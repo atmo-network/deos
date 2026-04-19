@@ -1,0 +1,24 @@
+[relaychain]
+default_command = "polkadot"
+chain = "rococo-local"
+
+[[relaychain.nodes]]
+name = "alice"
+validator = true
+rpc_port = 9944
+
+[[relaychain.nodes]]
+name = "bob"
+validator = true
+rpc_port = 9955
+
+[[parachains]]
+id = 2000
+chain_spec_path = "./chain_spec.json"
+onboard_as_parachain = true
+
+[parachains.collator]
+name = "charlie"
+rpc_port = 9988
+command = "polkadot-omni-node"
+args = ["--force-authoring"]

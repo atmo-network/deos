@@ -1,0 +1,49 @@
+[package]
+name = "pallet-axial-router"
+version = "0.1.0"
+description = "Minimalist multi-token routing system optimized for TMC ecosystems"
+authors.workspace = true
+homepage.workspace = true
+edition.workspace = true
+license = "MIT-0"
+publish = false
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]
+
+[dependencies]
+codec = { workspace = true }
+scale-info = { workspace = true }
+frame = { workspace = true }
+primitives = { workspace = true, default-features = false }
+pallet-tmc = { path = "../tmc", default-features = false }
+polkadot-sdk = { workspace = true, features = [
+  "frame-support",
+  "frame-system",
+  "pallet-asset-conversion",
+  "pallet-balances",
+  "pallet-assets",
+  "sp-runtime",
+  "sp-io",
+] }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+  "codec/std",
+  "pallet-tmc/std",
+  "primitives/std",
+  "polkadot-sdk/std",
+  "scale-info/std",
+]
+runtime-benchmarks = [
+  "polkadot-sdk/runtime-benchmarks",
+]
+try-runtime = ["polkadot-sdk/try-runtime"]

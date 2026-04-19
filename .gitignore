@@ -1,0 +1,27 @@
+# Downloaded binaries
+bin/
+
+# Build artifacts
+target/
+template/target/
+
+# Legacy binaries in template (remove after migration)
+template/polkadot
+template/polkadot-execute-worker
+template/polkadot-omni-node
+template/polkadot-parachain
+template/polkadot-prepare-worker
+template/parachain-template-node
+
+# Generated chain specs
+template/chain_spec.json
+
+# Logs
+*.log
+logs/
+
+# Backup files
+backup-*.tar.gz
+
+# Temporary directories
+delme/

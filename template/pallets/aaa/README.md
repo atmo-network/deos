@@ -1,0 +1,62 @@
+# pallet-aaa
+
+`pallet-aaa` is the DEOS deterministic account-abstraction actor pallet.
+
+## SDK baseline
+
+This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.0` line.
+The 2603 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/session/XCM integration surfaces rather than in `pallet-aaa` core logic.
+
+## Scope
+
+The current kernel/runtime slice provides:
+
+- User and system AAA creation with deterministic sovereign accounts
+- Bounded execution plans over adapter-driven tasks (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `StakeNative`, `Unstake`, etc.)
+- Double-buffer scheduler state (`CurrentQueue`, `NextQueue`) plus time-ordered wakeup storage
+- Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
+- Bounded `on_idle` execution with starvation observability
+- Fee admission, lifecycle controls, pause/resume, and best-effort close-time execution plans
+- Runtime-configured adapters for assets, DEX, staking, fee conversion, ingress, and entropy
+- Genesis provisioning of System actors through runtime configuration
+
+## Key rule
+
+AAA is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
+Actors execute declarative plans against runtime adapters under explicit queue, scheduler, fee, weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
+
+## Reconfiguration rule
+
+Within the existing task and adapter language, a large class of protocol changes should be expressed by reconfiguring actors, triggers, and graphs of asset flows rather than by rewriting the runtime.
+Runtime upgrades are reserved for extending primitives, adapter surfaces, or safety invariants.
+
+## Scheduler rule
+
+Readiness and execution must stay deterministic and bounded:
+
+- Future eligibility goes through the wakeup layer rather than ad hoc scans
+- Hot-path execution happens only under configured per-block limits
+- Probability misses are readiness misses, not partial cycle outcomes
+- `on_idle` does useful work only with remaining block budget
+
+## Runtime-as-Config rule
+
+The pallet must stay generic.
+Concrete chain policy belongs in runtime configuration, including:
+
+- `AssetOps`, `DexOps`, and `StakingOps`
+- Entropy policy and secure/insecure fallback posture
+- Fee conversion and task weight classes
+- Ingress hooks and genesis System AAA topology
+- Governance/system origins and operational bounds
+
+## Non-goals of the current slice
+
+The current kernel does not yet include:
+
+- Arbitrary user code execution
+- Hidden off-chain nondeterminism as a correctness dependency
+- Unbounded task graphs or unmetered loops
+- Direct pallet-specific business logic embedded into AAA core
+
+See `docs/aaa.architecture.en.md` and `docs/aaa.specification.en.md` for the current contract.

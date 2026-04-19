@@ -1,0 +1,628 @@
+{
+  "default_locale": "en",
+  "available_locales": [
+    "en",
+    "ru"
+  ],
+  "nodes": [
+    {
+      "id": "index",
+      "title": {
+        "en": "DEOS Wiki",
+        "ru": "Вики DEOS"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "index.en.md",
+        "ru": "index.ru.md"
+      }
+    },
+    {
+      "id": "deos-framework",
+      "title": {
+        "en": "DEOS Framework Overview",
+        "ru": "Обзор фреймворка DEOS"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/deos-framework.en.md",
+        "ru": "overview/deos-framework.ru.md"
+      }
+    },
+    {
+      "id": "aaa-system",
+      "title": {
+        "en": "AAA System",
+        "ru": "Система AAA"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/aaa-system.en.md",
+        "ru": "overview/aaa-system.ru.md"
+      }
+    },
+    {
+      "id": "aa-actor",
+      "title": {
+        "en": "AA-Actor",
+        "ru": "AA-Актор"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/aa-actor.en.md",
+        "ru": "overview/aa-actor.ru.md"
+      }
+    },
+    {
+      "id": "axial-router",
+      "title": {
+        "en": "Axial Router",
+        "ru": "Axial Router"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/axial-router.en.md",
+        "ru": "overview/axial-router.ru.md"
+      }
+    },
+    {
+      "id": "token-minting-curve",
+      "title": {
+        "en": "Token Minting Curve",
+        "ru": "Token Minting Curve"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/token-minting-curve.en.md",
+        "ru": "overview/token-minting-curve.ru.md"
+      }
+    },
+    {
+      "id": "governance-overview",
+      "title": {
+        "en": "Governance Overview",
+        "ru": "Обзор Governance"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/governance-overview.en.md",
+        "ru": "overview/governance-overview.ru.md"
+      }
+    },
+    {
+      "id": "asset-identity",
+      "title": {
+        "en": "Asset Identity",
+        "ru": "Идентичность активов"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/asset-identity.en.md",
+        "ru": "overview/asset-identity.ru.md"
+      }
+    },
+    {
+      "id": "randomness-strategy",
+      "title": {
+        "en": "Randomness Strategy",
+        "ru": "Стратегия случайности"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/randomness-strategy.en.md",
+        "ru": "overview/randomness-strategy.ru.md"
+      }
+    },
+    {
+      "id": "runtime-patterns",
+      "title": {
+        "en": "Runtime Patterns",
+        "ru": "Паттерны runtime"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/runtime-patterns.en.md",
+        "ru": "overview/runtime-patterns.ru.md"
+      }
+    },
+    {
+      "id": "reference-client",
+      "title": {
+        "en": "Reference Client",
+        "ru": "Эталонный клиент"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/reference-client.en.md",
+        "ru": "overview/reference-client.ru.md"
+      }
+    },
+    {
+      "id": "first-steps",
+      "title": {
+        "en": "First Steps",
+        "ru": "Первые шаги"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/first-steps.en.md",
+        "ru": "getting-started/first-steps.ru.md"
+      }
+    },
+    {
+      "id": "tmctol-standard",
+      "title": {
+        "en": "TMCTOL Standard",
+        "ru": "Стандарт TMCTOL"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/tmctol-standard.en.md",
+        "ru": "concepts/tmctol-standard.ru.md"
+      }
+    },
+    {
+      "id": "token-driven-automation",
+      "title": {
+        "en": "Token-Driven Automation",
+        "ru": "Токен-управляемая автоматизация"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/token-driven-automation.en.md",
+        "ru": "concepts/token-driven-automation.ru.md"
+      }
+    },
+    {
+      "id": "routing-and-minting-loop",
+      "title": {
+        "en": "Routing and Minting Loop",
+        "ru": "Контур маршрутизации и минтинга"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/routing-and-minting-loop.en.md",
+        "ru": "concepts/routing-and-minting-loop.ru.md"
+      }
+    },
+    {
+      "id": "staking-pools",
+      "title": {
+        "en": "Staking Pools",
+        "ru": "Пулы стейкинга"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/staking-pools.en.md",
+        "ru": "concepts/staking-pools.ru.md"
+      }
+    },
+    {
+      "id": "read-model-split",
+      "title": {
+        "en": "Read-Model Split",
+        "ru": "Разделение read-model"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/read-model-split.en.md",
+        "ru": "concepts/read-model-split.ru.md"
+      }
+    },
+    {
+      "id": "governance-domains",
+      "title": {
+        "en": "Governance Domains",
+        "ru": "Домены Governance"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/governance-domains.en.md",
+        "ru": "concepts/governance-domains.ru.md"
+      }
+    },
+    {
+      "id": "physics-vs-politics",
+      "title": {
+        "en": "Physics-First vs Politics-First",
+        "ru": "Physics-first против politics-first"
+      },
+      "page_type": "comparison",
+      "path": {
+        "en": "comparisons/physics-vs-politics.en.md",
+        "ru": "comparisons/physics-vs-politics.ru.md"
+      }
+    },
+    {
+      "id": "newcomer-faq",
+      "title": {
+        "en": "Newcomer FAQ",
+        "ru": "FAQ для новичков"
+      },
+      "page_type": "faq",
+      "path": {
+        "en": "faq/newcomer-faq.en.md",
+        "ru": "faq/newcomer-faq.ru.md"
+      }
+    },
+    {
+      "id": "core-terms",
+      "title": {
+        "en": "Core Terms",
+        "ru": "Базовые термины"
+      },
+      "page_type": "glossary",
+      "path": {
+        "en": "glossary/core-terms.en.md",
+        "ru": "glossary/core-terms.ru.md"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "index",
+      "to": "deos-framework",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "first-steps",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "governance-overview",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "core-terms",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "tmctol-standard",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "token-driven-automation",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "read-model-split",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "governance-domains",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "aaa-system",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "aa-actor",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "axial-router",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "token-minting-curve",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "asset-identity",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "randomness-strategy",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "runtime-patterns",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "routing-and-minting-loop",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "staking-pools",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "reference-client",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "physics-vs-politics",
+      "type": "entrypoint"
+    },
+    {
+      "from": "index",
+      "to": "newcomer-faq",
+      "type": "entrypoint"
+    },
+    {
+      "from": "deos-framework",
+      "to": "first-steps",
+      "type": "onboarding"
+    },
+    {
+      "from": "deos-framework",
+      "to": "aaa-system",
+      "type": "explains-automation"
+    },
+    {
+      "from": "deos-framework",
+      "to": "aa-actor",
+      "type": "explains-instance"
+    },
+    {
+      "from": "deos-framework",
+      "to": "axial-router",
+      "type": "explains-routing"
+    },
+    {
+      "from": "deos-framework",
+      "to": "token-minting-curve",
+      "type": "explains-minting"
+    },
+    {
+      "from": "deos-framework",
+      "to": "governance-overview",
+      "type": "explains-governance"
+    },
+    {
+      "from": "deos-framework",
+      "to": "asset-identity",
+      "type": "explains-assets"
+    },
+    {
+      "from": "deos-framework",
+      "to": "randomness-strategy",
+      "type": "explains-launch-line"
+    },
+    {
+      "from": "deos-framework",
+      "to": "runtime-patterns",
+      "type": "explains-runtime-baseline"
+    },
+    {
+      "from": "deos-framework",
+      "to": "tmctol-standard",
+      "type": "explains-standard"
+    },
+    {
+      "from": "deos-framework",
+      "to": "token-driven-automation",
+      "type": "explains-architecture"
+    },
+    {
+      "from": "deos-framework",
+      "to": "routing-and-minting-loop",
+      "type": "explains-runtime"
+    },
+    {
+      "from": "deos-framework",
+      "to": "reference-client",
+      "type": "explains-product"
+    },
+    {
+      "from": "first-steps",
+      "to": "tmctol-standard",
+      "type": "recommended-next"
+    },
+    {
+      "from": "first-steps",
+      "to": "read-model-split",
+      "type": "recommended-next"
+    },
+    {
+      "from": "first-steps",
+      "to": "reference-client",
+      "type": "recommended-next"
+    },
+    {
+      "from": "aaa-system",
+      "to": "aa-actor",
+      "type": "instance-view"
+    },
+    {
+      "from": "aaa-system",
+      "to": "token-driven-automation",
+      "type": "deepens-topic"
+    },
+    {
+      "from": "aaa-system",
+      "to": "routing-and-minting-loop",
+      "type": "supports-runtime-flow"
+    },
+    {
+      "from": "aa-actor",
+      "to": "aaa-system",
+      "type": "system-context"
+    },
+    {
+      "from": "aa-actor",
+      "to": "token-driven-automation",
+      "type": "deepens-topic"
+    },
+    {
+      "from": "aa-actor",
+      "to": "routing-and-minting-loop",
+      "type": "supports-runtime-flow"
+    },
+    {
+      "from": "axial-router",
+      "to": "token-minting-curve",
+      "type": "paired-with"
+    },
+    {
+      "from": "axial-router",
+      "to": "routing-and-minting-loop",
+      "type": "deepens-topic"
+    },
+    {
+      "from": "axial-router",
+      "to": "asset-identity",
+      "type": "depends-on-assets"
+    },
+    {
+      "from": "token-minting-curve",
+      "to": "axial-router",
+      "type": "paired-with"
+    },
+    {
+      "from": "token-minting-curve",
+      "to": "routing-and-minting-loop",
+      "type": "deepens-topic"
+    },
+    {
+      "from": "token-minting-curve",
+      "to": "tmctol-standard",
+      "type": "implemented-in-standard"
+    },
+    {
+      "from": "governance-overview",
+      "to": "governance-domains",
+      "type": "deepens-topic"
+    },
+    {
+      "from": "governance-overview",
+      "to": "physics-vs-politics",
+      "type": "explains-manifesto-link"
+    },
+    {
+      "from": "governance-overview",
+      "to": "staking-pools",
+      "type": "connected-rewards"
+    },
+    {
+      "from": "asset-identity",
+      "to": "routing-and-minting-loop",
+      "type": "enables-assets"
+    },
+    {
+      "from": "asset-identity",
+      "to": "staking-pools",
+      "type": "enables-foreign-assets"
+    },
+    {
+      "from": "randomness-strategy",
+      "to": "aa-actor",
+      "type": "constrains-probabilistic-use"
+    },
+    {
+      "from": "randomness-strategy",
+      "to": "governance-overview",
+      "type": "constrains-launch-policy"
+    },
+    {
+      "from": "runtime-patterns",
+      "to": "asset-identity",
+      "type": "supports-integration"
+    },
+    {
+      "from": "runtime-patterns",
+      "to": "randomness-strategy",
+      "type": "supports-launch-baseline"
+    },
+    {
+      "from": "tmctol-standard",
+      "to": "routing-and-minting-loop",
+      "type": "implemented-by"
+    },
+    {
+      "from": "tmctol-standard",
+      "to": "governance-domains",
+      "type": "depends-on"
+    },
+    {
+      "from": "tmctol-standard",
+      "to": "staking-pools",
+      "type": "related-subsystem"
+    },
+    {
+      "from": "token-driven-automation",
+      "to": "aaa-system",
+      "type": "system-parent"
+    },
+    {
+      "from": "token-driven-automation",
+      "to": "aa-actor",
+      "type": "explained-by"
+    },
+    {
+      "from": "token-driven-automation",
+      "to": "core-terms",
+      "type": "defines-vocabulary"
+    },
+    {
+      "from": "routing-and-minting-loop",
+      "to": "axial-router",
+      "type": "subsystem-view"
+    },
+    {
+      "from": "routing-and-minting-loop",
+      "to": "token-minting-curve",
+      "type": "subsystem-view"
+    },
+    {
+      "from": "routing-and-minting-loop",
+      "to": "token-driven-automation",
+      "type": "uses-runtime-automation"
+    },
+    {
+      "from": "staking-pools",
+      "to": "governance-domains",
+      "type": "connected-rewards"
+    },
+    {
+      "from": "reference-client",
+      "to": "read-model-split",
+      "type": "implements-read-model-honesty"
+    },
+    {
+      "from": "physics-vs-politics",
+      "to": "governance-domains",
+      "type": "explains-protection-bias"
+    },
+    {
+      "from": "newcomer-faq",
+      "to": "core-terms",
+      "type": "orientation"
+    },
+    {
+      "from": "read-model-split",
+      "to": "core-terms",
+      "type": "defines-vocabulary"
+    },
+    {
+      "from": "governance-domains",
+      "to": "governance-overview",
+      "type": "overview-parent"
+    },
+    {
+      "from": "governance-domains",
+      "to": "core-terms",
+      "type": "defines-vocabulary"
+    }
+  ]
+}

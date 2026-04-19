@@ -1,0 +1,190 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  check:
+    name: Check & Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      SKIP_WASM_BUILD: 1
+    defaults:
+      run:
+        working-directory: template
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from template/rust-toolchain.toml
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          toolchain = tomllib.loads(Path('rust-toolchain.toml').read_text())['toolchain']
+          command = [
+            'rustup',
+            'toolchain',
+            'install',
+            toolchain['channel'],
+            '--profile',
+            toolchain.get('profile', 'minimal'),
+          ]
+          for component in toolchain.get('components', []):
+            command.extend(['--component', component])
+          for target in toolchain.get('targets', []):
+            command.extend(['--target', target])
+          subprocess.check_call(command)
+          PY
+          rustup show active-toolchain
+
+      - name: Cache cargo registry & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            template/target
+          key: ${{ runner.os }}-cargo-check-${{ hashFiles('template/Cargo.lock', 'template/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-check-
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: cargo check
+        run: cargo check --workspace --locked
+
+  test-sim:
+    name: Simulator Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run simulator tests
+        run: node simulator/tests.js
+
+  test-rust:
+    name: Rust Tests (Fast Lane)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SKIP_WASM_BUILD: 1
+    defaults:
+      run:
+        working-directory: template
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from template/rust-toolchain.toml
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          toolchain = tomllib.loads(Path('rust-toolchain.toml').read_text())['toolchain']
+          command = [
+            'rustup',
+            'toolchain',
+            'install',
+            toolchain['channel'],
+            '--profile',
+            toolchain.get('profile', 'minimal'),
+          ]
+          for component in toolchain.get('components', []):
+            command.extend(['--component', component])
+          for target in toolchain.get('targets', []):
+            command.extend(['--target', target])
+          subprocess.check_call(command)
+          PY
+          rustup show active-toolchain
+
+      - name: Cache cargo registry & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            template/target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('template/Cargo.lock', 'template/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      - name: cargo test
+        run: cargo test --workspace --locked
+
+  bench:
+    name: Benchmark Compilability
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      SKIP_WASM_BUILD: 0
+    defaults:
+      run:
+        working-directory: template
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from template/rust-toolchain.toml
+        run: |
+          python3 - <<'PY'
+          import subprocess
+          import tomllib
+          from pathlib import Path
+
+          toolchain = tomllib.loads(Path('rust-toolchain.toml').read_text())['toolchain']
+          command = [
+            'rustup',
+            'toolchain',
+            'install',
+            toolchain['channel'],
+            '--profile',
+            toolchain.get('profile', 'minimal'),
+          ]
+          for component in toolchain.get('components', []):
+            command.extend(['--component', component])
+          for target in toolchain.get('targets', []):
+            command.extend(['--target', target])
+          subprocess.check_call(command)
+          PY
+          rustup show active-toolchain
+
+      - name: Cache cargo registry & build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            template/target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('template/Cargo.lock', 'template/rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-bench-
+
+      - name: Governance benchmark tests
+        run: cargo test -p pallet-tmctol-governance --features runtime-benchmarks --locked
+
+      - name: Runtime benchmark compilation
+        run: cargo check -p tmctol-runtime --features runtime-benchmarks --locked

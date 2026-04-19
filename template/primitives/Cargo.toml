@@ -1,0 +1,28 @@
+[package]
+name = "primitives"
+version = "0.1.0"
+description = "Shared primitive types for the DEOS reference runtime"
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+license = "MIT-0"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codec = { workspace = true, features = ["max-encoded-len"] }
+scale-info = { workspace = true }
+serde = { workspace = true, features = ["derive", "alloc"] }
+sp-arithmetic = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+	"codec/std",
+	"scale-info/std",
+	"serde/std",
+	"sp-arithmetic/std",
+]

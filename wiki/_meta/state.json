@@ -1,0 +1,560 @@
+{
+  "generated_at": "2026-04-20",
+  "mode": "incremental-sync",
+  "source_root": "../docs",
+  "default_locale": "en",
+  "available_locales": [
+    "en",
+    "ru"
+  ],
+  "pages": {
+    "index": {
+      "path": {
+        "en": "index.en.md",
+        "ru": "index.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "DEOS Wiki",
+        "ru": "Вики DEOS"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.95,
+      "sources": {
+        "en": [
+          "../docs/README.md",
+          "../README.md"
+        ],
+        "ru": [
+          "../docs/README.md",
+          "../README.md"
+        ]
+      }
+    },
+    "deos-framework": {
+      "path": {
+        "en": "overview/deos-framework.en.md",
+        "ru": "overview/deos-framework.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "DEOS Framework Overview",
+        "ru": "Обзор фреймворка DEOS"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.95,
+      "sources": {
+        "en": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "aaa-system": {
+      "path": {
+        "en": "overview/aaa-system.en.md",
+        "ru": "overview/aaa-system.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "AAA System",
+        "ru": "Система AAA"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.94,
+      "sources": {
+        "en": [
+          "../docs/aaa.specification.en.md",
+          "../docs/aaa.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/aaa.specification.ru.md",
+          "../docs/aaa.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "aa-actor": {
+      "path": {
+        "en": "overview/aa-actor.en.md",
+        "ru": "overview/aa-actor.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "AA-Actor",
+        "ru": "AA-Актор"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.93,
+      "sources": {
+        "en": [
+          "../docs/aaa.specification.en.md",
+          "../docs/aaa.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/aaa.specification.ru.md",
+          "../docs/aaa.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "axial-router": {
+      "path": {
+        "en": "overview/axial-router.en.md",
+        "ru": "overview/axial-router.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Axial Router",
+        "ru": "Axial Router"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.93,
+      "sources": {
+        "en": [
+          "../docs/axial-router.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/axial-router.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "token-minting-curve": {
+      "path": {
+        "en": "overview/token-minting-curve.en.md",
+        "ru": "overview/token-minting-curve.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Token Minting Curve",
+        "ru": "Token Minting Curve"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.94,
+      "sources": {
+        "en": [
+          "../docs/tmc.architecture.en.md",
+          "../docs/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../docs/tmc.architecture.en.md",
+          "../docs/tmctol.specification.ru.md"
+        ]
+      }
+    },
+    "governance-overview": {
+      "path": {
+        "en": "overview/governance-overview.en.md",
+        "ru": "overview/governance-overview.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Governance Overview",
+        "ru": "Обзор Governance"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.94,
+      "sources": {
+        "en": [
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/manifesto.en.md"
+        ],
+        "ru": [
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/manifesto.ru.md"
+        ]
+      }
+    },
+    "asset-identity": {
+      "path": {
+        "en": "overview/asset-identity.en.md",
+        "ru": "overview/asset-identity.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Asset Identity",
+        "ru": "Идентичность активов"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.91,
+      "sources": {
+        "en": [
+          "../docs/asset-registry.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/asset-registry.architecture.en.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "randomness-strategy": {
+      "path": {
+        "en": "overview/randomness-strategy.en.md",
+        "ru": "overview/randomness-strategy.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Randomness Strategy",
+        "ru": "Стратегия случайности"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.9,
+      "sources": {
+        "en": [
+          "../docs/randomness.strategy.en.md",
+          "../docs/manifesto.en.md"
+        ],
+        "ru": [
+          "../docs/randomness.strategy.en.md",
+          "../docs/manifesto.ru.md"
+        ]
+      }
+    },
+    "runtime-patterns": {
+      "path": {
+        "en": "overview/runtime-patterns.en.md",
+        "ru": "overview/runtime-patterns.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Runtime Patterns",
+        "ru": "Паттерны runtime"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.89,
+      "sources": {
+        "en": [
+          "../docs/polkadot-sdk-2603.insights.en.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/polkadot-sdk-2603.insights.en.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "reference-client": {
+      "path": {
+        "en": "overview/reference-client.en.md",
+        "ru": "overview/reference-client.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Reference Client",
+        "ru": "Эталонный клиент"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.9,
+      "sources": {
+        "en": [
+          "../docs/web-client.architecture.en.md",
+          "../web-client/README.md",
+          "../docs/read-model.contract.en.md"
+        ],
+        "ru": [
+          "../docs/web-client.architecture.en.md",
+          "../web-client/README.md",
+          "../docs/read-model.contract.en.md"
+        ]
+      }
+    },
+    "first-steps": {
+      "path": {
+        "en": "getting-started/first-steps.en.md",
+        "ru": "getting-started/first-steps.ru.md"
+      },
+      "page_type": "getting-started",
+      "title": {
+        "en": "First Steps",
+        "ru": "Первые шаги"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.93,
+      "sources": {
+        "en": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/read-model.contract.en.md"
+        ],
+        "ru": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/read-model.contract.en.md"
+        ]
+      }
+    },
+    "tmctol-standard": {
+      "path": {
+        "en": "concepts/tmctol-standard.en.md",
+        "ru": "concepts/tmctol-standard.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "TMCTOL Standard",
+        "ru": "Стандарт TMCTOL"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.94,
+      "sources": {
+        "en": [
+          "../docs/tmctol.specification.en.md",
+          "../README.md"
+        ],
+        "ru": [
+          "../docs/tmctol.specification.ru.md",
+          "../README.md"
+        ]
+      }
+    },
+    "token-driven-automation": {
+      "path": {
+        "en": "concepts/token-driven-automation.en.md",
+        "ru": "concepts/token-driven-automation.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Token-Driven Automation",
+        "ru": "Токен-управляемая автоматизация"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.92,
+      "sources": {
+        "en": [
+          "../docs/core.architecture.en.md",
+          "../docs/aaa.specification.en.md",
+          "../README.md"
+        ],
+        "ru": [
+          "../docs/core.architecture.en.md",
+          "../docs/aaa.specification.ru.md",
+          "../README.md"
+        ]
+      }
+    },
+    "routing-and-minting-loop": {
+      "path": {
+        "en": "concepts/routing-and-minting-loop.en.md",
+        "ru": "concepts/routing-and-minting-loop.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Routing and Minting Loop",
+        "ru": "Контур маршрутизации и минтинга"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.93,
+      "sources": {
+        "en": [
+          "../docs/axial-router.architecture.en.md",
+          "../docs/tmc.architecture.en.md",
+          "../docs/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../docs/axial-router.architecture.en.md",
+          "../docs/tmc.architecture.en.md",
+          "../docs/tmctol.specification.ru.md"
+        ]
+      }
+    },
+    "staking-pools": {
+      "path": {
+        "en": "concepts/staking-pools.en.md",
+        "ru": "concepts/staking-pools.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Staking Pools",
+        "ru": "Пулы стейкинга"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.92,
+      "sources": {
+        "en": [
+          "../docs/staking.specification.en.md",
+          "../docs/governance.specification.en.md"
+        ],
+        "ru": [
+          "../docs/staking.specification.en.md",
+          "../docs/governance.specification.en.md"
+        ]
+      }
+    },
+    "read-model-split": {
+      "path": {
+        "en": "concepts/read-model-split.en.md",
+        "ru": "concepts/read-model-split.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Read-Model Split",
+        "ru": "Разделение read-model"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.96,
+      "sources": {
+        "en": [
+          "../docs/read-model.contract.en.md",
+          "../docs/core.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/read-model.contract.en.md",
+          "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "governance-domains": {
+      "path": {
+        "en": "concepts/governance-domains.en.md",
+        "ru": "concepts/governance-domains.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "Governance Domains",
+        "ru": "Домены Governance"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.93,
+      "sources": {
+        "en": [
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/staking.specification.en.md"
+        ],
+        "ru": [
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/staking.specification.en.md"
+        ]
+      }
+    },
+    "physics-vs-politics": {
+      "path": {
+        "en": "comparisons/physics-vs-politics.en.md",
+        "ru": "comparisons/physics-vs-politics.ru.md"
+      },
+      "page_type": "comparison",
+      "title": {
+        "en": "Physics-First vs Politics-First",
+        "ru": "Physics-first против politics-first"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.91,
+      "sources": {
+        "en": [
+          "../docs/manifesto.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/tmctol.specification.en.md"
+        ],
+        "ru": [
+          "../docs/manifesto.ru.md",
+          "../docs/governance.specification.en.md",
+          "../docs/tmctol.specification.ru.md"
+        ]
+      }
+    },
+    "newcomer-faq": {
+      "path": {
+        "en": "faq/newcomer-faq.en.md",
+        "ru": "faq/newcomer-faq.ru.md"
+      },
+      "page_type": "faq",
+      "title": {
+        "en": "Newcomer FAQ",
+        "ru": "FAQ для новичков"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.92,
+      "sources": {
+        "en": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/manifesto.en.md",
+          "../docs/aaa.specification.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/staking.specification.en.md",
+          "../docs/read-model.contract.en.md",
+          "../docs/web-client.architecture.en.md"
+        ],
+        "ru": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/manifesto.ru.md",
+          "../docs/aaa.specification.ru.md",
+          "../docs/governance.specification.en.md",
+          "../docs/staking.specification.en.md",
+          "../docs/read-model.contract.en.md",
+          "../docs/web-client.architecture.en.md"
+        ]
+      }
+    },
+    "core-terms": {
+      "path": {
+        "en": "glossary/core-terms.en.md",
+        "ru": "glossary/core-terms.ru.md"
+      },
+      "page_type": "glossary",
+      "title": {
+        "en": "Core Terms",
+        "ru": "Базовые термины"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.95,
+      "sources": {
+        "en": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/tmctol.specification.en.md",
+          "../docs/core.architecture.en.md",
+          "../docs/aaa.specification.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/read-model.contract.en.md"
+        ],
+        "ru": [
+          "../README.md",
+          "../docs/README.md",
+          "../docs/tmctol.specification.ru.md",
+          "../docs/core.architecture.en.md",
+          "../docs/aaa.specification.ru.md",
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/read-model.contract.en.md"
+        ]
+      }
+    }
+  }
+}

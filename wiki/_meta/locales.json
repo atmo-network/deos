@@ -1,0 +1,142 @@
+{
+  "generated_at": "2026-04-16",
+  "default_locale": "en",
+  "supported_locales": [
+    "en",
+    "ru"
+  ],
+  "entrypoints": {
+    "index": {
+      "en": "index.en.md",
+      "ru": "index.ru.md"
+    },
+    "log": {
+      "en": "log.en.md",
+      "ru": "log.ru.md"
+    }
+  },
+  "metadata": {
+    "navigation": "navigation.json",
+    "state": "state.json",
+    "graph": "graph.json",
+    "aliases": "aliases.json"
+  },
+  "pages": {
+    "index": {
+      "en": "index.en.md",
+      "ru": "index.ru.md"
+    },
+    "deos-framework": {
+      "en": "overview/deos-framework.en.md",
+      "ru": "overview/deos-framework.ru.md"
+    },
+    "aaa-system": {
+      "en": "overview/aaa-system.en.md",
+      "ru": "overview/aaa-system.ru.md"
+    },
+    "aa-actor": {
+      "en": "overview/aa-actor.en.md",
+      "ru": "overview/aa-actor.ru.md"
+    },
+    "axial-router": {
+      "en": "overview/axial-router.en.md",
+      "ru": "overview/axial-router.ru.md"
+    },
+    "token-minting-curve": {
+      "en": "overview/token-minting-curve.en.md",
+      "ru": "overview/token-minting-curve.ru.md"
+    },
+    "governance-overview": {
+      "en": "overview/governance-overview.en.md",
+      "ru": "overview/governance-overview.ru.md"
+    },
+    "asset-identity": {
+      "en": "overview/asset-identity.en.md",
+      "ru": "overview/asset-identity.ru.md"
+    },
+    "randomness-strategy": {
+      "en": "overview/randomness-strategy.en.md",
+      "ru": "overview/randomness-strategy.ru.md"
+    },
+    "runtime-patterns": {
+      "en": "overview/runtime-patterns.en.md",
+      "ru": "overview/runtime-patterns.ru.md"
+    },
+    "reference-client": {
+      "en": "overview/reference-client.en.md",
+      "ru": "overview/reference-client.ru.md"
+    },
+    "first-steps": {
+      "en": "getting-started/first-steps.en.md",
+      "ru": "getting-started/first-steps.ru.md"
+    },
+    "tmctol-standard": {
+      "en": "concepts/tmctol-standard.en.md",
+      "ru": "concepts/tmctol-standard.ru.md"
+    },
+    "token-driven-automation": {
+      "en": "concepts/token-driven-automation.en.md",
+      "ru": "concepts/token-driven-automation.ru.md"
+    },
+    "routing-and-minting-loop": {
+      "en": "concepts/routing-and-minting-loop.en.md",
+      "ru": "concepts/routing-and-minting-loop.ru.md"
+    },
+    "staking-pools": {
+      "en": "concepts/staking-pools.en.md",
+      "ru": "concepts/staking-pools.ru.md"
+    },
+    "read-model-split": {
+      "en": "concepts/read-model-split.en.md",
+      "ru": "concepts/read-model-split.ru.md"
+    },
+    "governance-domains": {
+      "en": "concepts/governance-domains.en.md",
+      "ru": "concepts/governance-domains.ru.md"
+    },
+    "physics-vs-politics": {
+      "en": "comparisons/physics-vs-politics.en.md",
+      "ru": "comparisons/physics-vs-politics.ru.md"
+    },
+    "newcomer-faq": {
+      "en": "faq/newcomer-faq.en.md",
+      "ru": "faq/newcomer-faq.ru.md"
+    },
+    "core-terms": {
+      "en": "glossary/core-terms.en.md",
+      "ru": "glossary/core-terms.ru.md"
+    },
+    "repository-structure": {
+      "en": "implementation/repository-structure.en.md",
+      "ru": "implementation/repository-structure.ru.md"
+    },
+    "tech-stack": {
+      "en": "implementation/tech-stack.en.md",
+      "ru": "implementation/tech-stack.ru.md"
+    },
+    "tmctol-formulas": {
+      "en": "math/tmctol-formulas.en.md",
+      "ru": "math/tmctol-formulas.ru.md"
+    },
+    "scripts-layer": {
+      "en": "usage/scripts-layer.en.md",
+      "ru": "usage/scripts-layer.ru.md"
+    },
+    "three-layer-validation": {
+      "en": "development/three-layer-validation.en.md",
+      "ru": "development/three-layer-validation.ru.md"
+    },
+    "contributing": {
+      "en": "community/contributing.en.md",
+      "ru": "community/contributing.ru.md"
+    },
+    "status": {
+      "en": "development/status.en.md",
+      "ru": "development/status.ru.md"
+    }
+  },
+  "localization_strategy": {
+    "markdown": "file-suffixed",
+    "metadata": "language-keyed-fields"
+  }
+}

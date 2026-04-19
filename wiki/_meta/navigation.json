@@ -1,0 +1,527 @@
+{
+  "generated_at": "2026-04-20",
+  "audience": "newcomer",
+  "default_locale": "en",
+  "available_locales": ["en", "ru"],
+  "entrypoints": [
+    "deos-framework",
+    "first-steps",
+    "core-terms",
+    "newcomer-faq"
+  ],
+  "sections": [
+    {
+      "id": "start-here",
+      "title": {
+        "en": "Start Here",
+        "ru": "Начните здесь"
+      },
+      "items": [
+        {
+          "id": "deos-framework",
+          "title": {
+            "en": "DEOS Framework Overview",
+            "ru": "Обзор фреймворка DEOS"
+          },
+          "path": {
+            "en": "overview/deos-framework.en.md",
+            "ru": "overview/deos-framework.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "DEOS is the framework identity, while TMCTOL is the current standard running on top of it.",
+            "ru": "DEOS — это идентичность фреймворка, а TMCTOL — текущий стандарт, работающий поверх него."
+          }
+        },
+        {
+          "id": "first-steps",
+          "title": {
+            "en": "First Steps",
+            "ru": "Первые шаги"
+          },
+          "path": {
+            "en": "getting-started/first-steps.en.md",
+            "ru": "getting-started/first-steps.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "Start with the docs hub, understand the framework-versus-standard split, then choose the right working surface for your task.",
+            "ru": "Начните с хаба документации, поймите различие между фреймворком и стандартом, а затем выберите правильную рабочую поверхность под задачу."
+          }
+        },
+        {
+          "id": "core-terms",
+          "title": {
+            "en": "Core Terms",
+            "ru": "Базовые термины"
+          },
+          "path": {
+            "en": "glossary/core-terms.en.md",
+            "ru": "glossary/core-terms.ru.md"
+          },
+          "page_type": "glossary",
+          "summary": {
+            "en": "A compact glossary for the main DEOS and TMCTOL terms, including framework, runtime, governance, and read-model vocabulary.",
+            "ru": "Компактный глоссарий по главным терминам DEOS и TMCTOL, включая словарь фреймворка, runtime, governance и read-model."
+          }
+        },
+        {
+          "id": "newcomer-faq",
+          "title": {
+            "en": "Newcomer FAQ",
+            "ru": "FAQ для новичков"
+          },
+          "path": {
+            "en": "faq/newcomer-faq.en.md",
+            "ru": "faq/newcomer-faq.ru.md"
+          },
+          "page_type": "faq",
+          "summary": {
+            "en": "Quick orientation for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, and the reference client.",
+            "ru": "Быстрая ориентация по главным вопросам новичков о DEOS, TMCTOL, AAA, governance и эталонном клиенте."
+          }
+        }
+      ]
+    },
+    {
+      "id": "core-concepts",
+      "title": {
+        "en": "Core Concepts",
+        "ru": "Ключевые концепции"
+      },
+      "items": [
+        {
+          "id": "tmctol-standard",
+          "title": {
+            "en": "TMCTOL Standard",
+            "ru": "Стандарт TMCTOL"
+          },
+          "path": {
+            "en": "concepts/tmctol-standard.en.md",
+            "ru": "concepts/tmctol-standard.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "The flagship tokenomic standard that combines a mint-only curve, treasury-owned liquidity, and fee burning.",
+            "ru": "Флагманский токеномический стандарт, который сочетает mint-only кривую, treasury-owned liquidity и сжигание комиссий."
+          }
+        },
+        {
+          "id": "token-driven-automation",
+          "title": {
+            "en": "Token-Driven Automation",
+            "ru": "Токен-управляемая автоматизация"
+          },
+          "path": {
+            "en": "concepts/token-driven-automation.en.md",
+            "ru": "concepts/token-driven-automation.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How DEOS expresses recurring protocol behavior through bounded plans triggered by balances, schedules, and typed tasks.",
+            "ru": "Как DEOS выражает повторяющееся поведение протокола через ограниченные планы, запускаемые балансами, расписаниями и типизированными задачами."
+          }
+        },
+        {
+          "id": "read-model-split",
+          "title": {
+            "en": "Read-Model Split",
+            "ru": "Разделение read-model"
+          },
+          "path": {
+            "en": "concepts/read-model-split.en.md",
+            "ru": "concepts/read-model-split.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How DEOS separates bounded on-chain truth from indexed or materialized views.",
+            "ru": "Как DEOS отделяет ограниченную on-chain правду от indexed или materialized представлений."
+          }
+        },
+        {
+          "id": "governance-domains",
+          "title": {
+            "en": "Governance Domains",
+            "ru": "Домены Governance"
+          },
+          "path": {
+            "en": "concepts/governance-domains.en.md",
+            "ru": "concepts/governance-domains.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "One typed governance cell inside DEOS Governance: it binds together the governed subject, power surfaces, valid payload families, cadence, and execution authority.",
+            "ru": "Одна типизированная governance-cell внутри DEOS Governance: она связывает управляемый subject, power surfaces, допустимые payload-family, cadence и execution authority."
+          }
+        }
+      ]
+    },
+    {
+      "id": "runtime-and-product",
+      "title": {
+        "en": "Runtime and Product",
+        "ru": "Runtime и продукт"
+      },
+      "items": [
+        {
+          "id": "aaa-system",
+          "title": {
+            "en": "AAA System",
+            "ru": "Система AAA"
+          },
+          "path": {
+            "en": "overview/aaa-system.en.md",
+            "ru": "overview/aaa-system.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The system-level view of AAA as a bounded event-driven actor runtime where asset ingress can act like trigger-messages and actor graphs can be reconfigured on-chain.",
+            "ru": "Системный взгляд на AAA как на ограниченный event-driven actor runtime, где поступление активов может работать как сообщение-триггер, а графы акторов можно перенастраивать on-chain."
+          }
+        },
+        {
+          "id": "aa-actor",
+          "title": {
+            "en": "AA-Actor",
+            "ru": "AA-Актор"
+          },
+          "path": {
+            "en": "overview/aa-actor.en.md",
+            "ru": "overview/aa-actor.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "One concrete bounded execution instance inside the broader AAA system.",
+            "ru": "Один конкретный ограниченный экземпляр исполнения внутри более широкой системы AAA."
+          }
+        },
+        {
+          "id": "axial-router",
+          "title": {
+            "en": "Axial Router",
+            "ru": "Axial Router"
+          },
+          "path": {
+            "en": "overview/axial-router.en.md",
+            "ru": "overview/axial-router.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The protocol-first routing engine that compares bounded market and protocol-liquidity paths and serves as the mandatory gate for canonical swap execution.",
+            "ru": "Protocol-first движок маршрутизации, который сравнивает ограниченные пути через рыночную и протокольную ликвидность и служит обязательными воротами канонического обмена."
+          }
+        },
+        {
+          "id": "token-minting-curve",
+          "title": {
+            "en": "Token Minting Curve",
+            "ru": "Token Minting Curve"
+          },
+          "path": {
+            "en": "overview/token-minting-curve.en.md",
+            "ru": "overview/token-minting-curve.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The mint-only issuance engine that prices new supply along deterministic curve math.",
+            "ru": "Mint-only механизм эмиссии, который оценивает новое предложение по детерминированной математике кривой."
+          }
+        },
+        {
+          "id": "governance-overview",
+          "title": {
+            "en": "Governance Overview",
+            "ru": "Обзор Governance"
+          },
+          "path": {
+            "en": "overview/governance-overview.en.md",
+            "ru": "overview/governance-overview.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "A wide-angle introduction to DEOS Governance as a subsystem that explains why it exists, how it separates strategy from tactics, and which deeper concept pages to read next.",
+            "ru": "Широкое введение в DEOS Governance как подсистему, которое объясняет, зачем он нужен, как разделяет стратегию и тактику и к каким concept-страницам идти дальше."
+          }
+        },
+        {
+          "id": "asset-identity",
+          "title": {
+            "en": "Asset Identity",
+            "ru": "Идентичность активов"
+          },
+          "path": {
+            "en": "overview/asset-identity.en.md",
+            "ru": "overview/asset-identity.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The foreign-asset identity layer that maps XCM locations into stable runtime asset identifiers.",
+            "ru": "Слой идентичности внешних активов, который связывает XCM-локации со стабильными runtime-идентификаторами внутри DEOS."
+          }
+        },
+        {
+          "id": "randomness-strategy",
+          "title": {
+            "en": "Randomness Strategy",
+            "ru": "Стратегия случайности"
+          },
+          "path": {
+            "en": "overview/randomness-strategy.en.md",
+            "ru": "overview/randomness-strategy.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The current relay-beacon-first simplification and trusted-collator fallback posture.",
+            "ru": "Текущий подход DEOS к случайности: без локального VRF, с временным fallback на доверенных collator и с ориентацией на relay-chain beacon."
+          }
+        },
+        {
+          "id": "runtime-patterns",
+          "title": {
+            "en": "Runtime Patterns",
+            "ru": "Паттерны runtime"
+          },
+          "path": {
+            "en": "overview/runtime-patterns.en.md",
+            "ru": "overview/runtime-patterns.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The modern Polkadot SDK runtime baseline that DEOS follows for assembly, consensus posture, and deployment.",
+            "ru": "Современный набор runtime-паттернов Polkadot SDK, на которые опирается DEOS."
+          }
+        },
+        {
+          "id": "routing-and-minting-loop",
+          "title": {
+            "en": "Routing and Minting Loop",
+            "ru": "Контур маршрутизации и минтинга"
+          },
+          "path": {
+            "en": "concepts/routing-and-minting-loop.en.md",
+            "ru": "concepts/routing-and-minting-loop.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How the Axial Router and TMC work together to compare market and protocol liquidity.",
+            "ru": "Как Axial Router и TMC вместе сравнивают рыночную и протокольную ликвидность."
+          }
+        },
+        {
+          "id": "staking-pools",
+          "title": {
+            "en": "Staking Pools",
+            "ru": "Пулы стейкинга"
+          },
+          "path": {
+            "en": "concepts/staking-pools.en.md",
+            "ru": "concepts/staking-pools.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How DEOS staking uses share-vault pools, sovereign inflow channels, and transferable `stXXX` receipts.",
+            "ru": "Как стейкинг DEOS использует share-vault пулы, sovereign-каналы притока и transferable receipt-токены `stXXX`."
+          }
+        },
+        {
+          "id": "reference-client",
+          "title": {
+            "en": "Reference Client",
+            "ru": "Эталонный клиент"
+          },
+          "path": {
+            "en": "overview/reference-client.en.md",
+            "ru": "overview/reference-client.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "The on-chain-first browser client and its discipline around widgets, layout, execution feedback, and data provenance.",
+            "ru": "On-chain-first браузерный клиент и его дисциплина в отношении виджетов, layout, execution feedback и происхождения данных."
+          }
+        }
+      ]
+    },
+    {
+      "id": "technical-implementation",
+      "title": {
+        "en": "Technical Implementation",
+        "ru": "Техническая реализация"
+      },
+      "items": [
+        {
+          "id": "repository-structure",
+          "title": {
+            "en": "Repository Structure",
+            "ru": "Структура репозитория"
+          },
+          "path": {
+            "en": "implementation/repository-structure.en.md",
+            "ru": "implementation/repository-structure.ru.md"
+          },
+          "page_type": "implementation",
+          "summary": {
+            "en": "Detailed description of the DEOS framework repository directories and their purpose.",
+            "ru": "Как устроен репозиторий DEOS и за что отвечает каждая его основная директория."
+          }
+        },
+        {
+          "id": "tech-stack",
+          "title": {
+            "en": "Tech Stack",
+            "ru": "Технологический стек"
+          },
+          "path": {
+            "en": "implementation/tech-stack.en.md",
+            "ru": "implementation/tech-stack.ru.md"
+          },
+          "page_type": "implementation",
+          "summary": {
+            "en": "Overview of the underlying technologies that power the DEOS framework.",
+            "ru": "Ключевые технологии, на которых построен фреймворк DEOS."
+          }
+        }
+      ]
+    },
+    {
+      "id": "math",
+      "title": {
+        "en": "Mathematical Models",
+        "ru": "Математические модели"
+      },
+      "items": [
+        {
+          "id": "tmctol-formulas",
+          "title": {
+            "en": "TMCTOL Formulas",
+            "ru": "Формулы TMCTOL"
+          },
+          "path": {
+            "en": "math/tmctol-formulas.en.md",
+            "ru": "math/tmctol-formulas.ru.md"
+          },
+          "page_type": "math",
+          "summary": {
+            "en": "Mathematical models defining the Token Minting Curve and TOL.",
+            "ru": "Основные математические модели TMCTOL: кривая эмиссии, интегральный расчет минтинга и поддержка пола через XYK."
+          }
+        }
+      ]
+    },
+    {
+      "id": "usage",
+      "title": {
+        "en": "Practical Usage",
+        "ru": "Практическое использование"
+      },
+      "items": [
+        {
+          "id": "scripts-layer",
+          "title": {
+            "en": "Scripts Layer",
+            "ru": "Слой скриптов"
+          },
+          "path": {
+            "en": "usage/scripts-layer.en.md",
+            "ru": "usage/scripts-layer.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "Operator and developer automation workflows using the local scripts layer.",
+            "ru": "Локальный слой автоматизации для разработчиков и операторов DEOS: запуск, сборка, bootstrap и диагностика."
+          }
+        }
+      ]
+    },
+    {
+      "id": "development",
+      "title": {
+        "en": "Development",
+        "ru": "Разработка"
+      },
+      "items": [
+        {
+          "id": "three-layer-validation",
+          "title": {
+            "en": "Three-Layer Validation",
+            "ru": "Трехуровневая валидация"
+          },
+          "path": {
+            "en": "development/three-layer-validation.en.md",
+            "ru": "development/three-layer-validation.ru.md"
+          },
+          "page_type": "process",
+          "summary": {
+            "en": "The required testing strategy for validating protocol and economic changes in DEOS.",
+            "ru": "Обязательная стратегия проверки протокольных и экономических изменений в DEOS."
+          }
+        },
+        {
+          "id": "status",
+          "title": {
+            "en": "Development Status",
+            "ru": "Статус разработки"
+          },
+          "path": {
+            "en": "development/status.en.md",
+            "ru": "development/status.ru.md"
+          },
+          "page_type": "status",
+          "summary": {
+            "en": "Current implementation status, roadmap context, and active backlog items.",
+            "ru": "Текущий статус реализации, контекст дорожной карты и главные активные направления работы."
+          }
+        }
+      ]
+    },
+    {
+      "id": "philosophy-and-orientation",
+      "title": {
+        "en": "Philosophy and Orientation",
+        "ru": "Философия и ориентация"
+      },
+      "items": [
+        {
+          "id": "physics-vs-politics",
+          "title": {
+            "en": "Physics-First vs Politics-First",
+            "ru": "Physics-first против politics-first"
+          },
+          "path": {
+            "en": "comparisons/physics-vs-politics.en.md",
+            "ru": "comparisons/physics-vs-politics.ru.md"
+          },
+          "page_type": "comparison",
+          "summary": {
+            "en": "The manifesto-level contrast between structural economic physics and politics-by-default.",
+            "ru": "Сравнение между подходом, где правила выживания закреплены в экономической «физике», и подходом, где они остаются предметом обычной политики."
+          }
+        }
+      ]
+    },
+    {
+      "id": "community-and-governance",
+      "title": {
+        "en": "Community and Governance",
+        "ru": "Сообщество и управление"
+      },
+      "items": [
+        {
+          "id": "contributing",
+          "title": {
+            "en": "Contributing Guidelines",
+            "ru": "Руководство контрибьютора"
+          },
+          "path": {
+            "en": "community/contributing.en.md",
+            "ru": "community/contributing.ru.md"
+          },
+          "page_type": "process",
+          "summary": {
+            "en": "How to contribute to the DEOS framework, understand the philosophy, and navigate validation gates.",
+            "ru": "Как вносить вклад в DEOS, понимать философию проекта и проходить нужные этапы валидации."
+          }
+        }
+      ]
+    }
+  ]
+}
