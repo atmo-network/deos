@@ -90,7 +90,7 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 
 ### On-Chain Canonical Projection
 
-- `Location -> AssetId` mapping
+- Bidirectional `Location <-> AssetId` mapping
 - Deterministic foreign-asset identity and metadata
 - Governance-controlled registration/migration state
 - Well-known protocol asset identity surfaces
@@ -99,7 +99,7 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 
 - Registration history timelines
 - Migration history timelines
-- Ecosystem catalog browsing/search
+- Ecosystem catalog browsing/search beyond the bounded reverse projection
 - Operational asset onboarding dashboards
 
 ### 4.4 AAA / Automation Kernel

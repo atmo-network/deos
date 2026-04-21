@@ -50,6 +50,8 @@ The project is a `Specification & Reference Framework`.
 
 `Adoption Model`: DEOS is meant to be forked by partner teams launching their own ecosystems on top of the shared framework. Those downstream ecosystems may contribute stabilizations, client/indexer/read-model improvements, and other framework-hardening work back into DEOS/TMCTOL, while business-product logic stays downstream rather than accreting inside the core repo.
 
+`Release-Line Reset`: After the move into the standalone DEOS repository, the canonical framework release line restarts at `0.1.0`. `CHANGELOG.md` SHOULD therefore summarize achieved epics and the present shipped baseline of this repo line rather than preserving every intermediate implementation step or inherited pre-reset chronology.
+
 ## 2. Identity & Naming Contract
 
 > This section freezes project vocabulary and brand boundaries. It exists separately because naming drift creates system-wide confusion across docs, runtime surfaces, client copy, and backlog state.
@@ -132,6 +134,7 @@ _Implemented in `/template/pallets`, bound by Substrate logic._
 - `Type System Discipline`: Enforced strict `sp_arithmetic::Perbill` for ecosystem parameters. Adopted `sp_core::U256` for bonding curve calculations to prevent intermediate overflows.
 - `Logical-First Naming`: Stable docs/specs SHOULD name scheduler/storage abstractions by role first and reference-runtime representation second. Example: `time-ordered wakeup index` is the contract; block-bucketed map, tree-backed index, or other representation is an implementation choice until benchmark evidence promotes it to stable architecture.
 - `assets-common Rejected`: The `assets-common` crate (Location-as-AssetId, TrustBacked, ERC20/pallet-revive) is designed for Asset Hub pattern. Incompatible with TMCTOL's `u32` bitmask + `pallet-asset-registry` architecture. `pallet-asset-registry` already provides `MaybeEquivalence<Location, AssetId>`.
+- `Reverse-Index Preference`: When a subsystem needs bounded reverse lookup, bijectivity enforcement, or inverse conversion as part of the live contract, persist the reverse mapping as first-class state instead of recomputing the inverse relation through scans, ad hoc indexes, or weight-time storage reads.
 - `Stateful Testing`: Mocks use `RefCell<BTreeMap>` for realistic AMM simulation and TMC behavior, enabling "Mechanism Verification" over simple policy checks.
 
 ### 5.2 Constitutional & Product-Surface Architecture
@@ -196,6 +199,7 @@ Truth for protocol and economic changes is established in three layers. Use ever
 ### 6.4 Evolution Principles
 
 - `Forkability`: Changes in `/template` must maintain generic utility. Do not hardcode ecosystem-specific logic into the generic framework components.
+- `Pre-Fork Storage-Lineage Discipline`: This repository is a forkable framework with no implicit deployed-chain lineage of its own. Until a downstream fork launches a concrete chain, treat pallet storage versions as fresh-baseline schema markers and delete/reset historical `OnRuntimeUpgrade` migration ceremony instead of preserving in-repo upgrade archaeology. Once a forked chain exists, storage migrations become fork-owned delivery work and must then be handled explicitly.
 - `Emergent Complexity`: Features like "Gravity Well" are `evolved complexity`. They are protected. Complicated spaghetti code is `accidental complexity`. It is destroyed.
 - `Evidence-First Vocabulary`: Do not let architectural vocabulary outrun measured necessity. If a structure (`tree`, `heap`, specialized index) is still exploratory, keep it as roadmap/architecture discussion until insert/extract/proof-size evidence justifies making it part of the stable contract.
 - `Premature Optimization Discipline`: While the project is still architecturally raw, prefer business-facing correctness, product flows, and contract honesty over speculative lazy-loading, bundle-shaping, or other micro-optimizations. Do not add performance indirection unless tests, validation tooling, profiling, or real user/operator pain identify a concrete hotspot. Measure first, optimize second, and revert complexity that fails to produce meaningful wins.
@@ -260,7 +264,7 @@ Truth for protocol and economic changes is established in three layers. Use ever
 
 ### 8.2 Network Integration Protocol
 
-- `Hybrid Registration Protocol`: Generate `AssetId` via `Blake2(Location)` only at first governance registration, then persist `Location -> AssetId` in `pallet-asset-registry` so later XCM-version migrations can update the location key without breaking balances.
+- `Hybrid Registration Protocol`: Generate `AssetId` via `Blake2(Location)` only at first governance registration, then persist a bidirectional `Location <-> AssetId` registry in `pallet-asset-registry` so later XCM-version key changes can update the location side without breaking balances while reverse lookup and bijectivity stay O(1).
 - `Token-Domain Bootstrap Protocol`: Runtime glue hooks on Asset Registry registration and TMC curve creation must remain idempotent and deterministic. Preferred default mapping is `tol_id = token_asset_id` for non-LP assets, with governance override available via explicit binding extrinsics.
 - `Sovereign Liquidity`: The Parachain treats itself as a sovereign entity. It does not trust foreign chains to manage its liquidity; it pulls assets into its own local `pallet-assets` registry via XCM Reserve Transfers.
 

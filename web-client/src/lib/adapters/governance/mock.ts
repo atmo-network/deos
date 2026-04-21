@@ -36,7 +36,7 @@ import type {
 } from "$lib/governance";
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
-  GOVERNANCE_RUNTIME_WRITE_SURFACE,
+  buildWriteSurfaceAvailability,
 } from "$lib/governance";
 
 type OrdinaryVoteKind = Extract<
@@ -928,51 +928,16 @@ function settlementOutcome(
 }
 
 function availableWriteSurface(): GovernanceWriteSurfaceAvailability {
-  return {
-    castVote: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.castVote,
-      providerStatus: "available",
-      reason: "Stateful mock provider allows interactive vote previews",
-    },
-    submitProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.submitProposal,
-      providerStatus: "available",
-      reason:
-        "Stateful mock provider allows interactive signed public submission previews",
-    },
-    noteProposalPreimage: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.noteProposalPreimage,
-      providerStatus: "available",
-      reason:
-        "Stateful mock provider allows interactive preimage-note previews",
-    },
-    resolveProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.resolveProposal,
-      providerStatus: "available",
-      reason: "Stateful mock provider allows manual resolution previews",
-    },
-    rejectProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.rejectProposal,
-      providerStatus: "available",
-      reason: "Stateful mock provider allows admin rejection previews",
-    },
-    resolveProposalFromVotes: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.resolveProposalFromVotes,
-      providerStatus: "available",
-      reason: "Stateful mock provider allows maturity-time resolution previews",
-    },
-    forceResolveProposalFromVotes: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.forceResolveProposalFromVotes,
-      providerStatus: "available",
-      reason: "Stateful mock provider allows early-finalization previews",
-    },
-    requeueProposalForAutoFinalization: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.requeueProposalForAutoFinalization,
-      providerStatus: "available",
-      reason:
-        "Stateful mock provider allows auto-finalization recovery previews",
-    },
-  };
+  return buildWriteSurfaceAvailability({
+    castVote: { providerStatus: "available", reason: "Stateful mock provider allows interactive vote previews" },
+    submitProposal: { providerStatus: "available", reason: "Stateful mock provider allows interactive signed public submission previews" },
+    noteProposalPreimage: { providerStatus: "available", reason: "Stateful mock provider allows interactive preimage-note previews" },
+    resolveProposal: { providerStatus: "available", reason: "Stateful mock provider allows manual resolution previews" },
+    rejectProposal: { providerStatus: "available", reason: "Stateful mock provider allows admin rejection previews" },
+    resolveProposalFromVotes: { providerStatus: "available", reason: "Stateful mock provider allows maturity-time resolution previews" },
+    forceResolveProposalFromVotes: { providerStatus: "available", reason: "Stateful mock provider allows early-finalization previews" },
+    requeueProposalForAutoFinalization: { providerStatus: "available", reason: "Stateful mock provider allows auto-finalization recovery previews" },
+  });
 }
 
 export class GovernanceMockAdapter implements GovernanceAdapter {

@@ -65,11 +65,19 @@ function parseBeneficiary(value: string) {
   try {
     const bytes = decodeAddress(trimmed);
     if (bytes.length !== 32) {
-      return { valid: false, bytes: null as Uint8Array | null, normalized: trimmed };
+      return {
+        valid: false,
+        bytes: null as Uint8Array | null,
+        normalized: trimmed,
+      };
     }
     return { valid: true, bytes: Uint8Array.from(bytes), normalized: trimmed };
   } catch {
-    return { valid: false, bytes: null as Uint8Array | null, normalized: trimmed };
+    return {
+      valid: false,
+      bytes: null as Uint8Array | null,
+      normalized: trimmed,
+    };
   }
 }
 

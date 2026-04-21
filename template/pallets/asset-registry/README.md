@@ -13,7 +13,7 @@ The current kernel/runtime slice provides:
 
 - Governance-controlled foreign asset registration from XCM `Location`
 - Deterministic foreign `AssetId` generation for new registrations
-- Persistent `Location -> AssetId` storage as the runtime source of truth
+- Persistent bidirectional `Location <-> AssetId` storage as the runtime source of truth
 - Manual registration with explicit `AssetId` override for collision handling
 - Linking of pre-existing local assets to foreign `Location` keys
 - Location-key migration for XCM version / encoding changes

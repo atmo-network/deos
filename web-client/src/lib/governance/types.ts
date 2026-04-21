@@ -308,8 +308,13 @@ export type GovernanceWriteOperation =
   | "requeueProposalForAutoFinalization";
 export type GovernanceWriteAccessKind = "signed" | "admin";
 export type GovernanceWriteProviderStatus = "available" | "unavailable";
-export type GovernanceProviderStatus = "mock" | TmctolChainConnectionState["status"];
-export type GovernanceProviderState = Omit<TmctolChainConnectionState, "status"> & {
+export type GovernanceProviderStatus =
+  | "mock"
+  | TmctolChainConnectionState["status"];
+export type GovernanceProviderState = Omit<
+  TmctolChainConnectionState,
+  "status"
+> & {
   status: GovernanceProviderStatus;
 };
 export type GovernanceWriteCapability = {
@@ -454,74 +459,6 @@ export type GovernanceAdapter = GovernanceReadAdapter &
   GovernanceVoteWriteAdapter &
   GovernanceProposalWriteAdapter;
 
-export const GOVERNANCE_QUERY_SURFACE_AVAILABILITY: GovernanceQuerySurfaceAvailability = {
-  activeProposalDiscovery: "onchain",
-  recentFinalizedDiscovery: "onchain",
-  proposalStatus: "onchain",
-  proposalMetadata: "onchain",
-  proposalExecutionAuthority: "onchain",
-  authorizedRuntimeUpgrade: "onchain",
-  proposalSubmissionAuthority: "onchain",
-  proposalOpeningFee: "onchain",
-  proposalPayloadAvailability: "onchain",
-  payloadHashPreimageStatus: "onchain",
-  payloadPreimageNoteCost: "onchain",
-  proposalPrimaryTrackFamily: "onchain",
-  proposalPrimaryTrackTally: "onchain",
-  proposalWinningPrimaryOption: "onchain",
-  proposalTiming: "onchain",
-  proposalUrgentEligibility: "onchain",
-  proposalTally: "onchain",
-  votePowerProfiles: "onchain",
-  rewardCoefficient: "onchain",
-  govxpCounters: "onchain",
-  proposalExecutionDetail: "onchain",
-  ballotTimelines: "materialized",
-  archiveSearch: "materialized",
-};
-export const GOVERNANCE_RUNTIME_WRITE_SURFACE: GovernanceWriteSurfaceAvailability = {
-  castVote: {
-    runtimeAccess: "signed",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  submitProposal: {
-    runtimeAccess: "signed",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  noteProposalPreimage: {
-    runtimeAccess: "signed",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  resolveProposal: {
-    runtimeAccess: "admin",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  rejectProposal: {
-    runtimeAccess: "admin",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  resolveProposalFromVotes: {
-    runtimeAccess: "admin",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  forceResolveProposalFromVotes: {
-    runtimeAccess: "admin",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-  requeueProposalForAutoFinalization: {
-    runtimeAccess: "admin",
-    providerStatus: "unavailable",
-    reason: "Provider support not declared yet",
-  },
-};
-
 // --- UI domain types (previously in governance/types.ts) ---
 
 export type GovernancePanelProposal = {
@@ -537,19 +474,22 @@ export type GovernancePanelProposal = {
   urgentEligibility: boolean | null;
   primaryTrackTally: GovernanceProposalPrimaryTrackTally | null;
   tally: GovernanceProposalVoteTally | null;
-  votePowerProfiles: Partial<Record<GovernanceVoteKind, GovernanceVotePowerProfile>>;
+  votePowerProfiles: Partial<
+    Record<GovernanceVoteKind, GovernanceVotePowerProfile>
+  >;
 };
 
-export type GovernanceRetainedFinalizedProposal = GovernanceRecentFinalizedProposal & {
-  metadata: GovernanceProposalMetadata | null;
-  executionAuthority: GovernanceProposalExecutionAuthority | null;
-  submissionAuthority: GovernanceProposalSubmissionAuthority | null;
-  openingFee: GovernanceProposalOpeningFee | null;
-  payloadAvailability: GovernanceProposalPayloadAvailability | null;
-  primaryTrackFamily: GovernanceProposalPrimaryTrackFamily | null;
-  winningPrimaryOption: GovernancePrimaryTrackOption | null;
-  urgentEligibility: boolean | null;
-};
+export type GovernanceRetainedFinalizedProposal =
+  GovernanceRecentFinalizedProposal & {
+    metadata: GovernanceProposalMetadata | null;
+    executionAuthority: GovernanceProposalExecutionAuthority | null;
+    submissionAuthority: GovernanceProposalSubmissionAuthority | null;
+    openingFee: GovernanceProposalOpeningFee | null;
+    payloadAvailability: GovernanceProposalPayloadAvailability | null;
+    primaryTrackFamily: GovernanceProposalPrimaryTrackFamily | null;
+    winningPrimaryOption: GovernancePrimaryTrackOption | null;
+    urgentEligibility: boolean | null;
+  };
 
 export type GovernancePublicSubmissionOption = {
   payloadKind: GovernanceProposalPayloadKind;
@@ -566,7 +506,9 @@ export type GovernanceViewerState = {
   submissionOptions: GovernancePublicSubmissionOption[];
   authorizedRuntimeUpgrade: GovernanceAuthorizedRuntimeUpgrade | null;
   recentFinalizedProposals: GovernanceRetainedFinalizedProposal[];
-  recentFinalizedProposalsView: ReadModelValue<GovernanceRetainedFinalizedProposal[]> | null;
+  recentFinalizedProposalsView: ReadModelValue<
+    GovernanceRetainedFinalizedProposal[]
+  > | null;
   rewardCoefficient: string | null;
   govxpCounters: {
     rollingWinningParticipation: number;

@@ -365,14 +365,14 @@ The DEOS reference runtime extends its "Omnivorous" philosophy to the Polkadot e
 The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay Chain and Sibling Parachains after governance registration in the Asset Registry.
 
 - `Ingress Protocol`: The system accepts `ReserveAssetDeposited` and `Teleport` instructions.
-- `Asset Mapping (Hybrid)`: `Location -> AssetId` stored on-chain in the Asset Registry; IDs generated once at registration (hash(Location)) and persisted. Protects against XCM version drift (v5→v6) via key migration without changing `AssetId`.
+- `Asset Mapping (Hybrid)`: bidirectional `Location <-> AssetId` stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
 - `Holding Register`: Incoming assets are held in a temporary register before being dispatched to the `ForeignAssetsTransactor`.
 
 ### 6.2 Foreign Asset Transactor
 
 The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridge between XCM locations and the internal `pallet-assets` registry.
 
-- `Storage Lookup`: Uses the Asset Registry mapping (O(1) storage) to resolve `Location -> AssetId` (`0xF...` namespace).
+- `Storage Lookup`: Uses the Asset Registry mapping (O(1) storage) to resolve `Location -> AssetId` (`0xF...` namespace), with symmetric reverse lookup available when runtime integration needs `AssetId -> Location`.
 - `Governance-Gated Onboarding`: New assets are registered via registry extrinsics (deterministic ID, manual ID, or linking pre-created `0xF...`), then consumed by XCM flows.
 
 ### 6.3 Cross-Chain Identity
@@ -449,5 +449,5 @@ By expressing all deterministic economic flows as declarative execution plans on
 
 ---
 
-- `Version`: 0.0.0
+- `Version`: 0.1.0
 - `Last Updated`: March 2026

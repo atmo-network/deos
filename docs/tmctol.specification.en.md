@@ -833,7 +833,7 @@ System exhibits predicted dynamics (floor elevation, range compression) only whe
 
 ---
 
-- `Version`: 0.0.0
+- `Version`: 0.1.0
 - `Date`: April 2026
 - `Author`: LLB Lab
 - `License`: MIT

@@ -54,7 +54,7 @@ import type {
 } from "$lib/governance";
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
-  GOVERNANCE_RUNTIME_WRITE_SURFACE,
+  buildWriteSurfaceAvailability,
 } from "$lib/governance";
 import type { GovernanceBlockchainProvider } from "./provider";
 import { DEFAULT_GOVERNANCE_WS_ENDPOINT } from "$lib/governance";
@@ -66,40 +66,16 @@ type GovernanceSnapshot = TmctolChainSnapshot;
 type GovernanceEnum<T extends Record<string, unknown>> = PapiRuntimeEnum<T>;
 
 function unavailableWriteSurface(reason: string): GovernanceWriteSurfaceAvailability {
-  return {
-    castVote: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.castVote,
-      reason,
-    },
-    submitProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.submitProposal,
-      reason,
-    },
-    noteProposalPreimage: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.noteProposalPreimage,
-      reason,
-    },
-    resolveProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.resolveProposal,
-      reason,
-    },
-    rejectProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.rejectProposal,
-      reason,
-    },
-    resolveProposalFromVotes: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.resolveProposalFromVotes,
-      reason,
-    },
-    forceResolveProposalFromVotes: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.forceResolveProposalFromVotes,
-      reason,
-    },
-    requeueProposalForAutoFinalization: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.requeueProposalForAutoFinalization,
-      reason,
-    },
-  };
+  return buildWriteSurfaceAvailability({
+    castVote: { reason },
+    submitProposal: { reason },
+    noteProposalPreimage: { reason },
+    resolveProposal: { reason },
+    rejectProposal: { reason },
+    resolveProposalFromVotes: { reason },
+    forceResolveProposalFromVotes: { reason },
+    requeueProposalForAutoFinalization: { reason },
+  });
 }
 
 function fixedU128String(value: bigint): GovernanceRewardCoefficient {
@@ -162,43 +138,17 @@ function papiWriteSurfaceAvailability(options: {
   signedWriteReason: string;
   adminReason: string;
 }): GovernanceWriteSurfaceAvailability {
-  return {
-    castVote: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.castVote,
-      providerStatus: options.signedWriteAvailable ? "available" : "unavailable",
-      reason: options.signedWriteReason,
-    },
-    submitProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.submitProposal,
-      providerStatus: options.signedWriteAvailable ? "available" : "unavailable",
-      reason: options.signedWriteReason,
-    },
-    noteProposalPreimage: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.noteProposalPreimage,
-      providerStatus: options.signedWriteAvailable ? "available" : "unavailable",
-      reason: options.signedWriteReason,
-    },
-    resolveProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.resolveProposal,
-      reason: options.adminReason,
-    },
-    rejectProposal: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.rejectProposal,
-      reason: options.adminReason,
-    },
-    resolveProposalFromVotes: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.resolveProposalFromVotes,
-      reason: options.adminReason,
-    },
-    forceResolveProposalFromVotes: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.forceResolveProposalFromVotes,
-      reason: options.adminReason,
-    },
-    requeueProposalForAutoFinalization: {
-      ...GOVERNANCE_RUNTIME_WRITE_SURFACE.requeueProposalForAutoFinalization,
-      reason: options.adminReason,
-    },
-  };
+  const signedStatus = options.signedWriteAvailable ? "available" : "unavailable";
+  return buildWriteSurfaceAvailability({
+    castVote: { providerStatus: signedStatus, reason: options.signedWriteReason },
+    submitProposal: { providerStatus: signedStatus, reason: options.signedWriteReason },
+    noteProposalPreimage: { providerStatus: signedStatus, reason: options.signedWriteReason },
+    resolveProposal: { reason: options.adminReason },
+    rejectProposal: { reason: options.adminReason },
+    resolveProposalFromVotes: { reason: options.adminReason },
+    forceResolveProposalFromVotes: { reason: options.adminReason },
+    requeueProposalForAutoFinalization: { reason: options.adminReason },
+  });
 }
 
 function mapRejectionReason(

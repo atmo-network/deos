@@ -274,7 +274,7 @@ The temporal wakeup layer is a scheduler responsibility, not just a storage map:
 
 ### Starvation Safeguard
 
-Current implementation now follows the polished `0.0.0` starvation automaton: `IdleStarvationBlocks` increments only when the breaker is inactive and bounded housekeeping leaves zero remaining `on_idle` execution budget, resets as soon as positive post-housekeeping budget exists, and emits `IdleStarvationDetected` exactly once on threshold crossing.
+Current implementation now follows the polished `0.1.0` starvation automaton: `IdleStarvationBlocks` increments only when the breaker is inactive and bounded housekeeping leaves zero remaining `on_idle` execution budget, resets as soon as positive post-housekeeping budget exists, and emits `IdleStarvationDetected` exactly once on threshold crossing.
 
 Recovery is governance-operated (circuit breaker or parameter adjustment); no emergency cycle execution occurs in `on_initialize`.
 
@@ -651,7 +651,7 @@ Local runtime-invariant dry-run wrapper: `./scripts/try-runtime-local.sh --prepa
 
 ---
 
-- `Version`: 0.0.0 (Implementation mirror for [Specification](./aaa.specification.en.md))
+- `Version`: 0.1.0 (Implementation mirror for [Specification](./aaa.specification.en.md))
 - `Last Updated`: March 2026
 - `Author`: LLB Lab
 - `License`: MIT

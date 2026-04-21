@@ -98,6 +98,12 @@ pub mod pallet {
   pub type ForeignAssetMapping<T: Config> =
     StorageMap<_, Blake2_128Concat, Location, T::AssetId, OptionQuery>;
 
+  /// Reverse mapping from Local AssetId back to XCM Location.
+  #[pallet::storage]
+  #[pallet::getter(fn asset_to_location)]
+  pub type ForeignAssetLocationByAssetId<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AssetId, Location, OptionQuery>;
+
   #[pallet::event]
   #[pallet::generate_deposit(pub(super) fn deposit_event)]
   pub enum Event<T: Config> {
@@ -171,7 +177,7 @@ pub mod pallet {
         return Err(Error::<T>::AssetIdCollision.into());
       }
       // 4. Persist Mapping
-      ForeignAssetMapping::<T>::insert(&location, &asset_id);
+      Self::insert_mapping(&location, asset_id);
       // 5. Prepare Asset Owner
       // `pallet-assets` requires the owner to be passed as a Source (lookup target)
       let owner = T::AssetOwner::get();
@@ -241,7 +247,7 @@ pub mod pallet {
         return Err(Error::<T>::AssetIdCollision.into());
       }
       // 4. Persist Mapping
-      ForeignAssetMapping::<T>::insert(&location, &asset_id);
+      Self::insert_mapping(&location, asset_id);
       // 5. Prepare Asset Owner
       let owner = T::AssetOwner::get();
       let owner_source = T::Lookup::unlookup(owner);
@@ -278,9 +284,7 @@ pub mod pallet {
     /// Useful if the asset was created manually via `force_create` and now needs XCM binding.
     /// The AssetId must exist and have the correct FOREIGN mask.
     #[pallet::call_index(2)]
-    #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::link_existing_asset(
-      ForeignAssetMapping::<T>::iter_keys().count() as u32
-    ))]
+    #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::link_existing_asset())]
     pub fn link_existing_asset(
       origin: OriginFor<T>,
       location: Location,
@@ -304,13 +308,12 @@ pub mod pallet {
         Error::<T>::AssetNotFound
       );
       // 4. Bijectivity guard: ensure asset_id is not already mapped to a different location
-      for (_loc, mapped_id) in ForeignAssetMapping::<T>::iter() {
-        if mapped_id == asset_id {
-          return Err(Error::<T>::AssetAlreadyRegistered.into());
-        }
-      }
+      ensure!(
+        !ForeignAssetLocationByAssetId::<T>::contains_key(asset_id),
+        Error::<T>::AssetAlreadyRegistered
+      );
       // 5. Persist Mapping
-      ForeignAssetMapping::<T>::insert(&location, &asset_id);
+      Self::insert_mapping(&location, asset_id);
       // 6. Notify token-domain hook
       T::TokenDomainHook::on_token_registered(primitives::AssetKind::Foreign(asset_id.into()))?;
       // 7. Emit Event (Reuse registration event as the outcome is the same: mapping created)
@@ -341,7 +344,7 @@ pub mod pallet {
         Error::<T>::AssetAlreadyRegistered
       );
       ForeignAssetMapping::<T>::remove(&old_location);
-      ForeignAssetMapping::<T>::insert(&new_location, &asset_id);
+      Self::insert_mapping(&new_location, asset_id);
       Self::deposit_event(Event::MigrationApplied {
         asset_id,
         old_location,
@@ -358,6 +361,11 @@ pub mod pallet {
       ensure!(metadata.symbol.len() <= limit, Error::<T>::MetadataTooLong);
       Ok(())
     }
+
+    fn insert_mapping(location: &Location, asset_id: T::AssetId) {
+      ForeignAssetMapping::<T>::insert(location, &asset_id);
+      ForeignAssetLocationByAssetId::<T>::insert(&asset_id, location.clone());
+    }
   }
 
   /// Implementation of Convert trait to be used by xcm_config for LocationToAssetId lookup.
@@ -372,8 +380,8 @@ pub mod pallet {
       ForeignAssetMapping::<T>::get(location)
     }
 
-    fn convert_back(_: &T::AssetId) -> Option<Location> {
-      None
+    fn convert_back(asset_id: &T::AssetId) -> Option<Location> {
+      ForeignAssetLocationByAssetId::<T>::get(asset_id)
     }
   }
 
@@ -386,28 +394,45 @@ pub mod pallet {
       use alloc::collections::BTreeSet;
       use polkadot_sdk::sp_runtime::TryRuntimeError;
       let mut seen_ids = BTreeSet::new();
+      let mut forward_count = 0u64;
       let mut mapping_iter = ForeignAssetMapping::<T>::iter();
       while let Some((location, asset_id)) = mapping_iter.next() {
-        // Invariant 1: No two locations map to the same AssetId (bijectivity)
+        forward_count = forward_count.saturating_add(1);
         let id_u32: u32 = asset_id.into();
         if !seen_ids.insert(id_u32) {
           return Err(TryRuntimeError::Other(
             "ForeignAssetMapping: duplicate AssetId for different Locations",
           ));
         }
-        // Invariant 2: Every mapped AssetId has the FOREIGN bitmask
         if (id_u32 & primitives::assets::MASK_TYPE) != primitives::assets::TYPE_FOREIGN {
           return Err(TryRuntimeError::Other(
             "ForeignAssetMapping: AssetId does not have FOREIGN bitmask",
           ));
         }
-        // Invariant 3: Every mapped AssetId exists in pallet-assets
         if !pallet_assets::Pallet::<T>::asset_exists(asset_id) {
           return Err(TryRuntimeError::Other(
             "ForeignAssetMapping: AssetId does not exist in pallet-assets",
           ));
         }
-        let _ = location;
+        match ForeignAssetLocationByAssetId::<T>::get(asset_id) {
+          Some(reverse_location) if reverse_location == location => {}
+          Some(_) => {
+            return Err(TryRuntimeError::Other(
+              "ForeignAssetLocationByAssetId: reverse mapping points to a different Location",
+            ));
+          }
+          None => {
+            return Err(TryRuntimeError::Other(
+              "ForeignAssetLocationByAssetId: missing reverse mapping",
+            ));
+          }
+        }
+      }
+      let reverse_count = ForeignAssetLocationByAssetId::<T>::iter_keys().count() as u64;
+      if reverse_count != forward_count {
+        return Err(TryRuntimeError::Other(
+          "ForeignAssetLocationByAssetId: forward and reverse mapping counts diverge",
+        ));
       }
       Ok(())
     }

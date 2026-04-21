@@ -1,4 +1,8 @@
-import type { GovernanceDomainId, GovernanceItemId, GovernanceVoteKind } from "./types";
+import type {
+  GovernanceDomainId,
+  GovernanceItemId,
+  GovernanceVoteKind,
+} from "./types";
 
 export type GovernanceMaterializedArchiveEntry = {
   itemId: GovernanceItemId;
@@ -38,14 +42,16 @@ const ARCHIVE_BY_DOMAIN: Record<
     {
       itemId: 311,
       title: "Treasury buffer risk response",
-      summary: "Protected referendum with live veto pressure and split ordinary turnout",
+      summary:
+        "Protected referendum with live veto pressure and split ordinary turnout",
       finalizedAtEpoch: 42,
       outcomeLabel: "Active / veto pressure",
     },
     {
       itemId: 309,
       title: "Router fee retune",
-      summary: "Proposal failed approval threshold after bounded voting window closed",
+      summary:
+        "Proposal failed approval threshold after bounded voting window closed",
       finalizedAtEpoch: 41,
       outcomeLabel: "Rejected",
     },
@@ -59,7 +65,8 @@ const ARCHIVE_BY_DOMAIN: Record<
     {
       itemId: 307,
       title: "Emergency protected veto test",
-      summary: "Finalized through veto cancellation path after protected-track intervention",
+      summary:
+        "Finalized through veto cancellation path after protected-track intervention",
       finalizedAtEpoch: 39,
       outcomeLabel: "Veto cancelled",
     },
@@ -144,9 +151,7 @@ const BALLOT_TIMELINES: Record<
   },
 };
 
-export class GovernanceMockMaterializedProvider
-  implements GovernanceMaterializedProvider
-{
+export class GovernanceMockMaterializedProvider implements GovernanceMaterializedProvider {
   label(): string {
     return "Mock materialized governance view";
   }
@@ -180,12 +185,9 @@ export class GovernanceMockMaterializedProvider
   }
 }
 
-export class GovernanceUnavailableMaterializedProvider
-  implements GovernanceMaterializedProvider
-{
+export class GovernanceUnavailableMaterializedProvider implements GovernanceMaterializedProvider {
   constructor(
-    private readonly unavailableReason =
-      "No indexed governance backend configured for archive search or ballot timelines",
+    private readonly unavailableReason = "No indexed governance backend configured for archive search or ballot timelines",
   ) {}
 
   label(): string {

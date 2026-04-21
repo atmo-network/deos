@@ -71,7 +71,7 @@ Implementation-specific documents describing how the current runtime realizes th
   The unidirectional minting engine. Covers the current runtime realization of the linear bonding curve, integral-based minting, read surfaces, and conservation invariants.
 
 - `[Asset Registry Architecture](./asset-registry.architecture.en.md)`
-  The foreign asset gateway. Documents the Hybrid Registry pattern: deterministic hashing at registration, persistent Location→AssetId mapping, and XCM version migration.
+  The foreign asset gateway. Documents the Hybrid Registry pattern: deterministic hashing at registration, persistent bidirectional `Location <-> AssetId` mapping, and XCM location-key migration.
 
 - `[Randomness Strategy](./randomness.strategy.en.md)`
   Secondary operational note for the current launch line. Documents the retirement of the local `pallet-vrf` line, the trusted team-operated collator posture plus previous-block-hash fallback used for the first mainnet, and the gate for any future relay-beacon replacement: only a new parachain-consumable per-block protocol beacon qualifies.

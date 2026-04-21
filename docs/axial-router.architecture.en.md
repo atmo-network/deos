@@ -378,7 +378,7 @@ Axial Router is the central nervous system of the TMCTOL economic model. By stri
 
 ---
 
-- `Version`: 0.0.0
+- `Version`: 0.1.0
 - `Last Updated`: February 2026
 - `Author`: LLB Lab
 - `License`: MIT

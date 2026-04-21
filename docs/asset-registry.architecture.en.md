@@ -7,19 +7,19 @@
 
 ## Executive Summary
 
-The Asset Registry is the `Foreign Asset Gateway` that bridges XCM locations into the runtime's native asset system. It maintains a persistent mapping between XCM `Location` identifiers and deterministic `AssetId` values, creating a "digital twin" for every registered foreign asset.
+The Asset Registry is the `Foreign Asset Gateway` that bridges XCM locations into the runtime's native asset system. It maintains a persistent bidirectional mapping between XCM `Location` identifiers and deterministic `AssetId` values, creating a stable digital twin for every registered foreign asset.
 
-It implements a `Hybrid Registry Pattern`: deterministic ID generation via BLAKE2 hashing at registration time, combined with persistent storage for XCM version resilience. Once registered, foreign assets become first-class citizens in `pallet-assets`, enabling seamless integration with the Router, Burning Manager, and Zap Manager.
+It implements a `Hybrid Registry Pattern`: deterministic ID generation via BLAKE2 hashing at registration time, combined with persistent bidirectional storage for XCM location-key resilience and O(1) inverse lookup. Once registered, foreign assets become first-class citizens in `pallet-assets`, enabling seamless integration with the Router, Burning Manager, and Zap Manager.
 
 ## Architecture Overview
 
 ### Design Philosophy
 
 1. `Deterministic ID Generation`: BLAKE2 hash of XCM Location → 32-bit index with 0xF type prefix
-2. `XCM Version Resilience`: Storage persistence survives Location encoding changes (v4 → v5)
-3. `Namespace Safety`: Bitmask classification prevents foreign/local/LP/native collisions
-4. `Migration Support`: `migrate_location_key` allows updating Location keys without breaking balances
-5. `Governance Control`: All registration requires `RegistryOrigin` (Root/Governance)
+2. `Bidirectional Identity`: the live contract persists both `Location -> AssetId` and `AssetId -> Location`
+3. `XCM Version Resilience`: storage persistence survives Location encoding changes (v4 → v5)
+4. `Namespace Safety`: bitmask classification prevents foreign/local/LP/native collisions
+5. `Governance Control`: all registration requires `RegistryOrigin` (Root/Governance)
 
 ### Architectural Boundary
 
@@ -87,7 +87,8 @@ graph TD
 `Phase 4 — Persistence`:
 
 1. Store `ForeignAssetMapping[location] = asset_id`
-2. Emit `ForeignAssetRegistered { asset_id, location, symbol }`
+2. Store `ForeignAssetLocationByAssetId[asset_id] = location`
+3. Emit `ForeignAssetRegistered { asset_id, location, symbol }`
 
 ### Why Hybrid (Not Pure Hashing)?
 
@@ -147,15 +148,24 @@ pub fn is_foreign(asset_id: AssetId) -> bool {
 
 ## Core Components
 
-### 1. ForeignAssetMapping Storage
+### 1. Bidirectional Registry Storage
 
 ```rust
 #[pallet::storage]
 pub type ForeignAssetMapping<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
-    Location,  // XCM MultiLocation
-    AssetId,   // u32 with 0xF type prefix
+    Location,
+    AssetId,
+    OptionQuery,
+>;
+
+#[pallet::storage]
+pub type ForeignAssetLocationByAssetId<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    AssetId,
+    Location,
     OptionQuery,
 >;
 ```
@@ -163,7 +173,8 @@ pub type ForeignAssetMapping<T: Config> = StorageMap<
 `Access patterns`:
 
 - `location_to_asset(location)` → O(1) lookup during XCM execution
-- Iterated during governance audits (rare)
+- `asset_to_location(asset_id)` / `convert_back(asset_id)` → O(1) reverse lookup when the runtime needs inverse identity
+- Bijectivity checks stay O(1) instead of scanning all registered foreign assets
 
 ### 2. AssetIdGenerator (xcm_config.rs)
 
@@ -218,11 +229,12 @@ This subsystem follows the project-wide [`read-model.contract.en.md`](./read-mod
 The current pallet already provides chain-native bounded reads for foreign-asset identity truth through:
 
 - `location_to_asset(location)` as the authoritative `Location -> AssetId` mapping
+- `asset_to_location(asset_id)` / `MaybeEquivalence::convert_back(asset_id)` as the bounded reverse projection
 - the linked `pallet-assets` existence/metadata surface for a known `AssetId`
 - governance-controlled registration and migration events/state transitions for known assets
 - deterministic namespace validation (`0xF...`) and runtime hook side effects that make a registered foreign asset economically visible to the rest of TMCTOL
 
-These are the authoritative bounded surfaces for known-location resolution and live foreign-asset identity.
+These are the authoritative bounded surfaces for live foreign-asset identity in both directions.
 
 ### Indexed / materialized asset-registry views
 
@@ -230,18 +242,19 @@ The pallet intentionally does **not** promise these as canonical on-chain surfac
 
 - full registration history timelines
 - migration history timelines
-- reverse catalog browsing/search across all registered foreign assets
+- broad catalog browsing/search across all registered foreign assets beyond the bounded reverse projection
 - operator-facing onboarding dashboards and ecosystem directories
 
 Those belong to events plus external indexing/materialization rather than extra permanent registry storage.
 
 ### Current boundary for asset discovery
 
-The current boundary is asymmetric by design:
+The current boundary is intentionally bounded, not asymmetric:
 
 - known `Location -> AssetId` resolution is chain-native
+- known `AssetId -> Location` resolution is chain-native
 - known `AssetId -> metadata` resolution is chain-native through `pallet-assets`
-- broad catalog discovery or reverse `AssetId -> Location` browsing is still an indexed/materialized concern unless a future bounded reverse projection is added explicitly
+- broad catalog discovery/search across many assets is still an indexed/materialized concern
 
 ## Ecosystem Integration
 
@@ -313,8 +326,9 @@ migrate_location_key(
 
 1. Remove `ForeignAssetMapping[old_location]`
 2. Insert `ForeignAssetMapping[new_location] = asset_id`
-3. AssetId unchanged → all balances, approvals, pools preserved
-4. Emit `MigrationApplied` event
+3. Keep `ForeignAssetLocationByAssetId[asset_id] = new_location` in sync
+4. AssetId unchanged → all balances, approvals, pools preserved
+5. Emit `MigrationApplied` event
 
 ## Implementation Status
 

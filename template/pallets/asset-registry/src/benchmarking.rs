@@ -55,24 +55,9 @@ mod benches {
   }
 
   #[benchmark]
-  fn link_existing_asset(n: Linear<1, 1000>) {
+  fn link_existing_asset() {
     let pre_metadata = test_metadata();
     let min_balance: T::Balance = 1u32.into();
-
-    // Seed n unrelated mappings
-    for i in 0..n {
-      let seed_location = test_location(10_000 + i);
-      let seed_asset_id: T::AssetId = (primitives::assets::TYPE_FOREIGN | (10_000u32 + i)).into();
-      pallet::Pallet::<T>::register_foreign_asset_with_id(
-        RawOrigin::Root.into(),
-        seed_location,
-        seed_asset_id,
-        pre_metadata.clone(),
-        min_balance,
-        false,
-      )
-      .expect("benchmark seed registration must succeed");
-    }
 
     // Prepare target asset: create it mapped to some location, then remove mapping
     let pre_location = test_location(4000);
@@ -87,6 +72,7 @@ mod benches {
     )
     .expect("benchmark target pre-registration failed");
     ForeignAssetMapping::<T>::remove(&pre_location);
+    ForeignAssetLocationByAssetId::<T>::remove(asset_id);
 
     let link_location = test_location(4001);
 

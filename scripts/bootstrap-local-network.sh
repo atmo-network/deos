@@ -7,12 +7,7 @@ SKIP_DOWNLOAD="${SKIP_DOWNLOAD:-0}"
 SKIP_TOOLS="${SKIP_TOOLS:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_CHAINSPEC="${SKIP_CHAINSPEC:-0}"
-START_WEB_CLIENT="${START_WEB_CLIENT:-1}"
 CHAIN_TYPE="${CHAIN_TYPE:-Development}"
-WEB_CLIENT_PORT="${WEB_CLIENT_PORT:-5173}"
-WEB_CLIENT_READY_TIMEOUT_SEC="${WEB_CLIENT_READY_TIMEOUT_SEC:-180}"
-WEB_CLIENT_LOG="${WEB_CLIENT_LOG:-/tmp/tmctol-web-client.log}"
-WEB_CLIENT_PID=""
 
 usage() {
     cat <<'EOF'
@@ -25,7 +20,6 @@ Options:
   --skip-tools       Skip 02-install-tools.sh
   --skip-build       Skip 03-build-runtime.sh
   --skip-chain-spec  Skip 04-generate-chain-spec.sh
-  --no-web-client    Do not start web-client dev server
   -h, --help         Show this help message
 
 Environment:
@@ -33,11 +27,7 @@ Environment:
   SKIP_TOOLS=0|1
   SKIP_BUILD=0|1
   SKIP_CHAINSPEC=0|1
-  START_WEB_CLIENT=0|1
   CHAIN_TYPE=Development|Local|Live
-  WEB_CLIENT_PORT=5173
-  WEB_CLIENT_READY_TIMEOUT_SEC=<seconds>
-  WEB_CLIENT_LOG=/tmp/tmctol-web-client.log
 EOF
 }
 
@@ -55,9 +45,6 @@ parse_args() {
                 ;;
             --skip-chain-spec)
                 SKIP_CHAINSPEC=1
-                ;;
-            --no-web-client)
-                START_WEB_CLIENT=0
                 ;;
             -h|--help)
                 usage
@@ -124,26 +111,11 @@ check_spawn_prerequisites() {
     phase_banner "Step 5: Spawn preflight"
     hydrate_local_tool_paths
     require_commands polkadot polkadot-omni-node zombienet
-    if (( START_WEB_CLIENT == 1 )); then
-        require_local_script "07-start-web-client.sh"
-    fi
     log_success "Spawn prerequisites verified"
-}
-
-start_web_client_if_enabled() {
-    if (( START_WEB_CLIENT == 0 )); then
-        log_warning "Skipping web-client dev server"
-        return
-    fi
-
-    phase_banner "Step 6: Start web-client dev server"
-    start_background_script "web-client dev server" "07-start-web-client.sh" "$WEB_CLIENT_LOG" WEB_CLIENT_PID
-    wait_for_http "http://127.0.0.1:$WEB_CLIENT_PORT" "$WEB_CLIENT_READY_TIMEOUT_SEC" "Web client" "$WEB_CLIENT_PID" "$WEB_CLIENT_LOG"
 }
 
 on_exit() {
     local exit_code=$?
-    stop_background_process "$WEB_CLIENT_PID" 0 "$WEB_CLIENT_LOG" "web-client dev server"
     if (( exit_code != 0 )); then
         log_error "Local bootstrap failed"
     fi
@@ -156,13 +128,12 @@ main() {
 
     phase_banner "DEOS local bootstrap workflow"
     log_info "Chain type: $CHAIN_TYPE"
-    log_info "Plan: skip_download=$SKIP_DOWNLOAD skip_tools=$SKIP_TOOLS skip_build=$SKIP_BUILD skip_chain_spec=$SKIP_CHAINSPEC start_web_client=$START_WEB_CLIENT"
+    log_info "Plan: skip_download=$SKIP_DOWNLOAD skip_tools=$SKIP_TOOLS skip_build=$SKIP_BUILD skip_chain_spec=$SKIP_CHAINSPEC"
 
     run_bootstrap_steps
     check_spawn_prerequisites
-    start_web_client_if_enabled
 
-    phase_banner "7/7: Spawn Zombienet"
+    phase_banner "6/6: Spawn Zombienet"
     display_endpoints
     log_info "Starting network (Ctrl+C to stop)..."
     echo ""

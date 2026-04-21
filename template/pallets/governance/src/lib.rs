@@ -429,7 +429,7 @@ mod proposal_execution;
 mod proposal_resolution;
 mod reward_memory;
 
-const STORAGE_VERSION: StorageVersion = StorageVersion::new(11);
+const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
 
 #[frame::pallet]
 pub mod pallet {
@@ -437,9 +437,8 @@ pub mod pallet {
     EpochProvider as _, GovernanceDomainPolicyProvider as _,
     ProposalPayloadPreimageNoteCostProvider as _, ProposalPayloadPreimageProvider as _,
     ProposalRuntimeUpgradeAuthorizationProvider as _, ProposalSubmissionAuthorityProvider as _,
-    STORAGE_VERSION, WeightInfo as _,
+    WeightInfo as _,
   };
-  use alloc::collections::BTreeMap;
   use codec::{Decode, Encode};
   use frame::prelude::*;
   use polkadot_sdk::frame_support::{traits::Currency, transactional};
@@ -1453,148 +1452,8 @@ pub mod pallet {
     ProposalMetadataMissing,
   }
 
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  #[scale_info(skip_type_params(MaxProposalVotesPerDirection))]
-  struct LegacyProposalVotesV1<AccountId, MaxProposalVotesPerDirection: Get<u32>> {
-    ayes: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-    nays: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-    vetoes: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-  }
-
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  #[scale_info(skip_type_params(MaxProposalVotesPerDirection))]
-  struct LegacyProposalVotesV2<AccountId, MaxProposalVotesPerDirection: Get<u32>> {
-    ayes: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-    nays: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-    vetoes: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-    passes: BoundedVec<AccountId, MaxProposalVotesPerDirection>,
-  }
-
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  #[scale_info(skip_type_params(MaxProposalVotesPerDirection))]
-  struct LegacyProposalVotesV3<AccountId, Epoch, MaxProposalVotesPerDirection: Get<u32>> {
-    ayes: BoundedVec<ProposalBallot<AccountId, Epoch>, MaxProposalVotesPerDirection>,
-    nays: BoundedVec<ProposalBallot<AccountId, Epoch>, MaxProposalVotesPerDirection>,
-    vetoes: BoundedVec<ProposalBallot<AccountId, Epoch>, MaxProposalVotesPerDirection>,
-    passes: BoundedVec<ProposalBallot<AccountId, Epoch>, MaxProposalVotesPerDirection>,
-  }
-
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-    fn on_runtime_upgrade() -> Weight {
-      let on_chain_version = StorageVersion::get::<Pallet<T>>();
-      if on_chain_version >= STORAGE_VERSION {
-        return Weight::zero();
-      }
-      let migration_epoch = T::EpochProvider::current_epoch();
-      let inflate_ballots =
-        |accounts: BoundedVec<T::AccountId, T::MaxWinningVoteAccountsPerCall>| {
-          accounts.into_iter().fold(
-            BoundedVec::<
-              ProposalBallot<T::AccountId, T::Epoch>,
-              T::MaxWinningVoteAccountsPerCall,
-            >::default(),
-            |mut ballots, account| {
-              let push_result = ballots.try_push(ProposalBallot {
-                account,
-                vote_epoch: migration_epoch,
-              });
-              if push_result.is_err() {
-                panic!("migration ballots must preserve the bounded vote set")
-              }
-              ballots
-            },
-          )
-        };
-      let mut translated = 0u64;
-      if on_chain_version == StorageVersion::new(2) {
-        ProposalVotesByItem::<T>::translate::<
-          LegacyProposalVotesV2<T::AccountId, T::MaxWinningVoteAccountsPerCall>,
-          _,
-        >(|_, _, legacy_votes| {
-          translated = translated.saturating_add(1);
-          Some(ProposalVotes {
-            ayes: inflate_ballots(legacy_votes.ayes),
-            nays: inflate_ballots(legacy_votes.nays),
-            amplifies: BoundedVec::default(),
-            approves: BoundedVec::default(),
-            reduces: BoundedVec::default(),
-            vetoes: inflate_ballots(legacy_votes.vetoes),
-            passes: inflate_ballots(legacy_votes.passes),
-          })
-        });
-      } else if on_chain_version < StorageVersion::new(3) {
-        ProposalVotesByItem::<T>::translate::<
-          LegacyProposalVotesV1<T::AccountId, T::MaxWinningVoteAccountsPerCall>,
-          _,
-        >(|_, _, legacy_votes| {
-          translated = translated.saturating_add(1);
-          Some(ProposalVotes {
-            ayes: inflate_ballots(legacy_votes.ayes),
-            nays: inflate_ballots(legacy_votes.nays),
-            amplifies: BoundedVec::default(),
-            approves: BoundedVec::default(),
-            reduces: BoundedVec::default(),
-            vetoes: inflate_ballots(legacy_votes.vetoes),
-            passes: BoundedVec::default(),
-          })
-        });
-      } else if on_chain_version < StorageVersion::new(10) {
-        ProposalVotesByItem::<T>::translate::<
-          LegacyProposalVotesV3<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
-          _,
-        >(|_, _, legacy_votes| {
-          translated = translated.saturating_add(1);
-          Some(ProposalVotes {
-            ayes: legacy_votes.ayes,
-            nays: legacy_votes.nays,
-            amplifies: BoundedVec::default(),
-            approves: BoundedVec::default(),
-            reduces: BoundedVec::default(),
-            vetoes: legacy_votes.vetoes,
-            passes: legacy_votes.passes,
-          })
-        });
-      }
-      let mut migrated_active_proposals = 0u64;
-      let mut active_proposal_index_writes = 0u64;
-      if on_chain_version < StorageVersion::new(5) {
-        let mut active_indexes = BTreeMap::<
-          T::DomainId,
-          BoundedVec<T::WinningVoteItemId, T::MaxActiveProposalsPerDomain>,
-        >::new();
-        for (domain, item_id, _) in ActiveProposals::<T>::iter() {
-          migrated_active_proposals = migrated_active_proposals.saturating_add(1);
-          let item_ids = active_indexes.entry(domain).or_default();
-          if item_ids.iter().all(|existing| *existing != item_id) {
-            let push_result = item_ids.try_push(item_id);
-            if push_result.is_err() {
-              panic!("migration active proposal index must fit configured domain cap")
-            }
-          }
-        }
-        for (domain, item_ids) in active_indexes {
-          ActiveProposalIdsByDomain::<T>::insert(domain, item_ids);
-          active_proposal_index_writes = active_proposal_index_writes.saturating_add(1);
-        }
-      }
-      STORAGE_VERSION.put::<Pallet<T>>();
-      T::DbWeight::get().reads_writes(
-        translated
-          .saturating_add(migrated_active_proposals)
-          .saturating_add(1),
-        translated
-          .saturating_add(active_proposal_index_writes)
-          .saturating_add(1),
-      )
-    }
-
     fn on_initialize(_n: BlockNumberFor<T>) -> Weight {
       Self::service_current_epoch(T::EpochProvider::current_epoch())
     }

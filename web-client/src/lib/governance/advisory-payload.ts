@@ -38,7 +38,12 @@ function compactLengthBytes(length: number) {
     return Uint8Array.of(encoded & 0xff, (encoded >> 8) & 0xff);
   }
   const encoded = (length << 2) | 0b10;
-  return Uint8Array.of(encoded & 0xff, (encoded >> 8) & 0xff, (encoded >> 16) & 0xff, (encoded >> 24) & 0xff);
+  return Uint8Array.of(
+    encoded & 0xff,
+    (encoded >> 8) & 0xff,
+    (encoded >> 16) & 0xff,
+    (encoded >> 24) & 0xff,
+  );
 }
 
 function concatBytes(parts: Uint8Array[]) {
@@ -57,7 +62,9 @@ function encodeScaleBytes(bytes: Uint8Array) {
 }
 
 function encodeScaleOption(innerBytes: Uint8Array | null) {
-  return innerBytes == null ? Uint8Array.of(0) : concatBytes([Uint8Array.of(1), innerBytes]);
+  return innerBytes == null
+    ? Uint8Array.of(0)
+    : concatBytes([Uint8Array.of(1), innerBytes]);
 }
 
 function parseRequiredSummary(value: string) {
@@ -89,10 +96,18 @@ function parseOptionalDocCid(value: string) {
 function parseOptionalReferencedPayloadHash(value: string) {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    return { valid: true, bytes: null as Uint8Array | null, normalized: null as string | null };
+    return {
+      valid: true,
+      bytes: null as Uint8Array | null,
+      normalized: null as string | null,
+    };
   }
   if (!/^0x[0-9a-fA-F]{64}$/.test(trimmed)) {
-    return { valid: false, bytes: null as Uint8Array | null, normalized: null as string | null };
+    return {
+      valid: false,
+      bytes: null as Uint8Array | null,
+      normalized: null as string | null,
+    };
   }
   const normalized = trimmed.toLowerCase();
   return {
@@ -102,14 +117,18 @@ function parseOptionalReferencedPayloadHash(value: string) {
   };
 }
 
-let advisoryPayloadHasherPromise: Promise<(payloadBytes: Uint8Array) => string> | null = null;
+let advisoryPayloadHasherPromise: Promise<
+  (payloadBytes: Uint8Array) => string
+> | null = null;
 
 export async function hashGovernanceAdvisoryPayloadBytes(
   payloadBytes: Uint8Array,
 ): Promise<string> {
   if (advisoryPayloadHasherPromise == null) {
     advisoryPayloadHasherPromise = import("@polkadot/util-crypto").then(
-      ({ blake2AsHex }) => (bytes: Uint8Array) => blake2AsHex(bytes, 256),
+      ({ blake2AsHex }) =>
+        (bytes: Uint8Array) =>
+          blake2AsHex(bytes, 256),
     );
   }
   return (await advisoryPayloadHasherPromise)(payloadBytes);
@@ -120,8 +139,15 @@ export function deriveGovernanceAdvisoryPayloadDraftState(
 ): GovernanceAdvisoryPayloadDraftState {
   const summary = parseRequiredSummary(draft.summary);
   const docCid = parseOptionalDocCid(draft.docCid);
-  const referencedPayloadHash = parseOptionalReferencedPayloadHash(draft.referencedPayloadHash);
-  if (!summary.valid || summary.bytes == null || !docCid.valid || !referencedPayloadHash.valid) {
+  const referencedPayloadHash = parseOptionalReferencedPayloadHash(
+    draft.referencedPayloadHash,
+  );
+  if (
+    !summary.valid ||
+    summary.bytes == null ||
+    !docCid.valid ||
+    !referencedPayloadHash.valid
+  ) {
     return {
       summaryValid: summary.valid,
       summaryByteLength: summary.byteLength,
@@ -134,7 +160,9 @@ export function deriveGovernanceAdvisoryPayloadDraftState(
   const payloadBytes = concatBytes([
     encodeScaleOption(referencedPayloadHash.bytes),
     encodeScaleBytes(summary.bytes),
-    encodeScaleOption(docCid.bytes == null ? null : encodeScaleBytes(docCid.bytes)),
+    encodeScaleOption(
+      docCid.bytes == null ? null : encodeScaleBytes(docCid.bytes),
+    ),
   ]);
   return {
     summaryValid: true,

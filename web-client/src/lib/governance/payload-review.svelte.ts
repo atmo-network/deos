@@ -19,9 +19,11 @@ export function createPayloadReview(
 ): PayloadReviewState {
   let payloadHash = $state<string | null>(null);
   let payloadHashLoading = $state(false);
-  let payloadHashPreimageStatus = $state<GovernancePayloadHashPreimageStatus | null>(null);
+  let payloadHashPreimageStatus =
+    $state<GovernancePayloadHashPreimageStatus | null>(null);
   let payloadHashPreimageStatusLoading = $state(false);
-  let payloadPreimageNoteCost = $state<GovernancePayloadPreimageNoteCost | null>(null);
+  let payloadPreimageNoteCost =
+    $state<GovernancePayloadPreimageNoteCost | null>(null);
   let payloadPreimageNoteCostLoading = $state(false);
 
   $effect(() => {
@@ -94,11 +96,23 @@ export function createPayloadReview(
   });
 
   return {
-    get payloadHash() { return payloadHash; },
-    get payloadHashLoading() { return payloadHashLoading; },
-    get payloadHashPreimageStatus() { return payloadHashPreimageStatus; },
-    get payloadHashPreimageStatusLoading() { return payloadHashPreimageStatusLoading; },
-    get payloadPreimageNoteCost() { return payloadPreimageNoteCost; },
-    get payloadPreimageNoteCostLoading() { return payloadPreimageNoteCostLoading; },
+    get payloadHash() {
+      return payloadHash;
+    },
+    get payloadHashLoading() {
+      return payloadHashLoading;
+    },
+    get payloadHashPreimageStatus() {
+      return payloadHashPreimageStatus;
+    },
+    get payloadHashPreimageStatusLoading() {
+      return payloadHashPreimageStatusLoading;
+    },
+    get payloadPreimageNoteCost() {
+      return payloadPreimageNoteCost;
+    },
+    get payloadPreimageNoteCostLoading() {
+      return payloadPreimageNoteCostLoading;
+    },
   };
 }

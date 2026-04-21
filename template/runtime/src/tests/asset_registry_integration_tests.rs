@@ -35,6 +35,10 @@ fn register_foreign_asset_creates_mapping_and_metadata() {
     ));
 
     let stored_id = AssetRegistry::location_to_asset(location.clone()).expect("id stored");
+    assert_eq!(
+      AssetRegistry::asset_to_location(stored_id),
+      Some(location.clone())
+    );
     assert!(Assets::asset_exists(stored_id));
     let stored_metadata = pallet_assets::Metadata::<crate::Runtime>::get(stored_id);
     assert_eq!(stored_metadata.name, metadata.name);
@@ -154,6 +158,10 @@ fn link_existing_asset_works() {
       AssetRegistry::location_to_asset(location.clone()),
       Some(asset_id)
     );
+    assert_eq!(
+      AssetRegistry::asset_to_location(asset_id),
+      Some(location.clone())
+    );
     assert!(Assets::asset_exists(asset_id));
     let res = AssetRegistry::link_existing_asset(RuntimeOrigin::root(), location, asset_id);
     assert_noop!(
@@ -202,7 +210,11 @@ fn migrate_location_key_moves_mapping() {
     ));
 
     assert_eq!(AssetRegistry::location_to_asset(old_location), None);
-    assert_eq!(AssetRegistry::location_to_asset(new_location), Some(id));
+    assert_eq!(
+      AssetRegistry::location_to_asset(new_location.clone()),
+      Some(id)
+    );
+    assert_eq!(AssetRegistry::asset_to_location(id), Some(new_location));
   });
 }
 

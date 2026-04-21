@@ -36,6 +36,10 @@ fn register_foreign_asset_works() {
       crate::Pallet::<Test>::location_to_asset(&location),
       Some(1000)
     );
+    assert_eq!(
+      crate::Pallet::<Test>::asset_to_location(1000),
+      Some(location.clone())
+    );
 
     // 3. Verify Event
     frame_system::Pallet::<Test>::assert_last_event(RuntimeEvent::AssetRegistry(
@@ -328,6 +332,10 @@ fn link_existing_asset_rejects_duplicate_asset_id() {
       crate::Pallet::<Test>::location_to_asset(&location1),
       Some(asset_id)
     );
+    assert_eq!(
+      crate::Pallet::<Test>::asset_to_location(asset_id),
+      Some(location1.clone())
+    );
     // Verify location2 has no mapping
     assert!(crate::Pallet::<Test>::location_to_asset(&location2).is_none());
   });
@@ -360,6 +368,10 @@ fn migrate_location_key_emits_event() {
       old_location.clone(),
       new_location.clone()
     ));
+    assert_eq!(
+      crate::Pallet::<Test>::asset_to_location(asset_id),
+      Some(new_location.clone())
+    );
 
     frame_system::Pallet::<Test>::assert_last_event(RuntimeEvent::AssetRegistry(
       Event::MigrationApplied {
@@ -385,7 +397,7 @@ mod proptest_asset_registry {
 
     #[test]
     fn register_lookup_isomorphism(para_id in 1u32..100_000u32) {
-      let (stored, converted) = new_test_ext().execute_with(|| {
+      let (stored, converted, reverse, convert_back) = new_test_ext().execute_with(|| {
         frame_system::Pallet::<Test>::set_block_number(1);
         let location = location_for_para(para_id);
         let asset_id = TYPE_FOREIGN | (para_id & 0x0FFF_FFFF);
@@ -403,11 +415,16 @@ mod proptest_asset_registry {
           true,
         ));
         let stored = crate::Pallet::<Test>::location_to_asset(&location);
-        let converted = <crate::Pallet<Test> as Convert<Location, Option<u32>>>::convert(location);
-        (stored, converted)
+        let converted = <crate::Pallet<Test> as Convert<Location, Option<u32>>>::convert(location.clone());
+        let reverse = crate::Pallet::<Test>::asset_to_location(asset_id);
+        let convert_back = <crate::Pallet<Test> as polkadot_sdk::sp_runtime::traits::MaybeEquivalence<Location, u32>>::convert_back(&asset_id);
+        (stored, converted, reverse, convert_back)
       });
-      prop_assert_eq!(stored, Some(TYPE_FOREIGN | (para_id & 0x0FFF_FFFF)));
+      let expected = Some(TYPE_FOREIGN | (para_id & 0x0FFF_FFFF));
+      prop_assert_eq!(stored, expected);
       prop_assert_eq!(converted, stored);
+      prop_assert_eq!(reverse.clone(), Some(location_for_para(para_id)));
+      prop_assert_eq!(convert_back, reverse);
     }
   }
 }

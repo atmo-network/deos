@@ -6,6 +6,103 @@ use polkadot_sdk::frame_support::transactional;
 use polkadot_sdk::sp_runtime::{Perbill, traits::SaturatedConversion};
 
 impl<T: Config> Pallet<T> {
+  /// Returns an empty proposal votes struct with all directions defaulted.
+  fn empty_proposal_votes()
+  -> ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall> {
+    ProposalVotes {
+      ayes: BoundedVec::default(),
+      nays: BoundedVec::default(),
+      amplifies: BoundedVec::default(),
+      approves: BoundedVec::default(),
+      reduces: BoundedVec::default(),
+      vetoes: BoundedVec::default(),
+      passes: BoundedVec::default(),
+    }
+  }
+
+  /// Projects a winner bounded vec from an iterator of ballots.
+  fn project_winners(
+    ballots: impl Iterator<Item = ProposalBallot<T::AccountId, T::Epoch>>,
+  ) -> BoundedVec<T::AccountId, T::MaxWinningVoteAccountsPerCall> {
+    ballots.fold(BoundedVec::default(), |mut winners, ballot| {
+      let push_result = winners.try_push(ballot.account);
+      if push_result.is_err() {
+        panic!("winner projection must preserve the bounded vote set")
+      }
+      winners
+    })
+  }
+
+  /// Checks whether the given account has already cast an ordinary-track vote.
+  fn ordinary_track_contains_account(
+    votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
+    account: &T::AccountId,
+  ) -> bool {
+    Self::proposal_ballots_contain_account(&votes.ayes, account)
+      || Self::proposal_ballots_contain_account(&votes.nays, account)
+      || Self::proposal_ballots_contain_account(&votes.amplifies, account)
+      || Self::proposal_ballots_contain_account(&votes.approves, account)
+      || Self::proposal_ballots_contain_account(&votes.reduces, account)
+  }
+
+  /// Checks whether the given account has already cast a veto-track vote.
+  fn veto_track_contains_account(
+    votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
+    account: &T::AccountId,
+  ) -> bool {
+    Self::proposal_ballots_contain_account(&votes.vetoes, account)
+      || Self::proposal_ballots_contain_account(&votes.passes, account)
+  }
+
+  /// Shared storage cleanup for terminal proposal states.
+  /// Returns the proposer account if one existed.
+  fn remove_active_proposal_storage(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    remove_pending_enactment: bool,
+    remove_winning_option: bool,
+  ) -> Option<T::AccountId> {
+    ActiveProposals::<T>::remove(domain, item_id);
+    ProposalConfirmStartedAt::<T>::remove(domain, item_id);
+    ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
+    if remove_pending_enactment {
+      ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+    }
+    if remove_winning_option {
+      ProposalWinningPrimaryOptionByItem::<T>::remove(domain, item_id);
+    }
+    let proposer = ProposalAuthorsByItem::<T>::take(domain, item_id);
+    Self::remove_active_proposal_id(domain, item_id);
+    ProposalVotesByItem::<T>::remove(domain, item_id);
+    proposer
+  }
+
+  /// Attempts to schedule pending enactment, or executes immediately if no delay is needed.
+  fn resolve_enactment_or_execute(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    current_epoch: T::Epoch,
+    winner_count: u32,
+    urgent_authorized: bool,
+  ) -> DispatchResult {
+    let enactment_scheduled = if urgent_authorized {
+      ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
+      false
+    } else {
+      Self::schedule_pending_enactment_if_needed(domain, item_id, current_epoch)?
+    };
+    if !enactment_scheduled {
+      Self::maybe_execute_proposal_payload(
+        domain,
+        item_id,
+        current_epoch,
+        winner_count,
+        current_epoch,
+      )?;
+    }
+    Ok(())
+  }
+
   pub(crate) fn voting_progress(
     current_epoch: T::Epoch,
     submitted_epoch: T::Epoch,
@@ -95,28 +192,13 @@ impl<T: Config> Pallet<T> {
         ),
         DispatchError,
       > {
-        let mut votes = maybe_votes.take().unwrap_or(ProposalVotes {
-          ayes: BoundedVec::default(),
-          nays: BoundedVec::default(),
-          amplifies: BoundedVec::default(),
-          approves: BoundedVec::default(),
-          reduces: BoundedVec::default(),
-          vetoes: BoundedVec::default(),
-          passes: BoundedVec::default(),
-        });
+        let mut votes = maybe_votes.take().unwrap_or(Self::empty_proposal_votes());
         let ballot = ProposalBallot {
           account: account.clone(),
           vote_epoch: current_epoch,
         };
-        let ordinary_track_vote_exists =
-          Self::proposal_ballots_contain_account(&votes.ayes, &account)
-            || Self::proposal_ballots_contain_account(&votes.nays, &account)
-            || Self::proposal_ballots_contain_account(&votes.amplifies, &account)
-            || Self::proposal_ballots_contain_account(&votes.approves, &account)
-            || Self::proposal_ballots_contain_account(&votes.reduces, &account);
-        let veto_track_vote_exists =
-          Self::proposal_ballots_contain_account(&votes.vetoes, &account)
-            || Self::proposal_ballots_contain_account(&votes.passes, &account);
+        let ordinary_track_vote_exists = Self::ordinary_track_contains_account(&votes, &account);
+        let veto_track_vote_exists = Self::veto_track_contains_account(&votes, &account);
         let is_first_participation = !ordinary_track_vote_exists && !veto_track_vote_exists;
         let mut replaced_vote = None;
         match vote {
@@ -864,16 +946,7 @@ impl<T: Config> Pallet<T> {
           if pass_weight > veto_weight {
             Self::note_pass_winning_participation(domain, &votes);
           }
-          let winners = votes.ayes.into_iter().fold(
-            BoundedVec::<T::AccountId, T::MaxWinningVoteAccountsPerCall>::default(),
-            |mut winners, ballot| {
-              let push_result = winners.try_push(ballot.account);
-              if push_result.is_err() {
-                panic!("winner projection must preserve the bounded vote set")
-              }
-              winners
-            },
-          );
+          let winners = Self::project_winners(votes.ayes.into_iter());
           return Self::resolve_active_proposal(
             domain,
             item_id,
@@ -885,16 +958,7 @@ impl<T: Config> Pallet<T> {
           if pass_weight > veto_weight {
             Self::note_pass_winning_participation(domain, &votes);
           }
-          let winners = votes.nays.into_iter().fold(
-            BoundedVec::<T::AccountId, T::MaxWinningVoteAccountsPerCall>::default(),
-            |mut winners, ballot| {
-              let push_result = winners.try_push(ballot.account);
-              if push_result.is_err() {
-                panic!("winner projection must preserve the bounded vote set")
-              }
-              winners
-            },
-          );
+          let winners = Self::project_winners(votes.nays.into_iter());
           return Self::resolve_active_proposal(
             domain,
             item_id,
@@ -936,36 +1000,15 @@ impl<T: Config> Pallet<T> {
         let (leading_positive_option, _) =
           Self::invoice_leading_positive_weights(amplify_weight, approve_weight, reduce_weight);
         let winners = match leading_positive_option {
-          Some(ProposalPrimaryTrackOption::Amplify) => votes.amplifies.into_iter().fold(
-            BoundedVec::<T::AccountId, T::MaxWinningVoteAccountsPerCall>::default(),
-            |mut winners, ballot| {
-              let push_result = winners.try_push(ballot.account);
-              if push_result.is_err() {
-                panic!("winner projection must preserve the bounded vote set")
-              }
-              winners
-            },
-          ),
-          Some(ProposalPrimaryTrackOption::Approve) => votes.approves.into_iter().fold(
-            BoundedVec::<T::AccountId, T::MaxWinningVoteAccountsPerCall>::default(),
-            |mut winners, ballot| {
-              let push_result = winners.try_push(ballot.account);
-              if push_result.is_err() {
-                panic!("winner projection must preserve the bounded vote set")
-              }
-              winners
-            },
-          ),
-          Some(ProposalPrimaryTrackOption::Reduce) => votes.reduces.into_iter().fold(
-            BoundedVec::<T::AccountId, T::MaxWinningVoteAccountsPerCall>::default(),
-            |mut winners, ballot| {
-              let push_result = winners.try_push(ballot.account);
-              if push_result.is_err() {
-                panic!("winner projection must preserve the bounded vote set")
-              }
-              winners
-            },
-          ),
+          Some(ProposalPrimaryTrackOption::Amplify) => {
+            Self::project_winners(votes.amplifies.into_iter())
+          }
+          Some(ProposalPrimaryTrackOption::Approve) => {
+            Self::project_winners(votes.approves.into_iter())
+          }
+          Some(ProposalPrimaryTrackOption::Reduce) => {
+            Self::project_winners(votes.reduces.into_iter())
+          }
           _ => {
             return Self::reject_active_proposal(
               domain,
@@ -990,16 +1033,10 @@ impl<T: Config> Pallet<T> {
     );
     let winner_count = 0;
     let urgent_authorized = Self::proposal_is_urgent_authorized(domain, item_id);
-    ActiveProposals::<T>::remove(domain, item_id);
-    ProposalConfirmStartedAt::<T>::remove(domain, item_id);
-    ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
-    let proposer = ProposalAuthorsByItem::<T>::take(domain, item_id);
-    Self::remove_active_proposal_id(domain, item_id);
-    ProposalVotesByItem::<T>::remove(domain, item_id);
-    ProposalWinningPrimaryOptionByItem::<T>::remove(domain, item_id);
+    let proposer = Self::remove_active_proposal_storage(domain, item_id, false, true);
     let current_epoch = T::EpochProvider::current_epoch();
-    if let Some(proposer) = proposer {
-      Self::note_successful_authored_proposal(domain, &proposer);
+    if let Some(ref proposer) = proposer {
+      Self::note_successful_authored_proposal(domain, proposer);
     }
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1010,21 +1047,13 @@ impl<T: Config> Pallet<T> {
       },
       current_epoch,
     )?;
-    let enactment_scheduled = if urgent_authorized {
-      ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-      false
-    } else {
-      Self::schedule_pending_enactment_if_needed(domain, item_id, current_epoch)?
-    };
-    if !enactment_scheduled {
-      Self::maybe_execute_proposal_payload(
-        domain,
-        item_id,
-        current_epoch,
-        winner_count,
-        current_epoch,
-      )?;
-    }
+    Self::resolve_enactment_or_execute(
+      domain,
+      item_id,
+      current_epoch,
+      winner_count,
+      urgent_authorized,
+    )?;
     let active_count = ActiveProposalCounts::<T>::mutate(domain, |active_count| {
       *active_count = active_count.saturating_sub(1);
       *active_count
@@ -1065,20 +1094,15 @@ impl<T: Config> Pallet<T> {
       count_total_participation,
     )?;
     let urgent_authorized = Self::proposal_is_urgent_authorized(domain, item_id);
-    ActiveProposals::<T>::remove(domain, item_id);
-    ProposalConfirmStartedAt::<T>::remove(domain, item_id);
-    ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
-    let proposer = ProposalAuthorsByItem::<T>::take(domain, item_id);
-    Self::remove_active_proposal_id(domain, item_id);
-    ProposalVotesByItem::<T>::remove(domain, item_id);
+    let proposer = Self::remove_active_proposal_storage(domain, item_id, false, false);
     if let Some(winning_primary_option) = winning_primary_option {
       ProposalWinningPrimaryOptionByItem::<T>::insert(domain, item_id, winning_primary_option);
     } else {
       ProposalWinningPrimaryOptionByItem::<T>::remove(domain, item_id);
     }
     let current_epoch = T::EpochProvider::current_epoch();
-    if let Some(proposer) = proposer {
-      Self::note_successful_authored_proposal(domain, &proposer);
+    if let Some(ref proposer) = proposer {
+      Self::note_successful_authored_proposal(domain, proposer);
     }
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1089,21 +1113,13 @@ impl<T: Config> Pallet<T> {
       },
       current_epoch,
     )?;
-    let enactment_scheduled = if urgent_authorized {
-      ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-      false
-    } else {
-      Self::schedule_pending_enactment_if_needed(domain, item_id, current_epoch)?
-    };
-    if !enactment_scheduled {
-      Self::maybe_execute_proposal_payload(
-        domain,
-        item_id,
-        current_epoch,
-        winner_count,
-        current_epoch,
-      )?;
-    }
+    Self::resolve_enactment_or_execute(
+      domain,
+      item_id,
+      current_epoch,
+      winner_count,
+      urgent_authorized,
+    )?;
     let active_count = ActiveProposalCounts::<T>::mutate(domain, |active_count| {
       *active_count = active_count.saturating_sub(1);
       *active_count
@@ -1138,15 +1154,8 @@ impl<T: Config> Pallet<T> {
         Err(Error::<T>::ProposalVotingWindowStillOpen.into())
       }
       Some(ProposalResolutionState::VotingWindowOpen { .. }) => {
-        let votes = ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(ProposalVotes {
-          ayes: BoundedVec::default(),
-          nays: BoundedVec::default(),
-          amplifies: BoundedVec::default(),
-          approves: BoundedVec::default(),
-          reduces: BoundedVec::default(),
-          vetoes: BoundedVec::default(),
-          passes: BoundedVec::default(),
-        });
+        let votes =
+          ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
         Self::resolve_or_reject_from_current_votes(domain, item_id, votes)
       }
       Some(ProposalResolutionState::VetoPassing {
@@ -1169,15 +1178,8 @@ impl<T: Config> Pallet<T> {
       | Some(ProposalResolutionState::PassingNay)
       | Some(ProposalResolutionState::Confirming { .. })
       | Some(ProposalResolutionState::Rejected { .. }) => {
-        let votes = ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(ProposalVotes {
-          ayes: BoundedVec::default(),
-          nays: BoundedVec::default(),
-          amplifies: BoundedVec::default(),
-          approves: BoundedVec::default(),
-          reduces: BoundedVec::default(),
-          vetoes: BoundedVec::default(),
-          passes: BoundedVec::default(),
-        });
+        let votes =
+          ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
         Self::resolve_or_reject_from_current_votes(domain, item_id, votes)
       }
     }
@@ -1190,16 +1192,10 @@ impl<T: Config> Pallet<T> {
     reason: ProposalRejectionReason,
   ) -> DispatchResult {
     ensure!(
-      ActiveProposals::<T>::take(domain, item_id).is_some(),
+      ActiveProposals::<T>::contains_key(domain, item_id),
       Error::<T>::ProposalNotActive
     );
-    ProposalAuthorsByItem::<T>::remove(domain, item_id);
-    ProposalConfirmStartedAt::<T>::remove(domain, item_id);
-    ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
-    ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-    ProposalWinningPrimaryOptionByItem::<T>::remove(domain, item_id);
-    Self::remove_active_proposal_id(domain, item_id);
-    ProposalVotesByItem::<T>::remove(domain, item_id);
+    Self::remove_active_proposal_storage(domain, item_id, true, true);
     let current_epoch = T::EpochProvider::current_epoch();
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1231,23 +1227,17 @@ impl<T: Config> Pallet<T> {
     cancellation: VetoCancellation,
   ) -> DispatchResult {
     ensure!(
-      ActiveProposals::<T>::take(domain, item_id).is_some(),
+      ActiveProposals::<T>::contains_key(domain, item_id),
       Error::<T>::ProposalNotActive
     );
-    ProposalAuthorsByItem::<T>::remove(domain, item_id);
-    ProposalConfirmStartedAt::<T>::remove(domain, item_id);
-    ProposalUrgentAuthorizedAt::<T>::remove(domain, item_id);
-    ProposalPendingEnactmentAt::<T>::remove(domain, item_id);
-    ProposalWinningPrimaryOptionByItem::<T>::remove(domain, item_id);
-    Self::remove_active_proposal_id(domain, item_id);
     let votes = ProposalVotesByItem::<T>::get(domain, item_id);
-    if let Some(votes) = &votes {
+    if let Some(ref votes) = votes {
       Self::note_winning_participation_batch(
         domain,
         votes.vetoes.iter().map(|ballot| ballot.account.clone()),
       );
     }
-    ProposalVotesByItem::<T>::remove(domain, item_id);
+    Self::remove_active_proposal_storage(domain, item_id, true, true);
     let current_epoch = T::EpochProvider::current_epoch();
     Self::record_finalized_proposal_outcome(
       domain,
@@ -1388,15 +1378,8 @@ impl<T: Config> Pallet<T> {
       Self::proposal_ordinary_weighting_window(domain, item_id)?;
     let (protection_current_epoch, protection_open_epoch, protection_close_epoch) =
       Self::proposal_protection_weighting_window(domain, item_id)?;
-    let votes = ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(ProposalVotes {
-      ayes: BoundedVec::default(),
-      nays: BoundedVec::default(),
-      amplifies: BoundedVec::default(),
-      approves: BoundedVec::default(),
-      reduces: BoundedVec::default(),
-      vetoes: BoundedVec::default(),
-      passes: BoundedVec::default(),
-    });
+    let votes =
+      ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
     let aye_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1489,15 +1472,8 @@ impl<T: Config> Pallet<T> {
       Self::proposal_effective_primary_close_epoch(domain, item_id, proposal.submitted_epoch)
         .ok()?;
     let tally = Self::do_proposal_vote_tally(domain, item_id)?;
-    let votes = ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(ProposalVotes {
-      ayes: BoundedVec::default(),
-      nays: BoundedVec::default(),
-      amplifies: BoundedVec::default(),
-      approves: BoundedVec::default(),
-      reduces: BoundedVec::default(),
-      vetoes: BoundedVec::default(),
-      passes: BoundedVec::default(),
-    });
+    let votes =
+      ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
     if let Some(cancellation) = Self::current_veto_cancellation(domain, item_id, &votes, false) {
       return Some(ProposalResolutionState::VetoPassing {
         veto_weight: cancellation.veto_weight,
