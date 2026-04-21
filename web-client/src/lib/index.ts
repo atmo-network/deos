@@ -52,10 +52,19 @@ export type {
   GovernanceWriteOperation,
   GovernanceWriteProviderStatus,
   GovernanceWriteSurfaceAvailability,
-  GovernanceBlockchainProvider,
-  GovernanceBlockchainReadProvider,
-  GovernanceBlockchainWriteProvider,
-} from "./adapters/governance";
+  GovernancePanelProposal,
+  GovernancePublicSubmissionOption,
+  GovernanceViewerState,
+} from "./governance";
+export type { GovernanceBlockchainProvider } from "./adapters/governance";
+export {
+  DEFAULT_GOVERNANCE_RPC_ENDPOINT,
+  DEFAULT_GOVERNANCE_WS_ENDPOINT,
+  GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
+  GOVERNANCE_RUNTIME_WRITE_SURFACE,
+  GovernanceMockMaterializedProvider,
+  GovernanceUnavailableMaterializedProvider,
+} from "./governance";
 export {
   BlockchainAdapter,
   connectInjectedSigner,
@@ -76,17 +85,10 @@ export {
   type TmctolTypedApi,
 } from "./adapters/blockchain/deos";
 export {
-  DEFAULT_GOVERNANCE_RPC_ENDPOINT,
-  DEFAULT_GOVERNANCE_WS_ENDPOINT,
-  GovernanceBlockchainAdapter,
   GovernanceMockAdapter,
-  GovernanceMockMaterializedProvider,
   GovernancePapiProvider,
   GovernanceRpcProvider,
   GovernanceUnavailableBlockchainProvider,
-  GovernanceUnavailableMaterializedProvider,
-  GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
-  GOVERNANCE_RUNTIME_WRITE_SURFACE,
 } from "./adapters/governance";
 
 // Stateful slices and workspace subsystems
@@ -94,11 +96,7 @@ export { portfolioStore, type KnownClientAsset, type TransferAssetKey } from "./
 export { governanceStore } from "./governance/index.svelte";
 export { logStore } from "./log/index.svelte";
 export { marketStore } from "./market/index.svelte";
-export type {
-  GovernancePanelProposal,
-  GovernancePublicSubmissionOption,
-  GovernanceViewerState,
-} from "./governance/types";
+
 export { layoutStore } from "./layout/index.svelte";
 export { systemStore } from "./system/index.svelte";
 export {

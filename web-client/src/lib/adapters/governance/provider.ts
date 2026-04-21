@@ -1,5 +1,6 @@
 import type {
   GovernanceAccountId,
+  GovernanceAdapter,
   GovernanceAuthorizedRuntimeUpgrade,
   GovernanceDomainId,
   GovernanceGovXpCounters,
@@ -27,142 +28,13 @@ import type {
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
-} from "./types";
+} from "$lib/governance";
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   GOVERNANCE_RUNTIME_WRITE_SURFACE,
-} from "./types";
+} from "$lib/governance";
 
-export type GovernanceBlockchainReadProvider = {
-  getQuerySurfaceAvailability(): GovernanceQuerySurfaceAvailability;
-  getActiveProposalIds(domainId: GovernanceDomainId): Promise<GovernanceItemId[]>;
-  getRecentFinalizedProposals(
-    domainId: GovernanceDomainId,
-  ): Promise<GovernanceRecentFinalizedProposal[]>;
-  getProposalStatus(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalStatus | null>;
-  getProposalMetadata(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalMetadata | null>;
-  getProposalExecutionAuthority(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalExecutionAuthority | null>;
-  getAuthorizedRuntimeUpgrade(): Promise<GovernanceAuthorizedRuntimeUpgrade | null>;
-  getProposalSubmissionAuthority(
-    domainId: GovernanceDomainId,
-    payloadKind: GovernanceProposalPayloadKind,
-  ): Promise<GovernanceProposalSubmissionAuthority | null>;
-  getProposalOpeningFee(
-    domainId: GovernanceDomainId,
-    payloadKind: GovernanceProposalPayloadKind,
-  ): Promise<GovernanceProposalOpeningFee | null>;
-  getProposalPayloadAvailability(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPayloadAvailability | null>;
-  getPayloadHashPreimageStatus(
-    payloadHash: string,
-  ): Promise<GovernancePayloadHashPreimageStatus | null>;
-  getPayloadPreimageNoteCost(
-    payloadLen: number,
-  ): Promise<GovernancePayloadPreimageNoteCost | null>;
-  getProposalPrimaryTrackFamily(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPrimaryTrackFamily | null>;
-  getProposalTiming(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalTiming | null>;
-  getProposalUrgentEligibility(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<boolean | null>;
-  getProposalPrimaryTrackTally(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalPrimaryTrackTally | null>;
-  getProposalWinningPrimaryOption(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernancePrimaryTrackOption | null>;
-  getProposalTally(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalVoteTally | null>;
-  getProposalExecutionDetail(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-  ): Promise<GovernanceProposalExecutionDetail | null>;
-  getProposalVotePowerProfile(
-    domainId: GovernanceDomainId,
-    itemId: GovernanceItemId,
-    voteKind: GovernanceVoteKind,
-  ): Promise<GovernanceVotePowerProfile | null>;
-  getRewardCoefficient(
-    domainId: GovernanceDomainId,
-    accountId: GovernanceAccountId,
-  ): Promise<GovernanceRewardCoefficient | null>;
-  getGovXpCounters(
-    domainId: GovernanceDomainId,
-    accountId: GovernanceAccountId,
-  ): Promise<GovernanceGovXpCounters>;
-};
-
-export type GovernanceBlockchainWriteProvider = {
-  getWriteSurfaceAvailability(): GovernanceWriteSurfaceAvailability;
-  castVote(input: {
-    accountId: GovernanceAccountId;
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-    voteKind: GovernanceVoteKind;
-  }): Promise<void>;
-  submitProposal(input: {
-    accountId: GovernanceAccountId;
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-    cadenceMode: GovernanceProposalCadenceMode;
-    payloadKind: GovernanceProposalPayloadKind;
-    payloadHash: string;
-  }): Promise<void>;
-  noteProposalPreimage(input: {
-    accountId: GovernanceAccountId;
-    payloadBytes: Uint8Array;
-  }): Promise<void>;
-  resolveProposal(input: {
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-    winners: GovernanceAccountId[];
-  }): Promise<void>;
-  rejectProposal(input: {
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-  }): Promise<void>;
-  resolveProposalFromVotes(input: {
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-  }): Promise<void>;
-  forceResolveProposalFromVotes(input: {
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-  }): Promise<void>;
-  requeueProposalForAutoFinalization(input: {
-    domainId: GovernanceDomainId;
-    itemId: GovernanceItemId;
-  }): Promise<void>;
-};
-
-export type GovernanceBlockchainProvider = GovernanceBlockchainReadProvider &
-  GovernanceBlockchainWriteProvider & {
-    syncProviderState(): Promise<void>;
-    subscribeToUpdates(onUpdate: () => void): () => void;
-    providerState(): GovernanceProviderState;
-    label(): string;
-  };
+export type GovernanceBlockchainProvider = GovernanceAdapter;
 
 function unavailableWriteSurface(reason: string): GovernanceWriteSurfaceAvailability {
   return {
@@ -235,11 +107,11 @@ export class GovernanceUnavailableBlockchainProvider
     return () => {};
   }
 
-  providerState(): GovernanceProviderState {
+  getProviderState(): GovernanceProviderState {
     return this.state;
   }
 
-  label(): string {
+  getProviderLabel(): string {
     return this.state.label;
   }
 

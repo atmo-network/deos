@@ -33,11 +33,11 @@ import type {
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
-} from "./types";
+} from "$lib/governance";
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   GOVERNANCE_RUNTIME_WRITE_SURFACE,
-} from "./types";
+} from "$lib/governance";
 
 type OrdinaryVoteKind = Extract<
   GovernanceVoteKind,

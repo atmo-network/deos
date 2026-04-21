@@ -1,4 +1,3 @@
-import { GovernanceBlockchainAdapter } from "$lib/adapters/governance/blockchain";
 import {
   GovernanceUnavailableBlockchainProvider,
   type GovernanceBlockchainProvider,
@@ -8,7 +7,7 @@ import type {
   GovernanceProposalExecutionDetail,
   GovernanceProposalPayloadKind,
   GovernanceVoteKind,
-} from "$lib/adapters/governance/types";
+} from "$lib/governance";
 import type {
   GovernancePanelProposal,
   GovernancePublicSubmissionOption,
@@ -29,7 +28,7 @@ const DEFAULT_BLOCKCHAIN_PROVIDER = new GovernanceUnavailableBlockchainProvider(
 function buildGovernanceAdapter(
   blockchainProvider: GovernanceBlockchainProvider,
 ): GovernanceAdapter {
-  return new GovernanceBlockchainAdapter(blockchainProvider);
+  return blockchainProvider;
 }
 
 const DEFAULT_ADAPTER = buildGovernanceAdapter(DEFAULT_BLOCKCHAIN_PROVIDER);

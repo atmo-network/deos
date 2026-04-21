@@ -1,6 +1,6 @@
 use crate::{Error, Event, mock::*};
 use polkadot_sdk::{
-  frame_support::{assert_noop, assert_ok},
+  frame_support::{assert_noop, assert_ok, traits::fungibles::Inspect},
   frame_system, pallet_assets,
   sp_runtime::traits::Convert,
   staging_xcm::latest::{Junction::Parachain, Junctions, Location},
@@ -183,6 +183,153 @@ fn link_existing_asset_emits_symbol() {
         symbol: b"LNK".to_vec(),
       },
     ));
+  });
+}
+
+#[test]
+fn migrate_location_key_fails_on_occupied_new_location() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let old_location = Location::new(1, Junctions::X1(Arc::new([Parachain(8000)])));
+    let new_location = Location::new(1, Junctions::X1(Arc::new([Parachain(8001)])));
+    let metadata = CurrencyMetadata {
+      name: b"Foreign Token".to_vec(),
+      symbol: b"FRGN".to_vec(),
+      decimals: 12,
+    };
+
+    // Register at old_location
+    assert_ok!(crate::Pallet::<Test>::register_foreign_asset(
+      RuntimeOrigin::root(),
+      old_location.clone(),
+      metadata.clone(),
+      10,
+      true
+    ));
+
+    // Register at new_location
+    assert_ok!(crate::Pallet::<Test>::register_foreign_asset(
+      RuntimeOrigin::root(),
+      new_location.clone(),
+      metadata,
+      10,
+      true
+    ));
+
+    // Migrate should fail because new_location is occupied
+    assert_noop!(
+      crate::Pallet::<Test>::migrate_location_key(
+        RuntimeOrigin::root(),
+        old_location.clone(),
+        new_location.clone()
+      ),
+      Error::<Test>::AssetAlreadyRegistered
+    );
+
+    // Verify old_location mapping is preserved
+    assert!(crate::Pallet::<Test>::location_to_asset(&old_location).is_some());
+  });
+}
+
+#[test]
+fn register_foreign_asset_fails_oversized_metadata() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let location = Location::new(1, Junctions::X1(Arc::new([Parachain(1000)])));
+    let metadata = CurrencyMetadata {
+      name: vec![b'X'; 51],
+      symbol: b"SIBL".to_vec(),
+      decimals: 12,
+    };
+
+    assert_noop!(
+      crate::Pallet::<Test>::register_foreign_asset(
+        RuntimeOrigin::root(),
+        location.clone(),
+        metadata,
+        10,
+        true
+      ),
+      Error::<Test>::MetadataTooLong
+    );
+
+    // Verify no mapping was created
+    assert!(crate::Pallet::<Test>::location_to_asset(&location).is_none());
+    // Verify no asset was created
+    assert!(!<pallet_assets::Pallet<Test> as Inspect<u64>>::asset_exists(1000));
+  });
+}
+
+#[test]
+fn register_foreign_asset_with_id_fails_oversized_metadata() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let location = Location::new(1, Junctions::X1(Arc::new([Parachain(1000)])));
+    let asset_id = TYPE_FOREIGN | 123;
+    let metadata = CurrencyMetadata {
+      name: b"SIBL".to_vec(),
+      symbol: vec![b'X'; 51],
+      decimals: 12,
+    };
+
+    assert_noop!(
+      crate::Pallet::<Test>::register_foreign_asset_with_id(
+        RuntimeOrigin::root(),
+        location.clone(),
+        asset_id,
+        metadata,
+        10,
+        true
+      ),
+      Error::<Test>::MetadataTooLong
+    );
+
+    // Verify no mapping was created
+    assert!(crate::Pallet::<Test>::location_to_asset(&location).is_none());
+    // Verify no asset was created
+    assert!(!<pallet_assets::Pallet<Test> as Inspect<u64>>::asset_exists(asset_id));
+  });
+}
+
+#[test]
+fn link_existing_asset_rejects_duplicate_asset_id() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let location1 = Location::new(1, Junctions::X1(Arc::new([Parachain(3001)])));
+    let location2 = Location::new(1, Junctions::X1(Arc::new([Parachain(3002)])));
+    let asset_id = TYPE_FOREIGN | 77;
+
+    // Create asset and link to location1
+    assert_ok!(pallet_assets::Pallet::<Test>::force_create(
+      RuntimeOrigin::root(),
+      asset_id,
+      1,
+      true,
+      1
+    ));
+    assert_ok!(crate::Pallet::<Test>::link_existing_asset(
+      RuntimeOrigin::root(),
+      location1.clone(),
+      asset_id
+    ));
+
+    // Try to link same asset_id to location2
+    assert_noop!(
+      crate::Pallet::<Test>::link_existing_asset(
+        RuntimeOrigin::root(),
+        location2.clone(),
+        asset_id
+      ),
+      Error::<Test>::AssetAlreadyRegistered
+    );
+
+    // Verify location1 mapping is preserved
+    assert_eq!(
+      crate::Pallet::<Test>::location_to_asset(&location1),
+      Some(asset_id)
+    );
+    // Verify location2 has no mapping
+    assert!(crate::Pallet::<Test>::location_to_asset(&location2).is_none());
   });
 }
 

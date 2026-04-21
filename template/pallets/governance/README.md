@@ -2,6 +2,14 @@
 
 `pallet-governance` is the DEOS bounded governance reward-memory kernel for the current TMCTOL standard.
 
+The pallet source is now split into responsibility-scoped internal modules while keeping `lib.rs` as the FRAME macro surface:
+
+- `lib.rs` — pallet shell: storage, events, errors, extrinsics, public views
+- `reward_memory.rs` — rolling-window accounting, GovXP counters, reward-coefficient internals
+- `proposal_resolution.rs` — tally, resolution-state, rejection logic
+- `proposal_execution.rs` — payload authority, execution bookkeeping, finalized outcome helpers
+- `epoch_service.rs` — epoch servicing, maturing proposals, pending enactment, expiry helpers
+
 ## SDK baseline
 
 This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.0` line.

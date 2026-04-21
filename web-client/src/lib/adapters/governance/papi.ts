@@ -51,13 +51,13 @@ import type {
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
-} from "./types";
+} from "$lib/governance";
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   GOVERNANCE_RUNTIME_WRITE_SURFACE,
-} from "./types";
+} from "$lib/governance";
 import type { GovernanceBlockchainProvider } from "./provider";
-import { DEFAULT_GOVERNANCE_WS_ENDPOINT } from "./constants";
+import { DEFAULT_GOVERNANCE_WS_ENDPOINT } from "$lib/governance";
 
 const FIXED_U128_SCALE = 10n ** 18n;
 
@@ -1039,11 +1039,11 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     };
   }
 
-  providerState(): GovernanceProviderState {
+  getProviderState(): GovernanceProviderState {
     return this.governanceProviderState();
   }
 
-  label(): string {
+  getProviderLabel(): string {
     return this.governanceProviderState().label;
   }
 

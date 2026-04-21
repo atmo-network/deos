@@ -78,7 +78,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_asset_registry::WeightInfo fo
 	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
 	/// Storage: `Assets::Metadata` (r:1 w:0)
 	/// Proof: `Assets::Metadata` (`max_values`: None, `max_size`: Some(140), added: 2615, mode: `MaxEncodedLen`)
-	fn link_existing_asset() -> Weight {
+	/// The range of component `n` is `[1, 1000]`.
+	fn link_existing_asset(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `232`
 		//  Estimated: `4087`
@@ -86,6 +87,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_asset_registry::WeightInfo fo
 		Weight::from_parts(25_283_000, 0)
 			.saturating_add(Weight::from_parts(0, 4087))
 			.saturating_add(T::DbWeight::get().reads(3))
+			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AssetRegistry::ForeignAssetMapping` (r:2 w:2)

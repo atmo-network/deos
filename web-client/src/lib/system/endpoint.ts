@@ -1,4 +1,4 @@
-import { DEFAULT_GOVERNANCE_WS_ENDPOINT } from "$lib/adapters/governance/constants";
+import { DEFAULT_GOVERNANCE_WS_ENDPOINT } from "$lib/governance/constants";
 
 let blockchainEndpoint = DEFAULT_GOVERNANCE_WS_ENDPOINT;
 

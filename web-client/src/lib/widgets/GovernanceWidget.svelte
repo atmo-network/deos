@@ -1,23 +1,24 @@
 <script lang="ts">
-  import { RefreshCw } from "@lucide/svelte";
   import { onMount } from "svelte";
 
   import type {
-    GovernancePayloadHashPreimageStatus,
-    GovernancePayloadPreimageNoteCost,
-    GovernanceProposalPayloadKind,
-    GovernanceVoteKind,
-  } from "$lib/adapters/governance";
+      GovernancePayloadHashPreimageStatus,
+      GovernancePayloadPreimageNoteCost,
+      GovernanceProposalPayloadKind,
+      GovernanceVoteKind,
+  } from "$lib/governance";
   import {
-    GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES,
-    GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES,
-    deriveGovernanceAdvisoryPayloadDraftState,
-    hashGovernanceAdvisoryPayloadBytes,
+      GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES,
+      GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES,
+      deriveGovernanceAdvisoryPayloadDraftState,
   } from "$lib/governance/advisory-payload";
-  import { deriveGovernanceTreasuryPayloadDraftState } from "$lib/governance/treasury-payload";
+  import ActionReviewCard from "$lib/governance/ActionReviewCard.svelte";
+  import ProposalSemanticsRows from "$lib/governance/ProposalSemanticsRows.svelte";
   import { governanceStore } from "$lib/governance/index.svelte";
+  import { createPayloadReview } from "$lib/governance/payload-review.svelte";
+  import { deriveGovernanceTreasuryPayloadDraftState } from "$lib/governance/treasury-payload";
   import { fromClientBoundedProjection } from "$lib/shared/read-model";
-  import { Badge, Button, Card, DetailRow, IconButton, Notice, ReadModelBadge, SectionCard } from "$lib/shared/ui";
+  import { Badge, Button, Card, DetailRow, Notice, ReadModelBadge, SectionCard } from "$lib/shared/ui";
 
   type FinalizedProposal = (typeof governanceStore.state.recentFinalizedProposals)[number];
   type FinalizedExecutionDetail = FinalizedProposal["executionDetail"];
@@ -74,22 +75,13 @@
   let submitDocCidInput = $state("");
   let submitReferencedPayloadHashInput = $state("");
   let selectedSubmitPayloadKind = $state<GovernanceProposalPayloadKind | null>(null);
-  let advisoryPayloadHash = $state<string | null>(null);
-  let advisoryPayloadHashLoading = $state(false);
-  let advisoryPayloadHashPreimageStatus = $state<GovernancePayloadHashPreimageStatus | null>(null);
-  let advisoryPayloadHashPreimageStatusLoading = $state(false);
-  let advisoryPayloadPreimageNoteCost = $state<GovernancePayloadPreimageNoteCost | null>(null);
-  let advisoryPayloadPreimageNoteCostLoading = $state(false);
   let treasurySubmitItemIdInput = $state("");
   let treasuryBeneficiaryInput = $state("");
   let treasuryPayoutAssetInput = $state("");
   let treasuryBaseAmountInput = $state("");
-  let treasuryPayloadHash = $state<string | null>(null);
-  let treasuryPayloadHashLoading = $state(false);
-  let treasuryPayloadHashPreimageStatus = $state<GovernancePayloadHashPreimageStatus | null>(null);
-  let treasuryPayloadHashPreimageStatusLoading = $state(false);
-  let treasuryPayloadPreimageNoteCost = $state<GovernancePayloadPreimageNoteCost | null>(null);
-  let treasuryPayloadPreimageNoteCostLoading = $state(false);
+
+  const advisoryReview = createPayloadReview(() => advisoryPayloadDraft.encoding?.payloadBytes ?? null);
+  const treasuryReview = createPayloadReview(() => treasuryPayloadDraft.encoding?.payloadBytes ?? null);
 
   function profileLabel(profile?: string) {
     switch (profile) {
@@ -139,86 +131,6 @@
     selectedSubmitPayloadKind = options[0]?.payloadKind ?? null;
   });
 
-  $effect(() => {
-    const payloadBytes = advisoryPayloadDraft.encoding?.payloadBytes ?? null;
-    if (payloadBytes == null) {
-      advisoryPayloadHash = null;
-      advisoryPayloadHashLoading = false;
-      return;
-    }
-    let cancelled = false;
-    advisoryPayloadHash = null;
-    advisoryPayloadHashLoading = true;
-    void hashGovernanceAdvisoryPayloadBytes(payloadBytes)
-      .then((payloadHash) => {
-        if (cancelled) {
-          return;
-        }
-        advisoryPayloadHash = payloadHash;
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        advisoryPayloadHash = null;
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
-        advisoryPayloadHashLoading = false;
-      });
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  $effect(() => {
-    const payloadLen = advisoryPayloadDraft.encoding?.payloadByteLength ?? null;
-    if (
-      advisoryPayloadHash == null ||
-      payloadLen == null ||
-      governanceStore.state.providerState.status !== "connected"
-    ) {
-      advisoryPayloadHashPreimageStatus = null;
-      advisoryPayloadHashPreimageStatusLoading = false;
-      advisoryPayloadPreimageNoteCost = null;
-      advisoryPayloadPreimageNoteCostLoading = false;
-      return;
-    }
-    let cancelled = false;
-    advisoryPayloadHashPreimageStatusLoading = true;
-    advisoryPayloadPreimageNoteCostLoading = true;
-    void Promise.all([
-      governanceStore.lookupPayloadHashPreimageStatus(advisoryPayloadHash),
-      governanceStore.lookupPayloadPreimageNoteCost(payloadLen),
-    ])
-      .then(([status, noteCost]) => {
-        if (cancelled) {
-          return;
-        }
-        advisoryPayloadHashPreimageStatus = status;
-        advisoryPayloadPreimageNoteCost = noteCost;
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        advisoryPayloadHashPreimageStatus = null;
-        advisoryPayloadPreimageNoteCost = null;
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
-        advisoryPayloadHashPreimageStatusLoading = false;
-        advisoryPayloadPreimageNoteCostLoading = false;
-      });
-    return () => {
-      cancelled = true;
-    };
-  });
-
   const treasuryPayloadDraft = $derived(
     deriveGovernanceTreasuryPayloadDraftState({
       beneficiary: treasuryBeneficiaryInput,
@@ -226,86 +138,6 @@
       baseAmount: treasuryBaseAmountInput,
     }),
   );
-
-  $effect(() => {
-    const payloadBytes = treasuryPayloadDraft.encoding?.payloadBytes ?? null;
-    if (payloadBytes == null) {
-      treasuryPayloadHash = null;
-      treasuryPayloadHashLoading = false;
-      return;
-    }
-    let cancelled = false;
-    treasuryPayloadHash = null;
-    treasuryPayloadHashLoading = true;
-    void hashGovernanceAdvisoryPayloadBytes(payloadBytes)
-      .then((payloadHash) => {
-        if (cancelled) {
-          return;
-        }
-        treasuryPayloadHash = payloadHash;
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        treasuryPayloadHash = null;
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
-        treasuryPayloadHashLoading = false;
-      });
-    return () => {
-      cancelled = true;
-    };
-  });
-
-  $effect(() => {
-    const payloadLen = treasuryPayloadDraft.encoding?.payloadByteLength ?? null;
-    if (
-      treasuryPayloadHash == null ||
-      payloadLen == null ||
-      governanceStore.state.providerState.status !== "connected"
-    ) {
-      treasuryPayloadHashPreimageStatus = null;
-      treasuryPayloadHashPreimageStatusLoading = false;
-      treasuryPayloadPreimageNoteCost = null;
-      treasuryPayloadPreimageNoteCostLoading = false;
-      return;
-    }
-    let cancelled = false;
-    treasuryPayloadHashPreimageStatusLoading = true;
-    treasuryPayloadPreimageNoteCostLoading = true;
-    void Promise.all([
-      governanceStore.lookupPayloadHashPreimageStatus(treasuryPayloadHash),
-      governanceStore.lookupPayloadPreimageNoteCost(payloadLen),
-    ])
-      .then(([status, noteCost]) => {
-        if (cancelled) {
-          return;
-        }
-        treasuryPayloadHashPreimageStatus = status;
-        treasuryPayloadPreimageNoteCost = noteCost;
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        treasuryPayloadHashPreimageStatus = null;
-        treasuryPayloadPreimageNoteCost = null;
-      })
-      .finally(() => {
-        if (cancelled) {
-          return;
-        }
-        treasuryPayloadHashPreimageStatusLoading = false;
-        treasuryPayloadPreimageNoteCostLoading = false;
-      });
-    return () => {
-      cancelled = true;
-    };
-  });
 
   function statusLabel(
     proposal: (typeof governanceStore.state.activeProposals)[number],
@@ -1091,11 +923,11 @@
     }),
   );
   const submitPayloadReady = $derived(
-    advisoryPayloadDraft.encoding !== null && advisoryPayloadHash !== null,
+    advisoryPayloadDraft.encoding !== null && advisoryReview.payloadHash !== null,
   );
   const submitItemReady = $derived(parsedSubmitItemId() !== null);
   const treasurySubmitPayloadReady = $derived(
-    treasuryPayloadDraft.encoding !== null && treasuryPayloadHash !== null,
+    treasuryPayloadDraft.encoding !== null && treasuryReview.payloadHash !== null,
   );
   const treasurySubmitItemReady = $derived(parsedTreasurySubmitItemId() !== null);
   const submitPublicProposalDisabled = $derived(
@@ -1103,30 +935,30 @@
     selectedSubmitPayloadKind == null ||
     !submitItemReady ||
     !submitPayloadReady ||
-    advisoryPayloadHashLoading,
+    advisoryReview.payloadHashLoading,
   );
   const notePreimageDisabled = $derived(
     preimageWriteAvailability.providerStatus !== "available" ||
     advisoryPayloadDraft.encoding == null ||
-    advisoryPayloadHashLoading ||
-    advisoryPayloadHashPreimageStatusLoading ||
-    advisoryPayloadPreimageNoteCostLoading ||
-    advisoryPayloadHashPreimageStatus?.havePreimage === true,
+    advisoryReview.payloadHashLoading ||
+    advisoryReview.payloadHashPreimageStatusLoading ||
+    advisoryReview.payloadPreimageNoteCostLoading ||
+    advisoryReview.payloadHashPreimageStatus?.havePreimage === true,
   );
   const treasurySubmitProposalDisabled = $derived(
     submitWriteAvailability.providerStatus !== "available" ||
     treasurySubmissionOption == null ||
     !treasurySubmitItemReady ||
     !treasurySubmitPayloadReady ||
-    treasuryPayloadHashLoading,
+    treasuryReview.payloadHashLoading,
   );
   const treasuryNotePreimageDisabled = $derived(
     preimageWriteAvailability.providerStatus !== "available" ||
     treasuryPayloadDraft.encoding == null ||
-    treasuryPayloadHashLoading ||
-    treasuryPayloadHashPreimageStatusLoading ||
-    treasuryPayloadPreimageNoteCostLoading ||
-    treasuryPayloadHashPreimageStatus?.havePreimage === true,
+    treasuryReview.payloadHashLoading ||
+    treasuryReview.payloadHashPreimageStatusLoading ||
+    treasuryReview.payloadPreimageNoteCostLoading ||
+    treasuryReview.payloadHashPreimageStatus?.havePreimage === true,
   );
 
   function submitReviewStatusLabel() {
@@ -1145,7 +977,7 @@
     if (!advisoryPayloadDraft.referencedPayloadHashValid) {
       return "Fix the referenced payload hash";
     }
-    if (advisoryPayloadHashLoading) {
+    if (advisoryReview.payloadHashLoading) {
       return "Computing the advisory payload hash";
     }
     if (submitWriteAvailability.providerStatus !== "available") {
@@ -1155,22 +987,22 @@
   }
 
   function preimageReviewStatusLabel() {
-    if (advisoryPayloadHashLoading) {
+    if (advisoryReview.payloadHashLoading) {
       return "Computing the advisory payload hash";
     }
-    if (advisoryPayloadHashPreimageStatusLoading || advisoryPayloadPreimageNoteCostLoading) {
+    if (advisoryReview.payloadHashPreimageStatusLoading || advisoryReview.payloadPreimageNoteCostLoading) {
       return "Checking preimage status and note cost";
     }
-    if (advisoryPayloadDraft.encoding == null || advisoryPayloadHash == null) {
+    if (advisoryPayloadDraft.encoding == null || advisoryReview.payloadHash == null) {
       return "Finish the advisory draft first";
     }
-    if (advisoryPayloadHashPreimageStatus?.havePreimage) {
+    if (advisoryReview.payloadHashPreimageStatus?.havePreimage) {
       return "These exact bytes are already noted on-chain";
     }
     if (preimageWriteAvailability.providerStatus !== "available") {
       return preimageWriteAvailability.reason;
     }
-    if (advisoryPayloadHashPreimageStatus?.preimageRequested) {
+    if (advisoryReview.payloadHashPreimageStatus?.preimageRequested) {
       return "Optional separate note path can satisfy an existing request";
     }
     return "Optional separate preimage note path is available";
@@ -1188,7 +1020,7 @@
     if (advisoryPayloadDraft.encoding == null) {
       return "Unavailable";
     }
-    if (advisoryPayloadHashPreimageStatus?.havePreimage) {
+    if (advisoryReview.payloadHashPreimageStatus?.havePreimage) {
       return "No extra preimage note is needed";
     }
     return `Optional Preimage.note_preimage on ${advisoryPayloadDraft.encoding.payloadByteLength} bytes`;
@@ -1196,26 +1028,26 @@
 
   function submitReviewResultLine() {
     const itemId = parsedSubmitItemId();
-    if (itemId == null || advisoryPayloadHash == null) {
+    if (itemId == null || advisoryReview.payloadHash == null) {
       return "Unavailable";
     }
-    if (advisoryPayloadHashPreimageStatus?.havePreimage) {
-      return `Creates proposal #${itemId} with payload hash ${advisoryPayloadHash} and already-noted bytes`;
+    if (advisoryReview.payloadHashPreimageStatus?.havePreimage) {
+      return `Creates proposal #${itemId} with payload hash ${advisoryReview.payloadHash} and already-noted bytes`;
     }
-    return `Creates proposal #${itemId} with payload hash ${advisoryPayloadHash} only`;
+    return `Creates proposal #${itemId} with payload hash ${advisoryReview.payloadHash} only`;
   }
 
   function preimageReviewResultLine() {
-    if (advisoryPayloadHash == null) {
+    if (advisoryReview.payloadHash == null) {
       return "Unavailable";
     }
-    if (advisoryPayloadHashPreimageStatus?.havePreimage) {
-      return `No chain change needed because bytes for ${advisoryPayloadHash} are already noted`;
+    if (advisoryReview.payloadHashPreimageStatus?.havePreimage) {
+      return `No chain change needed because bytes for ${advisoryReview.payloadHash} are already noted`;
     }
-    if (advisoryPayloadHashPreimageStatus?.preimageRequested) {
-      return `Publishes payload bytes for ${advisoryPayloadHash} and satisfies an existing on-chain request`;
+    if (advisoryReview.payloadHashPreimageStatus?.preimageRequested) {
+      return `Publishes payload bytes for ${advisoryReview.payloadHash} and satisfies an existing on-chain request`;
     }
-    return `Publishes payload bytes for later on-chain lookup by ${advisoryPayloadHash}`;
+    return `Publishes payload bytes for later on-chain lookup by ${advisoryReview.payloadHash}`;
   }
 
   function parsedTreasurySubmitItemId() {
@@ -1246,7 +1078,7 @@
     if (!treasuryPayloadDraft.baseAmountValid) {
       return "Enter a valid positive base amount";
     }
-    if (treasuryPayloadHashLoading) {
+    if (treasuryReview.payloadHashLoading) {
       return "Computing the treasury payload hash";
     }
     if (submitWriteAvailability.providerStatus !== "available") {
@@ -1256,22 +1088,22 @@
   }
 
   function treasuryPreimageReviewStatusLabel() {
-    if (treasuryPayloadHashLoading) {
+    if (treasuryReview.payloadHashLoading) {
       return "Computing the treasury payload hash";
     }
-    if (treasuryPayloadHashPreimageStatusLoading || treasuryPayloadPreimageNoteCostLoading) {
+    if (treasuryReview.payloadHashPreimageStatusLoading || treasuryReview.payloadPreimageNoteCostLoading) {
       return "Checking preimage status and note cost";
     }
-    if (treasuryPayloadDraft.encoding == null || treasuryPayloadHash == null) {
+    if (treasuryPayloadDraft.encoding == null || treasuryReview.payloadHash == null) {
       return "Finish the treasury payload draft first";
     }
-    if (treasuryPayloadHashPreimageStatus?.havePreimage) {
+    if (treasuryReview.payloadHashPreimageStatus?.havePreimage) {
       return "These exact bytes are already noted on-chain";
     }
     if (preimageWriteAvailability.providerStatus !== "available") {
       return preimageWriteAvailability.reason;
     }
-    if (treasuryPayloadHashPreimageStatus?.preimageRequested) {
+    if (treasuryReview.payloadHashPreimageStatus?.preimageRequested) {
       return "Optional separate note path can satisfy an existing request";
     }
     return "Optional separate preimage note path is available";
@@ -1279,33 +1111,33 @@
 
   function treasurySubmitReviewResultLine() {
     const itemId = parsedTreasurySubmitItemId();
-    if (itemId == null || treasuryPayloadHash == null) {
+    if (itemId == null || treasuryReview.payloadHash == null) {
       return "Unavailable";
     }
-    if (treasuryPayloadHashPreimageStatus?.havePreimage) {
-      return `Creates proposal #${itemId} with payload hash ${treasuryPayloadHash} and already-noted bytes`;
+    if (treasuryReview.payloadHashPreimageStatus?.havePreimage) {
+      return `Creates proposal #${itemId} with payload hash ${treasuryReview.payloadHash} and already-noted bytes`;
     }
-    return `Creates proposal #${itemId} with payload hash ${treasuryPayloadHash} only`;
+    return `Creates proposal #${itemId} with payload hash ${treasuryReview.payloadHash} only`;
   }
 
   function treasuryPreimageReviewResultLine() {
-    if (treasuryPayloadHash == null) {
+    if (treasuryReview.payloadHash == null) {
       return "Unavailable";
     }
-    if (treasuryPayloadHashPreimageStatus?.havePreimage) {
-      return `No chain change needed because bytes for ${treasuryPayloadHash} are already noted`;
+    if (treasuryReview.payloadHashPreimageStatus?.havePreimage) {
+      return `No chain change needed because bytes for ${treasuryReview.payloadHash} are already noted`;
     }
-    if (treasuryPayloadHashPreimageStatus?.preimageRequested) {
-      return `Publishes payload bytes for ${treasuryPayloadHash} and satisfies an existing on-chain request`;
+    if (treasuryReview.payloadHashPreimageStatus?.preimageRequested) {
+      return `Publishes payload bytes for ${treasuryReview.payloadHash} and satisfies an existing on-chain request`;
     }
-    return `Publishes payload bytes for later on-chain lookup by ${treasuryPayloadHash}`;
+    return `Publishes payload bytes for later on-chain lookup by ${treasuryReview.payloadHash}`;
   }
 
   function treasuryPreimageReviewSummaryLine() {
     if (treasuryPayloadDraft.encoding == null) {
       return "Unavailable";
     }
-    if (treasuryPayloadHashPreimageStatus?.havePreimage) {
+    if (treasuryReview.payloadHashPreimageStatus?.havePreimage) {
       return "No extra preimage note is needed";
     }
     return `Optional Preimage.note_preimage on ${treasuryPayloadDraft.encoding.payloadByteLength} bytes`;
@@ -1324,7 +1156,7 @@
     if (
       selectedSubmitPayloadKind == null ||
       itemId == null ||
-      advisoryPayloadHash == null
+      advisoryReview.payloadHash == null
     ) {
       return;
     }
@@ -1332,7 +1164,7 @@
       itemId,
       cadenceMode: "Ordinary",
       payloadKind: selectedSubmitPayloadKind,
-      payloadHash: advisoryPayloadHash,
+      payloadHash: advisoryReview.payloadHash,
     });
   }
 
@@ -1346,14 +1178,14 @@
 
   async function submitTreasuryProposal() {
     const itemId = parsedTreasurySubmitItemId();
-    if (treasurySubmissionOption == null || itemId == null || treasuryPayloadHash == null) {
+    if (treasurySubmissionOption == null || itemId == null || treasuryReview.payloadHash == null) {
       return;
     }
     await governanceStore.submitProposal({
       itemId,
       cadenceMode: "Ordinary",
       payloadKind: treasurySubmissionOption.payloadKind,
-      payloadHash: treasuryPayloadHash,
+      payloadHash: treasuryReview.payloadHash,
     });
   }
 
@@ -1459,16 +1291,16 @@
           {#if advisorySubmissionOptions.length === 0}
             <Notice variant="muted">No signed advisory proposal kinds are available for this domain</Notice>
           {:else}
-            <DetailRow label="Cadence" value="Ordinary only" valueClass="text-(--mono-text)" />
-            <DetailRow label="Payload kind" value={selectedSubmitPayloadKind ? publicSubmissionPayloadLabel(selectedSubmitPayloadKind) : "Unavailable"} valueClass="text-(--mono-text)" />
-            <DetailRow label="Family" value={selectedSubmitPayloadKind ? payloadFamilyLabel(selectedSubmitPayloadKind) : "Unavailable"} valueClass="text-(--mono-text)" />
-            <DetailRow label="Execution authority" value={executionAuthorityLabel("NonExecutable")} valueClass="text-(--mono-text)" />
-            <DetailRow label="Execution path" value={selectedSubmitPayloadKind ? executionPathLabel(selectedSubmitPayloadKind, "Binary") : "Unavailable"} valueClass="text-(--mono-text)" />
-            {#if advisoryScopeLabel(selectedSubmitPayloadKind)}
-              <DetailRow label="Advisory scope" value={advisoryScopeLabel(selectedSubmitPayloadKind) ?? "Unavailable"} valueClass="text-(--mono-text)" />
-            {/if}
-            <DetailRow label="Opening fee" value={selectedSubmissionOption ? openingFeeLabel("Signed", selectedSubmissionOption.openingFee) : "Unavailable"} valueClass="text-(--mono-text)" />
-            <DetailRow label="Authorized runtime upgrade" value={authorizedRuntimeUpgradeLabel()} valueClass="text-(--mono-text) break-all" />
+            <ProposalSemanticsRows
+              cadenceLabel="Ordinary only"
+              payloadKindLabel={selectedSubmitPayloadKind ? publicSubmissionPayloadLabel(selectedSubmitPayloadKind) : "Unavailable"}
+              familyLabel={selectedSubmitPayloadKind ? payloadFamilyLabel(selectedSubmitPayloadKind) : "Unavailable"}
+              executionAuthorityLabel={executionAuthorityLabel("NonExecutable")}
+              executionPathLabel={selectedSubmitPayloadKind ? executionPathLabel(selectedSubmitPayloadKind, "Binary") : "Unavailable"}
+              openingFeeLabel={selectedSubmissionOption ? openingFeeLabel("Signed", selectedSubmissionOption.openingFee) : "Unavailable"}
+              advisoryScopeLabel={advisoryScopeLabel(selectedSubmitPayloadKind)}
+              authorizedRuntimeUpgradeLabel={authorizedRuntimeUpgradeLabel()}
+            />
             <label class="grid gap-1">
               <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Payload kind</span>
               <select class="rounded-lg border px-2 py-1 text-[12px] text-(--mono-text)" bind:value={selectedSubmitPayloadKind}>
@@ -1515,13 +1347,13 @@
               <DetailRow label="Referenced source" value={referencedPayloadSourceLabel} valueClass="text-(--mono-text)" />
               <Button size="sm" variant="secondary" class="justify-center" onclick={clearReferencedPayloadSuggestion}>Clear referenced payload</Button>
             {/if}
-            <DetailRow label="Derived payload hash" value={advisoryPayloadHashLoading ? "Computing..." : (advisoryPayloadHash ?? "Unavailable")} valueClass="text-(--mono-text) break-all" />
+            <DetailRow label="Derived payload hash" value={advisoryReview.payloadHashLoading ? "Computing..." : (advisoryReview.payloadHash ?? "Unavailable")} valueClass="text-(--mono-text) break-all" />
             <DetailRow label="Derived payload bytes" value={advisoryPayloadDraft.encoding ? `${advisoryPayloadDraft.encoding.payloadByteLength} bytes` : "Unavailable"} valueClass="text-(--mono-text)" />
             <DetailRow label="Summary bytes" value={`${advisoryPayloadDraft.summaryByteLength}/${GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES}`} valueClass="text-(--mono-text)" />
             <DetailRow label="Doc CID bytes" value={`${advisoryPayloadDraft.docCidByteLength}/${GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES}`} valueClass="text-(--mono-text)" />
             <DetailRow label="Referenced payload" value={advisoryPayloadDraft.encoding?.referencedPayloadHash ?? "None"} valueClass="text-(--mono-text) break-all" />
-            <DetailRow label="Derived preimage status" value={advisoryPayloadHashPreimageStatusLabel(advisoryPayloadHashPreimageStatus, advisoryPayloadHashPreimageStatusLoading)} valueClass="text-(--mono-text)" />
-            <DetailRow label="Preimage note cost" value={advisoryPayloadPreimageNoteCostLabel(advisoryPayloadPreimageNoteCost, advisoryPayloadPreimageNoteCostLoading)} valueClass="text-(--mono-text)" />
+            <DetailRow label="Derived preimage status" value={advisoryPayloadHashPreimageStatusLabel(advisoryReview.payloadHashPreimageStatus, advisoryReview.payloadHashPreimageStatusLoading)} valueClass="text-(--mono-text)" />
+            <DetailRow label="Preimage note cost" value={advisoryPayloadPreimageNoteCostLabel(advisoryReview.payloadPreimageNoteCost, advisoryReview.payloadPreimageNoteCostLoading)} valueClass="text-(--mono-text)" />
             {#if advisoryPayloadDraft.encoding}
               <label class="grid gap-1">
                 <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Derived payload hex</span>
@@ -1531,35 +1363,29 @@
               <Notice variant="muted">`Intent` stays inside the current governance domain, while `L2SignalToL1` records the domain's upward signal toward L1 without dispatching privileged state transitions by itself</Notice>
               <Notice variant="muted">Optional preimage noting uses the generic Preimage pallet and the quoted note cost is reserved against the noting account until the preimage is requested or cleared under pallet rules</Notice>
             {/if}
-            {#if advisoryPayloadHashPreimageStatus?.havePreimage}
+            {#if advisoryReview.payloadHashPreimageStatus?.havePreimage}
               <Notice variant="muted">These exact payload bytes are already noted on-chain, so the extra preimage step is unnecessary</Notice>
             {/if}
-            {#if advisoryPayloadHashPreimageStatus?.preimageRequested && !advisoryPayloadHashPreimageStatus.havePreimage}
+            {#if advisoryReview.payloadHashPreimageStatus?.preimageRequested && !advisoryReview.payloadHashPreimageStatus.havePreimage}
               <Notice variant="muted">This payload hash is already requested on-chain but the bytes are not yet noted, so supplying the preimage should avoid a new user-held note deposit</Notice>
             {/if}
-            <div class="rounded-xl border bg-(--mono-bg) p-3 grid gap-2 text-[10px] text-(--mono-muted)">
-              <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Submission review</div>
-              <div class="grid gap-2 @sm:grid-cols-2">
-                <div class="rounded-lg border bg-white p-2 grid gap-1">
-                  <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Submit proposal</div>
-                  <DetailRow label="Action" value={submitReviewSummaryLine()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Status" value={submitReviewStatusLabel()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Opening fee" value={selectedSubmissionOption ? openingFeeLabel("Signed", selectedSubmissionOption.openingFee) : "Unavailable"} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Result" value={submitReviewResultLine()} valueClass="text-(--mono-text) break-all" />
-                  <Notice variant="muted">Burns the quoted opening fee and stores the bounded payload hash at the governance boundary</Notice>
-                  <Button size="sm" variant="secondary" class="justify-center" disabled={submitPublicProposalDisabled} onclick={submitPublicProposal}>{publicSubmissionButtonLabel(selectedSubmitPayloadKind)}</Button>
-                </div>
-                <div class="rounded-lg border bg-white p-2 grid gap-1">
-                  <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Note preimage</div>
-                  <DetailRow label="Action" value={preimageReviewSummaryLine()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Status" value={preimageReviewStatusLabel()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Note cost" value={advisoryPayloadPreimageNoteCostLabel(advisoryPayloadPreimageNoteCost, advisoryPayloadPreimageNoteCostLoading)} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Result" value={preimageReviewResultLine()} valueClass="text-(--mono-text) break-all" />
-                  <Notice variant="muted">Optional separate path that publishes the same bounded payload bytes for later on-chain lookup</Notice>
-                  <Button size="sm" variant="secondary" class="justify-center" disabled={notePreimageDisabled} onclick={noteProposalPreimage}>{advisoryPayloadHashPreimageStatusLoading || advisoryPayloadPreimageNoteCostLoading ? "Checking preimage quote" : advisoryPayloadHashPreimageStatus?.havePreimage ? "Preimage already noted" : "Note advisory preimage"}</Button>
-                </div>
-              </div>
-            </div>
+            <ActionReviewCard
+              title="Submission review"
+              submitActionLabel={submitReviewSummaryLine()}
+              submitStatusLabel={submitReviewStatusLabel()}
+              submitOpeningFeeLabel={selectedSubmissionOption ? openingFeeLabel("Signed", selectedSubmissionOption.openingFee) : "Unavailable"}
+              submitResultLabel={submitReviewResultLine()}
+              submitButtonLabel={publicSubmissionButtonLabel(selectedSubmitPayloadKind)}
+              submitDisabled={submitPublicProposalDisabled}
+              submitOnClick={submitPublicProposal}
+              preimageActionLabel={preimageReviewSummaryLine()}
+              preimageStatusLabel={preimageReviewStatusLabel()}
+              preimageNoteCostLabel={advisoryPayloadPreimageNoteCostLabel(advisoryReview.payloadPreimageNoteCost, advisoryReview.payloadPreimageNoteCostLoading)}
+              preimageResultLabel={preimageReviewResultLine()}
+              preimageButtonLabel={advisoryReview.payloadHashPreimageStatusLoading || advisoryReview.payloadPreimageNoteCostLoading ? "Checking preimage quote" : advisoryReview.payloadHashPreimageStatus?.havePreimage ? "Preimage already noted" : "Note advisory preimage"}
+              preimageDisabled={notePreimageDisabled}
+              preimageOnClick={noteProposalPreimage}
+            />
             {#if !submitItemReady}
               <Notice variant="muted">Enter a positive integer item id</Notice>
             {/if}
@@ -1583,14 +1409,16 @@
         {#if treasurySubmissionOption}
           <div class="rounded-xl border bg-white p-3 grid gap-2 text-[10px] text-(--mono-muted)">
             <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Public tactical treasury submit</div>
-            <DetailRow label="Cadence" value="Ordinary only" valueClass="text-(--mono-text)" />
-            <DetailRow label="Payload kind" value={treasurySubmissionOptionLabel} valueClass="text-(--mono-text)" />
-            <DetailRow label="Family" value={payloadFamilyLabel("L2TreasurySpend")} valueClass="text-(--mono-text)" />
-            <DetailRow label="Execution authority" value={executionAuthorityLabel("DomainTreasury")} valueClass="text-(--mono-text)" />
-            <DetailRow label="Execution path" value={executionPathLabel("L2TreasurySpend", "Invoice")} valueClass="text-(--mono-text)" />
-            <DetailRow label="Settlement" value={treasurySettlementLabel("L2TreasurySpend", "Invoice") ?? "Unavailable"} valueClass="text-(--mono-text)" />
-            <DetailRow label="Funding source" value="BLDR treasury" valueClass="text-(--mono-text)" />
-            <DetailRow label="Opening fee" value={openingFeeLabel("Signed", treasurySubmissionOption.openingFee)} valueClass="text-(--mono-text)" />
+            <ProposalSemanticsRows
+              cadenceLabel="Ordinary only"
+              payloadKindLabel={treasurySubmissionOptionLabel}
+              familyLabel={payloadFamilyLabel("L2TreasurySpend")}
+              executionAuthorityLabel={executionAuthorityLabel("DomainTreasury")}
+              executionPathLabel={executionPathLabel("L2TreasurySpend", "Invoice")}
+              openingFeeLabel={openingFeeLabel("Signed", treasurySubmissionOption.openingFee)}
+              settlementLabel={treasurySettlementLabel("L2TreasurySpend", "Invoice")}
+              fundingSourceLabel="BLDR treasury"
+            />
             <Notice variant="muted">This is the smallest live browser composition slice for the signed tactical invoice path. It always encodes `BldrTreasury` as the funding source and leaves richer treasury-routing policy for later work.</Notice>
             <label class="grid gap-1">
               <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Item id</span>
@@ -1612,10 +1440,10 @@
               <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Base amount</span>
               <input class="rounded-lg border px-2 py-1 text-[12px] text-(--mono-text)" bind:value={treasuryBaseAmountInput} inputmode="numeric" placeholder="1000000000000" />
             </label>
-            <DetailRow label="Derived payload hash" value={treasuryPayloadHashLoading ? "Computing..." : (treasuryPayloadHash ?? "Unavailable")} valueClass="text-(--mono-text) break-all" />
+            <DetailRow label="Derived payload hash" value={treasuryReview.payloadHashLoading ? "Computing..." : (treasuryReview.payloadHash ?? "Unavailable")} valueClass="text-(--mono-text) break-all" />
             <DetailRow label="Derived payload bytes" value={treasuryPayloadDraft.encoding ? `${treasuryPayloadDraft.encoding.payloadByteLength} bytes` : "Unavailable"} valueClass="text-(--mono-text)" />
-            <DetailRow label="Derived preimage status" value={advisoryPayloadHashPreimageStatusLabel(treasuryPayloadHashPreimageStatus, treasuryPayloadHashPreimageStatusLoading)} valueClass="text-(--mono-text)" />
-            <DetailRow label="Preimage note cost" value={advisoryPayloadPreimageNoteCostLabel(treasuryPayloadPreimageNoteCost, treasuryPayloadPreimageNoteCostLoading)} valueClass="text-(--mono-text)" />
+            <DetailRow label="Derived preimage status" value={advisoryPayloadHashPreimageStatusLabel(treasuryReview.payloadHashPreimageStatus, treasuryReview.payloadHashPreimageStatusLoading)} valueClass="text-(--mono-text)" />
+            <DetailRow label="Preimage note cost" value={advisoryPayloadPreimageNoteCostLabel(treasuryReview.payloadPreimageNoteCost, treasuryReview.payloadPreimageNoteCostLoading)} valueClass="text-(--mono-text)" />
             {#if treasuryPayloadDraft.encoding}
               <label class="grid gap-1">
                 <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Derived payload hex</span>
@@ -1623,35 +1451,29 @@
               </label>
               <Notice variant="muted">The chain stores only the payload hash unless these same bounded payload bytes are separately noted as a preimage.</Notice>
             {/if}
-            {#if treasuryPayloadHashPreimageStatus?.havePreimage}
+            {#if treasuryReview.payloadHashPreimageStatus?.havePreimage}
               <Notice variant="muted">These exact treasury payload bytes are already noted on-chain, so the extra preimage step is unnecessary.</Notice>
             {/if}
-            {#if treasuryPayloadHashPreimageStatus?.preimageRequested && !treasuryPayloadHashPreimageStatus.havePreimage}
+            {#if treasuryReview.payloadHashPreimageStatus?.preimageRequested && !treasuryReview.payloadHashPreimageStatus.havePreimage}
               <Notice variant="muted">This treasury payload hash is already requested on-chain but the bytes are not yet noted, so supplying the preimage should avoid a new user-held note deposit.</Notice>
             {/if}
-            <div class="rounded-xl border bg-(--mono-bg) p-3 grid gap-2 text-[10px] text-(--mono-muted)">
-              <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Treasury submission review</div>
-              <div class="grid gap-2 @sm:grid-cols-2">
-                <div class="rounded-lg border bg-white p-2 grid gap-1">
-                  <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Submit proposal</div>
-                  <DetailRow label="Action" value={`Submit treasury invoice · ${executionPathLabel("L2TreasurySpend", "Invoice")}`} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Status" value={treasurySubmitReviewStatusLabel()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Opening fee" value={openingFeeLabel("Signed", treasurySubmissionOption.openingFee)} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Result" value={treasurySubmitReviewResultLine()} valueClass="text-(--mono-text) break-all" />
-                  <Notice variant="muted">Burns the quoted opening fee and stores the bounded treasury payload hash at the governance boundary.</Notice>
-                  <Button size="sm" variant="secondary" class="justify-center" disabled={treasurySubmitProposalDisabled} onclick={submitTreasuryProposal}>Submit treasury invoice</Button>
-                </div>
-                <div class="rounded-lg border bg-white p-2 grid gap-1">
-                  <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">Note preimage</div>
-                  <DetailRow label="Action" value={treasuryPreimageReviewSummaryLine()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Status" value={treasuryPreimageReviewStatusLabel()} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Note cost" value={advisoryPayloadPreimageNoteCostLabel(treasuryPayloadPreimageNoteCost, treasuryPayloadPreimageNoteCostLoading)} valueClass="text-(--mono-text)" />
-                  <DetailRow label="Result" value={treasuryPreimageReviewResultLine()} valueClass="text-(--mono-text) break-all" />
-                  <Notice variant="muted">Optional separate path that publishes the same bounded treasury payload bytes for later on-chain lookup.</Notice>
-                  <Button size="sm" variant="secondary" class="justify-center" disabled={treasuryNotePreimageDisabled} onclick={noteTreasuryProposalPreimage}>{treasuryPayloadHashPreimageStatusLoading || treasuryPayloadPreimageNoteCostLoading ? "Checking preimage quote" : treasuryPayloadHashPreimageStatus?.havePreimage ? "Preimage already noted" : "Note treasury preimage"}</Button>
-                </div>
-              </div>
-            </div>
+            <ActionReviewCard
+              title="Treasury submission review"
+              submitActionLabel={`Submit treasury invoice · ${executionPathLabel("L2TreasurySpend", "Invoice")}`}
+              submitStatusLabel={treasurySubmitReviewStatusLabel()}
+              submitOpeningFeeLabel={openingFeeLabel("Signed", treasurySubmissionOption.openingFee)}
+              submitResultLabel={treasurySubmitReviewResultLine()}
+              submitButtonLabel="Submit treasury invoice"
+              submitDisabled={treasurySubmitProposalDisabled}
+              submitOnClick={submitTreasuryProposal}
+              preimageActionLabel={treasuryPreimageReviewSummaryLine()}
+              preimageStatusLabel={treasuryPreimageReviewStatusLabel()}
+              preimageNoteCostLabel={advisoryPayloadPreimageNoteCostLabel(treasuryReview.payloadPreimageNoteCost, treasuryReview.payloadPreimageNoteCostLoading)}
+              preimageResultLabel={treasuryPreimageReviewResultLine()}
+              preimageButtonLabel={treasuryReview.payloadHashPreimageStatusLoading || treasuryReview.payloadPreimageNoteCostLoading ? "Checking preimage quote" : treasuryReview.payloadHashPreimageStatus?.havePreimage ? "Preimage already noted" : "Note treasury preimage"}
+              preimageDisabled={treasuryNotePreimageDisabled}
+              preimageOnClick={noteTreasuryProposalPreimage}
+            />
             {#if !treasurySubmitItemReady}
               <Notice variant="muted">Enter a positive integer item id.</Notice>
             {/if}

@@ -635,6 +635,53 @@ fn claim_reward_rejects_truncated_epoch() {
 }
 
 #[test]
+fn reward_touch_overflow_marks_epoch_truncated_and_blocks_claims() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
+
+    let epoch = 1u64;
+    let asset_id = 2u32;
+
+    let mut accounts = polkadot_sdk::frame_support::BoundedVec::new();
+    for i in 1u64..=256u64 {
+      accounts.try_push(i).expect("must fit within 256");
+    }
+    crate::RewardEpochTouchedAccounts::<Test>::insert(epoch, asset_id, accounts);
+
+    let result = Staking::note_reward_touch(asset_id, &257);
+    assert!(!result);
+    assert!(crate::RewardTruncatedEpochs::<Test>::contains_key(epoch));
+    System::assert_has_event(RuntimeEvent::Staking(
+      Event::RewardTouchedAccountsOverflow {
+        epoch,
+        asset_id,
+        account: 257,
+      },
+    ));
+
+    assert_ok!(Staking::bootstrap_reward_snapshot(
+      RuntimeOrigin::root(),
+      asset_id,
+      1,
+    ));
+    let reward_account = Staking::reward_account_for(asset_id);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      asset_id,
+      &1,
+      &reward_account,
+      40,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    assert_ok!(Staking::note_reward_inflow(asset_id, 40));
+    advance_to_block(2);
+    assert_noop!(
+      Staking::claim_reward(RuntimeOrigin::signed(1), asset_id, epoch),
+      Error::<Test>::RewardEpochIncomplete
+    );
+  });
+}
+
+#[test]
 fn register_asset_rejects_preexisting_staked_asset_id_collision() {
   const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
   new_test_ext().execute_with(|| {

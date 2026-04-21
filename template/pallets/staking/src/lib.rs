@@ -372,6 +372,11 @@ pub mod pallet {
       scanned: u32,
       max_scan: u32,
     },
+    RewardTouchedAccountsOverflow {
+      epoch: T::RewardEpoch,
+      asset_id: T::AssetId,
+      account: T::AccountId,
+    },
     Staked {
       asset_id: T::AssetId,
       account: T::AccountId,
@@ -984,9 +989,13 @@ pub mod pallet {
       Self::reward_active_weight_snapshot(asset_id, account).map(|snapshot| snapshot.weight)
     }
 
+    fn mark_reward_epoch_truncated(epoch: T::RewardEpoch) {
+      RewardTruncatedEpochs::<T>::insert(epoch, ());
+    }
+
     pub fn note_reward_ingress_truncated(epoch: T::RewardEpoch, scanned: u32, max_scan: u32) {
       LastRewardIngressTruncatedEpoch::<T>::put(epoch);
-      RewardTruncatedEpochs::<T>::insert(epoch, ());
+      Self::mark_reward_epoch_truncated(epoch);
       Self::deposit_event(Event::RewardIngressTruncated {
         epoch,
         scanned,
@@ -1036,7 +1045,16 @@ pub mod pallet {
         if accounts.iter().any(|existing| existing == account) {
           return true;
         }
-        accounts.try_push(account.clone()).is_ok()
+        if accounts.try_push(account.clone()).is_err() {
+          Self::mark_reward_epoch_truncated(epoch);
+          Self::deposit_event(Event::RewardTouchedAccountsOverflow {
+            epoch,
+            asset_id,
+            account: account.clone(),
+          });
+          return false;
+        }
+        true
       })
     }
 

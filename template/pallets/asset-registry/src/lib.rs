@@ -38,7 +38,10 @@ pub mod pallet {
   use crate::{TokenDomainHook as _, weights::WeightInfo as _};
   use frame::prelude::*;
   use polkadot_sdk::{
-    frame_support::traits::{EnsureOrigin, Get, fungibles::Inspect},
+    frame_support::{
+      traits::{EnsureOrigin, Get, fungibles::Inspect},
+      transactional,
+    },
     pallet_assets,
     sp_runtime::{
       DispatchResult,
@@ -122,6 +125,8 @@ pub mod pallet {
     InvalidAssetIdMask,
     /// The asset does not exist in pallet-assets.
     AssetNotFound,
+    /// Asset name or symbol exceeds the allowed length limit.
+    MetadataTooLong,
   }
 
   #[pallet::call]
@@ -143,6 +148,7 @@ pub mod pallet {
     /// - `is_sufficient`: Whether the asset can be used to pay fees (requires `pallet-assets` support).
     #[pallet::call_index(0)]
     #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::register_foreign_asset())]
+    #[transactional]
     pub fn register_foreign_asset(
       origin: OriginFor<T>,
       location: Location,
@@ -151,6 +157,8 @@ pub mod pallet {
       is_sufficient: bool,
     ) -> DispatchResult {
       T::RegistryOrigin::ensure_origin(origin)?;
+      // 0. Validate metadata
+      Self::validate_metadata(&metadata)?;
       // 1. Check if already registered
       ensure!(
         !ForeignAssetMapping::<T>::contains_key(&location),
@@ -205,6 +213,7 @@ pub mod pallet {
     /// The ID must strictly follow the Foreign Asset bitmask (0xF...).
     #[pallet::call_index(1)]
     #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::register_foreign_asset_with_id())]
+    #[transactional]
     pub fn register_foreign_asset_with_id(
       origin: OriginFor<T>,
       location: Location,
@@ -214,6 +223,8 @@ pub mod pallet {
       is_sufficient: bool,
     ) -> DispatchResult {
       T::RegistryOrigin::ensure_origin(origin)?;
+      // 0. Validate metadata
+      Self::validate_metadata(&metadata)?;
       // 1. Validate Mask
       let id_u32: u32 = asset_id.into();
       ensure!(
@@ -267,7 +278,9 @@ pub mod pallet {
     /// Useful if the asset was created manually via `force_create` and now needs XCM binding.
     /// The AssetId must exist and have the correct FOREIGN mask.
     #[pallet::call_index(2)]
-    #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::link_existing_asset())]
+    #[pallet::weight(<T as crate::pallet::Config>::WeightInfo::link_existing_asset(
+      ForeignAssetMapping::<T>::iter_keys().count() as u32
+    ))]
     pub fn link_existing_asset(
       origin: OriginFor<T>,
       location: Location,
@@ -290,11 +303,17 @@ pub mod pallet {
         pallet_assets::Pallet::<T>::asset_exists(asset_id),
         Error::<T>::AssetNotFound
       );
-      // 4. Persist Mapping
+      // 4. Bijectivity guard: ensure asset_id is not already mapped to a different location
+      for (_loc, mapped_id) in ForeignAssetMapping::<T>::iter() {
+        if mapped_id == asset_id {
+          return Err(Error::<T>::AssetAlreadyRegistered.into());
+        }
+      }
+      // 5. Persist Mapping
       ForeignAssetMapping::<T>::insert(&location, &asset_id);
-      // 5. Notify token-domain hook
+      // 6. Notify token-domain hook
       T::TokenDomainHook::on_token_registered(primitives::AssetKind::Foreign(asset_id.into()))?;
-      // 6. Emit Event (Reuse registration event as the outcome is the same: mapping created)
+      // 7. Emit Event (Reuse registration event as the outcome is the same: mapping created)
       let symbol = pallet_assets::Metadata::<T>::get(asset_id)
         .symbol
         .into_inner();
@@ -316,17 +335,27 @@ pub mod pallet {
     ) -> DispatchResult {
       T::RegistryOrigin::ensure_origin(origin)?;
       let asset_id =
-        ForeignAssetMapping::<T>::take(&old_location).ok_or(Error::<T>::AssetNotFound)?;
+        ForeignAssetMapping::<T>::get(&old_location).ok_or(Error::<T>::AssetNotFound)?;
       ensure!(
         !ForeignAssetMapping::<T>::contains_key(&new_location),
         Error::<T>::AssetAlreadyRegistered
       );
+      ForeignAssetMapping::<T>::remove(&old_location);
       ForeignAssetMapping::<T>::insert(&new_location, &asset_id);
       Self::deposit_event(Event::MigrationApplied {
         asset_id,
         old_location,
         new_location,
       });
+      Ok(())
+    }
+  }
+
+  impl<T: Config> Pallet<T> {
+    fn validate_metadata(metadata: &CurrencyMetadata) -> DispatchResult {
+      let limit = <T as pallet_assets::Config>::StringLimit::get() as usize;
+      ensure!(metadata.name.len() <= limit, Error::<T>::MetadataTooLong);
+      ensure!(metadata.symbol.len() <= limit, Error::<T>::MetadataTooLong);
       Ok(())
     }
   }
