@@ -13,7 +13,7 @@
 // benchmark
 // pallet
 // --runtime
-// /home/llb/Repos/deos/template/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm
+// /home/llb/Repos/deos/template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
 // --pallet
 // pallet_asset_registry
 // --extrinsic

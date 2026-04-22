@@ -184,7 +184,7 @@ jobs:
             ${{ runner.os }}-cargo-bench-
 
       - name: Governance benchmark tests
-        run: cargo test -p pallet-tmctol-governance --features runtime-benchmarks --locked
+        run: cargo test -p pallet-deos-governance --features runtime-benchmarks --locked
 
       - name: Runtime benchmark compilation
-        run: cargo check -p tmctol-runtime --features runtime-benchmarks --locked
+        run: cargo check -p deos-runtime --features runtime-benchmarks --locked

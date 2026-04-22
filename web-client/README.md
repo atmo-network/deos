@@ -58,7 +58,7 @@ npm install
 npm run dev
 ```
 
-`npm install` now runs `papi generate` automatically from the committed `.papi/metadata/tmctol.scale` snapshot, so the local typed descriptors are regenerated before the app starts. When runtime query/view surfaces change, refresh that committed metadata snapshot first and then rerun `npm run papi:generate` so the frontend can consume the new typed API.
+`npm install` now runs `papi generate` automatically from the committed `.papi/metadata/deos.scale` snapshot, so the local typed descriptors are regenerated before the app starts. When runtime query/view surfaces change, refresh that committed metadata snapshot first and then rerun `npm run papi:generate` so the frontend can consume the new typed API.
 
 If the local parachain was started from the current development/local chain spec, the foreign asset, router tracked-asset set, and native curve should already exist in genesis. Use `../scripts/08-seed-web-client-state.sh` after the network is up to top up Alice's foreign balance when needed and to create/seed the native-foreign pool if liquidity is still missing. That script remains intentionally local-dev-only.
 
@@ -121,7 +121,7 @@ The current client stage should optimize for clarity and subsystem boundaries.
 - `src/lib/system/` — live chain snapshot and refresh ownership for the chain-backed frontend
 - `src/lib/wallet/` — wallet session state, persisted account selection, Zombienet dev-account presets, injected-wallet discovery, signer-readiness classification, and local-dev signer routing
 - `src/lib/adapters/governance/` — typed governance read/write adapter contract plus current mock provider, materialized mock provider, PAPI-backed blockchain provider, and blockchain adapter boundary
-- `.papi/` — committed TMCTOL metadata snapshot plus generated-descriptor package scaffold for PAPI codegen
+- `.papi/` — committed DEOS runtime metadata snapshot plus generated-descriptor package scaffold for PAPI codegen
 - `src/lib/governance/` — governance viewer store and UI-facing projection state
 - `src/lib/adapters/types.ts` — shared async adapter contract for the live UI layer
 - `src/routes/+page.svelte` — on-chain workspace entrypoint that mounts the unified `WorkspaceFrame`

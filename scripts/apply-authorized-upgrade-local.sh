@@ -158,7 +158,7 @@ verify_and_maybe_submit() {
 import { readFile } from "node:fs/promises";
 import { blake2AsHex, cryptoWaitReady } from "@polkadot/util-crypto";
 import { createWsClient } from "polkadot-api/ws";
-import { tmctol } from "@polkadot-api/descriptors";
+import { deos } from "@polkadot-api/descriptors";
 import { Keyring } from "@polkadot/keyring";
 import { getPolkadotSigner } from "@polkadot-api/signer";
 
@@ -172,7 +172,7 @@ const localCodeHash = blake2AsHex(wasmBytes, 256);
 const client = createWsClient(wsUri);
 let typedApi;
 try {
-  typedApi = client.getTypedApi(tmctol);
+  typedApi = client.getTypedApi(deos);
   const authorization = await typedApi.view.Governance.authorized_runtime_upgrade();
   const matchesAuthorizedHash = authorization
     ? authorization.code_hash.toLowerCase() === localCodeHash.toLowerCase()

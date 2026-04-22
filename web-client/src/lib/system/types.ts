@@ -1,5 +1,5 @@
 import type { Adapter } from "$lib/adapters/types";
-import type { TmctolChainConnectionState } from "$lib/adapters/blockchain/deos";
+import type { DeosChainConnectionState } from "$lib/adapters/blockchain/deos";
 import type {
   SystemConfig,
   SystemSnapshot,
@@ -17,4 +17,4 @@ export type {
   SwapResult,
 };
 
-export type { TmctolChainConnectionState };
+export type { DeosChainConnectionState };

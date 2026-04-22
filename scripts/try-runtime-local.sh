@@ -11,14 +11,14 @@ RUN_EXECUTE_BLOCK="${RUN_EXECUTE_BLOCK:-1}"
 DISABLE_SPEC_VERSION_CHECK="${DISABLE_SPEC_VERSION_CHECK:-1}"
 WS_URI="${WS_URI:-ws://127.0.0.1:9988}"
 HTTP_URI="${HTTP_URI:-http://127.0.0.1:9988}"
-ZOMBIENET_LOG="${ZOMBIENET_LOG:-/tmp/tmctol-try-runtime-zombienet.log}"
+ZOMBIENET_LOG="${ZOMBIENET_LOG:-/tmp/deos-try-runtime-zombienet.log}"
 CHAIN_TYPE="${CHAIN_TYPE:-Development}"
 BLOCK_TIME_MILLIS="${BLOCK_TIME_MILLIS:-6000}"
 FINALIZED_HEAD_TIMEOUT_SEC="${FINALIZED_HEAD_TIMEOUT_SEC:-120}"
 TRY_RUNTIME_CASE_TIMEOUT_SEC="${TRY_RUNTIME_CASE_TIMEOUT_SEC:-300}"
 ON_RUNTIME_UPGRADE_TIMEOUT_SEC="${ON_RUNTIME_UPGRADE_TIMEOUT_SEC:-$TRY_RUNTIME_CASE_TIMEOUT_SEC}"
 EXECUTE_BLOCK_TIMEOUT_SEC="${EXECUTE_BLOCK_TIMEOUT_SEC:-$TRY_RUNTIME_CASE_TIMEOUT_SEC}"
-WASM_PATH_RELATIVE="target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm"
+WASM_PATH_RELATIVE="target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
 WASM_PATH="$TEMPLATE_DIR/$WASM_PATH_RELATIVE"
 
 ZOMBIENET_PID=""
@@ -53,7 +53,7 @@ Environment:
   EXECUTE_BLOCK_TIMEOUT_SEC=300
   WS_URI=ws://127.0.0.1:9988
   HTTP_URI=http://127.0.0.1:9988
-  ZOMBIENET_LOG=/tmp/tmctol-try-runtime-zombienet.log
+  ZOMBIENET_LOG=/tmp/deos-try-runtime-zombienet.log
 EOF
 }
 
@@ -121,10 +121,10 @@ check_prerequisites() {
 
 build_try_runtime_wasm() {
     phase_banner "Step 3: Build try-runtime WASM"
-    log_info "Building tmctol-runtime with try-runtime feature"
+    log_info "Building deos-runtime with try-runtime feature"
     (
         cd "$TEMPLATE_DIR"
-        cargo build --release -p tmctol-runtime --features try-runtime
+        cargo build --release -p deos-runtime --features try-runtime
     )
 
     if [[ ! -f "$WASM_PATH" ]]; then

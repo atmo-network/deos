@@ -82,18 +82,18 @@ cargo clippy --workspace --all-targets -- -D warnings
 ### Targeted runtime checks
 
 ```bash
-cargo test -p tmctol-runtime
-cargo test -p tmctol-runtime aaa_integration_tests
-cargo test -p tmctol-runtime staking_integration_tests
-cargo check -p tmctol-runtime --features runtime-benchmarks
+cargo test -p deos-runtime
+cargo test -p deos-runtime aaa_integration_tests
+cargo test -p deos-runtime staking_integration_tests
+cargo check -p deos-runtime --features runtime-benchmarks
 ```
 
 ### Targeted pallet checks
 
 ```bash
 cargo test -p pallet-aaa
-cargo test -p pallet-tmctol-governance
-cargo test -p pallet-tmctol-staking
+cargo test -p pallet-deos-governance
+cargo test -p pallet-deos-staking
 ```
 
 ### Benchmarks

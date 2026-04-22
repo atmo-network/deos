@@ -10,7 +10,7 @@ import type {
   TransactionProgress,
   TransferAssetKey,
 } from "$lib/shared/types";
-import type { TmctolChainConnectionState } from "$lib/adapters/blockchain/deos";
+import type { DeosChainConnectionState } from "$lib/adapters/blockchain/deos";
 
 export type Adapter = {
   init(
@@ -21,7 +21,7 @@ export type Adapter = {
   ): void;
   destroy?(): void;
   getSnapshot(): SystemSnapshot | Promise<SystemSnapshot>;
-  getConnectionState?(): TmctolChainConnectionState | Promise<TmctolChainConnectionState>;
+  getConnectionState?(): DeosChainConnectionState | Promise<DeosChainConnectionState>;
   getUserBalance(): { native: bigint; foreign: bigint } | Promise<{ native: bigint; foreign: bigint }>;
   getKnownAssetBalances?(): AssetBalanceProjection[] | Promise<AssetBalanceProjection[]>;
   getAutomationActors?(): AutomationActorSnapshot[] | Promise<AutomationActorSnapshot[]>;

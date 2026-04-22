@@ -1,6 +1,6 @@
 [package]
-name = "pallet-tmctol-governance"
-version = "0.1.1"
+name = "pallet-deos-governance"
+version = "0.1.2"
 description = "Bounded governance reward-memory kernel"
 authors.workspace = true
 license = "MIT-0"

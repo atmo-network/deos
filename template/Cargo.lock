@@ -3920,6 +3920,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "deos-runtime"
+version = "0.1.2"
+dependencies = [
+ "cumulus-pallet-parachain-system",
+ "docify",
+ "hex-literal",
+ "log",
+ "pallet-aaa",
+ "pallet-asset-registry",
+ "pallet-axial-router",
+ "pallet-deos-governance",
+ "pallet-deos-staking",
+ "pallet-tmc",
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "primitives",
+ "scale-info",
+ "serde_json",
+ "smallvec",
+ "substrate-wasm-builder",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8247,7 +8270,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8349,7 +8372,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-asset-registry"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8525,7 +8548,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-axial-router"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "pallet-tmc",
  "parity-scale-codec",
@@ -9025,6 +9048,26 @@ dependencies = [
  "sp-core",
  "sp-io",
  "sp-runtime",
+]
+
+[[package]]
+name = "pallet-deos-governance"
+version = "0.1.2"
+dependencies = [
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "polkadot-sdk-frame",
+ "scale-info",
+]
+
+[[package]]
+name = "pallet-deos-staking"
+version = "0.1.2"
+dependencies = [
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "polkadot-sdk-frame",
+ "scale-info",
 ]
 
 [[package]]
@@ -10258,33 +10301,13 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmc"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
  "polkadot-sdk-frame",
  "primitives",
  "proptest",
- "scale-info",
-]
-
-[[package]]
-name = "pallet-tmctol-governance"
-version = "0.1.1"
-dependencies = [
- "parity-scale-codec",
- "polkadot-sdk",
- "polkadot-sdk-frame",
- "scale-info",
-]
-
-[[package]]
-name = "pallet-tmctol-staking"
-version = "0.1.1"
-dependencies = [
- "parity-scale-codec",
- "polkadot-sdk",
- "polkadot-sdk-frame",
  "scale-info",
 ]
 
@@ -12759,7 +12782,7 @@ dependencies = [
 
 [[package]]
 name = "primitives"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "parity-scale-codec",
  "scale-info",
@@ -18175,29 +18198,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "tmctol-runtime"
-version = "0.1.1"
-dependencies = [
- "cumulus-pallet-parachain-system",
- "docify",
- "hex-literal",
- "log",
- "pallet-aaa",
- "pallet-asset-registry",
- "pallet-axial-router",
- "pallet-tmc",
- "pallet-tmctol-governance",
- "pallet-tmctol-staking",
- "parity-scale-codec",
- "polkadot-sdk",
- "primitives",
- "scale-info",
- "serde_json",
- "smallvec",
- "substrate-wasm-builder",
-]
 
 [[package]]
 name = "tokio"

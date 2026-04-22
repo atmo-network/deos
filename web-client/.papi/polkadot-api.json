@@ -2,8 +2,8 @@
   "version": 0,
   "descriptorPath": ".papi/descriptors",
   "entries": {
-    "tmctol": {
-      "metadata": ".papi/metadata/tmctol.scale"
+    "deos": {
+      "metadata": ".papi/metadata/deos.scale"
     }
   }
 }

@@ -23,20 +23,20 @@ import {
   ZAP_MANAGER_AAA_ID,
   deriveSystemAaaSovereignAccount,
 } from "./runtime-accounts";
-import { DEFAULT_TMCTOL_DAPP_NAME, connectTmctolSigner } from "./signer";
+import { DEFAULT_DEOS_DAPP_NAME, connectDeosSigner } from "./signer";
 import { walletStore } from "$lib/wallet/index.svelte";
 import { getBlockchainEndpoint } from "$lib/system/endpoint";
 import type {
-  TmctolChainConnectionState,
-  TmctolPapiConnection,
-  TmctolChainSnapshot,
+  DeosChainConnectionState,
+  DeosPapiConnection,
+  DeosChainSnapshot,
 } from "./deos";
 
 export {
-  DEFAULT_TMCTOL_DAPP_NAME,
+  DEFAULT_DEOS_DAPP_NAME,
   connectDevSigner,
   connectInjectedSigner,
-  connectTmctolSigner,
+  connectDeosSigner,
   discoverInjectedSignerAccounts,
   hasBuiltInDevSigner,
   injectedSignerAvailability,
@@ -167,8 +167,8 @@ function automationTriggerLabel(trigger?: { type: string; value?: unknown }): st
 }
 
 export class BlockchainAdapter implements Adapter {
-  private papi: TmctolPapiConnection | null = null;
-  private papiLoading: Promise<TmctolPapiConnection> | null = null;
+  private papi: DeosPapiConnection | null = null;
+  private papiLoading: Promise<DeosPapiConnection> | null = null;
   private currentEndpoint: string | null = null;
   private loadingEndpoint: string | null = null;
   private connectionGeneration = 0;
@@ -178,7 +178,7 @@ export class BlockchainAdapter implements Adapter {
   private networkLogSupported = true;
 
   private async canonicalForeignAsset(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
   ): Promise<RuntimeAssetKind | null> {
     const nativeCurve =
       await snapshot.typedApi.query.TokenMintingCurve.TokenCurves.getValue(
@@ -197,7 +197,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async resolvePrimaryForeignAsset(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
   ): Promise<RuntimeAssetKind> {
     const canonicalForeignAsset = await this.canonicalForeignAsset(snapshot);
     if (canonicalForeignAsset) {
@@ -208,7 +208,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async trackedAssets(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
   ): Promise<RuntimeAssetKind[]> {
     return (
       (await snapshot.typedApi.query.AxialRouter.TrackedAssets.getValue({
@@ -218,7 +218,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async describeAsset(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     asset: RuntimeAssetKind,
     isCanonical = asset.type === "Native",
   ): Promise<AssetPresentation> {
@@ -245,7 +245,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async knownAssetBalancesAtSnapshot(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     address: string,
   ): Promise<AssetBalanceProjection[]> {
     const [canonicalForeignAsset, primaryRouteAsset, trackedAssets, nativeAccount] =
@@ -290,7 +290,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async xykReserves(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     foreignAsset: RuntimeAssetKind,
   ): Promise<{ native: bigint; foreign: bigint } | null> {
     const reserves = toOptionalValue(
@@ -312,7 +312,7 @@ export class BlockchainAdapter implements Adapter {
     return { native, foreign };
   }
 
-  private async nativeCurve(snapshot: TmctolChainSnapshot) {
+  private async nativeCurve(snapshot: DeosChainSnapshot) {
     return await snapshot.typedApi.query.TokenMintingCurve.TokenCurves.getValue(
       NATIVE_ASSET,
       {
@@ -322,7 +322,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async poolLpAssetId(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     foreignAsset: RuntimeAssetKind,
   ): Promise<number | null> {
     const direct = await snapshot.typedApi.query.AssetConversion.Pools.getValue(
@@ -345,7 +345,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async lpSupply(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     lpAssetId: number | null,
   ): Promise<bigint> {
     if (lpAssetId === null) {
@@ -361,7 +361,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async bucketBalances(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     foreignAsset: RuntimeAssetKind,
     reserves: { native: bigint; foreign: bigint } | null,
     lpAssetId: number | null,
@@ -413,7 +413,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async zapManagerBuffers(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     foreignAsset: RuntimeAssetKind,
   ): Promise<{ native: bigint; foreign: bigint }> {
     const zapManager = deriveSystemAaaSovereignAccount(ZAP_MANAGER_AAA_ID);
@@ -439,7 +439,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async tmcMintQuote(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     foreignNet: bigint,
   ): Promise<bigint> {
     const curve = await this.nativeCurve(snapshot);
@@ -470,7 +470,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async quoteBuyAtSnapshot(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
     foreignAmount: bigint,
   ): Promise<Quote | null> {
     if (foreignAmount <= 0n) {
@@ -524,7 +524,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   private async buildSystemSnapshot(
-    snapshot: TmctolChainSnapshot,
+    snapshot: DeosChainSnapshot,
   ): Promise<SystemSnapshot> {
     const canonicalForeignAsset = await this.canonicalForeignAsset(snapshot);
     const foreignAsset =
@@ -626,14 +626,14 @@ export class BlockchainAdapter implements Adapter {
     this.loadingEndpoint = null;
   }
 
-  private startPapiLoad(endpoint: string): Promise<TmctolPapiConnection> {
+  private startPapiLoad(endpoint: string): Promise<DeosPapiConnection> {
     const generation = ++this.connectionGeneration;
     this.loadingEndpoint = endpoint;
-    this.papiLoading = import("./deos").then(({ TmctolPapiConnection }) => {
+    this.papiLoading = import("./deos").then(({ DeosPapiConnection }) => {
       if (generation !== this.connectionGeneration) {
         throw new Error("Adapter initialization superseded");
       }
-      const papi = new TmctolPapiConnection(endpoint);
+      const papi = new DeosPapiConnection(endpoint);
       this.cancelFinalizedBlockSub = papi.subscribeToFinalizedBlocks(() => {
         if (this.onRefresh) {
           this.onRefresh();
@@ -658,7 +658,7 @@ export class BlockchainAdapter implements Adapter {
     return this.papiLoading;
   }
 
-  private async ensurePapi(): Promise<TmctolPapiConnection> {
+  private async ensurePapi(): Promise<DeosPapiConnection> {
     const endpoint = getBlockchainEndpoint();
     if (this.papi && this.currentEndpoint === endpoint) {
       return this.papi;
@@ -743,7 +743,7 @@ export class BlockchainAdapter implements Adapter {
     return [];
   }
 
-  getConnectionState(): TmctolChainConnectionState {
+  getConnectionState(): DeosChainConnectionState {
     return this.papi?.connectionState() ?? {
       status: "unconfigured",
       label: "DEOS blockchain provider",
@@ -1042,9 +1042,9 @@ export class BlockchainAdapter implements Adapter {
 
   private async submitSigned(
     submitter: (
-      snapshot: TmctolChainSnapshot,
+      snapshot: DeosChainSnapshot,
       accountId: string,
-      signer: NonNullable<Awaited<ReturnType<typeof connectTmctolSigner>>>,
+      signer: NonNullable<Awaited<ReturnType<typeof connectDeosSigner>>>,
     ) => { subscribe: (observer: {
       next: (event: any) => void;
       error: (error: unknown) => void;
@@ -1057,9 +1057,9 @@ export class BlockchainAdapter implements Adapter {
     if (!accountId) {
       throw new Error("Select an account before submitting a live transaction");
     }
-    const signer = await connectTmctolSigner(
+    const signer = await connectDeosSigner(
       accountId,
-      DEFAULT_TMCTOL_DAPP_NAME,
+      DEFAULT_DEOS_DAPP_NAME,
     );
     if (!signer) {
       throw new Error(missingSignerMessage);

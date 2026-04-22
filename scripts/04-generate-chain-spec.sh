@@ -63,17 +63,17 @@ resolve_chain_profile() {
         Development)
             PRESET="development"
             CHAIN_NAME="DEOS Development"
-            CHAIN_ID="tmctol-dev"
+            CHAIN_ID="deos-dev"
             ;;
         Local)
             PRESET="local_testnet"
             CHAIN_NAME="DEOS Local Testnet"
-            CHAIN_ID="tmctol-local"
+            CHAIN_ID="deos-local"
             ;;
         Live)
             PRESET="development"
             CHAIN_NAME="DEOS"
-            CHAIN_ID="tmctol"
+            CHAIN_ID="deos"
             ;;
         *)
             log_error "Unknown CHAIN_TYPE: $CHAIN_TYPE (expected: Development, Local, Live)"
@@ -92,7 +92,7 @@ check_prerequisites() {
 
 generate_chain_spec() {
     phase_banner "Step 2: Generate chain spec"
-    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm"
+    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
     local chain_spec_path="$TEMPLATE_DIR/chain_spec.json"
 
     log_info "Generating chain specification"

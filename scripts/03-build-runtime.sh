@@ -7,7 +7,7 @@ usage() {
     cat <<'EOF'
 Usage: 03-build-runtime.sh [OPTIONS]
 
-Builds the current DEOS reference runtime (`tmctol-runtime`) WASM artifact in release mode.
+Builds the current DEOS reference runtime (`deos-runtime`) WASM artifact in release mode.
 
 Options:
   -h, --help        Show this help message
@@ -58,7 +58,7 @@ build_runtime() {
     cd "$TEMPLATE_DIR"
 
     local start_time=$(date +%s)
-    cargo build --release -p tmctol-runtime
+    cargo build --release -p deos-runtime
     local end_time=$(date +%s)
     local build_duration=$((end_time - start_time))
 
@@ -67,7 +67,7 @@ build_runtime() {
 
 verify_build() {
     phase_banner "Step 4: Verify output"
-    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm"
+    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
 
     if [[ -f "$wasm_path" ]]; then
         local wasm_size=$(du -h "$wasm_path" | cut -f1)

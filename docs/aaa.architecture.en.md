@@ -561,11 +561,11 @@ Reproducible commands:
 
 ```bash
 cd template
-cargo test --release -p tmctol-runtime profile_scheduler_wallclock_matrix -- --ignored --nocapture
-cargo test --release -p tmctol-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture
-cargo test --release -p tmctol-runtime profile_readiness_hot_state_vs_fallback -- --ignored --nocapture
-cargo test --release -p tmctol-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored
-cargo test --release -p tmctol-runtime stress_10k_actors_queue_scheduler -- --ignored
+cargo test --release -p deos-runtime profile_scheduler_wallclock_matrix -- --ignored --nocapture
+cargo test --release -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture
+cargo test --release -p deos-runtime profile_readiness_hot_state_vs_fallback -- --ignored --nocapture
+cargo test --release -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored
+cargo test --release -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored
 ```
 
 Measurement environment (baseline run):
@@ -597,8 +597,8 @@ Readiness hot-state impact check (`10,000 actors`, `64 blocks`):
 
 PoV proof-size decomposition benchmark (`scheduler_scan_*`, `n ∈ [100,1000]`):
 
-- Command (hot): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_scan_hot_readiness --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_scan_hot_readiness.rs`
-- Command (fallback): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_scan_fallback_readiness --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_scan_fallback_readiness.rs`
+- Command (hot): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_scan_hot_readiness --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_scan_hot_readiness.rs`
+- Command (fallback): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_scan_fallback_readiness --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_scan_fallback_readiness.rs`
 - At `n=1000` (estimated model):
   - Hot-state path: proof-size `2,628,794`, ref-time `6,241,298,446 ps`
   - Fallback path: proof-size `7,658,794`, ref-time `10,115,500,000 ps`
@@ -607,16 +607,16 @@ PoV proof-size decomposition benchmark (`scheduler_scan_*`, `n ∈ [100,1000]`):
 
 Temporal wakeup diagnostics (`scheduler_wakeup_*`, excluded from runtime weight artifact):
 
-- Dense due-drain baseline: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_dense_due_drain --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_dense_due_drain.rs`
-- Sparse-gap recovery plateau: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_sparse_gap_recovery --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_sparse_gap_recovery.rs`
-- Spillover probe horizon: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_spillover_probe --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_spillover_probe.rs`
+- Dense due-drain baseline: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_dense_due_drain --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_dense_due_drain.rs`
+- Sparse-gap recovery plateau: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_sparse_gap_recovery --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_sparse_gap_recovery.rs`
+- Spillover probe horizon: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_spillover_probe --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_spillover_probe.rs`
 - Interpretation: these diagnostics are the evidence gate for any future `tree`/`heap` vocabulary or storage migration; until they show a real win against lifecycle pain points, block-bucketed `WakeupIndex` remains the reference representation.
 
 Close-path complexity diagnostics (`on_close_execution_plan`):
 
 - Dispatch weight anchor: `close_aaa` benchmark now sets up worst-case-like `on_close_execution_plan` (max system steps + max split-transfer legs) before closure
-- System diagnostic command (excluded from runtime weight artifact): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic close_aaa_on_close_execution_plan_complex --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_close_on_close_execution_plan_complex.rs`
-- User diagnostic command (excluded from runtime weight artifact): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic close_aaa_user_fee_bearing_tail --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_close_aaa_user_fee_bearing_tail.rs`
+- System diagnostic command (excluded from runtime weight artifact): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic close_aaa_on_close_execution_plan_complex --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_close_on_close_execution_plan_complex.rs`
+- User diagnostic command (excluded from runtime weight artifact): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic close_aaa_user_fee_bearing_tail --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_close_aaa_user_fee_bearing_tail.rs`
 - Purpose: expose both non-fee-bearing system close scaling and fee-bearing user close-tail scaling while preserving non-blocking closure semantics
 - These close-tail probes remain diagnostic-only in the current line; production weights still come from the normal pallet/runtime benchmarking path rather than being regenerated from this evidence harness
 - Current evidence is considered sufficient without adding a higher-fidelity runtime-only fee-sink misconfiguration simulator: runtime integration tests already lock user/system close-tail charging semantics and scheduler deferral behavior, while pallet tests lock the non-blocking fee-sink transfer failure path directly
@@ -639,11 +639,11 @@ Current pre-release AAA scheduler gate for the DEOS reference runtime:
 
 Repo-native wrapper: `./scripts/aaa-release-gate.sh`
 
-1. `cargo test --release -p tmctol-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored`
-2. `cargo test --release -p tmctol-runtime scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored`
-3. `cargo test --release -p tmctol-runtime scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored`
-4. `cargo test --release -p tmctol-runtime stress_10k_actors_queue_scheduler -- --ignored`
-5. `cargo test --release -p tmctol-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture`
+1. `cargo test --release -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored`
+2. `cargo test --release -p deos-runtime scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored`
+3. `cargo test --release -p deos-runtime scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored`
+4. `cargo test --release -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored`
+5. `cargo test --release -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture`
 
 Fairness SLO for the current queue topology: high-density matrix and 10K stress runs must stay starvation-free with `nonce spread <= 3` on the documented baseline scenarios.
 

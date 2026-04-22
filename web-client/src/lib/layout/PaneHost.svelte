@@ -91,7 +91,7 @@
       return;
     }
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("application/x-tmctol-pane", leaf.id);
+    event.dataTransfer.setData("application/x-deos-pane", leaf.id);
     requestAnimationFrame(() => layoutStore.startPaneDrag(leaf.id));
   }
 

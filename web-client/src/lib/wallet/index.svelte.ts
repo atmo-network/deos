@@ -1,5 +1,5 @@
 import {
-  DEFAULT_TMCTOL_DAPP_NAME,
+  DEFAULT_DEOS_DAPP_NAME,
   TMCTOL_DEV_SIGNER_PRESETS,
   discoverInjectedSignerAccounts,
   hasBuiltInDevSigner,
@@ -65,7 +65,7 @@ function injectedAccountLabel(account: TmctolInjectedSignerAccount): string {
 
 const DEV_ACCOUNTS = TMCTOL_DEV_SIGNER_PRESETS.map(buildDevAccount);
 const DEFAULT_DEV_ACCOUNT = DEV_ACCOUNTS[0];
-const WALLET_STORAGE_KEY = "tmctol.wallet.selected-address";
+const WALLET_STORAGE_KEY = "deos.wallet.selected-address";
 
 class WalletStore {
   state: WalletState = $state({
@@ -100,7 +100,7 @@ class WalletStore {
     this.state.lastError = null;
     try {
       const accounts = await discoverInjectedSignerAccounts(
-        DEFAULT_TMCTOL_DAPP_NAME,
+        DEFAULT_DEOS_DAPP_NAME,
       );
       this.state.injectedAccounts = accounts.map((account) => ({
         address: account.address,

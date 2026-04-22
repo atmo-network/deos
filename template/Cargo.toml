@@ -51,13 +51,13 @@ while_immutable_condition = { level = "allow", priority = 2 }
 zero-prefixed-literal = { level = "allow", priority = 2 }
 
 [workspace.dependencies]
-tmctol-runtime = { path = "./runtime", default-features = false }
+deos-runtime = { path = "./runtime", default-features = false }
 primitives = { path = "./primitives", default-features = false }
 pallet-aaa = { path = "./pallets/aaa", default-features = false }
 pallet-asset-registry = { path = "./pallets/asset-registry", default-features = false }
 pallet-axial-router = { path = "./pallets/axial-router", default-features = false }
-pallet-governance = { package = "pallet-tmctol-governance", path = "./pallets/governance", default-features = false }
-pallet-staking = { package = "pallet-tmctol-staking", path = "./pallets/staking", default-features = false }
+pallet-governance = { package = "pallet-deos-governance", path = "./pallets/governance", default-features = false }
+pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", default-features = false }
 pallet-tmc = { path = "./pallets/tmc", default-features = false }
 
 # Polkadot SDK umbrella crate

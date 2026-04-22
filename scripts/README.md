@@ -18,7 +18,7 @@ This directory is intentionally split into two classes:
   Install local cargo-based tooling (`zombienet`, `chain-spec-builder`, `try-runtime`).
 
 - [03-build-runtime.sh](./03-build-runtime.sh)
-  Build the current DEOS reference runtime WASM artifact (`tmctol-runtime`).
+  Build the current DEOS reference runtime WASM artifact (`deos-runtime`).
 
 - [04-generate-chain-spec.sh](./04-generate-chain-spec.sh)
   Generate and patch `template/chain_spec.json`, including the current local-dev bootstrap surfaces used by the web-client seeding/probe flow (foreign asset, router tracking, native curve).
@@ -53,7 +53,7 @@ This directory is intentionally split into two classes:
   Run the heavy AAA scheduler release gate.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
-  Build `tmctol-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
+  Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
 
 - [benchmarks.sh](./benchmarks.sh)
   Run pallet benchmarking flows and weight generation helpers. Supports `--extra` to include AAA circular-chain diagnostics outside the default production-weight set.

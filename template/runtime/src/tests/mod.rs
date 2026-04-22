@@ -20,3 +20,5 @@ pub mod load_testing;
 pub mod staking_integration_tests;
 #[cfg(test)]
 pub mod tmctol_integration_tests;
+#[cfg(test)]
+pub mod tmctol_invariants;

@@ -72,7 +72,7 @@ seed_state() {
         LIQUIDITY_FOREIGN="$LIQUIDITY_FOREIGN" \
         node --input-type=module - <<'EOF'
 import { createWsClient } from 'polkadot-api/ws';
-import { tmctol } from '@polkadot-api/descriptors';
+import { deos } from '@polkadot-api/descriptors';
 import { Keyring } from '@polkadot/keyring';
 import { cryptoWaitReady } from '@polkadot/util-crypto';
 import { getPolkadotSigner } from '@polkadot-api/signer';
@@ -104,7 +104,7 @@ async function main() {
   const alice = keyring.createFromUri('//Alice', { name: 'Alice' }, 'sr25519');
   const signer = getPolkadotSigner(alice.publicKey, 'Sr25519', (input) => alice.sign(input));
   const client = createWsClient(WS);
-  const api = client.getTypedApi(tmctol);
+  const api = client.getTypedApi(deos);
   const submit = async (label, tx) => {
     console.log(`\n== ${label} ==`);
     const result = await tx.signAndSubmit(signer);

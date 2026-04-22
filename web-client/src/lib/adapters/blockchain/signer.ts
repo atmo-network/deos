@@ -1,6 +1,6 @@
 import { AccountId, type PolkadotSigner } from "polkadot-api";
 
-export const DEFAULT_TMCTOL_DAPP_NAME = "DEOS Web Client";
+export const DEFAULT_DEOS_DAPP_NAME = "DEOS Web Client";
 
 export type TmctolInjectedSignerAccount = {
   address: string;
@@ -152,7 +152,7 @@ export function injectedSignerAvailability(): TmctolInjectedSignerAvailability {
 }
 
 export async function discoverInjectedSignerAccounts(
-  dappName: string = DEFAULT_TMCTOL_DAPP_NAME,
+  dappName: string = DEFAULT_DEOS_DAPP_NAME,
 ): Promise<TmctolInjectedSignerAccount[]> {
   if (typeof window === "undefined") {
     return [];
@@ -252,7 +252,7 @@ export async function connectDevSigner(
 
 export async function connectInjectedSigner(
   address: string,
-  dappName: string = DEFAULT_TMCTOL_DAPP_NAME,
+  dappName: string = DEFAULT_DEOS_DAPP_NAME,
 ): Promise<TmctolInjectedSignerMatch | null> {
   const normalizedAddress = address.trim();
   if (normalizedAddress.length === 0 || typeof window === "undefined") {
@@ -289,9 +289,9 @@ export async function connectInjectedSigner(
   return null;
 }
 
-export async function connectTmctolSigner(
+export async function connectDeosSigner(
   addressOrAlias: string,
-  dappName: string = DEFAULT_TMCTOL_DAPP_NAME,
+  dappName: string = DEFAULT_DEOS_DAPP_NAME,
 ): Promise<TmctolSignerMatch | null> {
   const injectedSigner = await connectInjectedSigner(addressOrAlias, dappName);
   if (injectedSigner) {

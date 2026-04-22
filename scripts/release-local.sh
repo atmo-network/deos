@@ -3,8 +3,8 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-RELEASE_DIR="${RELEASE_DIR:-./target/production/wbuild/tmctol-runtime}"
-WASM_FILE="${WASM_FILE:-tmctol_runtime.compact.compressed.wasm}"
+RELEASE_DIR="${RELEASE_DIR:-./target/production/wbuild/deos-runtime}"
+WASM_FILE="${WASM_FILE:-deos_runtime.compact.compressed.wasm}"
 OUTPUT_DIR="${OUTPUT_DIR:-./release-test-output}"
 BUILD_DURATION=0
 WASM_SIZE=0
@@ -20,8 +20,8 @@ Options:
   -h, --help        Show this help message
 
 Environment:
-  RELEASE_DIR=./target/production/wbuild/tmctol-runtime
-  WASM_FILE=tmctol_runtime.compact.compressed.wasm
+  RELEASE_DIR=./target/production/wbuild/deos-runtime
+  WASM_FILE=deos_runtime.compact.compressed.wasm
   OUTPUT_DIR=./release-test-output
 EOF
 }

@@ -1,3 +1,11 @@
+//! Integration tests for the TMCTOL economic standard on DEOS runtime.
+//!
+//! The `tmctol_` prefix is intentional: this module tests the TMCTOL standard
+//! (TMC, TOL, Router, Splitter, Zap Manager, Bucket) running on top of the DEOS
+//! runtime. Per AGENTS.md Artifact-Name Tail Policy, standard-specific identifiers
+//! remain as conscious legacy names; only framework identifiers were migrated.
+//! Do not rename this file to `deos_integration_tests`.
+
 use super::common::{
   ALICE, ASSET_A, ASSET_B, add_liquidity, create_pool, get_pool_lp_asset, new_test_ext,
   seeded_test_ext,

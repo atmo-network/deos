@@ -36,8 +36,8 @@ import type {
 } from "./types";
 import { MAX_TILE_LEAF_COUNT } from "./types";
 
-const TILE_LAYOUT_STORAGE_KEY = "tmctol-tile-layout";
-const WORKSPACE_FRAME_STORAGE_KEY = "tmctol-workspace-frame";
+const TILE_LAYOUT_STORAGE_KEY = "deos-tile-layout";
+const WORKSPACE_FRAME_STORAGE_KEY = "deos-workspace-frame";
 
 function createDefaultLayout(): TileSplit {
   return buildLayoutFromSpec(CANONICAL_DEFAULT_LAYOUT_SPEC, genTileId) as TileSplit;

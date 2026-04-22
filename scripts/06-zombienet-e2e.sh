@@ -105,19 +105,19 @@ scenario_xcm_foreign_registration() {
     phase_banner "Step 3: Runtime scenario suite"
     log_info "Scenario 2: XCM reserve transfer -> foreign asset registration"
     log_info "Using runtime integration proxy (asset-registry flow)"
-    (cd "$TEMPLATE_DIR" && cargo test -p tmctol-runtime tests::asset_registry_integration_tests::register_foreign_asset_creates_mapping_and_metadata)
+    (cd "$TEMPLATE_DIR" && cargo test -p deos-runtime tests::asset_registry_integration_tests::register_foreign_asset_creates_mapping_and_metadata)
     log_success "Scenario 2 passed"
 }
 
 scenario_full_economic_cycle() {
     log_info "Scenario 3: full economic cycle (TMC -> Router -> Burn -> TOL)"
-    (cd "$TEMPLATE_DIR" && cargo test -p tmctol-runtime tests::tmctol_integration_tests::bldr_full_e2e_router_tmc_splitter_zm_bucket)
+    (cd "$TEMPLATE_DIR" && cargo test -p deos-runtime tests::tmctol_integration_tests::bldr_full_e2e_router_tmc_splitter_zm_bucket)
     log_success "Scenario 3 passed"
 }
 
 scenario_aaa_lifecycle() {
     log_info "Scenario 4: AAA lifecycle (create -> execute cycles -> close)"
-    (cd "$TEMPLATE_DIR" && cargo test -p tmctol-runtime tests::aaa_integration_tests::user_dca_e2e_lifecycle_with_natural_close)
+    (cd "$TEMPLATE_DIR" && cargo test -p deos-runtime tests::aaa_integration_tests::user_dca_e2e_lifecycle_with_natural_close)
     log_success "Scenario 4 passed"
 }
 

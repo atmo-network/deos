@@ -11,7 +11,7 @@ usage() {
     cat <<'EOF'
 Usage: aaa-release-gate.sh [OPTIONS]
 
-Runs the documented AAA scheduler release gate against tmctol-runtime.
+Runs the documented AAA scheduler release gate against deos-runtime.
 
 Options:
   --skip-occupancy-profile   Skip the 10k occupancy diagnostics profile
@@ -67,7 +67,7 @@ main() {
 
     if [[ "$QUICK_MODE" == "1" ]]; then
         log_info "Quick mode enabled - running only fast checks"
-        run_shell_step "AAA quick gate: clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p tmctol-runtime --all-targets -- -D warnings"
+        run_shell_step "AAA quick gate: clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p deos-runtime --all-targets -- -D warnings"
         run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-aaa --lib"
         log_success "AAA quick gate completed successfully"
         exit 0
@@ -76,28 +76,28 @@ main() {
     run_shell_step \
         "AAA gate: over-capacity fairness matrix" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p tmctol-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored"
 
     run_shell_step \
         "AAA gate: dense vs sparse topology matrix" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p tmctol-runtime scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored"
 
     run_shell_step \
         "AAA gate: sparse topology long-run liveness" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p tmctol-runtime scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored"
 
     run_shell_step \
         "AAA gate: 10k queue scheduler stress" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p tmctol-runtime stress_10k_actors_queue_scheduler -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored"
 
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" == "1" ]]; then
         run_shell_step \
             "AAA gate: 10k queue/wakeup occupancy profile" \
             "" \
-            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p tmctol-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture"
+            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture"
     else
         log_warning "Skipping occupancy profile"
     fi

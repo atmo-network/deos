@@ -13,7 +13,7 @@
 // benchmark
 // pallet
 // --runtime
-// target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm
+// target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
 // --pallet
 // pallet_axial_router
 // --extrinsic

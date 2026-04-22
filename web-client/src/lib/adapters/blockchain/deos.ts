@@ -9,11 +9,11 @@ import {
   type StatusChange,
 } from "polkadot-api/ws";
 
-import { tmctol } from "@polkadot-api/descriptors";
+import { deos } from "@polkadot-api/descriptors";
 
-export const DEFAULT_TMCTOL_WS_ENDPOINT = "ws://127.0.0.1:9988";
+export const DEFAULT_DEOS_WS_ENDPOINT = "ws://127.0.0.1:9988";
 
-export type TmctolChainConnectionState = {
+export type DeosChainConnectionState = {
   status: "connected" | "unconfigured" | "error";
   label: string;
   endpoint: string | null;
@@ -26,29 +26,29 @@ export type TmctolChainConnectionState = {
   message: string | null;
 };
 
-export type TmctolClient = PolkadotClient & {
+export type DeosClient = PolkadotClient & {
   switch: (uri?: string) => void;
   getStatus: () => StatusChange;
 };
-export type TmctolTypedApi = TypedApi<typeof tmctol>;
-export type TmctolChainSnapshot = {
+export type DeosTypedApi = TypedApi<typeof deos>;
+export type DeosChainSnapshot = {
   at: HexString;
   currentEpoch: number;
   finalizedBlockHash: HexString;
   finalizedBlockNumber: number;
-  typedApi: TmctolTypedApi;
+  typedApi: DeosTypedApi;
 };
-export type TmctolFinalizedBlock = {
+export type DeosFinalizedBlock = {
   hash: HexString;
   number: number;
 };
 
 function buildConnectionState(
-  status: TmctolChainConnectionState["status"],
+  status: DeosChainConnectionState["status"],
   message: string,
   endpoint: string | null,
   label = "DEOS blockchain provider",
-): TmctolChainConnectionState {
+): DeosChainConnectionState {
   return {
     status,
     label,
@@ -96,22 +96,22 @@ function describeWsStatus(status: StatusChange | null): string | null {
   }
 }
 
-export class TmctolPapiConnection {
-  private client: TmctolClient | null = null;
+export class DeosPapiConnection {
+  private client: DeosClient | null = null;
   private currentEndpoint: string | null = null;
-  private state: TmctolChainConnectionState = buildConnectionState(
+  private state: DeosChainConnectionState = buildConnectionState(
     "unconfigured",
     "PAPI connection not checked yet",
-    DEFAULT_TMCTOL_WS_ENDPOINT,
+    DEFAULT_DEOS_WS_ENDPOINT,
   );
-  private typedApi: TmctolTypedApi | null = null;
+  private typedApi: DeosTypedApi | null = null;
   private wsStatus: StatusChange | null = null;
   private finalizedBlockListeners = new Set<
-    (block: TmctolFinalizedBlock) => void
+    (block: DeosFinalizedBlock) => void
   >();
   private finalizedBlockSubscription: { unsubscribe(): void } | null = null;
 
-  constructor(private readonly endpoint: string = DEFAULT_TMCTOL_WS_ENDPOINT) {
+  constructor(private readonly endpoint: string = DEFAULT_DEOS_WS_ENDPOINT) {
     this.state = buildConnectionState(
       "unconfigured",
       "PAPI connection not checked yet",
@@ -133,7 +133,7 @@ export class TmctolPapiConnection {
     this.resetClient();
   }
 
-  private subscribeFinalizedBlockStream(client: TmctolClient): void {
+  private subscribeFinalizedBlockStream(client: DeosClient): void {
     if (this.finalizedBlockListeners.size === 0 || this.finalizedBlockSubscription !== null) {
       return;
     }
@@ -153,8 +153,8 @@ export class TmctolPapiConnection {
   }
 
   private ensureClient(endpoint: string): {
-    client: TmctolClient;
-    typedApi: TmctolTypedApi;
+    client: DeosClient;
+    typedApi: DeosTypedApi;
   } {
     if (
       this.client !== null &&
@@ -173,7 +173,7 @@ export class TmctolPapiConnection {
       },
     });
     this.wsStatus = this.client.getStatus();
-    this.typedApi = this.client.getTypedApi(tmctol);
+    this.typedApi = this.client.getTypedApi(deos);
     this.currentEndpoint = endpoint;
     this.subscribeFinalizedBlockStream(this.client);
     return {
@@ -187,7 +187,7 @@ export class TmctolPapiConnection {
     this.subscribeFinalizedBlockStream(client);
   }
 
-  subscribeToFinalizedBlocks(onBlock: (block: TmctolFinalizedBlock) => void): () => void {
+  subscribeToFinalizedBlocks(onBlock: (block: DeosFinalizedBlock) => void): () => void {
     this.finalizedBlockListeners.add(onBlock);
     const normalizedEndpoint = normalizeBlockchainEndpoint(this.endpoint);
     if (normalizedEndpoint.length > 0) {
@@ -202,13 +202,13 @@ export class TmctolPapiConnection {
     };
   }
 
-  connectionState(): TmctolChainConnectionState {
+  connectionState(): DeosChainConnectionState {
     return this.state;
   }
 
   async ensureConnected(): Promise<{
-    client: TmctolClient;
-    typedApi: TmctolTypedApi;
+    client: DeosClient;
+    typedApi: DeosTypedApi;
   }> {
     const normalizedEndpoint = normalizeBlockchainEndpoint(this.endpoint);
     if (normalizedEndpoint.length === 0) {
@@ -283,7 +283,7 @@ export class TmctolPapiConnection {
     }
   }
 
-  async snapshot(): Promise<TmctolChainSnapshot> {
+  async snapshot(): Promise<DeosChainSnapshot> {
     const { client, typedApi } = await this.ensureConnected();
     const finalizedBlock = await client.getFinalizedBlock();
     return {

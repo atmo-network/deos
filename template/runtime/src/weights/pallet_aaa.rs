@@ -13,7 +13,7 @@
 // benchmark
 // pallet
 // --runtime
-// /home/llb/Repos/tmctol/template/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm
+// /home/llb/Repos/deos/template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
 // --pallet
 // pallet_aaa
 // --extrinsic
@@ -45,7 +45,7 @@
 // --heap-pages
 // 4096
 // --output
-// /home/llb/Repos/tmctol/template/runtime/src/weights/pallet_aaa.rs
+// /home/llb/Repos/deos/template/runtime/src/weights/pallet_aaa.rs
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 #![allow(unused_parens)]

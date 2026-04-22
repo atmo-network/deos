@@ -1,12 +1,12 @@
 import { Enum as PapiEnum, type Enum as PapiRuntimeEnum } from "polkadot-api";
 
 import type {
-  TmctolChainSnapshot,
-  TmctolPapiConnection,
+  DeosChainSnapshot,
+  DeosPapiConnection,
 } from "../blockchain/deos";
 import {
-  connectTmctolSigner,
-  DEFAULT_TMCTOL_DAPP_NAME,
+  connectDeosSigner,
+  DEFAULT_DEOS_DAPP_NAME,
   hasBuiltInDevSigner,
   injectedSignerAvailability,
 } from "../blockchain/signer";
@@ -59,7 +59,7 @@ import type { GovernanceBlockchainProvider } from "./provider";
 
 const FIXED_U128_SCALE = 10n ** 18n;
 
-type GovernanceSnapshot = TmctolChainSnapshot;
+type GovernanceSnapshot = DeosChainSnapshot;
 
 type GovernanceEnum<T extends Record<string, unknown>> = PapiRuntimeEnum<T>;
 
@@ -927,8 +927,8 @@ function mapProposalStatus(
 }
 
 export class GovernancePapiProvider implements GovernanceBlockchainProvider {
-  private connection: TmctolPapiConnection | null = null;
-  private connectionLoading: Promise<TmctolPapiConnection> | null = null;
+  private connection: DeosPapiConnection | null = null;
+  private connectionLoading: Promise<DeosPapiConnection> | null = null;
 
   constructor(
     private readonly endpoint: string = DEFAULT_GOVERNANCE_WS_ENDPOINT,
@@ -949,7 +949,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     };
   }
 
-  private async ensureConnection(): Promise<TmctolPapiConnection> {
+  private async ensureConnection(): Promise<DeosPapiConnection> {
     if (this.connection) {
       return this.connection;
     }
@@ -957,8 +957,8 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
       return this.connectionLoading;
     }
     this.connectionLoading = import("../blockchain/deos").then(
-      ({ TmctolPapiConnection }) => {
-        const connection = new TmctolPapiConnection(this.endpoint);
+      ({ DeosPapiConnection }) => {
+        const connection = new DeosPapiConnection(this.endpoint);
         this.connection = connection;
         this.connectionLoading = null;
         return connection;
@@ -1031,14 +1031,14 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
       );
     }
     const signerSupport = injectedSignerAvailability();
-    const devSignerAvailable = hasBuiltInDevSigner(accountId ?? null);
+    const isDevSigner = hasBuiltInDevSigner(accountId ?? null);
     return papiWriteSurfaceAvailability({
       signedWriteAvailable:
-        signerSupport.status === "available" || devSignerAvailable,
+        signerSupport.status === "available" || isDevSigner,
       signedWriteReason:
         signerSupport.status === "available"
           ? `${signerSupport.message}; signed governance writes are enabled when the selected account matches either an injected signer account or a built-in Zombienet dev identity`
-          : devSignerAvailable
+          : isDevSigner
             ? "Built-in Zombienet dev signer is active for the selected account; signed governance writes are available for local testing even without an injected extension"
             : `${signerSupport.message}; signed governance writes still work for built-in Zombienet dev identities, while custom addresses need a matching injected signer account`,
       adminReason:
@@ -1393,9 +1393,9 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     itemId: GovernanceItemId;
     voteKind: GovernanceVoteKind;
   }): Promise<void> {
-    const signer = await connectTmctolSigner(
+    const signer = await connectDeosSigner(
       input.accountId,
-      DEFAULT_TMCTOL_DAPP_NAME,
+      DEFAULT_DEOS_DAPP_NAME,
     );
     if (!signer) {
       throw new Error(
@@ -1433,9 +1433,9 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
         `Browser submission currently supports only runtime-signed public proposal kinds; ${input.payloadKind} is still admin-only for domain ${input.domainId}.`,
       );
     }
-    const signer = await connectTmctolSigner(
+    const signer = await connectDeosSigner(
       input.accountId,
-      DEFAULT_TMCTOL_DAPP_NAME,
+      DEFAULT_DEOS_DAPP_NAME,
     );
     if (!signer) {
       throw new Error(
@@ -1462,9 +1462,9 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     accountId: GovernanceAccountId;
     payloadBytes: Uint8Array;
   }): Promise<void> {
-    const signer = await connectTmctolSigner(
+    const signer = await connectDeosSigner(
       input.accountId,
-      DEFAULT_TMCTOL_DAPP_NAME,
+      DEFAULT_DEOS_DAPP_NAME,
     );
     if (!signer) {
       throw new Error(

@@ -68,7 +68,7 @@ export {
 export {
   BlockchainAdapter,
   connectInjectedSigner,
-  DEFAULT_TMCTOL_DAPP_NAME,
+  DEFAULT_DEOS_DAPP_NAME,
   injectedSignerAvailability,
   injectedSignerExtensionNames,
   type TmctolInjectedSignerAccount,
@@ -76,13 +76,13 @@ export {
   type TmctolInjectedSignerMatch,
 } from "./adapters/blockchain";
 export {
-  DEFAULT_TMCTOL_WS_ENDPOINT,
-  TmctolPapiConnection,
+  DEFAULT_DEOS_WS_ENDPOINT,
+  DeosPapiConnection,
   normalizeBlockchainEndpoint,
-  type TmctolChainConnectionState,
-  type TmctolChainSnapshot,
-  type TmctolClient,
-  type TmctolTypedApi,
+  type DeosChainConnectionState,
+  type DeosChainSnapshot,
+  type DeosClient,
+  type DeosTypedApi,
 } from "./adapters/blockchain/deos";
 export {
   GovernanceMockAdapter,

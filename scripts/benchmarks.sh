@@ -119,9 +119,9 @@ check_prerequisites() {
 build_benchmarks() {
     phase_banner "Step 2: Build benchmark runtime"
     run_shell_step \
-        "Build tmctol-runtime with runtime-benchmarks" \
+        "Build deos-runtime with runtime-benchmarks" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo build --release --features runtime-benchmarks -p tmctol-runtime"
+        "cd \"$TEMPLATE_DIR\" && cargo build --release --features runtime-benchmarks -p deos-runtime"
 }
 
 check_only() {
@@ -208,7 +208,7 @@ run_pallet_benchmark() {
     if [[ "$BENCHER_MODE" == "omni" ]]; then
         local template_file="$TEMPLATE_DIR/.maintain/frame-weight-template.hbs"
         local bencher_args=(
-            --runtime "$TEMPLATE_DIR/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm"
+            --runtime "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
             --pallet "$pallet_name"
             --extrinsic "*"
             "${exclude_args[@]}"
@@ -233,7 +233,7 @@ run_pallet_benchmark() {
             log_warning "--extra requires frame-omni-bencher for actual extra-benchmark execution; cargo fallback remains compile-only"
         fi
         cd "$TEMPLATE_DIR"
-        cargo test --release --features runtime-benchmarks -p tmctol-runtime -- "benchmark" --nocapture 2>&1 || true
+        cargo test --release --features runtime-benchmarks -p deos-runtime -- "benchmark" --nocapture 2>&1 || true
         log_warning "Weight files NOT updated (frame-omni-bencher required for weight generation)"
         return 0
     fi

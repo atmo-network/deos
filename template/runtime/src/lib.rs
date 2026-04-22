@@ -44,8 +44,8 @@ include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 /// Runtime version
 #[sp_version::runtime_version]
 pub const VERSION: sp_version::RuntimeVersion = sp_version::RuntimeVersion {
-  spec_name: alloc::borrow::Cow::Borrowed("tmctol-runtime"),
-  impl_name: alloc::borrow::Cow::Borrowed("tmctol-runtime"),
+  spec_name: alloc::borrow::Cow::Borrowed("deos-runtime"),
+  impl_name: alloc::borrow::Cow::Borrowed("deos-runtime"),
   apis: apis::RUNTIME_API_VERSIONS,
   authoring_version: 1,
   impl_version: 1,

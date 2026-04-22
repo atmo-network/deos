@@ -6,7 +6,7 @@ import { portfolioStore } from "$lib/portfolio/index.svelte";
 import type {
   SystemConfig,
   SystemSnapshot,
-  TmctolChainConnectionState,
+  DeosChainConnectionState,
 } from "./types";
 
 const DEFAULT_INITIAL_FOREIGN_BALANCE = 100000;
@@ -14,7 +14,7 @@ const DEFAULT_INITIAL_FOREIGN_BALANCE = 100000;
 class SystemStore {
   adapter: Adapter = $state(new BlockchainAdapter());
   snapshot: SystemSnapshot | null = $state(null);
-  connectionState: TmctolChainConnectionState | null = $state(null);
+  connectionState: DeosChainConnectionState | null = $state(null);
 
   async init(overrides: Partial<SystemConfig> = {}, initialForeign?: number): Promise<void> {
     const foreign = initialForeign ?? DEFAULT_INITIAL_FOREIGN_BALANCE;

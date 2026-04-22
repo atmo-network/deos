@@ -18,7 +18,7 @@
     root: TileNode;
   };
 
-  const SIDEBAR_PANEL_ID = "tmctol-sidebar-panel";
+  const SIDEBAR_PANEL_ID = "deos-sidebar-panel";
   const SIDEBAR_STACK_BREAKPOINT = 900;
   const SIDEBAR_WIDTH = "22rem";
   const SIDEBAR_TRANSITION_MS = 180;

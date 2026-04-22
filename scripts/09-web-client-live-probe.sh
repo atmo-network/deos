@@ -76,7 +76,7 @@ run_live_probe() {
         SWAP_AMOUNT="$SWAP_AMOUNT" \
         node --input-type=module - <<'EOF'
 import { createWsClient } from 'polkadot-api/ws';
-import { tmctol } from '@polkadot-api/descriptors';
+import { deos } from '@polkadot-api/descriptors';
 import { Keyring } from '@polkadot/keyring';
 import { cryptoWaitReady } from '@polkadot/util-crypto';
 import { getPolkadotSigner } from '@polkadot-api/signer';
@@ -98,7 +98,7 @@ async function main() {
   const bob = keyring.createFromUri('//Bob', { name: 'Bob' }, 'sr25519');
   const signer = getPolkadotSigner(alice.publicKey, 'Sr25519', (input) => alice.sign(input));
   const client = createWsClient(WS);
-  const api = client.getTypedApi(tmctol);
+  const api = client.getTypedApi(deos);
   const isStaleTxError = (error) =>
     typeof error === 'object' &&
     error !== null &&

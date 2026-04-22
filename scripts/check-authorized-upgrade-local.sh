@@ -136,7 +136,7 @@ import { readFile } from "node:fs/promises";
 import { u8aToHex } from "@polkadot/util";
 import { blake2AsHex } from "@polkadot/util-crypto";
 import { createWsClient } from "polkadot-api/ws";
-import { tmctol } from "@polkadot-api/descriptors";
+import { deos } from "@polkadot-api/descriptors";
 
 const wsUri = process.env.WS_URI;
 const wasmPath = process.env.WASM_PATH;
@@ -147,7 +147,7 @@ const localCodeHash = blake2AsHex(wasmBytes, 256);
 const client = createWsClient(wsUri);
 let typedApi;
 try {
-  typedApi = client.getTypedApi(tmctol);
+  typedApi = client.getTypedApi(deos);
   const authorization = await typedApi.view.Governance.authorized_runtime_upgrade();
   const matchesAuthorizedHash = authorization
     ? authorization.code_hash.toLowerCase() === localCodeHash.toLowerCase()

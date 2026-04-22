@@ -4,6 +4,19 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the new DEOS monorepo. The changelog therefore focuses on achieved epics and the current shipped baseline of this repo, not on preserving every intermediate refactor step or pre-reset chronology.
 
+## [0.1.2] - 2026-04-22
+
+### Framework Identity — TMCTOL → DEOS Rename Epic
+
+- `tmctol-runtime` → `deos-runtime`: runtime crate, `spec_name`/`impl_name`, and all build artifact paths.
+- `pallet-tmctol-governance` → `pallet-deos-governance`, `pallet-tmctol-staking` → `pallet-deos-staking`: pallet crate names and workspace aliases.
+- Scripts updated: `03-build-runtime.sh`, `04-generate-chain-spec.sh`, `06-zombienet-e2e.sh`, `release-local.sh`, `validate-local.sh`, `aaa-release-gate.sh` — all `tmctol-runtime`, `tmctol-dev`, `tmctol-local`, `tmctol` chain ID references migrated.
+- Web-client adapter layer: `TmctolPapiConnection` → `DeosPapiConnection`, `TmctolChainSnapshot` → `DeosChainSnapshot`, `TmctolChainConnectionState` → `DeosChainConnectionState`, `connectTmctolSigner` → `connectDeosSigner`, `DEFAULT_TMCTOL_*` → `DEFAULT_DEOS_*`.
+- Web-client local-storage keys: `tmctol-tile-layout`, `tmctol-workspace-frame`, `tmctol.wallet.selected-address` → `deos-*`.
+- PAPI descriptors regenerated: entry `tmctol` removed, `deos` added from new runtime WASM metadata; generated namespace now uses `deos`.
+- Weight file comments updated to reference `deos-runtime` artifact paths.
+- Runtime integration test module **preserved** as `tmctol_integration_tests`: it tests the TMCTOL economic standard (TMC, TOL, Router, Splitter, Zap Manager, Bucket) on top of DEOS runtime, so the `tmctol` prefix correctly identifies the standard under test, not the framework.
+
 ## [0.1.1] - 2026-04-22
 
 ### Runtime
