@@ -4,21 +4,29 @@ import {
 } from "$lib/adapters/governance/provider";
 import type {
   GovernanceAdapter,
+  GovernancePrimaryTrackOption,
+  GovernanceProposalDescriptor,
   GovernanceProposalExecutionDetail,
   GovernanceProposalPayloadKind,
   GovernanceVoteKind,
 } from "$lib/governance";
+import {
+  getGovernanceDomainId,
+  setGovernanceDomainId,
+} from "$lib/governance/session";
+import { logStore } from "$lib/log/index.svelte";
+import { fromClientBoundedProjection } from "$lib/shared/read-model";
+import {
+  getBlockchainEndpoint,
+  setBlockchainEndpoint,
+} from "$lib/system/endpoint";
+import { walletStore } from "$lib/wallet/index.svelte";
 import type {
   GovernancePanelProposal,
   GovernancePublicSubmissionOption,
   GovernanceRetainedFinalizedProposal,
   GovernanceViewerState,
 } from "./types";
-import { fromClientBoundedProjection } from "$lib/shared/read-model";
-import { logStore } from "$lib/log/index.svelte";
-import { getBlockchainEndpoint, setBlockchainEndpoint } from "$lib/system/endpoint";
-import { getGovernanceDomainId, setGovernanceDomainId } from "$lib/governance/session";
-import { walletStore } from "$lib/wallet/index.svelte";
 
 const DEFAULT_ACCOUNT_ID = walletStore.selectedAddress;
 const DEFAULT_BLOCKCHAIN_PROVIDER = new GovernanceUnavailableBlockchainProvider(
@@ -47,7 +55,10 @@ async function loadPublicSubmissionOptions(
   const entries = await Promise.all(
     PUBLIC_SUBMISSION_PAYLOAD_KINDS.map(async (payloadKind) => ({
       payloadKind,
-      authority: await adapter.getProposalSubmissionAuthority(domainId, payloadKind),
+      authority: await adapter.getProposalSubmissionAuthority(
+        domainId,
+        payloadKind,
+      ),
       openingFee: await adapter.getProposalOpeningFee(domainId, payloadKind),
     })),
   );
@@ -59,19 +70,65 @@ async function loadPublicSubmissionOptions(
     }));
 }
 
+async function loadProposalCommonFields(
+  adapter: GovernanceAdapter,
+  domainId: number,
+  itemId: number,
+): Promise<GovernanceProposalDescriptor> {
+  const [
+    metadata,
+    executionAuthority,
+    payloadAvailability,
+    primaryTrackFamily,
+    urgentEligibility,
+  ] = await Promise.all([
+    adapter.getProposalMetadata(domainId, itemId),
+    adapter.getProposalExecutionAuthority(domainId, itemId),
+    adapter.getProposalPayloadAvailability(domainId, itemId),
+    adapter.getProposalPrimaryTrackFamily(domainId, itemId),
+    adapter.getProposalUrgentEligibility(domainId, itemId),
+  ]);
+  const submissionAuthority = metadata
+    ? await adapter.getProposalSubmissionAuthority(
+        domainId,
+        metadata.payloadKind,
+      )
+    : null;
+  const openingFee = metadata
+    ? await adapter.getProposalOpeningFee(domainId, metadata.payloadKind)
+    : null;
+  return {
+    metadata,
+    executionAuthority,
+    payloadAvailability,
+    primaryTrackFamily,
+    urgentEligibility,
+    submissionAuthority,
+    openingFee,
+  };
+}
+
 async function loadProposal(
   adapter: GovernanceAdapter,
   domainId: number,
   itemId: number,
 ): Promise<GovernancePanelProposal> {
-  const [status, metadata, executionAuthority, payloadAvailability, primaryTrackFamily, timing, urgentEligibility, primaryTrackTally, tally, aye, nay, amplify, approve, reduce, veto, pass] = await Promise.all([
+  const common = await loadProposalCommonFields(adapter, domainId, itemId);
+  const [
+    status,
+    timing,
+    primaryTrackTally,
+    tally,
+    aye,
+    nay,
+    amplify,
+    approve,
+    reduce,
+    veto,
+    pass,
+  ] = await Promise.all([
     adapter.getProposalStatus(domainId, itemId),
-    adapter.getProposalMetadata(domainId, itemId),
-    adapter.getProposalExecutionAuthority(domainId, itemId),
-    adapter.getProposalPayloadAvailability(domainId, itemId),
-    adapter.getProposalPrimaryTrackFamily(domainId, itemId),
     adapter.getProposalTiming(domainId, itemId),
-    adapter.getProposalUrgentEligibility(domainId, itemId),
     adapter.getProposalPrimaryTrackTally(domainId, itemId),
     adapter.getProposalTally(domainId, itemId),
     adapter.getProposalVotePowerProfile(domainId, itemId, "aye"),
@@ -82,23 +139,11 @@ async function loadProposal(
     adapter.getProposalVotePowerProfile(domainId, itemId, "veto"),
     adapter.getProposalVotePowerProfile(domainId, itemId, "pass"),
   ]);
-  const submissionAuthority = metadata
-    ? await adapter.getProposalSubmissionAuthority(domainId, metadata.payloadKind)
-    : null;
-  const openingFee = metadata
-    ? await adapter.getProposalOpeningFee(domainId, metadata.payloadKind)
-    : null;
   return {
     itemId,
     status,
-    metadata,
-    executionAuthority,
-    submissionAuthority,
-    openingFee,
-    payloadAvailability,
-    primaryTrackFamily,
+    ...common,
     timing,
-    urgentEligibility,
     primaryTrackTally,
     tally,
     votePowerProfiles: {
@@ -145,7 +190,9 @@ class GovernanceStore {
     loading: false,
     error: null,
     writeError: null,
-    writeSurfaceAvailability: DEFAULT_ADAPTER.getWriteSurfaceAvailability(),
+    writeSurfaceAvailability: DEFAULT_ADAPTER.getWriteSurfaceAvailability(
+      walletStore.selectedAddress,
+    ),
   });
 
   private bindAdapterUpdates() {
@@ -176,9 +223,8 @@ class GovernanceStore {
       );
       return;
     }
-    const { GovernancePapiProvider } = await import(
-      "$lib/adapters/governance/papi"
-    );
+    const { GovernancePapiProvider } =
+      await import("$lib/adapters/governance/papi");
     if (this.state.endpoint.trim() !== normalizedEndpoint) {
       return;
     }
@@ -220,10 +266,7 @@ class GovernanceStore {
     });
   }
 
-  private async runWrite(
-    action: () => Promise<void>,
-    fallbackMessage: string,
-  ) {
+  private async runWrite(action: () => Promise<void>, fallbackMessage: string) {
     try {
       await action();
       this.clearWriteError();
@@ -242,7 +285,8 @@ class GovernanceStore {
       this.state.accountId = walletStore.selectedAddress;
       await this.adapter.syncProviderState();
       this.state.providerState = this.adapter.getProviderState();
-      this.state.writeSurfaceAvailability = this.adapter.getWriteSurfaceAvailability();
+      this.state.writeSurfaceAvailability =
+        this.adapter.getWriteSurfaceAvailability(this.state.accountId);
       if (this.state.providerState.status !== "connected") {
         this.clearReadState();
         return;
@@ -275,72 +319,71 @@ class GovernanceStore {
       );
       const recentRetainedDetails = await Promise.all(
         recentFinalizedProposals.map(async (proposal) => {
-          const [executionDetail, metadata, executionAuthority, payloadAvailability, primaryTrackFamily, winningPrimaryOption, urgentEligibility] = await Promise.all([
-            this.adapter.getProposalExecutionDetail(this.state.domainId, proposal.itemId),
-            this.adapter.getProposalMetadata(this.state.domainId, proposal.itemId),
-            this.adapter.getProposalExecutionAuthority(this.state.domainId, proposal.itemId),
-            this.adapter.getProposalPayloadAvailability(this.state.domainId, proposal.itemId),
-            this.adapter.getProposalPrimaryTrackFamily(this.state.domainId, proposal.itemId),
-            this.adapter.getProposalWinningPrimaryOption(this.state.domainId, proposal.itemId),
-            this.adapter.getProposalUrgentEligibility(this.state.domainId, proposal.itemId),
-          ]);
-          const submissionAuthority = metadata
-            ? await this.adapter.getProposalSubmissionAuthority(this.state.domainId, metadata.payloadKind)
-            : null;
-          const openingFee = metadata
-            ? await this.adapter.getProposalOpeningFee(this.state.domainId, metadata.payloadKind)
-            : null;
+          const [executionDetail, winningPrimaryOption, common] =
+            await Promise.all([
+              this.adapter.getProposalExecutionDetail(
+                this.state.domainId,
+                proposal.itemId,
+              ),
+              this.adapter.getProposalWinningPrimaryOption(
+                this.state.domainId,
+                proposal.itemId,
+              ),
+              loadProposalCommonFields(
+                this.adapter,
+                this.state.domainId,
+                proposal.itemId,
+              ),
+            ]);
           return {
             itemId: proposal.itemId,
             executionDetail,
-            metadata,
-            executionAuthority,
-            payloadAvailability,
-            primaryTrackFamily,
             winningPrimaryOption,
-            urgentEligibility,
-            submissionAuthority,
-            openingFee,
+            ...common,
           };
         }),
       );
-      const retainedDetailByItem = new Map<number, {
-        executionDetail: GovernanceProposalExecutionDetail | null;
-        metadata: GovernanceRetainedFinalizedProposal["metadata"];
-        executionAuthority: GovernanceRetainedFinalizedProposal["executionAuthority"];
-        payloadAvailability: GovernanceRetainedFinalizedProposal["payloadAvailability"];
-        primaryTrackFamily: GovernanceRetainedFinalizedProposal["primaryTrackFamily"];
-        winningPrimaryOption: GovernanceRetainedFinalizedProposal["winningPrimaryOption"];
-        urgentEligibility: GovernanceRetainedFinalizedProposal["urgentEligibility"];
-        submissionAuthority: GovernanceRetainedFinalizedProposal["submissionAuthority"];
-        openingFee: GovernanceRetainedFinalizedProposal["openingFee"];
-      }>(recentRetainedDetails.map((entry) => [entry.itemId, {
-        executionDetail: entry.executionDetail,
-        metadata: entry.metadata,
-        executionAuthority: entry.executionAuthority,
-        payloadAvailability: entry.payloadAvailability,
-        primaryTrackFamily: entry.primaryTrackFamily,
-        winningPrimaryOption: entry.winningPrimaryOption,
-        urgentEligibility: entry.urgentEligibility,
-        submissionAuthority: entry.submissionAuthority,
-        openingFee: entry.openingFee,
-      }]));
-      const recentFinalizedWithDetail: GovernanceRetainedFinalizedProposal[] = recentFinalizedProposals.map((proposal) => {
-        const retainedDetail = retainedDetailByItem.get(proposal.itemId);
-        return {
-          ...proposal,
-          executionDetail:
-            retainedDetail?.executionDetail ?? proposal.executionDetail ?? null,
-          metadata: retainedDetail?.metadata ?? null,
-          executionAuthority: retainedDetail?.executionAuthority ?? null,
-          payloadAvailability: retainedDetail?.payloadAvailability ?? null,
-          primaryTrackFamily: retainedDetail?.primaryTrackFamily ?? null,
-          winningPrimaryOption: retainedDetail?.winningPrimaryOption ?? null,
-          urgentEligibility: retainedDetail?.urgentEligibility ?? null,
-          submissionAuthority: retainedDetail?.submissionAuthority ?? null,
-          openingFee: retainedDetail?.openingFee ?? null,
-        };
-      });
+      const retainedDetailByItem = new Map<
+        number,
+        GovernanceProposalDescriptor & {
+          executionDetail: GovernanceProposalExecutionDetail | null;
+          winningPrimaryOption: GovernancePrimaryTrackOption | null;
+        }
+      >(
+        recentRetainedDetails.map((entry) => [
+          entry.itemId,
+          {
+            executionDetail: entry.executionDetail,
+            winningPrimaryOption: entry.winningPrimaryOption,
+            metadata: entry.metadata,
+            executionAuthority: entry.executionAuthority,
+            payloadAvailability: entry.payloadAvailability,
+            primaryTrackFamily: entry.primaryTrackFamily,
+            urgentEligibility: entry.urgentEligibility,
+            submissionAuthority: entry.submissionAuthority,
+            openingFee: entry.openingFee,
+          },
+        ]),
+      );
+      const recentFinalizedWithDetail: GovernanceRetainedFinalizedProposal[] =
+        recentFinalizedProposals.map((proposal) => {
+          const retainedDetail = retainedDetailByItem.get(proposal.itemId);
+          return {
+            ...proposal,
+            executionDetail:
+              retainedDetail?.executionDetail ??
+              proposal.executionDetail ??
+              null,
+            metadata: retainedDetail?.metadata ?? null,
+            executionAuthority: retainedDetail?.executionAuthority ?? null,
+            payloadAvailability: retainedDetail?.payloadAvailability ?? null,
+            primaryTrackFamily: retainedDetail?.primaryTrackFamily ?? null,
+            winningPrimaryOption: retainedDetail?.winningPrimaryOption ?? null,
+            urgentEligibility: retainedDetail?.urgentEligibility ?? null,
+            submissionAuthority: retainedDetail?.submissionAuthority ?? null,
+            openingFee: retainedDetail?.openingFee ?? null,
+          };
+        });
       this.state.activeProposalIds = activeProposalIds;
       this.state.activeProposals = activeProposals;
       this.state.submissionOptions = submissionOptions;
@@ -384,12 +427,13 @@ class GovernanceStore {
 
   async castVote(itemId: number, voteKind: GovernanceVoteKind) {
     await this.runWrite(
-      () => this.adapter.castVote({
-        accountId: walletStore.selectedAddress,
-        domainId: this.state.domainId,
-        itemId,
-        voteKind,
-      }),
+      () =>
+        this.adapter.castVote({
+          accountId: walletStore.selectedAddress,
+          domainId: this.state.domainId,
+          itemId,
+          voteKind,
+        }),
       "Unknown governance vote error",
     );
   }
@@ -405,83 +449,94 @@ class GovernanceStore {
   async submitProposal(input: {
     itemId: number;
     cadenceMode: "Ordinary" | "Fast";
-    payloadKind: "L1RootAction" | "L2TreasurySpend" | "L2ParameterChange" | "Intent" | "L2SignalToL1";
+    payloadKind:
+      | "L1RootAction"
+      | "L2TreasurySpend"
+      | "L2ParameterChange"
+      | "Intent"
+      | "L2SignalToL1";
     payloadHash: string;
   }) {
     await this.runWrite(
-      () => this.adapter.submitProposal({
-        accountId: walletStore.selectedAddress,
-        domainId: this.state.domainId,
-        itemId: input.itemId,
-        cadenceMode: input.cadenceMode,
-        payloadKind: input.payloadKind,
-        payloadHash: input.payloadHash,
-      }),
+      () =>
+        this.adapter.submitProposal({
+          accountId: walletStore.selectedAddress,
+          domainId: this.state.domainId,
+          itemId: input.itemId,
+          cadenceMode: input.cadenceMode,
+          payloadKind: input.payloadKind,
+          payloadHash: input.payloadHash,
+        }),
       "Unknown governance proposal submission error",
     );
   }
 
   async noteProposalPreimage(payloadBytes: Uint8Array) {
     await this.runWrite(
-      () => this.adapter.noteProposalPreimage({
-        accountId: walletStore.selectedAddress,
-        payloadBytes,
-      }),
+      () =>
+        this.adapter.noteProposalPreimage({
+          accountId: walletStore.selectedAddress,
+          payloadBytes,
+        }),
       "Unknown governance preimage note error",
     );
   }
 
   async rejectProposal(itemId: number) {
     await this.runWrite(
-      () => this.adapter.rejectProposal({
-        domainId: this.state.domainId,
-        itemId,
-      }),
+      () =>
+        this.adapter.rejectProposal({
+          domainId: this.state.domainId,
+          itemId,
+        }),
       "Unknown governance proposal rejection error",
     );
   }
 
   async resolveProposal(itemId: number, winners: string[]) {
     await this.runWrite(
-      () => this.adapter.resolveProposal({
-        domainId: this.state.domainId,
-        itemId,
-        winners,
-      }),
+      () =>
+        this.adapter.resolveProposal({
+          domainId: this.state.domainId,
+          itemId,
+          winners,
+        }),
       "Unknown governance proposal resolution error",
     );
   }
 
   async resolveProposalFromVotes(itemId: number) {
     await this.runWrite(
-      () => this.adapter.resolveProposalFromVotes({
-        domainId: this.state.domainId,
-        itemId,
-      }),
+      () =>
+        this.adapter.resolveProposalFromVotes({
+          domainId: this.state.domainId,
+          itemId,
+        }),
       "Unknown governance vote resolution error",
     );
   }
 
   async forceResolveProposalFromVotes(itemId: number) {
     await this.runWrite(
-      () => this.adapter.forceResolveProposalFromVotes({
-        domainId: this.state.domainId,
-        itemId,
-      }),
+      () =>
+        this.adapter.forceResolveProposalFromVotes({
+          domainId: this.state.domainId,
+          itemId,
+        }),
       "Unknown forced governance vote resolution error",
     );
   }
 
   async requeueProposalForAutoFinalization(itemId: number) {
     await this.runWrite(
-      () => this.adapter.requeueProposalForAutoFinalization({
-        domainId: this.state.domainId,
-        itemId,
-      }),
+      () =>
+        this.adapter.requeueProposalForAutoFinalization({
+          domainId: this.state.domainId,
+          itemId,
+        }),
       "Unknown governance requeue error",
     );
   }
-
 }
 
 export const governanceStore = new GovernanceStore();

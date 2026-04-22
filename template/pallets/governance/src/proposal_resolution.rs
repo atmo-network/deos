@@ -5,6 +5,14 @@ use frame::prelude::*;
 use polkadot_sdk::frame_support::transactional;
 use polkadot_sdk::sp_runtime::{Perbill, traits::SaturatedConversion};
 
+/// Core policy outcome for a proposal given its vote weights.
+/// This is the single source of truth for turnout, tie, approval, and winner selection.
+#[derive(Debug, PartialEq)]
+pub(crate) enum CoreResolutionOutcome {
+  Rejected(ProposalRejectionReason),
+  Passing(ProposalPrimaryTrackOption),
+}
+
 impl<T: Config> Pallet<T> {
   /// Returns an empty proposal votes struct with all directions defaulted.
   fn empty_proposal_votes()
@@ -840,6 +848,61 @@ impl<T: Config> Pallet<T> {
     None
   }
 
+  pub(crate) fn evaluate_core_resolution_policy(
+    family: ProposalPrimaryTrackFamily,
+    tally: &ProposalVoteTally,
+    turnout_threshold: u64,
+    approval_threshold: Perbill,
+  ) -> CoreResolutionOutcome {
+    if tally.turnout_weight == 0 {
+      return CoreResolutionOutcome::Rejected(ProposalRejectionReason::NoVotes);
+    }
+    if tally.turnout_weight < turnout_threshold {
+      return CoreResolutionOutcome::Rejected(ProposalRejectionReason::TurnoutBelowMinimum);
+    }
+    match family {
+      crate::ProposalPrimaryTrackFamily::Binary => {
+        if tally.aye_weight == tally.nay_weight {
+          return CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie);
+        }
+        let aye_approval = Perbill::from_rational(tally.aye_weight, tally.turnout_weight);
+        let nay_approval = Perbill::from_rational(tally.nay_weight, tally.turnout_weight);
+        if aye_approval >= approval_threshold {
+          CoreResolutionOutcome::Passing(ProposalPrimaryTrackOption::Aye)
+        } else if nay_approval >= approval_threshold {
+          CoreResolutionOutcome::Passing(ProposalPrimaryTrackOption::Nay)
+        } else {
+          CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet)
+        }
+      }
+      crate::ProposalPrimaryTrackFamily::Invoice => {
+        let positive_weight = tally
+          .amplify_weight
+          .saturating_add(tally.approve_weight)
+          .saturating_add(tally.reduce_weight);
+        if positive_weight == tally.nay_weight {
+          return CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie);
+        }
+        if positive_weight < tally.nay_weight {
+          return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
+        }
+        let positive_approval = Perbill::from_rational(positive_weight, tally.turnout_weight);
+        if positive_approval < approval_threshold {
+          return CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet);
+        }
+        let (leading_positive_option, _) = Self::invoice_leading_positive_weights(
+          tally.amplify_weight,
+          tally.approve_weight,
+          tally.reduce_weight,
+        );
+        match leading_positive_option {
+          Some(opt) => CoreResolutionOutcome::Passing(opt),
+          None => CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet),
+        }
+      }
+    }
+  }
+
   pub(crate) fn resolve_or_reject_from_current_votes(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -854,170 +917,47 @@ impl<T: Config> Pallet<T> {
     let (current_epoch, primary_open_epoch, primary_close_epoch) =
       Self::proposal_ordinary_weighting_window(domain, item_id)
         .ok_or(Error::<T>::ProposalNotActive)?;
+    let family = Self::do_proposal_primary_track_family(domain, item_id)
+      .ok_or(Error::<T>::ProposalNotActive)?;
     let (protection_current_epoch, protection_open_epoch, protection_close_epoch) =
       Self::proposal_protection_weighting_window(domain, item_id)
         .ok_or(Error::<T>::ProposalNotActive)?;
-    let family = Self::do_proposal_primary_track_family(domain, item_id)
-      .ok_or(Error::<T>::ProposalNotActive)?;
-    let aye_weight = Self::proposal_vote_weight_sum(
+    let tally = Self::build_vote_tally(
       domain,
       item_id,
-      current_epoch,
-      primary_open_epoch,
-      primary_close_epoch,
-      &votes.ayes,
+      &votes,
+      (current_epoch, primary_open_epoch, primary_close_epoch),
+      (
+        protection_current_epoch,
+        protection_open_epoch,
+        protection_close_epoch,
+      ),
     );
-    let nay_weight = Self::proposal_vote_weight_sum(
-      domain,
-      item_id,
-      current_epoch,
-      primary_open_epoch,
-      primary_close_epoch,
-      &votes.nays,
-    );
-    let amplify_weight = Self::proposal_vote_weight_sum(
-      domain,
-      item_id,
-      current_epoch,
-      primary_open_epoch,
-      primary_close_epoch,
-      &votes.amplifies,
-    );
-    let approve_weight = Self::proposal_vote_weight_sum(
-      domain,
-      item_id,
-      current_epoch,
-      primary_open_epoch,
-      primary_close_epoch,
-      &votes.approves,
-    );
-    let reduce_weight = Self::proposal_vote_weight_sum(
-      domain,
-      item_id,
-      current_epoch,
-      primary_open_epoch,
-      primary_close_epoch,
-      &votes.reduces,
-    );
-    let veto_weight = Self::proposal_veto_weight_sum(
-      domain,
-      item_id,
-      protection_current_epoch,
-      protection_open_epoch,
-      protection_close_epoch,
-      &votes.vetoes,
-    );
-    let pass_weight = Self::proposal_veto_weight_sum(
-      domain,
-      item_id,
-      protection_current_epoch,
-      protection_open_epoch,
-      protection_close_epoch,
-      &votes.passes,
-    );
-    let turnout = match family {
-      crate::ProposalPrimaryTrackFamily::Binary => aye_weight.saturating_add(nay_weight),
-      crate::ProposalPrimaryTrackFamily::Invoice => amplify_weight
-        .saturating_add(approve_weight)
-        .saturating_add(reduce_weight)
-        .saturating_add(nay_weight),
-    };
-    if turnout == 0 {
-      return Self::reject_active_proposal(domain, item_id, ProposalRejectionReason::NoVotes);
-    }
-    if turnout < Self::turnout_threshold_at(current_epoch, primary_open_epoch, primary_close_epoch)
-    {
-      return Self::reject_active_proposal(
-        domain,
-        item_id,
-        ProposalRejectionReason::TurnoutBelowMinimum,
-      );
-    }
+    let turnout_threshold =
+      Self::turnout_threshold_at(current_epoch, primary_open_epoch, primary_close_epoch);
     let approval_threshold =
       Self::approval_threshold_at(current_epoch, primary_open_epoch, primary_close_epoch);
-    match family {
-      crate::ProposalPrimaryTrackFamily::Binary => {
-        if aye_weight == nay_weight {
-          return Self::reject_active_proposal(domain, item_id, ProposalRejectionReason::VoteTie);
-        }
-        let aye_approval = Perbill::from_rational(aye_weight, turnout);
-        let nay_approval = Perbill::from_rational(nay_weight, turnout);
-        if aye_approval >= approval_threshold {
-          if pass_weight > veto_weight {
-            Self::note_pass_winning_participation(domain, &votes);
-          }
-          let winners = Self::project_winners(votes.ayes.into_iter());
-          return Self::resolve_active_proposal(
-            domain,
-            item_id,
-            winners,
-            Some(ProposalPrimaryTrackOption::Aye),
-          );
-        }
-        if nay_approval >= approval_threshold {
-          if pass_weight > veto_weight {
-            Self::note_pass_winning_participation(domain, &votes);
-          }
-          let winners = Self::project_winners(votes.nays.into_iter());
-          return Self::resolve_active_proposal(
-            domain,
-            item_id,
-            winners,
-            Some(ProposalPrimaryTrackOption::Nay),
-          );
-        }
-        Self::reject_active_proposal(
-          domain,
-          item_id,
-          ProposalRejectionReason::ApprovalThresholdNotMet,
-        )
+    match Self::evaluate_core_resolution_policy(
+      family,
+      &tally,
+      turnout_threshold,
+      approval_threshold,
+    ) {
+      CoreResolutionOutcome::Rejected(reason) => {
+        Self::reject_active_proposal(domain, item_id, reason)
       }
-      crate::ProposalPrimaryTrackFamily::Invoice => {
-        let positive_weight = amplify_weight
-          .saturating_add(approve_weight)
-          .saturating_add(reduce_weight);
-        if positive_weight == nay_weight {
-          return Self::reject_active_proposal(domain, item_id, ProposalRejectionReason::VoteTie);
-        }
-        if positive_weight < nay_weight {
-          return Self::reject_active_proposal(
-            domain,
-            item_id,
-            ProposalRejectionReason::ApprovalThresholdNotMet,
-          );
-        }
-        let positive_approval = Perbill::from_rational(positive_weight, turnout);
-        if positive_approval < approval_threshold {
-          return Self::reject_active_proposal(
-            domain,
-            item_id,
-            ProposalRejectionReason::ApprovalThresholdNotMet,
-          );
-        }
-        if pass_weight > veto_weight {
+      CoreResolutionOutcome::Passing(option) => {
+        if tally.pass_weight > tally.veto_weight {
           Self::note_pass_winning_participation(domain, &votes);
         }
-        let (leading_positive_option, _) =
-          Self::invoice_leading_positive_weights(amplify_weight, approve_weight, reduce_weight);
-        let winners = match leading_positive_option {
-          Some(ProposalPrimaryTrackOption::Amplify) => {
-            Self::project_winners(votes.amplifies.into_iter())
-          }
-          Some(ProposalPrimaryTrackOption::Approve) => {
-            Self::project_winners(votes.approves.into_iter())
-          }
-          Some(ProposalPrimaryTrackOption::Reduce) => {
-            Self::project_winners(votes.reduces.into_iter())
-          }
-          _ => {
-            return Self::reject_active_proposal(
-              domain,
-              item_id,
-              ProposalRejectionReason::ApprovalThresholdNotMet,
-            );
-          }
+        let winners = match option {
+          ProposalPrimaryTrackOption::Aye => Self::project_winners(votes.ayes.into_iter()),
+          ProposalPrimaryTrackOption::Nay => Self::project_winners(votes.nays.into_iter()),
+          ProposalPrimaryTrackOption::Amplify => Self::project_winners(votes.amplifies.into_iter()),
+          ProposalPrimaryTrackOption::Approve => Self::project_winners(votes.approves.into_iter()),
+          ProposalPrimaryTrackOption::Reduce => Self::project_winners(votes.reduces.into_iter()),
         };
-        Self::resolve_active_proposal(domain, item_id, winners, leading_positive_option)
+        Self::resolve_active_proposal(domain, item_id, winners, Some(option))
       }
     }
   }
@@ -1370,16 +1310,19 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  pub(crate) fn do_proposal_vote_tally(
+  /// Pure tally builder: computes a ProposalVoteTally from already-resolved votes and windows.
+  /// Does not touch storage.
+  fn build_vote_tally(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
-  ) -> Option<ProposalVoteTally> {
-    let (current_epoch, primary_open_epoch, primary_close_epoch) =
-      Self::proposal_ordinary_weighting_window(domain, item_id)?;
-    let (protection_current_epoch, protection_open_epoch, protection_close_epoch) =
-      Self::proposal_protection_weighting_window(domain, item_id)?;
-    let votes =
-      ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
+    votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
+    (current_epoch, primary_open_epoch, primary_close_epoch): (T::Epoch, T::Epoch, T::Epoch),
+    (protection_current_epoch, protection_open_epoch, protection_close_epoch): (
+      T::Epoch,
+      T::Epoch,
+      T::Epoch,
+    ),
+  ) -> ProposalVoteTally {
     let aye_weight = Self::proposal_vote_weight_sum(
       domain,
       item_id,
@@ -1442,7 +1385,7 @@ impl<T: Config> Pallet<T> {
       .saturating_add(approve_weight)
       .saturating_add(reduce_weight);
     let veto_turnout_weight = veto_weight.saturating_add(pass_weight);
-    Some(ProposalVoteTally {
+    ProposalVoteTally {
       aye_voters: votes.ayes.len() as u32,
       nay_voters: votes.nays.len() as u32,
       amplify_voters: votes.amplifies.len() as u32,
@@ -1459,7 +1402,24 @@ impl<T: Config> Pallet<T> {
       pass_weight,
       turnout_weight,
       veto_turnout_weight,
-    })
+    }
+  }
+
+  pub(crate) fn do_proposal_vote_tally(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+  ) -> Option<ProposalVoteTally> {
+    let primary_window = Self::proposal_ordinary_weighting_window(domain, item_id)?;
+    let protection_window = Self::proposal_protection_weighting_window(domain, item_id)?;
+    let votes =
+      ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
+    Some(Self::build_vote_tally(
+      domain,
+      item_id,
+      &votes,
+      primary_window,
+      protection_window,
+    ))
   }
 
   pub fn proposal_resolution_state(
@@ -1471,9 +1431,11 @@ impl<T: Config> Pallet<T> {
     let maturity_epoch =
       Self::proposal_effective_primary_close_epoch(domain, item_id, proposal.submitted_epoch)
         .ok()?;
-    let tally = Self::do_proposal_vote_tally(domain, item_id)?;
     let votes =
       ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
+    let primary_window = Self::proposal_ordinary_weighting_window(domain, item_id)?;
+    let protection_window = Self::proposal_protection_weighting_window(domain, item_id)?;
+    let tally = Self::build_vote_tally(domain, item_id, &votes, primary_window, protection_window);
     if let Some(cancellation) = Self::current_veto_cancellation(domain, item_id, &votes, false) {
       return Some(ProposalResolutionState::VetoPassing {
         veto_weight: cancellation.veto_weight,
@@ -1497,96 +1459,41 @@ impl<T: Config> Pallet<T> {
         mode: cancellation.mode,
       });
     }
-    if tally.turnout_weight == 0 {
-      return Some(ProposalResolutionState::Rejected {
-        reason: ProposalRejectionReason::NoVotes,
-      });
-    }
-    if tally.aye_weight == tally.nay_weight {
-      return Some(ProposalResolutionState::Rejected {
-        reason: ProposalRejectionReason::VoteTie,
-      });
-    }
-    if tally.turnout_weight
-      < Self::turnout_threshold_at(
-        current_epoch,
-        Self::proposal_effective_primary_open_epoch(domain, item_id, proposal.submitted_epoch)
-          .ok()?,
-        maturity_epoch,
-      )
-    {
-      return Some(ProposalResolutionState::Rejected {
-        reason: ProposalRejectionReason::TurnoutBelowMinimum,
-      });
-    }
-    let approval_threshold = Self::approval_threshold_at(
-      current_epoch,
+    let primary_open_epoch =
       Self::proposal_effective_primary_open_epoch(domain, item_id, proposal.submitted_epoch)
-        .ok()?,
-      maturity_epoch,
-    );
-    let passing_state = match Self::do_proposal_primary_track_family(domain, item_id)? {
-      crate::ProposalPrimaryTrackFamily::Binary => {
-        if tally.aye_weight == tally.nay_weight {
-          return Some(ProposalResolutionState::Rejected {
-            reason: ProposalRejectionReason::VoteTie,
+        .ok()?;
+    let turnout_threshold =
+      Self::turnout_threshold_at(current_epoch, primary_open_epoch, maturity_epoch);
+    let approval_threshold =
+      Self::approval_threshold_at(current_epoch, primary_open_epoch, maturity_epoch);
+    let family = Self::do_proposal_primary_track_family(domain, item_id)?;
+    match Self::evaluate_core_resolution_policy(
+      family,
+      &tally,
+      turnout_threshold,
+      approval_threshold,
+    ) {
+      CoreResolutionOutcome::Rejected(reason) => Some(ProposalResolutionState::Rejected { reason }),
+      CoreResolutionOutcome::Passing(option) => {
+        let passing_state = match option {
+          ProposalPrimaryTrackOption::Aye => ProposalResolutionState::PassingAye,
+          ProposalPrimaryTrackOption::Nay => ProposalResolutionState::PassingNay,
+          ProposalPrimaryTrackOption::Amplify => ProposalResolutionState::PassingAmplify,
+          ProposalPrimaryTrackOption::Approve => ProposalResolutionState::PassingApprove,
+          ProposalPrimaryTrackOption::Reduce => ProposalResolutionState::PassingReduce,
+        };
+        if let Some(confirm_started) = ProposalConfirmStartedAt::<T>::get(domain, item_id) {
+          let confirm_end_u32 = confirm_started
+            .saturated_into::<u32>()
+            .saturating_add(T::ProposalConfirmPeriod::get().saturated_into::<u32>());
+          return Some(ProposalResolutionState::Confirming {
+            confirm_started_epoch: confirm_started,
+            confirm_end_epoch: confirm_end_u32.saturated_into(),
           });
         }
-        let aye_approval = Perbill::from_rational(tally.aye_weight, tally.turnout_weight);
-        let nay_approval = Perbill::from_rational(tally.nay_weight, tally.turnout_weight);
-        if aye_approval >= approval_threshold {
-          ProposalResolutionState::PassingAye
-        } else if nay_approval >= approval_threshold {
-          ProposalResolutionState::PassingNay
-        } else {
-          return Some(ProposalResolutionState::Rejected {
-            reason: ProposalRejectionReason::ApprovalThresholdNotMet,
-          });
-        }
+        Some(passing_state)
       }
-      crate::ProposalPrimaryTrackFamily::Invoice => {
-        let positive_weight = tally
-          .amplify_weight
-          .saturating_add(tally.approve_weight)
-          .saturating_add(tally.reduce_weight);
-        if positive_weight == tally.nay_weight {
-          return Some(ProposalResolutionState::Rejected {
-            reason: ProposalRejectionReason::VoteTie,
-          });
-        }
-        if positive_weight < tally.nay_weight {
-          return Some(ProposalResolutionState::Rejected {
-            reason: ProposalRejectionReason::ApprovalThresholdNotMet,
-          });
-        }
-        let positive_approval = Perbill::from_rational(positive_weight, tally.turnout_weight);
-        if positive_approval < approval_threshold {
-          return Some(ProposalResolutionState::Rejected {
-            reason: ProposalRejectionReason::ApprovalThresholdNotMet,
-          });
-        }
-        match Self::invoice_leading_positive_option(&tally).0 {
-          Some(ProposalPrimaryTrackOption::Amplify) => ProposalResolutionState::PassingAmplify,
-          Some(ProposalPrimaryTrackOption::Approve) => ProposalResolutionState::PassingApprove,
-          Some(ProposalPrimaryTrackOption::Reduce) => ProposalResolutionState::PassingReduce,
-          _ => {
-            return Some(ProposalResolutionState::Rejected {
-              reason: ProposalRejectionReason::ApprovalThresholdNotMet,
-            });
-          }
-        }
-      }
-    };
-    if let Some(confirm_started) = ProposalConfirmStartedAt::<T>::get(domain, item_id) {
-      let confirm_end_u32 = confirm_started
-        .saturated_into::<u32>()
-        .saturating_add(T::ProposalConfirmPeriod::get().saturated_into::<u32>());
-      return Some(ProposalResolutionState::Confirming {
-        confirm_started_epoch: confirm_started,
-        confirm_end_epoch: confirm_end_u32.saturated_into(),
-      });
     }
-    Some(passing_state)
   }
 
   pub(crate) fn do_proposal_status(

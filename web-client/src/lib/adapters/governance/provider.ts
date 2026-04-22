@@ -5,11 +5,12 @@ import type {
   GovernanceDomainId,
   GovernanceGovXpCounters,
   GovernanceItemId,
+  GovernancePayloadHashPreimageStatus,
+  GovernancePayloadPreimageNoteCost,
+  GovernancePrimaryTrackOption,
   GovernanceProposalCadenceMode,
   GovernanceProposalExecutionAuthority,
   GovernanceProposalExecutionDetail,
-  GovernancePayloadHashPreimageStatus,
-  GovernancePayloadPreimageNoteCost,
   GovernanceProposalMetadata,
   GovernanceProposalOpeningFee,
   GovernanceProposalPayloadAvailability,
@@ -20,7 +21,6 @@ import type {
   GovernanceProposalSubmissionAuthority,
   GovernanceProposalTiming,
   GovernanceProposalVoteTally,
-  GovernancePrimaryTrackOption,
   GovernanceProviderState,
   GovernanceQuerySurfaceAvailability,
   GovernanceRecentFinalizedProposal,
@@ -36,7 +36,9 @@ import {
 
 export type GovernanceBlockchainProvider = GovernanceAdapter;
 
-function unavailableWriteSurface(reason: string): GovernanceWriteSurfaceAvailability {
+function unavailableWriteSurface(
+  reason: string,
+): GovernanceWriteSurfaceAvailability {
   return buildWriteSurfaceAvailability({
     castVote: { reason },
     submitProposal: { reason },
@@ -64,9 +66,7 @@ function unconfiguredProviderState(message: string): GovernanceProviderState {
   };
 }
 
-export class GovernanceUnavailableBlockchainProvider
-  implements GovernanceBlockchainProvider
-{
+export class GovernanceUnavailableBlockchainProvider implements GovernanceBlockchainProvider {
   private state: GovernanceProviderState;
 
   constructor(
@@ -95,11 +95,15 @@ export class GovernanceUnavailableBlockchainProvider
     return GOVERNANCE_QUERY_SURFACE_AVAILABILITY;
   }
 
-  getWriteSurfaceAvailability(): GovernanceWriteSurfaceAvailability {
+  getWriteSurfaceAvailability(
+    _accountId?: GovernanceAccountId | null,
+  ): GovernanceWriteSurfaceAvailability {
     return unavailableWriteSurface(this.unavailableReason);
   }
 
-  async getActiveProposalIds(_domainId: GovernanceDomainId): Promise<GovernanceItemId[]> {
+  async getActiveProposalIds(
+    _domainId: GovernanceDomainId,
+  ): Promise<GovernanceItemId[]> {
     throw new Error(this.unavailableReason);
   }
 

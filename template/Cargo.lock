@@ -8247,7 +8247,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8349,7 +8349,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-asset-registry"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8525,7 +8525,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-axial-router"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "pallet-tmc",
  "parity-scale-codec",
@@ -10258,7 +10258,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmc"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -10270,7 +10270,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmctol-governance"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -10280,7 +10280,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmctol-staking"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -12759,7 +12759,7 @@ dependencies = [
 
 [[package]]
 name = "primitives"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "parity-scale-codec",
  "scale-info",
@@ -18178,7 +18178,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tmctol-runtime"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "cumulus-pallet-parachain-system",
  "docify",

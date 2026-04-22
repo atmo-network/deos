@@ -1,4 +1,3 @@
-import type { TmctolChainConnectionState } from "$lib/adapters/blockchain/deos";
 import type { ReadModelValue } from "$lib/shared/read-model";
 
 export type GovernanceDomainId = number;
@@ -310,12 +309,20 @@ export type GovernanceWriteAccessKind = "signed" | "admin";
 export type GovernanceWriteProviderStatus = "available" | "unavailable";
 export type GovernanceProviderStatus =
   | "mock"
-  | TmctolChainConnectionState["status"];
-export type GovernanceProviderState = Omit<
-  TmctolChainConnectionState,
-  "status"
-> & {
+  | "connected"
+  | "unconfigured"
+  | "error";
+export type GovernanceProviderState = {
   status: GovernanceProviderStatus;
+  label: string;
+  endpoint: string | null;
+  chainName: string | null;
+  nodeName: string | null;
+  nodeVersion: string | null;
+  genesisHash: string | null;
+  finalizedBlockHash: string | null;
+  finalizedBlockNumber: number | null;
+  message: string | null;
 };
 export type GovernanceWriteCapability = {
   runtimeAccess: GovernanceWriteAccessKind;
@@ -332,7 +339,9 @@ export type GovernanceReadAdapter = {
   getProviderState(): GovernanceProviderState;
   getProviderLabel(): string;
   getQuerySurfaceAvailability(): GovernanceQuerySurfaceAvailability;
-  getWriteSurfaceAvailability(): GovernanceWriteSurfaceAvailability;
+  getWriteSurfaceAvailability(
+    accountId?: GovernanceAccountId | null,
+  ): GovernanceWriteSurfaceAvailability;
   getActiveProposalIds(
     domainId: GovernanceDomainId,
   ): Promise<GovernanceItemId[]>;
@@ -461,17 +470,20 @@ export type GovernanceAdapter = GovernanceReadAdapter &
 
 // --- UI domain types (previously in governance/types.ts) ---
 
-export type GovernancePanelProposal = {
-  itemId: number;
-  status: GovernanceProposalStatus | null;
+export type GovernanceProposalDescriptor = {
   metadata: GovernanceProposalMetadata | null;
   executionAuthority: GovernanceProposalExecutionAuthority | null;
   submissionAuthority: GovernanceProposalSubmissionAuthority | null;
   openingFee: GovernanceProposalOpeningFee | null;
   payloadAvailability: GovernanceProposalPayloadAvailability | null;
   primaryTrackFamily: GovernanceProposalPrimaryTrackFamily | null;
-  timing: GovernanceProposalTiming | null;
   urgentEligibility: boolean | null;
+};
+
+export type GovernancePanelProposal = GovernanceProposalDescriptor & {
+  itemId: number;
+  status: GovernanceProposalStatus | null;
+  timing: GovernanceProposalTiming | null;
   primaryTrackTally: GovernanceProposalPrimaryTrackTally | null;
   tally: GovernanceProposalVoteTally | null;
   votePowerProfiles: Partial<
@@ -480,16 +492,10 @@ export type GovernancePanelProposal = {
 };
 
 export type GovernanceRetainedFinalizedProposal =
-  GovernanceRecentFinalizedProposal & {
-    metadata: GovernanceProposalMetadata | null;
-    executionAuthority: GovernanceProposalExecutionAuthority | null;
-    submissionAuthority: GovernanceProposalSubmissionAuthority | null;
-    openingFee: GovernanceProposalOpeningFee | null;
-    payloadAvailability: GovernanceProposalPayloadAvailability | null;
-    primaryTrackFamily: GovernanceProposalPrimaryTrackFamily | null;
-    winningPrimaryOption: GovernancePrimaryTrackOption | null;
-    urgentEligibility: boolean | null;
-  };
+  GovernanceRecentFinalizedProposal &
+    GovernanceProposalDescriptor & {
+      winningPrimaryOption: GovernancePrimaryTrackOption | null;
+    };
 
 export type GovernancePublicSubmissionOption = {
   payloadKind: GovernanceProposalPayloadKind;

@@ -1,7 +1,7 @@
 [package]
 name = "tmctol-runtime"
 description = "A parachain runtime template built with Substrate and Cumulus, part of Polkadot Sdk."
-version = "0.1.0"
+version = "0.1.1"
 license = "Unlicense"
 authors.workspace = true
 homepage.workspace = true

@@ -1,9 +1,10 @@
+use crate::proposal_resolution::CoreResolutionOutcome;
 use crate::{
   ActiveProposalCounts, ActiveProposals, Error, Event, ExpiringAccountTouch, ExpiryBuckets,
   FinalizedProposalOutcome, ProposalCadenceMode, ProposalExecutionAuthority, ProposalMetadata,
   ProposalPayloadKind, ProposalPendingEnactmentAt, ProposalRejectionReason, ProposalTiming,
-  ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVotesByItem, RecentFinalizedProposal,
-  mock::*,
+  ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVoteTally, ProposalVotesByItem,
+  RecentFinalizedProposal, mock::*,
 };
 use polkadot_sdk::frame_support::{BoundedVec, assert_noop, assert_ok, traits::Hooks};
 use polkadot_sdk::sp_core::H256;
@@ -2860,4 +2861,184 @@ fn pass_outweighing_veto_allows_main_track_resolution() {
       FixedU128::from_rational(1u128, 6u128)
     );
   });
+}
+
+// --- CoreResolutionOutcome unit tests (pure policy, no runtime) ---
+
+fn test_tally(
+  aye_weight: u64,
+  nay_weight: u64,
+  amplify_weight: u64,
+  approve_weight: u64,
+  reduce_weight: u64,
+  turnout_weight: u64,
+) -> ProposalVoteTally {
+  ProposalVoteTally {
+    aye_voters: 0,
+    nay_voters: 0,
+    amplify_voters: 0,
+    approve_voters: 0,
+    reduce_voters: 0,
+    veto_voters: 0,
+    pass_voters: 0,
+    aye_weight,
+    nay_weight,
+    amplify_weight,
+    approve_weight,
+    reduce_weight,
+    veto_weight: 0,
+    pass_weight: 0,
+    turnout_weight,
+    veto_turnout_weight: 0,
+  }
+}
+
+#[test]
+fn core_resolution_rejects_zero_turnout() {
+  let tally = test_tally(0, 0, 0, 0, 0, 0);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Binary,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Rejected(ProposalRejectionReason::NoVotes)
+  );
+}
+
+#[test]
+fn core_resolution_rejects_turnout_below_minimum() {
+  let tally = test_tally(5, 0, 0, 0, 0, 5);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Binary,
+    &tally,
+    10,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Rejected(ProposalRejectionReason::TurnoutBelowMinimum)
+  );
+}
+
+#[test]
+fn core_resolution_binary_aye_wins() {
+  let tally = test_tally(70, 30, 0, 0, 0, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Binary,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Aye)
+  );
+}
+
+#[test]
+fn core_resolution_binary_nay_wins() {
+  let tally = test_tally(30, 70, 0, 0, 0, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Binary,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Nay)
+  );
+}
+
+#[test]
+fn core_resolution_binary_rejects_tie() {
+  let tally = test_tally(50, 50, 0, 0, 0, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Binary,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie)
+  );
+}
+
+#[test]
+fn core_resolution_binary_rejects_approval_not_met() {
+  let tally = test_tally(40, 30, 0, 0, 0, 70);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Binary,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(60),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet)
+  );
+}
+
+#[test]
+fn core_resolution_invoice_positive_wins() {
+  let tally = test_tally(0, 30, 40, 20, 10, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Invoice,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Amplify)
+  );
+}
+
+#[test]
+fn core_resolution_invoice_rejects_when_positive_below_nay() {
+  let tally = test_tally(0, 60, 20, 10, 10, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Invoice,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Rejected(ProposalRejectionReason::ApprovalThresholdNotMet)
+  );
+}
+
+#[test]
+fn core_resolution_invoice_rejects_tie() {
+  let tally = test_tally(0, 50, 30, 20, 0, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Invoice,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Rejected(ProposalRejectionReason::VoteTie)
+  );
+}
+
+#[test]
+fn core_resolution_invoice_reduce_wins_on_equal_weight_last_wins() {
+  let tally = test_tally(0, 10, 30, 30, 30, 100);
+  let result = Governance::evaluate_core_resolution_policy(
+    crate::ProposalPrimaryTrackFamily::Invoice,
+    &tally,
+    1,
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50),
+  );
+  assert_eq!(
+    result,
+    CoreResolutionOutcome::Passing(crate::ProposalPrimaryTrackOption::Reduce)
+  );
 }

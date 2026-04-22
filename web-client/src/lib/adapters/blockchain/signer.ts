@@ -40,25 +40,29 @@ const DEV_SIGNER_SPECS = [
     alias: "alice",
     label: "Alice",
     suri: "//Alice",
-    publicKeyHex: "d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d",
+    publicKeyHex:
+      "d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d",
   },
   {
     alias: "bob",
     label: "Bob",
     suri: "//Bob",
-    publicKeyHex: "8eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a48",
+    publicKeyHex:
+      "8eaf04151687736326c9fea17e25fc5287613693c912909cb226aa4794f26a48",
   },
   {
     alias: "charlie",
     label: "Charlie",
     suri: "//Charlie",
-    publicKeyHex: "90b5ab205c6974c9ea841be688864633dc9ca8a357843eeacf2314649965fe22",
+    publicKeyHex:
+      "90b5ab205c6974c9ea841be688864633dc9ca8a357843eeacf2314649965fe22",
   },
   {
     alias: "dave",
     label: "Dave",
     suri: "//Dave",
-    publicKeyHex: "306721211d5404bd9da88e0204360a1a9ab8b87c66c1bc2fcdd37f3c2222cc20",
+    publicKeyHex:
+      "306721211d5404bd9da88e0204360a1a9ab8b87c66c1bc2fcdd37f3c2222cc20",
   },
 ] as const;
 
@@ -72,10 +76,11 @@ function hexToBytes(hex: string): Uint8Array {
   return bytes;
 }
 
-export const TMCTOL_DEV_SIGNER_PRESETS: TmctolDevSignerPreset[] = DEV_SIGNER_SPECS.map((preset) => ({
-  ...preset,
-  address: accountIdCodec.dec(hexToBytes(preset.publicKeyHex)),
-}));
+export const TMCTOL_DEV_SIGNER_PRESETS: TmctolDevSignerPreset[] =
+  DEV_SIGNER_SPECS.map((preset) => ({
+    ...preset,
+    address: accountIdCodec.dec(hexToBytes(preset.publicKeyHex)),
+  }));
 
 export function isValidTmctolAddress(address: string): boolean {
   const normalized = address.trim();
@@ -105,16 +110,21 @@ async function connectInjectedExtensionRuntime(
   dappName: string,
 ): Promise<InjectedExtensionShape> {
   const { connectInjectedExtension } = await import("polkadot-api/pjs-signer");
-  return (await connectInjectedExtension(extensionName, dappName)) as InjectedExtensionShape;
+  return (await connectInjectedExtension(
+    extensionName,
+    dappName,
+  )) as InjectedExtensionShape;
 }
 
 export function injectedSignerExtensionNames(): string[] {
   if (typeof window === "undefined") {
     return [];
   }
-  const injected = (window as Window & {
-    injectedWeb3?: Record<string, unknown>;
-  }).injectedWeb3;
+  const injected = (
+    window as Window & {
+      injectedWeb3?: Record<string, unknown>;
+    }
+  ).injectedWeb3;
   return injected ? Object.keys(injected) : [];
 }
 
@@ -152,7 +162,10 @@ export async function discoverInjectedSignerAccounts(
   for (const extensionName of injectedSignerExtensionNames()) {
     let extension: InjectedExtensionShape | null = null;
     try {
-      extension = await connectInjectedExtensionRuntime(extensionName, dappName);
+      extension = await connectInjectedExtensionRuntime(
+        extensionName,
+        dappName,
+      );
       for (const account of extension.getAccounts()) {
         if (seenAddresses.has(account.address)) {
           continue;
@@ -180,19 +193,24 @@ function matchDevPreset(addressOrAlias: string): TmctolDevSignerPreset | null {
     return null;
   }
   const lowered = normalized.toLowerCase();
-  return TMCTOL_DEV_SIGNER_PRESETS.find((preset) => {
-    return (
-      preset.address === normalized ||
-      preset.alias === lowered ||
-      preset.label.toLowerCase() === lowered ||
-      preset.suri.toLowerCase() === lowered ||
-      lowered === `//${preset.alias}` ||
-      (lowered === "david" && preset.alias === "dave")
-    );
-  }) ?? null;
+  return (
+    TMCTOL_DEV_SIGNER_PRESETS.find((preset) => {
+      return (
+        preset.address === normalized ||
+        preset.alias === lowered ||
+        preset.label.toLowerCase() === lowered ||
+        preset.suri.toLowerCase() === lowered ||
+        lowered === `//${preset.alias}` ||
+        (lowered === "david" && preset.alias === "dave")
+      );
+    }) ?? null
+  );
 }
 
-export function hasBuiltInDevSigner(addressOrAlias: string): boolean {
+export function hasBuiltInDevSigner(addressOrAlias: string | null): boolean {
+  if (!addressOrAlias) {
+    return false;
+  }
   return matchDevPreset(addressOrAlias) !== null;
 }
 
@@ -206,21 +224,28 @@ export async function connectDevSigner(
   if (!preset) {
     return null;
   }
-  const [{ getPolkadotSigner }, { Keyring }, { cryptoWaitReady }] = await Promise.all([
-    import("@polkadot-api/signer"),
-    import("@polkadot/keyring"),
-    import("@polkadot/util-crypto"),
-  ]);
+  const [{ getPolkadotSigner }, { Keyring }, { cryptoWaitReady }] =
+    await Promise.all([
+      import("@polkadot-api/signer"),
+      import("@polkadot/keyring"),
+      import("@polkadot/util-crypto"),
+    ]);
   await cryptoWaitReady();
   const keyring = new Keyring({ type: "sr25519", ss58Format: 42 });
-  const pair = keyring.createFromUri(preset.suri, { name: preset.label }, "sr25519");
+  const pair = keyring.createFromUri(
+    preset.suri,
+    { name: preset.label },
+    "sr25519",
+  );
   return {
     address: pair.address,
     source: "dev",
     extensionName: null,
     name: preset.label,
     type: "sr25519",
-    signer: getPolkadotSigner(pair.publicKey, "Sr25519", (input) => pair.sign(input)),
+    signer: getPolkadotSigner(pair.publicKey, "Sr25519", (input) =>
+      pair.sign(input),
+    ),
     disconnect: () => {},
   };
 }
@@ -236,7 +261,10 @@ export async function connectInjectedSigner(
   for (const extensionName of injectedSignerExtensionNames()) {
     let extension: InjectedExtensionShape | null = null;
     try {
-      extension = await connectInjectedExtensionRuntime(extensionName, dappName);
+      extension = await connectInjectedExtensionRuntime(
+        extensionName,
+        dappName,
+      );
       const account = extension
         .getAccounts()
         .find((candidate) => candidate.address === normalizedAddress);

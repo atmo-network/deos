@@ -1,17 +1,15 @@
 import { Enum as PapiEnum, type Enum as PapiRuntimeEnum } from "polkadot-api";
 
+import type {
+  TmctolChainSnapshot,
+  TmctolPapiConnection,
+} from "../blockchain/deos";
 import {
   connectTmctolSigner,
   DEFAULT_TMCTOL_DAPP_NAME,
   hasBuiltInDevSigner,
   injectedSignerAvailability,
 } from "../blockchain/signer";
-import type {
-  TmctolPapiConnection,
-  TmctolChainSnapshot,
-} from "../blockchain/deos";
-
-import { walletStore } from "$lib/wallet/index.svelte";
 
 import type {
   GovernanceAccountId,
@@ -19,29 +17,29 @@ import type {
   GovernanceDomainId,
   GovernanceFinalizedProposalOutcome,
   GovernanceGovXpCounters,
+  GovernanceItemId,
+  GovernancePayloadHashPreimageStatus,
+  GovernancePayloadPreimageNoteCost,
+  GovernancePrimaryTrackOption,
   GovernanceProposalCadenceMode,
+  GovernanceProposalExecutionAuthority,
   GovernanceProposalExecutionDetail,
   GovernanceProposalExecutionFailureReason,
   GovernanceProposalExecutionSuccessDetail,
-  GovernanceProposalExecutionAuthority,
-  GovernancePayloadHashPreimageStatus,
-  GovernancePayloadPreimageNoteCost,
-  GovernanceProposalOpeningFee,
-  GovernanceProposalSubmissionAuthority,
-  GovernancePrimaryTrackOption,
   GovernanceProposalMetadata,
-  GovernanceProposalPrimaryTrackFamily,
-  GovernanceProposalPrimaryTrackTally,
-  GovernanceProposalTiming,
+  GovernanceProposalOpeningFee,
   GovernanceProposalParameterChangeSurface,
   GovernanceProposalPayloadAvailability,
   GovernanceProposalPayloadKind,
-  GovernanceProposalTreasurySpendScalar,
-  GovernanceProposalTreasurySpendSettlementKind,
-  GovernanceItemId,
+  GovernanceProposalPrimaryTrackFamily,
+  GovernanceProposalPrimaryTrackTally,
   GovernanceProposalRejectionReason,
   GovernanceProposalResolutionState,
   GovernanceProposalStatus,
+  GovernanceProposalSubmissionAuthority,
+  GovernanceProposalTiming,
+  GovernanceProposalTreasurySpendScalar,
+  GovernanceProposalTreasurySpendSettlementKind,
   GovernanceProposalVoteTally,
   GovernanceProviderState,
   GovernanceQuerySurfaceAvailability,
@@ -53,11 +51,11 @@ import type {
   GovernanceWriteSurfaceAvailability,
 } from "$lib/governance";
 import {
-  GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   buildWriteSurfaceAvailability,
+  DEFAULT_GOVERNANCE_WS_ENDPOINT,
+  GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
 } from "$lib/governance";
 import type { GovernanceBlockchainProvider } from "./provider";
-import { DEFAULT_GOVERNANCE_WS_ENDPOINT } from "$lib/governance";
 
 const FIXED_U128_SCALE = 10n ** 18n;
 
@@ -65,7 +63,9 @@ type GovernanceSnapshot = TmctolChainSnapshot;
 
 type GovernanceEnum<T extends Record<string, unknown>> = PapiRuntimeEnum<T>;
 
-function unavailableWriteSurface(reason: string): GovernanceWriteSurfaceAvailability {
+function unavailableWriteSurface(
+  reason: string,
+): GovernanceWriteSurfaceAvailability {
   return buildWriteSurfaceAvailability({
     castVote: { reason },
     submitProposal: { reason },
@@ -138,11 +138,22 @@ function papiWriteSurfaceAvailability(options: {
   signedWriteReason: string;
   adminReason: string;
 }): GovernanceWriteSurfaceAvailability {
-  const signedStatus = options.signedWriteAvailable ? "available" : "unavailable";
+  const signedStatus = options.signedWriteAvailable
+    ? "available"
+    : "unavailable";
   return buildWriteSurfaceAvailability({
-    castVote: { providerStatus: signedStatus, reason: options.signedWriteReason },
-    submitProposal: { providerStatus: signedStatus, reason: options.signedWriteReason },
-    noteProposalPreimage: { providerStatus: signedStatus, reason: options.signedWriteReason },
+    castVote: {
+      providerStatus: signedStatus,
+      reason: options.signedWriteReason,
+    },
+    submitProposal: {
+      providerStatus: signedStatus,
+      reason: options.signedWriteReason,
+    },
+    noteProposalPreimage: {
+      providerStatus: signedStatus,
+      reason: options.signedWriteReason,
+    },
     resolveProposal: { reason: options.adminReason },
     rejectProposal: { reason: options.adminReason },
     resolveProposalFromVotes: { reason: options.adminReason },
@@ -383,7 +394,9 @@ function mapProposalExecutionSuccessDetail(
         baseAmount: detail.value.base_amount,
         scalar: mapProposalTreasurySpendScalar(detail.value.scalar),
         finalAmount: detail.value.final_amount,
-        settlementKind: mapProposalTreasurySpendSettlementKind(detail.value.settlement_kind),
+        settlementKind: mapProposalTreasurySpendSettlementKind(
+          detail.value.settlement_kind,
+        ),
       };
   }
 }
@@ -699,7 +712,9 @@ function mapProposalPrimaryTrackTally(
         nayWeight: tally.value.nay_weight,
         positiveWeight: tally.value.positive_weight,
         turnoutWeight: tally.value.turnout_weight,
-        leadingPositiveOption: mapPrimaryTrackOption(tally.value.leading_positive_option),
+        leadingPositiveOption: mapPrimaryTrackOption(
+          tally.value.leading_positive_option,
+        ),
         leadingPositiveWeight: tally.value.leading_positive_weight,
       };
   }
@@ -915,7 +930,9 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   private connection: TmctolPapiConnection | null = null;
   private connectionLoading: Promise<TmctolPapiConnection> | null = null;
 
-  constructor(private readonly endpoint: string = DEFAULT_GOVERNANCE_WS_ENDPOINT) {}
+  constructor(
+    private readonly endpoint: string = DEFAULT_GOVERNANCE_WS_ENDPOINT,
+  ) {}
 
   private uninitializedProviderState(): GovernanceProviderState {
     return {
@@ -939,17 +956,20 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     if (this.connectionLoading) {
       return this.connectionLoading;
     }
-    this.connectionLoading = import("../blockchain/deos").then(({ TmctolPapiConnection }) => {
-      const connection = new TmctolPapiConnection(this.endpoint);
-      this.connection = connection;
-      this.connectionLoading = null;
-      return connection;
-    });
+    this.connectionLoading = import("../blockchain/deos").then(
+      ({ TmctolPapiConnection }) => {
+        const connection = new TmctolPapiConnection(this.endpoint);
+        this.connection = connection;
+        this.connectionLoading = null;
+        return connection;
+      },
+    );
     return this.connectionLoading;
   }
 
   private governanceProviderState(): GovernanceProviderState {
-    const state = this.connection?.connectionState() ?? this.uninitializedProviderState();
+    const state =
+      this.connection?.connectionState() ?? this.uninitializedProviderState();
     if (state.status !== "connected") {
       return state;
     }
@@ -1001,15 +1021,20 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     return GOVERNANCE_QUERY_SURFACE_AVAILABILITY;
   }
 
-  getWriteSurfaceAvailability(): GovernanceWriteSurfaceAvailability {
+  getWriteSurfaceAvailability(
+    accountId?: string | null,
+  ): GovernanceWriteSurfaceAvailability {
     const state = this.governanceProviderState();
     if (state.status !== "connected") {
-      return unavailableWriteSurface(state.message ?? "PAPI provider unavailable");
+      return unavailableWriteSurface(
+        state.message ?? "PAPI provider unavailable",
+      );
     }
     const signerSupport = injectedSignerAvailability();
-    const devSignerAvailable = hasBuiltInDevSigner(walletStore.selectedAddress);
+    const devSignerAvailable = hasBuiltInDevSigner(accountId ?? null);
     return papiWriteSurfaceAvailability({
-      signedWriteAvailable: signerSupport.status === "available" || devSignerAvailable,
+      signedWriteAvailable:
+        signerSupport.status === "available" || devSignerAvailable,
       signedWriteReason:
         signerSupport.status === "available"
           ? `${signerSupport.message}; signed governance writes are enabled when the selected account matches either an injected signer account or a built-in Zombienet dev identity`
@@ -1021,21 +1046,27 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     });
   }
 
-  async getActiveProposalIds(domainId: GovernanceDomainId): Promise<GovernanceItemId[]> {
+  async getActiveProposalIds(
+    domainId: GovernanceDomainId,
+  ): Promise<GovernanceItemId[]> {
     const snapshot = await this.snapshot();
-    return snapshot.typedApi.query.Governance.ActiveProposalIdsByDomain.getValue(domainId, {
-      at: snapshot.at,
-    });
+    return snapshot.typedApi.query.Governance.ActiveProposalIdsByDomain.getValue(
+      domainId,
+      {
+        at: snapshot.at,
+      },
+    );
   }
 
   async getRecentFinalizedProposals(
     domainId: GovernanceDomainId,
   ): Promise<GovernanceRecentFinalizedProposal[]> {
     const snapshot = await this.snapshot();
-    const proposals = await snapshot.typedApi.view.Governance.recent_finalized_proposals(
-      domainId,
-      { at: snapshot.at },
-    );
+    const proposals =
+      await snapshot.typedApi.view.Governance.recent_finalized_proposals(
+        domainId,
+        { at: snapshot.at },
+      );
     return Promise.all(
       proposals.map(async (proposal) => ({
         itemId: proposal.item_id,
@@ -1057,9 +1088,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceProposalStatus | null> {
     const snapshot = await this.snapshot();
     return mapProposalStatus(
-      await snapshot.typedApi.view.Governance.proposal_status(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.proposal_status(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1068,11 +1103,12 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     itemId: GovernanceItemId,
   ): Promise<GovernanceProposalMetadata | null> {
     const snapshot = await this.snapshot();
-    const metadata = await snapshot.typedApi.query.Governance.ProposalMetadataByItem.getValue(
-      domainId,
-      itemId,
-      { at: snapshot.at },
-    );
+    const metadata =
+      await snapshot.typedApi.query.Governance.ProposalMetadataByItem.getValue(
+        domainId,
+        itemId,
+        { at: snapshot.at },
+      );
     if (!metadata) {
       return null;
     }
@@ -1088,19 +1124,21 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     itemId: GovernanceItemId,
   ): Promise<GovernanceProposalExecutionAuthority | null> {
     const snapshot = await this.snapshot();
-    const authority = await snapshot.typedApi.view.Governance.proposal_execution_authority(
-      domainId,
-      itemId,
-      { at: snapshot.at },
-    );
+    const authority =
+      await snapshot.typedApi.view.Governance.proposal_execution_authority(
+        domainId,
+        itemId,
+        { at: snapshot.at },
+      );
     return authority ? mapProposalExecutionAuthority(authority) : null;
   }
 
   async getAuthorizedRuntimeUpgrade(): Promise<GovernanceAuthorizedRuntimeUpgrade | null> {
     const snapshot = await this.snapshot();
-    const authorization = await snapshot.typedApi.view.Governance.authorized_runtime_upgrade({
-      at: snapshot.at,
-    });
+    const authorization =
+      await snapshot.typedApi.view.Governance.authorized_runtime_upgrade({
+        at: snapshot.at,
+      });
     if (!authorization) {
       return null;
     }
@@ -1142,11 +1180,12 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     itemId: GovernanceItemId,
   ): Promise<GovernanceProposalPayloadAvailability | null> {
     const snapshot = await this.snapshot();
-    const availability = await snapshot.typedApi.view.Governance.proposal_payload_availability(
-      domainId,
-      itemId,
-      { at: snapshot.at },
-    );
+    const availability =
+      await snapshot.typedApi.view.Governance.proposal_payload_availability(
+        domainId,
+        itemId,
+        { at: snapshot.at },
+      );
     if (!availability) {
       return null;
     }
@@ -1160,10 +1199,11 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     payloadHash: string,
   ): Promise<GovernancePayloadHashPreimageStatus | null> {
     const snapshot = await this.snapshot();
-    const status = await snapshot.typedApi.view.Governance.payload_hash_preimage_status(
-      payloadHash,
-      { at: snapshot.at },
-    );
+    const status =
+      await snapshot.typedApi.view.Governance.payload_hash_preimage_status(
+        payloadHash,
+        { at: snapshot.at },
+      );
     return {
       havePreimage: status.have_preimage,
       preimageRequested: status.preimage_requested,
@@ -1175,9 +1215,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     payloadLen: number,
   ): Promise<GovernancePayloadPreimageNoteCost | null> {
     const snapshot = await this.snapshot();
-    const cost = await snapshot.typedApi.view.Governance.payload_preimage_note_cost(payloadLen, {
-      at: snapshot.at,
-    });
+    const cost =
+      await snapshot.typedApi.view.Governance.payload_preimage_note_cost(
+        payloadLen,
+        {
+          at: snapshot.at,
+        },
+      );
     return cost ?? null;
   }
 
@@ -1187,9 +1231,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceProposalPrimaryTrackFamily | null> {
     const snapshot = await this.snapshot();
     return mapProposalPrimaryTrackFamily(
-      await snapshot.typedApi.view.Governance.proposal_primary_track_family(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.proposal_primary_track_family(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1199,9 +1247,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceProposalTiming | null> {
     const snapshot = await this.snapshot();
     return mapProposalTiming(
-      await snapshot.typedApi.view.Governance.proposal_timing(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.proposal_timing(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1210,11 +1262,12 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     itemId: GovernanceItemId,
   ): Promise<boolean | null> {
     const snapshot = await this.snapshot();
-    const eligibility = await snapshot.typedApi.view.Governance.proposal_urgent_eligibility(
-      domainId,
-      itemId,
-      { at: snapshot.at },
-    );
+    const eligibility =
+      await snapshot.typedApi.view.Governance.proposal_urgent_eligibility(
+        domainId,
+        itemId,
+        { at: snapshot.at },
+      );
     return eligibility ?? null;
   }
 
@@ -1224,9 +1277,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceProposalPrimaryTrackTally | null> {
     const snapshot = await this.snapshot();
     return mapProposalPrimaryTrackTally(
-      await snapshot.typedApi.view.Governance.proposal_primary_track_tally(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.proposal_primary_track_tally(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1236,9 +1293,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernancePrimaryTrackOption | null> {
     const snapshot = await this.snapshot();
     return mapPrimaryTrackOption(
-      await snapshot.typedApi.view.Governance.retained_proposal_winning_primary_option(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.retained_proposal_winning_primary_option(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1248,9 +1309,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceProposalVoteTally | null> {
     const snapshot = await this.snapshot();
     return mapProposalVoteTally(
-      await snapshot.typedApi.view.Governance.proposal_vote_tally(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.proposal_vote_tally(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1260,9 +1325,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceProposalExecutionDetail | null> {
     const snapshot = await this.snapshot();
     return mapProposalExecutionDetail(
-      await snapshot.typedApi.view.Governance.proposal_execution_detail(domainId, itemId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.proposal_execution_detail(
+        domainId,
+        itemId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1288,9 +1357,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   ): Promise<GovernanceRewardCoefficient | null> {
     const snapshot = await this.snapshot();
     return fixedU128String(
-      await snapshot.typedApi.view.Governance.reward_coefficient(domainId, accountId, {
-        at: snapshot.at,
-      }),
+      await snapshot.typedApi.view.Governance.reward_coefficient(
+        domainId,
+        accountId,
+        {
+          at: snapshot.at,
+        },
+      ),
     );
   }
 
@@ -1413,30 +1486,40 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   async resolveProposal(): Promise<void> {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
-    throw new Error("Browser-side admin governance extrinsic submission is not implemented yet");
+    throw new Error(
+      "Browser-side admin governance extrinsic submission is not implemented yet",
+    );
   }
 
   async rejectProposal(): Promise<void> {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
-    throw new Error("Browser-side admin governance extrinsic submission is not implemented yet");
+    throw new Error(
+      "Browser-side admin governance extrinsic submission is not implemented yet",
+    );
   }
 
   async resolveProposalFromVotes(): Promise<void> {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
-    throw new Error("Browser-side admin governance extrinsic submission is not implemented yet");
+    throw new Error(
+      "Browser-side admin governance extrinsic submission is not implemented yet",
+    );
   }
 
   async forceResolveProposalFromVotes(): Promise<void> {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
-    throw new Error("Browser-side admin governance extrinsic submission is not implemented yet");
+    throw new Error(
+      "Browser-side admin governance extrinsic submission is not implemented yet",
+    );
   }
 
   async requeueProposalForAutoFinalization(): Promise<void> {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
-    throw new Error("Browser-side admin governance extrinsic submission is not implemented yet");
+    throw new Error(
+      "Browser-side admin governance extrinsic submission is not implemented yet",
+    );
   }
 }

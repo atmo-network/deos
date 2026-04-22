@@ -4,6 +4,23 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the new DEOS monorepo. The changelog therefore focuses on achieved epics and the current shipped baseline of this repo, not on preserving every intermediate refactor step or pre-reset chronology.
 
+## [0.1.1] - 2026-04-22
+
+### Runtime
+
+- `pallet-governance`: Extracted `CoreResolutionOutcome` as the single source of truth for proposal resolution policy, eliminating duplication between the execution path and the view/status path.
+- `pallet-governance`: Added `build_vote_tally` — a pure storage-free tally builder consumed by both execution and query surfaces, removing redundant storage reads.
+- `pallet-governance`: Added 10 isolated unit tests covering all branches of the core resolution policy (zero turnout, below threshold, ties, approval not met, Binary Aye/Nay wins, Invoice positive wins, equal-weight last-wins).
+- `pallet-governance`: Fixed a latent bug where `proposal_resolution_state` incorrectly returned `VoteTie` for Invoice proposals with no Nay votes due to a duplicated pre-family tie check.
+
+### Web Client
+
+- Decoupled `GovernanceProviderState` from `TmctolChainConnectionState`; governance domain types are now independent of the concrete blockchain adapter.
+- Removed `walletStore` import from `GovernancePapiProvider`; `getWriteSurfaceAvailability` now accepts `accountId` as a parameter, making the adapter fully stateless.
+- Introduced `GovernanceProposalDescriptor` named type; `GovernancePanelProposal` and `GovernanceRetainedFinalizedProposal` now compose via intersection, eliminating duplicated hydration logic.
+- Extracted `loadProposalCommonFields` helper shared by active and retained proposal loaders.
+- Relaxed `hasBuiltInDevSigner` signature to accept `string | null`, removing the `?? ""` hack.
+
 ## [0.1.0] - 2026-04-22
 
 ### Framework & Runtime

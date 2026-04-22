@@ -8,24 +8,22 @@ import type {
   GovernanceFinalizedProposalOutcome,
   GovernanceGovXpCounters,
   GovernanceItemId,
+  GovernancePayloadHashPreimageStatus,
+  GovernancePayloadPreimageNoteCost,
   GovernancePrimaryTrackOption,
   GovernanceProposalCadenceMode,
   GovernanceProposalExecutionAuthority,
-  GovernancePayloadHashPreimageStatus,
-  GovernancePayloadPreimageNoteCost,
-  GovernanceProposalOpeningFee,
-  GovernanceProposalPayloadKind,
-  GovernanceProposalSubmissionAuthority,
   GovernanceProposalExecutionDetail,
   GovernanceProposalMetadata,
+  GovernanceProposalOpeningFee,
+  GovernanceProposalPayloadAvailability,
+  GovernanceProposalPayloadKind,
   GovernanceProposalPrimaryTrackFamily,
   GovernanceProposalPrimaryTrackTally,
-  GovernanceProposalTreasurySpendScalar,
-  GovernanceProposalTiming,
-  GovernanceProposalPayloadAvailability,
-  GovernanceProposalRejectionReason,
   GovernanceProposalResolutionState,
   GovernanceProposalStatus,
+  GovernanceProposalSubmissionAuthority,
+  GovernanceProposalTiming,
   GovernanceProposalVoteTally,
   GovernanceProviderState,
   GovernanceRecentFinalizedProposal,
@@ -419,17 +417,18 @@ function protectionTrackIsClosed(
   return domain.currentEpoch > protectionTrackCloseEpoch(proposal);
 }
 
-function proposalTimingForProposal(proposal: MockProposal): GovernanceProposalTiming {
-  const ordinaryPrimaryOpenEpoch = proposal.metadata.cadenceMode === "Fast"
-    ? proposal.submittedEpoch
-    : proposal.submittedEpoch + DEFAULT_LEAD_IN_PERIOD;
+function proposalTimingForProposal(
+  proposal: MockProposal,
+): GovernanceProposalTiming {
+  const ordinaryPrimaryOpenEpoch =
+    proposal.metadata.cadenceMode === "Fast"
+      ? proposal.submittedEpoch
+      : proposal.submittedEpoch + DEFAULT_LEAD_IN_PERIOD;
   const ordinaryPrimaryCloseEpoch = proposal.maturityEpoch;
-  const urgentPrimaryOpenEpoch = proposal.metadata.cadenceMode === "Fast"
-    ? proposal.submittedEpoch
-    : null;
-  const urgentPrimaryCloseEpoch = proposal.metadata.cadenceMode === "Fast"
-    ? proposal.maturityEpoch
-    : null;
+  const urgentPrimaryOpenEpoch =
+    proposal.metadata.cadenceMode === "Fast" ? proposal.submittedEpoch : null;
+  const urgentPrimaryCloseEpoch =
+    proposal.metadata.cadenceMode === "Fast" ? proposal.maturityEpoch : null;
   return {
     submittedEpoch: proposal.submittedEpoch,
     protectionOpenEpoch: proposal.submittedEpoch,
@@ -438,8 +437,10 @@ function proposalTimingForProposal(proposal: MockProposal): GovernanceProposalTi
     ordinaryPrimaryCloseEpoch,
     urgentPrimaryOpenEpoch,
     urgentPrimaryCloseEpoch,
-    effectivePrimaryOpenEpoch: urgentPrimaryOpenEpoch ?? ordinaryPrimaryOpenEpoch,
-    effectivePrimaryCloseEpoch: urgentPrimaryCloseEpoch ?? ordinaryPrimaryCloseEpoch,
+    effectivePrimaryOpenEpoch:
+      urgentPrimaryOpenEpoch ?? ordinaryPrimaryOpenEpoch,
+    effectivePrimaryCloseEpoch:
+      urgentPrimaryCloseEpoch ?? ordinaryPrimaryCloseEpoch,
     pendingEnactmentEpoch: null,
   };
 }
@@ -461,7 +462,9 @@ function proposalOpeningFee(
   domainId: GovernanceDomainId,
   payloadKind: GovernanceProposalPayloadKind,
 ): GovernanceProposalOpeningFee | null {
-  return proposalSubmissionAuthority(domainId, payloadKind) === "Signed" ? 10n : null;
+  return proposalSubmissionAuthority(domainId, payloadKind) === "Signed"
+    ? 10n
+    : null;
 }
 
 function proposalPrimaryTrackFamily(
@@ -474,20 +477,27 @@ function proposalPrimaryTrackFamily(
   return "Binary";
 }
 
-function invoiceLeadingPositiveOption(
-  proposal: MockProposal,
-): { option: GovernancePrimaryTrackOption | null; weight: bigint } {
+function invoiceLeadingPositiveOption(proposal: MockProposal): {
+  option: GovernancePrimaryTrackOption | null;
+  weight: bigint;
+} {
   let option: GovernancePrimaryTrackOption | null = null;
   let weight = 0n;
   if (proposal.tally.amplifyWeight > 0n) {
     option = "Amplify";
     weight = proposal.tally.amplifyWeight;
   }
-  if (proposal.tally.approveWeight > 0n && proposal.tally.approveWeight >= weight) {
+  if (
+    proposal.tally.approveWeight > 0n &&
+    proposal.tally.approveWeight >= weight
+  ) {
     option = "Approve";
     weight = proposal.tally.approveWeight;
   }
-  if (proposal.tally.reduceWeight > 0n && proposal.tally.reduceWeight >= weight) {
+  if (
+    proposal.tally.reduceWeight > 0n &&
+    proposal.tally.reduceWeight >= weight
+  ) {
     option = "Reduce";
     weight = proposal.tally.reduceWeight;
   }
@@ -849,7 +859,9 @@ function finalizeProposal(
       executionDetail: null,
       metadata: proposal ? { ...proposal.metadata } : null,
       executionAuthority: proposal?.executionAuthority ?? null,
-      payloadAvailability: proposal ? { ...proposal.payloadAvailability } : null,
+      payloadAvailability: proposal
+        ? { ...proposal.payloadAvailability }
+        : null,
       winningPrimaryOption,
     },
     ...domain.recentFinalized.filter(
@@ -929,14 +941,41 @@ function settlementOutcome(
 
 function availableWriteSurface(): GovernanceWriteSurfaceAvailability {
   return buildWriteSurfaceAvailability({
-    castVote: { providerStatus: "available", reason: "Stateful mock provider allows interactive vote previews" },
-    submitProposal: { providerStatus: "available", reason: "Stateful mock provider allows interactive signed public submission previews" },
-    noteProposalPreimage: { providerStatus: "available", reason: "Stateful mock provider allows interactive preimage-note previews" },
-    resolveProposal: { providerStatus: "available", reason: "Stateful mock provider allows manual resolution previews" },
-    rejectProposal: { providerStatus: "available", reason: "Stateful mock provider allows admin rejection previews" },
-    resolveProposalFromVotes: { providerStatus: "available", reason: "Stateful mock provider allows maturity-time resolution previews" },
-    forceResolveProposalFromVotes: { providerStatus: "available", reason: "Stateful mock provider allows early-finalization previews" },
-    requeueProposalForAutoFinalization: { providerStatus: "available", reason: "Stateful mock provider allows auto-finalization recovery previews" },
+    castVote: {
+      providerStatus: "available",
+      reason: "Stateful mock provider allows interactive vote previews",
+    },
+    submitProposal: {
+      providerStatus: "available",
+      reason:
+        "Stateful mock provider allows interactive signed public submission previews",
+    },
+    noteProposalPreimage: {
+      providerStatus: "available",
+      reason:
+        "Stateful mock provider allows interactive preimage-note previews",
+    },
+    resolveProposal: {
+      providerStatus: "available",
+      reason: "Stateful mock provider allows manual resolution previews",
+    },
+    rejectProposal: {
+      providerStatus: "available",
+      reason: "Stateful mock provider allows admin rejection previews",
+    },
+    resolveProposalFromVotes: {
+      providerStatus: "available",
+      reason: "Stateful mock provider allows maturity-time resolution previews",
+    },
+    forceResolveProposalFromVotes: {
+      providerStatus: "available",
+      reason: "Stateful mock provider allows early-finalization previews",
+    },
+    requeueProposalForAutoFinalization: {
+      providerStatus: "available",
+      reason:
+        "Stateful mock provider allows auto-finalization recovery previews",
+    },
   });
 }
 
@@ -986,7 +1025,9 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     return GOVERNANCE_QUERY_SURFACE_AVAILABILITY;
   }
 
-  getWriteSurfaceAvailability(): GovernanceWriteSurfaceAvailability {
+  getWriteSurfaceAvailability(
+    _accountId?: string | null,
+  ): GovernanceWriteSurfaceAvailability {
     return availableWriteSurface();
   }
 
@@ -1126,7 +1167,8 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       maturityEpoch: 0,
       proposerAccountId: "mock",
       metadata: retainedProposal.metadata,
-      executionAuthority: retainedProposal.executionAuthority ?? "NonExecutable",
+      executionAuthority:
+        retainedProposal.executionAuthority ?? "NonExecutable",
       payloadAvailability: retainedProposal.payloadAvailability ?? {
         havePreimage: false,
         preimageRequested: false,
@@ -1184,7 +1226,8 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       maturityEpoch: 0,
       proposerAccountId: "mock",
       metadata: retainedProposal.metadata,
-      executionAuthority: retainedProposal.executionAuthority ?? "NonExecutable",
+      executionAuthority:
+        retainedProposal.executionAuthority ?? "NonExecutable",
       payloadAvailability: retainedProposal.payloadAvailability ?? {
         havePreimage: false,
         preimageRequested: false,
@@ -1361,7 +1404,10 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     payloadHash: string;
   }): Promise<void> {
     const domain = this.domain(input.domainId);
-    if (proposalSubmissionAuthority(input.domainId, input.payloadKind) !== "Signed") {
+    if (
+      proposalSubmissionAuthority(input.domainId, input.payloadKind) !==
+      "Signed"
+    ) {
       throw new Error(
         `${input.payloadKind} is not publicly submittable in mock governance for domain ${input.domainId}`,
       );
