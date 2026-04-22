@@ -84,12 +84,30 @@ impl<AccountId, GovernanceDomainId> RewardCoefficientProvider<AccountId, Governa
 }
 
 pub trait RewardSnapshotEventIngress<Epoch> {
-  fn ingest(_epoch: Epoch, _max_scan: usize) -> Weight {
+  fn ingest(_epoch: Epoch, _max_scan: usize, _remaining_weight: Weight) -> Weight {
     Weight::zero()
   }
 }
 
 impl<Epoch> RewardSnapshotEventIngress<Epoch> for () {}
+
+pub struct NativeDelegationIngress<AccountId> {
+  pub touched_accounts: alloc::vec::Vec<AccountId>,
+  pub weight: Weight,
+  pub truncated: bool,
+}
+
+pub trait NativeDelegationEventIngress<AccountId> {
+  fn ingress(_max_scan: usize, _remaining_weight: Weight) -> NativeDelegationIngress<AccountId> {
+    NativeDelegationIngress {
+      touched_accounts: alloc::vec::Vec::new(),
+      weight: Weight::zero(),
+      truncated: false,
+    }
+  }
+}
+
+impl<AccountId> NativeDelegationEventIngress<AccountId> for () {}
 
 #[cfg(test)]
 mod mock;
@@ -99,21 +117,23 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+const STORAGE_VERSION: StorageVersion = StorageVersion::new(5);
 
 #[frame::pallet]
 pub mod pallet {
   use crate::{
-    NativeBindingTargetValidator as _, RewardCoefficientProvider as _, RewardEpochProvider as _,
-    RewardGovernanceDomainResolver as _, RewardSnapshotEventIngress as _,
-    StakedAssetIdResolver as _, StakedAssetLifecycle as _, weights::WeightInfo as _,
+    NativeBindingTargetValidator as _, NativeDelegationEventIngress as _,
+    RewardCoefficientProvider as _, RewardEpochProvider as _, RewardGovernanceDomainResolver as _,
+    RewardSnapshotEventIngress as _, StakedAssetIdResolver as _, StakedAssetLifecycle as _,
+    weights::WeightInfo as _,
   };
   use alloc::{collections::BTreeSet, vec::Vec};
   use codec::{Decode, Encode};
   use frame::prelude::*;
+  use polkadot_sdk::frame_support::storage::generator::StorageMap as _;
   use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
   use polkadot_sdk::frame_support::traits::tokens::{Fortitude, Precision, Preservation};
-  use polkadot_sdk::frame_support::{PalletId, weights::Weight};
+  use polkadot_sdk::frame_support::{PalletId, transactional, weights::Weight};
   use polkadot_sdk::sp_core::U256;
   use polkadot_sdk::sp_runtime::{
     FixedU128, Perbill,
@@ -136,12 +156,15 @@ pub mod pallet {
     type RewardEpochProvider: crate::RewardEpochProvider<Self::RewardEpoch>;
     type RewardCoefficientProvider: crate::RewardCoefficientProvider<Self::AccountId, Self::GovernanceDomainId>;
     type RewardSnapshotEventIngress: crate::RewardSnapshotEventIngress<Self::RewardEpoch>;
+    type NativeDelegationEventIngress: crate::NativeDelegationEventIngress<Self::AccountId>;
     #[pallet::constant]
     type MaxOperatorCommission: Get<Perbill>;
     #[pallet::constant]
     type MaxRewardEventScanPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxRewardAccountsPerAssetEpoch: Get<u32>;
+    #[pallet::constant]
+    type MaxRewardAssetsPerGovernanceDomain: Get<u32>;
     #[pallet::constant]
     type MaxClaimEpochsPerCall: Get<u32>;
     type Balance: Parameter
@@ -169,10 +192,26 @@ pub mod pallet {
       Self::roll_reward_epoch_if_needed()
     }
 
-    fn on_idle(_n: BlockNumberFor<T>, _remaining_weight: Weight) -> Weight {
+    fn on_idle(_n: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
       let epoch = T::RewardEpochProvider::current_reward_epoch();
       let max_scan = T::MaxRewardEventScanPerBlock::get() as usize;
-      T::RewardSnapshotEventIngress::ingest(epoch, max_scan)
+      let (native_delegation_weight, native_delegation_truncated) =
+        Self::ingest_native_delegation_events(max_scan, remaining_weight);
+      let remaining_after_native = remaining_weight.saturating_sub(native_delegation_weight);
+      let native_delegation_repair_weight = Self::repair_native_delegation_cache(
+        max_scan,
+        native_delegation_truncated,
+        remaining_after_native,
+      );
+      let reward_ingress_budget =
+        remaining_after_native.saturating_sub(native_delegation_repair_weight);
+      native_delegation_weight
+        .saturating_add(native_delegation_repair_weight)
+        .saturating_add(T::RewardSnapshotEventIngress::ingest(
+          epoch,
+          max_scan,
+          reward_ingress_budget,
+        ))
     }
   }
 
@@ -216,6 +255,11 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, T::AssetId, PoolState<T::Balance>, OptionQuery>;
 
   #[pallet::storage]
+  #[pallet::getter(fn base_asset_for_staked_asset)]
+  pub type LiveStakedAssetBaseAssets<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AssetId, T::AssetId, OptionQuery>;
+
+  #[pallet::storage]
   #[pallet::getter(fn position)]
   pub type Positions<T: Config> = StorageDoubleMap<
     _,
@@ -236,6 +280,60 @@ pub mod pallet {
   #[pallet::getter(fn operator_commission)]
   pub type OperatorCommissions<T: Config> =
     StorageMap<_, Blake2_128Concat, T::AccountId, Perbill, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn reward_assets_for_governance_domain)]
+  pub type RewardAssetsByGovernanceDomain<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::GovernanceDomainId,
+    BoundedVec<T::AssetId, T::MaxRewardAssetsPerGovernanceDomain>,
+    ValueQuery,
+  >;
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct CachedNativeDelegation<AccountId, Balance> {
+    pub operator: AccountId,
+    pub shares: Balance,
+  }
+
+  #[pallet::storage]
+  #[pallet::getter(fn cached_native_delegation)]
+  pub type CachedNativeDelegations<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    CachedNativeDelegation<T::AccountId, T::Balance>,
+    OptionQuery,
+  >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn cached_operator_native_shares)]
+  pub type CachedOperatorNativeShares<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AccountId, T::Balance, ValueQuery>;
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub enum NativeDelegationRepairPhase {
+    ClearingCache,
+    RebuildingBindings,
+  }
+
+  #[pallet::storage]
+  #[pallet::getter(fn native_delegation_cache_dirty)]
+  pub type NativeDelegationCacheDirty<T: Config> = StorageValue<_, bool, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn native_delegation_repair_phase)]
+  pub type NativeDelegationRepairPhaseState<T: Config> =
+    StorageValue<_, NativeDelegationRepairPhase, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn native_delegation_repair_cursor)]
+  pub type NativeDelegationRepairCursor<T: Config> = StorageValue<_, T::AccountId, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn reward_epoch_accrued)]
@@ -441,12 +539,14 @@ pub mod pallet {
     RewardAlreadyClaimed,
     DuplicateRewardEpoch,
     NoRewardClaimable,
+    RewardGovernanceDomainAssetSetFull,
   }
 
   #[pallet::call]
   impl<T: Config> Pallet<T> {
     #[pallet::call_index(0)]
     #[pallet::weight(T::WeightInfo::register_staking_asset())]
+    #[transactional]
     pub fn register_staking_asset(origin: OriginFor<T>, asset_id: T::AssetId) -> DispatchResult {
       T::AdminOrigin::ensure_origin(origin)?;
       ensure!(
@@ -464,6 +564,7 @@ pub mod pallet {
           Error::<T>::StakedAssetIdCollision
         );
         T::StakedAssetLifecycle::register(asset_id, staked_asset_id, &pool_account)?;
+        Self::index_live_staked_asset(asset_id, staked_asset_id)?;
       }
       let accounted_balance = T::Assets::balance(asset_id, &pool_account);
       Pools::<T>::insert(
@@ -474,6 +575,7 @@ pub mod pallet {
           active_staker_count: 0,
         },
       );
+      Self::index_reward_governance_domain_asset(asset_id)?;
       Self::deposit_event(Event::StakingAssetRegistered {
         asset_id,
         pool_account: Self::pool_account_for(asset_id),
@@ -646,6 +748,7 @@ pub mod pallet {
         Error::<T>::InvalidBindingTarget
       );
       NativeBindings::<T>::insert(&account, &operator);
+      Self::refresh_cached_native_delegation_if_clean(&account);
       Self::deposit_event(Event::NativeBindingSet { account, operator });
       Ok(())
     }
@@ -655,6 +758,7 @@ pub mod pallet {
     pub fn clear_native_binding(origin: OriginFor<T>) -> DispatchResult {
       let account = ensure_signed(origin)?;
       NativeBindings::<T>::remove(&account);
+      Self::refresh_cached_native_delegation_if_clean(&account);
       Self::deposit_event(Event::NativeBindingCleared { account });
       Ok(())
     }
@@ -703,6 +807,7 @@ pub mod pallet {
 
     #[pallet::call_index(9)]
     #[pallet::weight(T::WeightInfo::initialize_staked_asset())]
+    #[transactional]
     pub fn initialize_staked_asset(origin: OriginFor<T>, asset_id: T::AssetId) -> DispatchResult {
       T::AdminOrigin::ensure_origin(origin)?;
       Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
@@ -942,6 +1047,7 @@ pub mod pallet {
         Error::<T>::StakedAssetAlreadyInitialized
       );
       T::StakedAssetLifecycle::register(asset_id, staked_asset_id, &pool_account)?;
+      Self::index_live_staked_asset(asset_id, staked_asset_id)?;
       Ok((staked_asset_id, pool_account))
     }
 
@@ -1101,12 +1207,49 @@ pub mod pallet {
       T::StakedAssetIdResolver::staked_asset_id(asset_id)
     }
 
+    pub fn live_base_asset_for_staked_asset(staked_asset_id: T::AssetId) -> Option<T::AssetId> {
+      let asset_id = LiveStakedAssetBaseAssets::<T>::get(staked_asset_id)?;
+      if Self::live_staked_asset_id(asset_id) == Some(staked_asset_id) {
+        return Some(asset_id);
+      }
+      None
+    }
+
     fn live_staked_asset_id(asset_id: T::AssetId) -> Option<T::AssetId> {
       let staked_asset_id = Self::staked_asset_id(asset_id)?;
       if T::Assets::asset_exists(staked_asset_id) {
         return Some(staked_asset_id);
       }
       None
+    }
+
+    fn index_live_staked_asset(
+      asset_id: T::AssetId,
+      staked_asset_id: T::AssetId,
+    ) -> DispatchResult {
+      if let Some(existing_asset_id) = LiveStakedAssetBaseAssets::<T>::get(staked_asset_id) {
+        ensure!(
+          existing_asset_id == asset_id,
+          Error::<T>::StakedAssetIdCollision
+        );
+      }
+      LiveStakedAssetBaseAssets::<T>::insert(staked_asset_id, asset_id);
+      Ok(())
+    }
+
+    fn index_reward_governance_domain_asset(asset_id: T::AssetId) -> DispatchResult {
+      let Some(domain_id) = Self::reward_governance_domain(asset_id) else {
+        return Ok(());
+      };
+      RewardAssetsByGovernanceDomain::<T>::try_mutate(domain_id, |assets| {
+        if assets.contains(&asset_id) {
+          return Ok(());
+        }
+        assets
+          .try_push(asset_id)
+          .map_err(|_| Error::<T>::RewardGovernanceDomainAssetSetFull)?;
+        Ok(())
+      })
     }
 
     fn legacy_position_shares(asset_id: T::AssetId, account: &T::AccountId) -> T::Balance {
@@ -1272,6 +1415,161 @@ pub mod pallet {
           }
         })
         .fold(Zero::zero(), |total, value| total.saturating_add(value))
+    }
+
+    pub fn cached_delegated_native_backing(operator: &T::AccountId) -> T::Balance {
+      if NativeDelegationCacheDirty::<T>::get() {
+        return Self::delegated_native_backing(operator);
+      }
+      let Some(pool) = Pools::<T>::get(T::NativeStakingAssetId::get()) else {
+        return Zero::zero();
+      };
+      if pool.total_shares.is_zero() {
+        return Zero::zero();
+      }
+      let shares = CachedOperatorNativeShares::<T>::get(operator);
+      if shares.is_zero() {
+        return Zero::zero();
+      }
+      Self::mul_div_floor(shares, pool.accounted_balance, pool.total_shares)
+    }
+
+    fn ingest_native_delegation_events(
+      max_scan: usize,
+      remaining_weight: Weight,
+    ) -> (Weight, bool) {
+      let ingress = T::NativeDelegationEventIngress::ingress(max_scan, remaining_weight);
+      if ingress.truncated {
+        NativeDelegationCacheDirty::<T>::put(true);
+        if NativeDelegationRepairPhaseState::<T>::get().is_none() {
+          NativeDelegationRepairPhaseState::<T>::put(NativeDelegationRepairPhase::ClearingCache);
+          NativeDelegationRepairCursor::<T>::kill();
+        }
+      }
+      for account in ingress.touched_accounts {
+        Self::refresh_cached_native_delegation(&account);
+      }
+      (ingress.weight, ingress.truncated)
+    }
+
+    fn refresh_cached_native_delegation_if_clean(account: &T::AccountId) {
+      if NativeDelegationCacheDirty::<T>::get() {
+        return;
+      }
+      Self::refresh_cached_native_delegation(account);
+    }
+
+    fn clear_cached_native_delegation(account: &T::AccountId) {
+      let Some(cached_delegation) = CachedNativeDelegations::<T>::take(account) else {
+        return;
+      };
+      let updated = CachedOperatorNativeShares::<T>::get(&cached_delegation.operator)
+        .saturating_sub(cached_delegation.shares);
+      if updated.is_zero() {
+        CachedOperatorNativeShares::<T>::remove(&cached_delegation.operator);
+      } else {
+        CachedOperatorNativeShares::<T>::insert(&cached_delegation.operator, updated);
+      }
+    }
+
+    fn repair_native_delegation_cache(
+      max_accounts: usize,
+      native_delegation_truncated: bool,
+      remaining_weight: Weight,
+    ) -> Weight {
+      const REPAIR_ACCOUNT_WEIGHT_REF_TIME: u64 = 8_000;
+      if !NativeDelegationCacheDirty::<T>::get() {
+        return Weight::zero();
+      }
+      let max_ref_time = remaining_weight.ref_time();
+      let mut remaining = max_accounts;
+      let mut repaired_accounts = 0u64;
+      while remaining > 0 {
+        let next_repaired_accounts = repaired_accounts.saturating_add(1);
+        let projected_ref_time =
+          next_repaired_accounts.saturating_mul(REPAIR_ACCOUNT_WEIGHT_REF_TIME);
+        if projected_ref_time > max_ref_time {
+          break;
+        }
+        let Some(phase) = NativeDelegationRepairPhaseState::<T>::get() else {
+          break;
+        };
+        match phase {
+          NativeDelegationRepairPhase::ClearingCache => {
+            let next_cached = match NativeDelegationRepairCursor::<T>::get() {
+              Some(cursor) => CachedNativeDelegations::<T>::iter_from_key(cursor).next(),
+              None => CachedNativeDelegations::<T>::iter_from(
+                CachedNativeDelegations::<T>::prefix_hash().to_vec(),
+              )
+              .next(),
+            };
+            let Some((account, _)) = next_cached else {
+              NativeDelegationRepairPhaseState::<T>::put(
+                NativeDelegationRepairPhase::RebuildingBindings,
+              );
+              NativeDelegationRepairCursor::<T>::kill();
+              continue;
+            };
+            Self::clear_cached_native_delegation(&account);
+            NativeDelegationRepairCursor::<T>::put(account);
+          }
+          NativeDelegationRepairPhase::RebuildingBindings => {
+            let next_binding = match NativeDelegationRepairCursor::<T>::get() {
+              Some(cursor) => NativeBindings::<T>::iter_from_key(cursor).next(),
+              None => {
+                NativeBindings::<T>::iter_from(NativeBindings::<T>::prefix_hash().to_vec()).next()
+              }
+            };
+            let Some((account, _)) = next_binding else {
+              if !native_delegation_truncated {
+                NativeDelegationCacheDirty::<T>::put(false);
+                NativeDelegationRepairPhaseState::<T>::kill();
+                NativeDelegationRepairCursor::<T>::kill();
+              }
+              break;
+            };
+            Self::refresh_cached_native_delegation(&account);
+            NativeDelegationRepairCursor::<T>::put(account);
+          }
+        }
+        repaired_accounts = repaired_accounts.saturating_add(1);
+        remaining = remaining.saturating_sub(1);
+      }
+      Weight::from_parts(
+        repaired_accounts.saturating_mul(REPAIR_ACCOUNT_WEIGHT_REF_TIME),
+        0,
+      )
+    }
+
+    fn refresh_cached_native_delegation(account: &T::AccountId) {
+      let old_delegation = CachedNativeDelegations::<T>::get(account);
+      let should_retire_binding = old_delegation.is_some();
+      let live_binding = NativeBindings::<T>::get(account);
+      let new_delegation = live_binding.clone().and_then(|operator| {
+        let shares = Self::effective_share_balance(T::NativeStakingAssetId::get(), account)
+          .unwrap_or_else(Zero::zero);
+        if shares.is_zero() {
+          return None;
+        }
+        Some(CachedNativeDelegation { operator, shares })
+      });
+      if old_delegation.is_some() {
+        Self::clear_cached_native_delegation(account);
+      }
+      if let Some(ref new_delegation) = new_delegation {
+        let updated = CachedOperatorNativeShares::<T>::get(&new_delegation.operator)
+          .saturating_add(new_delegation.shares);
+        CachedOperatorNativeShares::<T>::insert(&new_delegation.operator, updated);
+        CachedNativeDelegations::<T>::insert(account, new_delegation);
+      } else {
+        CachedNativeDelegations::<T>::remove(account);
+        if should_retire_binding && live_binding.is_some() {
+          NativeBindings::<T>::remove(account);
+          Self::deposit_event(Event::NativeBindingCleared {
+            account: account.clone(),
+          });
+        }
+      }
     }
 
     fn roll_reward_epoch_if_needed() -> Weight {

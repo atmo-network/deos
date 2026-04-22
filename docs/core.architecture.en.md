@@ -367,6 +367,7 @@ The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay C
 - `Ingress Protocol`: The system accepts `ReserveAssetDeposited` and `Teleport` instructions.
 - `Asset Mapping (Hybrid)`: bidirectional `Location <-> AssetId` stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
 - `Holding Register`: Incoming assets are held in a temporary register before being dispatched to the `ForeignAssetsTransactor`.
+- `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; `SafeCallFilter = Nothing` makes `Transact` fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
 
 ### 6.2 Foreign Asset Transactor
 
@@ -379,6 +380,7 @@ The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridg
 
 - `Sovereignty`: The parachain maintains sovereign accounts on other chains to manage its own liquidity reserves.
 - `Sibling Recognition`: `ForeignAssetsFromSibling` filter ensures that assets originating from sibling parachains are recognized as valid reserve assets, enabling seamless cross-chain swaps.
+- `Controller Separation`: XCMP queue control remains Root-only on the current line even though relay/sibling/account-style XCM origins can still be converted for other executor/controller plumbing; origin conversion does not itself widen queue-control authority.
 
 ## 7. Economic Guarantees
 

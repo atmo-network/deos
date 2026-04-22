@@ -14,6 +14,7 @@ use core::marker::PhantomData;
 /// Weight functions for `pallet_tmc`.
 pub trait WeightInfo {
 	fn create_curve() -> Weight;
+	fn mint_with_distribution() -> Weight;
 }
 
 /// Weights for `pallet_tmc` using the Substrate node and recommended hardware.
@@ -24,11 +25,19 @@ impl<T: polkadot_sdk::frame_system::Config> WeightInfo for SubstrateWeight<T> {
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
+	fn mint_with_distribution() -> Weight {
+		Weight::from_parts(50_000_000, 5000)
+			.saturating_add(T::DbWeight::get().reads(6))
+			.saturating_add(T::DbWeight::get().writes(5))
+	}
 }
 
 // For backwards compatibility and tests
 impl WeightInfo for () {
 	fn create_curve() -> Weight {
 		Weight::from_parts(10_000_000, 3553)
+	}
+	fn mint_with_distribution() -> Weight {
+		Weight::from_parts(50_000_000, 5000)
 	}
 }

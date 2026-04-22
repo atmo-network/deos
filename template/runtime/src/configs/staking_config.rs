@@ -13,6 +13,8 @@ use polkadot_sdk::{
   pallet_assets::Event as AssetsEvent,
   sp_runtime::FixedU128,
 };
+#[cfg(test)]
+use std::cell::Cell;
 
 parameter_types! {
   pub const StakingPalletId: PalletId = PalletId(*primitives::ecosystem::pallet_ids::STAKING_PALLET_ID);
@@ -20,7 +22,56 @@ parameter_types! {
   pub const MaxOperatorCommission: polkadot_sdk::sp_runtime::Perbill = polkadot_sdk::sp_runtime::Perbill::from_percent(50);
   pub const MaxRewardEventScanPerBlock: u32 = 128;
   pub const MaxRewardAccountsPerAssetEpoch: u32 = 256;
+  pub const MaxRewardAssetsPerGovernanceDomain: u32 = 16;
   pub const MaxClaimEpochsPerCall: u32 = 16;
+}
+
+pub(crate) const REWARD_INGRESS_EVENT_SCAN_WEIGHT_REF_TIME: u64 = 1_000;
+pub(crate) const REWARD_INGRESS_ACCOUNT_TOUCH_WEIGHT_REF_TIME: u64 = 2_000;
+pub(crate) const REWARD_INGRESS_RECORD_WEIGHT_REF_TIME: u64 = 4_000;
+
+#[cfg(test)]
+thread_local! {
+  static REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT: Cell<u32> = const { Cell::new(0) };
+  static REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
+#[cfg(test)]
+pub fn reset_reward_ingress_lookup_probes() {
+  REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT.with(|count| count.set(0));
+  REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub fn reward_ingress_receipt_base_lookup_probe_count() -> u32 {
+  REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT.with(Cell::get)
+}
+
+#[cfg(test)]
+pub fn reward_ingress_governance_domain_lookup_probe_count() -> u32 {
+  REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT.with(Cell::get)
+}
+
+pub(crate) fn reward_ingress_expected_ref_time(
+  scanned: u64,
+  touched: u64,
+  recorded_inflows: u64,
+) -> u64 {
+  scanned
+    .saturating_mul(REWARD_INGRESS_EVENT_SCAN_WEIGHT_REF_TIME)
+    .saturating_add(touched.saturating_mul(REWARD_INGRESS_ACCOUNT_TOUCH_WEIGHT_REF_TIME))
+    .saturating_add(recorded_inflows.saturating_mul(REWARD_INGRESS_RECORD_WEIGHT_REF_TIME))
+}
+
+#[cfg(test)]
+fn note_reward_ingress_receipt_base_lookup() {
+  REWARD_INGRESS_RECEIPT_BASE_LOOKUP_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+}
+
+#[cfg(test)]
+fn note_reward_ingress_governance_domain_lookup() {
+  REWARD_INGRESS_GOVERNANCE_DOMAIN_LOOKUP_COUNT
+    .with(|count| count.set(count.get().saturating_add(1)));
 }
 
 pub struct RuntimeNativeBindingTargetValidator;
@@ -144,15 +195,187 @@ impl pallet_staking::RewardCoefficientProvider<AccountId, AssetId>
   }
 }
 
+pub struct RuntimeNativeDelegationEventIngress;
+impl pallet_staking::NativeDelegationEventIngress<AccountId>
+  for RuntimeNativeDelegationEventIngress
+{
+  fn ingress(
+    max_scan: usize,
+    remaining_weight: Weight,
+  ) -> pallet_staking::NativeDelegationIngress<AccountId> {
+    const EVENT_SCAN_WEIGHT_REF_TIME: u64 = 1_000;
+    const ACCOUNT_REFRESH_WEIGHT_REF_TIME: u64 = 2_000;
+    let native_staked_asset_id = crate::Staking::staked_asset_id(NativeStakingAssetId::get());
+    let Some(native_staked_asset_id) = native_staked_asset_id else {
+      return pallet_staking::NativeDelegationIngress {
+        touched_accounts: alloc::vec::Vec::new(),
+        weight: Weight::zero(),
+        truncated: false,
+      };
+    };
+    let max_ref_time = remaining_weight.ref_time();
+    let mut scanned = 0u64;
+    let mut truncated = false;
+    let mut touched_accounts = BTreeSet::new();
+    for record in crate::System::read_events_no_consensus().take(max_scan.saturating_add(1)) {
+      let next_scanned = scanned.saturating_add(1);
+      let scan_only_ref_time = next_scanned
+        .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
+        .saturating_add(
+          (touched_accounts.len() as u64).saturating_mul(ACCOUNT_REFRESH_WEIGHT_REF_TIME),
+        );
+      if scan_only_ref_time > max_ref_time {
+        break;
+      }
+      scanned = next_scanned;
+      if scanned > max_scan as u64 {
+        truncated = true;
+        break;
+      }
+      let projected_touches = match &record.event {
+        crate::RuntimeEvent::Assets(AssetsEvent::Transferred {
+          asset_id,
+          from,
+          to,
+          amount: _,
+        })
+        | crate::RuntimeEvent::Assets(AssetsEvent::TransferredApproved {
+          asset_id,
+          owner: from,
+          destination: to,
+          amount: _,
+          ..
+        }) if *asset_id == native_staked_asset_id => {
+          let mut projected_touches = touched_accounts.len();
+          projected_touches =
+            projected_touches.saturating_add(usize::from(!touched_accounts.contains(from)));
+          projected_touches.saturating_add(usize::from(!touched_accounts.contains(to)))
+        }
+        crate::RuntimeEvent::Assets(
+          AssetsEvent::Issued {
+            asset_id,
+            owner,
+            amount: _,
+          }
+          | AssetsEvent::Deposited {
+            asset_id,
+            who: owner,
+            amount: _,
+          },
+        ) if *asset_id == native_staked_asset_id => touched_accounts
+          .len()
+          .saturating_add(usize::from(!touched_accounts.contains(owner))),
+        crate::RuntimeEvent::Assets(
+          AssetsEvent::Burned {
+            asset_id,
+            owner,
+            balance: _,
+          }
+          | AssetsEvent::Withdrawn {
+            asset_id,
+            who: owner,
+            amount: _,
+          },
+        ) if *asset_id == native_staked_asset_id => touched_accounts
+          .len()
+          .saturating_add(usize::from(!touched_accounts.contains(owner))),
+        crate::RuntimeEvent::Staking(
+          pallet_staking::Event::NativeBindingSet { account, .. }
+          | pallet_staking::Event::NativeBindingCleared { account },
+        ) => touched_accounts
+          .len()
+          .saturating_add(usize::from(!touched_accounts.contains(account))),
+        _ => touched_accounts.len(),
+      };
+      let projected_ref_time = scanned
+        .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
+        .saturating_add((projected_touches as u64).saturating_mul(ACCOUNT_REFRESH_WEIGHT_REF_TIME));
+      if projected_ref_time > max_ref_time {
+        truncated = true;
+        break;
+      }
+      match &record.event {
+        crate::RuntimeEvent::Assets(AssetsEvent::Transferred {
+          asset_id,
+          from,
+          to,
+          amount: _,
+        })
+        | crate::RuntimeEvent::Assets(AssetsEvent::TransferredApproved {
+          asset_id,
+          owner: from,
+          destination: to,
+          amount: _,
+          ..
+        }) if *asset_id == native_staked_asset_id => {
+          touched_accounts.insert(from.clone());
+          touched_accounts.insert(to.clone());
+        }
+        crate::RuntimeEvent::Assets(
+          AssetsEvent::Issued {
+            asset_id,
+            owner,
+            amount: _,
+          }
+          | AssetsEvent::Deposited {
+            asset_id,
+            who: owner,
+            amount: _,
+          },
+        ) if *asset_id == native_staked_asset_id => {
+          touched_accounts.insert(owner.clone());
+        }
+        crate::RuntimeEvent::Assets(
+          AssetsEvent::Burned {
+            asset_id,
+            owner,
+            balance: _,
+          }
+          | AssetsEvent::Withdrawn {
+            asset_id,
+            who: owner,
+            amount: _,
+          },
+        ) if *asset_id == native_staked_asset_id => {
+          touched_accounts.insert(owner.clone());
+        }
+        crate::RuntimeEvent::Staking(
+          pallet_staking::Event::NativeBindingSet { account, .. }
+          | pallet_staking::Event::NativeBindingCleared { account },
+        ) => {
+          touched_accounts.insert(account.clone());
+        }
+        _ => {}
+      }
+    }
+    let touched_accounts = touched_accounts.into_iter().collect::<alloc::vec::Vec<_>>();
+    pallet_staking::NativeDelegationIngress {
+      weight: Weight::from_parts(
+        scanned
+          .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
+          .saturating_add(
+            (touched_accounts.len() as u64).saturating_mul(ACCOUNT_REFRESH_WEIGHT_REF_TIME),
+          ),
+        0,
+      ),
+      touched_accounts,
+      truncated,
+    }
+  }
+}
+
 pub struct RuntimeRewardSnapshotEventIngress;
 impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSnapshotEventIngress {
-  fn ingest(epoch: BlockNumber, max_scan: usize) -> Weight {
-    const EVENT_SCAN_WEIGHT_REF_TIME: u64 = 1_000;
-    const ACCOUNT_TOUCH_WEIGHT_REF_TIME: u64 = 2_000;
-    const REWARD_RECORD_WEIGHT_REF_TIME: u64 = 4_000;
+  fn ingest(epoch: BlockNumber, max_scan: usize, remaining_weight: Weight) -> Weight {
     fn reward_base_asset_id(asset_id: AssetId) -> Option<AssetId> {
-      pallet_staking::Pools::<Runtime>::iter_keys()
-        .find(|base_asset_id| crate::Staking::staked_asset_id(*base_asset_id) == Some(asset_id))
+      #[cfg(test)]
+      note_reward_ingress_receipt_base_lookup();
+      crate::Staking::live_base_asset_for_staked_asset(asset_id)
+    }
+    fn reward_assets_for_governance_domain(domain: AssetId) -> alloc::vec::Vec<AssetId> {
+      #[cfg(test)]
+      note_reward_ingress_governance_domain_lookup();
+      crate::Staking::reward_assets_for_governance_domain(domain).into_inner()
     }
     fn reward_inflow_asset_id(asset_id: AssetId, recipient: &AccountId) -> Option<AssetId> {
       if !pallet_staking::Pools::<Runtime>::contains_key(asset_id) {
@@ -163,6 +386,7 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
       }
       Some(asset_id)
     }
+    let max_ref_time = remaining_weight.ref_time();
     let mut scanned = 0u64;
     let mut touched = 0u64;
     let mut recorded_reward_inflows = 0u64;
@@ -170,11 +394,22 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
     let mut pending_reward_touches: BTreeSet<(AssetId, AccountId)> = BTreeSet::new();
     let mut pending_reward_inflows: BTreeMap<AssetId, Balance> = BTreeMap::new();
     for record in crate::System::read_events_no_consensus().take(max_scan.saturating_add(1)) {
-      scanned = scanned.saturating_add(1);
+      let next_scanned = scanned.saturating_add(1);
+      let scan_only_ref_time = reward_ingress_expected_ref_time(
+        next_scanned,
+        pending_reward_touches.len() as u64,
+        pending_reward_inflows.len() as u64,
+      );
+      if scan_only_ref_time > max_ref_time {
+        break;
+      }
+      scanned = next_scanned;
       if scanned > max_scan as u64 {
         truncated = true;
         break;
       }
+      let mut projected_touches = pending_reward_touches.len();
+      let mut projected_inflows = pending_reward_inflows.len();
       match &record.event {
         crate::RuntimeEvent::Assets(AssetsEvent::Transferred {
           asset_id,
@@ -189,6 +424,28 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
           amount,
           ..
         }) => {
+          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, to) {
+            projected_inflows = projected_inflows.saturating_add(usize::from(
+              !pending_reward_inflows.contains_key(&reward_asset_id),
+            ));
+          }
+          if let Some(base_asset_id) = reward_base_asset_id(*asset_id) {
+            projected_touches = projected_touches.saturating_add(usize::from(
+              !pending_reward_touches.contains(&(base_asset_id, from.clone())),
+            ));
+            projected_touches = projected_touches.saturating_add(usize::from(
+              !pending_reward_touches.contains(&(base_asset_id, to.clone())),
+            ));
+          }
+          let projected_ref_time = reward_ingress_expected_ref_time(
+            scanned,
+            projected_touches as u64,
+            projected_inflows as u64,
+          );
+          if projected_ref_time > max_ref_time {
+            truncated = true;
+            break;
+          }
           if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, to) {
             pending_reward_inflows
               .entry(reward_asset_id)
@@ -214,6 +471,25 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
           },
         ) => {
           if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, owner) {
+            projected_inflows = projected_inflows.saturating_add(usize::from(
+              !pending_reward_inflows.contains_key(&reward_asset_id),
+            ));
+          }
+          if let Some(base_asset_id) = reward_base_asset_id(*asset_id) {
+            projected_touches = projected_touches.saturating_add(usize::from(
+              !pending_reward_touches.contains(&(base_asset_id, owner.clone())),
+            ));
+          }
+          let projected_ref_time = reward_ingress_expected_ref_time(
+            scanned,
+            projected_touches as u64,
+            projected_inflows as u64,
+          );
+          if projected_ref_time > max_ref_time {
+            truncated = true;
+            break;
+          }
+          if let Some(reward_asset_id) = reward_inflow_asset_id(*asset_id, owner) {
             pending_reward_inflows
               .entry(reward_asset_id)
               .and_modify(|value| *value = value.saturating_add(*amount))
@@ -236,6 +512,20 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
             amount: _,
           },
         ) => {
+          if let Some(base_asset_id) = reward_base_asset_id(*asset_id) {
+            projected_touches = projected_touches.saturating_add(usize::from(
+              !pending_reward_touches.contains(&(base_asset_id, owner.clone())),
+            ));
+          }
+          let projected_ref_time = reward_ingress_expected_ref_time(
+            scanned,
+            projected_touches as u64,
+            projected_inflows as u64,
+          );
+          if projected_ref_time > max_ref_time {
+            truncated = true;
+            break;
+          }
           let Some(base_asset_id) = reward_base_asset_id(*asset_id) else {
             continue;
           };
@@ -249,13 +539,40 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
             domain, account, ..
           },
         ) => {
-          for asset_id in pallet_staking::Pools::<Runtime>::iter_keys() {
-            if crate::Staking::reward_governance_domain(asset_id) == Some(*domain) {
-              pending_reward_touches.insert((asset_id, account.clone()));
-            }
+          let reward_assets = reward_assets_for_governance_domain(*domain);
+          projected_touches =
+            reward_assets
+              .clone()
+              .into_iter()
+              .fold(projected_touches, |count, asset_id| {
+                count.saturating_add(usize::from(
+                  !pending_reward_touches.contains(&(asset_id, account.clone())),
+                ))
+              });
+          let projected_ref_time = reward_ingress_expected_ref_time(
+            scanned,
+            projected_touches as u64,
+            projected_inflows as u64,
+          );
+          if projected_ref_time > max_ref_time {
+            truncated = true;
+            break;
+          }
+          reward_assets.into_iter().for_each(|asset_id| {
+            pending_reward_touches.insert((asset_id, account.clone()));
+          });
+        }
+        _ => {
+          let projected_ref_time = reward_ingress_expected_ref_time(
+            scanned,
+            projected_touches as u64,
+            projected_inflows as u64,
+          );
+          if projected_ref_time > max_ref_time {
+            truncated = true;
+            break;
           }
         }
-        _ => {}
       }
     }
     if truncated {
@@ -272,10 +589,7 @@ impl pallet_staking::RewardSnapshotEventIngress<BlockNumber> for RuntimeRewardSn
       )));
     }
     Weight::from_parts(
-      scanned
-        .saturating_mul(EVENT_SCAN_WEIGHT_REF_TIME)
-        .saturating_add(touched.saturating_mul(ACCOUNT_TOUCH_WEIGHT_REF_TIME))
-        .saturating_add(recorded_reward_inflows.saturating_mul(REWARD_RECORD_WEIGHT_REF_TIME)),
+      reward_ingress_expected_ref_time(scanned, touched, recorded_reward_inflows),
       0,
     )
   }
@@ -294,9 +608,11 @@ impl pallet_staking::Config for Runtime {
   type RewardEpochProvider = RuntimeRewardEpochProvider;
   type RewardCoefficientProvider = RuntimeRewardCoefficientProvider;
   type RewardSnapshotEventIngress = RuntimeRewardSnapshotEventIngress;
+  type NativeDelegationEventIngress = RuntimeNativeDelegationEventIngress;
   type MaxOperatorCommission = MaxOperatorCommission;
   type MaxRewardEventScanPerBlock = MaxRewardEventScanPerBlock;
   type MaxRewardAccountsPerAssetEpoch = MaxRewardAccountsPerAssetEpoch;
+  type MaxRewardAssetsPerGovernanceDomain = MaxRewardAssetsPerGovernanceDomain;
   type MaxClaimEpochsPerCall = MaxClaimEpochsPerCall;
   type Balance = Balance;
   type Assets = crate::Assets;

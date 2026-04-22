@@ -269,15 +269,21 @@ Current public native surface:
 - `clear_native_binding()`
 - `delegated_native_backing(operator)`
 
-### Read-derived backing
+### Cached shares, read-derived value
 
-The live implementation deliberately prefers read-derived backing over eagerly cached per-operator counters.
-The effective operator backing is computed from live stake value of accounts whose `NativeBindings[account] == operator`.
+The live implementation now keeps a first cached per-operator native-delegation surface for the collator-ranking hot path, but it still derives final backing value from the live native pool ratio.
+More concretely:
+
+- `on_idle` refreshes cached per-operator delegated native **shares** from native binding events plus native `stNTVE` balance-change events
+- `bind_native` and `clear_native_binding` also refresh that cache immediately when the cache is already clean, so rebinding and clear-to-passive transitions do not wait for later event replay
+- The session-manager ranking path reads those cached shares and converts them into live backing value through the current native pool state
+- If the bounded native-delegation ingress truncates, ranking safely falls back to the exact read-derived `delegated_native_backing(operator)` path while a bounded two-phase repair loop clears stale cache entries and rebuilds live bindings over later `on_idle` passes
 
 This preserves the intended invariant:
 
 - If `stNTVE` leaves the account, backing falls with it
 - If a recipient receives `stNTVE`, it stays passive until they explicitly bind
+- If a previously delegated account reaches zero native exposure, the runtime retires that stale binding during cache refresh instead of leaving inert delegated state behind
 
 ### Current runtime validator
 
@@ -328,12 +334,14 @@ The runtime ingress implementation aggregates touches and reward inflows in memo
 ### Reward inflow ingestion
 
 `on_idle` calls the runtime `RewardSnapshotEventIngress`.
-That adapter scans system events up to `MaxRewardEventScanPerBlock` and performs two bounded jobs:
+That adapter now receives the real remaining idle budget after earlier staking maintenance work and scans system events only while the projected scan/touch/inflow work still fits inside that residual budget, subject to the hard `MaxRewardEventScanPerBlock` cap.
+Receipt-driven reward-touch events no longer rediscover their base staking asset by iterating all pools; the pallet now maintains a live `stXXX -> base asset` reverse index when receipt assets are created or backfilled, and reward ingress resolves that mapping through the indexed surface. Governance-driven reward-touch events likewise no longer walk every staking pool to find matching domains; staking-asset registration now maintains a bounded `domain -> reward assets` index that the runtime reward ingress consumes directly.
+It performs two bounded jobs:
 
 1. aggregate deposits into `reward_account(asset_id)` and call `note_reward_inflow(asset_id, amount)`
 2. aggregate touched accounts and call `note_reward_touch(asset_id, account)`
 
-When the scan cap is exceeded:
+When either the remaining idle budget or the scan cap is exceeded:
 
 - `RewardIngressTruncated` is emitted
 - The epoch is marked in `RewardTruncatedEpochs`
@@ -503,8 +511,8 @@ For `$NTVE`, the runtime uses explicit metadata `Staked Native Token / stNTVE / 
 
 ## Complexity and Growth Pressure
 
-1. `Native backing aggregation is currently O(B)`
-   `delegated_native_backing(operator)` iterates `NativeBindings` and re-derives live stake value account by account. This is acceptable for the current trusted-collator launch scale, but it is the first obvious candidate for cached aggregation if binding cardinality grows materially.
+1. `Native backing now has a bounded hot path with bounded dirty-cache repair`
+   Candidate ranking no longer rescans `NativeBindings` in its hot path. Instead it reads cached per-operator shares refreshed by bounded event ingress, and truncation now triggers a bounded clear/rebuild repair loop while ranking stays on the exact fallback path.
 
 2. `Receipt-event ingress currently does runtime-side base-asset discovery by pool scan`
    In `RuntimeRewardSnapshotEventIngress`, receipt-asset events are mapped back to a base staking asset by iterating `Pools::<Runtime>::iter_keys()` and matching `staked_asset_id(base_asset_id)`. This is a runtime-adapter growth point, not a pallet-storage flaw, but it is a real current cost surface.
@@ -580,22 +588,25 @@ That gives the minimal live picture of whether `stNTVE` is currently passive or 
 1. `Legacy bridge still exists`
    `Positions` and `active_staker_count` cannot be deleted until real chain state proves the bridge is drained
 
-2. `Native backing is currently O(B)`
-   `delegated_native_backing(operator)` scans `NativeBindings`; acceptable now, but this is the first scaling pressure point if operator/delegator cardinality rises materially
+2. `Native-delegation truncation now degrades safely while repair catches up`
+   If native binding / `stNTVE` ingress truncates, the runtime marks the cache dirty, ranking falls back to the exact `delegated_native_backing(operator)` path, and a bounded two-phase repair loop clears stale cache state before rebuilding live bindings. The remaining pressure is performance evidence and larger regression matrices, not missing repair semantics
 
-3. `Reward ingress is bounded, not exhaustive`
+3. `Zero-exposure cleanup is now automatic, not user-driven`
+   Once a previously delegated account reaches zero native exposure, cache refresh clears the inert binding automatically. That keeps the live binding surface honest, but it also means zero-balance prebinding is not treated as durable delegation state
+
+4. `Reward ingress is bounded, not exhaustive`
    scan truncation intentionally preserves safety by making the epoch unclaimable rather than pretending accounting stayed complete
 
-4. `Live-chain bootstrap is operationally mandatory`
+5. `Live-chain bootstrap is operationally mandatory`
    already-live holders must be bootstrapped with `bootstrap_reward_snapshot(...)` before enabling reward ingress for that epoch
 
-5. `Reward-claim discovery is intentionally off-chain today`
+6. `Reward-claim discovery is intentionally off-chain today`
    canonical on-chain state verifies claimability for a supplied epoch, but discovering which epochs a wallet should inspect next is currently an indexed/materialized concern rather than a bounded pallet projection
 
-6. `Generic native automation is intentionally missing`
+7. `Generic native automation is intentionally missing`
    the pallet has `stake_native(amount, operator)`, but higher-level automation such as AAA-native staking still needs an operator-aware surface
 
-7. `Non-native staking remains isolated from consensus security`
+8. `Non-native staking remains isolated from consensus security`
    this is deliberate and should stay explicit in runtime/UI/operator assumptions
 
 ## Conclusion

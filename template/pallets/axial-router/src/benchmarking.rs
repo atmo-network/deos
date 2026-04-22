@@ -2,6 +2,9 @@ extern crate alloc;
 
 use crate::{types::BenchmarkHelper, *};
 use polkadot_sdk::frame_benchmarking::v2::*;
+use polkadot_sdk::frame_support::traits::{
+  fungible::Inspect as NativeInspect, fungibles::Inspect as FungiblesInspect,
+};
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::sp_runtime::traits::SaturatedConversion;
 use primitives::AssetKind;
@@ -19,8 +22,6 @@ mod benches {
     let min_amount_out = 1u128;
     let recipient = caller.clone();
     let deadline = 10000u32.into();
-
-    // Setup assets and liquidity (fund 2x to keep ED buffer after transfers)
     T::BenchmarkHelper::create_asset(from).expect("Failed to create asset");
     let fund_amount: u128 = 1_000_000_000_000_000_000;
     let liquidity_amount: u128 = 100_000_000_000_000_000;
@@ -28,7 +29,6 @@ mod benches {
       .expect("Failed to mint native");
     T::BenchmarkHelper::mint_asset(from, &caller, fund_amount.saturated_into())
       .expect("Failed to mint foreign");
-
     T::BenchmarkHelper::create_pool(to, from).expect("Failed to create pool");
     T::BenchmarkHelper::add_liquidity(
       &caller,
@@ -38,21 +38,46 @@ mod benches {
       liquidity_amount.saturated_into(),
     )
     .expect("Failed to add liquidity");
-
-    // Fund BM account so fee routing doesn't fail
     let bm_account = T::BurningManagerAccount::get();
-    T::BenchmarkHelper::mint_asset(to, &bm_account, fund_amount.saturated_into())
-      .expect("Failed to fund BM account");
+    let caller_native_before = T::Currency::balance(&caller);
+    let caller_foreign_before = match from {
+      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &caller),
+      AssetKind::Native => 0,
+    };
+    let bm_foreign_before = match from {
+      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &bm_account),
+      AssetKind::Native => 0,
+    };
+    let expected_fee = Pallet::<T>::calculate_router_fee(amount_in);
 
     #[extrinsic_call]
     swap(
-      RawOrigin::Signed(caller),
+      RawOrigin::Signed(caller.clone()),
       from,
       to,
       amount_in,
       min_amount_out,
       recipient,
       deadline,
+    );
+
+    let caller_native_after = T::Currency::balance(&caller);
+    let caller_foreign_after = match from {
+      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &caller),
+      AssetKind::Native => 0,
+    };
+    let bm_foreign_after = match from {
+      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &bm_account),
+      AssetKind::Native => 0,
+    };
+    assert!(caller_native_after > caller_native_before);
+    assert_eq!(
+      caller_foreign_before.saturating_sub(caller_foreign_after),
+      amount_in
+    );
+    assert_eq!(
+      bm_foreign_after.saturating_sub(bm_foreign_before),
+      expected_fee
     );
   }
 

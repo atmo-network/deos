@@ -146,8 +146,11 @@ pub mod pallet {
       PalletId,
       traits::{
         Currency, EnsureOrigin,
-        fungibles::{Inspect, Mutate},
+        fungible::Inspect as NativeInspect,
+        fungibles::{Inspect as FungiblesInspect, Mutate},
+        tokens::{Fortitude, Preservation},
       },
+      transactional,
     },
     sp_runtime::traits::AccountIdConversion,
   };
@@ -156,10 +159,10 @@ pub mod pallet {
   #[pallet::config]
   pub trait Config: frame_system::Config {
     /// Native currency interface for native token transfers
-    type Currency: Currency<Self::AccountId>;
+    type Currency: Currency<Self::AccountId> + NativeInspect<Self::AccountId, Balance = Balance>;
 
     /// Asset management interface
-    type Assets: Inspect<Self::AccountId, AssetId = u32, Balance = Balance>
+    type Assets: FungiblesInspect<Self::AccountId, AssetId = u32, Balance = Balance>
       + Mutate<Self::AccountId>;
 
     /// TMC pallet interface
@@ -319,6 +322,8 @@ pub mod pallet {
     DeadlinePassed,
     /// Fee processing failed
     FeeRoutingFailed,
+    /// Account cannot pay the full swap input under the selected preservation policy
+    InsufficientInputBalance,
     /// Price deviation exceeds maximum allowed
     PriceDeviationExceeded,
     /// Invalid price oracle data
@@ -422,32 +427,37 @@ pub mod pallet {
       )
     }
 
-    /// Execute optimal route selection with advanced routing
-    fn execute_optimal_route(
-      who: &T::AccountId,
+    /// Plan the optimal route and validate its protection bounds before execution
+    fn prepare_optimal_route(
       from: AssetKind,
       to: AssetKind,
       amount_in: Balance,
       min_amount_out: Balance,
-      recipient: &T::AccountId,
-      keep_alive: bool,
-    ) -> Result<(Balance, RouteMechanismKind), DispatchError> {
-      // Find optimal route using advanced selection
+    ) -> Result<RouteComparison, Error<T>> {
       let route_comparison =
         Self::find_optimal_route(from, to, amount_in).ok_or(Error::<T>::NoRouteFound)?;
-      // Validate price protection for the route
       Self::validate_price_protection(
         &route_comparison.path,
         amount_in,
         min_amount_out,
         route_comparison.expected_output,
       )?;
+      Ok(route_comparison)
+    }
+
+    /// Execute a route that was already selected and validated
+    fn execute_prepared_route(
+      who: &T::AccountId,
+      to: AssetKind,
+      amount_in: Balance,
+      min_amount_out: Balance,
+      recipient: &T::AccountId,
+      keep_alive: bool,
+      route_comparison: RouteComparison,
+    ) -> Result<(Balance, RouteMechanismKind), DispatchError> {
       let mechanism_kind = RouteMechanismKind::from(&route_comparison.mechanism);
-      // Execute the selected route
       let amount_out = match route_comparison.mechanism {
         RouteMechanism::DirectMint { foreign_asset } => {
-          // TMC Mints Native Token (to).
-          // foreign_asset is the Collateral (from).
           T::TmcPallet::mint_with_distribution(who, to, foreign_asset, amount_in)?
         }
         _ => Self::execute_direct_swap(
@@ -459,7 +469,6 @@ pub mod pallet {
           keep_alive,
         )?,
       };
-
       Ok((amount_out, mechanism_kind))
     }
 
@@ -518,6 +527,27 @@ pub mod pallet {
       Ok(())
     }
 
+    fn ensure_can_debit_input(
+      who: &T::AccountId,
+      asset: AssetKind,
+      amount: Balance,
+      keep_alive: bool,
+    ) -> Result<(), Error<T>> {
+      let preservation = if keep_alive {
+        Preservation::Protect
+      } else {
+        Preservation::Expendable
+      };
+      let reducible = match asset {
+        AssetKind::Native => T::Currency::reducible_balance(who, preservation, Fortitude::Polite),
+        AssetKind::Local(id) | AssetKind::Foreign(id) => {
+          T::Assets::reducible_balance(id, who, preservation, Fortitude::Polite)
+        }
+      };
+      ensure!(reducible >= amount, Error::<T>::InsufficientInputBalance);
+      Ok(())
+    }
+
     /// Collect router fee with advanced accumulated balance processing
     fn collect_router_fee(
       fee_asset: AssetKind,
@@ -527,11 +557,9 @@ pub mod pallet {
       if fee_amount == 0 {
         return Ok(());
       }
-      // Anti-self-taxation: system operations are fee-free
       if Self::is_fee_exempt(who) {
         return Ok(());
       }
-      // Direct one-hop transfer to burning manager account
       T::FeeAdapter::route_fee(who, fee_asset, fee_amount)
         .map_err(|_| Error::<T>::FeeRoutingFailed)?;
       Self::deposit_event(Event::<T>::FeeCollected {
@@ -549,7 +577,8 @@ pub mod pallet {
     }
 
     /// Public entry point for system-level swaps (BM, ZM, and other pallets).
-    /// Handles oracle updates, fee exemption for system accounts, optimal routing.
+    /// Handles fee exemption for system accounts, gross-input affordability, and optimal routing.
+    #[transactional]
     pub fn execute_swap_for(
       who: &T::AccountId,
       from: AssetKind,
@@ -560,30 +589,28 @@ pub mod pallet {
     ) -> Result<Balance, DispatchError> {
       ensure!(from != to, Error::<T>::IdenticalAssets);
       ensure!(amount_in > 0, Error::<T>::ZeroAmount);
-      // Update oracle using pre-swap pool reserves
-      Self::update_oracle_from_reserves(from, to)?;
       let system_account = Self::is_fee_exempt(who);
-      // Fee-exempt system accounts pay zero
       let fee = if system_account {
         0
       } else {
         Self::calculate_router_fee(amount_in)
       };
       let amount_after_fee = amount_in.saturating_sub(fee);
-      // System accounts can drain balances (ED-free); user accounts keep alive
       let keep_alive = !system_account;
-      // Execute swap on net amount
-      let (amount_out, mechanism) = Self::execute_optimal_route(
+      Self::ensure_can_debit_input(who, from, amount_in, keep_alive)?;
+      let route_comparison =
+        Self::prepare_optimal_route(from, to, amount_after_fee, min_amount_out)?;
+      Self::collect_router_fee(from, fee, who)?;
+      Self::update_oracle_from_reserves(from, to)?;
+      let (amount_out, mechanism) = Self::execute_prepared_route(
         who,
-        from,
         to,
         amount_after_fee,
         min_amount_out,
         recipient,
         keep_alive,
+        route_comparison,
       )?;
-      // Collect fee after successful swap
-      Self::collect_router_fee(from, fee, who)?;
       Self::deposit_event(Event::SwapExecuted {
         who: who.clone(),
         from,

@@ -513,6 +513,148 @@ mod tests {
   }
 
   #[test]
+  fn create_curve_rejects_unknown_token_or_collateral_assets() {
+    use crate::mock::{RuntimeOrigin, TokenMintingCurve, new_test_ext};
+    use crate::types::AssetKind;
+    use polkadot_sdk::frame_support::{assert_noop, assert_ok};
+    new_test_ext().execute_with(|| {
+      assert_noop!(
+        TokenMintingCurve::create_curve(
+          RuntimeOrigin::root(),
+          AssetKind::Local(999),
+          AssetKind::Native,
+          1_000_000_000u128,
+          1_000_000_000u128,
+        ),
+        crate::Error::<crate::mock::Test>::AssetDoesNotExist
+      );
+      assert_noop!(
+        TokenMintingCurve::create_curve(
+          RuntimeOrigin::root(),
+          AssetKind::Native,
+          AssetKind::Local(999),
+          1_000_000_000u128,
+          1_000_000_000u128,
+        ),
+        crate::Error::<crate::mock::Test>::AssetDoesNotExist
+      );
+      assert_ok!(TokenMintingCurve::create_curve(
+        RuntimeOrigin::root(),
+        AssetKind::Native,
+        AssetKind::Local(1),
+        1_000_000_000u128,
+        1_000_000_000u128,
+      ));
+      assert_noop!(
+        TokenMintingCurve::create_curve(
+          RuntimeOrigin::root(),
+          AssetKind::Local(2),
+          AssetKind::Local(2),
+          1_000_000_000u128,
+          1_000_000_000u128,
+        ),
+        crate::Error::<crate::mock::Test>::InvalidParameters
+      );
+    });
+  }
+
+  #[test]
+  fn forced_user_mint_failure_rolls_back_local_collateral_transfer() {
+    use crate::mock::{
+      Assets, Balances, ForcedMintFailure, RuntimeOrigin, Test, TokenMintingCurve, new_test_ext,
+      set_forced_mint_failure,
+    };
+    use crate::types::AssetKind;
+    use polkadot_sdk::frame_support::{
+      assert_noop, assert_ok,
+      traits::{fungible::Inspect as FungibleInspect, fungibles::Mutate as FungiblesMutate},
+    };
+    new_test_ext().execute_with(|| {
+      let user = 10u64;
+      let output = 888u64;
+      let foreign_amount = 25_000u128;
+      assert_ok!(Assets::mint_into(1, &user, foreign_amount));
+      assert_ok!(TokenMintingCurve::create_curve(
+        RuntimeOrigin::root(),
+        AssetKind::Native,
+        AssetKind::Local(1),
+        primitives::ecosystem::params::PRECISION,
+        0u128,
+      ));
+      let user_collateral_before = Assets::balance(1, user);
+      let output_collateral_before = Assets::balance(1, output);
+      let user_native_before = Balances::balance(&user);
+      let output_native_before = Balances::balance(&output);
+      set_forced_mint_failure(Some(ForcedMintFailure::User));
+      assert_noop!(
+        TokenMintingCurve::mint_with_distribution(
+          &user,
+          AssetKind::Native,
+          AssetKind::Local(1),
+          foreign_amount,
+        ),
+        polkadot_sdk::sp_runtime::DispatchError::Other("Forced user mint failure")
+      );
+      set_forced_mint_failure(None);
+      assert_eq!(Assets::balance(1, user), user_collateral_before);
+      assert_eq!(Assets::balance(1, output), output_collateral_before);
+      assert_eq!(Balances::balance(&user), user_native_before);
+      assert_eq!(Balances::balance(&output), output_native_before);
+      assert_eq!(crate::TotalNativeMinted::<Test>::get(), 0);
+    });
+  }
+
+  #[test]
+  fn forced_sink_mint_failure_rolls_back_native_collateral_transfer() {
+    use crate::mock::{
+      Assets, Balances, ForcedMintFailure, RuntimeOrigin, TokenMintingCurve, new_test_ext,
+      set_forced_mint_failure,
+    };
+    use crate::types::AssetKind;
+    use polkadot_sdk::frame_support::{
+      assert_noop, assert_ok,
+      traits::{
+        fungible::Inspect as FungibleInspect, fungible::Mutate as FungibleMutate,
+        fungibles::Inspect as FungiblesInspect,
+      },
+    };
+    new_test_ext().execute_with(|| {
+      let user = 20u64;
+      let output = 888u64;
+      let foreign_amount = 50_000u128;
+      assert_ok!(Balances::mint_into(&user, foreign_amount));
+      assert_ok!(TokenMintingCurve::create_curve(
+        RuntimeOrigin::root(),
+        AssetKind::Local(2),
+        AssetKind::Native,
+        primitives::ecosystem::params::PRECISION,
+        0u128,
+      ));
+      let user_native_before = Balances::balance(&user);
+      let output_native_before = Balances::balance(&output);
+      let user_local_before = Assets::balance(2, user);
+      let output_local_before = Assets::balance(2, output);
+      let issuance_before = Assets::total_issuance(2);
+      set_forced_mint_failure(Some(ForcedMintFailure::Sink));
+      assert_noop!(
+        TokenMintingCurve::mint_with_distribution(
+          &user,
+          AssetKind::Local(2),
+          AssetKind::Native,
+          foreign_amount,
+        ),
+        polkadot_sdk::sp_runtime::DispatchError::Other("Forced sink mint failure")
+      );
+      set_forced_mint_failure(None);
+      assert_eq!(Balances::balance(&user), user_native_before);
+      assert_eq!(Balances::balance(&output), output_native_before);
+      assert_eq!(Assets::balance(2, user), user_local_before);
+      assert_eq!(Assets::balance(2, output), output_local_before);
+      assert_eq!(Assets::total_issuance(2), issuance_before);
+    });
+  }
+
+  #[test]
   fn total_native_burned_tracks_issuance_deficit_against_curve_baseline() {
     use crate::mock::{Assets, Balances, RuntimeOrigin, Test, TokenMintingCurve, new_test_ext};
     use crate::types::AssetKind;

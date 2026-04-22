@@ -64,6 +64,43 @@ impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
   }
 }
 
+#[cfg(feature = "runtime-benchmarks")]
+pub struct TmcBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_tmc::BenchmarkHelper<AccountId> for TmcBenchmarkHelper {
+  fn create_asset(asset_id: u32) -> polkadot_sdk::sp_runtime::DispatchResult {
+    if !<pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(asset_id) {
+      let _ = pallet_assets::Pallet::<Runtime>::force_create(
+        RuntimeOrigin::root(),
+        asset_id,
+        polkadot_sdk::sp_runtime::MultiAddress::Id(BurningManagerAccount::get()),
+        true,
+        1,
+      );
+    }
+    Ok(())
+  }
+
+  fn mint_native(to: &AccountId, amount: Balance) -> polkadot_sdk::sp_runtime::DispatchResult {
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        to, amount,
+      );
+    Ok(())
+  }
+
+  fn mint_local(
+    asset_id: u32,
+    to: &AccountId,
+    amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::fungibles::Mutate;
+    <pallet_assets::Pallet<Runtime> as Mutate<AccountId>>::mint_into(asset_id, to, amount)?;
+    Ok(())
+  }
+}
+
 impl pallet_tmc::pallet::Config for Runtime {
   type AdminOrigin = frame_system::EnsureRoot<AccountId>;
   type Assets = pallet_assets::Pallet<Runtime>;
@@ -77,5 +114,8 @@ impl pallet_tmc::pallet::Config for Runtime {
   type TreasuryAccount = ZapManagerAccount;
   type MintOutputResolver = TmctolMintOutput;
   type UserAllocationRatio = TmcUserAllocationRatio;
+  type MintDistributionHook = ();
   type WeightInfo = crate::weights::pallet_tmc::SubstrateWeight<Runtime>;
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = TmcBenchmarkHelper;
 }

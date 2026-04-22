@@ -7,13 +7,13 @@
 //! Do not rename this file to `deos_integration_tests`.
 
 use super::common::{
-  ALICE, ASSET_A, ASSET_B, add_liquidity, create_pool, get_pool_lp_asset, new_test_ext,
-  seeded_test_ext,
+  ALICE, ASSET_A, ASSET_B, add_liquidity, burning_manager_account, create_pool, get_pool_lp_asset,
+  new_test_ext, seeded_test_ext, zap_manager_account,
 };
-use crate::{AAA, Balances, Runtime, RuntimeOrigin, System};
+use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_aaa::{AmountResolution, DexOps, Event, ExecutionPlanOf, StepErrorPolicy, Task};
 use polkadot_sdk::frame_support::{
-  assert_ok,
+  assert_noop, assert_ok,
   traits::{Currency, Hooks, fungibles::Inspect as FungiblesInspect},
   weights::Weight,
 };
@@ -920,6 +920,141 @@ fn bucket_c_unwind_execution_plan_transfers_lp_components_to_treasury_c() {
 // --- BLDR Domain Integration Tests ---
 
 #[test]
+fn native_tmc_mint_routes_collateral_and_tokens_to_default_zap_manager_sink() {
+  seeded_test_ext().execute_with(|| {
+    let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let zap_manager = zap_manager_account();
+    assert_ok!(TokenMintingCurve::create_curve(
+      RuntimeOrigin::root(),
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      primitives::ecosystem::params::PRECISION,
+      0,
+    ));
+    let alice_native_before = Balances::free_balance(&ALICE);
+    let alice_foreign_before = crate::Assets::balance(ASSET_A, &ALICE);
+    let zap_native_before = Balances::free_balance(&zap_manager);
+    let zap_foreign_before = crate::Assets::balance(ASSET_A, &zap_manager);
+    let minted = TokenMintingCurve::mint_with_distribution(
+      &ALICE,
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      foreign_amount,
+    )
+    .expect("native TMC mint must succeed");
+    let user_allocation = primitives::ecosystem::params::TMC_USER_ALLOCATION.mul_floor(minted);
+    let zap_allocation = minted.saturating_sub(user_allocation);
+    assert_eq!(minted, foreign_amount);
+    assert_eq!(
+      Balances::free_balance(&ALICE),
+      alice_native_before + user_allocation
+    );
+    assert_eq!(
+      crate::Assets::balance(ASSET_A, &ALICE),
+      alice_foreign_before - foreign_amount
+    );
+    assert_eq!(
+      Balances::free_balance(&zap_manager),
+      zap_native_before + zap_allocation
+    );
+    assert_eq!(
+      crate::Assets::balance(ASSET_A, &zap_manager),
+      zap_foreign_before + foreign_amount
+    );
+  });
+}
+
+#[test]
+fn native_tmc_mint_rejects_wrong_collateral_without_touching_default_zap_manager_sink() {
+  seeded_test_ext().execute_with(|| {
+    let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let zap_manager = zap_manager_account();
+    assert_ok!(TokenMintingCurve::create_curve(
+      RuntimeOrigin::root(),
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      primitives::ecosystem::params::PRECISION,
+      0,
+    ));
+    let alice_native_before = Balances::free_balance(&ALICE);
+    let alice_wrong_foreign_before = crate::Assets::balance(ASSET_B, &ALICE);
+    let zap_native_before = Balances::free_balance(&zap_manager);
+    let zap_wrong_foreign_before = crate::Assets::balance(ASSET_B, &zap_manager);
+    System::reset_events();
+    assert_noop!(
+      TokenMintingCurve::mint_with_distribution(
+        &ALICE,
+        AssetKind::Native,
+        AssetKind::Local(ASSET_B),
+        foreign_amount,
+      ),
+      pallet_tmc::Error::<Runtime>::InvalidForeignAsset
+    );
+    assert_eq!(Balances::free_balance(&ALICE), alice_native_before);
+    assert_eq!(
+      crate::Assets::balance(ASSET_B, &ALICE),
+      alice_wrong_foreign_before
+    );
+    assert_eq!(Balances::free_balance(&zap_manager), zap_native_before);
+    assert_eq!(
+      crate::Assets::balance(ASSET_B, &zap_manager),
+      zap_wrong_foreign_before
+    );
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::RuntimeEvent::TokenMintingCurve(_)) })
+    );
+  });
+}
+
+#[test]
+fn bldr_tmc_mint_rejects_wrong_collateral_without_touching_splitter_sink() {
+  use primitives::ecosystem::{aaa_ids, protocol_tokens};
+  seeded_test_ext().execute_with(|| {
+    let bldr_id = protocol_tokens::BLDR_ASSET_ID;
+    let bldr_asset = AssetKind::Local(bldr_id);
+    let wrong_collateral = AssetKind::Local(ASSET_A);
+    let splitter_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
+    let mint_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let alice_native_before = Balances::free_balance(&ALICE);
+    let alice_wrong_foreign_before = crate::Assets::balance(ASSET_A, &ALICE);
+    let splitter_native_before = Balances::free_balance(&splitter_sov);
+    let splitter_wrong_foreign_before = crate::Assets::balance(ASSET_A, &splitter_sov);
+    let splitter_bldr_before = crate::Assets::balance(bldr_id, &splitter_sov);
+    let alice_bldr_before = crate::Assets::balance(bldr_id, &ALICE);
+    System::reset_events();
+    assert_noop!(
+      TokenMintingCurve::mint_with_distribution(&ALICE, bldr_asset, wrong_collateral, mint_amount),
+      pallet_tmc::Error::<Runtime>::InvalidForeignAsset
+    );
+    assert_eq!(Balances::free_balance(&ALICE), alice_native_before);
+    assert_eq!(
+      crate::Assets::balance(ASSET_A, &ALICE),
+      alice_wrong_foreign_before
+    );
+    assert_eq!(
+      Balances::free_balance(&splitter_sov),
+      splitter_native_before
+    );
+    assert_eq!(
+      crate::Assets::balance(ASSET_A, &splitter_sov),
+      splitter_wrong_foreign_before
+    );
+    assert_eq!(
+      crate::Assets::balance(bldr_id, &splitter_sov),
+      splitter_bldr_before
+    );
+    assert_eq!(crate::Assets::balance(bldr_id, &ALICE), alice_bldr_before);
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::RuntimeEvent::TokenMintingCurve(_)) })
+    );
+  });
+}
+
+#[test]
 fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
   use primitives::ecosystem::{aaa_ids, protocol_tokens};
   seeded_test_ext().execute_with(|| {
@@ -1387,6 +1522,14 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
     ));
     // Swap via Router — should select TMC (better price at low supply)
     let mint_amount = precision;
+    let quote =
+      crate::AxialRouter::quote_exact_input(ALICE, AssetKind::Native, bldr_asset, mint_amount)
+        .expect("direct-mint quote must exist");
+    let splitter_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
+    let burning_manager_before = Balances::free_balance(&burning_manager_account());
+    let splitter_native_before = Balances::free_balance(&splitter_sov);
+    let splitter_bldr_before =
+      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let alice_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
     assert_ok!(crate::AxialRouter::swap(
@@ -1400,6 +1543,9 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
     ));
     let alice_bldr_after =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
+    let splitter_native_after = Balances::free_balance(&splitter_sov);
+    let splitter_bldr_after =
+      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let received = alice_bldr_after.saturating_sub(alice_bldr_before);
     assert!(received > 0, "Must receive BLDR tokens");
     // TMC at low supply gives ~33% of collateral as user share
@@ -1432,6 +1578,21 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       used_mechanism,
       pallet_axial_router::RouteMechanismKind::DirectMint,
       "Router must select TMC (DirectMint) when TMC price is better than XYK"
+    );
+    assert_eq!(
+      Balances::free_balance(&burning_manager_account()) - burning_manager_before,
+      quote.router_fee,
+      "Router direct-mint path must route the native fee to the burning manager"
+    );
+    assert_eq!(
+      splitter_native_after - splitter_native_before,
+      quote.amount_after_fee,
+      "BLDR splitter must receive the post-fee native collateral"
+    );
+    assert_eq!(
+      received + splitter_bldr_after.saturating_sub(splitter_bldr_before),
+      quote.amount_out,
+      "User + splitter BLDR deltas must equal the router direct-mint output"
     );
   });
 }

@@ -51,10 +51,11 @@ graph TD
 
 ### Step-by-Step Execution
 
-`1. Curve Lookup`
+`1. Curve Lookup + Preflight`
 
 - `get_curve(asset_kind)` retrieves the stored `CurveConfig`
 - Contains: `initial_price`, `slope_parameter`, `initial_issuance`, `native_asset_id`, `foreign_asset_id`
+- Mint execution now fails closed: the pallet pre-validates the configured collateral match and requires every non-native asset in the pair to exist before any collateral transfer begins
 
 `2. Effective Supply Calculation`
 
@@ -73,12 +74,14 @@ graph TD
 - Where: `K = precision`, `m = slope`, `P = current_price`, `Cost = user_payment`
 - Uses U256 internally to prevent intermediate overflow
 
-`5. Distribution Split`
+`5. Transactional Distribution Split`
 
-- Mint total `ΔS` tokens
+- Transfer collateral to the resolved sink account
+- Mint total `ΔS` tokens inside one transactional flow
 - Transfer 1/3 to user (`UserAllocationRatio` = 1/3)
-- Transfer 2/3 to Zap Manager account
-- Emit `ZapAllocationDistributed` event
+- Transfer 2/3 to Zap Manager / splitter sink account
+- If either mint leg fails, the collateral transfer rolls back too
+- Emit `ZapAllocationDistributed` event only after the whole distribution succeeds
 
 `6. Post-Mint Integration`
 

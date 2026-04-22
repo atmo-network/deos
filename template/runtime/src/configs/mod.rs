@@ -8,11 +8,6 @@ pub mod staking_config;
 mod tmc_config;
 mod xcm_config;
 
-use polkadot_sdk::{staging_parachain_info as parachain_info, staging_xcm as xcm, *};
-#[cfg(not(feature = "runtime-benchmarks"))]
-use polkadot_sdk::{staging_xcm_builder as xcm_builder, staging_xcm_executor as xcm_executor};
-
-// Substrate and Polkadot dependencies
 use cumulus_pallet_parachain_system::RelayNumberMonotonicallyIncreases;
 use cumulus_primitives_core::{AggregateMessageOrigin, ParaId};
 use frame_support::{
@@ -33,11 +28,16 @@ use parachains_common::message_queue::{NarrowOriginToSibling, ParaIdToSibling};
 use polkadot_runtime_common::{
   BlockHashCount, SlowAdjustingFeeUpdate, xcm_sender::ExponentialPrice,
 };
+use polkadot_sdk::{staging_parachain_info as parachain_info, staging_xcm as xcm, *};
+#[cfg(not(feature = "runtime-benchmarks"))]
+use polkadot_sdk::{staging_xcm_builder as xcm_builder, staging_xcm_executor as xcm_executor};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::Perbill;
 use sp_staking::SessionIndex;
-use sp_std::vec::Vec;
+use sp_std::{collections::btree_map::BTreeMap, vec::Vec};
 use sp_version::RuntimeVersion;
+#[cfg(test)]
+use std::cell::Cell;
 use xcm::latest::prelude::{AssetId, BodyId};
 
 // Local module imports
@@ -284,7 +284,60 @@ parameter_types! {
     pub const Offset: u32 = 0;
 }
 
+#[cfg(test)]
+std::thread_local! {
+  static RANKING_BACKING_LOOKUP_COUNT: Cell<u32> = const { Cell::new(0) };
+}
+
 pub struct DelegationWeightedCollatorSessionManager;
+
+impl DelegationWeightedCollatorSessionManager {
+  #[cfg(test)]
+  pub(crate) fn reset_ranking_backing_lookup_probe() {
+    RANKING_BACKING_LOOKUP_COUNT.with(|count| count.set(0));
+  }
+
+  #[cfg(test)]
+  pub(crate) fn ranking_backing_lookup_probe_count() -> u32 {
+    RANKING_BACKING_LOOKUP_COUNT.with(Cell::get)
+  }
+
+  #[cfg(test)]
+  fn note_ranking_backing_lookup() {
+    RANKING_BACKING_LOOKUP_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+  }
+
+  #[cfg(not(test))]
+  fn note_ranking_backing_lookup() {}
+
+  pub(crate) fn rank_candidates(
+    mut candidates: Vec<polkadot_sdk::pallet_collator_selection::CandidateInfo<AccountId, Balance>>,
+  ) -> Vec<polkadot_sdk::pallet_collator_selection::CandidateInfo<AccountId, Balance>> {
+    let mut delegated_backing_by_candidate = BTreeMap::new();
+    for candidate in &candidates {
+      Self::note_ranking_backing_lookup();
+      delegated_backing_by_candidate.insert(
+        candidate.who.clone(),
+        crate::Staking::cached_delegated_native_backing(&candidate.who),
+      );
+    }
+    candidates.sort_by(|left, right| {
+      let left_backing = delegated_backing_by_candidate
+        .get(&left.who)
+        .copied()
+        .unwrap_or_default();
+      let right_backing = delegated_backing_by_candidate
+        .get(&right.who)
+        .copied()
+        .unwrap_or_default();
+      right_backing
+        .cmp(&left_backing)
+        .then_with(|| right.deposit.cmp(&left.deposit))
+        .then_with(|| left.who.cmp(&right.who))
+    });
+    candidates
+  }
+}
 
 impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSessionManager {
   fn new_session(index: SessionIndex) -> Option<Vec<AccountId>> {
@@ -312,16 +365,9 @@ impl pallet_session::SessionManager<AccountId> for DelegationWeightedCollatorSes
     let removed = candidates_len_before.saturating_sub(active_candidates_count);
     let desired_candidates =
       polkadot_sdk::pallet_collator_selection::DesiredCandidates::<Runtime>::get() as usize;
-    let mut ranked_candidates =
-      polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get().into_inner();
-    ranked_candidates.sort_by(|left, right| {
-      let left_backing = crate::Staking::delegated_native_backing(&left.who);
-      let right_backing = crate::Staking::delegated_native_backing(&right.who);
-      right_backing
-        .cmp(&left_backing)
-        .then_with(|| right.deposit.cmp(&left.deposit))
-        .then_with(|| left.who.cmp(&right.who))
-    });
+    let ranked_candidates = Self::rank_candidates(
+      polkadot_sdk::pallet_collator_selection::CandidateList::<Runtime>::get().into_inner(),
+    );
     collators.extend(
       ranked_candidates
         .into_iter()

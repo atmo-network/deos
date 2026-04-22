@@ -31,6 +31,7 @@ use polkadot_sdk::{
       fungibles::{Inspect, Mutate},
       tokens::Preservation,
     },
+    transactional,
   },
   sp_core::U256,
   sp_runtime::{
@@ -63,6 +64,33 @@ impl DomainGlueHook for () {
 /// provisioning) is the sink's responsibility.
 pub trait MintOutputResolver<AccountId> {
   fn output_account(minted_asset: AssetKind) -> AccountId;
+}
+
+pub trait MintDistributionHook<AccountId> {
+  fn before_user_mint(
+    _minted_asset: AssetKind,
+    _account: &AccountId,
+    _amount: Balance,
+  ) -> Result<(), DispatchError> {
+    Ok(())
+  }
+
+  fn before_sink_mint(
+    _minted_asset: AssetKind,
+    _account: &AccountId,
+    _amount: Balance,
+  ) -> Result<(), DispatchError> {
+    Ok(())
+  }
+}
+
+impl<AccountId> MintDistributionHook<AccountId> for () {}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub trait BenchmarkHelper<AccountId> {
+  fn create_asset(asset_id: u32) -> DispatchResult;
+  fn mint_native(to: &AccountId, amount: Balance) -> DispatchResult;
+  fn mint_local(asset_id: u32, to: &AccountId, amount: Balance) -> DispatchResult;
 }
 
 #[frame::pallet]
@@ -110,8 +138,15 @@ pub mod pallet {
     /// Runtime glue hook executed on curve creation
     type DomainGlueHook: DomainGlueHook;
 
+    /// Optional hook for deterministic mint-failure injection in tests
+    type MintDistributionHook: MintDistributionHook<Self::AccountId>;
+
     /// Weight information
     type WeightInfo: WeightInfo;
+
+    /// Helper for benchmarking
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper: BenchmarkHelper<Self::AccountId>;
   }
 
   #[pallet::pallet]
@@ -194,6 +229,8 @@ pub mod pallet {
     ArithmeticOverflow,
     /// Invalid parameters provided
     InvalidParameters,
+    /// Asset kind does not exist in the live asset registry
+    AssetDoesNotExist,
     /// Foreign asset does not match the curve collateral configuration
     InvalidForeignAsset,
     /// Zero amount not allowed
@@ -227,6 +264,7 @@ pub mod pallet {
     /// Create a new bonding curve for a token
     #[pallet::call_index(0)]
     #[pallet::weight(T::WeightInfo::create_curve())]
+    #[transactional]
     pub fn create_curve(
       origin: OriginFor<T>,
       token_asset: AssetKind,
@@ -235,16 +273,17 @@ pub mod pallet {
       slope: Slope,
     ) -> DispatchResult {
       T::AdminOrigin::ensure_origin(origin)?;
-      // Ensure curve doesn't already exist
       ensure!(
         !TokenCurves::<T>::contains_key(token_asset),
         Error::<T>::CurveAlreadyExists
       );
-      // Validate parameters
       ensure!(
         initial_price > Balance::from(0u32) || slope > Balance::from(0u32),
         Error::<T>::InvalidParameters
       );
+      ensure!(token_asset != foreign_asset, Error::<T>::InvalidParameters);
+      Self::ensure_asset_exists(token_asset)?;
+      Self::ensure_asset_exists(foreign_asset)?;
       T::DomainGlueHook::on_curve_created(token_asset, foreign_asset)?;
       let initial_issuance: Balance = match token_asset {
         AssetKind::Native => T::Currency::total_issuance().unique_saturated_into(),
@@ -373,7 +412,18 @@ pub mod pallet {
       Ok(result_u256.as_u128().unique_saturated_into())
     }
 
+    fn ensure_asset_exists(asset: AssetKind) -> Result<(), DispatchError> {
+      match asset {
+        AssetKind::Native => Ok(()),
+        AssetKind::Local(id) | AssetKind::Foreign(id) => {
+          ensure!(T::Assets::asset_exists(id), Error::<T>::AssetDoesNotExist);
+          Ok(())
+        }
+      }
+    }
+
     /// Execute mint through bonding curve with user/TOL distribution
+    #[transactional]
     pub fn mint_with_distribution(
       who: &T::AccountId,
       token_asset: AssetKind,
@@ -386,9 +436,10 @@ pub mod pallet {
         curve.foreign_asset == foreign_asset,
         Error::<T>::InvalidForeignAsset
       );
+      Self::ensure_asset_exists(token_asset)?;
+      Self::ensure_asset_exists(foreign_asset)?;
       let mint_amount = Self::calculate_user_receives(token_asset, foreign_amount)?;
       let output = T::MintOutputResolver::output_account(token_asset);
-      // Transfer collateral from user to output sink
       match foreign_asset {
         AssetKind::Native => {
           T::Currency::transfer(who, &output, foreign_amount, Preservation::Expendable)?;
@@ -399,15 +450,18 @@ pub mod pallet {
       }
       let user_allocation = T::UserAllocationRatio::get().mul_floor(mint_amount);
       let zap_allocation = mint_amount.saturating_sub(user_allocation);
-      // Mint tokens: user share to buyer, zap share to output sink
       match token_asset {
         AssetKind::Native => {
+          T::MintDistributionHook::before_user_mint(token_asset, who, user_allocation)?;
           T::Currency::mint_into(who, user_allocation)?;
+          T::MintDistributionHook::before_sink_mint(token_asset, &output, zap_allocation)?;
           T::Currency::mint_into(&output, zap_allocation)?;
           TotalNativeMinted::<T>::mutate(|acc| *acc = acc.saturating_add(mint_amount));
         }
         AssetKind::Local(id) | AssetKind::Foreign(id) => {
+          T::MintDistributionHook::before_user_mint(token_asset, who, user_allocation)?;
           T::Assets::mint_into(id, who, user_allocation)?;
+          T::MintDistributionHook::before_sink_mint(token_asset, &output, zap_allocation)?;
           T::Assets::mint_into(id, &output, zap_allocation)?;
         }
       }

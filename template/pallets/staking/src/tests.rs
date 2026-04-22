@@ -1,4 +1,8 @@
-use crate::{Error, Event, mock::*};
+use crate::{
+  CachedNativeDelegation, CachedNativeDelegations, CachedOperatorNativeShares, Error, Event,
+  NativeBindings, NativeDelegationCacheDirty, NativeDelegationRepairCursor,
+  NativeDelegationRepairPhase, NativeDelegationRepairPhaseState, PoolState, Pools, mock::*,
+};
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
   traits::{
@@ -264,6 +268,18 @@ fn register_asset_creates_empty_pool() {
     assert!(<Assets as Inspect<AccountId>>::asset_exists(
       TYPE_STAKED_LOCAL
     ));
+    assert_eq!(
+      Staking::base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
+      Some(2)
+    );
+    assert_eq!(
+      Staking::live_base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
+      Some(2)
+    );
+    assert_eq!(
+      Staking::reward_assets_for_governance_domain(2).into_inner(),
+      vec![2]
+    );
     assert_eq!(
       <Assets as MetadataInspect<AccountId>>::name(TYPE_STAKED_LOCAL),
       b"Staked Asset 2".to_vec()
@@ -756,10 +772,26 @@ fn initialize_staked_asset_backfills_legacy_pool_receipt_class() {
     assert!(!<Assets as Inspect<AccountId>>::asset_exists(
       TYPE_STAKED_LOCAL
     ));
+    assert_eq!(
+      Staking::base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
+      None
+    );
+    assert_eq!(
+      Staking::live_base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
+      None
+    );
     assert_ok!(Staking::initialize_staked_asset(RuntimeOrigin::root(), 2));
     assert!(<Assets as Inspect<AccountId>>::asset_exists(
       TYPE_STAKED_LOCAL
     ));
+    assert_eq!(
+      Staking::base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
+      Some(2)
+    );
+    assert_eq!(
+      Staking::live_base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
+      Some(2)
+    );
     assert_eq!(
       <Assets as MetadataInspect<AccountId>>::name(TYPE_STAKED_LOCAL),
       b"Staked Asset 2".to_vec()
@@ -1128,6 +1160,68 @@ fn clearing_native_binding_removes_operator_backing() {
 }
 
 #[test]
+fn dirty_native_delegation_cache_repairs_across_multiple_on_idle_passes() {
+  const TYPE_STAKED: AssetId = 0x5000_0000;
+  const LIVE_OPERATOR: AccountId = 99;
+  const STALE_OPERATOR: AccountId = 98;
+  const ACCOUNTS: AccountId = 130;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    Pools::<Test>::insert(
+      1,
+      PoolState {
+        total_shares: ACCOUNTS as Balance,
+        accounted_balance: ACCOUNTS as Balance,
+        active_staker_count: 0,
+      },
+    );
+    CachedOperatorNativeShares::<Test>::insert(STALE_OPERATOR, ACCOUNTS as Balance);
+    for account in 1..=ACCOUNTS {
+      assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
+        TYPE_STAKED,
+        &account,
+        1
+      ));
+      NativeBindings::<Test>::insert(account, LIVE_OPERATOR);
+      CachedNativeDelegations::<Test>::insert(
+        account,
+        CachedNativeDelegation {
+          operator: STALE_OPERATOR,
+          shares: 1,
+        },
+      );
+    }
+    NativeDelegationCacheDirty::<Test>::put(true);
+    NativeDelegationRepairPhaseState::<Test>::put(NativeDelegationRepairPhase::ClearingCache);
+    NativeDelegationRepairCursor::<Test>::kill();
+    System::reset_events();
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert!(NativeDelegationCacheDirty::<Test>::get());
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert!(NativeDelegationCacheDirty::<Test>::get());
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert!(!NativeDelegationCacheDirty::<Test>::get());
+    assert_eq!(CachedOperatorNativeShares::<Test>::get(STALE_OPERATOR), 0);
+    assert_eq!(
+      Staking::cached_delegated_native_backing(&LIVE_OPERATOR),
+      ACCOUNTS as Balance
+    );
+  });
+}
+
+#[test]
+fn clearing_binding_updates_cached_native_backing_without_waiting_for_on_idle() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
+    assert_ok!(Staking::clear_native_binding(RuntimeOrigin::signed(1)));
+    assert_eq!(Staking::cached_delegated_native_backing(&99), 0);
+  });
+}
+
+#[test]
 fn delegated_native_backing_follows_live_receipt_balance_after_transfer() {
   const TYPE_STAKED: AssetId = 0x5000_0000;
   new_test_ext().execute_with(|| {
@@ -1142,6 +1236,84 @@ fn delegated_native_backing_follows_live_receipt_balance_after_transfer() {
       polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
     ));
     assert_eq!(Staking::delegated_native_backing(&99), 70);
+  });
+}
+
+#[test]
+fn cached_native_backing_follows_transfer_after_on_idle() {
+  const TYPE_STAKED: AssetId = 0x5000_0000;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
+    System::reset_events();
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      TYPE_STAKED,
+      &1,
+      &2,
+      30,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::cached_delegated_native_backing(&99), 70);
+  });
+}
+
+#[test]
+fn dirty_native_delegation_cache_repairs_stale_entries_over_on_idle() {
+  const TYPE_STAKED: AssetId = 0x5000_0000;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      TYPE_STAKED,
+      &1,
+      &2,
+      100,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
+    ));
+    NativeBindings::<Test>::remove(1);
+    NativeBindings::<Test>::insert(2, 99);
+    NativeDelegationCacheDirty::<Test>::put(true);
+    NativeDelegationRepairPhaseState::<Test>::put(NativeDelegationRepairPhase::ClearingCache);
+    NativeDelegationRepairCursor::<Test>::kill();
+    System::reset_events();
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert!(!NativeDelegationCacheDirty::<Test>::get());
+    assert!(CachedNativeDelegations::<Test>::get(&1).is_none());
+    assert_eq!(
+      CachedNativeDelegations::<Test>::get(&2).map(|cached| cached.operator),
+      Some(99)
+    );
+    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
+  });
+}
+
+#[test]
+fn zero_native_exposure_retires_stale_binding_after_on_idle() {
+  const TYPE_STAKED: AssetId = 0x5000_0000;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::native_binding(1), Some(99));
+    System::reset_events();
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      TYPE_STAKED,
+      &1,
+      &2,
+      100,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::native_binding(1), None);
+    assert_eq!(Staking::delegated_native_stake_value(&1), None);
+    System::assert_has_event(RuntimeEvent::Staking(Event::NativeBindingCleared {
+      account: 1,
+    }));
   });
 }
 

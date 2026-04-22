@@ -1,7 +1,7 @@
 use crate::{Error, Event, RouteMechanismKind, mock::*, types::*};
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
-  traits::{Get, fungibles::Mutate},
+  traits::{Currency, Get, fungibles::Mutate},
 };
 use polkadot_sdk::sp_runtime::Perbill;
 use primitives::ecosystem::params::PRECISION;
@@ -339,16 +339,177 @@ fn fee_routing_adapter_test() {
     let user = 1u64;
     let asset = AssetKind::Local(1);
     let amount = 1000u128;
-    // Call route_fee via adapter (MockFeeAdapter)
     assert_ok!(<Test as crate::Config>::FeeAdapter::route_fee(
       &user, asset, amount
     ));
     let fees = get_collected_fees();
     assert_eq!(fees.len(), 1);
     assert_eq!(fees[0], (user, asset, amount));
-    // Check balances (Mock adapter transfers to 123)
     let balance = Assets::balance(1, 123);
     assert_eq!(balance, 1000);
+  });
+}
+
+#[test]
+fn native_input_swap_rejects_gross_debit_that_breaks_keep_alive() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 777u64;
+    let amount_in = 100 * PRECISION;
+    let target = AssetKind::Local(2);
+    set_pool(
+      AssetKind::Native,
+      target,
+      10_000 * PRECISION,
+      10_000 * PRECISION,
+    );
+    let _ = Balances::deposit_creating(&user, amount_in);
+    let pool_before = get_pool(AssetKind::Native, target).expect("pool must exist");
+    System::reset_events();
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        AssetKind::Native,
+        target,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      ),
+      Error::<Test>::InsufficientInputBalance
+    );
+    assert_eq!(Balances::free_balance(user), amount_in);
+    assert_eq!(Assets::balance(2, user), 0);
+    assert_eq!(get_pool(AssetKind::Native, target), Some(pool_before));
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+    );
+  });
+}
+
+#[test]
+fn forced_fee_failure_skips_direct_xyk_route_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_pool(from, to, 10_000 * PRECISION, 10_000 * PRECISION);
+    let user_from_before = Assets::balance(2, user);
+    let user_to_before = Balances::free_balance(user);
+    let burn_before = Assets::balance(2, 123);
+    let pool_before = get_pool(from, to).expect("pool must exist");
+    set_force_fee_failure(true);
+    System::reset_events();
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX
+      ),
+      Error::<Test>::FeeRoutingFailed
+    );
+    assert_eq!(Assets::balance(2, user), user_from_before);
+    assert_eq!(Balances::free_balance(user), user_to_before);
+    assert_eq!(Assets::balance(2, 123), burn_before);
+    assert_eq!(get_pool(from, to), Some(pool_before));
+    assert!(get_collected_fees().is_empty());
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+    );
+  });
+}
+
+#[test]
+fn forced_fee_failure_skips_direct_mint_route_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_tmc_curve(to, from, 2);
+    let user_from_before = Assets::balance(2, user);
+    let user_native_before = Balances::free_balance(user);
+    let zap_native_before = Balances::free_balance(888);
+    let burn_before = Assets::balance(2, 123);
+    set_force_fee_failure(true);
+    System::reset_events();
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX
+      ),
+      Error::<Test>::FeeRoutingFailed
+    );
+    assert_eq!(Assets::balance(2, user), user_from_before);
+    assert_eq!(Balances::free_balance(user), user_native_before);
+    assert_eq!(Balances::free_balance(888), zap_native_before);
+    assert_eq!(Assets::balance(2, 123), burn_before);
+    assert!(get_collected_fees().is_empty());
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+    );
+  });
+}
+
+#[test]
+fn forced_fee_failure_skips_multi_hop_route_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let dot = AssetKind::Local(2);
+    let usdc = AssetKind::Local(3);
+    let native = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_pool(dot, native, 10_000 * PRECISION, 10_000 * PRECISION);
+    set_pool(native, usdc, 10_000 * PRECISION, 10_000 * PRECISION);
+    let user_dot_before = Assets::balance(2, user);
+    let user_usdc_before = Assets::balance(3, user);
+    let burn_before = Assets::balance(2, 123);
+    let first_pool_before = get_pool(dot, native).expect("first pool must exist");
+    let second_pool_before = get_pool(native, usdc).expect("second pool must exist");
+    set_force_fee_failure(true);
+    System::reset_events();
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        dot,
+        usdc,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      ),
+      Error::<Test>::FeeRoutingFailed
+    );
+    assert_eq!(Assets::balance(2, user), user_dot_before);
+    assert_eq!(Assets::balance(3, user), user_usdc_before);
+    assert_eq!(Assets::balance(2, 123), burn_before);
+    assert_eq!(get_pool(dot, native), Some(first_pool_before));
+    assert_eq!(get_pool(native, usdc), Some(second_pool_before));
+    assert!(get_collected_fees().is_empty());
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+    );
   });
 }
 

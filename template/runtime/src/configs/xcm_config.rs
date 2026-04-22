@@ -362,7 +362,7 @@ impl xcm_executor::Config for XcmConfig {
   type PalletInstancesInfo = AllPalletsWithSystem;
   type ResponseHandler = PolkadotXcm;
   type RuntimeCall = RuntimeCall;
-  type SafeCallFilter = Everything;
+  type SafeCallFilter = Nothing;
   type SubscriptionService = PolkadotXcm;
   type Trader = UsingComponents<WeightToFee, RelayLocation, AccountId, Balances, ToAuthor<Runtime>>;
   type TransactionalProcessor = FrameTransactionalProcessor;
@@ -414,6 +414,15 @@ impl cumulus_pallet_xcm::Config for Runtime {
 #[cfg(test)]
 mod tests {
   use super::*;
+  use codec::Encode;
+  use polkadot_sdk::{
+    frame_support::{
+      assert_noop,
+      traits::{Contains, OriginTrait},
+    },
+    sp_runtime::DispatchError,
+    staging_xcm_executor::traits::{ConvertOrigin, Properties, ShouldExecute},
+  };
   use primitives::assets::{AssetInspector, TYPE_FOREIGN};
 
   #[test]
@@ -554,5 +563,258 @@ mod tests {
       !ForeignAssetsFromSibling::contains(&asset, &origin),
       "Asset from different parachain should be rejected"
     );
+  }
+
+  #[test]
+  fn test_xcm_origin_converter_maps_parent_to_relay_origin() {
+    let converted =
+      <XcmOriginToTransactDispatchOrigin as ConvertOrigin<RuntimeOrigin>>::convert_origin(
+        Location::parent(),
+        xcm::latest::OriginKind::Native,
+      )
+      .expect("parent origin should convert");
+    assert_eq!(
+      converted.into_caller().encode(),
+      RuntimeOrigin::from(cumulus_pallet_xcm::Origin::Relay)
+        .into_caller()
+        .encode()
+    );
+  }
+
+  #[test]
+  fn test_xcm_origin_converter_maps_sibling_to_sibling_origin() {
+    let converted =
+      <XcmOriginToTransactDispatchOrigin as ConvertOrigin<RuntimeOrigin>>::convert_origin(
+        Location::new(1, [Parachain(2000)]),
+        xcm::latest::OriginKind::Native,
+      )
+      .expect("sibling origin should convert");
+    assert_eq!(
+      converted.into_caller().encode(),
+      RuntimeOrigin::from(cumulus_pallet_xcm::Origin::SiblingParachain(2000u32.into()))
+        .into_caller()
+        .encode()
+    );
+  }
+
+  #[test]
+  fn test_xcm_origin_converter_maps_account_id32_to_signed_origin() {
+    let who = AccountId::new([7u8; 32]);
+    let converted =
+      <XcmOriginToTransactDispatchOrigin as ConvertOrigin<RuntimeOrigin>>::convert_origin(
+        Location::new(
+          0,
+          [AccountId32 {
+            network: None,
+            id: who.clone().into(),
+          }],
+        ),
+        xcm::latest::OriginKind::Native,
+      )
+      .expect("account id32 origin should convert");
+    assert_eq!(
+      converted.into_caller().encode(),
+      RuntimeOrigin::signed(who).into_caller().encode()
+    );
+  }
+
+  #[test]
+  fn test_xcm_origin_converter_maps_xcm_passthrough_origin() {
+    let location = Location::new(1, [Parachain(3000), PalletInstance(42)]);
+    let converted =
+      <XcmOriginToTransactDispatchOrigin as ConvertOrigin<RuntimeOrigin>>::convert_origin(
+        location.clone(),
+        xcm::latest::OriginKind::Xcm,
+      )
+      .expect("xcm passthrough origin should convert");
+    assert_eq!(
+      converted.into_caller().encode(),
+      RuntimeOrigin::from(pallet_xcm::Origin::Xcm(location))
+        .into_caller()
+        .encode()
+    );
+  }
+
+  #[test]
+  fn test_safe_call_filter_now_denies_representative_runtime_calls() {
+    let user_call = RuntimeCall::System(frame_system::Call::remark { remark: Vec::new() });
+    let admin_call =
+      RuntimeCall::Staking(pallet_staking::Call::register_staking_asset { asset_id: 1 });
+    let queue_control_call =
+      RuntimeCall::XcmpQueue(cumulus_pallet_xcmp_queue::Call::suspend_xcm_execution {});
+    assert!(
+      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
+        &user_call,
+      )
+    );
+    assert!(
+      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
+        &admin_call,
+      )
+    );
+    assert!(
+      !<<XcmConfig as xcm_executor::Config>::SafeCallFilter as Contains<RuntimeCall>>::contains(
+        &queue_control_call,
+      )
+    );
+  }
+
+  #[test]
+  fn test_barrier_allows_paid_execution_from_sibling() {
+    let sibling_origin = Location::new(1, [Parachain(2000)]);
+    let max_weight = Weight::from_parts(10, 10);
+    let mut message = Xcm::<RuntimeCall>(vec![
+      WithdrawAsset((Parent, 100).into()),
+      BuyExecution {
+        fees: (Parent, 100).into(),
+        weight_limit: Limited(max_weight),
+      },
+    ]);
+    let mut properties = Properties {
+      weight_credit: Weight::zero(),
+      message_id: None,
+    };
+    assert!(
+      Barrier::should_execute(
+        &sibling_origin,
+        message.inner_mut(),
+        max_weight,
+        &mut properties,
+      )
+      .is_ok()
+    );
+  }
+
+  #[test]
+  fn test_barrier_allows_explicit_unpaid_execution_from_parent() {
+    let max_weight = Weight::from_parts(10, 10);
+    let mut message = Xcm::<RuntimeCall>(vec![
+      UnpaidExecution {
+        weight_limit: Limited(max_weight),
+        check_origin: Some(Location::parent()),
+      },
+      ClearTopic,
+    ]);
+    let mut properties = Properties {
+      weight_credit: Weight::zero(),
+      message_id: None,
+    };
+    assert!(
+      Barrier::should_execute(
+        &Location::parent(),
+        message.inner_mut(),
+        max_weight,
+        &mut properties,
+      )
+      .is_ok()
+    );
+  }
+
+  #[test]
+  fn test_barrier_rejects_explicit_unpaid_execution_from_sibling() {
+    let sibling_origin = Location::new(1, [Parachain(2000)]);
+    let max_weight = Weight::from_parts(10, 10);
+    let mut message = Xcm::<RuntimeCall>(vec![
+      UnpaidExecution {
+        weight_limit: Limited(max_weight),
+        check_origin: Some(sibling_origin.clone()),
+      },
+      ClearTopic,
+    ]);
+    let mut properties = Properties {
+      weight_credit: Weight::zero(),
+      message_id: None,
+    };
+    assert!(
+      Barrier::should_execute(
+        &sibling_origin,
+        message.inner_mut(),
+        max_weight,
+        &mut properties,
+      )
+      .is_err()
+    );
+  }
+
+  #[test]
+  fn test_barrier_allows_explicit_unpaid_execution_from_parent_executive_plurality() {
+    let executive_origin = Location::new(
+      1,
+      [Plurality {
+        id: BodyId::Executive,
+        part: BodyPart::Voice,
+      }],
+    );
+    let max_weight = Weight::from_parts(10, 10);
+    let mut message = Xcm::<RuntimeCall>(vec![
+      UnpaidExecution {
+        weight_limit: Limited(max_weight),
+        check_origin: Some(executive_origin.clone()),
+      },
+      ClearTopic,
+    ]);
+    let mut properties = Properties {
+      weight_credit: Weight::zero(),
+      message_id: None,
+    };
+    assert!(
+      Barrier::should_execute(
+        &executive_origin,
+        message.inner_mut(),
+        max_weight,
+        &mut properties,
+      )
+      .is_ok()
+    );
+  }
+
+  #[test]
+  fn test_xcmp_queue_controller_rejects_relay_origin_without_root() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      assert_noop!(
+        cumulus_pallet_xcmp_queue::Pallet::<Runtime>::suspend_xcm_execution(RuntimeOrigin::from(
+          cumulus_pallet_xcm::Origin::Relay
+        ),),
+        DispatchError::BadOrigin
+      );
+    });
+  }
+
+  #[test]
+  fn test_xcmp_queue_controller_rejects_sibling_origin_without_root() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      assert_noop!(
+        cumulus_pallet_xcmp_queue::Pallet::<Runtime>::suspend_xcm_execution(RuntimeOrigin::from(
+          cumulus_pallet_xcm::Origin::SiblingParachain(2000u32.into())
+        ),),
+        DispatchError::BadOrigin
+      );
+    });
+  }
+
+  #[test]
+  fn test_xcmp_queue_controller_rejects_signed_origin_without_root() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      assert_noop!(
+        cumulus_pallet_xcmp_queue::Pallet::<Runtime>::suspend_xcm_execution(RuntimeOrigin::signed(
+          AccountId::new([9u8; 32])
+        ),),
+        DispatchError::BadOrigin
+      );
+    });
+  }
+
+  #[test]
+  fn test_xcmp_queue_controller_allows_root_origin() {
+    crate::tests::common::seeded_test_ext().execute_with(|| {
+      assert!(
+        cumulus_pallet_xcmp_queue::Pallet::<Runtime>::suspend_xcm_execution(RuntimeOrigin::root(),)
+          .is_ok()
+      );
+      assert!(
+        cumulus_pallet_xcmp_queue::Pallet::<Runtime>::resume_xcm_execution(RuntimeOrigin::root(),)
+          .is_ok()
+      );
+    });
   }
 }

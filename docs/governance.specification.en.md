@@ -548,7 +548,7 @@ Execution rules:
 
 1. The discrete winning scalar from Section 6.1 applies to the declared `base amount`
 2. `final payout = base amount * winning scalar`
-3. The funding source MUST be one of the domain's governance-declared executable treasury sources; payout MUST NOT be implicitly drawn from arbitrary protocol balances
+3. The funding source MUST be one of the domain's governance-declared executable treasury sources; payout MUST NOT be implicitly drawn from arbitrary protocol balances. On the current reference line, the tactical `$BLDR` domain declares exactly one executable treasury source: `BldrTreasury`
 4. The beneficiary is the explicit payload field, not automatically the proposer unless those identities are intentionally the same
 5. Invoice execution MUST be transactional: either the full payout executes, or no payout executes
 6. If the payload exceeds declared domain/payload caps or available spendable capacity at enactment, execution MUST fail explicitly rather than partially paying

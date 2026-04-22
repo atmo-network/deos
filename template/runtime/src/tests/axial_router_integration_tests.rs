@@ -11,11 +11,11 @@
 
 use super::common::{
   ALICE, ASSET_A, ASSET_B, ASSET_NATIVE, LIQUIDITY_AMOUNT, MIN_AMOUNT_OUT, MIN_LIQUIDITY,
-  SWAP_AMOUNT, add_liquidity, axial_router_account, ensure_asset_conversion_pool, seeded_test_ext,
-  setup_axial_router_infrastructure,
+  SWAP_AMOUNT, add_liquidity, axial_router_account, burning_manager_account,
+  ensure_asset_conversion_pool, seeded_test_ext, setup_axial_router_infrastructure,
 };
-use crate::{AccountId, Assets, AxialRouter, Balances, Runtime, RuntimeOrigin, System};
-use polkadot_sdk::frame_support::{assert_noop, assert_ok, traits::Currency};
+use crate::{Assets, AxialRouter, Balances, Runtime, RuntimeOrigin, System};
+use polkadot_sdk::frame_support::{assert_noop, assert_ok};
 use primitives::AssetKind;
 
 /// Setup test environment with pools and liquidity
@@ -27,21 +27,45 @@ fn setup_test_environment() -> Result<(), &'static str> {
 fn test_axial_router_basic_swap_functionality() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Test basic swap functionality - focus on API compatibility
-    // Execute swap through Axial Router (ASSET_A -> NATIVE)
-
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+      .expect("quote must exist for seeded direct pool");
+    let alice_asset_before = Assets::balance(ASSET_A, ALICE);
+    let alice_native_before = Balances::free_balance(ALICE);
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    System::reset_events();
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
+      from,
+      to,
       SWAP_AMOUNT,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify swap executed successfully (simplified testing environment)
-    // In production, balances would change, but in testing we verify API compatibility
-    // Axial Router basic swap functionality verified
+    assert_eq!(
+      Assets::balance(ASSET_A, ALICE),
+      alice_asset_before - SWAP_AMOUNT
+    );
+    assert_eq!(
+      Balances::free_balance(ALICE),
+      alice_native_before + quote.amount_out
+    );
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      burning_manager_before + quote.router_fee
+    );
+    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
+      pallet_axial_router::Event::SwapExecuted {
+        who: ALICE,
+        from,
+        to,
+        amount_in: SWAP_AMOUNT,
+        amount_out: quote.amount_out,
+        mechanism: quote.mechanism,
+      },
+    ));
   });
 }
 
@@ -49,20 +73,34 @@ fn test_axial_router_basic_swap_functionality() {
 fn test_axial_router_fee_processing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Execute swap to trigger fee collection (ASSET_A -> NATIVE)
-
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+      .expect("quote must exist for seeded direct pool");
+    let burning_manager = burning_manager_account();
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager.clone());
+    System::reset_events();
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
+      from,
+      to,
       SWAP_AMOUNT,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify fee processing infrastructure (simplified testing environment)
-    // In production, router would collect fees, but in testing we verify API compatibility
-    // Axial Router fee processing infrastructure verified
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager.clone()),
+      burning_manager_before + quote.router_fee
+    );
+    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
+      pallet_axial_router::Event::FeeCollected {
+        asset: from,
+        amount: quote.router_fee,
+        source: ALICE,
+        collector: burning_manager,
+      },
+    ));
   });
 }
 
@@ -70,26 +108,43 @@ fn test_axial_router_fee_processing() {
 fn test_axial_router_anti_self_taxation() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let existential_deposit = 1_000_000_000;
-    // Transfer native balance to router account using the proper method
-    // Deposit native tokens to router account for asset operations
-    let _ = <Balances as Currency<AccountId>>::deposit_creating(
-      &axial_router_account(),
-      existential_deposit * 10,
-    );
-    // Test that router account can perform operations without self-taxation
-    // This verifies the anti-self-taxation mechanism
+    let router = axial_router_account();
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let quote = AxialRouter::quote_exact_input(router.clone(), from, to, SWAP_AMOUNT)
+      .expect("router account should still receive a direct quote");
+    let router_asset_before = Assets::balance(ASSET_A, router.clone());
+    let router_native_before = Balances::free_balance(router.clone());
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    System::reset_events();
+    assert_eq!(quote.router_fee, 0);
     assert_ok!(AxialRouter::swap(
-      RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
+      RuntimeOrigin::signed(router.clone()),
+      from,
+      to,
       SWAP_AMOUNT,
       MIN_AMOUNT_OUT,
-      ALICE,
+      router.clone(),
       1000,
     ));
-    // Verify anti-self-taxation infrastructure
-    // Axial Router anti-self-taxation verified
+    assert_eq!(
+      Assets::balance(ASSET_A, router.clone()),
+      router_asset_before - SWAP_AMOUNT
+    );
+    assert_eq!(
+      Balances::free_balance(router.clone()),
+      router_native_before + quote.amount_out
+    );
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      burning_manager_before
+    );
+    assert!(System::events().iter().all(|record| {
+      !matches!(
+        &record.event,
+        crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected { .. })
+      )
+    }));
   });
 }
 
@@ -263,21 +318,25 @@ fn test_axial_router_error_handling() {
 fn test_axial_router_accumulated_balance_processing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Initialize EMA prices to avoid price deviation errors
-    // Use direct storage access to set initial EMA prices
-    // Execute single swap for accumulated balance processing test
+    let amount = SWAP_AMOUNT / 10;
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let quote = AxialRouter::quote_exact_input(ALICE, from, to, amount)
+      .expect("quote must exist for seeded direct pool");
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
-      SWAP_AMOUNT / 10,
+      from,
+      to,
+      amount,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Skip accumulated balance assertions in simplified testing environment
-    // Focus on accumulated balance processing infrastructure
-    // Axial Router accumulated balance processing verified
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      burning_manager_before + quote.router_fee
+    );
   });
 }
 
@@ -285,18 +344,34 @@ fn test_axial_router_accumulated_balance_processing() {
 fn test_axial_router_native_token_swaps() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Test native token swaps: ASSET_NATIVE -> ASSET_A (direct swap)
+    let from = AssetKind::Native;
+    let to = AssetKind::Local(ASSET_A);
+    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+      .expect("quote must exist for seeded direct pool");
+    let alice_native_before = Balances::free_balance(ALICE);
+    let alice_asset_before = Assets::balance(ASSET_A, ALICE);
+    let burning_manager_before = Balances::free_balance(burning_manager_account());
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Native,
-      AssetKind::Local(ASSET_A),
+      from,
+      to,
       SWAP_AMOUNT,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify native token swap infrastructure - in test environment, balances may not change
-    // Axial Router native token swaps verified
+    assert_eq!(
+      Balances::free_balance(ALICE),
+      alice_native_before - SWAP_AMOUNT
+    );
+    assert_eq!(
+      Assets::balance(ASSET_A, ALICE),
+      alice_asset_before + quote.amount_out
+    );
+    assert_eq!(
+      Balances::free_balance(burning_manager_account()),
+      burning_manager_before + quote.router_fee
+    );
   });
 }
 
@@ -304,23 +379,16 @@ fn test_axial_router_native_token_swaps() {
 fn test_axial_router_fee_calculation_accuracy() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Initialize EMA prices to avoid deviation errors
-    // Test fee calculation accuracy (0.5% router fee)
-    let _router_initial_balance = Assets::balance(ASSET_A, axial_router_account());
-    // Execute swap with known amount
-    assert_ok!(AxialRouter::swap(
-      RuntimeOrigin::signed(ALICE),
+    let expected_fee = AxialRouter::calculate_router_fee(SWAP_AMOUNT);
+    let quote = AxialRouter::quote_exact_input(
+      ALICE,
       AssetKind::Local(ASSET_A),
       AssetKind::Native,
       SWAP_AMOUNT,
-      MIN_AMOUNT_OUT,
-      ALICE,
-      1000,
-    ));
-    // Verify fee calculation infrastructure - in test environment, calculations may be simplified
-    let _router_final_balance = Assets::balance(ASSET_A, axial_router_account());
-    // In test environment, focus on infrastructure rather than precise fee amounts
-    // Axial Router fee calculation accuracy verified
+    )
+    .expect("quote must exist for seeded direct pool");
+    assert_eq!(quote.router_fee, expected_fee);
+    assert_eq!(quote.amount_after_fee, SWAP_AMOUNT - expected_fee);
   });
 }
 
@@ -349,8 +417,7 @@ fn test_axial_router_minimum_amount_out_protection() {
       AssetKind::Native,
       SWAP_AMOUNT,
     );
-    // Test minimum amount out protection with unreasonably high minimum
-    let unreasonably_high_min = SWAP_AMOUNT * 10; // Expecting 1000% return
+    let unreasonably_high_min = SWAP_AMOUNT * 10;
     assert_noop!(
       AxialRouter::swap(
         RuntimeOrigin::signed(ALICE),
@@ -363,8 +430,6 @@ fn test_axial_router_minimum_amount_out_protection() {
       ),
       pallet_axial_router::pallet::Error::<Runtime>::SlippageExceeded
     );
-    // Verify minimum amount out protection works correctly
-    // Axial Router minimum amount out protection verified
   });
 }
 
@@ -372,20 +437,65 @@ fn test_axial_router_minimum_amount_out_protection() {
 fn test_axial_router_direct_fee_processing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let _existential_deposit = 1_000_000_000;
-    // Test direct fee processing infrastructure
-    // This verifies that fees are properly routed and processed
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+      .expect("quote must exist for seeded direct pool");
+    System::reset_events();
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
+      from,
+      to,
       SWAP_AMOUNT,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify direct fee processing infrastructure
-    // Axial Router direct fee processing verified
+    let router_events = System::events()
+      .into_iter()
+      .filter_map(|record| match record.event {
+        crate::RuntimeEvent::AxialRouter(event) => Some(event),
+        _ => None,
+      })
+      .collect::<Vec<_>>();
+    let fee_index = router_events
+      .iter()
+      .position(|event| {
+        matches!(
+          event,
+          pallet_axial_router::Event::FeeCollected {
+            asset,
+            amount,
+            source,
+            collector,
+          } if *asset == from
+            && *amount == quote.router_fee
+            && *source == ALICE
+            && *collector == burning_manager_account()
+        )
+      })
+      .expect("fee event must be present");
+    let swap_index = router_events
+      .iter()
+      .position(|event| {
+        matches!(
+          event,
+          pallet_axial_router::Event::SwapExecuted {
+            who,
+            from: event_from,
+            to: event_to,
+            amount_in,
+            amount_out,
+            ..
+          } if *who == ALICE
+            && *event_from == from
+            && *event_to == to
+            && *amount_in == SWAP_AMOUNT
+            && *amount_out == quote.amount_out
+        )
+      })
+      .expect("swap event must be present");
+    assert!(fee_index < swap_index, "fee event must precede swap event");
   });
 }
 
@@ -393,19 +503,33 @@ fn test_axial_router_direct_fee_processing() {
 fn test_axial_router_consistent_fee_burning() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Initialize EMA prices to avoid deviation errors
-    // Test consistent fee burning across multiple swaps
+    let amount = SWAP_AMOUNT / 10;
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let fee = AxialRouter::calculate_router_fee(amount);
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
-      SWAP_AMOUNT / 10,
+      from,
+      to,
+      amount,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify consistent fee burning infrastructure
-    // Axial Router consistent fee burning verified
+    assert_ok!(AxialRouter::swap(
+      RuntimeOrigin::signed(ALICE),
+      from,
+      to,
+      amount,
+      MIN_AMOUNT_OUT,
+      ALICE,
+      1000,
+    ));
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      burning_manager_before + fee * 2
+    );
   });
 }
 
@@ -413,19 +537,45 @@ fn test_axial_router_consistent_fee_burning() {
 fn test_axial_router_multiple_accumulation_cycles() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Initialize EMA prices to avoid deviation errors
-    // Test multiple accumulation cycles
+    let amount = SWAP_AMOUNT / 10;
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    System::reset_events();
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
-      SWAP_AMOUNT / 10,
+      from,
+      to,
+      amount,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify multiple accumulation cycles infrastructure
-    // Axial Router multiple accumulation cycles verified
+    assert_ok!(AxialRouter::swap(
+      RuntimeOrigin::signed(ALICE),
+      from,
+      to,
+      amount,
+      MIN_AMOUNT_OUT,
+      ALICE,
+      1000,
+    ));
+    let fee_events = System::events()
+      .into_iter()
+      .filter(|record| {
+        matches!(
+          &record.event,
+          crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected {
+            asset,
+            amount: event_amount,
+            source,
+            ..
+          }) if *asset == from
+            && *event_amount == AxialRouter::calculate_router_fee(amount)
+            && *source == ALICE
+        )
+      })
+      .count();
+    assert_eq!(fee_events, 2);
   });
 }
 
@@ -433,10 +583,9 @@ fn test_axial_router_multiple_accumulation_cycles() {
 fn test_axial_router_fee_collection_only_on_successful_swaps() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let _existential_deposit = 1_000_000_000;
-    // Test that fees are only collected on successful swaps
-    // Attempt a swap that should fail (unreasonably high minimum output)
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     let unreasonably_high_min = SWAP_AMOUNT * 100;
+    System::reset_events();
     assert_noop!(
       AxialRouter::swap(
         RuntimeOrigin::signed(ALICE),
@@ -449,9 +598,16 @@ fn test_axial_router_fee_collection_only_on_successful_swaps() {
       ),
       pallet_axial_router::pallet::Error::<Runtime>::SlippageExceeded
     );
-
-    // Verify no fees were collected on failed swap
-    // Axial Router fee collection only on successful swaps verified
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      burning_manager_before
+    );
+    assert!(System::events().into_iter().all(|record| {
+      !matches!(
+        record.event,
+        crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected { .. })
+      )
+    }));
   });
 }
 
@@ -459,23 +615,30 @@ fn test_axial_router_fee_collection_only_on_successful_swaps() {
 fn test_axial_router_path_validation() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Test path validation for non-existent asset
-    // Test that failed swaps don't collect fees
-
+    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     let non_existent_asset = 999;
-    let _ = AxialRouter::swap(
-      RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Local(non_existent_asset),
-      SWAP_AMOUNT,
-      MIN_AMOUNT_OUT,
-      ALICE,
-      1000,
+    System::reset_events();
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(ALICE),
+        AssetKind::Local(ASSET_A),
+        AssetKind::Local(non_existent_asset),
+        SWAP_AMOUNT,
+        MIN_AMOUNT_OUT,
+        ALICE,
+        1000,
+      ),
+      pallet_axial_router::pallet::Error::<Runtime>::NoRouteFound
     );
-    // Focus on infrastructure testing rather than specific error handling
-    // Axial Router path validation infrastructure verified
-    // Verify path validation infrastructure
-    // Axial Router path validation verified
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      burning_manager_before
+    );
+    assert!(
+      System::events()
+        .into_iter()
+        .all(|record| { !matches!(record.event, crate::RuntimeEvent::AxialRouter(_)) })
+    );
   });
 }
 
@@ -504,27 +667,37 @@ fn test_axial_router_with_empty_pools() {
 fn test_axial_router_events() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Clear events before test
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Native;
+    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+      .expect("quote must exist for seeded direct pool");
     System::reset_events();
-    // Execute swap to generate events
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
+      from,
+      to,
       SWAP_AMOUNT,
       MIN_AMOUNT_OUT,
       ALICE,
       1000,
     ));
-    // Verify events were emitted
-    assert!(
-      System::events().iter().any(|r| matches!(
-        &r.event,
-        crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted { .. })
-      )),
-      "Axial Router swap executed event should be emitted"
-    );
-    // Verify event infrastructure
-    // Axial Router events verified
+    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
+      pallet_axial_router::Event::FeeCollected {
+        asset: from,
+        amount: quote.router_fee,
+        source: ALICE,
+        collector: burning_manager_account(),
+      },
+    ));
+    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
+      pallet_axial_router::Event::SwapExecuted {
+        who: ALICE,
+        from,
+        to,
+        amount_in: SWAP_AMOUNT,
+        amount_out: quote.amount_out,
+        mechanism: quote.mechanism,
+      },
+    ));
   });
 }

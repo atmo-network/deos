@@ -133,6 +133,23 @@ check_only() {
     log_success "All benchmarks compile successfully"
 }
 
+resolve_runtime_wasm_path() {
+    local candidates=(
+        "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
+        "$TEMPLATE_DIR/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return 0
+        fi
+    done
+
+    log_error "Benchmark runtime WASM not found in known wbuild output paths"
+    return 1
+}
+
 # frame-omni-bencher generates files with bare `frame_system`/`frame_support` imports
 # and `WeightInfo<T>` struct names. Normalize to project conventions.
 normalize_weight_file() {
@@ -207,8 +224,10 @@ run_pallet_benchmark() {
 
     if [[ "$BENCHER_MODE" == "omni" ]]; then
         local template_file="$TEMPLATE_DIR/.maintain/frame-weight-template.hbs"
+        local runtime_wasm
+        runtime_wasm="$(resolve_runtime_wasm_path)" || return 1
         local bencher_args=(
-            --runtime "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
+            --runtime "$runtime_wasm"
             --pallet "$pallet_name"
             --extrinsic "*"
             "${exclude_args[@]}"

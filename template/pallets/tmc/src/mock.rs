@@ -11,6 +11,7 @@ use polkadot_sdk::sp_runtime::{
   testing::H256,
   traits::{BlakeTwo256, IdentityLookup},
 };
+use std::cell::RefCell;
 
 type Block = frame_system::mocking::MockBlock<Test>;
 
@@ -104,6 +105,20 @@ impl Get<Perbill> for UserAllocationRatio {
   }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ForcedMintFailure {
+  User,
+  Sink,
+}
+
+thread_local! {
+  pub static FORCED_MINT_FAILURE: RefCell<Option<ForcedMintFailure>> = const { RefCell::new(None) };
+}
+
+pub fn set_forced_mint_failure(mode: Option<ForcedMintFailure>) {
+  FORCED_MINT_FAILURE.with(|state| *state.borrow_mut() = mode);
+}
+
 /// Default resolver: routes all TMC output to account 888
 pub struct DefaultMintOutput;
 impl crate::MintOutputResolver<u64> for DefaultMintOutput {
@@ -112,8 +127,63 @@ impl crate::MintOutputResolver<u64> for DefaultMintOutput {
   }
 }
 
+pub struct MockMintDistributionHook;
+impl crate::MintDistributionHook<u64> for MockMintDistributionHook {
+  fn before_user_mint(
+    _minted_asset: primitives::AssetKind,
+    _account: &u64,
+    _amount: u128,
+  ) -> Result<(), polkadot_sdk::sp_runtime::DispatchError> {
+    let should_fail =
+      FORCED_MINT_FAILURE.with(|state| *state.borrow() == Some(ForcedMintFailure::User));
+    if should_fail {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced user mint failure",
+      ));
+    }
+    Ok(())
+  }
+
+  fn before_sink_mint(
+    _minted_asset: primitives::AssetKind,
+    _account: &u64,
+    _amount: u128,
+  ) -> Result<(), polkadot_sdk::sp_runtime::DispatchError> {
+    let should_fail =
+      FORCED_MINT_FAILURE.with(|state| *state.borrow() == Some(ForcedMintFailure::Sink));
+    if should_fail {
+      return Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "Forced sink mint failure",
+      ));
+    }
+    Ok(())
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct TmcBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl crate::BenchmarkHelper<u64> for TmcBenchmarkHelper {
+  fn create_asset(asset_id: u32) -> polkadot_sdk::sp_runtime::DispatchResult {
+    let _ = Assets::force_create(frame_system::RawOrigin::Root.into(), asset_id, 1, true, 1);
+    Ok(())
+  }
+
+  fn mint_native(to: &u64, amount: u128) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::fungible::Mutate;
+    let _ = Balances::mint_into(to, amount);
+    Ok(())
+  }
+
+  fn mint_local(asset_id: u32, to: &u64, amount: u128) -> polkadot_sdk::sp_runtime::DispatchResult {
+    use polkadot_sdk::frame_support::traits::fungibles::Mutate;
+    Assets::mint_into(asset_id, to, amount)?;
+    Ok(())
+  }
+}
+
 impl pallet_tmc::Config for Test {
-  // type RuntimeEvent = RuntimeEvent;
   type Assets = Assets;
   type Currency = Balances;
   type Balance = u128;
@@ -125,8 +195,11 @@ impl pallet_tmc::Config for Test {
   type MintOutputResolver = DefaultMintOutput;
   type UserAllocationRatio = UserAllocationRatio;
   type DomainGlueHook = ();
+  type MintDistributionHook = MockMintDistributionHook;
   type AdminOrigin = EnsureRoot<u64>;
   type WeightInfo = ();
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = TmcBenchmarkHelper;
 }
 
 pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
@@ -147,6 +220,8 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   pallet_tmc::GenesisConfig::<Test>::default()
     .assimilate_storage(&mut t)
     .unwrap();
+
+  FORCED_MINT_FAILURE.with(|state| *state.borrow_mut() = None);
 
   t.into()
 }

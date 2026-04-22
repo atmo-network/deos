@@ -116,6 +116,18 @@ fn reject_governance_proposal(domain: u32, item_id: u32) {
   ));
 }
 
+fn register_additional_staking_assets(start_index: u32, count: u32) {
+  const TYPE_TEST: u32 = 0x2000_0000;
+  for offset in 0..count {
+    let asset_id = TYPE_TEST | (start_index + offset);
+    assert_ok!(create_test_asset(asset_id, &ALICE));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      asset_id
+    ));
+  }
+}
+
 fn cast_governance_vote_kind(
   account: crate::AccountId,
   domain: u32,
@@ -917,7 +929,7 @@ fn prefunded_reward_account_can_record_reward_inflow_into_current_epoch() {
 }
 
 #[test]
-fn reward_event_ingress_aggregates_same_block_reward_inflows() {
+fn direct_reward_ingress_weight_matches_aggregated_inflow_model() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -927,6 +939,7 @@ fn reward_event_ingress_aggregates_same_block_reward_inflows() {
     ));
     assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
     let reward_account = Staking::reward_account_for(ASSET_A);
+    System::reset_events();
     assert_ok!(Assets::transfer(
       RuntimeOrigin::signed(ALICE),
       ASSET_A,
@@ -939,7 +952,73 @@ fn reward_event_ingress_aggregates_same_block_reward_inflows() {
       reward_account.clone().into(),
       45,
     ));
-    let ingress_weight = Staking::on_idle(System::block_number(), Weight::MAX);
+    let ingress_weight = <crate::configs::staking_config::RuntimeRewardSnapshotEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
+      System::block_number(),
+      128,
+      Weight::MAX,
+    );
+    assert_eq!(
+      ingress_weight.ref_time(),
+      crate::configs::staking_config::reward_ingress_expected_ref_time(3, 0, 1)
+    );
+    assert_eq!(Staking::reward_epoch_accrued(ASSET_A, 1), 75);
+    assert_eq!(Staking::reward_liability_balance(ASSET_A), 75);
+  });
+}
+
+#[test]
+fn direct_reward_ingress_weight_matches_governance_touch_model() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
+    System::reset_events();
+    record_winning_vote(ASSET_A, 100, BOB);
+    let ingress_weight = <crate::configs::staking_config::RuntimeRewardSnapshotEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
+      System::block_number(),
+      128,
+      Weight::MAX,
+    );
+    assert_eq!(
+      ingress_weight.ref_time(),
+      crate::configs::staking_config::reward_ingress_expected_ref_time(1, 1, 0)
+    );
+    let touched_accounts =
+      pallet_staking::RewardEpochTouchedAccounts::<crate::Runtime>::get(1, ASSET_A);
+    assert_eq!(touched_accounts.len(), 1);
+    assert!(touched_accounts.contains(&BOB));
+  });
+}
+
+#[test]
+fn reward_event_ingress_aggregates_same_block_reward_inflows_under_finite_budget() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
+    let reward_account = Staking::reward_account_for(ASSET_A);
+    System::reset_events();
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(ALICE),
+      ASSET_A,
+      reward_account.clone().into(),
+      30,
+    ));
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(ALICE),
+      ASSET_A,
+      reward_account.clone().into(),
+      45,
+    ));
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(100_000, 0));
     assert!(ingress_weight.ref_time() > 0);
     Staking::on_finalize(System::block_number());
     assert_eq!(Staking::reward_epoch_accrued(ASSET_A, 1), 75);
@@ -963,7 +1042,231 @@ fn reward_event_ingress_aggregates_same_block_reward_inflows() {
 }
 
 #[test]
-fn reward_event_ingress_emits_truncation_signal_when_scan_cap_is_hit() {
+fn reward_event_ingress_respects_remaining_weight_budget() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
+    let reward_account = Staking::reward_account_for(ASSET_A);
+    System::reset_events();
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(ALICE),
+      ASSET_A,
+      reward_account.clone().into(),
+      30,
+    ));
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(ALICE),
+      ASSET_A,
+      reward_account.clone().into(),
+      45,
+    ));
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(7_000, 0));
+    assert!(ingress_weight.ref_time() > 0);
+    Staking::on_finalize(System::block_number());
+    assert_eq!(Staking::reward_epoch_accrued(ASSET_A, 1), 0);
+    assert_eq!(Staking::reward_liability_balance(ASSET_A), 0);
+    assert_eq!(Staking::last_reward_ingress_truncated_epoch(), Some(1));
+    assert!(System::events().into_iter().any(|record| {
+      matches!(
+        record.event,
+        RuntimeEvent::Staking(pallet_staking::Event::RewardIngressTruncated { epoch: 1, .. })
+      )
+    }));
+  });
+}
+
+#[test]
+fn reward_event_ingress_stops_at_tiny_remaining_weight_budget() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
+    let reward_account = Staking::reward_account_for(ASSET_A);
+    System::reset_events();
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(ALICE),
+      ASSET_A,
+      reward_account.into(),
+      30,
+    ));
+    let ingress_weight = <crate::configs::staking_config::RuntimeRewardSnapshotEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
+      System::block_number(),
+      crate::configs::staking_config::MaxRewardEventScanPerBlock::get() as usize,
+      Weight::from_parts(1_000, 0),
+    );
+    assert_eq!(ingress_weight.ref_time(), 1_000);
+    assert_eq!(Staking::reward_epoch_accrued(ASSET_A, 1), 0);
+    assert_eq!(Staking::reward_liability_balance(ASSET_A), 0);
+  });
+}
+
+#[test]
+fn native_delegation_event_ingress_stops_at_tiny_remaining_weight_budget() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE]).expect("single invulnerable must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      ALICE
+    ));
+    let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
+    System::reset_events();
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(BOB),
+      staked_asset_id,
+      CHARLIE.into(),
+      50,
+    ));
+    let ingress = <crate::configs::staking_config::RuntimeNativeDelegationEventIngress as pallet_staking::NativeDelegationEventIngress<crate::AccountId>>::ingress(
+      crate::configs::staking_config::MaxRewardEventScanPerBlock::get() as usize,
+      Weight::from_parts(1_000, 0),
+    );
+    assert_eq!(ingress.weight.ref_time(), 1_000);
+    assert!(ingress.truncated);
+    assert!(ingress.touched_accounts.is_empty());
+  });
+}
+
+#[test]
+fn native_delegation_cache_repair_respects_remaining_weight_budget() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE]).expect("single invulnerable must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      ALICE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::cached_delegated_native_backing(&ALICE), 400);
+    System::reset_events();
+    pallet_staking::NativeDelegationCacheDirty::<crate::Runtime>::put(true);
+    pallet_staking::NativeDelegationRepairPhaseState::<crate::Runtime>::put(
+      pallet_staking::NativeDelegationRepairPhase::ClearingCache,
+    );
+    pallet_staking::NativeDelegationRepairCursor::<crate::Runtime>::kill();
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(7_999, 0));
+    assert_eq!(ingress_weight.ref_time(), 0);
+    assert!(pallet_staking::NativeDelegationCacheDirty::<crate::Runtime>::get());
+    assert_eq!(
+      pallet_staking::NativeDelegationRepairPhaseState::<crate::Runtime>::get(),
+      Some(pallet_staking::NativeDelegationRepairPhase::ClearingCache)
+    );
+  });
+}
+
+#[test]
+fn reward_event_ingress_records_governance_touches_under_finite_budget() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
+    System::reset_events();
+    record_winning_vote(ASSET_A, 100, BOB);
+    record_winning_vote(ASSET_A, 101, CHARLIE);
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(7_000, 0));
+    assert!(ingress_weight.ref_time() > 0);
+    let touched_accounts =
+      pallet_staking::RewardEpochTouchedAccounts::<crate::Runtime>::get(1, ASSET_A);
+    assert_eq!(touched_accounts.len(), 1);
+    assert!(touched_accounts.contains(&BOB));
+    assert_eq!(Staking::last_reward_ingress_truncated_epoch(), Some(1));
+    assert!(System::events().into_iter().any(|record| {
+      matches!(
+        record.event,
+        RuntimeEvent::Staking(pallet_staking::Event::RewardIngressTruncated { epoch: 1, .. })
+      )
+    }));
+  });
+}
+
+#[test]
+fn reward_ingress_receipt_lookup_probe_stays_event_bound_with_many_pools() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    register_additional_staking_assets(10, 8);
+    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
+    let staked_asset_id = Staking::staked_asset_id(ASSET_A).expect("staked asset id must resolve");
+    System::reset_events();
+    crate::configs::staking_config::reset_reward_ingress_lookup_probes();
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(BOB),
+      staked_asset_id,
+      CHARLIE.into(),
+      50,
+    ));
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(100_000, 0));
+    assert!(ingress_weight.ref_time() > 0);
+    assert_eq!(
+      crate::configs::staking_config::reward_ingress_receipt_base_lookup_probe_count(),
+      2
+    );
+    let touched_accounts =
+      pallet_staking::RewardEpochTouchedAccounts::<crate::Runtime>::get(1, ASSET_A);
+    assert_eq!(touched_accounts.len(), 2);
+    assert!(touched_accounts.contains(&BOB));
+    assert!(touched_accounts.contains(&CHARLIE));
+  });
+}
+
+#[test]
+fn reward_ingress_governance_lookup_probe_stays_domain_bound_with_many_pools() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    register_additional_staking_assets(20, 8);
+    assert_ok!(Staking::register_staking_asset(
+      RuntimeOrigin::root(),
+      ASSET_A
+    ));
+    System::reset_events();
+    crate::configs::staking_config::reset_reward_ingress_lookup_probes();
+    record_winning_vote(ASSET_A, 100, BOB);
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(100_000, 0));
+    assert!(ingress_weight.ref_time() > 0);
+    assert_eq!(
+      crate::configs::staking_config::reward_ingress_governance_domain_lookup_probe_count(),
+      1
+    );
+    let touched_accounts =
+      pallet_staking::RewardEpochTouchedAccounts::<crate::Runtime>::get(1, ASSET_A);
+    assert_eq!(touched_accounts.len(), 1);
+    assert!(touched_accounts.contains(&BOB));
+  });
+}
+
+#[test]
+fn reward_event_ingress_emits_truncation_signal_when_scan_cap_is_hit_under_finite_budget() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(Staking::register_staking_asset(
@@ -980,7 +1283,7 @@ fn reward_event_ingress_emits_truncation_signal_when_scan_cap_is_hit() {
         1,
       ));
     }
-    let ingress_weight = Staking::on_idle(System::block_number(), Weight::MAX);
+    let ingress_weight = Staking::on_idle(System::block_number(), Weight::from_parts(1_000_000, 0));
     assert!(ingress_weight.ref_time() > 0);
     Staking::on_finalize(System::block_number());
     assert_eq!(Staking::reward_epoch_accrued(ASSET_A, 1), 127);
@@ -1741,6 +2044,80 @@ fn passive_stntve_holder_can_bind_native_backing() {
 }
 
 #[test]
+fn rebinding_native_stake_moves_backing_between_operators() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, CHARLIE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      ALICE
+    ));
+    assert_eq!(Staking::delegated_native_backing(&ALICE), 400);
+    assert_eq!(Staking::delegated_native_backing(&CHARLIE), 0);
+    assert_ok!(Staking::bind_native(RuntimeOrigin::signed(BOB), CHARLIE));
+    assert_eq!(Staking::native_binding(BOB), Some(CHARLIE));
+    assert_eq!(Staking::delegated_native_backing(&ALICE), 0);
+    assert_eq!(Staking::delegated_native_backing(&CHARLIE), 400);
+    System::assert_has_event(RuntimeEvent::Staking(
+      pallet_staking::Event::NativeBindingSet {
+        account: BOB,
+        operator: CHARLIE,
+      },
+    ));
+  });
+}
+
+#[test]
+fn rebinding_updates_runtime_ranking_cache_without_waiting_for_on_idle() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, CHARLIE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      ALICE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::cached_delegated_native_backing(&ALICE), 400);
+    assert_eq!(Staking::cached_delegated_native_backing(&CHARLIE), 0);
+    assert_ok!(Staking::bind_native(RuntimeOrigin::signed(BOB), CHARLIE));
+    assert_eq!(Staking::cached_delegated_native_backing(&ALICE), 0);
+    assert_eq!(Staking::cached_delegated_native_backing(&CHARLIE), 400);
+    let ranked =
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: ALICE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 10,
+        },
+      ]);
+    let ranked_accounts = ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(ranked_accounts, alloc::vec![CHARLIE, ALICE]);
+  });
+}
+
+#[test]
 fn clear_native_binding_makes_stntve_passive_again() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
@@ -1959,6 +2336,109 @@ fn native_binding_rejects_permissionless_candidates_while_trusted_phase_is_activ
 }
 
 #[test]
+fn session_manager_ranking_cache_follows_transfer_after_on_idle() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, CHARLIE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &EVE, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      ALICE
+    ));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(EVE),
+      300,
+      CHARLIE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let initial_ranked =
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: ALICE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 10,
+        },
+      ]);
+    let initial_accounts = initial_ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(initial_accounts, alloc::vec![ALICE, CHARLIE]);
+    let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(BOB),
+      staked_asset_id,
+      DAVE.into(),
+      400,
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let refreshed_ranked =
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: ALICE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 10,
+        },
+      ]);
+    let refreshed_accounts = refreshed_ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(refreshed_accounts, alloc::vec![CHARLIE, ALICE]);
+  });
+}
+
+#[test]
+fn zero_native_exposure_retires_runtime_binding_after_on_idle() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE]).expect("single invulnerable must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      ALICE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
+    System::reset_events();
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(BOB),
+      staked_asset_id,
+      CHARLIE.into(),
+      400,
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    assert_eq!(Staking::native_binding(BOB), None);
+    assert_eq!(Staking::delegated_native_stake_value(&BOB), None);
+    assert_eq!(Staking::passive_native_stake_value(&BOB), None);
+    System::assert_has_event(RuntimeEvent::Staking(
+      pallet_staking::Event::NativeBindingCleared { account: BOB },
+    ));
+  });
+}
+
+#[test]
 fn session_manager_ignores_candidates_while_permissionless_collators_are_disabled() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
@@ -1982,5 +2462,352 @@ fn session_manager_ignores_candidates_while_permissionless_collators_are_disable
     >>::new_session(0)
     .expect("session manager must return a collator set");
     assert_eq!(collators, alloc::vec![ALICE]);
+  });
+}
+
+#[test]
+fn session_manager_ranks_larger_candidate_set_by_backing_deposit_and_account() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    let faythe = crate::AccountId::new([6u8; 32]);
+    let grace = crate::AccountId::new([7u8; 32]);
+    let heidi = crate::AccountId::new([8u8; 32]);
+    let ivan = crate::AccountId::new([9u8; 32]);
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, BOB, CHARLIE, DAVE, EVE, faythe.clone()])
+        .expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &EVE, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &grace, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &heidi, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      500,
+      ALICE
+    ));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(EVE), 500, DAVE));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(grace),
+      300,
+      BOB
+    ));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(heidi),
+      300,
+      CHARLIE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let ranked =
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: faythe.clone(),
+          deposit: 1,
+        },
+        CandidateInfo {
+          who: EVE,
+          deposit: 100,
+        },
+        CandidateInfo {
+          who: DAVE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 40,
+        },
+        CandidateInfo {
+          who: BOB,
+          deposit: 40,
+        },
+        CandidateInfo {
+          who: ALICE,
+          deposit: 20,
+        },
+      ]);
+    let ranked_accounts = ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(
+      ranked_accounts,
+      alloc::vec![ALICE, DAVE, BOB, CHARLIE, EVE, faythe]
+    );
+    let top_three = ranked_accounts
+      .into_iter()
+      .take(3)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(top_three, alloc::vec![ALICE, DAVE, BOB]);
+    assert_eq!(Staking::cached_delegated_native_backing(&ALICE), 500);
+    assert_eq!(Staking::cached_delegated_native_backing(&DAVE), 500);
+    assert_eq!(Staking::cached_delegated_native_backing(&BOB), 300);
+    assert_eq!(Staking::cached_delegated_native_backing(&CHARLIE), 300);
+    assert_eq!(Staking::cached_delegated_native_backing(&EVE), 0);
+    assert_eq!(Staking::cached_delegated_native_backing(&ivan), 0);
+  });
+}
+
+#[test]
+fn rebinding_can_flip_top_n_membership_in_larger_candidate_set_without_waiting_for_on_idle() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, BOB, CHARLIE, DAVE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &EVE, 1_000));
+    assert_ok!(mint_tokens(
+      0,
+      &ALICE,
+      &crate::AccountId::new([6u8; 32]),
+      1_000
+    ));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      500,
+      ALICE
+    ));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(EVE), 400, BOB));
+    let grace = crate::AccountId::new([6u8; 32]);
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(grace),
+      300,
+      CHARLIE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let rank_candidates = || {
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: DAVE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: BOB,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: ALICE,
+          deposit: 10,
+        },
+      ])
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>()
+    };
+    assert_eq!(
+      rank_candidates()
+        .into_iter()
+        .take(3)
+        .collect::<alloc::vec::Vec<_>>(),
+      alloc::vec![ALICE, BOB, CHARLIE]
+    );
+    assert_ok!(Staking::bind_native(RuntimeOrigin::signed(EVE), DAVE));
+    assert_eq!(Staking::cached_delegated_native_backing(&BOB), 0);
+    assert_eq!(Staking::cached_delegated_native_backing(&DAVE), 400);
+    assert_eq!(
+      rank_candidates()
+        .into_iter()
+        .take(3)
+        .collect::<alloc::vec::Vec<_>>(),
+      alloc::vec![ALICE, DAVE, CHARLIE]
+    );
+  });
+}
+
+#[test]
+fn session_manager_top_n_boundary_prefers_account_order_on_equal_backing_and_deposit() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    let faythe = crate::AccountId::new([6u8; 32]);
+    let grace = crate::AccountId::new([7u8; 32]);
+    let heidi = crate::AccountId::new([8u8; 32]);
+    let ivan = crate::AccountId::new([9u8; 32]);
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, BOB, CHARLIE, DAVE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &faythe, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &grace, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &heidi, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &ivan, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(faythe),
+      200,
+      ALICE
+    ));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(grace),
+      200,
+      BOB
+    ));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(heidi),
+      200,
+      CHARLIE
+    ));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(ivan),
+      200,
+      DAVE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let ranked =
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: DAVE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: BOB,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: ALICE,
+          deposit: 10,
+        },
+      ]);
+    let ranked_accounts = ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(ranked_accounts, alloc::vec![ALICE, BOB, CHARLIE, DAVE]);
+    let top_two = ranked_accounts
+      .into_iter()
+      .take(2)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(top_two, alloc::vec![ALICE, BOB]);
+  });
+}
+
+#[test]
+fn ranking_probe_stays_candidate_bound_after_cache_refresh_with_many_bindings() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, BOB, CHARLIE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    for seed in 6u8..30u8 {
+      let delegator = crate::AccountId::new([seed; 32]);
+      let operator = match seed % 3 {
+        0 => ALICE,
+        1 => BOB,
+        _ => CHARLIE,
+      };
+      assert_ok!(mint_tokens(0, &ALICE, &delegator, 101));
+      assert_ok!(Staking::stake_native(
+        RuntimeOrigin::signed(delegator),
+        100,
+        operator,
+      ));
+    }
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    crate::configs::DelegationWeightedCollatorSessionManager::reset_ranking_backing_lookup_probe();
+    let ranked = crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(
+      alloc::vec![
+        CandidateInfo {
+          who: ALICE,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: BOB,
+          deposit: 10,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 10,
+        },
+      ],
+    );
+    let ranked_accounts = ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(ranked_accounts.len(), 3);
+    assert_eq!(
+      crate::configs::DelegationWeightedCollatorSessionManager::ranking_backing_lookup_probe_count(),
+      3,
+      "clean cached ranking should perform one backing lookup per candidate, not per delegator binding",
+    );
+  });
+}
+
+#[test]
+fn session_manager_ranks_candidates_by_backing_then_deposit_then_account() {
+  let mut ext = seeded_test_ext();
+  ext.execute_with(|| {
+    use polkadot_sdk::frame_support::BoundedVec;
+    use polkadot_sdk::pallet_collator_selection::CandidateInfo;
+
+    polkadot_sdk::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
+      BoundedVec::try_from(alloc::vec![ALICE, BOB, CHARLIE, DAVE]).expect("invulnerables must fit"),
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(mint_tokens(0, &ALICE, &EVE, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(BOB),
+      400,
+      CHARLIE
+    ));
+    assert_ok!(Staking::stake_native(
+      RuntimeOrigin::signed(EVE),
+      400,
+      ALICE
+    ));
+    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
+    let ranked =
+      crate::configs::DelegationWeightedCollatorSessionManager::rank_candidates(alloc::vec![
+        CandidateInfo {
+          who: DAVE,
+          deposit: 30,
+        },
+        CandidateInfo {
+          who: CHARLIE,
+          deposit: 50,
+        },
+        CandidateInfo {
+          who: BOB,
+          deposit: 30,
+        },
+        CandidateInfo {
+          who: ALICE,
+          deposit: 30,
+        },
+      ]);
+    let ranked_accounts = ranked
+      .into_iter()
+      .map(|candidate| candidate.who)
+      .collect::<alloc::vec::Vec<_>>();
+    assert_eq!(ranked_accounts, alloc::vec![CHARLIE, ALICE, BOB, DAVE]);
   });
 }

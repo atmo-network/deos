@@ -4,3 +4,6 @@
 {"timestamp":"2026-04-07T08:30:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
 {"timestamp":"2026-04-07T15:11:38Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
 {"timestamp":"2026-04-08T00:06:51Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
+{"timestamp":"2026-04-22T20:53:54Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/staking/src/lib.rs,/home/llb/Repos/deos/template/runtime/src/configs/mod.rs"}
+{"timestamp":"2026-04-22T23:10:42Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/staking_config.rs"}
+{"timestamp":"2026-04-22T23:12:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/staking_config.rs"}

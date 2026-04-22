@@ -5,7 +5,13 @@ extern crate alloc;
 use crate::*;
 use frame::prelude::*;
 use polkadot_sdk::frame_benchmarking::{account, v2::*};
-use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
+use polkadot_sdk::frame_support::{
+  traits::{
+    Hooks,
+    fungibles::{Inspect, Mutate},
+  },
+  weights::Weight,
+};
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::pallet_assets;
 use polkadot_sdk::sp_runtime::traits::{One, Zero};
@@ -87,6 +93,34 @@ fn seed_legacy_pool_with_position<T>(
   );
   Positions::<T>::insert(asset_id, holder, StakePosition { shares });
   mint_to::<T>(asset_id, &pool_account, shares);
+}
+
+fn seed_cached_native_delegation<T>(
+  binder: &T::AccountId,
+  operator: &T::AccountId,
+  amount: <T as Config>::Balance,
+) where
+  T: Config
+    + pallet_assets::Config<AssetId = <T as Config>::AssetId, Balance = <T as Config>::Balance>,
+  <T as pallet_assets::Config>::AssetIdParameter: From<<T as Config>::AssetId> + Copy,
+  <T as Config>::AssetId: From<u32>,
+  BlockNumberFor<T>: From<u32>,
+{
+  let native_asset_id = T::NativeStakingAssetId::get();
+  register_pool::<T>(native_asset_id);
+  mint_to::<T>(
+    native_asset_id,
+    binder,
+    amount + <T as Config>::Balance::one(),
+  );
+  Pallet::<T>::stake_native(
+    RawOrigin::Signed(binder.clone()).into(),
+    amount,
+    operator.clone(),
+  )
+  .expect("benchmark native stake setup must succeed");
+  let _ = Pallet::<T>::on_idle(frame_system::Pallet::<T>::block_number(), Weight::MAX);
+  frame_system::Pallet::<T>::reset_events();
 }
 
 #[benchmarks(where
@@ -228,11 +262,20 @@ mod benches {
   #[benchmark]
   fn bind_native() {
     let binder: T::AccountId = whitelisted_caller();
+    let old_operator: T::AccountId = account("delegation-old-operator", 0, 0);
     let operator: T::AccountId = account("delegation-operator", 0, 0);
+    let amount = <T as Config>::Balance::from(100u32);
+    T::NativeBindingTargetValidator::benchmark_prepare_valid_operator(&old_operator);
     T::NativeBindingTargetValidator::benchmark_prepare_valid_operator(&operator);
+    seed_cached_native_delegation::<T>(&binder, &old_operator, amount);
     #[extrinsic_call]
     bind_native(RawOrigin::Signed(binder.clone()), operator.clone());
-    assert_eq!(NativeBindings::<T>::get(&binder), Some(operator));
+    assert_eq!(NativeBindings::<T>::get(&binder), Some(operator.clone()));
+    assert_eq!(
+      CachedOperatorNativeShares::<T>::get(&old_operator),
+      Zero::zero()
+    );
+    assert_eq!(CachedOperatorNativeShares::<T>::get(&operator), amount);
   }
 
   #[benchmark]
@@ -248,12 +291,17 @@ mod benches {
   fn clear_native_binding() {
     let binder: T::AccountId = whitelisted_caller();
     let operator: T::AccountId = account("delegation-operator", 0, 0);
+    let amount = <T as Config>::Balance::from(100u32);
     T::NativeBindingTargetValidator::benchmark_prepare_valid_operator(&operator);
-    Pallet::<T>::bind_native(RawOrigin::Signed(binder.clone()).into(), operator)
-      .expect("benchmark native binding setup must succeed");
+    seed_cached_native_delegation::<T>(&binder, &operator, amount);
     #[extrinsic_call]
     clear_native_binding(RawOrigin::Signed(binder.clone()));
     assert!(NativeBindings::<T>::get(&binder).is_none());
+    assert!(CachedNativeDelegations::<T>::get(&binder).is_none());
+    assert_eq!(
+      CachedOperatorNativeShares::<T>::get(&operator),
+      Zero::zero()
+    );
   }
 
   #[benchmark]

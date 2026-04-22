@@ -29,9 +29,63 @@
 > - mirror implementation-architecture docs for staking and governance
 > - Polkadot SDK `2603` / node `1.22.0` runtime line with `system_version >= 3` and staged `:pending_code -> :code` runtime-upgrade behavior
 
+## Open Runtime / Security Hardening
+
+### 0. Swap / mint atomicity and runtime hardening
+
+> Execute this section in listed priority order while the current pass stays in audit/backlog-hardening mode.
+
+- [x] `Finish Axial Router hardening after the atomic fee rewrite:` the router now pre-validates gross affordability, routes fees inside one transactional execution flow, the runtime test suite asserts concrete balance/fee effects, and the shipped benchmark/weight surfaces were refreshed to match the hardened path.
+  - [x] `Refactor execute_swap_for into one transactional economic flow:` the router now keeps fee routing and route execution inside one transactional path so late failures cannot strand successful state changes.
+  - [x] `Pre-validate full user affordability against the gross amount rather than only amount_after_fee:` user swaps now prove they can pay the full input under the selected preservation policy before any mutable swap path starts.
+  - [x] `Make the fee-paying and fee-exempt swap paths share one explicit debit-order contract:` fee-exempt system accounts now stay a zero-fee branch of the same gross-debit / prepared-route execution flow rather than a separate late-fee safety story.
+  - [x] `Pin router hardening to the concrete native keep-alive edge cases:` the pallet test suite now covers native-input affordability so ED / keep-alive failures are rejected before route execution.
+  - [x] `Finish replacing the remaining Axial Router runtime smoke tests with economic regressions:` the runtime integration suite now asserts concrete balance deltas, fee-sink deltas, event payloads/order, native-input semantics, repeated fee accumulation, and failed-swap no-fee behavior instead of relying on API-compatibility placeholders.
+  - [x] `Add explicit failure-injection hooks to the router test harness for fee-routing failures:` the mock fee adapter now exposes a deterministic forced-failure switch so the hardening suite can prove the route short-circuits before any mechanism executes.
+  - [x] `Add regression coverage for fee-failure short-circuit scenarios:` pallet tests now prove that an induced fee-routing failure cannot execute `DirectXyk`, `DirectMint`, or `MultiHopNative` paths or mutate the corresponding balances/pools.
+  - [x] `Cover the full router mechanism matrix in the hardening regressions:` the fail-safe regression suite now exercises `DirectXyk`, `DirectMint`, and `MultiHopNative` under forced fee failure.
+  - [x] `Regenerate shipped router swap weights from the hardened benchmark path:` the benchmark now asserts caller debit, fee-sink credit, and successful output on the transactional swap flow, and the shipped runtime weight file was regenerated from that path.
+- [x] `Finish TMC fail-closed hardening after the first transactional rewrite:` curve creation now rejects nonexistent/self-paired asset kinds, mint execution preflights asset existence, `mint_with_distribution` is transactional with deterministic user/sink failure hooks in the unit harness, runtime tests cover both shipped output topologies on success and failure, and the benchmark/weight surfaces now cover the hardened mint path too.
+  - [x] `Harden create_curve admission against invalid or non-mintable asset pairs:` curve creation now rejects nonexistent assets and identical token/collateral pairs before those curves become user-facing.
+  - [x] `Define the canonical preflight capability checks for minted assets:` mint execution now requires the configured non-native assets to exist before collateral transfer begins.
+  - [x] `Replace the current TMC happy-path-heavy test emphasis with fail-closed regressions:` the pallet suite now includes forced user/sink mint failures and invalid asset-pair admission checks instead of relying only on successful mint paths.
+  - [x] `Add deterministic failure-injection hooks to the TMC unit harness for user/sink mint failure:` the mock runtime now exposes deterministic user-leg and sink-leg failure modes.
+  - [x] `Wrap mint_with_distribution in pre-validation/transactional semantics:` collateral transfer, user allocation mint, zap allocation mint, and accounting updates now live inside one fail-closed transactional flow.
+  - [x] `Add regression tests proving collateral cannot be stranded on failed mint/distribution:` the pallet suite now proves rollback for both local-collateral and native-collateral failure paths.
+  - [x] `Finish runtime fail-closed coverage across both TMC output topologies:` runtime tests now assert successful routing plus wrong-collateral fail-closed behavior for both the default zap-manager sink and the special BLDR-splitter sink.
+  - [x] `Add router-driven direct-mint regressions after the fail-closed TMC rewrite:` runtime coverage now proves the Axial Router `DirectMint` path preserves fee routing, net collateral delivery to the splitter sink, and total TMC output conservation end-to-end.
+  - [x] `Extend TMC benchmark coverage beyond create_curve once the mint path is hardened:` the pallet benchmark suite now includes `mint_with_distribution`, and the shipped runtime weight file was regenerated from that expanded benchmark set.
+- [x] `Finish the NativeBindings collator-ranking cache hardening:` candidate ranking now reads cached per-operator delegated-native shares refreshed from native binding + `stNTVE` event ingress during `on_idle`, bounded dirty-cache repair clears stale cache state and rebuilds live bindings after ingress truncation, and the runtime suite now covers both immediate and deferred cache-correctness pressure cases around ordering and top-N selection.
+  - [x] `Introduce cached per-operator delegated-native backing state:` session-manager ranking now reads cached per-operator delegated-native shares, and `on_idle` refreshes that cache from native binding events plus native receipt balance-change events.
+  - [x] `Make rebinding and clear-binding paths update operator backing deltas exactly once:` `bind_native` and `clear_native_binding` now refresh the cached native-delegation surface immediately when the cache is clean, so operator backing deltas do not wait for later event replay.
+  - [x] `Add a native-binding regression matrix for rebinding, transfer-out, and clear-to-passive transitions:` the suite now covers immediate clean-cache rebinding, larger-set top-N membership flips from immediate rebinding, immediate clear-to-passive cache updates, transfer-driven cache refresh, and zero-exposure cleanup.
+  - [x] `Stop recomputing backing inside the sort comparator itself:` candidate ranking now materializes delegated backing once per candidate before sorting rather than rescanning bindings during every comparator call.
+  - [x] `Retire stale zero-value bindings as part of the same pass:` when a previously delegated account reaches zero native exposure, native-delegation cache refresh now clears the inert binding instead of leaving stale delegated state behind.
+  - [x] `Retarget session-manager ranking away from repeated per-candidate full-map rescans:` the ranking path no longer recomputes operator backing inside the sort comparator.
+  - [x] `Retarget session-manager ranking to the cached backing surface:` collator ordering now reads the cached per-operator native-share surface, converting shares to live backing value at ranking time.
+  - [x] `Add an explicit cache-repair path after bounded native-delegation ingress truncation:` when native-delegation ingress truncates, the runtime now keeps ranking on exact fallback while a bounded two-phase repair clears stale cache entries and rebuilds live bindings over subsequent `on_idle` passes.
+  - [x] `Extend the ranking-correctness regression matrix for candidate ordering and tie-breaks:` the runtime suite now covers ordering/tie-break semantics, explicit rebinding delta regressions, transfer-driven cache-refresh regression, zero-exposure binding cleanup, both single-pass and multi-pass pallet-level dirty-cache repair, larger candidate-set ordering/top-N regression, immediate rebind-driven top-N membership flips, and explicit top-N cutoff tie behavior on equal backing/deposit.
+  - [x] `Add an operator-backing performance probe for collator ranking after the cache lands:` the runtime suite now has a deterministic probe showing that clean cached ranking performs one backing lookup per candidate even when many delegator bindings exist, proving the hot path no longer scales with full-map scans in the healthy-cache case.
+- [x] `Make staking reward ingress weight-honest and budget-aware:` reward ingress now consumes the real post-native-maintenance `on_idle` budget, resolves both receipt and governance-domain mappings through bounded indexes, ships finite-budget regressions plus deterministic lookup/weight probes, and no longer relies on extrinsic-only benchmarking as the truth surface for the runtime-side ingress path.
+  - [x] `Thread remaining on_idle budget into RewardSnapshotEventIngress and stop when the budget is exhausted:` reward ingress now receives the real post-native-maintenance `on_idle` budget and truncates once the projected scan/touch/inflow work would exceed that remaining weight.
+  - [x] `Add a remaining-weight-aware reward-ingress regression matrix:` the runtime suite now covers low-idle-budget truncation, finite-budget reward inflow aggregation, finite-budget scan-cap truncation, and finite-budget governance-touch pressure instead of relying only on `Weight::MAX` happy paths.
+  - [x] `Replace repeated receipt-asset -> base-asset scans with an indexed reverse lookup:` reward ingress now resolves `stXXX -> base asset` through a live reverse index maintained when receipt assets are created or backfilled instead of iterating all staking pools for every receipt event.
+  - [x] `Replace repeated governance-domain -> staking-asset scans with a bounded index:` governance reward-touch ingress now resolves `domain -> reward assets` through a bounded indexed membership surface maintained at staking-asset registration time instead of walking every staking pool on each winning-vote event.
+  - [x] `Add deterministic runtime-side reward-ingress weight assertions for the shipped bounded model:` the runtime suite now directly asserts exact reward-ingress returned weight for bounded aggregated-inflow and governance-touch mixes, while shipped dispatch weights were separately refreshed after the indexed storage writes landed.
+  - [x] `Add explicit local/runtime probes for reward-ingress on_idle behavior because current staking benchmarks are extrinsic-only:` the runtime suite now includes deterministic receipt-lookup and governance-domain-lookup probes showing the indexed reward-ingress path stays event/domain bound even when many unrelated staking pools exist.
+- [x] `Narrow the XCM Transact callable surface to an explicit safe-call filter:` the current line now truthfully exposes no sovereign-XCM `Transact` runtime-call surface by default (`SafeCallFilter = Nothing`), with representative tests covering origin conversion, barrier admission, filter denial, and controller-origin queue-control gates.
+  - [x] `Audit the currently reachable sovereign-XCM call surface before changing policy:` the runtime suite now captures the origin-conversion baseline for `Parent`, `sibling`, `AccountId32`, and `XcmPassthrough`, plus representative admin/queue-control call exposure, and that audit directly fed the current empty allowlist decision for sovereign `Transact`.
+  - [x] `Model the combined XCM attack surface across Barrier + OriginConverter + SafeCallFilter + controller origins:` the current runtime suite now covers representative composed behavior across barrier admission, origin conversion, the final empty `SafeCallFilter`, and Root-only XCMP queue-controller gating.
+  - [x] `Add an origin-capability matrix for Parent / sibling / AccountId32 / XcmPassthrough paths:` the runtime suite now covers all four current origin families and their representative interaction with the current barrier/filter/controller gates.
+  - [x] `Add representative barrier-path tests for paid vs Parent-executive unpaid execution:` the runtime suite now proves paid sibling execution is admitted, explicit unpaid parent execution is admitted, explicit unpaid parent executive-plurality execution is admitted, and explicit unpaid sibling execution is rejected.
+  - [x] `Define the first explicit allowed RuntimeCall matrix for XCM Transact:` the current line now uses the truthful empty allowlist — no runtime calls remain reachable from sovereign `Transact` until an explicit future policy opts them in.
+  - [x] `Retarget xcm_config away from SafeCallFilter = Everything once that matrix is defined:` `xcm_config` now uses `SafeCallFilter = Nothing` so barrier admission no longer implies any runtime-call dispatch surface.
+  - [x] `Add representative allow/deny runtime tests for the final XCM call matrix:` the runtime suite now proves representative user/admin/queue-control calls are denied by the final empty `SafeCallFilter`.
+  - [x] `Add controller-origin allow/deny tests for XCMP queue control after the XCM matrix is narrowed:` the runtime suite now proves relay, sibling, and signed origins cannot invoke XCMP queue controller extrinsics while Root still can.
+
 ## Open Product / Client Work
 
-### 0. Governance v1 contract rollout (spec target, not yet shipped)
+### 1. Governance v1 contract rollout (spec target, not yet shipped)
 
 - [x] `Implement the ordinary public referendum cadence in pallet-governance:` the reference runtime now uses the public ordinary cadence contract directly: protection opens at submission, ordinary classes wait through a `3 day` lead-in before primary voting, ordinary protection stays open for `7 days`, ordinary primary runs for `7 days`, the canonical public Declining Power curve decays `7x -> 1x` by the end of day 6 with day 7 flat at `1x`, and successful ordinary referenda now enter a default `3 day` enactment delay with bounded query visibility.
   - [x] `Add proposal timing scaffolding:` runtime config plus bounded storage/query state for lead-in, protection-window close, primary open/close, urgent-open override, and enactment scheduling are now present through additive config hooks, `ProposalUrgentAuthorizedAt` / `ProposalPendingEnactmentAt` storage, and the new canonical `proposal_timing(domain, item_id)` runtime view.
@@ -55,7 +109,7 @@
       - [ ] `Broaden executable payload call matrices beyond the first bounded slices:` `L2ParameterChange` now has two truthful runtime paths (`AxialRouter.add_tracked_asset` and `AxialRouter.update_router_fee`), while `L2TreasurySpend` now supports bounded asset transfers from the designated BLDR treasury sovereign for any asset class held there. The remaining work is no longer one generic "make the matrix bigger" umbrella:
         - [x] `Publish the current rejected-surface inventory for L2 parameter delegation:` the current line now records that TMC launch-physics mutation, staking onboarding/recovery/admin reward bootstrap, AAA global-control surfaces, and asset-registry registration/migration remain L1/system-owned rather than truthful domain-owned `L2ParameterChange` targets.
         - [ ] `Add the first explicitly delegated/domain-owned L2 parameter surface beyond the Axial Router pair:` the next slice is to introduce a genuinely delegated/domain-owned parameter surface rather than widening legacy Root setters that still belong to launch physics, system control, staking administration, or asset registration.
-        - [ ] `Define the next truthful L2 treasury authority topology before widening payout semantics further:` make funding source, asset scope, and domain-local treasury authority explicit before adding native payout or richer treasury-spend families.
+        - [x] `Define the next truthful L2 treasury authority topology before widening payout semantics further:` the current line now states the explicit bounded topology — tactical `L2TreasurySpend` executes only from the tactical domain's single declared `BldrTreasury` funding source, with asset scope limited to balances actually held there, and any wider source family or native payout topology remains future opt-in work rather than an implied right of the current payload.
       - [ ] `Broaden execution-side observability beyond the first bounded slices:` generic success/failure/advisory-finalization events now exist and each now names the bounded payload kind directly, execution failures now also expose bounded failure-reason categories (including invoice-side `MissingWinningPrimaryOption`), the runtime now also retains bounded `proposal_execution_detail(domain, item_id)` query projections for recent enacted/failed/advisory items, and treasury-spend execution details now carry scalar-aware `base_amount + scalar + final_amount` invoice truth. The remaining observability gap is richer per-kind reporting beyond the current bounded slices rather than missing invoice-scalar execution detail itself.
     - [x] `Publish one canonical payload-kind matrix across docs/runtime/events:` the docs, runtime enum, query surfaces, tests, and submission/vote events now consistently use only `L1RootAction`, `L2TreasurySpend`, `L2ParameterChange`, `Intent`, and `L2SignalToL1` as the active payload-kind vocabulary.
   - [x] `Define advisory payload semantics:` the governance specification now fixes bounded `Intent` / `L2SignalToL1` payload shape (`summary`, optional `doc_cid`, optional referenced payload hash), explicit non-executable handling, and the default no winner-memory / GovXP credit contract.
@@ -76,7 +130,7 @@
   - [ ] `Design the next richer browser composition surface beyond the current advisory + minimal tactical treasury forms`
   - [ ] `Define a separate materialized/archive governance UX instead of stretching bounded retention cards`
 
-### 1. Web-client wallet and execution UX hardening
+### 2. Web-client wallet and execution UX hardening
 
 - [x] `Finish transaction-grade wallet UX in web-client:` account/signer ownership, bounded asset projection, send-surface provenance, native safe-max honesty, tracked-asset transfer coverage, and draft-keyed in-flight send behavior across watch-only/signer transitions are now landed on the current line.
 - [ ] `Extend the Wallet widget beyond the bounded tracked-asset contract:` the wallet now discovers the bounded tracked-asset set with live balances for the selected account and the send surface can already transfer Native plus those bounded tracked assets, but any future expansion beyond that bounded runtime-facing contract still needs a wider authoritative asset-presentation / discovery surface before the wallet should pretend to expose a full portfolio UX.
@@ -86,7 +140,7 @@
   - [x] `Move governance advisory payload hashing behind an existing action-path lazy edge:` the governance advisory review/submit path now computes the payload hash through an on-demand dynamic `@polkadot/util-crypto` import instead of pinning that crypto chunk on the base governance viewer path.
   - [x] `Choose the next bootstrap fan-out boundary after the advisory hashing cut:` the next honest choice is `(a)` for the current line: accept that startup still pays for bounded live chain bootstrap while the canonical default workspace remains on-chain-first/eager, and defer any further typed-API/metadata lazy boundary until that product contract changes.
 
-### 2. Web-client UI architecture simplification
+### 3. Web-client UI architecture simplification
 
 - [ ] `Continue evolving the reserved edge-lane layout model:` the first header/footer/sidebar lane-spec line is already landed. Remaining work:
   - [ ] `Define the first concrete left/right lane growth slice if product pressure creates another reserved lane`
@@ -108,7 +162,7 @@
 
 ## Conditional / Externally Gated Work
 
-### 5. Relay-beacon replacement path
+### 4. Relay-beacon replacement path
 
 > Only actionable if a real parachain-consumable per-block beacon appears upstream.
 
@@ -117,7 +171,7 @@
 - [ ] `Only if that future per-block beacon exists, wire AAA to it and measure the proof-size / weight impact.`
 - [ ] `Only after a production-ready per-block relay/protocol beacon exists, design and prototype any permissionless-collator activation path instead of reviving a local threshold line.`
 
-### 6. External dependency watch
+### 5. External dependency watch
 
 > The simplified randomness/security roadmap depends on upstream delivery rather than local cryptographic ambition.
 

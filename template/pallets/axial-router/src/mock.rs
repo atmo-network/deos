@@ -33,6 +33,9 @@ thread_local! {
 
     // Fee accumulator for verification
     pub static COLLECTED_FEES: RefCell<Vec<(u64, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
+
+    // Deterministic fee-routing failure switch for atomicity regressions
+    pub static FORCE_FEE_FAILURE: RefCell<bool> = const { RefCell::new(false) };
 }
 
 // Helper methods to setup state
@@ -68,6 +71,19 @@ pub fn set_oracle_price(asset_a: AssetKind, asset_b: AssetKind, price: u128) {
 
 pub fn get_collected_fees() -> Vec<(u64, AssetKind, u128)> {
   COLLECTED_FEES.with(|f| f.borrow().clone())
+}
+
+pub fn set_force_fee_failure(should_fail: bool) {
+  FORCE_FEE_FAILURE.with(|flag| *flag.borrow_mut() = should_fail);
+}
+
+pub fn get_pool(asset_a: AssetKind, asset_b: AssetKind) -> Option<(u128, u128)> {
+  let key = if asset_a < asset_b {
+    (asset_a, asset_b)
+  } else {
+    (asset_b, asset_a)
+  };
+  POOLS.with(|p| p.borrow().get(&key).cloned())
 }
 
 type Block = frame_system::mocking::MockBlock<Test>;
@@ -318,9 +334,10 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
 pub struct MockFeeAdapter;
 impl pallet_axial_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter {
   fn route_fee(who: &u64, asset: AssetKind, amount: u128) -> Result<(), DispatchError> {
+    if FORCE_FEE_FAILURE.with(|flag| *flag.borrow()) {
+      return Err(DispatchError::Other("Forced fee routing failure"));
+    }
     COLLECTED_FEES.with(|f| f.borrow_mut().push((*who, asset, amount)));
-
-    // Transfer fee to burning manager account (123)
     let burn_mgr = 123;
 
     match asset {
@@ -629,6 +646,7 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   TMC_RATES.with(|r| r.borrow_mut().clear());
   ORACLE_PRICES.with(|p| p.borrow_mut().clear());
   COLLECTED_FEES.with(|f| f.borrow_mut().clear());
+  FORCE_FEE_FAILURE.with(|flag| *flag.borrow_mut() = false);
 
   ext.execute_with(|| {
     // Pre-fund accounts with Native Balance for deposits

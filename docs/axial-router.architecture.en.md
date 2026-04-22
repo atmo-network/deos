@@ -29,18 +29,17 @@ graph TD
 
     subgraph "Atomic Execution Block"
 
-    Router -->|2. Pre-Swap Snapshot| Oracle[EMA Oracle]
+    Router -->|2. Route Selection| Decision{Efficiency Score}
+    Router -->|3. One-Hop Fee| BurnMgr[Burning Manager Account]
+    Router -->|4. Pre-Swap Snapshot| Oracle[EMA Oracle]
     Oracle -.->|Update EmaPrices| OracleStorage[(EmaPrices Storage)]
 
-    Router -->|3. Route Selection| Decision{Efficiency Score}
     Decision -->|DirectXyk| XYK[AssetConversion Pallet]
     Decision -->|DirectMint| TMC[TMC Pallet]
     Decision -->|MultiHopNative| XYK
 
-    XYK -->|4. Balance Delta| User
-    TMC -->|4. mint_with_distribution| User
-
-    Router -->|5. One-Hop Fee| BurnMgr[Burning Manager Account]
+    XYK -->|5. Balance Delta| User
+    TMC -->|5. mint_with_distribution| User
 
     end
 ```
@@ -51,13 +50,14 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 1. `Extrinsic Validation`: `amount_in >= MinSwapForeign`, `block <= deadline`.
 2. `Core Validation`: `from != to`, `amount_in > 0`.
-3. `Pre-Swap Oracle Update`: Snapshot pool reserves and update EMA prices _before_ trade.
-4. `Fee Calculation`: Zero for fee-exempt system accounts (BM, ZM, Router); `Perbill`-based for users.
+3. `Fee Calculation`: Zero for fee-exempt system accounts (BM, ZM, Router); `Perbill`-based for users.
+4. `Gross-Debit Preflight`: Users must be able to pay the full `amount_in` under the selected preservation policy before any state-mutating swap path begins.
 5. `Route Selection`: `find_optimal_route()` evaluates all candidates, selects by highest `efficiency_score()`.
 6. `Price Protection`: Validate quote against EMA oracle and slippage bounds.
-7. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
-8. `Fee Collection`: One-hop transfer from user to Burning Manager via `FeeAdapter::route_fee()`.
-9. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`.
+7. `Fee Collection`: One-hop transfer from user to Burning Manager via `FeeAdapter::route_fee()`, inside the same transactional flow as the swap.
+8. `Pre-Swap Oracle Update`: Snapshot pool reserves and update EMA prices _before_ trade execution.
+9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
+10. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`.
 
 `Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets (BM, ZM) for system-level swaps with automatic fee exemption and keep-alive awareness.
 

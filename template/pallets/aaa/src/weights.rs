@@ -154,8 +154,8 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> TaskWeightInfo
   }
 
   fn dex_swap() -> Weight {
-    Weight::from_parts(260_000_000, 3200)
-      .saturating_add(T::DbWeight::get().reads_writes(12, 8))
+    Weight::from_parts(280_000_000, 13_000)
+      .saturating_add(T::DbWeight::get().reads_writes(13, 10))
   }
 
   fn dex_liquidity() -> Weight {
@@ -206,7 +206,7 @@ impl TaskWeightInfo for () {
     let bounded_legs = u64::from(legs.min(8));
     Weight::from_parts(15_000_000u64.saturating_add(bounded_legs.saturating_mul(2_000_000)), 1400)
   }
-  fn dex_swap() -> Weight { Weight::from_parts(260_000_000, 3200) }
+  fn dex_swap() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn dex_liquidity() -> Weight { Weight::from_parts(220_000_000, 3600) }
   fn noop() -> Weight { Weight::from_parts(1_000_000, 0) }
 }
