@@ -1,5 +1,6 @@
 import type {
   GovernanceAccountId,
+  GovernanceAccountPowerView,
   GovernanceAdapter,
   GovernanceAuthorizedRuntimeUpgrade,
   GovernanceDomainId,
@@ -206,6 +207,14 @@ export class GovernanceUnavailableBlockchainProvider implements GovernanceBlockc
     _domainId: GovernanceDomainId,
     _itemId: GovernanceItemId,
   ): Promise<GovernanceProposalVoteTally | null> {
+    throw new Error(this.unavailableReason);
+  }
+
+  async getAccountGovernancePowerView(
+    _domainId: GovernanceDomainId,
+    _itemId: GovernanceItemId,
+    _accountId: GovernanceAccountId,
+  ): Promise<GovernanceAccountPowerView | null> {
     throw new Error(this.unavailableReason);
   }
 

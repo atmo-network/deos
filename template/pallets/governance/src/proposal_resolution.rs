@@ -169,6 +169,8 @@ impl<T: Config> Pallet<T> {
   ) -> DispatchResult {
     let proposal =
       ActiveProposals::<T>::get(domain, item_id).ok_or(Error::<T>::ProposalNotActive)?;
+    let vote_lock_until =
+      Self::proposal_governance_lock_until(domain, item_id, proposal.submitted_epoch)?;
     let current_epoch = T::EpochProvider::current_epoch();
     let protection_close_epoch = Self::proposal_protection_close_epoch(proposal.submitted_epoch)?;
     let primary_track_family = Self::do_proposal_primary_track_family(domain, item_id)
@@ -201,10 +203,6 @@ impl<T: Config> Pallet<T> {
         DispatchError,
       > {
         let mut votes = maybe_votes.take().unwrap_or(Self::empty_proposal_votes());
-        let ballot = ProposalBallot {
-          account: account.clone(),
-          vote_epoch: current_epoch,
-        };
         let ordinary_track_vote_exists = Self::ordinary_track_contains_account(&votes, &account);
         let veto_track_vote_exists = Self::veto_track_contains_account(&votes, &account);
         let is_first_participation = !ordinary_track_vote_exists && !veto_track_vote_exists;
@@ -229,6 +227,8 @@ impl<T: Config> Pallet<T> {
               !ordinary_track_vote_exists,
               Error::<T>::ProposalVoteAlreadyCast
             );
+            let ballot =
+              Self::ordinary_proposal_ballot(domain, item_id, &proposal, current_epoch, &account)?;
             votes
               .ayes
               .try_push(ballot)
@@ -249,6 +249,8 @@ impl<T: Config> Pallet<T> {
               !ordinary_track_vote_exists,
               Error::<T>::ProposalVoteAlreadyCast
             );
+            let ballot =
+              Self::ordinary_proposal_ballot(domain, item_id, &proposal, current_epoch, &account)?;
             votes
               .nays
               .try_push(ballot)
@@ -273,6 +275,8 @@ impl<T: Config> Pallet<T> {
               !ordinary_track_vote_exists,
               Error::<T>::ProposalVoteAlreadyCast
             );
+            let ballot =
+              Self::ordinary_proposal_ballot(domain, item_id, &proposal, current_epoch, &account)?;
             votes
               .amplifies
               .try_push(ballot)
@@ -297,6 +301,8 @@ impl<T: Config> Pallet<T> {
               !ordinary_track_vote_exists,
               Error::<T>::ProposalVoteAlreadyCast
             );
+            let ballot =
+              Self::ordinary_proposal_ballot(domain, item_id, &proposal, current_epoch, &account)?;
             votes
               .approves
               .try_push(ballot)
@@ -321,6 +327,8 @@ impl<T: Config> Pallet<T> {
               !ordinary_track_vote_exists,
               Error::<T>::ProposalVoteAlreadyCast
             );
+            let ballot =
+              Self::ordinary_proposal_ballot(domain, item_id, &proposal, current_epoch, &account)?;
             votes
               .reduces
               .try_push(ballot)
@@ -347,6 +355,14 @@ impl<T: Config> Pallet<T> {
                 Error::<T>::ProposalVoteAlreadyCast
               );
             }
+            let ballot = Self::protection_proposal_ballot(
+              domain,
+              item_id,
+              &proposal,
+              current_epoch,
+              protection_close_epoch,
+              &account,
+            );
             votes
               .vetoes
               .try_push(ballot)
@@ -373,6 +389,14 @@ impl<T: Config> Pallet<T> {
                 Error::<T>::ProposalVoteAlreadyCast
               );
             }
+            let ballot = Self::protection_proposal_ballot(
+              domain,
+              item_id,
+              &proposal,
+              current_epoch,
+              protection_close_epoch,
+              &account,
+            );
             votes
               .passes
               .try_push(ballot)
@@ -409,6 +433,7 @@ impl<T: Config> Pallet<T> {
         ))
       },
     )?;
+    Self::extend_governance_lock(account.clone(), vote_lock_until);
     if is_first_participation {
       Self::note_total_participation(domain, &account);
     }
@@ -475,6 +500,81 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  fn proposal_governance_lock_until(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    submitted_epoch: T::Epoch,
+  ) -> Result<T::Epoch, DispatchError> {
+    let primary_close_epoch =
+      Self::proposal_effective_primary_close_epoch(domain, item_id, submitted_epoch)?;
+    Self::add_epochs(primary_close_epoch, T::ProposalEnactmentDelay::get())
+  }
+
+  fn extend_governance_lock(account: T::AccountId, lock_until: T::Epoch) {
+    let previous_lock_until = GovernanceLocks::<T>::get(&account).map(|lock| lock.lock_until);
+    if previous_lock_until.is_some_and(|previous| previous >= lock_until) {
+      return;
+    }
+    GovernanceLocks::<T>::insert(&account, GovernanceLock { lock_until });
+    Self::deposit_event(Event::GovernanceLockExtended {
+      account,
+      previous_lock_until,
+      new_lock_until: lock_until,
+    });
+  }
+
+  fn ordinary_proposal_ballot(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    proposal: &ActiveProposal<T::Epoch>,
+    current_epoch: T::Epoch,
+    account: &T::AccountId,
+  ) -> Result<ProposalBallot<T::AccountId, T::Epoch>, DispatchError> {
+    let primary_open_epoch =
+      Self::proposal_effective_primary_open_epoch(domain, item_id, proposal.submitted_epoch)?;
+    let primary_close_epoch =
+      Self::proposal_effective_primary_close_epoch(domain, item_id, proposal.submitted_epoch)?;
+    let context = Self::proposal_vote_context(
+      item_id,
+      primary_open_epoch,
+      current_epoch,
+      primary_close_epoch,
+      current_epoch,
+    );
+    let weight = u64::from(T::ProposalVoteWeightProvider::vote_weight(
+      domain, &context, account,
+    ));
+    Ok(ProposalBallot {
+      account: account.clone(),
+      vote_epoch: current_epoch,
+      weight,
+      raw_power: weight,
+    })
+  }
+
+  fn protection_proposal_ballot(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    proposal: &ActiveProposal<T::Epoch>,
+    current_epoch: T::Epoch,
+    protection_close_epoch: T::Epoch,
+    account: &T::AccountId,
+  ) -> ProposalBallot<T::AccountId, T::Epoch> {
+    let context = Self::proposal_vote_context(
+      item_id,
+      proposal.submitted_epoch,
+      current_epoch,
+      protection_close_epoch,
+      current_epoch,
+    );
+    ProposalBallot {
+      account: account.clone(),
+      vote_epoch: current_epoch,
+      weight: T::VetoVotePowerProvider::vote_weight(domain, &context, account),
+      raw_power: T::VetoVotePowerProvider::raw_vote_weight(domain, account),
+    }
+  }
+
   pub(crate) fn proposal_ordinary_weighting_window(
     domain: T::DomainId,
     item_id: T::WinningVoteItemId,
@@ -513,20 +613,18 @@ impl<T: Config> Pallet<T> {
     maturity_epoch: T::Epoch,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
   ) -> u64 {
-    ballots.iter().fold(0u64, |sum, ballot| {
-      let context = Self::proposal_vote_context(
-        item_id,
-        submitted_epoch,
-        current_epoch,
-        maturity_epoch,
-        ballot.vote_epoch,
-      );
-      sum.saturating_add(u64::from(T::ProposalVoteWeightProvider::vote_weight(
-        domain,
-        &context,
-        &ballot.account,
-      )))
-    })
+    let _ = (
+      domain,
+      item_id,
+      current_epoch,
+      submitted_epoch,
+      maturity_epoch,
+    );
+    let mut total = 0u64;
+    for ballot in ballots {
+      total = total.saturating_add(ballot.weight);
+    }
+    total
   }
 
   pub(crate) fn proposal_veto_weight_sum(
@@ -537,32 +635,30 @@ impl<T: Config> Pallet<T> {
     maturity_epoch: T::Epoch,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
   ) -> u64 {
-    ballots.iter().fold(0u64, |sum, ballot| {
-      let context = Self::proposal_vote_context(
-        item_id,
-        submitted_epoch,
-        current_epoch,
-        maturity_epoch,
-        ballot.vote_epoch,
-      );
-      sum.saturating_add(T::VetoVotePowerProvider::vote_weight(
-        domain,
-        &context,
-        &ballot.account,
-      ))
-    })
+    let _ = (
+      domain,
+      item_id,
+      current_epoch,
+      submitted_epoch,
+      maturity_epoch,
+    );
+    let mut total = 0u64;
+    for ballot in ballots {
+      total = total.saturating_add(ballot.weight);
+    }
+    total
   }
 
   pub(crate) fn proposal_raw_protection_weight_sum(
     domain: T::DomainId,
     ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
   ) -> u64 {
-    ballots.iter().fold(0u64, |sum, ballot| {
-      sum.saturating_add(T::VetoVotePowerProvider::raw_vote_weight(
-        domain,
-        &ballot.account,
-      ))
-    })
+    let _ = domain;
+    let mut total = 0u64;
+    for ballot in ballots {
+      total = total.saturating_add(ballot.raw_power);
+    }
+    total
   }
 
   pub(crate) fn proposal_raw_veto_weight_sum(
@@ -1420,6 +1516,102 @@ impl<T: Config> Pallet<T> {
       primary_window,
       protection_window,
     ))
+  }
+
+  fn account_frozen_ballot(
+    ballots: &BoundedVec<ProposalBallot<T::AccountId, T::Epoch>, T::MaxWinningVoteAccountsPerCall>,
+    vote: ProposalVoteKind,
+    account: &T::AccountId,
+  ) -> Option<ProposalFrozenBallot<T::Epoch>> {
+    for ballot in ballots {
+      if ballot.account == *account {
+        return Some(ProposalFrozenBallot {
+          vote,
+          vote_epoch: ballot.vote_epoch,
+          weight: ballot.weight,
+          raw_power: ballot.raw_power,
+        });
+      }
+    }
+    None
+  }
+
+  fn account_frozen_ordinary_ballot(
+    votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
+    account: &T::AccountId,
+  ) -> Option<ProposalFrozenBallot<T::Epoch>> {
+    Self::account_frozen_ballot(&votes.ayes, ProposalVoteKind::Aye, account)
+      .or_else(|| Self::account_frozen_ballot(&votes.nays, ProposalVoteKind::Nay, account))
+      .or_else(|| Self::account_frozen_ballot(&votes.amplifies, ProposalVoteKind::Amplify, account))
+      .or_else(|| Self::account_frozen_ballot(&votes.approves, ProposalVoteKind::Approve, account))
+      .or_else(|| Self::account_frozen_ballot(&votes.reduces, ProposalVoteKind::Reduce, account))
+  }
+
+  fn account_frozen_protection_ballot(
+    votes: &ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
+    account: &T::AccountId,
+  ) -> Option<ProposalFrozenBallot<T::Epoch>> {
+    Self::account_frozen_ballot(&votes.vetoes, ProposalVoteKind::Veto, account)
+      .or_else(|| Self::account_frozen_ballot(&votes.passes, ProposalVoteKind::Pass, account))
+  }
+
+  pub(crate) fn do_account_governance_power_view(
+    domain: T::DomainId,
+    item_id: T::WinningVoteItemId,
+    account: T::AccountId,
+  ) -> Option<AccountGovernancePowerView<T::Epoch>> {
+    let proposal = ActiveProposals::<T>::get(domain, item_id)?;
+    let current_epoch = T::EpochProvider::current_epoch();
+    let primary_open_epoch =
+      Self::proposal_effective_primary_open_epoch(domain, item_id, proposal.submitted_epoch)
+        .ok()?;
+    let primary_close_epoch =
+      Self::proposal_effective_primary_close_epoch(domain, item_id, proposal.submitted_epoch)
+        .ok()?;
+    let protection_close_epoch =
+      Self::proposal_protection_close_epoch(proposal.submitted_epoch).ok()?;
+    let ordinary_context = Self::proposal_vote_context(
+      item_id,
+      primary_open_epoch,
+      current_epoch,
+      primary_close_epoch,
+      current_epoch,
+    );
+    let protection_context = Self::proposal_vote_context(
+      item_id,
+      proposal.submitted_epoch,
+      current_epoch,
+      protection_close_epoch,
+      current_epoch,
+    );
+    let votes =
+      ProposalVotesByItem::<T>::get(domain, item_id).unwrap_or(Self::empty_proposal_votes());
+    Some(AccountGovernancePowerView {
+      governance_lock_until: GovernanceLocks::<T>::get(&account).map(|lock| lock.lock_until),
+      ordinary_power_profile: T::ProposalTrackPowerProfileProvider::power_profile(
+        domain,
+        item_id,
+        crate::ProposalTrackFamily::Ordinary,
+      ),
+      protection_power_profile: T::ProposalTrackPowerProfileProvider::power_profile(
+        domain,
+        item_id,
+        crate::ProposalTrackFamily::Veto,
+      ),
+      current_ordinary_weight: u64::from(T::ProposalVoteWeightProvider::vote_weight(
+        domain,
+        &ordinary_context,
+        &account,
+      )),
+      current_protection_weight: T::VetoVotePowerProvider::vote_weight(
+        domain,
+        &protection_context,
+        &account,
+      ),
+      current_protection_raw_power: T::VetoVotePowerProvider::raw_vote_weight(domain, &account),
+      frozen_ordinary_ballot: Self::account_frozen_ordinary_ballot(&votes, &account),
+      frozen_protection_ballot: Self::account_frozen_protection_ballot(&votes, &account),
+    })
   }
 
   pub fn proposal_resolution_state(

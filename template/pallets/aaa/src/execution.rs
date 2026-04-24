@@ -1,6 +1,6 @@
 use super::pallet::*;
 use super::types::Task as AaaTask;
-use super::{AssetOps, DexOps, StakingOps};
+use super::{AssetOps, DexOps, LiquidityDonationOps, StakingOps};
 use alloc::vec::Vec;
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
@@ -78,9 +78,11 @@ enum PreparedTask<T: Config> {
     asset: T::AssetId,
     amount: T::Balance,
   },
-  StakeNative {
+  DonateLiquidity {
+    asset_a: T::AssetId,
+    asset_b: T::AssetId,
     amount: T::Balance,
-    operator: T::AccountId,
+    max_ratio_error: Perbill,
   },
   Unstake {
     asset: T::AssetId,
@@ -651,8 +653,10 @@ impl<T: Config> Pallet<T> {
       AaaTask::Stake { asset, amount } => {
         Self::push_trigger_asset(amount, *asset, assets);
       }
-      AaaTask::StakeNative { amount, .. } => {
-        Self::push_trigger_asset(amount, T::NativeStakingAssetId::get(), assets);
+      AaaTask::DonateLiquidity {
+        asset_a, amount, ..
+      } => {
+        Self::push_trigger_asset(amount, *asset_a, assets);
       }
       AaaTask::Noop | AaaTask::Unstake { .. } => {}
     }
@@ -946,11 +950,15 @@ impl<T: Config> Pallet<T> {
           amount: resolved,
         }))
       }
-      AaaTask::StakeNative { amount, operator } => {
-        let native_staking_asset = T::NativeStakingAssetId::get();
+      AaaTask::DonateLiquidity {
+        asset_a,
+        asset_b,
+        amount,
+        max_ratio_error,
+      } => {
         let resolved = match Self::resolve_for_task(
           amount,
-          native_staking_asset,
+          *asset_a,
           actor,
           reserved,
           trigger_balances,
@@ -963,10 +971,14 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
-        Ok(PreparedTaskOutcome::Executable(PreparedTask::StakeNative {
-          amount: resolved,
-          operator: operator.clone(),
-        }))
+        Ok(PreparedTaskOutcome::Executable(
+          PreparedTask::DonateLiquidity {
+            asset_a: *asset_a,
+            asset_b: *asset_b,
+            amount: resolved,
+            max_ratio_error: *max_ratio_error,
+          },
+        ))
       }
       AaaTask::Unstake { asset, shares } => {
         let resolved = match Self::resolve_for_task(
@@ -1126,12 +1138,26 @@ impl<T: Config> Pallet<T> {
           amount,
         });
       }
-      PreparedTask::StakeNative { amount, operator } => {
-        T::StakingOps::stake_native(actor, amount, &operator)?;
-        Self::deposit_event(Event::StakeNativeExecuted {
-          aaa_id,
+      PreparedTask::DonateLiquidity {
+        asset_a,
+        asset_b,
+        amount,
+        max_ratio_error,
+      } => {
+        let (amount_a, amount_b) = T::LiquidityDonationOps::donate_liquidity(
+          actor,
+          asset_a,
+          asset_b,
           amount,
-          operator,
+          max_ratio_error,
+        )?;
+        Self::deposit_event(Event::LiquidityDonated {
+          aaa_id,
+          asset_a,
+          asset_b,
+          amount,
+          amount_a,
+          amount_b,
         });
       }
       PreparedTask::Unstake { asset, shares } => {

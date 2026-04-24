@@ -11,7 +11,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/tmc.architecture.en.md
-  - ../../docs/tmctol.specification.ru.md
+  - ../../docs/tmctol.specification.en.md
 status: active
 audience: newcomer
 tags:
@@ -83,4 +83,4 @@ TMC — только один элемент системы. В текущей �
 ## Источники
 
 - `docs/tmc.architecture.en.md`
-- `docs/tmctol.specification.ru.md`
+- `docs/tmctol.specification.en.md`

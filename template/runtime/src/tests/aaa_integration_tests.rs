@@ -1,9 +1,13 @@
 use super::common::{
-  ALICE, ASSET_A, BOB, CHARLIE, create_test_asset, mint_tokens, seeded_test_ext,
+  ALICE, ASSET_A, BOB, CHARLIE, add_liquidity, create_pool, create_test_asset, mint_tokens,
+  seeded_test_ext,
 };
 use crate::{
-  AAA, Assets, Balances, Runtime, RuntimeEvent, RuntimeOrigin, System,
-  configs::{AddressEventIngress, RuntimeAddressEventIngress, RuntimeAddressEventIngressHook},
+  AAA, Assets, Balances, Runtime, RuntimeEvent, RuntimeOrigin, Staking, System,
+  configs::{
+    AddressEventIngress, RuntimeAddressEventIngress, RuntimeAddressEventIngressHook,
+    aaa_config::TmctolGenesisSystemAaas,
+  },
 };
 use alloc::boxed::Box;
 use pallet_aaa::{
@@ -17,6 +21,7 @@ use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
   traits::{
     Currency, Get, Hooks,
+    fungibles::Inspect as FungiblesInspect,
     tokens::imbalance::{ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting},
   },
   weights::Weight,
@@ -255,6 +260,129 @@ fn manual_trigger_executes_transfer_execution_plan() {
           skipped_funding_unavailable: 0,
           failed_steps: 0,
         } if *id == aaa_id
+      )
+    }));
+  });
+}
+
+#[test]
+fn native_staking_lp_farmer_activation_requires_initialized_pool() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_noop!(
+      TmctolGenesisSystemAaas::activate_native_staking_lp_farming(1),
+      DispatchError::Other("StakedAssetUnavailable")
+    );
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_noop!(
+      TmctolGenesisSystemAaas::activate_native_staking_lp_farming(1),
+      DispatchError::Other("NativeStakingAmmUnavailable")
+    );
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
+    let base_asset = AssetKind::Local(0);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    assert_ok!(create_pool(
+      RuntimeOrigin::signed(BOB),
+      base_asset,
+      staked_asset
+    ));
+    assert_ok!(add_liquidity(
+      RuntimeOrigin::signed(BOB),
+      base_asset,
+      staked_asset,
+      400,
+      400,
+      1,
+      1,
+      &BOB,
+    ));
+    assert_ok!(TmctolGenesisSystemAaas::activate_native_staking_lp_farming(
+      1
+    ));
+    let actor = AAA::aaa_instances(primitives::ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID)
+      .expect("native staking LP farmer must exist");
+    assert!(matches!(
+      actor.execution_plan.first().map(|step| &step.task),
+      Some(Task::DonateLiquidity { .. })
+    ));
+  });
+}
+
+#[test]
+fn system_aaa_executes_native_staking_lp_donation_task() {
+  seeded_test_ext().execute_with(|| {
+    use polkadot_sdk::pallet_asset_conversion::PoolLocator;
+    System::set_block_number(1);
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    let staked_asset_id = Staking::staked_asset_id(0).expect("staked asset id must resolve");
+    let base_asset = AssetKind::Local(0);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    assert_ok!(create_pool(
+      RuntimeOrigin::signed(BOB),
+      base_asset,
+      staked_asset
+    ));
+    assert_ok!(add_liquidity(
+      RuntimeOrigin::signed(BOB),
+      base_asset,
+      staked_asset,
+      400,
+      400,
+      1,
+      1,
+      &BOB,
+    ));
+    let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &base_asset,
+      &staked_asset,
+    )
+    .expect("NTVE/stNTVE pool id must resolve");
+    let pool_account =
+      <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::address(&pool_id)
+        .expect("NTVE/stNTVE pool account must resolve");
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(&pool_id)
+      .expect("NTVE/stNTVE pool must exist");
+    let lp_supply_before =
+      <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
+        pool.lp_token,
+      );
+    let execution_plan = TmctolGenesisSystemAaas::build_native_staking_lp_farming_execution_plan(1);
+    let aaa_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    let sovereign = aaa_account(aaa_id);
+    assert_ok!(Assets::transfer(
+      RuntimeOrigin::signed(BOB),
+      0,
+      sovereign.clone().into(),
+      81,
+    ));
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    let lp_supply_after =
+      <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
+        pool.lp_token,
+      );
+    assert_eq!(lp_supply_after, lp_supply_before);
+    assert_eq!(Assets::balance(0, pool_account.clone()), 440);
+    assert_eq!(Assets::balance(staked_asset_id, pool_account), 440);
+    assert_eq!(Assets::balance(0, sovereign.clone()), 1);
+    assert_eq!(Assets::balance(staked_asset_id, sovereign), 0);
+    assert!(has_aaa_event(|event| {
+      matches!(
+        event,
+        Event::LiquidityDonated {
+          aaa_id: id,
+          asset_a: AssetKind::Local(0),
+          asset_b,
+          amount: 80,
+          amount_a: 40,
+          amount_b: 40,
+        } if *id == aaa_id && *asset_b == AssetKind::Local(staked_asset_id)
       )
     }));
   });
@@ -1056,34 +1184,14 @@ fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
 }
 
 #[test]
-fn staking_adapter_rejects_native_stake_without_operator_context() {
+fn staking_adapter_supports_liquid_native_stake_without_operator_context() {
   seeded_test_ext().execute_with(|| {
     let who = crate::AccountId::new([77u8; 32]);
-    let result =
-      <crate::configs::aaa_config::TmctolStakingOps as pallet_aaa::adapters::StakingOps<
-        crate::AccountId,
-        AssetKind,
-        u128,
-      >>::stake(&who, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
-    assert_eq!(
-      result,
-      Err(pallet_staking::Error::<crate::Runtime>::NativeStakeRequiresOperator.into())
-    );
-  });
-}
-
-#[test]
-fn staking_adapter_supports_native_stake_with_operator_context() {
-  seeded_test_ext().execute_with(|| {
-    crate::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
-      BoundedVec::try_from(vec![ALICE]).expect("single invulnerable must fit"),
-    );
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(crate::Staking::register_staking_asset(
       RuntimeOrigin::root(),
       0
     ));
-    let who = crate::AccountId::new([77u8; 32]);
     assert_ok!(Assets::set_team(
       RuntimeOrigin::signed(ALICE),
       0,
@@ -1097,22 +1205,19 @@ fn staking_adapter_supports_native_stake_with_operator_context() {
       &who,
       crate::EXISTENTIAL_DEPOSIT.saturating_mul(10)
     ));
-    let before = Assets::balance(0, who.clone());
     let result =
       <crate::configs::aaa_config::TmctolStakingOps as pallet_aaa::adapters::StakingOps<
         crate::AccountId,
         AssetKind,
         u128,
-      >>::stake_native(&who, crate::EXISTENTIAL_DEPOSIT, &ALICE);
+      >>::stake(&who, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
     assert_ok!(result);
-    assert_eq!(crate::Staking::native_binding(&who), Some(ALICE));
     assert!(crate::Staking::live_native_staked_receipt_balance(&who).unwrap_or_default() > 0);
-    assert!(Assets::balance(0, who.clone()) < before);
   });
 }
 
 #[test]
-fn aaa_native_stake_task_binds_operator_and_mints_stntve() {
+fn aaa_native_stake_task_mints_liquid_stntve_without_binding() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     crate::pallet_collator_selection::Invulnerables::<crate::Runtime>::put(
@@ -1130,9 +1235,9 @@ fn aaa_native_stake_task_binds_operator_and_mints_stntve() {
       ALICE.into(),
       ALICE.into(),
     ));
-    let execution_plan = BoundedVec::try_from(vec![make_step(Task::StakeNative {
+    let execution_plan = BoundedVec::try_from(vec![make_step(Task::Stake {
+      asset: AssetKind::Local(0),
       amount: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
-      operator: ALICE,
     })])
     .expect("execution_plan fits");
     let aaa_id = create_user(BOB, manual_schedule(), None, execution_plan);
@@ -1146,7 +1251,6 @@ fn aaa_native_stake_task_binds_operator_and_mints_stntve() {
     fund_native(aaa_id, 100_000_000_000_000);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(BOB), aaa_id));
     run_idle(Weight::MAX);
-    assert_eq!(crate::Staking::native_binding(&aaa_acc), Some(ALICE));
     assert!(
       crate::Staking::live_native_staked_receipt_balance(&aaa_acc).unwrap_or_default() > 0,
       "AAA sovereign must receive stNTVE after native stake"
@@ -1154,11 +1258,11 @@ fn aaa_native_stake_task_binds_operator_and_mints_stntve() {
     assert!(has_aaa_event(|event| {
       matches!(
         event,
-        Event::StakeNativeExecuted {
+        Event::StakeExecuted {
           aaa_id: id,
+          asset: AssetKind::Local(0),
           amount,
-          operator,
-        } if *id == aaa_id && *amount == crate::EXISTENTIAL_DEPOSIT && *operator == ALICE
+        } if *id == aaa_id && *amount == crate::EXISTENTIAL_DEPOSIT
       )
     }));
   });
@@ -2587,8 +2691,8 @@ fn assert_core_stability(aaa_ids: &[u64], diag: &StressDiagnostics) {
 
 /// Under-capacity: 35 chain actors + ~12 genesis actors active in worst block.
 /// Runtime has MaxExecutionsPerBlock=48.
-/// Genesis creates 13 System AAAs (cooldown=10): in worst block ~12 compete.
-/// 35 + 12 = 47 < 48 → all chain actors must fire every block.
+/// Genesis creates 14 System AAAs (cooldown=10): in worst block ~13 compete.
+/// 35 + 13 = 48 <= 48 → all chain actors must fire every block.
 ///
 /// Asserts: exact balance conservation, 100% per-block coverage, zero deferrals,
 /// zero failures, uniform cycle_nonce, zero consecutive_failures.
@@ -2597,7 +2701,7 @@ fn circular_chain_under_capacity_every_actor_every_block() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    // 35 chain + ≤12 active genesis = ≤47 < MaxExecutionsPerBlock(48)
+    // 35 chain + ≤13 active genesis = ≤48 <= MaxExecutionsPerBlock(48)
     let chain_len = 35u64;
     let num_blocks = 50u32;
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
@@ -3227,9 +3331,9 @@ fn genesis_sparse_id_space_all_actors_execute_every_block() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
-    // Genesis AAAs occupy IDs: 0, 2-13 (Fee Sink keeps reserved id 1, no actor) (13 actors).
-    // NextAaaId = 2005. The gaps (1, 5..999, 1005..2000) are empty.
-    // This is a genuine sparse ID space: ~2000 slots, only 13 occupied.
+    // Genesis AAAs occupy IDs: 0, 2-14 (Fee Sink keeps reserved id 1, no actor) (14 actors).
+    // The gaps after ID 1 are empty until a new actor is created.
+    // This is a genuine sparse ID space: ~2000 slots, only 14 occupied.
     //
     // Ringless scheduler iterates ActiveActors BTreeSet directly,
     // so sparse IDs are handled efficiently — no scanning over empty slots.
@@ -3238,17 +3342,17 @@ fn genesis_sparse_id_space_all_actors_execute_every_block() {
     // ID 0 (Burning Manager) has every_blocks=10, so it won't fire at block 2;
     // all other genesis actors have every_blocks=1.
     let genesis_ids_all: alloc::vec::Vec<u64> =
-      alloc::vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,];
+      alloc::vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,];
     for &id in &genesis_ids_all {
       let sov = AAA::sovereign_account_id_system(id);
       let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov, initial_balance);
     }
     // Actors expected to fire every block (every_blocks=1, nonce=0 skips cooldown)
     let every_block_genesis: alloc::vec::Vec<u64> =
-      alloc::vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13,];
+      alloc::vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,];
     // Create a fresh actor at the high end (ID 2005) to extend the space
     let fresh_id = crate::AAA::next_aaa_id();
-    assert_eq!(fresh_id, 14);
+    assert_eq!(fresh_id, 15);
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,

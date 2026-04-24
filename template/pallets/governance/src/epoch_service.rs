@@ -457,6 +457,7 @@ impl<T: Config> Pallet<T> {
             false
           });
         if evicted {
+          T::WinningVoteRewardTouchHandler::note_winning_vote_evicted(touch.domain, &touch.account);
           Self::deposit_event(Event::WinningVoteWindowEvicted {
             domain: touch.domain,
             account: touch.account,

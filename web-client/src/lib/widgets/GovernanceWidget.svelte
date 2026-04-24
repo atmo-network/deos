@@ -6,6 +6,7 @@
       GovernancePayloadPreimageNoteCost,
       GovernanceProposalPayloadKind,
       GovernanceVoteKind,
+      GovernanceMaterializedArchiveEntry,
   } from "$lib/governance";
   import {
       GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES,
@@ -15,9 +16,10 @@
   import ActionReviewCard from "$lib/governance/ActionReviewCard.svelte";
   import ProposalSemanticsRows from "$lib/governance/ProposalSemanticsRows.svelte";
   import { governanceStore } from "$lib/governance/index.svelte";
+  import { GovernanceUnavailableMaterializedProvider } from "$lib/governance/materialized";
   import { createPayloadReview } from "$lib/governance/payload-review.svelte";
   import { deriveGovernanceTreasuryPayloadDraftState } from "$lib/governance/treasury-payload";
-  import { fromClientBoundedProjection } from "$lib/shared/read-model";
+  import { fromClientBoundedProjection, fromMaterialized } from "$lib/shared/read-model";
   import { Badge, Button, Card, DetailRow, Notice, ReadModelBadge, SectionCard } from "$lib/shared/ui";
 
   type FinalizedProposal = (typeof governanceStore.state.recentFinalizedProposals)[number];
@@ -33,6 +35,13 @@
   };
 
   const refresh = () => governanceStore.refresh();
+  const materializedArchiveProvider = new GovernanceUnavailableMaterializedProvider();
+  const materializedArchivePlaceholder = fromMaterialized<GovernanceMaterializedArchiveEntry[]>(
+    [],
+    "archive-api",
+    "Governance materialized archive provider",
+    "archive",
+  );
 
   let rootEl = $state<HTMLDivElement | null>(null);
   let viewport = $state({ width: 0, height: 0 });
@@ -600,6 +609,40 @@
       );
     }
     return profileLabel(proposal.votePowerProfiles.aye);
+  }
+
+  function voteKindLabel(voteKind?: GovernanceVoteKind | null) {
+    switch (voteKind) {
+      case "aye":
+        return "Aye";
+      case "nay":
+        return "Nay";
+      case "amplify":
+        return "Amplify";
+      case "approve":
+        return "Approve";
+      case "reduce":
+        return "Reduce";
+      case "veto":
+        return "Veto";
+      case "pass":
+        return "Pass";
+      default:
+        return "Unavailable";
+    }
+  }
+
+  function governanceLockLabel(epoch?: number | null) {
+    return epoch == null ? "None" : `Until epoch ${epoch}`;
+  }
+
+  function frozenBallotLabel(
+    ballot?: NonNullable<(typeof governanceStore.state.activeProposals)[number]["accountPowerView"]>["frozenOrdinaryBallot"] | null,
+  ) {
+    if (!ballot) {
+      return "No frozen ballot";
+    }
+    return `${voteKindLabel(ballot.voteKind)} · ${ballot.weight.toLocaleString()} at epoch ${ballot.voteEpoch}`;
   }
 
   function voteButtons(
@@ -1223,7 +1266,7 @@
   }
 
   function runtimeUpgradeOperatorPathLabel() {
-    return "check-authorized-upgrade-local.sh → apply-authorized-upgrade-local.sh";
+    return "authorized-upgrade-local.sh check → authorized-upgrade-local.sh apply --submit";
   }
 
   function finalizedRuntimeUpgradeApplicationLabel(
@@ -1556,6 +1599,14 @@
                   <DetailRow label="Pending enactment" value={pendingEnactmentLabel(proposal.timing?.pendingEnactmentEpoch)} valueClass="text-(--mono-text)" />
                   <DetailRow label={powerLabel} value={primaryTrackPowerLabel(proposal)} valueClass="text-(--mono-text)" />
                   <DetailRow label={vetoLabel} value={profileLabel(proposal.votePowerProfiles.veto)} valueClass="text-(--mono-text)" />
+                  {#if proposal.accountPowerView}
+                    <DetailRow label="Account lock" value={governanceLockLabel(proposal.accountPowerView.governanceLockUntil)} valueClass="text-(--mono-text)" />
+                    <DetailRow label="My current primary" value={proposal.accountPowerView.currentOrdinaryWeight.toLocaleString()} valueClass="text-(--mono-text)" />
+                    <DetailRow label="My current protection" value={proposal.accountPowerView.currentProtectionWeight.toLocaleString()} valueClass="text-(--mono-text)" />
+                    <DetailRow label="Protection raw" value={proposal.accountPowerView.currentProtectionRawPower.toLocaleString()} valueClass="text-(--mono-text)" />
+                    <DetailRow label="Frozen primary" value={frozenBallotLabel(proposal.accountPowerView.frozenOrdinaryBallot)} valueClass="text-(--mono-text)" />
+                    <DetailRow label="Frozen protection" value={frozenBallotLabel(proposal.accountPowerView.frozenProtectionBallot)} valueClass="text-(--mono-text)" />
+                  {/if}
                   {#if hasDecliningPower(proposal)}
                     <Notice variant="warn">Early ballots carry more weight</Notice>
                   {/if}
@@ -1653,6 +1704,32 @@
           </div>
         {:else}
           <Notice>No retained finalized proposals yet</Notice>
+        {/if}
+      </SectionCard>
+
+      <SectionCard title="Governance archive" subtitle="Explicit materialized provider boundary">
+        {#snippet actions()}
+          <ReadModelBadge provenance={materializedArchivePlaceholder.provenance} />
+          <Badge variant="info">future provider</Badge>
+        {/snippet}
+        <Notice variant="muted">Recent finalized cards above are bounded on-chain retention. Full archive search and ballot timelines belong to a separate materialized/indexed provider, not to expanded consensus-state retention.</Notice>
+        <div class="rounded-xl border bg-(--mono-bg) px-3 py-2 grid gap-1">
+          <DetailRow label="Provider" value={materializedArchiveProvider.label()} valueClass="text-(--mono-text)" />
+          <DetailRow label="Contract" value="Indexed archive/search provider" valueClass="text-(--mono-text)" />
+          <DetailRow label="Current status" value={materializedArchiveProvider.message() ?? "Configured"} valueClass="text-(--mono-muted)" />
+        </div>
+        {#if materializedArchivePlaceholder.value.length > 0}
+          <div class="grid gap-2">
+            {#each materializedArchivePlaceholder.value as entry}
+              <div class="rounded-xl border bg-(--mono-bg) px-3 py-2 grid gap-1">
+                <DetailRow label={`#${entry.itemId}`} value={entry.title} valueClass="text-(--mono-text)" />
+                <DetailRow label="Outcome" value={entry.outcomeLabel} valueClass="text-(--mono-muted)" />
+                <DetailRow label="Summary" value={entry.summary} valueClass="text-(--mono-muted)" />
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <Notice>No materialized governance archive backend is configured on the current reference line</Notice>
         {/if}
       </SectionCard>
     </div>

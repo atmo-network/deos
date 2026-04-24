@@ -1,193 +1,191 @@
-# Staking: Share-Vault, Receipt, and Native Binding Architecture
+# Staking: Share-Vault, Native LP Nomination, and Epoch Reward Architecture
 
 > **On-Chain Namespace**
 >
 > - Pallet: `pallet-staking`
 > - PalletId: `staking0`
-> - The pallet does not revolve around one shared operational account. It derives deterministic per-asset sovereign accounts instead:
+> - Deterministic per-asset accounts:
 >   - `pool_account(asset_id) = PalletId.into_sub_account_truncating(asset_id)`
 >   - `reward_account(asset_id) = blake2_256((PalletId, "reward", asset_id))`
 > - Current runtime native staking asset id: `0` (`$NTVE`)
-> - Receipt namespaces:
->   - native/local receipts: `0x5...`
->   - foreign receipts: `0x6...`
+> - Native/local staking receipts use the `0x5...` namespace (`stNTVE`, `stXXX`)
+> - Foreign staking receipts use the `0x6...` namespace
+> - Native collator nomination is backed by locked canonical `NTVE/stNTVE` LP, not by liquid `stNTVE`
 
 ## Executive Summary
 
-`pallet-staking` is the DEOS reference runtime's live multi-asset share-vault staking implementation.
-It already does more than the original share-vault kernel: in the current runtime it combines deterministic per-asset pool accounts, tokenized staking receipts, a native-only collator-binding surface, and the first bounded governance-conditioned reward path. In the shipped reference line, that staking surface serves the TMCTOL standard.
+`pallet-staking` is the DEOS reference runtime's multi-asset share-vault staking implementation plus the native `$NTVE` security and reward surface used by the current launch line.
 
-The core invariant is still the simple one:
+The common staking kernel remains simple:
 
-> Backing inflow belongs to the pool and raises share value without iterating all stakers
+> Backing inflow belongs to the pool and raises receipt value without iterating all holders
 
-What changed in implementation is the ownership and reward surface around that invariant:
+The current native implementation adds a separate security layer on top of that kernel:
 
-- Ownership is moving from legacy `Positions` into transferable `stXXX` receipts
-- Native `$NTVE` is the only security-relevant staking asset
-- Governance-conditioned reward inflow is isolated into a second sovereign channel per asset
-- Reward settlement compounds back into fresh same-asset `stXXX`
+- `stake_native(amount)` mints liquid, yield-bearing `stNTVE`
+- The canonical `NTVE/stNTVE` AMM is the liquidity surface for native security
+- Collator nomination requires explicit custody of `NTVE/stNTVE` LP through `lock_native_lp_for_collator`
+- Native `NativeVotePower` comes from explicit custody sources, not transferable receipt movement
+- Native nomination rewards are recognized by epoch reconciliation and claimed from `reward_account(NTVE)`
+- Remaining event scanning is scoped as legacy non-native reward compatibility
 
-This document describes the implemented runtime architecture, not the abstract contract alone.
+This document describes shipped implementation truth. The broader normative target lives in `docs/staking.specification.en.md`.
 
 ## Architecture Overview
 
 ### Design Principles
 
 1. `Pool-first accounting`
-   Share price moves through pool backing, not per-holder reward writes
-2. `Governance-explicit onboarding`
-   Asset registration and staking registration remain separate decisions
-3. `Receipt-forward ownership`
-   Fresh pools mint/burn `stXXX`; legacy `Positions` survive only as a compatibility bridge
-4. `Native special case`
-   Only `$NTVE` can bind to collator backing; non-native pools remain economic-only
+   Share price moves through pool backing, not per-holder reward writes.
+2. `Liquid native receipt`
+   `$NTVE` staking mints yield-bearing `stNTVE` without binding the account to a collator.
+3. `Liquidity-backed nomination`
+   Native collator backing is explicit locked `NTVE/stNTVE` LP custody.
+4. `Explicit security state`
+   Transferable `stNTVE` movement does not update collator backing or native reward eligibility.
 5. `Dual-inflow separation`
-   Backing inflow and governance-conditioned reward inflow are different channels with different accounting rules
-6. `Runtime-as-Config`
-   Governance domain, reward epoch, coefficient source, receipt lifecycle, and operator validation all come from runtime wiring
+   Backing inflow and governance-conditioned reward inflow are separate sovereign channels.
+6. `Epoch reward truth`
+   Native reward funding is recognized by reward-account balance reconciliation at epoch rollover.
+7. `Runtime-as-Config`
+   Receipt lifecycle, operator validation, LP validation, reward base weight, governance coefficients, compound routing, and read-model valuation are runtime-provided.
 
 ### System Architecture
 
 ```mermaid
 graph TD
-    Gov[Governance] -->|register_staking_asset| Pool[Per-asset pool]
-    Gov -->|initialize_staked_asset| Receipt[stXXX asset class]
-    Gov -->|bootstrap_reward_snapshot| Snap[Reward snapshot state]
-
-    User[User] -->|stake / stake_native| PoolAccount[pool_account(asset_id)]
-    PoolAccount --> Pool
-    Pool -->|mint shares| Receipt
-
-    External[External inflow] -->|same asset| PoolAccount
-    Pool -->|lazy sync| SharePrice[Higher share price]
-
-    RewardSource[Reward inflow] -->|same asset| RewardAccount[reward_account(asset_id)]
-    RewardAccount -->|on_idle ingress| RewardEpochs[RewardEpochAccruals]
-
-    GovMem[Governance reward memory] -->|coefficient| Snapshots[Reward weight snapshots]
-    Receipt -->|transfer / mint / burn events| Snapshots
-    User -->|claim_reward| RewardAccount
-    RewardAccount -->|auto-compound| PoolAccount
-    Pool -->|mint fresh stXXX| User
-
-    User -->|bind_native / clear_native_binding| Binding[NativeBindings]
-    Binding --> Backing[delegated_native_backing]
-    Backing --> Collators[Trusted collator weighting]
+    User[User] -->|stake_native(amount)| NativePool[NTVE share-vault]
+    NativePool -->|mint liquid receipt| StNTVE[stNTVE]
+    User -->|add liquidity| Amm[Zero-fee NTVE/stNTVE AMM]
+    AAA[System AAA LP farmer] -->|DonateLiquidity NTVE/stNTVE| Amm
+    Amm -->|mint LP to user| Lp[NTVE/stNTVE LP]
+    User -->|lock_native_lp_for_collator| CollatorLock[Collator LP lock custody]
+    CollatorLock -->|conservative native value| Session[Collator session ranking]
+    CollatorLock -->|reward base| RewardSnapshots[Native reward snapshots]
+    GovLocks[Governance LP/asset locks] -->|NativeVotePower| Governance[Governance]
+    Governance -->|winning vote touch hook| RewardSnapshots
+    RewardSource[Reward source] -->|fund reward_account NTVE| RewardAccount[reward_account(NTVE)]
+    RewardAccount -->|epoch reconciliation| RewardEpochs[Reward accrual/liability]
+    User -->|claim_nomination_reward| LiquidPayout[liquid NTVE payout]
+    User -->|claim_and_compound_nomination_reward| Compound[stake + add LP + lock]
 ```
 
 ## Account and Asset Topology
 
 ### Per-asset sovereign channels
 
-For each registered staking asset, the pallet derives two deterministic accounts:
+Each registered staking asset has two deterministic accounts:
 
-1. `pool_account(asset_id)`
-   - holds common backing for the share-vault
-   - receives direct stake deposits
-   - receives external backing inflow
-   - receives claimed reward amounts during auto-compound settlement
+| Account | Role |
+| :------ | :--- |
+| `pool_account(asset_id)` | Holds backing for the share-vault and receives stake deposits, external backing inflows, and same-asset auto-compound settlement for non-native rewards |
+| `reward_account(asset_id)` | Holds reward funding and backs reward liabilities without directly changing pool share price |
 
-2. `reward_account(asset_id)`
-   - isolated reward-liability channel
-   - receives governance-conditioned reward funding
-   - must not change share price directly
-   - is consumed only through reward settlement into the pool
-
-This separation is one of the most important implementation upgrades over the original pure share-vault kernel.
+The account split is essential: backing inflow changes `stXXX` value, while reward inflow stays claimable through bounded epoch accounting.
 
 ### Receipt asset lifecycle
 
-Receipt derivation is runtime-resolved through `StakedAssetIdResolver`.
-In the live runtime:
+Receipt ids are runtime-resolved by `StakedAssetIdResolver`:
 
-- `$NTVE` and local protocol assets derive into `0x5...`
-- Foreign assets derive into `0x6...`
-- Receipt ids remain local `pallet-assets` asset classes
+- `$NTVE` and local assets derive into the local staked namespace (`TYPE_STAKED = 0x5000_0000`)
+- Foreign assets derive into `TYPE_STAKED_FOREIGN = 0x6000_0000`
+- Receipt classes are local `pallet-assets` assets
 
-At `register_staking_asset(asset_id)`:
+At `register_staking_asset(asset_id)` the runtime lifecycle hook creates the receipt class when the id is resolvable. For `$NTVE`, metadata is currently `Staked Native Token` / `stNTVE` / `12` decimals.
 
-- The pool is registered only if the base asset already exists
-- The pallet computes `pool_account(asset_id)`
-- If a receipt id is resolvable, the runtime lifecycle hook creates the `stXXX` asset class immediately
-- The runtime assigns deterministic metadata and uses the pool sovereign account as admin/owner
+### Canonical native LP token
 
-Already-live legacy pools that predate receipt mode are upgraded later with `initialize_staked_asset(asset_id)`.
+The runtime validates the native staking LP token through `RuntimeNativeStakingLpAssetValidator`:
+
+1. Resolve `$NTVE -> stNTVE`
+2. Resolve Asset Conversion pool id for `AssetKind::Local(NTVE)` and `AssetKind::Local(stNTVE)`
+3. Read `pallet_asset_conversion::Pools[pool_id].lp_token`
+4. Accept only that LP asset id
+
+The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace before creating pools, so canonical LP ids stay out of ordinary local asset id space.
 
 ## Storage Topology
 
-### Core ownership and pool state
+### Core pool and receipt state
 
-| Storage                          | Role                               | Notes                                                      |
-| :------------------------------- | :--------------------------------- | :--------------------------------------------------------- |
-| `Pools[asset_id]`                | Pool totals                        | `total_shares`, `accounted_balance`, `active_staker_count` |
-| `Positions[(asset_id, account)]` | Legacy share ownership             | Compatibility-only once receipt mode exists                |
-| `NativeBindings[account]`        | Native account -> operator binding | Only meaningful for `$NTVE`                                |
-| `OperatorCommissions[operator]`  | Per-operator commission            | Bounded by runtime `MaxOperatorCommission`                 |
+| Storage | Role | Notes |
+| :------ | :--- | :---- |
+| `Pools[asset_id]` | Share-vault totals | `total_shares`, `accounted_balance`, `active_staker_count` |
+| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | Bounded direct lookup for receipt -> base |
+| `Positions[(asset_id, account)]` | Legacy share ownership | Compatibility bridge for pre-receipt positions |
+| `OperatorCommissions[operator]` | Operator commission | Bounded by runtime `MaxOperatorCommission` |
+
+`Positions` is retained only for legacy compatibility. Fresh ownership is receipt-based.
+
+### Native LP security state
+
+| Storage | Role |
+| :------ | :--- |
+| `NativeLpLocks[(account, operator)]` | Collator-specific locked LP position |
+| `OperatorNativeLpLocked[operator]` | Aggregate LP backing for session ranking |
+| `AccountNativeLpLocked[account]` | Aggregate account LP custody for NativeVotePower |
+| `AccountNativeCollatorLpLocked[account]` | Collator-locked LP only, used for native nomination rewards |
+| `TotalNativeLpLocked` | Aggregate native LP custody |
+| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal |
+
+Unlock requests immediately remove LP from backing and reward/governance aggregates, then delay token withdrawal by `NativeLpUnlockDelay`.
+
+### Native governance custody state
+
+| Storage | Role |
+| :------ | :--- |
+| `NativeGovernanceLpLocks[account]` | Standalone `NTVE/stNTVE` LP locked for NativeVotePower only |
+| `PendingNativeGovernanceLpUnlocks[account]` | Delayed standalone LP withdrawal |
+| `NativeGovernanceAssetLocked[(account, asset_id)]` | Locked `$NTVE` or `stNTVE` for NativeVotePower |
+| `TotalNativeGovernanceAssetLocked[asset_id]` | Aggregate locked native-governance asset amount |
+| `PendingNativeGovernanceAssetUnlocks[(account, asset_id)]` | Delayed native-governance asset withdrawal |
+
+Standalone governance LP feeds NativeVotePower but does not feed `AccountNativeCollatorLpLocked`, so it cannot earn nomination rewards.
 
 ### Reward accounting and snapshot state
 
-| Storage                                                    | Role                                                 |
-| :--------------------------------------------------------- | :--------------------------------------------------- |
-| `RewardEpochAccruals[(asset_id, epoch)]`                   | Reward inflow attributed to one epoch                |
-| `RewardLiabilityBalances[asset_id]`                        | Total unsettled reward liability                     |
-| `RewardEpochTouchedAccounts[(epoch, asset_id)]`            | Sparse account touch set for next epoch rollover     |
-| `RewardActiveWeightSnapshots[(asset_id, account)]`         | Current active reward snapshot                       |
-| `RewardActiveTotalWeights[asset_id]`                       | Current active total reward weight                   |
-| `RewardEpochTotalWeights[(asset_id, epoch)]`               | Frozen denominator used for one epoch's claims       |
-| `RewardEpochWeightSnapshots[((asset_id, epoch), account)]` | Historical per-epoch snapshot                        |
-| `RewardClaims[((asset_id, epoch), account)]`               | Claim-consumption marker and amount                  |
-| `LastProcessedRewardEpoch`                                 | Last rolled reward epoch                             |
-| `LastRewardIngressTruncatedEpoch`                          | Latest scan-cap truncation signal                    |
-| `RewardTruncatedEpochs[epoch]`                             | Marks epochs as incomplete and therefore unclaimable |
+| Storage | Role |
+| :------ | :--- |
+| `RewardEpochAccruals[(asset_id, epoch)]` | Reward funding attributed to one epoch |
+| `RewardLiabilityBalances[asset_id]` | Unsettled reward liability still held by `reward_account(asset_id)` |
+| `RewardEpochTouchedAccounts[(epoch, asset_id)]` | Sparse touch set rolled into the next epoch snapshot |
+| `RewardActiveWeightSnapshots[(asset_id, account)]` | Current reward snapshot for an account |
+| `RewardActiveTotalWeights[asset_id]` | Current denominator candidate |
+| `RewardEpochTotalWeights[(asset_id, epoch)]` | Frozen claim denominator |
+| `RewardEpochWeightSnapshots[((asset_id, epoch), account)]` | Frozen per-account claim numerator |
+| `RewardClaims[((asset_id, epoch), account)]` | Claim-consumption marker and claimed amount |
+| `LastProcessedRewardEpoch` | Last fully completed reward epoch rollover |
+| `PendingRewardEpochRollover` | Bounded rollover cursor from the prior epoch to the target epoch |
+| `LastRewardIngressTruncatedEpoch` | Latest legacy event-scan truncation signal |
+| `RewardTruncatedEpochs[epoch]` | Incomplete epoch marker; claims are rejected |
 
-### Important compatibility detail
-
-`active_staker_count` still exists because legacy pools may still hold `Positions`.
-In fresh receipt-mode pools it is no longer the canonical measure of economic ownership.
-During migration it is best understood as a rollout-readiness counter for residual legacy state.
-
-## Transitional Ownership Reality
-
-The current implementation does not yet have one pure ownership source of truth across all pools.
-During the receipt migration, several important paths intentionally use a hybrid surface:
-
-- `unstake(asset_id, shares)` accepts the sum of `live stXXX balance + legacy Position shares`
-- Query helpers such as `stake_value(...)` and `stake_fraction(...)` resolve through `effective_share_balance(...)`
-- Reward snapshots also currently use that same effective share balance, so untouched legacy holders are not excluded from governance-conditioned reward weight while the bridge still exists
-
-So the current architecture is not simply `receipt mode or legacy mode`.
-It is a deliberately mixed compatibility regime until real chain state proves legacy positions are drained.
-
-Two consequences matter operationally:
-
-1. `active_staker_count` is a legacy-drain metric, not a universal ownership metric
-2. deleting `Positions` too early would break both unstake rights and reward-snapshot correctness for still-unmigrated holders
+Native reward snapshots use `RuntimeRewardBaseWeightProvider`, which replaces the default share-balance base with conservative collator-locked LP value.
 
 ## Core Execution Flows
 
-### 1. Pool registration and receipt-mode activation
+### 1. Pool registration
 
-`register_staking_asset(asset_id)` does the following:
+`register_staking_asset(asset_id)`:
 
-1. Root/governance ensures the base asset exists
-2. Creates receipt asset class immediately when namespace resolution is supported
-3. Initializes `Pools[asset_id]`
-4. Seeds `accounted_balance` from the pool sovereign's current live balance
-5. Emits `StakingAssetRegistered { asset_id, pool_account, reward_account }`
+1. Requires `AdminOrigin`
+2. Requires base asset existence
+3. Creates receipt asset through `StakedAssetLifecycle` when supported
+4. Indexes receipt -> base in `LiveStakedAssetBaseAssets`
+5. Creates `Pools[asset_id]` with current pool-account backing as `accounted_balance`
+6. Emits `StakingAssetRegistered`
 
-That last step matters operationally: if the pool account already holds backing when the pool is created, that balance becomes accounted state from genesis of the pool rather than silent dust.
+If the pool account is prefunded before registration, that balance becomes accounted backing immediately rather than dust.
 
-### 2. Stake path
+### 2. Liquid staking
 
-Current public entry paths:
+Public staking calls:
 
-- `stake(asset_id, amount)` for non-native assets only
-- `stake_native(amount, operator)` for `$NTVE`
+- `stake(asset_id, amount)` for non-native assets
+- `stake_native(amount)` for `$NTVE`
 
-Generic native stake is intentionally rejected with `NativeStakeRequiresOperator`.
+Generic native staking through `stake(0, amount)` is rejected with `NativeStakeRequiresDedicatedCall`.
 
-Both paths end up in the same share-crediting logic:
+Both staking paths use the same share formula:
 
 ```text
 if total_shares == 0:
@@ -198,432 +196,305 @@ else:
 
 Implementation details:
 
-- Share math uses `mul_div_floor(...)` with `U256` intermediates
-- The pallet first calls `sync_pool_state(asset_id)`
-- If `total_shares == 0 && accounted_balance > 0`, stake is rejected as `PoolHasUnownedBalance`
-- In receipt mode, minted shares become `stXXX`
-- In legacy mode, minted shares become `Positions[(asset_id, account)]`
-- Every successful stake marks the account as a reward-touch candidate for the next epoch
+- Math uses `U256` intermediates
+- `sync_pool_state(asset_id)` runs before crediting shares
+- `total_shares == 0 && accounted_balance > 0` rejects as `PoolHasUnownedBalance`
+- Receipt mode mints `stXXX`
+- Legacy mode writes `Positions`
+- Successful stake touches reward snapshot state for the next epoch
 
-### 3. Unstake path
+For native `$NTVE`, staking is liquid and passive: it creates `stNTVE`, not collator security backing.
 
-`unstake(asset_id, shares)` operates against the combined ownership surface during migration:
+### 3. Unstake
+
+`unstake(asset_id, shares)` works against the migration-era effective ownership surface:
 
 ```text
-available_shares = live_receipt_balance + legacy_position_shares
+available_shares = live stXXX balance + legacy Position shares
 amount_out = shares * accounted_balance / total_shares
 ```
 
-The burn order is implementation-specific and important:
+Burn order:
 
-1. burn receipt balance first when present
-2. burn residual legacy shares from `Positions` only if needed
-3. transfer underlying from `pool_account(asset_id)` back to the caller
-4. reduce `pool.total_shares` and `pool.accounted_balance`
+1. Burn receipt balance first
+2. Burn residual `Positions` only if needed
 
-This lets a transferred receipt holder exit even if they never had a legacy `Position`.
+Native unstake is therefore an exit from liquid `stNTVE` value, not an exit from collator nomination. Collator nomination exits use the LP unlock lifecycle.
 
-### 4. Lazy sync and outflow detection
+### 4. Native LP collator nomination
 
-`sync_pool_state(asset_id)` reads the actual pool-account balance and compares it to `accounted_balance`.
+`lock_native_lp_for_collator(lp_asset_id, amount, operator)`:
 
-- Positive delta -> pool backing is updated and `PoolSynced` is emitted
-- Negative delta -> rejected as `PoolOutflowDetected`
+1. Ensures `operator` is valid through `NativeOperatorValidator`
+2. Ensures `lp_asset_id` is the canonical `NTVE/stNTVE` LP
+3. Transfers LP from the user into `native_lp_lock_account()`
+4. Updates `NativeLpLocks[(account, operator)]`
+5. Updates `OperatorNativeLpLocked`, `AccountNativeLpLocked`, `AccountNativeCollatorLpLocked`, and `TotalNativeLpLocked`
+6. Touches native reward snapshots when the native pool exists
+7. Emits `NativeLpLocked`
 
-This is a deliberate implementation guard: the pallet refuses to silently normalize unexplained outflows.
+During the current trusted-collator phase, session sets use the configured invulnerables directly. Collator-locked LP remains the authoritative backing surface for nomination rewards, NativeVotePower, and bounded valuation. If permissionless candidate ranking is enabled later, candidate ordering uses conservative collator-locked LP native-equivalent value; the removed native-binding compatibility path no longer affects candidate ordering.
 
-### 5. Unowned-balance recovery
+### 5. Unlock and redelegation lifecycle
 
-If a pool has backing before anyone owns shares, governance may call:
+`request_unlock_native_lp(operator, amount)`:
 
-- `recover_unowned_pool(asset_id, beneficiary)`
+- Requires no active governance lock horizon for the account
+- Removes backing immediately from operator/account/collator aggregates
+- Creates or updates `PendingNativeLpUnlocks[(account, operator)]`
+- Touches native reward snapshots
+- Emits `NativeLpUnlockRequested`
 
-The guard differs slightly by mode:
+`withdraw_unlocked_native_lp(operator)` transfers the LP back after `NativeLpUnlockDelay`.
 
-- In receipt mode: `pool.total_shares` must be zero
-- In legacy mode: both `pool.total_shares` and `active_staker_count` must be zero
+`redelegate_native_lp(from_operator, to_operator, amount)` moves locked LP between operators without releasing custody to the account. It validates the new operator and updates operator aggregates, while preserving account-level locked LP totals.
 
-The asymmetry exists because `active_staker_count` is no longer authoritative once transferable receipts exist.
+### 6. Governance-only native custody
 
-### 6. Legacy bridge
+`lock_native_lp_for_governance(lp_asset_id, amount)` locks canonical `NTVE/stNTVE` LP for NativeVotePower without collator nomination.
 
-The receipt migration is intentionally monotonic:
+`lock_native_asset_for_governance(asset_id, amount)` locks either `$NTVE` or `stNTVE` for NativeVotePower.
 
-- `initialize_staked_asset(asset_id)` backfills the missing receipt asset class
-- `convert_position_to_receipt(asset_id)` lets a holder mint `stXXX` equal to their legacy shares and deletes the old `Position`
-- Queries and `unstake` keep summing `live_receipt_balance + legacy_position_shares` until the bridge can be retired
+Governance unlock requests are blocked while `NativeGovernanceLockProvider::lock_until(account)` is active. The runtime provider reads `pallet-governance::GovernanceLocks`.
 
-This is the main reason the architecture document exists separately from the specification: the live code now includes transitional behavior that the pure share-vault model never needed.
+### 7. Conservative native-equivalent LP valuation
 
-## Native Binding Architecture
+Runtime valuation is centralized in `DelegationWeightedCollatorSessionManager::conservative_native_lp_value(locked_lp)`:
 
-### Why native is special
+```text
+native_equivalent = 2 * min(reserve_NTVE, reserve_stNTVE * staking_exchange_rate) * locked_lp / lp_supply
+```
 
-Only the runtime's native staking asset participates in the security path.
-All other staking assets stay economic-only.
+This value is used by:
 
-Current public native surface:
+- Permissionless candidate ranking through operator locked LP when that runtime phase is enabled
+- Native nomination reward base through account collator-locked LP
+- Governance NativeVotePower through aggregate account locked LP
+- Read-model views through `RuntimeNativeStakingReadModelProvider`
 
-- `stake_native(amount, operator)`
-- `bind_native(operator)`
-- `clear_native_binding()`
-- `delegated_native_backing(operator)`
-
-### Cached shares, read-derived value
-
-The live implementation now keeps a first cached per-operator native-delegation surface for the collator-ranking hot path, but it still derives final backing value from the live native pool ratio.
-More concretely:
-
-- `on_idle` refreshes cached per-operator delegated native **shares** from native binding events plus native `stNTVE` balance-change events
-- `bind_native` and `clear_native_binding` also refresh that cache immediately when the cache is already clean, so rebinding and clear-to-passive transitions do not wait for later event replay
-- The session-manager ranking path reads those cached shares and converts them into live backing value through the current native pool state
-- If the bounded native-delegation ingress truncates, ranking safely falls back to the exact read-derived `delegated_native_backing(operator)` path while a bounded two-phase repair loop clears stale cache entries and rebuilds live bindings over later `on_idle` passes
-
-This preserves the intended invariant:
-
-- If `stNTVE` leaves the account, backing falls with it
-- If a recipient receives `stNTVE`, it stays passive until they explicitly bind
-- If a previously delegated account reaches zero native exposure, the runtime retires that stale binding during cache refresh instead of leaving inert delegated state behind
-
-### Current runtime validator
-
-`RuntimeNativeBindingTargetValidator` accepts:
-
-- Trusted invulnerable collators always
-- Permissionless candidates only if `PermissionlessCollatorsEnabled` is active
-
-So the current chain posture remains compatible with the trusted-collator launch line.
+The formula intentionally ignores optimistic value from an unbalanced pool side.
 
 ## Reward Architecture
 
-### Epoch model
+### Native reward funding recognition
 
-In the current runtime, reward epochs are simply block numbers.
-That is intentionally narrow and easy to reason about during the first rollout line.
-
-### Sparse one-epoch-lag snapshots
-
-Reward weight is not recomputed globally.
-Instead the pallet keeps a sparse active snapshot line and rolls only touched accounts forward.
-
-The active snapshot stores:
-
-- `shares`
-- `coefficient`
-- `weight = coefficient * shares`
-- `effective_from_epoch`
-
-In the current transition line, `shares` here are not receipt-only.
-The snapshot path resolves through the pallet's effective ownership surface, which currently means:
+Native `$NTVE` reward funding is not detected by transfer-event scanning. Instead, epoch rollover calls:
 
 ```text
-effective_share_balance(asset_id, account)
-  = live receipt balance + residual legacy Position shares
+reconcile_reward_inflow(NativeStakingAssetId)
 ```
 
-That is the correctness bridge that keeps already-live legacy holders inside reward accounting until migration is complete.
+The reconciliation compares live `reward_account(NTVE)` balance against `RewardLiabilityBalances[NTVE]` and records only the positive unaccounted delta. Repeated reconciliation without new funding is idempotent.
 
-Touch sources in the live runtime are:
+### Bounded epoch rollover
 
-- `stake` / `unstake`
-- `stXXX` transfer, mint, burn, deposit, and withdrawal events from `pallet-assets`
-- Governance events `WinningVoteRecorded` and `WinningVoteWindowEvicted`
+`on_initialize` closes reward epochs through a persisted `PendingRewardEpochRollover` cursor. Each block processes at most `MaxRewardRolloverAssetsPerBlock` touched asset buckets from the source epoch, rolls their bounded account sets into the target epoch snapshot, and leaves the cursor in storage if more buckets remain. `LastProcessedRewardEpoch` advances only after the cursor is empty; native reward reconciliation also waits for that completion point so epoch close remains resumable instead of collecting all touched assets in one block.
 
-The runtime ingress implementation aggregates touches and reward inflows in memory before mutating staking storage.
+### Reward snapshot base
 
-### Reward inflow ingestion
+Default non-native reward snapshots still use effective share balance.
 
-`on_idle` calls the runtime `RewardSnapshotEventIngress`.
-That adapter now receives the real remaining idle budget after earlier staking maintenance work and scans system events only while the projected scan/touch/inflow work still fits inside that residual budget, subject to the hard `MaxRewardEventScanPerBlock` cap.
-Receipt-driven reward-touch events no longer rediscover their base staking asset by iterating all pools; the pallet now maintains a live `stXXX -> base asset` reverse index when receipt assets are created or backfilled, and reward ingress resolves that mapping through the indexed surface. Governance-driven reward-touch events likewise no longer walk every staking pool to find matching domains; staking-asset registration now maintains a bounded `domain -> reward assets` index that the runtime reward ingress consumes directly.
-It performs two bounded jobs:
+Native `$NTVE` reward snapshots use runtime-provided reward base:
 
-1. aggregate deposits into `reward_account(asset_id)` and call `note_reward_inflow(asset_id, amount)`
-2. aggregate touched accounts and call `note_reward_touch(asset_id, account)`
+```text
+native reward base = conservative_native_lp_value(AccountNativeCollatorLpLocked[account])
+```
 
-When either the remaining idle budget or the scan cap is exceeded:
+This excludes:
 
-- `RewardIngressTruncated` is emitted
-- The epoch is marked in `RewardTruncatedEpochs`
-- Claims for that epoch are blocked with `RewardEpochIncomplete`
+- Liquid `stNTVE`
+- Standalone governance-only LP
+- Locked `$NTVE` / `stNTVE` governance assets
 
-This is an explicit correctness-over-convenience choice.
+Only collator-locked LP earns native nomination rewards.
 
-### Reward denominator freezing
+### Reward touch sources
 
-`note_reward_inflow(asset_id, amount)` does three important things:
+Native reward snapshots are touched by explicit state transitions:
 
-1. increases `RewardEpochAccruals[(asset_id, epoch)]`
-2. increases `RewardLiabilityBalances[asset_id]`
-3. freezes `RewardEpochTotalWeights[(asset_id, epoch)]` from the current active total weight if not already frozen
+- Native stake path
+- Collator LP lock
+- Collator LP unlock request
+- Governance winning-vote record/eviction hook
+- Bootstrap helper before denominator freeze
 
-That makes reward accounting ingress-time attributable rather than balance-delta reconstructive.
+Native reward snapshots do not depend on:
 
-### Reward claim path
+- `$NTVE` reward-account transfer events
+- `stNTVE` transfer events
+- Governance event scanning
 
-Claim settlement is same-asset auto-compound only.
+### Legacy non-native reward ingress
 
-Public surfaces:
+`RuntimeLegacyRewardSnapshotEventIngress` remains wired as compatibility support for non-native share-vault rewards. It scans current block events with bounded budget and emits truncation state when the scan cap is hit.
 
-- `claim_reward(asset_id, epoch)`
-- `claim_reward_batch(asset_id, epochs)`
+Native filters deliberately exclude:
 
-Implementation path:
+- `$NTVE` reward-account inflows
+- Native `stNTVE` receipt transfers
+- Native governance-domain expansion
 
-1. verify the epoch is closed
-2. reject truncated epochs
-3. reject duplicate claim attempts
-4. require live receipt mode for the pool (`live_staked_asset_id(asset_id)` must exist) or fail with `StakedAssetNotInitialized`
-5. compute `reward_claimable(...)` from epoch accrual, frozen denominator, and the claimant's epoch snapshot
-6. move funds from `reward_account(asset_id)` into `pool_account(asset_id)`
-7. mint fresh `stXXX` against the pre-compound pool price
-8. write `RewardClaims`
+The caveat is operationally important: legacy event ingress only sees current block events via `System::read_events_no_consensus()`. It is not a historical event processor.
 
-This means reward settlement never pays out a separate liquid leg in the current baseline path, but it also means the current claim path is practically receipt-mode dependent.
+### Claim paths
 
-## Staking Read-Model Contract
+`claim_reward(asset_id, epoch)` and `claim_reward_batch(asset_id, epochs)` remain the generic same-asset auto-compound paths for non-native staking assets. They move reward amount from `reward_account(asset_id)` into pool backing and mint fresh `stXXX` receipts. Passing the native staking asset is rejected so `$NTVE` nomination rewards cannot escape through the legacy auto-compound surface.
 
-This subsystem follows the project-wide [`read-model.contract.en.md`](./read-model.contract.en.md) split.
+Native nomination rewards use separate entrypoints:
 
-### Canonical on-chain staking projections
+- `claim_nomination_reward(epoch)` pays liquid `$NTVE` to the caller
+- `claim_nomination_reward_batch(epochs)` pays multiple closed native nomination reward epochs as liquid `$NTVE`
+- `claim_and_compound_nomination_reward(epoch, operator)` claims liquid `$NTVE`, routes it through the runtime compound helper, mints `NTVE/stNTVE` LP, and locks the minted LP to `operator`
 
-The current pallet already provides chain-native reads for live bounded staking truth through:
+All native nomination claim paths share `RewardClaims[((NTVE, epoch), account)]`, so the same epoch cannot be claimed twice through different surfaces.
 
-- `pool(asset_id)` / `pool_state(asset_id)`
-- `pool_account(asset_id)` and `reward_account(asset_id)`
-- `position(asset_id, account)` plus effective-share/exposure helpers
-- `stake_value(asset_id, account)` / `stake_fraction(asset_id, account)` / `stake_exposure(asset_id, account)`
-- `native_binding(account)` for the live `$NTVE` binding surface
-- `staked_receipt_balance(asset_id, account)` / `staked_receipt_value(asset_id, account)`
-- `reward_coefficient(asset_id, account)`
-- `reward_claimable(asset_id, epoch, account)` for known closed epochs
-- Reward epoch/liability/truncation state for known `(asset_id, epoch)` queries
+## Governance Integration
 
-These are the authoritative bounded surfaces for current balances, exposure, binding state, reward weight, and known-epoch claimability.
+### NativeVotePower sources
 
-### Indexed / materialized staking views
+The runtime `$BLDR` protection track sums explicit custody sources:
 
-The pallet intentionally does **not** promise these as canonical on-chain surfaces:
+1. Locked `$NTVE`
+2. Locked `stNTVE`, converted through staking exchange rate
+3. Standalone locked `NTVE/stNTVE` LP, conservatively valued
+4. Collator-locked `NTVE/stNTVE` LP, conservatively valued
 
-- APY charts and long-range return series
-- Historical claim timelines
-- Wallet PnL history
-- Search/filter across many past epochs or pools
-- Dashboard/leaderboard analytics beyond current bounded state
+Liquid balances outside these custody surfaces do not count as NativeVotePower.
 
-Those belong to events plus external indexing/materialization rather than permanent pallet storage.
+### Frozen ballot settlement
 
-### Current launch-line decision for reward-claim discovery
+`pallet-governance` stores `ProposalBallot { account, vote_epoch, weight, raw_power }` at vote time.
 
-The current runtime now treats reward-claim discovery as an explicit `Indexed / Materialized View`, not as a canonical on-chain projection.
+Resolution and tally views sum stored ballot facts, not live provider state. Later AMM reserve donations, exchange-rate changes, or custody changes do not mutate already-cast ballot weight.
 
-Why:
+### Governance lock horizon
 
-- The pallet exposes `reward_claimable(asset_id, epoch, account)` for verification of a supplied closed epoch
-- But it does **not** expose a bounded per-account recent-claimable-epoch index/query helper
-- In the current design, claimable epochs can accumulate across an effectively unbounded historical set, so a fully chain-native discovery list would require either unbounded state growth or an explicit retention/horizon redesign
-
-So the honest contract today is:
-
-- Chain-native for `is epoch E claimable for account A?`
-- Indexed/materialized for `which epochs should account A inspect or batch-claim next?`
-
-Consumers SHOULD NOT infer claim-discovery state from raw storage topology and treat that as a stable product contract.
-
-## Public Call Surface
-
-| Call Index | Extrinsic                                      | Role                                |
-| :--------- | :--------------------------------------------- | :---------------------------------- |
-| `0`        | `register_staking_asset(asset_id)`             | Governance onboarding               |
-| `1`        | `sync_pool(asset_id)`                          | User-triggered lazy sync            |
-| `2`        | `stake(asset_id, amount)`                      | Non-native entry                    |
-| `3`        | `unstake(asset_id, shares)`                    | Generic exit                        |
-| `4`        | `recover_unowned_pool(asset_id, beneficiary)`  | Governance recovery                 |
-| `5`        | `bind_native(operator)`                        | Attach live `stNTVE` to an operator |
-| `6`        | `clear_native_binding()`                       | Return `stNTVE` to passive state    |
-| `7`        | `set_operator_commission(commission)`          | Operator-side commission config     |
-| `8`        | `stake_native(amount, operator)`               | Native entry path                   |
-| `9`        | `initialize_staked_asset(asset_id)`            | Legacy receipt backfill             |
-| `10`       | `convert_position_to_receipt(asset_id)`        | Holder migration                    |
-| `11`       | `bootstrap_reward_snapshot(asset_id, account)` | Live-chain reward warm-up           |
-| `12`       | `claim_reward(asset_id, epoch)`                | Single-epoch auto-compound claim    |
-| `13`       | `claim_reward_batch(asset_id, epochs)`         | Bounded multi-epoch sweep           |
-
-## Events and Errors
-
-### Events that matter operationally
-
-| Event                                       | Why it matters                                                                      |
-| :------------------------------------------ | :---------------------------------------------------------------------------------- |
-| `StakingAssetRegistered`                    | Confirms pool onboarding and publishes both sovereign accounts                      |
-| `StakedAssetInitialized`                    | Confirms receipt backfill for a legacy pool                                         |
-| `Staked` / `Unstaked`                       | Confirms user-facing entry and exit on the live ownership surface                   |
-| `PoolSynced`                                | Signals recognized backing inflow on the common pool line                           |
-| `RewardInflowRecorded`                      | Confirms reward-account ingress was attributed to one epoch                         |
-| `RewardSnapshotBootstrapped`                | Confirms a live holder was materialized into reward snapshot state before freeze    |
-| `RewardClaimed`                             | Confirms same-asset auto-compound settlement and minted receipt amount              |
-| `RewardIngressTruncated`                    | Signals correctness-preserving truncation; that epoch must be treated as incomplete |
-| `LegacyPositionConverted`                   | Confirms one holder left the legacy bridge and moved into `stXXX`                   |
-| `NativeBindingSet` / `NativeBindingCleared` | Confirms live native backing attachment or passive reversion                        |
-| `OperatorCommissionSet`                     | Confirms operator-side economic metadata updates                                    |
-| `UnownedPoolRecovered`                      | Confirms governance drained prefunded no-owner state                                |
-
-### Errors that expose real architecture boundaries
-
-| Error                                           | Meaning                                                                                            |
-| :---------------------------------------------- | :------------------------------------------------------------------------------------------------- |
-| `PoolHasUnownedBalance`                         | First-stake capture of prefunded backing is blocked                                                |
-| `PoolOutflowDetected`                           | Pool-account balance fell below accounted state; the pallet refuses silent normalization           |
-| `StakedAssetIdCollision`                        | Receipt namespace or lifecycle setup is inconsistent with current asset state                      |
-| `StakedAssetNotInitialized`                     | Reward claims or receipt conversions are trying to use a pool that is not yet in live receipt mode |
-| `NativeStakeRequiresOperator`                   | Generic native entry is intentionally disallowed; native must go through the operator-aware path   |
-| `InvalidBindingTarget`                          | Native binding target failed the runtime validator                                                 |
-| `RewardEpochWeightFrozen`                       | Bootstrap came too late for the current epoch                                                      |
-| `RewardEpochStillOpen`                          | Claim attempted before the epoch closed                                                            |
-| `RewardEpochIncomplete`                         | Reward ingress truncation marked the epoch unsafe for settlement                                   |
-| `RewardAlreadyClaimed` / `DuplicateRewardEpoch` | Claim replay or malformed batch input was rejected                                                 |
-
-## Runtime Binding
+Each accepted ballot extends:
 
-Current runtime wiring in `template/runtime/src/configs/staking_config.rs`:
+```text
+GovernanceLocks[account].lock_until = max(current, proposal_effective_primary_close_epoch + ProposalEnactmentDelay)
+```
 
-- `AdminOrigin = Root`
-- `NativeStakingAssetId = 0`
-- `GovernanceDomainId = AssetId`
-- `RewardEpoch = BlockNumber`
-- `StakedAssetIdResolver = RuntimeStakedAssetIdResolver`
-- `StakedAssetLifecycle = RuntimeStakedAssetLifecycle`
-- `RewardGovernanceDomainResolver = identity(asset_id)`
-- `RewardCoefficientProvider = Governance::reward_coefficient(domain, account)`
-- `RewardSnapshotEventIngress = RuntimeRewardSnapshotEventIngress`
+Staking unlock paths consult this horizon before reducing NativeVotePower custody.
 
-Current runtime constants:
+## Runtime Bindings
 
-| Constant                         | Value |
-| :------------------------------- | :---- |
-| `MaxOperatorCommission`          | `50%` |
-| `MaxRewardEventScanPerBlock`     | `128` |
-| `MaxRewardAccountsPerAssetEpoch` | `256` |
-| `MaxClaimEpochsPerCall`          | `16`  |
+The reference runtime wires `pallet-staking` with these key adapters:
 
-Receipt lifecycle in the runtime is implemented through `pallet-assets::force_create` + `force_set_metadata`.
-For `$NTVE`, the runtime uses explicit metadata `Staked Native Token / stNTVE / 12`.
+| Runtime adapter | Role |
+| :-------------- | :--- |
+| `RuntimeNativeOperatorValidator` | Accepts trusted invulnerables and enabled permissionless collator candidates |
+| `RuntimeNativeStakingLpAssetValidator` | Validates canonical `NTVE/stNTVE` LP token |
+| `RuntimeStakedAssetIdResolver` | Resolves base asset -> receipt asset id |
+| `RuntimeStakedAssetLifecycle` | Creates receipt assets and metadata |
+| `RuntimeRewardGovernanceDomainResolver` | Maps reward asset to governance domain |
+| `RuntimeRewardEpochProvider` | Uses block number as reward epoch on the current line |
+| `RuntimeRewardCoefficientProvider` | Reads governance reward-memory coefficient |
+| `RuntimeRewardBaseWeightProvider` | Overrides native reward base to collator-locked LP value |
+| `RuntimeNativeNominationRewardCompounder` | Routes claim+compound into Asset Conversion and LP locking |
+| `RuntimeNativeStakingReadModelProvider` | Exposes native pool/LP valuation for bounded views |
+| `RuntimeLegacyRewardSnapshotEventIngress` | Legacy non-native event scanner |
+| `RuntimeNativeGovernanceLockProvider` | Reads governance lock horizon |
 
-## Complexity and Growth Pressure
+## AAA and Asset Conversion Integration
 
-1. `Native backing now has a bounded hot path with bounded dirty-cache repair`
-   Candidate ranking no longer rescans `NativeBindings` in its hot path. Instead it reads cached per-operator shares refreshed by bounded event ingress, and truncation now triggers a bounded clear/rebuild repair loop while ranking stays on the exact fallback path.
+`pallet-aaa` remains tokenomics-agnostic. It exposes generic:
 
-2. `Receipt-event ingress currently does runtime-side base-asset discovery by pool scan`
-   In `RuntimeRewardSnapshotEventIngress`, receipt-asset events are mapped back to a base staking asset by iterating `Pools::<Runtime>::iter_keys()` and matching `staked_asset_id(base_asset_id)`. This is a runtime-adapter growth point, not a pallet-storage flaw, but it is a real current cost surface.
+```text
+Task::DonateLiquidity { asset_a, asset_b, amount, max_ratio_error }
+```
 
-3. `Touched-account saturation is bounded but not loudly signaled`
-   `RewardEpochTouchedAccounts[(epoch, asset_id)]` is capped by `MaxRewardAccountsPerAssetEpoch`. When a brand-new account no longer fits, `note_reward_touch(...)` simply returns `false`; there is currently no dedicated saturation event for that specific condition.
+The runtime-specific `TmctolLiquidityDonationOps` maps the `NTVE/stNTVE` pair to:
 
-4. `Reward rollover cost scales with touched accounts, not all holders`
-   This is the intended win of the sparse snapshot model, but it also means ingress quality and touch coverage are part of correctness, not only performance.
+```text
+AssetConversionAdapter::donate_native_staking_liquidity_from_ntve
+```
 
-5. `Hybrid ownership remains a deliberate complexity tax`
-   As long as legacy `Positions` survive, unstake rights, query math, and reward snapshots all depend on the mixed ownership surface rather than a single pure receipt ledger.
+That helper:
 
-6. `Batch reward claims scale with requested epochs`
-   `claim_reward_batch(...)` is bounded by `MaxClaimEpochsPerCall`, but still intentionally linear in the number of epochs swept.
+1. Reads current `NTVE/stNTVE` reserves and staking exchange rate
+2. Computes the native stake-vs-donate split needed for balanced donation
+3. Stakes the required `$NTVE` leg to mint `stNTVE`
+4. Donates both legs directly into the pool account without minting LP
+5. Rolls back transactionally on any failure
 
-## Validation Surface
+This is the protocol LP-farming path: System AAA strengthens existing LP holders by increasing reserves per LP token rather than minting claimable rewards.
 
-The implementation is backed by three layers of evidence:
+The runtime also exposes:
 
-- Pallet unit/regression tests in `template/pallets/staking/src/tests.rs`
-- Runtime integration tests in `template/runtime/src/tests/staking_integration_tests.rs`
-- FRAME v2 benchmarks plus runtime weight bridge in `template/runtime/src/weights/pallet_staking.rs`
+```text
+AssetConversionAdapter::compound_native_nomination_reward_to_locked_lp(account, operator, amount)
+```
 
-Coverage includes:
+This is user-compound oriented: it stakes part of liquid `$NTVE`, adds balanced liquidity through Asset Conversion, receives newly minted LP, and locks that LP to the requested collator.
 
-- Share-vault math
-- Receipt lifecycle and metadata
-- Legacy pool conversion
-- Transferred-receipt exits
-- Native binding and rebinding
-- Reward snapshot lag semantics
-- Reward ingress truncation behavior
-- Same-asset auto-compound claims
+## Read-Model Classification
 
-## Operator Checklist
+### Bounded authoritative on-chain projections
 
-### Legacy-drain readiness
+The current runtime exposes bounded view/query surfaces for:
 
-Inspect these surfaces together:
+- `native_staking_exchange_rate()`
+- `native_staking_liquidity_pool()`
+- `native_locked_lp_position(account)`
+- `native_collator_lp_position(account, operator)`
+- `native_governance_custody_position(account, asset_id)`
+- `native_nomination_reward_claimable(epoch, account)`
+- Governance `account_governance_power_view(domain, item_id, account)`
+- Governance proposal tallies, timing, status, recent finalized proposal window, and vote-power profiles
 
-- `pool(asset_id).active_staker_count`
-- `position(asset_id, account)`
-- `staked_receipt_balance(asset_id, account)`
-- `stake_value(asset_id, account)`
-- `LegacyPositionConverted`
+These are intended for raw client / light-client consumption because they read bounded state.
 
-The migration is only truly finished when legacy positions are gone, not merely when receipt mode exists.
+### Externally indexed / materialized staking views
 
-### Reward-rollout readiness
+The following remain indexer/materialized responsibilities:
 
-Before enabling live reward ingress for an already-active pool, operators should verify:
+- Long-range reward history
+- Full account position history
+- Historical AMM reserve charts
+- Cross-epoch APY analytics
+- Operator backing history over time
+- All holders sorted by locked LP or reward claimability
 
-- Receipt mode is initialized for the pool
-- Target live holders have been bootstrapped via `bootstrap_reward_snapshot(...)`
-- `reward_active_weight_snapshot(asset_id, account)` exists for the holders that need warm-up
-- The current epoch has not already frozen `RewardEpochTotalWeights[(asset_id, epoch)]`
-- No `RewardIngressTruncated` event has marked the target epoch incomplete
+Do not move unbounded history or sorted dashboards into consensus state.
 
-### Native-binding sanity checks
+## Operational Watchpoints
 
-For native security posture, inspect:
+### Native AMM availability
 
-- `native_binding(account)`
-- `passive_native_stake_value(account)`
-- `delegated_native_stake_value(account)`
-- `NativeBindingSet` / `NativeBindingCleared`
+Native LP nomination, AAA donation, read-model valuation, and claim+compound require the canonical `NTVE/stNTVE` pool to exist and be non-empty. The local development preset now registers the native staking asset and `stNTVE` receipt at genesis and seeds the LP asset-id namespace, while `scripts/07-seed-web-client-state.sh` can create/fund the local `NTVE/stNTVE` pool after the chain starts.
 
-That gives the minimal live picture of whether `stNTVE` is currently passive or contributing backing to a trusted collator.
+### Production/operator NTVE/stNTVE bootstrap flow
 
-## Current Watchpoints
+Outside the local-dev preset, the canonical pool should be launched through an explicit operator/governance sequence rather than hidden genesis assumptions:
 
-1. `Legacy bridge still exists`
-   `Positions` and `active_staker_count` cannot be deleted until real chain state proves the bridge is drained
+1. Register the local native staking asset with `pallet-staking` so the staking pool exists and the `stNTVE` receipt asset is initialized.
+2. Ensure the Asset Conversion LP namespace is seeded into `TYPE_LP | 1` before creating the pool so the LP token cannot collide with local, staked, or foreign assets.
+3. Create the canonical `AssetKind::Local(NTVE) / AssetKind::Local(stNTVE)` pool through the runtime/governance-approved pool-creation path.
+4. Seed balanced initial liquidity from a designated bootstrap account; this mints the initial LP supply to that account and makes read-model valuation non-empty.
+5. Run readiness checks before enabling dependent flows: `native_staking_liquidity_pool()` returns a pool, both reserves are non-zero, LP total issuance is non-zero, and `RuntimeNativeStakingLpAssetValidator` accepts the LP id. Operators can use `scripts/bootstrap-native-staking-local.sh check` as the local read-only readiness probe for this phase.
+6. Activate the Native Staking LP Farmer System AAA only after the readiness checks pass; activation remains guarded by `activate_native_staking_lp_farming` so donation execution cannot start against a missing or empty pool.
+7. If any step after pool creation fails, leave the actor inactive and treat remediation as an operator/governance action; do not silently fall back to liquid `stNTVE` balances or transfer-event-derived backing.
 
-2. `Native-delegation truncation now degrades safely while repair catches up`
-   If native binding / `stNTVE` ingress truncates, the runtime marks the cache dirty, ranking falls back to the exact `delegated_native_backing(operator)` path, and a bounded two-phase repair loop clears stale cache state before rebuilding live bindings. The remaining pressure is performance evidence and larger regression matrices, not missing repair semantics
+### Governance locks block vote-power withdrawal
 
-3. `Zero-exposure cleanup is now automatic, not user-driven`
-   Once a previously delegated account reaches zero native exposure, cache refresh clears the inert binding automatically. That keeps the live binding surface honest, but it also means zero-balance prebinding is not treated as durable delegation state
+Unlock requests for native governance custody and collator LP check the account governance lock horizon. A user may be unable to reduce NativeVotePower until the relevant proposal's enactment horizon expires.
 
-4. `Reward ingress is bounded, not exhaustive`
-   scan truncation intentionally preserves safety by making the epoch unclaimable rather than pretending accounting stayed complete
+### Native reward funding must happen before epoch reconciliation
 
-5. `Live-chain bootstrap is operationally mandatory`
-   already-live holders must be bootstrapped with `bootstrap_reward_snapshot(...)` before enabling reward ingress for that epoch
+Funding `reward_account(NTVE)` after the epoch rollover will be recognized in a later epoch. Tests intentionally fund before the transition that reconciles the reward account.
 
-6. `Reward-claim discovery is intentionally off-chain today`
-   canonical on-chain state verifies claimability for a supplied epoch, but discovering which epochs a wallet should inspect next is currently an indexed/materialized concern rather than a bounded pallet projection
+### Truncated legacy reward epochs are unclaimable
 
-7. `Generic native automation is intentionally missing`
-   the pallet has `stake_native(amount, operator)`, but higher-level automation such as AAA-native staking still needs an operator-aware surface
+If legacy event scanning exceeds the bounded scan cap, the epoch is marked incomplete and claims for that epoch are rejected.
 
-8. `Non-native staking remains isolated from consensus security`
-   this is deliberate and should stay explicit in runtime/UI/operator assumptions
+### Pre-fork storage baseline
 
-## Conclusion
+This repository is still the forkable framework line. Storage versions are current baseline markers rather than deployed-chain migration history. Downstream live forks own explicit migrations once launched.
 
-`pallet-staking` is no longer just a minimal share-vault.
-It is now the live convergence point of four concerns:
+## Current Limitations and Remaining Work
 
-- Pool accounting
-- Tokenized ownership
-- Native security binding
-- Governance-conditioned reward settlement
-
-The implementation remains anchored to the original O(1) share-vault invariant, but it now carries the real-world transitional and operational machinery required to move from a clean math model to a launchable runtime.
-
----
-
-- `Version`: 0.1.0
-- `Last Updated`: March 2026
-- `Author`: LLB Lab
-- `License`: MIT
+- Legacy non-native reward event scanning still exists until non-native reward surfaces are migrated away from the older share-vault event model
+- Architecture docs should be revisited after any future replacement of non-native reward ingress
+- Browser staking surfaces are now wired for the bounded native views and first signed action paths, but product-grade onboarding copy and guided flows can still improve
+- Runtime staking weights have been regenerated from the expanded benchmark set; production forks should rerun benchmarks on their target hardware and runtime profile before launch

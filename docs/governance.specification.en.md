@@ -217,7 +217,7 @@ The protection-track contract MUST keep these properties:
 4. `Minimum raw protection floor` — the final protection-track gate for ordinary cadence MUST support a runtime-defined minimum raw `Veto` turnout floor against the total eligible protection supply, so accidental dust cannot activate the fail-closed branch by itself
 5. `Early-open availability` — the protection track MUST open at submission and remain available throughout lead-in plus any ordinary primary window
 6. `Dual-mode cancellation` — the protection track MUST support both of these contracts:
-   - `immediate threshold veto` — if raw live protection weight becomes **strictly greater** than the configured threshold against the total eligible protection supply, the proposal MUST resolve into `VetoCancelled` immediately
+   - `immediate threshold veto` — if frozen raw protection power on recorded `Veto` ballots becomes **strictly greater** than the configured threshold against the total eligible protection supply, the proposal MUST resolve into `VetoCancelled` immediately
    - `final protection-track gate` — if immediate threshold veto did not happen, the ordinary-cadence final proposal outcome MUST still be gated by the separate protection track at resolution time, but only once raw `Veto` turnout reaches the configured minimum floor
 7. `Explicit pass side inside the protection track` — the protection track MUST support both `Veto` and explicit protection-track `Pass` ballots or an equivalent two-sided representation, so consumers can distinguish `cancel`, `allow ordinary track to decide`, and `authorize urgent handling when that domain + payload-kind combination allows it`
 8. `Track-local vote replacement` — within the protection track, a later `Veto` or `Pass` ballot MAY replace that account's earlier protection-track ballot for the same item; this replacement MUST remain bounded and MUST NOT mint duplicate participation or winner-memory effects
@@ -229,11 +229,11 @@ The protection-track contract MUST keep these properties:
 In this specification version:
 
 - Protocol / network governance protection is backed by the well-known `$VETO` protocol asset
-- Canonical tactical `$BLDR` governance protection is backed by native `Native` staking weight
+- Canonical tactical `$BLDR` governance protection is backed by runtime-resolved native `NativeVotePower` from explicit native economic locks
 - Protection-track ballots carry their own vote-time epoch, so late `Pass -> Veto` or `Veto -> Pass` changes are repriced to the later weaker Declining Power multiplier rather than inheriting an earlier stronger one
-- Immediate cancellation uses raw live protection weight / total eligible protection supply and requires `Veto` weight to be **strictly greater** than the configured threshold rather than merely equal to it
+- Immediate cancellation uses frozen raw `Veto` ballot power / total eligible protection supply and requires `Veto` power to be **strictly greater** than the configured threshold rather than merely equal to it
 - For `$VETO`-backed protocol governance, that raw guard compares live `$VETO` balance against total `$VETO` issuance
-- For the canonical `$BLDR` domain, that raw guard compares native staking weight against total native staking supply eligible in `pallet-staking`
+- For the canonical `$BLDR` domain, that raw guard compares frozen native `NativeVotePower` against total eligible native `NativeVotePower`
 - The final protection-track gate requires a raw `Veto` dust floor of at least `1%` of total eligible protection supply before fail-closed blocking can activate
 - If immediate threshold veto does not happen and that raw `Veto` floor is met, the ordinary-cadence protection track is fail-closed unless decline-weighted protection-track `Pass` strictly outweighs decline-weighted `Veto`
 - All first-class proposal families in this specification version are protected by default unless a later revision declares otherwise
@@ -338,14 +338,22 @@ canonical tactical $BLDR governance => Staking::native_stake_value(account)
 
 These base-balance surfaces are then transformed by the temporal-weighting policy rather than being exposed as the final vote-power contract directly.
 
-This specification version uses `live balance settlement`, not immutable base-weight snapshots.
-A ballot stores voter identity plus vote-time information, but the balance-backed component of vote power is derived from the live backing surface when tally/resolution is evaluated.
+This specification version uses `frozen vote-power settlement` for recorded ballots.
+At cast time, the implementation resolves the applicable base backing surface, applies that track's temporal policy, and stores the resulting ballot weight. Protection-track ballots also store the raw protection power needed by raw-threshold guards.
 That means:
 
-- if the backing balance or stake leaves the account before resolution, that ballot's effective base weight falls accordingly
-- if the backing balance moves to another account, only the account currently controlling that backing contributes live weight at tally time
+- if the backing balance, stake, staking exchange rate, or LP reserve state changes after the vote, the already-cast ballot's stored weight does not change
+- if the backing position later moves to another account, the old ballot remains fixed and the new holder must cast its own eligible ballot on later items
 - one account may still cast at most one primary-track ballot and one protection-track ballot per item
-- implementations MUST surface this honestly in queries/UI so users do not mistake recorded ballot presence for immutable snapshotted voting power
+- implementations MUST surface this honestly in queries/UI so users understand that recorded ballot weight is a vote-time snapshot, not a live balance view
+
+A conforming governance implementation SHOULD maintain one aggregate account-level governance lock horizon. Each accepted ballot extends that account's `lock_until` to at least the proposal's enactment horizon:
+
+```text
+lock_until = max(current_lock_until, proposal_primary_close + enactment_delay)
+```
+
+The lock horizon is account-level, not a per-referendum unlock ledger. Runtime-specific staking, asset, or LP custody layers may use that horizon to enforce source locks, but the ballot record remains the frozen vote-power fact for the proposal.
 
 ### 5.2 Declining Power
 
@@ -373,9 +381,9 @@ Contract requirements:
 4. Early and late voters on the same side MUST be allowed to contribute different effective weight on ordinary cadence
 5. The temporal rule MUST be surfaced honestly in queries/UI, not hidden behind opaque aggregate numbers
 6. Changing a live ballot side late MUST reprice that ballot to the later vote-time weight rather than preserving an older stronger multiplier
-7. The special immediate-veto emergency threshold remains a separate raw-supply guard: it still checks raw live protection weight against raw total eligible protection supply with the configured strict `>` majority rule, rather than consuming the declining-power multiplier
+7. The special immediate-veto emergency threshold remains a separate raw-supply guard: it uses the ballot's frozen raw protection power against total eligible protection supply with the configured strict `>` majority rule, rather than consuming the declining-power multiplier
 
-Active proposal ballots MUST carry enough vote-time information to verify the temporal-weighting rule, and immediate cancellation still uses raw live protection weight / total eligible protection supply so the explicit strict-majority emergency contract remains independent of the decline-weighted protection tally.
+Active proposal ballots MUST carry enough vote-time and frozen-weight information to verify the temporal-weighting rule, and immediate cancellation still uses raw protection power / total eligible protection supply so the explicit strict-majority emergency contract remains independent of the decline-weighted protection tally.
 
 ### 5.3 Track Power Profiles
 
@@ -385,7 +393,7 @@ At minimum, this specification version SHOULD remain able to represent these pro
 
 - `DecliningDirectStake` — same-domain staking weight with ballot-time decay
 - `DecliningVetoAsset` — protocol / network protection weight backed by the well-known `$VETO` asset with ballot-time decay
-- `DecliningNativeStake` — tactical protection weight backed by native `Native` staking with ballot-time decay
+- `DecliningNativeStake` — tactical protection weight backed by runtime-resolved native `NativeVotePower` with ballot-time decay
 - `FlatUrgentDirectStake` — same-domain primary weight with constant `1x` urgent handling
 
 Contract rules:

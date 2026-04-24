@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Staking Pools
-summary: DEOS staking uses a multi-asset share-vault model. Each asset has its own pool and sovereign inflow channel, backing raises share value instead of triggering fan-out reward writes, and the long-term direction is transferable `stXXX` receipts with a native-special-case security path.
+summary: DEOS staking uses a multi-asset share-vault model with transferable `stXXX` receipts. Native `$NTVE` now mints liquid `stNTVE`, while collator security and native nomination rewards come from explicitly locked `NTVE/stNTVE` LP rather than from a live `stNTVE` balance binding.
 locale: en
 canonical_page_id: staking-pools
 translation_status: source
@@ -10,6 +10,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/staking.specification.en.md
+  - ../../docs/staking.architecture.en.md
   - ../../docs/governance.specification.en.md
 status: active
 audience: newcomer
@@ -22,17 +23,17 @@ related:
   - Routing and Minting Loop
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-04-16
-confidence: 0.92
+last_compiled: 2026-04-25
+confidence: 0.94
 ---
 
 # Staking Pools
 
 ## Summary
 
-DEOS staking is not modeled as a classic era-reward fan-out system. The specification defines a multi-asset share-vault design where each registered asset gets its own staking pool and sovereign inflow channel.
+DEOS staking is a multi-asset share-vault system. Each registered staking asset has a pool, deterministic accounts, and share/receipt accounting so backing can rise without writing rewards to every holder.
 
-The core idea is simple: when backing arrives at the pool, the value of existing ownership goes up. The runtime should not need to iterate over every staker just to distribute one inflow.
+The current native staking line is intentionally split into two surfaces: `$NTVE -> stNTVE` is liquid share-vault staking, while collator nomination and native reward exposure use locked `NTVE/stNTVE` LP. A plain `stNTVE` balance is not the collator-security signal.
 
 ## Share-Vault Model
 
@@ -40,52 +41,69 @@ For each staking asset, the system keeps:
 
 - One deterministic pool account
 - One pool state object
-- Many positions representing share ownership
+- Transferable receipt supply when a `stXXX` asset exists
+- Bounded read surfaces for exchange rate, account value, and reward claimability
 
-Ownership is represented by shares. Pool inflows increase what each share is worth instead of writing rewards into every user account.
+Ownership is represented by shares. Pool inflows increase what each share is worth instead of forcing a fan-out write across every user account.
 
-## Why This Scales Better
+## `stXXX` Receipts
 
-The staking specification explicitly rejects iterating all stakers on every inflow. Instead, inflows show up as share-price appreciation.
+`stXXX` tokens are yield-bearing receipts for staking pools:
 
-That means the important bounded reads are things like:
+- Local and native receipts use the `TYPE_STAKED` namespace
+- Foreign staking receipts use `TYPE_STAKED_FOREIGN`
+- Receipt supply tracks outstanding pool shares
+- Share value rises when pool backing grows while receipt supply stays fixed
 
-- Total shares
-- Accounted balance
-- Per-account shares
-- Current stake value derived from those numbers
+For native staking, the concrete receipt is `stNTVE`.
 
-## Sovereign Inflow Channel
+## Native `$NTVE -> stNTVE`
 
-Each staking asset has a deterministic sovereign account. Funds transferred to that account in the same asset become backing for the pool.
+The native entry path is now liquid and operator-free:
 
-This keeps the inflow path explicit and matches the broader DEOS pattern of token-driven coordination.
+```text
+$NTVE
+  -> Staking::stake_native(amount)
+  -> mint stNTVE receipt shares
+```
 
-## `stXXX` Direction
+This is a vault deposit and receipt mint, not an ordinary AMM swap. It increases native staking backing and mints receipt shares according to staking-pool accounting.
 
-The long-term direction is tokenized staking receipts:
+## Collator Security Uses Locked LP
 
-- Local and native receipts in the `TYPE_STAKED` namespace
-- Foreign receipts in the `TYPE_STAKED_FOREIGN` namespace
-- Receipt supply tracking outstanding pool shares
-- Share price rising when pool backing grows while receipt supply stays constant
+Native collator backing is no longer derived from live `stNTVE` balances or transfer-driven native bindings. The current security path is explicit LP custody:
 
-In short, `stXXX` is meant to represent transferable, yield-bearing ownership of the pool.
+```text
+$NTVE + stNTVE
+  -> add liquidity to NTVE/stNTVE
+  -> receive NTVE/stNTVE LP
+  -> lock_native_lp_for_collator(lp_asset_id, amount, operator)
+```
 
-## Native Special Case
+Locked `NTVE/stNTVE` LP is valued conservatively through the runtime's native-equivalent read model and feeds collator ranking / native nomination reward exposure.
 
-The native token path is special. Non-native staking stays economic-only, but native `$NTVE` also participates in the collator or operator security path.
+## Governance Custody
 
-The target design keeps one native receipt, `stNTVE`, while requiring explicit operator-aware entry or rebinding for the security surface.
+The same native value surface can also be locked for governance-only `NativeVotePower` without nominating a collator. The current runtime includes separate LP and native-asset custody paths for tactical protection voting, with unlock requests blocked while governance lock horizons are active.
+
+## Native Nomination Rewards
+
+Native nomination rewards are settled through native-specific claim paths. Generic same-asset reward settlement rejects the native staking asset so `$NTVE` nomination rewards cannot escape through legacy auto-compound semantics.
+
+The native settlement paths include:
+
+- `claim_nomination_reward(epoch)` for liquid `$NTVE` payout
+- `claim_and_compound_nomination_reward(epoch, operator)` for turning payout into locked LP
+- `claim_nomination_reward_batch(epochs)` for bounded multi-epoch native claims
 
 ## Relationship to Governance Rewards
 
-The staking and governance specs are linked, but they are not collapsed into one subsystem:
+Staking and governance remain separate subsystems:
 
-- Staking owns pool math, receipts, and reward settlement
-- Governance owns bounded participation memory and the exported reward coefficient
+- Staking owns pool math, receipts, locked LP custody, reward snapshots, and settlement
+- Governance owns bounded participation memory, vote-power policy, execution state, and exported reward coefficients
 
-The intended reward direction is same-asset auto-compound into fresh `stXXX` rather than a separate liquid payout leg.
+For non-native assets, same-asset reward settlement can still auto-compound into fresh receipts. Native `$NTVE` nomination rewards use the dedicated native paths above.
 
 ## Related
 
@@ -97,4 +115,5 @@ The intended reward direction is same-asset auto-compound into fresh `stXXX` rat
 ## Sources
 
 - `docs/staking.specification.en.md`
+- `docs/staking.architecture.en.md`
 - `docs/governance.specification.en.md`

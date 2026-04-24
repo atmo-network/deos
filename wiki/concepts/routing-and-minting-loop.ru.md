@@ -12,7 +12,7 @@ available_locales:
 sources:
   - ../../docs/axial-router.architecture.en.md
   - ../../docs/tmc.architecture.en.md
-  - ../../docs/tmctol.specification.ru.md
+  - ../../docs/tmctol.specification.en.md
 status: active
 audience: newcomer
 tags:
@@ -96,4 +96,4 @@ Token Minting Curve — это механизм однонаправленной
 
 - `docs/axial-router.architecture.en.md`
 - `docs/tmc.architecture.en.md`
-- `docs/tmctol.specification.ru.md`
+- `docs/tmctol.specification.en.md`

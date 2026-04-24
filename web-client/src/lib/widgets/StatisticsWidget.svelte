@@ -5,15 +5,9 @@
   import { marketStore } from "$lib/market/index.svelte";
   import { fmt, fmtPrice, toFloat } from "$lib/shared/format";
   import { fromClientBoundedProjection } from "$lib/shared/read-model";
-  import {
-      Card,
-      Notice,
-      ReadModelBadge,
-      SectionCard,
-      Sparkline,
-      StatCard,
-  } from "$lib/shared/ui";
+  import { Card, Notice, ReadModelBadge, SectionCard, Sparkline, StatCard } from "$lib/shared/ui";
   import { systemStore } from "$lib/system/index.svelte";
+  import StakingWidget from "./StakingWidget.svelte";
 
   type TrendCard = {
     label: string;
@@ -227,6 +221,8 @@
           <Notice>Awaiting recent chain samples</Notice>
         {/if}
       </SectionCard>
+
+      <StakingWidget {compactPane} {densePane} />
 
       <div class={[
         "grid gap-3",

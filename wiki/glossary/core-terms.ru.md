@@ -12,9 +12,9 @@ available_locales:
 sources:
   - ../../README.md
   - ../../docs/README.md
-  - ../../docs/tmctol.specification.ru.md
+  - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
-  - ../../docs/aaa.specification.ru.md
+  - ../../docs/aaa.specification.en.md
   - ../../docs/governance.specification.en.md
   - ../../docs/governance.architecture.en.md
   - ../../docs/read-model.contract.en.md
@@ -137,9 +137,9 @@ confidence: 0.95
 
 - `README.md`
 - `docs/README.md`
-- `docs/tmctol.specification.ru.md`
+- `docs/tmctol.specification.en.md`
 - `docs/core.architecture.en.md`
-- `docs/aaa.specification.ru.md`
+- `docs/aaa.specification.en.md`
 - `docs/governance.specification.en.md`
 - `docs/governance.architecture.en.md`
 - `docs/read-model.contract.en.md`

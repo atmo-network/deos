@@ -70,7 +70,7 @@
 	{#if hasVerticalOverflow}
 		<div class="pointer-events-none sticky top-0 z-20 h-0">
 			<div
-				class="h-4 w-full rounded-t-2xl bg-gradient-to-b from-[rgba(44,50,30,0.14)] via-[rgba(44,50,30,0.06)] to-transparent transition-opacity duration-150"
+				class="h-4 w-full rounded-t-2xl bg-linear-to-b from-[rgba(44,50,30,0.14)] via-[rgba(44,50,30,0.06)] to-transparent transition-opacity duration-150"
 				class:opacity-100={isScrolled}
 				class:opacity-65={!isScrolled}
 			></div>

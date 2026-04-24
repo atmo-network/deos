@@ -76,28 +76,28 @@ main() {
     run_shell_step \
         "AAA gate: over-capacity fairness matrix" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored --nocapture"
 
     run_shell_step \
         "AAA gate: dense vs sparse topology matrix" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored --nocapture"
 
     run_shell_step \
         "AAA gate: sparse topology long-run liveness" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored --nocapture"
 
     run_shell_step \
         "AAA gate: 10k queue scheduler stress" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked stress_10k_actors_queue_scheduler -- --ignored --nocapture"
 
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" == "1" ]]; then
         run_shell_step \
             "AAA gate: 10k queue/wakeup occupancy profile" \
             "" \
-            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture"
+            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture"
     else
         log_warning "Skipping occupancy profile"
     fi

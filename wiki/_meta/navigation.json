@@ -1,8 +1,11 @@
 {
-  "generated_at": "2026-04-20",
+  "generated_at": "2026-04-25",
   "audience": "newcomer",
   "default_locale": "en",
-  "available_locales": ["en", "ru"],
+  "available_locales": [
+    "en",
+    "ru"
+  ],
   "entrypoints": [
     "deos-framework",
     "first-steps",
@@ -175,8 +178,8 @@
           },
           "page_type": "overview",
           "summary": {
-            "en": "The system-level view of AAA as a bounded event-driven actor runtime where asset ingress can act like trigger-messages and actor graphs can be reconfigured on-chain.",
-            "ru": "Системный взгляд на AAA как на ограниченный event-driven actor runtime, где поступление активов может работать как сообщение-триггер, а графы акторов можно перенастраивать on-chain."
+            "en": "The system-level view of AAA as a bounded actor runtime with portable generic staking tasks and runtime-adapter boundaries for chain-specific staking policy.",
+            "ru": "Системный взгляд на AAA как на bounded actor runtime с portable generic staking tasks и runtime-adapter границами для chain-specific staking policy."
           }
         },
         {
@@ -319,8 +322,8 @@
           },
           "page_type": "concept",
           "summary": {
-            "en": "How DEOS staking uses share-vault pools, sovereign inflow channels, and transferable `stXXX` receipts.",
-            "ru": "Как стейкинг DEOS использует share-vault пулы, sovereign-каналы притока и transferable receipt-токены `stXXX`."
+            "en": "How DEOS staking uses share-vault pools, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination, and native-specific reward settlement.",
+            "ru": "Как staking DEOS использует share-vault pools, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination и native-specific reward settlement."
           }
         },
         {
@@ -426,8 +429,8 @@
           },
           "page_type": "usage",
           "summary": {
-            "en": "Operator and developer automation workflows using the local scripts layer.",
-            "ru": "Локальный слой автоматизации для разработчиков и операторов DEOS: запуск, сборка, bootstrap и диагностика."
+            "en": "Operator and developer automation, including local bootstrap, metadata export, authorized-upgrade checks, and native staking bootstrap call preparation.",
+            "ru": "Автоматизация для разработчиков и операторов: local bootstrap, metadata export, authorized-upgrade checks и подготовка native staking bootstrap call data."
           }
         }
       ]
@@ -467,8 +470,8 @@
           },
           "page_type": "status",
           "summary": {
-            "en": "Current implementation status, roadmap context, and active backlog items.",
-            "ru": "Текущий статус реализации, контекст дорожной карты и главные активные направления работы."
+            "en": "Current implementation status after the native staking migration baseline closed, with governance v1 and product crystallization as the active focus.",
+            "ru": "Текущий статус после закрытия native staking migration baseline, с активным фокусом на governance v1 и product crystallization."
           }
         }
       ]

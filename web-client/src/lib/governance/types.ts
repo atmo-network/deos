@@ -216,6 +216,22 @@ export type GovernanceProposalStatus =
       kind: "Finalized";
       outcome: GovernanceFinalizedProposalOutcome;
     };
+export type GovernanceFrozenBallot = {
+  voteKind: GovernanceVoteKind;
+  voteEpoch: GovernanceEpoch;
+  weight: GovernanceWeight;
+  rawPower: GovernanceWeight;
+};
+export type GovernanceAccountPowerView = {
+  governanceLockUntil: GovernanceEpoch | null;
+  ordinaryPowerProfile: GovernanceVotePowerProfile;
+  protectionPowerProfile: GovernanceVotePowerProfile;
+  currentOrdinaryWeight: GovernanceWeight;
+  currentProtectionWeight: GovernanceWeight;
+  currentProtectionRawPower: GovernanceWeight;
+  frozenOrdinaryBallot: GovernanceFrozenBallot | null;
+  frozenProtectionBallot: GovernanceFrozenBallot | null;
+};
 export type GovernanceProposalVoteTally = {
   ayeVoters: number;
   nayVoters: number;
@@ -289,6 +305,7 @@ export type GovernanceQuerySurfaceAvailability = {
   proposalTiming: GovernanceQuerySurfaceKind;
   proposalUrgentEligibility: GovernanceQuerySurfaceKind;
   proposalTally: GovernanceQuerySurfaceKind;
+  accountGovernancePower: GovernanceQuerySurfaceKind;
   votePowerProfiles: GovernanceQuerySurfaceKind;
   rewardCoefficient: GovernanceQuerySurfaceKind;
   govxpCounters: GovernanceQuerySurfaceKind;
@@ -403,6 +420,11 @@ export type GovernanceReadAdapter = {
     domainId: GovernanceDomainId,
     itemId: GovernanceItemId,
   ): Promise<GovernanceProposalVoteTally | null>;
+  getAccountGovernancePowerView(
+    domainId: GovernanceDomainId,
+    itemId: GovernanceItemId,
+    accountId: GovernanceAccountId,
+  ): Promise<GovernanceAccountPowerView | null>;
   getProposalExecutionDetail(
     domainId: GovernanceDomainId,
     itemId: GovernanceItemId,
@@ -486,6 +508,7 @@ export type GovernancePanelProposal = GovernanceProposalDescriptor & {
   timing: GovernanceProposalTiming | null;
   primaryTrackTally: GovernanceProposalPrimaryTrackTally | null;
   tally: GovernanceProposalVoteTally | null;
+  accountPowerView: GovernanceAccountPowerView | null;
   votePowerProfiles: Partial<
     Record<GovernanceVoteKind, GovernanceVotePowerProfile>
   >;

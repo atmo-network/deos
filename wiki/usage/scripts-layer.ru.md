@@ -1,7 +1,7 @@
 ---
 page_type: usage
 title: Слой скриптов
-summary: Локальный слой автоматизации для разработчиков и операторов DEOS: запуск, сборка, bootstrap, диагностика и служебные утилиты.
+summary: Локальный слой автоматизации для разработчиков и операторов DEOS — bootstrap, сборка, metadata export, authorized-upgrade checks, native staking readiness и plan-only подготовка call data для запуска `NTVE/stNTVE` pool.
 locale: ru
 canonical_page_id: scripts-layer
 translation_of: scripts-layer.en.md
@@ -20,48 +20,59 @@ tags:
 related:
   - Структура репозитория
   - Обзор фреймворка DEOS
-last_compiled: 2026-04-16
-confidence: 0.95
+last_compiled: 2026-04-25
+confidence: 0.96
 ---
 
 # Слой скриптов
 
 ## Кратко
 
-Директория `/scripts` — это практический слой автоматизации для разработчиков и операторов DEOS. Здесь лежат атомарные Bash-скрипты, более крупные оркестраторы и административные утилиты, которые помогают запускать локальную сеть, собирать runtime, проверять состояние и выполнять служебные операции.
+Директория `/scripts` — это практический слой автоматизации для разработчиков и операторов DEOS. Здесь лежат атомарные Bash-скрипты, более крупные оркестраторы и административные утилиты, которые помогают запускать локальную сеть, собирать runtime, проверять состояние, готовить call data и выполнять служебные операции.
 
-## Два основных класса скриптов
+## Классы скриптов
+
+Архитектура специально делит automation на понятные классы.
 
 ### Атомарные скрипты
 
-Это пронумерованные скрипты, которые делают одну конкретную вещь и не пытаются быть мини-фреймворком сами по себе.
-
-Примеры:
+Пронумерованные скрипты делают одну конкретную операцию и не оркестрируют друг друга. Примеры:
 
 - `01-download-binaries.sh` — скачать бинарники Polkadot SDK
 - `03-build-runtime.sh` — собрать Wasm-артефакт runtime
 - `05-spawn-zombienet.sh` — поднять локальную сеть
-- `08-seed-web-client-state.sh` — подготовить локальное состояние для тестирования клиента
+- `07-seed-web-client-state.sh` — подготовить локальное wallet/swap/native-staking состояние для live-тестирования web-client
 
 ### Оркестраторы
 
-Это именованные скрипты, которые собирают атомарные шаги в один более крупный workflow.
+Именованные workflow-скрипты собирают атомарные шаги в более крупные процессы:
 
-Примеры:
-
-- `bootstrap-local-network.sh` — собрать runtime, подготовить спецификацию, запустить локальную сеть и клиент
-- `validate-local.sh` — прогнать локальный набор проверок
-- `aaa-release-gate.sh` — запустить тяжелые стресс-проверки для AAA
+- `bootstrap-local-network.sh` — собрать runtime, подготовить спецификацию и запустить локальную сеть с клиентом
+- `validate-local.sh` — прогнать локальный набор CI/release/E2E проверок
+- `aaa-release-gate.sh` — запустить тяжелые stress-тесты для AAA scheduler
+- `benchmarks.sh` — запустить runtime benchmark compilation и weight-generation flows
 
 ## Административные утилиты
 
-Есть и отдельные служебные скрипты для управления локальной средой или работающей сетью.
+Admin scripts помогают операторам проверять локальную или live-chain готовность, не скрывая границы полномочий.
 
-Примеры:
+Важные примеры:
 
-- `check-authorized-upgrade-local.sh` — проверить соответствие локального Wasm ожидающему on-chain upgrade
-- `apply-authorized-upgrade-local.sh` — отправить авторизованный blob обновления
-- `teardown-local-network.sh` — аккуратно остановить локальную сеть и прибрать временное состояние
+- `export-papi-metadata.sh` — экспортировать Rust runtime metadata и пересобрать PAPI descriptors для web-client
+- `bootstrap-native-staking-local.sh check` — прочитать готовность native staking bootstrap без отправки транзакций
+- `bootstrap-native-staking-local.sh prepare-calls` — выпустить следующий plan-only Root/governance staking-admin или signed operator call data для registration/initialization native staking, создания canonical `NTVE/stNTVE` pool или начального liquidity seeding
+- `authorized-upgrade-local.sh check` — проверить, совпадает ли локальный Wasm hash с pending authorized runtime upgrade on-chain
+- `authorized-upgrade-local.sh apply` — отправить already-authorized runtime code bytes только при явном запросе
+- `teardown-local-network.sh` — аккуратно остановить фоновые процессы и удалить временное состояние сети
+
+## Native staking bootstrap helpers
+
+Native staking bootstrap path разделен на два operator-safe инструмента:
+
+1. `bootstrap-native-staking-local.sh prepare-calls` читает live state и готовит следующий call data для production/operator path
+2. `bootstrap-native-staking-local.sh check` проверяет готовность canonical `NTVE/stNTVE` pool, native staking exchange rate и Native Staking LP Farmer skeleton
+
+Оба helper-а по умолчанию plan/read-only. Preparation helper никогда не подписывает и не отправляет транзакции; он только выводит call data и ожидаемую authority для каждого шага.
 
 ## Общие соглашения
 

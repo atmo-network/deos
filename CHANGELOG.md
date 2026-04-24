@@ -4,6 +4,34 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the new DEOS monorepo. The changelog therefore focuses on achieved epics and the current shipped baseline of this repo, not on preserving every intermediate refactor step or pre-reset chronology.
 
+## [0.3.0] - 2026-04-25
+
+### Native Staking Launch Contract
+
+- `Native staking contract`: Shipped the liquidity-backed `$NTVE` launch model as one coherent baseline: `$NTVE` stakes into liquid yield-bearing `stNTVE`, the canonical `NTVE/stNTVE` AMM becomes the security-liquidity surface, collator nomination uses explicitly locked canonical LP, governance power comes only from explicit custody sources, and native nomination rewards settle through bounded epoch accounting rather than transferable-balance event tracking.
+- `pallet-staking` + `deos-runtime`: Replaced the obsolete native-binding security path with locked `NTVE/stNTVE` LP nomination, including lock/unlock/withdraw/redelegate lifecycle, conservative native-equivalent LP valuation, governance-lock custody enforcement, collator-only nomination reward base separation, and trusted-collator-phase session behavior that no longer depends on liquid `stNTVE` balances or native-binding cache repair.
+- `pallet-staking` + `pallet-governance`: Landed the full `NativeVotePower` custody model: locked `$NTVE`, locked `stNTVE`, standalone locked `NTVE/stNTVE` LP, and collator-locked LP feed frozen ballot power through explicit runtime valuation, while already-cast governance weights remain immutable across later exchange-rate, AMM-reserve, or custody changes.
+- `pallet-staking`: Shipped native nomination reward settlement as a dedicated surface: generic `claim_reward` / `claim_reward_batch` reject the native staking asset, native rewards are recognized by reward-account balance reconciliation during bounded resumable epoch rollover, `claim_nomination_reward` and `claim_nomination_reward_batch` pay liquid `$NTVE`, and `claim_and_compound_nomination_reward(epoch, operator)` compounds into new `NTVE/stNTVE` LP locked to the explicit target operator.
+- `pallet-aaa` + `deos-runtime`: Kept AAA staking portable by removing the DEOS-specific `StakeNative` task and routing native/liquid staking through generic `Task::Stake { asset, amount }`; added generic `DonateLiquidity` plus the Native Staking LP Farmer System actor so protocol-owned `$NTVE` can deterministically strengthen `NTVE/stNTVE` reserves without minting LP to the donor.
+- `deos-runtime` + Asset Conversion: Shipped the deterministic stake-vs-donate native LP-farming path, canonical LP namespace seeding, balanced donation helper, native nomination reward compound helper, guarded Native Staking LP Farmer activation, and runtime coverage proving donation increases reserves per LP token while ordinary compounding mints LP and locks it transactionally.
+- `pallet-staking` + `deos-runtime` weights: Added benchmark coverage for the expanded native LP custody, governance custody, rollover, claim, batch-claim, and compound paths; restored benchmark compilation and regenerated production staking runtime weights from the expanded benchmark set.
+
+### Native Staking Read Models, Client, and Operations
+
+- `pallet-staking` + `pallet-governance` + PAPI: Exposed bounded canonical views for native staking exchange rate, canonical `NTVE/stNTVE` reserves and LP issuance, account locked-LP/governance-custody detail, known-epoch nomination reward claimability, and account governance power/frozen-ballot facts; refreshed committed metadata/descriptors through the reproducible runtime metadata export path.
+- `web-client`: Split native staking into a dedicated `StakingWidget` with canonical-chain provenance, exact 12-decimal amount parsing, signer-gated reward claim/compound actions, collator LP nomination lifecycle actions, governance-only NativeVotePower custody actions, bounded wallet balances, safe-max helpers, pending unlock detail, and grouped collapsible action sections.
+- `scripts` + local bootstrap: Added local native staking bootstrap support, plan-only production/operator call preparation, JSON-safe readiness probing, and guarded activation sequencing for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer actor.
+
+### Governance and Product Baseline Stabilization
+
+- `Governance v1`: Closed the current domain/cadence/payload-kind rollout baseline as shipped and moved wider `L2ParameterChange`, per-kind execution observability, browser composition, and archive growth behind explicit future policy/provider gates.
+- `web-client`: Added an explicit governance archive boundary so full archive search and ballot timelines remain materialized-provider work instead of being implied by bounded on-chain recent-finalized retention.
+
+### Documentation, Wiki, and Context
+
+- `docs/staking.specification.en.md` + `docs/staking.architecture.en.md`: Aligned the NativeStaking contract and shipped architecture around the simpler final baseline: unlock requests remove active backing immediately while custody withdrawal remains delayed, nomination reward compounding uses an explicit operator target, donation acquisition defaults to deterministic stake-vs-donate, generic native-asset calls are allowed instead of mandatory wrapper extrinsics, and architecture wording reflects the trusted-collator phase plus regenerated weights.
+- `docs` + `wiki` + `BACKLOG.md`: Repaired stale native-binding and `StakeNative` wording, regenerated affected wiki projections, documented production/operator bootstrap sequencing, closed the native staking migration and current governance-product rollout baselines, and reclassified swap/mixed-route LP donation acquisition plus broader governance/archive growth as conditional future work.
+
 ## [0.2.0] - 2026-04-23
 
 ### Runtime Hardening

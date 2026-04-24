@@ -112,6 +112,7 @@ async function loadProposal(
   adapter: GovernanceAdapter,
   domainId: number,
   itemId: number,
+  accountId: string,
 ): Promise<GovernancePanelProposal> {
   const common = await loadProposalCommonFields(adapter, domainId, itemId);
   const [
@@ -119,6 +120,7 @@ async function loadProposal(
     timing,
     primaryTrackTally,
     tally,
+    accountPowerView,
     aye,
     nay,
     amplify,
@@ -131,6 +133,7 @@ async function loadProposal(
     adapter.getProposalTiming(domainId, itemId),
     adapter.getProposalPrimaryTrackTally(domainId, itemId),
     adapter.getProposalTally(domainId, itemId),
+    adapter.getAccountGovernancePowerView(domainId, itemId, accountId),
     adapter.getProposalVotePowerProfile(domainId, itemId, "aye"),
     adapter.getProposalVotePowerProfile(domainId, itemId, "nay"),
     adapter.getProposalVotePowerProfile(domainId, itemId, "amplify"),
@@ -146,6 +149,7 @@ async function loadProposal(
     timing,
     primaryTrackTally,
     tally,
+    accountPowerView,
     votePowerProfiles: {
       aye: aye ?? undefined,
       nay: nay ?? undefined,
@@ -314,7 +318,7 @@ class GovernanceStore {
       ]);
       const activeProposals = await Promise.all(
         activeProposalIds.map((itemId) =>
-          loadProposal(this.adapter, this.state.domainId, itemId),
+          loadProposal(this.adapter, this.state.domainId, itemId, this.state.accountId),
         ),
       );
       const recentRetainedDetails = await Promise.all(

@@ -20,13 +20,11 @@ jobs:
     timeout-minutes: 120
     env:
       SKIP_WASM_BUILD: 1
-    defaults:
-      run:
-        working-directory: template
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain from template/rust-toolchain.toml
+        working-directory: template
         run: |
           python3 - <<'PY'
           import subprocess
@@ -61,17 +59,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-stress-
 
-      - name: Stress matrix - over-capacity fairness (10k)
-        run: /usr/bin/time -f "stress.over_capacity.seconds=%e" timeout 35m cargo test -p deos-runtime --release --locked scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored --nocapture
-
-      - name: Stress diagnostics - queue/wakeup occupancy (10k)
-        run: /usr/bin/time -f "stress.queue_wakeup_profile.seconds=%e" timeout 35m cargo test -p deos-runtime --release --locked profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture
-
-      - name: Stress matrix - dense vs sparse topology
-        run: /usr/bin/time -f "stress.dense_sparse.seconds=%e" timeout 35m cargo test -p deos-runtime --release --locked scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored --nocapture
-
-      - name: Stress matrix - sparse long-run liveness
-        run: /usr/bin/time -f "stress.sparse_long.seconds=%e" timeout 35m cargo test -p deos-runtime --release --locked scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored --nocapture
-
-      - name: Stress matrix - ringless 10k actors
-        run: /usr/bin/time -f "stress.ringless_10k.seconds=%e" timeout 20m cargo test -p deos-runtime --release --locked stress_10k_actors_ringless_scheduler -- --ignored --nocapture
+      - name: AAA scheduler stress gate
+        run: ./scripts/aaa-release-gate.sh

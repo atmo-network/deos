@@ -10,16 +10,20 @@ SLOPE="${SLOPE:-1000000}"
 MINT_AMOUNT="${MINT_AMOUNT:-50000000000000}"
 LIQUIDITY_NATIVE="${LIQUIDITY_NATIVE:-5000000000000}"
 LIQUIDITY_FOREIGN="${LIQUIDITY_FOREIGN:-5000000000000}"
+NATIVE_STAKING_ASSET_ID="${NATIVE_STAKING_ASSET_ID:-0}"
+NATIVE_STAKE_AMOUNT="${NATIVE_STAKE_AMOUNT:-10000000000000}"
+NATIVE_STAKING_LIQUIDITY="${NATIVE_STAKING_LIQUIDITY:-5000000000000}"
 
 usage() {
     cat <<'EOF'
-Usage: 08-seed-web-client-state.sh [OPTIONS]
+Usage: 07-seed-web-client-state.sh [OPTIONS]
 
 Seeds the live local parachain with the remaining minimum economic state needed for real
-web-client wallet/swap testing: the current dev/local chain spec is expected to
-already provide the foreign asset, router tracking, and native curve, while this
-script tops up Alice's foreign balance when needed and creates/boots the
-native/foreign pool with starter liquidity if it is still empty.
+web-client wallet/swap/native-staking testing: the current dev/local chain spec is expected to
+already provide the foreign asset, local native-staking asset, stNTVE receipt,
+router tracking, native curve, and staking registration, while this script tops
+up Alice's balances when needed and creates/boots the native/foreign plus
+NTVE/stNTVE pools with starter liquidity if they are still empty.
 
 Options:
   -h, --help  Show this help message
@@ -32,6 +36,9 @@ Environment:
   MINT_AMOUNT=50000000000000
   LIQUIDITY_NATIVE=5000000000000
   LIQUIDITY_FOREIGN=5000000000000
+  NATIVE_STAKING_ASSET_ID=0
+  NATIVE_STAKE_AMOUNT=10000000000000
+  NATIVE_STAKING_LIQUIDITY=5000000000000
 EOF
 }
 
@@ -70,6 +77,9 @@ seed_state() {
         MINT_AMOUNT="$MINT_AMOUNT" \
         LIQUIDITY_NATIVE="$LIQUIDITY_NATIVE" \
         LIQUIDITY_FOREIGN="$LIQUIDITY_FOREIGN" \
+        NATIVE_STAKING_ASSET_ID="$NATIVE_STAKING_ASSET_ID" \
+        NATIVE_STAKE_AMOUNT="$NATIVE_STAKE_AMOUNT" \
+        NATIVE_STAKING_LIQUIDITY="$NATIVE_STAKING_LIQUIDITY" \
         node --input-type=module - <<'EOF'
 import { createWsClient } from 'polkadot-api/ws';
 import { deos } from '@polkadot-api/descriptors';
@@ -84,6 +94,11 @@ const SLOPE = BigInt(process.env.SLOPE);
 const MINT_AMOUNT = BigInt(process.env.MINT_AMOUNT);
 const LIQUIDITY_NATIVE = BigInt(process.env.LIQUIDITY_NATIVE);
 const LIQUIDITY_FOREIGN = BigInt(process.env.LIQUIDITY_FOREIGN);
+const NATIVE_STAKING_ASSET_ID = Number(process.env.NATIVE_STAKING_ASSET_ID);
+const NATIVE_STAKE_AMOUNT = BigInt(process.env.NATIVE_STAKE_AMOUNT);
+const NATIVE_STAKING_LIQUIDITY = BigInt(process.env.NATIVE_STAKING_LIQUIDITY);
+const STAKED_ASSET_TYPE = 0x50000000;
+const STAKED_NATIVE_ASSET_ID = STAKED_ASSET_TYPE | NATIVE_STAKING_ASSET_ID;
 
 function multiId(address) {
   return { type: 'Id', value: address };
@@ -93,6 +108,9 @@ function assetNative() {
 }
 function assetForeign(id = FOREIGN_ID) {
   return { type: 'Foreign', value: id };
+}
+function assetLocal(id) {
+  return { type: 'Local', value: id };
 }
 function encode(value) {
   return JSON.stringify(value, (_, inner) => typeof inner === 'bigint' ? inner.toString() : inner, 2);
@@ -137,6 +155,8 @@ async function main() {
     const tracked = await api.query.AxialRouter.TrackedAssets.getValue({ at: fin.hash }) ?? [];
     const curve = await api.query.TokenMintingCurve.TokenCurves.getValue(assetNative(), { at: fin.hash });
     const assetDetails = await api.view.Assets.asset_details(FOREIGN_ID, { at: fin.hash });
+    const nativeStakingAssetDetails = await api.view.Assets.asset_details(NATIVE_STAKING_ASSET_ID, { at: fin.hash });
+    const stakedNativeAssetDetails = await api.view.Assets.asset_details(STAKED_NATIVE_ASSET_ID, { at: fin.hash });
     const poolId = await api.query.AssetConversion.Pools.getValue([assetNative(), assetForeign()], { at: fin.hash });
     const reserves = await api.view.AssetConversion.get_reserves(assetForeign(), assetNative(), { at: fin.hash });
 
@@ -166,6 +186,11 @@ async function main() {
     }
     console.log('\n== native curve ==\nalready exists from genesis bootstrap');
 
+    if (!nativeStakingAssetDetails || !stakedNativeAssetDetails) {
+      throw new Error(`Native staking asset ${NATIVE_STAKING_ASSET_ID} or staked receipt ${STAKED_NATIVE_ASSET_ID} is missing. Regenerate the local chain spec with the current runtime presets before running this seed script.`);
+    }
+    console.log('\n== native staking asset ==\nlocal NTVE and stNTVE receipt already exist from genesis bootstrap');
+
     if (poolId == null) {
       await submitWithRetry('create native-foreign pool', () => api.tx.AssetConversion.create_pool({
         asset1: assetNative(),
@@ -191,16 +216,54 @@ async function main() {
       console.log('\n== liquidity ==\npool already has reserves');
     }
 
+    const aliceStakedBefore = await api.view.Assets.balance_of(alice.address, STAKED_NATIVE_ASSET_ID) ?? 0n;
+    if (aliceStakedBefore < NATIVE_STAKING_LIQUIDITY) {
+      await submitWithRetry('stake local NTVE into stNTVE', () => api.tx.Staking.stake_native({
+        amount: NATIVE_STAKE_AMOUNT,
+      }));
+    } else {
+      console.log('\n== native staking ==\nAlice already has sufficient stNTVE balance');
+    }
+
+    const stakingPoolBlock = await client.getFinalizedBlock();
+    const stakingPool = await api.view.Staking.native_staking_liquidity_pool({ at: stakingPoolBlock.hash });
+    if (!stakingPool) {
+      await submitWithRetry('create NTVE/stNTVE pool', () => api.tx.AssetConversion.create_pool({
+        asset1: assetLocal(NATIVE_STAKING_ASSET_ID),
+        asset2: assetLocal(STAKED_NATIVE_ASSET_ID),
+      }));
+    } else {
+      console.log('\n== NTVE/stNTVE pool ==\nalready exists');
+    }
+
+    const stakingLiquidityBlock = await client.getFinalizedBlock();
+    const stakingPoolAfterCreate = await api.view.Staking.native_staking_liquidity_pool({ at: stakingLiquidityBlock.hash });
+    if (!stakingPoolAfterCreate || stakingPoolAfterCreate.reserve_native === 0n || stakingPoolAfterCreate.reserve_staked === 0n) {
+      await submitWithRetry('add NTVE/stNTVE liquidity', () => api.tx.AssetConversion.add_liquidity({
+        asset1: assetLocal(NATIVE_STAKING_ASSET_ID),
+        asset2: assetLocal(STAKED_NATIVE_ASSET_ID),
+        amount1_desired: NATIVE_STAKING_LIQUIDITY,
+        amount2_desired: NATIVE_STAKING_LIQUIDITY,
+        amount1_min: 1n,
+        amount2_min: 1n,
+        mint_to: alice.address,
+      }));
+    } else {
+      console.log('\n== NTVE/stNTVE liquidity ==\npool already has reserves');
+    }
+
     const after = await client.getFinalizedBlock();
     const finalTracked = await api.query.AxialRouter.TrackedAssets.getValue({ at: after.hash }) ?? [];
     const finalCurve = await api.query.TokenMintingCurve.TokenCurves.getValue(assetNative(), { at: after.hash });
     const finalReserves = await api.view.AssetConversion.get_reserves(assetForeign(), assetNative(), { at: after.hash });
+    const finalNativeStakingPool = await api.view.Staking.native_staking_liquidity_pool({ at: after.hash });
     console.log('\n== final state ==');
     console.log(encode({
       block: after.number,
       tracked: finalTracked,
       hasCurve: finalCurve !== null && finalCurve !== undefined,
       reserves: finalReserves,
+      nativeStakingPool: finalNativeStakingPool,
     }));
   } finally {
     client.destroy();

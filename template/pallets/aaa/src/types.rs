@@ -70,9 +70,11 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     asset: AssetId,
     amount: AmountResolution<Balance>,
   },
-  StakeNative {
+  DonateLiquidity {
+    asset_a: AssetId,
+    asset_b: AssetId,
     amount: AmountResolution<Balance>,
-    operator: AccountId,
+    max_ratio_error: Perbill,
   },
   Unstake {
     asset: AssetId,
@@ -149,9 +151,16 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         asset: asset.clone(),
         amount: amount.clone(),
       },
-      Self::StakeNative { amount, operator } => Self::StakeNative {
+      Self::DonateLiquidity {
+        asset_a,
+        asset_b,
+        amount,
+        max_ratio_error,
+      } => Self::DonateLiquidity {
+        asset_a: asset_a.clone(),
+        asset_b: asset_b.clone(),
         amount: amount.clone(),
-        operator: operator.clone(),
+        max_ratio_error: *max_ratio_error,
       },
       Self::Unstake { asset, shares } => Self::Unstake {
         asset: asset.clone(),
@@ -243,10 +252,17 @@ impl<
         .field("asset", asset)
         .field("amount", amount)
         .finish(),
-      Self::StakeNative { amount, operator } => f
-        .debug_struct("StakeNative")
+      Self::DonateLiquidity {
+        asset_a,
+        asset_b,
+        amount,
+        max_ratio_error,
+      } => f
+        .debug_struct("DonateLiquidity")
+        .field("asset_a", asset_a)
+        .field("asset_b", asset_b)
         .field("amount", amount)
-        .field("operator", operator)
+        .field("max_ratio_error", max_ratio_error)
         .finish(),
       Self::Unstake { asset, shares } => f
         .debug_struct("Unstake")
@@ -385,15 +401,24 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
         },
       ) => left_asset == right_asset && left_amount == right_amount,
       (
-        Self::StakeNative {
+        Self::DonateLiquidity {
+          asset_a: left_asset_a,
+          asset_b: left_asset_b,
           amount: left_amount,
-          operator: left_operator,
+          max_ratio_error: left_max_ratio_error,
         },
-        Self::StakeNative {
+        Self::DonateLiquidity {
+          asset_a: right_asset_a,
+          asset_b: right_asset_b,
           amount: right_amount,
-          operator: right_operator,
+          max_ratio_error: right_max_ratio_error,
         },
-      ) => left_amount == right_amount && left_operator == right_operator,
+      ) => {
+        left_asset_a == right_asset_a
+          && left_asset_b == right_asset_b
+          && left_amount == right_amount
+          && left_max_ratio_error == right_max_ratio_error
+      }
       (
         Self::Unstake {
           asset: left_asset,

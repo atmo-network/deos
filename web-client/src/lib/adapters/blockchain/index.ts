@@ -4,6 +4,9 @@ import type {
   AssetBalanceProjection,
   AssetPresentation,
   AutomationActorSnapshot,
+  NativeCollatorLpPositionProjection,
+  NativeGovernanceCustodyPositionProjection,
+  NativeStakingProjection,
   LogEntry,
   SystemConfig,
   SystemSnapshot,
@@ -248,7 +251,7 @@ export class BlockchainAdapter implements Adapter {
     snapshot: DeosChainSnapshot,
     address: string,
   ): Promise<AssetBalanceProjection[]> {
-    const [canonicalForeignAsset, primaryRouteAsset, trackedAssets, nativeAccount] =
+    const [canonicalForeignAsset, primaryRouteAsset, trackedAssets, nativeAccount, nativeStakingPool] =
       await Promise.all([
         this.canonicalForeignAsset(snapshot),
         this.resolvePrimaryForeignAsset(snapshot),
@@ -256,15 +259,24 @@ export class BlockchainAdapter implements Adapter {
         snapshot.typedApi.query.System.Account.getValue(address, {
           at: snapshot.at,
         }),
+        snapshot.typedApi.view.Staking.native_staking_liquidity_pool({ at: snapshot.at }),
       ]);
     const canonicalAssetKey = canonicalForeignAsset
       ? runtimeAssetKey(canonicalForeignAsset)
       : null;
     const primaryRouteKey = runtimeAssetKey(primaryRouteAsset);
+    const nativeStakingAssets: RuntimeAssetKind[] = nativeStakingPool
+      ? [
+          PapiEnum("Local", nativeStakingPool.native_asset_id) as RuntimeAssetKind,
+          PapiEnum("Local", nativeStakingPool.staked_asset_id) as RuntimeAssetKind,
+          PapiEnum("Local", nativeStakingPool.lp_asset_id) as RuntimeAssetKind,
+        ]
+      : [];
     const candidateAssets = dedupeRuntimeAssets([
       NATIVE_ASSET,
       primaryRouteAsset,
       ...trackedAssets,
+      ...nativeStakingAssets,
     ]);
     return await Promise.all(
       candidateAssets.map(async (asset) => {
@@ -410,6 +422,116 @@ export class BlockchainAdapter implements Adapter {
       }),
     );
     return buckets;
+  }
+
+  private async nativeStakingReadModel(
+    snapshot: DeosChainSnapshot,
+  ): Promise<NativeStakingProjection> {
+    const accountAddress = walletStore.state.selectedAddress || null;
+    const unavailable = {
+      isAvailable: false,
+      accountAddress,
+      exchangeRate: null,
+      pool: null,
+      accountPosition: null,
+    } satisfies NativeStakingProjection;
+    try {
+      const [exchangeRate, pool, accountPosition] = await Promise.all([
+        snapshot.typedApi.view.Staking.native_staking_exchange_rate({ at: snapshot.at }),
+        snapshot.typedApi.view.Staking.native_staking_liquidity_pool({ at: snapshot.at }),
+        accountAddress
+          ? snapshot.typedApi.view.Staking.native_locked_lp_position(accountAddress, { at: snapshot.at })
+          : Promise.resolve(null),
+      ]);
+      return {
+        isAvailable: pool !== null,
+        accountAddress,
+        exchangeRate: exchangeRate ?? null,
+        pool: pool
+          ? {
+              nativeAssetId: pool.native_asset_id,
+              stakedAssetId: pool.staked_asset_id,
+              lpAssetId: pool.lp_asset_id,
+              reserveNative: pool.reserve_native,
+              reserveStaked: pool.reserve_staked,
+              lpTotalIssuance: pool.lp_total_issuance,
+            }
+          : null,
+        accountPosition: accountPosition
+          ? {
+              totalLockedLp: accountPosition.total_locked_lp,
+              collatorLockedLp: accountPosition.collator_locked_lp,
+              governanceLockedLp: accountPosition.governance_locked_lp,
+              conservativeNativeValue: accountPosition.conservative_native_value ?? null,
+            }
+          : null,
+      };
+    } catch {
+      return unavailable;
+    }
+  }
+
+  async getNativeCollatorLpPosition(
+    operator: string,
+  ): Promise<NativeCollatorLpPositionProjection | null> {
+    const accountAddress = walletStore.state.selectedAddress || null;
+    const normalizedOperator = operator.trim();
+    if (!accountAddress || normalizedOperator.length === 0) {
+      return null;
+    }
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    const position = await snapshot.typedApi.view.Staking.native_collator_lp_position(
+      accountAddress,
+      normalizedOperator,
+      { at: snapshot.at },
+    );
+    return {
+      lpAssetId: position.lp_asset_id ?? null,
+      lockedLp: position.locked_lp,
+      pendingUnlockLp: position.pending_unlock_lp,
+      pendingUnlockBlock: position.pending_unlock_block ?? null,
+      conservativeNativeValue: position.conservative_native_value ?? null,
+    };
+  }
+
+  async getNativeGovernanceCustodyPosition(
+    assetId: number,
+  ): Promise<NativeGovernanceCustodyPositionProjection | null> {
+    const accountAddress = walletStore.state.selectedAddress || null;
+    if (!accountAddress || !Number.isFinite(assetId)) {
+      return null;
+    }
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    const position = await snapshot.typedApi.view.Staking.native_governance_custody_position(
+      accountAddress,
+      assetId,
+      { at: snapshot.at },
+    );
+    return {
+      lpAssetId: position.lp_asset_id ?? null,
+      governanceLockedLp: position.governance_locked_lp,
+      pendingGovernanceLpUnlock: position.pending_governance_lp_unlock,
+      pendingGovernanceLpUnlockBlock: position.pending_governance_lp_unlock_block ?? null,
+      assetId: position.asset_id,
+      assetLocked: position.asset_locked,
+      pendingAssetUnlock: position.pending_asset_unlock,
+      pendingAssetUnlockBlock: position.pending_asset_unlock_block ?? null,
+    };
+  }
+
+  async getNativeNominationRewardClaimable(epoch: number): Promise<bigint | null> {
+    const accountAddress = walletStore.state.selectedAddress || null;
+    if (!accountAddress || !Number.isInteger(epoch) || epoch < 0) {
+      return null;
+    }
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    return (
+      await snapshot.typedApi.view.Staking.native_nomination_reward_claimable(
+        epoch,
+        accountAddress,
+        { at: snapshot.at },
+      )
+    ) ?? null;
   }
 
   private async zapManagerBuffers(
@@ -558,7 +680,7 @@ export class BlockchainAdapter implements Adapter {
     const reserveForeign = reserves?.foreign ?? 0n;
     const hasPool = reserveNative > 0n && reserveForeign > 0n;
     const supplyLp = await this.lpSupply(snapshot, lpAssetId);
-    const [buckets, zapBuffers] = await Promise.all([
+    const [buckets, zapBuffers, nativeStaking] = await Promise.all([
       this.bucketBalances(
         snapshot,
         foreignAsset,
@@ -567,6 +689,7 @@ export class BlockchainAdapter implements Adapter {
         supplyLp,
       ),
       this.zapManagerBuffers(snapshot, foreignAsset),
+      this.nativeStakingReadModel(snapshot),
     ]);
     const priceXyk = hasPool
       ? (reserveForeign * PRECISION) / reserveNative
@@ -609,6 +732,7 @@ export class BlockchainAdapter implements Adapter {
       bufferForeign: zapBuffers.foreign,
       nativeAsset: nativeAssetPresentation,
       foreignAsset: foreignAssetPresentation,
+      nativeStaking,
     };
   }
 
@@ -727,6 +851,13 @@ export class BlockchainAdapter implements Adapter {
           symbol: "FOREIGN",
           isCanonical: false,
         },
+        nativeStaking: {
+          isAvailable: false,
+          accountAddress: walletStore.state.selectedAddress || null,
+          exchangeRate: null,
+          pool: null,
+          accountPosition: null,
+        },
       };
     }
   }
@@ -833,6 +964,15 @@ export class BlockchainAdapter implements Adapter {
 
   private accountRecipient(accountId: string) {
     return PapiEnum("Id", accountId);
+  }
+
+  private async resolveNativeStakingLpAssetId(): Promise<number> {
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    const pool = await snapshot.typedApi.view.Staking.native_staking_liquidity_pool({ at: snapshot.at });
+    if (!pool) {
+      throw new Error("Canonical NTVE/stNTVE liquidity pool is unavailable");
+    }
+    return pool.lp_asset_id;
   }
 
   private emitTransactionProgress(progress: TransactionProgress): void {
@@ -1174,6 +1314,264 @@ export class BlockchainAdapter implements Adapter {
 
   async depositForeign(_amount: bigint): Promise<void> {
     return;
+  }
+
+  async claimNominationReward(epoch: number): Promise<void> {
+    if (!Number.isInteger(epoch) || epoch < 0) {
+      throw new Error("Reward epoch must be a non-negative integer");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.claim_nomination_reward({
+          epoch,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        `Claim nomination reward #${epoch}`,
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native nomination reward claim failed",
+      );
+    }
+  }
+
+  async claimAndCompoundNominationReward(epoch: number, operator: string): Promise<void> {
+    if (!Number.isInteger(epoch) || epoch < 0) {
+      throw new Error("Reward epoch must be a non-negative integer");
+    }
+    const normalizedOperator = operator.trim();
+    if (normalizedOperator.length === 0) {
+      throw new Error("Collator/operator address is required for compound locking");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.claim_and_compound_nomination_reward({
+          epoch,
+          operator: normalizedOperator,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        `Compound nomination reward #${epoch}`,
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native nomination reward compound failed",
+      );
+    }
+  }
+
+  async lockNativeLpForCollator(amount: bigint, operator: string): Promise<void> {
+    if (amount <= 0n) {
+      throw new Error("LP lock amount must be greater than zero");
+    }
+    const normalizedOperator = operator.trim();
+    if (normalizedOperator.length === 0) {
+      throw new Error("Collator/operator address is required");
+    }
+    try {
+      const lpAssetId = await this.resolveNativeStakingLpAssetId();
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.lock_native_lp_for_collator({
+          lp_asset_id: lpAssetId,
+          amount,
+          operator: normalizedOperator,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Lock native staking LP",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native LP collator lock failed",
+      );
+    }
+  }
+
+  async requestUnlockNativeLp(operator: string, amount: bigint): Promise<void> {
+    if (amount <= 0n) {
+      throw new Error("LP unlock amount must be greater than zero");
+    }
+    const normalizedOperator = operator.trim();
+    if (normalizedOperator.length === 0) {
+      throw new Error("Collator/operator address is required");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.request_unlock_native_lp({
+          operator: normalizedOperator,
+          amount,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Request native LP unlock",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native LP unlock request failed",
+      );
+    }
+  }
+
+  async withdrawUnlockedNativeLp(operator: string): Promise<void> {
+    const normalizedOperator = operator.trim();
+    if (normalizedOperator.length === 0) {
+      throw new Error("Collator/operator address is required");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.withdraw_unlocked_native_lp({
+          operator: normalizedOperator,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Withdraw unlocked native LP",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native LP withdrawal failed",
+      );
+    }
+  }
+
+  async redelegateNativeLp(fromOperator: string, toOperator: string, amount: bigint): Promise<void> {
+    if (amount <= 0n) {
+      throw new Error("LP redelegation amount must be greater than zero");
+    }
+    const normalizedFromOperator = fromOperator.trim();
+    const normalizedToOperator = toOperator.trim();
+    if (normalizedFromOperator.length === 0 || normalizedToOperator.length === 0) {
+      throw new Error("Both source and target collator/operator addresses are required");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.redelegate_native_lp({
+          from_operator: normalizedFromOperator,
+          to_operator: normalizedToOperator,
+          amount,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Redelegate native LP",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native LP redelegation failed",
+      );
+    }
+  }
+
+  async lockNativeLpForGovernance(amount: bigint): Promise<void> {
+    if (amount <= 0n) {
+      throw new Error("Governance LP lock amount must be greater than zero");
+    }
+    try {
+      const lpAssetId = await this.resolveNativeStakingLpAssetId();
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.lock_native_lp_for_governance({
+          lp_asset_id: lpAssetId,
+          amount,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Lock governance native LP",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native governance LP lock failed",
+      );
+    }
+  }
+
+  async requestUnlockNativeLpForGovernance(amount: bigint): Promise<void> {
+    if (amount <= 0n) {
+      throw new Error("Governance LP unlock amount must be greater than zero");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.request_unlock_native_lp_for_governance({
+          amount,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Request governance LP unlock",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native governance LP unlock request failed",
+      );
+    }
+  }
+
+  async withdrawUnlockedNativeLpForGovernance(): Promise<void> {
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.withdraw_unlocked_native_lp_for_governance().signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Withdraw governance LP",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native governance LP withdrawal failed",
+      );
+    }
+  }
+
+  async lockNativeAssetForGovernance(assetId: number, amount: bigint): Promise<void> {
+    if (!Number.isFinite(assetId)) {
+      throw new Error("Governance asset id is required");
+    }
+    if (amount <= 0n) {
+      throw new Error("Governance asset lock amount must be greater than zero");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.lock_native_asset_for_governance({
+          asset_id: assetId,
+          amount,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Lock governance native asset",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native governance asset lock failed",
+      );
+    }
+  }
+
+  async requestUnlockNativeAssetForGovernance(assetId: number, amount: bigint): Promise<void> {
+    if (!Number.isFinite(assetId)) {
+      throw new Error("Governance asset id is required");
+    }
+    if (amount <= 0n) {
+      throw new Error("Governance asset unlock amount must be greater than zero");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.request_unlock_native_asset_for_governance({
+          asset_id: assetId,
+          amount,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Request governance asset unlock",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native governance asset unlock request failed",
+      );
+    }
+  }
+
+  async withdrawUnlockedNativeAssetForGovernance(assetId: number): Promise<void> {
+    if (!Number.isFinite(assetId)) {
+      throw new Error("Governance asset id is required");
+    }
+    try {
+      await this.submitSigned(
+        (snapshot, _accountId, signer) => snapshot.typedApi.tx.Staking.withdraw_unlocked_native_asset_for_governance({
+          asset_id: assetId,
+        }).signSubmitAndWatch(signer.signer),
+        `No signer is available for ${walletStore.selectedAddress.trim()}. Use an injected wallet account or a built-in Zombienet dev identity.`,
+        "Withdraw governance asset",
+      );
+    } catch (error) {
+      throw new Error(
+        error instanceof Error ? error.message : "Native governance asset withdrawal failed",
+      );
+    }
   }
 
   async transferAsset(

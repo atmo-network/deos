@@ -46,12 +46,17 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
 /// Optional: required only when Stake or Unstake tasks are present.
 pub trait StakingOps<AccountId, AssetId, Balance> {
   fn stake(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError>;
-  fn stake_native(
-    who: &AccountId,
-    amount: Balance,
-    operator: &AccountId,
-  ) -> Result<(), DispatchError>;
   fn unstake(who: &AccountId, asset: AssetId, shares: Balance) -> Result<(), DispatchError>;
+}
+
+pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
+  fn donate_liquidity(
+    who: &AccountId,
+    asset_a: AssetId,
+    asset_b: AssetId,
+    amount: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(Balance, Balance), DispatchError>;
 }
 
 pub trait DexOps<AccountId, AssetId, Balance> {
@@ -170,11 +175,22 @@ impl<AccountId, AssetId, Balance: Default> StakingOps<AccountId, AssetId, Balanc
     Err(DispatchError::Other("StakingOps not configured"))
   }
 
-  fn stake_native(_: &AccountId, _: Balance, _: &AccountId) -> Result<(), DispatchError> {
-    Err(DispatchError::Other("StakingOps not configured"))
-  }
-
   fn unstake(_: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
     Err(DispatchError::Other("StakingOps not configured"))
+  }
+}
+
+/// No-op `LiquidityDonationOps` for configurations where LP donation is not used.
+impl<AccountId, AssetId, Balance: Default> LiquidityDonationOps<AccountId, AssetId, Balance>
+  for ()
+{
+  fn donate_liquidity(
+    _: &AccountId,
+    _: AssetId,
+    _: AssetId,
+    _: Balance,
+    _: Perbill,
+  ) -> Result<(Balance, Balance), DispatchError> {
+    Err(DispatchError::Other("LiquidityDonationOps not configured"))
   }
 }

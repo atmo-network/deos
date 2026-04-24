@@ -25,6 +25,7 @@ export const GOVERNANCE_QUERY_SURFACE_AVAILABILITY: GovernanceQuerySurfaceAvaila
     proposalTiming: "onchain",
     proposalUrgentEligibility: "onchain",
     proposalTally: "onchain",
+    accountGovernancePower: "onchain",
     votePowerProfiles: "onchain",
     rewardCoefficient: "onchain",
     govxpCounters: "onchain",

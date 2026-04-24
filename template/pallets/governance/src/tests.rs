@@ -1676,7 +1676,7 @@ fn vote_weight_provider_changes_winner_selection() {
 }
 
 #[test]
-fn proposal_vote_weight_provider_receives_time_aware_context() {
+fn proposal_vote_weight_is_frozen_at_cast_time() {
   new_test_ext().execute_with(|| {
     set_vote_weight(10, 5);
     set_vote_weight(11, 1);
@@ -1709,17 +1709,48 @@ fn proposal_vote_weight_provider_receives_time_aware_context() {
       assert_eq!(vote_epoch, 1);
       assert!(matches!(account, 10 | 11));
     }
+    set_vote_weight(10, 1);
+    set_vote_weight(11, 5);
     System::set_block_number(3);
-    let _ = Governance::proposal_vote_tally(7, 100).expect("active proposal must expose tally");
-    let contexts = take_vote_weight_contexts();
-    assert_eq!(contexts.len(), 2);
-    for (_, _, current_epoch, submitted_epoch, maturity_epoch, vote_epoch, account) in contexts {
-      assert_eq!(current_epoch, 3);
-      assert_eq!(submitted_epoch, 1);
-      assert_eq!(maturity_epoch, 3);
-      assert_eq!(vote_epoch, 1);
-      assert!(matches!(account, 10 | 11));
-    }
+    let tally = Governance::proposal_vote_tally(7, 100).expect("active proposal must expose tally");
+    assert_eq!(tally.aye_weight, 5);
+    assert_eq!(tally.nay_weight, 1);
+    assert!(take_vote_weight_contexts().is_empty());
+  });
+}
+
+#[test]
+fn proposal_vote_extends_account_governance_lock_until_enactment_horizon() {
+  new_test_ext().execute_with(|| {
+    ProposalEnactmentDelay::set(5);
+    assert_ok!(submit_test_proposal(7, 100, DEFAULT_PROPOSER));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      7,
+      100,
+      ProposalVoteKind::Aye,
+    ));
+    assert_eq!(
+      Governance::governance_lock(10),
+      Some(crate::GovernanceLock { lock_until: 8 })
+    );
+    System::assert_has_event(RuntimeEvent::Governance(Event::GovernanceLockExtended {
+      account: 10,
+      previous_lock_until: None,
+      new_lock_until: 8,
+    }));
+    ProposalEnactmentDelay::set(0);
+    assert_ok!(submit_test_proposal(7, 101, DEFAULT_PROPOSER));
+    assert_ok!(Governance::cast_vote(
+      RuntimeOrigin::signed(10),
+      7,
+      101,
+      ProposalVoteKind::Aye,
+    ));
+    assert_eq!(
+      Governance::governance_lock(10),
+      Some(crate::GovernanceLock { lock_until: 8 })
+    );
   });
 }
 

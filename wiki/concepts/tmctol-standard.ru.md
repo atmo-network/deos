@@ -10,7 +10,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.ru.md
+  - ../../docs/tmctol.specification.en.md
   - ../../README.md
 status: active
 audience: newcomer
@@ -107,5 +107,5 @@ DEOS дает этот более широкий операционный сло
 
 ## Источники
 
-- `docs/tmctol.specification.ru.md`
+- `docs/tmctol.specification.en.md`
 - `README.md`

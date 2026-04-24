@@ -5,13 +5,7 @@ extern crate alloc;
 use crate::*;
 use frame::prelude::*;
 use polkadot_sdk::frame_benchmarking::{account, v2::*};
-use polkadot_sdk::frame_support::{
-  traits::{
-    Hooks,
-    fungibles::{Inspect, Mutate},
-  },
-  weights::Weight,
-};
+use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::pallet_assets;
 use polkadot_sdk::sp_runtime::traits::{One, Zero};
@@ -95,32 +89,86 @@ fn seed_legacy_pool_with_position<T>(
   mint_to::<T>(asset_id, &pool_account, shares);
 }
 
-fn seed_cached_native_delegation<T>(
-  binder: &T::AccountId,
-  operator: &T::AccountId,
-  amount: <T as Config>::Balance,
-) where
+fn register_native_pool<T>() -> <T as Config>::AssetId
+where
   T: Config
     + pallet_assets::Config<AssetId = <T as Config>::AssetId, Balance = <T as Config>::Balance>,
   <T as pallet_assets::Config>::AssetIdParameter: From<<T as Config>::AssetId> + Copy,
   <T as Config>::AssetId: From<u32>,
-  BlockNumberFor<T>: From<u32>,
 {
-  let native_asset_id = T::NativeStakingAssetId::get();
-  register_pool::<T>(native_asset_id);
-  mint_to::<T>(
-    native_asset_id,
-    binder,
-    amount + <T as Config>::Balance::one(),
-  );
-  Pallet::<T>::stake_native(
-    RawOrigin::Signed(binder.clone()).into(),
+  let asset_id = T::NativeStakingAssetId::get();
+  if !Pools::<T>::contains_key(asset_id) {
+    register_pool::<T>(asset_id);
+  }
+  asset_id
+}
+
+fn benchmark_amount<T: Config>(value: u32) -> <T as Config>::Balance {
+  <T as Config>::Balance::from(value)
+}
+
+fn benchmark_operator<T: Config>(name: &'static str) -> T::AccountId {
+  account(name, 0, 0)
+}
+
+fn setup_collator_lp_lock<T>(
+  caller: &T::AccountId,
+  operator: &T::AccountId,
+  amount: <T as Config>::Balance,
+) -> <T as Config>::AssetId
+where
+  T: Config
+    + pallet_assets::Config<AssetId = <T as Config>::AssetId, Balance = <T as Config>::Balance>,
+  <T as pallet_assets::Config>::AssetIdParameter: From<<T as Config>::AssetId> + Copy,
+  <T as Config>::AssetId: From<u32>,
+{
+  register_native_pool::<T>();
+  T::NativeOperatorValidator::benchmark_prepare_valid_operator(operator);
+  let lp_asset_id =
+    <T as Config>::BenchmarkHelper::prepare_native_staking_lp(caller, amount + amount)
+      .expect("benchmark helper must prepare native staking LP");
+  Pallet::<T>::lock_native_lp_for_collator(
+    RawOrigin::Signed(caller.clone()).into(),
+    lp_asset_id,
     amount,
     operator.clone(),
   )
-  .expect("benchmark native stake setup must succeed");
-  let _ = Pallet::<T>::on_idle(frame_system::Pallet::<T>::block_number(), Weight::MAX);
-  frame_system::Pallet::<T>::reset_events();
+  .expect("benchmark native LP lock must succeed");
+  lp_asset_id
+}
+
+fn setup_native_reward_claim<T>(
+  caller: &T::AccountId,
+  operator: &T::AccountId,
+  reward_amount: <T as Config>::Balance,
+) -> <T as Config>::RewardEpoch
+where
+  T: Config
+    + pallet_assets::Config<AssetId = <T as Config>::AssetId, Balance = <T as Config>::Balance>,
+  <T as pallet_assets::Config>::AssetIdParameter: From<<T as Config>::AssetId> + Copy,
+  <T as Config>::AssetId: From<u32>,
+  <T as Config>::RewardEpoch: From<u32>,
+  BlockNumberFor<T>: From<u32>,
+{
+  let asset_id = register_native_pool::<T>();
+  let governance_domain = Pallet::<T>::reward_governance_domain(asset_id)
+    .expect("benchmark native asset must resolve governance domain");
+  T::RewardCoefficientProvider::benchmark_prepare_positive_coefficient(governance_domain, caller);
+  mint_to::<T>(asset_id, caller, benchmark_amount::<T>(500));
+  let _ = Pallet::<T>::stake_native(
+    RawOrigin::Signed(caller.clone()).into(),
+    benchmark_amount::<T>(100),
+  );
+  setup_collator_lp_lock::<T>(caller, operator, benchmark_amount::<T>(100));
+  let claim_epoch = T::RewardEpochProvider::current_reward_epoch();
+  Pallet::<T>::bootstrap_reward_snapshot(RawOrigin::Root.into(), asset_id, caller.clone())
+    .expect("benchmark reward bootstrap must succeed");
+  let reward_account = Pallet::<T>::reward_account_for(asset_id);
+  mint_to::<T>(asset_id, &reward_account, reward_amount);
+  Pallet::<T>::note_reward_inflow(asset_id, reward_amount)
+    .expect("benchmark reward inflow must succeed");
+  frame_system::Pallet::<T>::set_block_number(2u32.into());
+  claim_epoch
 }
 
 #[benchmarks(where
@@ -260,25 +308,6 @@ mod benches {
   }
 
   #[benchmark]
-  fn bind_native() {
-    let binder: T::AccountId = whitelisted_caller();
-    let old_operator: T::AccountId = account("delegation-old-operator", 0, 0);
-    let operator: T::AccountId = account("delegation-operator", 0, 0);
-    let amount = <T as Config>::Balance::from(100u32);
-    T::NativeBindingTargetValidator::benchmark_prepare_valid_operator(&old_operator);
-    T::NativeBindingTargetValidator::benchmark_prepare_valid_operator(&operator);
-    seed_cached_native_delegation::<T>(&binder, &old_operator, amount);
-    #[extrinsic_call]
-    bind_native(RawOrigin::Signed(binder.clone()), operator.clone());
-    assert_eq!(NativeBindings::<T>::get(&binder), Some(operator.clone()));
-    assert_eq!(
-      CachedOperatorNativeShares::<T>::get(&old_operator),
-      Zero::zero()
-    );
-    assert_eq!(CachedOperatorNativeShares::<T>::get(&operator), amount);
-  }
-
-  #[benchmark]
   fn set_operator_commission() {
     let caller: T::AccountId = whitelisted_caller();
     let commission = T::MaxOperatorCommission::get();
@@ -288,20 +317,301 @@ mod benches {
   }
 
   #[benchmark]
-  fn clear_native_binding() {
-    let binder: T::AccountId = whitelisted_caller();
-    let operator: T::AccountId = account("delegation-operator", 0, 0);
-    let amount = <T as Config>::Balance::from(100u32);
-    T::NativeBindingTargetValidator::benchmark_prepare_valid_operator(&operator);
-    seed_cached_native_delegation::<T>(&binder, &operator, amount);
+  fn lock_native_lp_for_collator() {
+    let caller: T::AccountId = whitelisted_caller();
+    let operator = benchmark_operator::<T>("native-operator");
+    let amount = benchmark_amount::<T>(40);
+    register_native_pool::<T>();
+    T::NativeOperatorValidator::benchmark_prepare_valid_operator(&operator);
+    let lp_asset_id =
+      <T as Config>::BenchmarkHelper::prepare_native_staking_lp(&caller, amount + amount)
+        .expect("benchmark helper must prepare native staking LP");
+    Pallet::<T>::lock_native_lp_for_collator(
+      RawOrigin::Signed(caller.clone()).into(),
+      lp_asset_id,
+      amount,
+      operator.clone(),
+    )
+    .expect("benchmark existing native LP lock setup must succeed");
     #[extrinsic_call]
-    clear_native_binding(RawOrigin::Signed(binder.clone()));
-    assert!(NativeBindings::<T>::get(&binder).is_none());
-    assert!(CachedNativeDelegations::<T>::get(&binder).is_none());
-    assert_eq!(
-      CachedOperatorNativeShares::<T>::get(&operator),
-      Zero::zero()
+    lock_native_lp_for_collator(
+      RawOrigin::Signed(caller.clone()),
+      lp_asset_id,
+      amount,
+      operator.clone(),
     );
+    assert_eq!(
+      AccountNativeCollatorLpLocked::<T>::get(&caller),
+      amount + amount
+    );
+  }
+
+  #[benchmark]
+  fn request_unlock_native_lp() {
+    let caller: T::AccountId = whitelisted_caller();
+    let operator = benchmark_operator::<T>("native-operator");
+    let amount = benchmark_amount::<T>(15);
+    setup_collator_lp_lock::<T>(&caller, &operator, amount + amount);
+    #[extrinsic_call]
+    request_unlock_native_lp(RawOrigin::Signed(caller.clone()), operator.clone(), amount);
+    assert!(PendingNativeLpUnlocks::<T>::contains_key(
+      &caller, &operator
+    ));
+  }
+
+  #[benchmark]
+  fn withdraw_unlocked_native_lp() {
+    let caller: T::AccountId = whitelisted_caller();
+    let operator = benchmark_operator::<T>("native-operator");
+    let amount = benchmark_amount::<T>(15);
+    setup_collator_lp_lock::<T>(&caller, &operator, amount);
+    Pallet::<T>::request_unlock_native_lp(
+      RawOrigin::Signed(caller.clone()).into(),
+      operator.clone(),
+      amount,
+    )
+    .expect("benchmark native LP unlock request must succeed");
+    frame_system::Pallet::<T>::set_block_number(T::NativeLpUnlockDelay::get() + 2u32.into());
+    #[extrinsic_call]
+    withdraw_unlocked_native_lp(RawOrigin::Signed(caller.clone()), operator.clone());
+    assert!(!PendingNativeLpUnlocks::<T>::contains_key(
+      &caller, &operator
+    ));
+  }
+
+  #[benchmark]
+  fn redelegate_native_lp() {
+    let caller: T::AccountId = whitelisted_caller();
+    let from_operator = benchmark_operator::<T>("from-operator");
+    let to_operator = benchmark_operator::<T>("to-operator");
+    let amount = benchmark_amount::<T>(15);
+    setup_collator_lp_lock::<T>(&caller, &from_operator, amount + amount);
+    T::NativeOperatorValidator::benchmark_prepare_valid_operator(&to_operator);
+    #[extrinsic_call]
+    redelegate_native_lp(
+      RawOrigin::Signed(caller.clone()),
+      from_operator.clone(),
+      to_operator.clone(),
+      amount,
+    );
+    assert!(NativeLpLocks::<T>::contains_key(&caller, &to_operator));
+  }
+
+  #[benchmark]
+  fn lock_native_lp_for_governance() {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(40);
+    register_native_pool::<T>();
+    let lp_asset_id =
+      <T as Config>::BenchmarkHelper::prepare_native_staking_lp(&caller, amount + amount)
+        .expect("benchmark helper must prepare native staking LP");
+    Pallet::<T>::lock_native_lp_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      lp_asset_id,
+      amount,
+    )
+    .expect("benchmark existing governance LP lock setup must succeed");
+    #[extrinsic_call]
+    lock_native_lp_for_governance(RawOrigin::Signed(caller.clone()), lp_asset_id, amount);
+    assert_eq!(
+      NativeGovernanceLpLocks::<T>::get(&caller).map(|lock| lock.amount),
+      Some(amount + amount)
+    );
+  }
+
+  #[benchmark]
+  fn request_unlock_native_lp_for_governance() {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(15);
+    register_native_pool::<T>();
+    let lp_asset_id =
+      <T as Config>::BenchmarkHelper::prepare_native_staking_lp(&caller, amount + amount)
+        .expect("benchmark helper must prepare native staking LP");
+    Pallet::<T>::lock_native_lp_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      lp_asset_id,
+      amount + amount,
+    )
+    .expect("benchmark governance LP lock setup must succeed");
+    #[extrinsic_call]
+    request_unlock_native_lp_for_governance(RawOrigin::Signed(caller.clone()), amount);
+    assert!(PendingNativeGovernanceLpUnlocks::<T>::contains_key(&caller));
+  }
+
+  #[benchmark]
+  fn withdraw_unlocked_native_lp_for_governance() {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(15);
+    register_native_pool::<T>();
+    let lp_asset_id = <T as Config>::BenchmarkHelper::prepare_native_staking_lp(&caller, amount)
+      .expect("benchmark helper must prepare native staking LP");
+    Pallet::<T>::lock_native_lp_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      lp_asset_id,
+      amount,
+    )
+    .expect("benchmark governance LP lock setup must succeed");
+    Pallet::<T>::request_unlock_native_lp_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      amount,
+    )
+    .expect("benchmark governance LP unlock request must succeed");
+    frame_system::Pallet::<T>::set_block_number(T::NativeLpUnlockDelay::get() + 2u32.into());
+    #[extrinsic_call]
+    withdraw_unlocked_native_lp_for_governance(RawOrigin::Signed(caller.clone()));
+    assert!(!PendingNativeGovernanceLpUnlocks::<T>::contains_key(
+      &caller
+    ));
+  }
+
+  #[benchmark]
+  fn lock_native_asset_for_governance() {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(40);
+    register_native_pool::<T>();
+    let asset_id =
+      <T as Config>::BenchmarkHelper::prepare_native_governance_asset(&caller, amount + amount)
+        .expect("benchmark helper must prepare native governance asset");
+    Pallet::<T>::lock_native_asset_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      asset_id,
+      amount,
+    )
+    .expect("benchmark existing governance asset lock setup must succeed");
+    #[extrinsic_call]
+    lock_native_asset_for_governance(RawOrigin::Signed(caller.clone()), asset_id, amount);
+    assert_eq!(
+      NativeGovernanceAssetLocked::<T>::get(&caller, asset_id),
+      amount + amount
+    );
+  }
+
+  #[benchmark]
+  fn request_unlock_native_asset_for_governance() {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(15);
+    register_native_pool::<T>();
+    let asset_id =
+      <T as Config>::BenchmarkHelper::prepare_native_governance_asset(&caller, amount + amount)
+        .expect("benchmark helper must prepare native governance asset");
+    Pallet::<T>::lock_native_asset_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      asset_id,
+      amount + amount,
+    )
+    .expect("benchmark governance asset lock setup must succeed");
+    #[extrinsic_call]
+    request_unlock_native_asset_for_governance(RawOrigin::Signed(caller.clone()), asset_id, amount);
+    assert!(PendingNativeGovernanceAssetUnlocks::<T>::contains_key(
+      &caller, asset_id
+    ));
+  }
+
+  #[benchmark]
+  fn withdraw_unlocked_native_asset_for_governance() {
+    let caller: T::AccountId = whitelisted_caller();
+    let amount = benchmark_amount::<T>(15);
+    register_native_pool::<T>();
+    let asset_id = <T as Config>::BenchmarkHelper::prepare_native_governance_asset(&caller, amount)
+      .expect("benchmark helper must prepare native governance asset");
+    Pallet::<T>::lock_native_asset_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      asset_id,
+      amount,
+    )
+    .expect("benchmark governance asset lock setup must succeed");
+    Pallet::<T>::request_unlock_native_asset_for_governance(
+      RawOrigin::Signed(caller.clone()).into(),
+      asset_id,
+      amount,
+    )
+    .expect("benchmark governance asset unlock request must succeed");
+    frame_system::Pallet::<T>::set_block_number(T::NativeLpUnlockDelay::get() + 2u32.into());
+    #[extrinsic_call]
+    withdraw_unlocked_native_asset_for_governance(RawOrigin::Signed(caller.clone()), asset_id);
+    assert!(!PendingNativeGovernanceAssetUnlocks::<T>::contains_key(
+      &caller, asset_id
+    ));
+  }
+
+  #[benchmark]
+  fn claim_nomination_reward() {
+    let caller: T::AccountId = whitelisted_caller();
+    let operator = benchmark_operator::<T>("native-operator");
+    let reward_amount = benchmark_amount::<T>(25);
+    let claim_epoch = setup_native_reward_claim::<T>(&caller, &operator, reward_amount);
+    #[extrinsic_call]
+    claim_nomination_reward(RawOrigin::Signed(caller.clone()), claim_epoch);
+    assert_eq!(
+      RewardClaims::<T>::get((T::NativeStakingAssetId::get(), claim_epoch), &caller),
+      Some(reward_amount)
+    );
+  }
+
+  #[benchmark]
+  fn claim_and_compound_nomination_reward() {
+    let caller: T::AccountId = whitelisted_caller();
+    let operator = benchmark_operator::<T>("native-operator");
+    let reward_amount = benchmark_amount::<T>(1_000_000_000);
+    let claim_epoch = setup_native_reward_claim::<T>(&caller, &operator, reward_amount);
+    #[extrinsic_call]
+    claim_and_compound_nomination_reward(
+      RawOrigin::Signed(caller.clone()),
+      claim_epoch,
+      operator.clone(),
+    );
+    assert!(RewardClaims::<T>::contains_key(
+      (T::NativeStakingAssetId::get(), claim_epoch),
+      &caller
+    ));
+  }
+
+  #[benchmark]
+  fn claim_nomination_reward_batch(n: Linear<1, 16>) {
+    let caller: T::AccountId = whitelisted_caller();
+    let operator = benchmark_operator::<T>("native-operator");
+    let asset_id = register_native_pool::<T>();
+    let governance_domain = Pallet::<T>::reward_governance_domain(asset_id)
+      .expect("benchmark native asset must resolve governance domain");
+    T::RewardCoefficientProvider::benchmark_prepare_positive_coefficient(
+      governance_domain,
+      &caller,
+    );
+    mint_to::<T>(asset_id, &caller, benchmark_amount::<T>(500));
+    let _ = Pallet::<T>::stake_native(
+      RawOrigin::Signed(caller.clone()).into(),
+      benchmark_amount::<T>(100),
+    );
+    setup_collator_lp_lock::<T>(&caller, &operator, benchmark_amount::<T>(100));
+    let reward_amount = benchmark_amount::<T>(25);
+    let reward_account = Pallet::<T>::reward_account_for(asset_id);
+    let mut epochs = alloc::vec::Vec::new();
+    for epoch_index in 1..=n {
+      let claim_epoch: T::RewardEpoch = epoch_index.into();
+      frame_system::Pallet::<T>::set_block_number(epoch_index.into());
+      T::RewardCoefficientProvider::benchmark_prepare_positive_coefficient(
+        governance_domain,
+        &caller,
+      );
+      Pallet::<T>::bootstrap_reward_snapshot(RawOrigin::Root.into(), asset_id, caller.clone())
+        .expect("benchmark reward bootstrap must succeed");
+      mint_to::<T>(asset_id, &reward_account, reward_amount);
+      Pallet::<T>::note_reward_inflow(asset_id, reward_amount)
+        .expect("benchmark reward inflow must succeed");
+      epochs.push(claim_epoch);
+      frame_system::Pallet::<T>::set_block_number((epoch_index + 1).into());
+    }
+    let epochs: BoundedVec<T::RewardEpoch, T::MaxClaimEpochsPerCall> = epochs
+      .try_into()
+      .expect("benchmark epoch batch must respect runtime bound");
+    #[extrinsic_call]
+    claim_nomination_reward_batch(RawOrigin::Signed(caller.clone()), epochs.clone());
+    for claim_epoch in epochs {
+      assert!(RewardClaims::<T>::contains_key(
+        (asset_id, claim_epoch),
+        &caller
+      ));
+    }
   }
 
   #[benchmark]

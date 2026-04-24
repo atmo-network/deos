@@ -1,559 +1,693 @@
-# Staking Specification: Multi-Asset Share-Vault Pools
+# Staking Specification: Yield-Bearing Native Liquidity and Governance Power
 
-> Contract maps: [`staking.architecture.en.md`](./staking.architecture.en.md), [`governance.architecture.en.md`](./governance.architecture.en.md)
+> Contract maps: [`staking.architecture.en.md`](./staking.architecture.en.md), [`governance.architecture.en.md`](./governance.architecture.en.md), [`axial-router.architecture.en.md`](./axial-router.architecture.en.md)
 >
-> This document defines the staking contract: the conceptual model, invariants, public capability surface, and extension direction. Implementation status, runtime bindings, migration state, and operator rollout details belong in the paired architecture docs.
+> This document defines the target staking contract: the conceptual model, economic invariants, public capability surface, and governance-power semantics. Implementation status, migration state, runtime wiring, and operator rollout details belong in the paired architecture documents.
 
 ---
 
 ## 0. Specification Maintenance Meta-Layer
 
-This specification MUST stay at or below **720 lines** (formatting-preserving count), add new normative content only with equal-or-greater removal of obsolete content, state rules as positive executable behavior unless a negative safety-critical constraint is required, keep normative facts single-sourced with references instead of duplication, preserve mandatory blank-line separation above and below numbered headings, and ensure every line carries normative meaning, traceability, or required implementation context.
+This specification MUST stay at or below **720 lines**. New normative content SHOULD replace obsolete content instead of expanding the document indefinitely. State rules as executable positive behavior, keep implementation status out of the specification, and single-source shipped realization details in architecture documents.
 
 ---
 
 ## 1. Purpose
 
-The TMCTOL standard on DEOS requires a real staking contract rather than an ad-hoc weighting bridge.
-The required contract is not a classic era/slashing NPoS design.
-It is a **multi-asset share-vault staking system** where each registered asset owns its own staking pool and its own sovereign input channel.
+DEOS staking is not a classic era/slashing NPoS design. It is an economic coordination layer that must connect four protocol functions without relying on transferable-balance event tracking:
 
-The key product property is:
+- Yield-bearing native liquid staking
+- Zero-fee native receipt liquidity
+- Collator nomination through locked useful liquidity
+- Governance-conditioned rewards and voting power
 
-> If funds arrive at the sovereign account of asset `A`, they must become claimable by the stakers of `A` proportionally to stake ownership, without iterating over all stakers.
+The launch contract centers on `$NTVE` and its native staking receipt `stNTVE`.
 
----
+The core product property is:
 
-## 2. Canonical Model
+> `$NTVE` staking creates a yield-bearing `stNTVE` receipt; `NTVE/stNTVE` liquidity is strengthened by protocol donation; collator nomination is backed by locked `NTVE/stNTVE` LP; governance-conditioned nomination rewards are settled by bounded epoch accounting.
 
-For each registered staking asset `asset_id`, the pallet maintains:
-
-- One deterministic `pool_account(asset_id)`
-- One `PoolState(asset_id)`
-- Many `Position(asset_id, account)` entries
-
-Ownership is represented by **shares**, not by per-inflow writes.
-Incoming funds increase the value of each share.
-They do not trigger one storage write per staker.
+Generic liquid staking for arbitrary `XXX/stXXX` pairs is not part of this launch contract.
 
 ---
 
-## 3. Storage Surface
+## 2. Canonical Launch Scope
 
-### 3.1 Pool
-
-Each staking asset has exactly one pool:
+The launch staking surface is native-first:
 
 ```text
-Pools[asset_id] = PoolState {
-  total_shares,
-  accounted_balance,
-  active_staker_count,
-}
+NTVE -> stNTVE -> NTVE/stNTVE LP -> locked LP nomination -> governance-conditioned reward
 ```
 
-Fields:
-
-- `total_shares`: total outstanding pool shares for the asset
-- `accounted_balance`: underlying asset amount already recognized by the pool accounting
-- `active_staker_count`: number of non-zero positions
-
-### 3.2 Position
-
-Each staker position is just shares:
+The contract intentionally focuses on `NTVE/stNTVE` because this pair reinforces the axial-router and `$NTVE` value loop:
 
 ```text
-Positions[(asset_id, account)] = StakePosition {
-  shares,
-}
+native staking -> liquid receipt liquidity -> router volume -> route fees -> NTVE burn/value support
 ```
 
-This is the canonical efficient ownership representation.
+Future ecosystems MAY add non-native liquid-staking markets, but that is a separate opt-in extension. A future non-native model would have only two reward flows by default:
+
+1. `XXX` staking yield through the `XXX` staking pool
+2. `XXX/stXXX` LP farming through protocol donation
+
+It would not participate in native collator nomination unless a future governance contract explicitly delegates such authority.
 
 ---
 
-## 4. Sovereign Input Channel
+## 3. Three Reward Flows
 
-For each registered asset, the pallet derives a deterministic sovereign account:
+### 3.1 Staking yield
+
+Staking yield belongs to the native staking pool:
 
 ```text
-pool_account(asset_id) = PalletId + asset_id
+staking_yield -> pool_account(NTVE)
 ```
 
-Any funds transferred to that account in the same asset become pool backing.
-This is the asset's input channel.
+When recognized:
+
+```text
+accounted_balance(NTVE) increases
+total_shares(NTVE) stays constant
+stNTVE appreciates against NTVE
+```
+
+This reward is not separately claimable. It is received through the higher redemption value and market value of `stNTVE`.
+
+### 3.2 LP farming through protocol donation
+
+DEOS AMM pools have `0%` LP fee by default, so swap volume does not by itself accumulate fees into pool reserves.
+
+LP farming for `NTVE/stNTVE` is therefore a protocol donation flow:
+
+```text
+AAA funding -> router/zap -> balanced donation into NTVE/stNTVE reserves
+```
+
+The intended result is:
+
+```text
+AMM reserves increase
+LP total supply stays constant
+LP token value increases
+AMM price ratio stays within tolerance
+```
+
+This reward is not separately claimable. Existing LP holders receive it through appreciation of each LP token's underlying claim.
+
+### 3.3 Governance-conditioned nomination reward
+
+Nomination reward is the selective claimable flow. It belongs only to accounts that lock `NTVE/stNTVE` LP for collator nomination and maintain useful governance activity.
+
+```text
+locked_lp_native_value * governance_coefficient -> nomination_reward_weight
+```
+
+Reward funding stays outside the staking pool until epoch settlement:
+
+```text
+reward_account(NTVE) -> epoch pot -> claim_nomination_reward
+```
+
+A conforming implementation MAY expose a compound path that turns claimed nomination reward into more `NTVE/stNTVE` LP and locks it to an explicit collator target chosen at claim time. The launch contract intentionally keeps nomination rewards account-scoped rather than per-collator-scoped so compound settlement does not require historical per-operator attribution.
 
 ---
 
-## 5. Distribution Rule
+## 4. Native Staking Pool
 
-Incoming funds are distributed by **share-price appreciation**.
-
-The pallet does **not** do this:
-
-- Receive inflow
-- Iterate every staker
-- Update every account's balance or reward storage
-
-Instead it does this:
-
-- Pool backing increases
-- `total_shares` stays constant
-- Each share becomes worth more underlying
-
-A staker's current claim is:
+The native staking pool is the canonical source of intrinsic `stNTVE` value.
 
 ```text
-stake_value(account, asset_id) = shares(account, asset_id) * accounted_balance(asset_id) / total_shares(asset_id)
+pool_account(NTVE)
+PoolState { total_shares, accounted_balance }
 ```
 
-A staker's ownership fraction is:
+The exchange rate is:
 
 ```text
-stake_fraction(account, asset_id) = shares(account, asset_id) / total_shares(asset_id)
+staking_exchange_rate = accounted_balance / total_shares
 ```
 
-This gives efficient proportional ownership lookup without fan-out writes.
+### 4.1 Stake
 
----
+Native staking mints yield-bearing `stNTVE` shares.
 
-## 6. Lazy Pool Sync
-
-Pool accounting is synchronized lazily.
-
-For a registered asset:
-
-```text
-actual_balance = asset balance of pool_account(asset_id)
-```
-
-Then:
-
-```text
-if actual_balance > accounted_balance:
-  inflow_delta = actual_balance - accounted_balance
-  accounted_balance = actual_balance
-```
-
-This realizes external inflow distribution without touching positions.
-
-A conforming implementation SHOULD prefer lazy sync on explicit touchpoints:
-
-- `stake`
-- `unstake`
-- Explicit `sync_pool`
-
-It must not require an every-block full scan of all staking pools.
-
----
-
-## 7. Stake Math
-
-### 7.1 First Stake into Empty Pool
-
-If:
-
-- `total_shares == 0`
-- `accounted_balance == 0`
-
-then:
+For an empty pool:
 
 ```text
 minted_shares = amount_in
 ```
 
-This initializes the pool at price `1 share = 1 underlying unit`.
-
-### 7.2 Stake into Non-Empty Pool
-
-If the pool already has shares and backing:
+For a non-empty pool:
 
 ```text
 minted_shares = amount_in * total_shares / accounted_balance
 ```
 
-Then:
+The deposited `$NTVE` becomes pool backing and the staker receives `stNTVE`.
 
-```text
-total_shares += minted_shares
-accounted_balance += amount_in
-```
+### 4.2 Unstake
 
-The ownership unit MAY be represented directly by shares or by a transferable receipt whose supply tracks outstanding shares.
-Any compatibility bridge between legacy share storage and transferable receipts MUST preserve the same economic ownership result.
-
----
-
-## 8. Unstake Math
-
-If a staker burns `shares_out`:
+Native unstaking burns `stNTVE` shares and redeems `$NTVE` backing.
 
 ```text
 amount_out = shares_out * accounted_balance / total_shares
 ```
 
+### 4.3 Transfer
+
+`stNTVE` is a transferable yield-bearing receipt. A transfer of `stNTVE` changes only liquid receipt ownership.
+
+It MUST NOT change:
+
+- Collator backing
+- Nomination reward eligibility
+- Governance coefficient
+- Frozen vote power
+- Epoch reward snapshots
+
+---
+
+## 5. `NTVE/stNTVE` Zero-Fee AMM Pool
+
+`NTVE/stNTVE` is the canonical launch liquidity pair for native liquid staking.
+
+It provides:
+
+- Instant liquid entry and exit
+- Market price discovery
+- Router routes between `$NTVE` and `stNTVE`
+- The LP asset used by collator nomination
+
+The staking pool defines intrinsic value:
+
+```text
+staking_price(stNTVE) = accounted_balance / total_shares
+```
+
+The AMM defines market price:
+
+```text
+xyk_price(stNTVE) = reserve_NTVE / reserve_stNTVE
+```
+
+The AMM price MAY diverge from intrinsic staking value. Router and arbitrage activity SHOULD pull the market price toward intrinsic value, but the AMM price is not staking truth.
+
+---
+
+## 6. LP Farming Donation
+
+A protocol donation increases LP token value without minting new LP supply to the donor.
+
+Let:
+
+```text
+reserve_NTVE = X
+reserve_stNTVE = Y
+lp_total_supply = L
+```
+
+A balanced donation satisfies:
+
+```text
+delta_NTVE / X = delta_stNTVE / Y
+```
+
 Then:
 
 ```text
-total_shares -= shares_out
-accounted_balance -= amount_out
+reserve_NTVE increases
+reserve_stNTVE increases
+lp_total_supply stays constant
+pool ratio stays constant
+LP token value increases
 ```
 
-When ownership is tokenized, the burned ownership unit is the transferable staking receipt.
-Any compatibility bridge MUST preserve unstake rights and claim-value equivalence while ownership sources are converging.
-The underlying is transferred from `pool_account(asset_id)` back to the staker.
+### 6.1 No add/remove-liquidity farming
+
+Ordinary `add_liquidity` mints LP tokens and therefore does not farm existing LP holders. Ordinary `remove_liquidity` burns LP and withdraws reserves.
+
+LP farming donation MUST be realized as one of:
+
+- Direct balanced transfer into the AMM pool account
+- A runtime helper that donates reserves without minting LP tokens
+
+It MUST NOT be modeled as `add_liquidity -> remove_liquidity`.
+
+### 6.2 AAA donation actor
+
+The donation actor may start with `$NTVE` funding only.
+
+Baseline flow:
+
+```text
+AAA has NTVE
+runtime computes the stake-vs-donate split from current reserves and staking exchange rate
+stake the required NTVE side into stNTVE
+donate balanced NTVE + stNTVE into AMM pool
+```
+
+The donation operation SHOULD enforce configured ratio tolerance and emit a donation event suitable for wallets, analytics, and route-quality accounting. Swap or mixed-route acquisition MAY be added later only as an explicit policy extension when reserve divergence proves the deterministic stake-acquisition baseline insufficient.
 
 ---
 
-## 9. Critical Edge Case: Unowned Inflow Before First Share
+## 7. Collator Nomination Through Locked LP
 
-The staking contract MUST reject the dangerous case:
+Collator nomination uses locked `NTVE/stNTVE` LP tokens, not locked `stNTVE`.
 
-- `total_shares == 0`
-- `accounted_balance > 0`
+```text
+lock_lp_for_collator(lp_asset_id, operator, lp_amount)
+```
 
-This means assets entered the sovereign account before any staker owned pool shares.
-If the first staker were allowed to mint against this state, they could capture unowned inflow for free.
+Locked LP:
 
-Therefore the contract requires an explicit invalid-state recovery path:
+- Backs a collator
+- Creates nomination reward eligibility
+- Retains exposure to staking yield through the `stNTVE` reserve side
+- Receives LP farming through AMM donation
+- Cannot be transferred until unlocked
 
-- `recover_unowned_pool(asset_id, beneficiary)` may be called only when the pool has zero outstanding shares and zero active stakers
-- It transfers the full current sovereign balance of the pool to `beneficiary`
-- It resets `accounted_balance` to zero
-- The pool then returns to a clean empty state and first stake becomes possible again
+Ordinary LP-token transfer MUST NOT affect collator backing or nomination reward eligibility.
+
+The mutation surface is explicit and operator-scoped so one account may maintain bounded independent collator positions without hidden global nomination state:
+
+- `lock_lp_for_collator(lp_asset_id, operator, lp_amount)`
+- `request_unlock_lp(operator, lp_amount)`
+- `withdraw_unlocked_lp(operator)`
+- `redelegate_locked_lp(from_operator, to_operator, lp_amount)`
 
 ---
 
-## 10. Public Capability Surface
+## 8. LP-Backed Collator Weight
 
-A conforming implementation SHOULD expose a bounded public surface sufficient for:
+Raw LP amount is not a stable backing unit. Collator backing SHOULD use a conservative native-equivalent value.
 
-- Governance-explicit staking-pool onboarding
-- Lazy pool synchronization on touchpoints
-- Stake entry and exit
-- Explicit recovery of prefunded no-owner pool state
-- Bounded reward bootstrap and claim settlement for the reward-inflow line
-- Bounded read helpers for live ownership, exposure, receipt value, and known-epoch claim verification
+Preferred balanced value:
 
-Pool onboarding MUST remain explicit.
-Registering an asset MUST NOT silently create a staking pool or another economic surface as an accidental side effect.
-If governance wants a staking pool for a registered asset, it MUST opt in explicitly through a dedicated staking-onboarding path.
+```text
+balanced_pool_native_value =
+  2 * min(
+    reserve_NTVE,
+    reserve_stNTVE * staking_exchange_rate
+  )
+```
 
-### 10.1 Read-model contract
+Then:
+
+```text
+locked_lp_native_value(account) =
+  locked_lp_amount(account) / lp_total_supply
+  * balanced_pool_native_value
+```
+
+Using `min` prevents excess on one side of a skewed pool from inflating backing power. The weight rewards useful two-sided liquidity rather than raw reserve size.
+
+Reward and governance accounting SHOULD use epoch snapshots of this value rather than live per-block recalculation.
+
+---
+
+## 9. NativeVotePower
+
+`NativeVotePower` is the normalized governance unit for native economic exposure. It is not a token. It is a frozen value computed from explicitly locked positions.
+
+The launch sources are:
+
+- Locked `$NTVE`
+- Locked `stNTVE`
+- Locked `NTVE/stNTVE` LP
+- LP already locked for collator nomination and additionally used for governance
+
+Liquid balances do not vote by default. A position must be explicitly locked or already locked in an eligible lock surface before it can produce `NativeVotePower`.
+
+### 9.1 Source formulas
+
+Locked `$NTVE`:
+
+```text
+power = locked_NTVE * ntve_vote_multiplier
+```
+
+Locked `stNTVE`:
+
+```text
+power = locked_stNTVE
+  * staking_exchange_rate_at_vote
+  * stNTVE_vote_multiplier
+```
+
+Locked `NTVE/stNTVE` LP:
+
+```text
+power = locked_lp_amount / lp_total_supply_at_vote
+  * 2 * min(
+      reserve_NTVE_at_vote,
+      reserve_stNTVE_at_vote * staking_exchange_rate_at_vote
+    )
+  * lp_vote_multiplier
+```
+
+Runtime policy MAY use multipliers or haircuts per source. The specification requires that all source conversions be explicit and deterministic.
+
+### 9.2 No double counting
+
+The same economic claim MUST NOT produce multiple simultaneous voting powers across source classes.
+
+Therefore:
+
+- `NTVE` deposited into staking no longer votes as liquid `$NTVE`
+- `stNTVE` deposited into an LP no longer votes as standalone `stNTVE`
+- LP locked for collator may be reused as governance power only through an explicit governance-use record
+- Transferable balances outside a lock do not vote
+
+---
+
+## 10. Governance Lock Contract
+
+Governance uses an aggregate account-level lock, not per-referendum locks.
+
+A conforming contract SHOULD model:
+
+```text
+GovernanceLock(account) {
+  locked_sources,
+  total_native_vote_power,
+  lock_until,
+}
+```
+
+When the account votes with new sources:
+
+1. Convert selected balances into `NativeVotePower` using current rates/reserves
+2. Freeze that `NativeVotePower` for the vote being cast
+3. Lock or mark the selected positions as governance-used
+4. Extend `lock_until` to the referendum's enactment horizon if it is later
+
+```text
+lock_until = max(current_lock_until, referendum_enactment_end)
+```
+
+The lock may cover multiple referenda. There is no separate unlock ledger per referendum in the baseline contract.
+
+### 10.1 Frozen vote records
+
+Each vote stores the power used at cast time:
+
+```text
+Vote(referendum_id, account) {
+  vote_side,
+  native_vote_power,
+}
+```
+
+Later changes to `stNTVE` exchange rate, AMM reserves, LP farming donations, or staking yield MUST NOT change already cast vote power.
+
+This protects governance outcomes from non-voting economic state changes.
+
+### 10.2 Collator-locked LP used for governance
+
+LP already locked for collator nomination may be used as governance power without transferring it into a second custody layer.
+
+The governance lock MUST extend the effective unlock horizon:
+
+```text
+effective_unlock = max(collator_unlock_epoch, governance_lock_until)
+```
+
+This preserves both obligations: collator nomination and referendum voting.
+
+---
+
+## 11. Governance-Conditioned Nomination Rewards
+
+A nomination reward epoch uses locked LP value and governance activity.
+
+Eligibility requires:
+
+- Locked `NTVE/stNTVE` LP
+- A collator target
+- A positive governance coefficient for the epoch
+
+Weight:
+
+```text
+nomination_reward_weight(account, epoch) =
+  locked_lp_native_value_snapshot(account, epoch)
+  * governance_coefficient(account, epoch)
+```
+
+The governance coefficient is exported by governance logic. Staking MUST NOT hardcode the formula.
+
+Epoch-lag rule:
+
+- LP locks created in epoch `E` affect reward from `E + 1`
+- Governance activity in epoch `E` affects reward from `E + 1`
+- Unlock requests immediately remove active collator backing and future nomination-reward weight, while custody withdrawal remains delayed until the configured unlock block
+- Already-finalized epoch snapshots and claim rights remain unchanged by later unlock requests
+
+---
+
+## 12. Nomination Reward Funding
+
+Reward funding is recognized by epoch balance reconciliation, not by per-block event ingress.
+
+At epoch boundary:
+
+```text
+new_nomination_reward_inflow(epoch) =
+  live_balance(reward_account(NTVE))
+  - accounted_nomination_reward_liability(NTVE)
+```
+
+A positive delta becomes that epoch's reward pot.
+
+This gives the desired boundedness:
+
+- No transfer/deposit event tracking for `reward_account(NTVE)`
+- No dependency on block event replay
+- No dependency on `stNTVE` or LP transfers
+- No full LP-holder scan
+
+---
+
+## 13. Nomination Reward Settlement
+
+The baseline claim path MAY be simple liquid payout:
+
+```text
+claim_nomination_reward(epoch) -> receive NTVE
+```
+
+The preferred extension is compound settlement:
+
+```text
+claim_nomination_reward(epoch)
+  -> deterministic stake/zap into NTVE + stNTVE
+  -> add/mint LP position
+  -> lock resulting LP to an explicit collator target
+```
+
+A conforming implementation MAY expose:
+
+```text
+claim_and_compound_nomination_reward(epoch, operator)
+```
+
+The `operator` argument is explicit because nomination rewards are account-scoped in the launch contract. The compound path MUST validate the target like ordinary LP nomination and MUST NOT infer historical per-collator reward ownership from expired snapshots.
+
+This extension reinforces the native loop:
+
+```text
+governance activity -> nomination reward -> more liquidity -> stronger locked LP backing
+```
+
+---
+
+## 14. Public Capability Surface
+
+A conforming launch implementation SHOULD expose bounded capabilities for:
+
+### 14.1 Native liquid staking
+
+- `stake_native(amount)`
+- `unstake(NativeStakingAssetId, shares)` or an equivalent `unstake_native(shares)` alias
+- `sync_pool(NativeStakingAssetId)` or an equivalent `sync_native_pool()` alias
+
+### 14.2 Native AMM and donation support
+
+- Governance-controlled initialization of `NTVE/stNTVE`
+- A bounded runtime or actor donation path that computes the stake-vs-donate split and donates without minting LP to the donor
+- A public quote surface MAY be added when direct user-facing donation becomes a product flow; AAA-only donation does not require a separate public quote call
+
+### 14.3 Collator LP nomination
+
+- `lock_lp_for_collator(lp_asset_id, operator, lp_amount)`
+- `request_unlock_lp(operator, lp_amount)`
+- `withdraw_unlocked_lp(operator)`
+- `redelegate_locked_lp(from_operator, to_operator, lp_amount)`
+
+### 14.4 Governance voting
+
+- `lock_and_vote(referendum_id, vote, selected_sources)`
+- `vote_with_existing_lock(referendum_id, vote, native_vote_power)`
+- `extend_lock_and_vote(referendum_id, vote, additional_sources)`
+- `unlock_governance()` once `lock_until` has passed
+
+### 14.5 Nomination rewards
+
+- `claim_nomination_reward(epoch)`
+- `claim_nomination_reward_batch(epochs)`
+- `claim_and_compound_nomination_reward(epoch, operator)` as an extension
+
+---
+
+## 15. Read-Model Contract
 
 The staking query contract MUST distinguish bounded canonical on-chain projections from indexed/materialized views.
 
-`Canonical on-chain staking projections` SHOULD cover live position and settlement truth:
+Canonical on-chain projections SHOULD cover:
 
-- Pool state, sovereign accounts, and current share-vault ownership/exposure reads
-- Native binding state and current delegated/passive split
-- Reward coefficient and known-epoch reward claimability
-- Receipt identity and current receipt-backed value
+- Native pool state and `stNTVE` receipt identity
+- Current staking exchange rate and redeem estimate
+- Current `NTVE/stNTVE` reserves
+- LP token identity and total supply
+- Current LP native-equivalent estimate
+- Locked LP nomination state
+- Operator locked LP and backing estimate
+- Governance lock state and frozen vote power
+- Known-epoch nomination reward claimability
 
-`Indexed / materialized staking views` SHOULD carry the heavier surfaces:
+Indexed / materialized views SHOULD cover:
 
-- APY charts and long-range performance series
-- Historical claim timelines and wallet PnL history
-- Search/filter across many past epochs or pools
-- Dashboard/leaderboard analytics beyond current bounded state
-
-Reward-claim discovery across an open-ended historical horizon MUST remain an `Indexed / Materialized View` unless the contract first introduces an explicit bounded horizon, expiry rule, or another equally honest cap.
-
-So the product contract is:
-
-- `known epoch claim verification` -> canonical on-chain
-- `which epochs should this wallet try next?` -> explicit indexed/materialized discovery
+- Historical staking exchange-rate charts
+- Historical LP donation / LP farming APY
+- AMM discount / premium history
+- Router volume and burn impact
+- Long-range nomination reward history
+- Wallet PnL
+- Operator leaderboards beyond current bounded state
+- Search across expired reward epochs
 
 ---
 
-## 11. Non-Goals of This Specification Version
+## 16. Bounded Maintenance Contract
 
-This specification version does **not** require:
+The staking system SHOULD NOT be an event-stream orchestrator.
+
+The launch contract removes the need for:
+
+- `stNTVE` transfer/mint/burn event ingress
+- LP token transfer event ingress
+- Reward-account transfer event ingress
+- Cache repair based on transferable balances
+- Per-block reward touch scanning
+
+Remaining maintenance SHOULD be bounded and epoch-oriented:
+
+- Lazy native pool sync on explicit touchpoints
+- Epoch-close nomination reward recognition
+- Bounded LP value snapshot finalization
+- Bounded nomination denominator finalization
+- Bounded claim expiry / cleanup
+
+`on_idle` SHOULD perform at most one maintenance class per pass and resume unfinished epoch work before starting lower-priority cleanup.
+
+---
+
+## 17. Invariants
+
+### 17.1 Yield-bearing receipt
+
+```text
+stNTVE represents native staking shares and may appreciate against NTVE
+```
+
+### 17.2 AMM truth boundary
+
+```text
+staking exchange rate is intrinsic value; AMM price is market value
+```
+
+### 17.3 Zero-fee LP farming
+
+```text
+NTVE/stNTVE trades do not grow LP value through LP fees
+```
+
+### 17.4 Donation farming
+
+```text
+LP farming increases AMM reserves without increasing LP total supply
+```
+
+### 17.5 Ratio preservation
+
+```text
+balanced donation must not move AMM price beyond configured tolerance
+```
+
+### 17.6 Security primitive
+
+```text
+collator backing depends on locked NTVE/stNTVE LP, not stNTVE balance
+```
+
+### 17.7 Governance power freeze
+
+```text
+NativeVotePower is computed at lock/vote time and frozen for that vote
+```
+
+### 17.8 Aggregate lock
+
+```text
+governance unlock time is the maximum enactment horizon of votes using the lock
+```
+
+### 17.9 Transfer isolation
+
+```text
+transfer(stNTVE) and transfer(LP_NTVE_stNTVE) do not affect security, reward, or frozen voting state
+```
+
+### 17.10 Flow separation
+
+```text
+staking yield -> staking pool
+LP farming -> AMM donation
+nomination reward -> epoch claimable side channel
+```
+
+---
+
+## 18. Non-Goals
+
+This launch specification does not require:
 
 - Slashing
 - Era rewards
 - Validator election
-- Reward tokens separate from the staked asset
-- Tree-based weighted sampler structures
-
-Those belong to later evolution layers.
-
----
-
-## 12. Why This Model
-
-This model is preferred because it gives:
-
-- O(1) inflow recognition per touched pool
-- O(1) per-staker ownership lookup
-- No per-inflow writes across all stakers
-- Deterministic sovereign input channels per asset
-- A clean bridge from generic economic staking to native security-specific evolution
-
-This model is already useful on its own as a generic multi-asset staking substrate.
-
-The important isolation rule is explicit:
-
-- Multi-asset staking remains a generic economic substrate
-- Only native `$NTVE` participates in the canonical collator/operator security path
-- Non-native staking pools are economic-only and must not silently influence block production or operator weighting
+- Generic liquid staking for every `XXX/stXXX` pair
+- LP-fee accumulation in AMM pools
+- Per-referendum source-specific lock ledgers
+- Dynamic vote-power recalculation after a vote is cast
+- Raw LP-token voting without native-equivalent normalization
+- Full holder scans for reward or governance accounting
 
 ---
 
-## 13. Tokenized Share-Receipt Direction (`stXXX`)
+## 19. Why This Model
 
-The next target design tokenizes pool shares as standard yield-bearing staking receipts:
+This model is preferred because it aligns the economic roles of the native stack:
 
-- Native and local staking receipts derive deterministically via `TYPE_STAKED = 0x5000_0000`
-- Foreign staking receipts derive deterministically via the dedicated `TYPE_STAKED_FOREIGN = 0x6000_0000` namespace
-- Staking receipt supply tracks outstanding pool shares
-- Share price rises when pool backing grows while receipt supply stays constant
-- `XXX / stXXX` pools remain technically composable, even though the protocol does not yet assign them a special economic role
+- Staking yield strengthens `stNTVE`
+- AAA donation strengthens zero-fee `NTVE/stNTVE` liquidity
+- Locked LP strengthens collator backing
+- Governance activity gates selective nomination rewards
+- Router usage and route fees reinforce the `$NTVE` burn/value loop
 
-This tokenization direction now applies to native, local, and foreign staking assets.
-The dedicated foreign receipt namespace is a deliberate answer to the current 32-bit `[type:4 | index:28]` constraint: there is no free injective arithmetic remap that keeps both full-width local receipts and full-width foreign receipts inside the single `0x5...` staking namespace, so foreign receipt derivation uses its own local namespace rather than another naive nibble swap.
+The important simplification is explicit:
 
-The preferred lifecycle is explicit creation at staking-pool onboarding time:
-
-- `register_staking_asset(asset_id)` deterministically reserves/creates the corresponding `stXXX` receipt asset when the namespace is currently resolvable
-- The pool sovereign account is the receipt asset admin/owner
-- Deterministic receipt metadata is assigned at registration time
-- The first user stake should mint supply, not create the asset class lazily
-
-This keeps the staking surface governance-explicit, removes first-stake races, and lets wallets/indexers see the receipt asset before user funds arrive.
-
-Ownership coherence remains part of the contract:
-
-- Once `stXXX` becomes transferable, legacy per-account share storage can no longer remain the only source of unstake rights or stake valuation
-- A conforming implementation MAY keep a bounded compatibility bridge from legacy ownership storage to receipt-balance-based ownership while preserving stake value, unstake rights, and reward eligibility
-- During such a bridge, any compatibility-only counters or legacy ownership stores MUST NOT become the hidden economic source of truth once receipt ownership exists
-- Runtime cleanup MUST NOT remove the compatibility bridge until the implementation can prove that no surviving legacy ownership depends on it
-
-Rollout sequencing, operator acceptance checks, and shipped migration state belong in [`staking.architecture.en.md`](./staking.architecture.en.md).
-
----
-
-## 14. Unified Native Staking Target (`$NTVE` -> `stNTVE`)
-
-Native `$NTVE` is the special case.
-The target design keeps **one pallet** (`pallet-staking`) and **one native staking receipt** (`stNTVE`).
-It deliberately rejects both a separate `nomXXX` tier and a standalone `pallet-delegation` unless later evidence proves they are necessary.
-
-The target native flow is:
-
-- A user may not passively stake `$NTVE` without nominating a trusted collator
-- Native stake entry must include an explicit collator choice
-- Successful native staking mints transferable `stNTVE`
-- `stNTVE` remains the only native staking receipt
-- Transferred `stNTVE` is economically valid but must not continue contributing backing to the sender's old collator binding
-
-So native staking combines two properties in one surface:
-
-- `stNTVE` is a liquid yield-bearing receipt
-- Collator backing must still reflect real skin in the game
-
-That implies the core invariant for the native path:
-
-> Effective operator backing must follow the account's **live `stNTVE` position** so transfers or unstakes cannot leave stale votes behind
-
-The intended default consequence is:
-
-- If `stNTVE` leaves an account, the corresponding collator backing must fall with it
-- The received `stNTVE` remains passive until the recipient explicitly binds it to a trusted collator
-
-### 14.1 Canonical Native User Surface
-
-The target surface should be explicit rather than implicit.
-The preferred contract is:
-
-- `stake(asset_id, amount)` for non-native whitelisted assets only
-- `stake_native(amount, operator)` for `$NTVE`
-- `bind_native(operator)` for a holder of already-owned `stNTVE` to attach their live balance to a trusted collator
-- `clear_native_binding()` only if the runtime still wants to permit voluntarily passive `stNTVE` after acquisition
-- `unstake(asset_id, shares)` remains the generic exit path, including native receipt burn
-
-A conforming implementation SHOULD expose equivalent operator-aware entry and rebinding paths so native stake cannot enter the security surface without an explicit operator choice.
-
-The essential rule is that native entry and native rebinding are operator-aware actions, while receipt transfers remain normal asset transfers.
-
-### 14.2 Canonical Native Storage Contract
-
-The minimum target storage contract is:
-
-- One generic pool per asset, exactly as in the share-vault model
-- One native binding map `account -> operator` for accounts that actively back a collator with their current `stNTVE`
-- No separate `nomXXX` receipt layer
-- No second pallet-level custody layer for native nomination
-
-`stNTVE` itself is the only bearer receipt.
-The operator binding is metadata attached to the account, not a second asset.
-
-### 14.3 Canonical Backing Formula
-
-The preferred source of truth is read-derived live balance, not stale historical share assignment.
-
-```text
-effective_native_backing(operator)
-  = Σ live_stNTVE_balance(account)
-    for all accounts where native_binding(account) == operator
-```
-
-Where:
-
-```text
-live_stNTVE_balance(account) = pallet-assets balance of stNTVE held by account
-```
-
-This means:
-
-- A transfer out lowers the sender's effective backing automatically
-- An unstake lowers effective backing automatically because `stNTVE` is burned
-- An inbound transfer does not create operator backing until the recipient explicitly binds
-
-Because `pallet-assets` does not provide an especially rich per-transfer callback surface for this design, the default target should prefer **read-derived backing** over eager per-transfer cached accounting until benchmark evidence proves cached counters are necessary.
-
----
-
-## 15. Architecture Boundary for Native Binding
-
-Implementation status, trusted-collator-phase wiring, runtime target validation, operator-commission policy, and launch-line security posture belong in [`staking.architecture.en.md`](./staking.architecture.en.md), not in this contract document.
-
----
-
-## 16. Future Reward Inflow Layer (`pallet-staking` + `pallet-governance`)
-
-The next evolution line keeps **two pallets**, not one merged super-pallet:
-
-- `pallet-staking` owns stake receipts, pool backing, reward inflow accounting, and reward settlement
-- `pallet-governance` owns winning-vote memory, GovXP / SBT state, cumulative participation/authorship counters, and the exported reward coefficient
-
-The architectural goal is to reward governance quality **without** corrupting the base share-vault invariant.
-
-### 16.1 Dual Inflow Contract Per Staking Asset
-
-For each staking asset, the future contract uses two sovereign input channels:
-
-- `pool_account(asset_id)` = backing inflow channel
-- `reward_account(asset_id)` = governance-conditioned reward inflow channel
-
-Their semantics are intentionally different:
-
-1. **Backing inflow**
-   - always belongs to the pool as common backing
-   - always increases `accounted_balance`
-   - always raises `stXXX` share price when recognized
-   - may continue to use lazy pool sync (`actual_balance - accounted_balance`) because backing distribution is path-independent
-
-2. **Reward inflow**
-   - never changes share price directly
-   - must be attributed to a concrete reward epoch at ingress time
-   - must not be recovered later through a lazy reward-balance delta, because reward distribution depends on epoch-scoped weights
-
-This is the core invariant:
-
-> Backing inflow changes receipt value for all share holders. Reward inflow changes only reward entitlements for accounts whose governance-weighted epoch share deserves it.
-
-### 16.2 Canonical Reward Weight
-
-For a reward epoch `e`, the intended effective weight is:
-
-```text
-reward_weight(account, asset_id, e)
-  = staked_receipt_snapshot(account, asset_id, e)
-    × governance_reward_coefficient(account, governance_domain(asset_id), e)
-```
-
-Where:
-
-- `staked_receipt_snapshot` is the epoch snapshot of live `stXXX` ownership for that staking asset
-- `governance_domain(asset_id)` maps the staking asset into the relevant governance domain
-- `governance_reward_coefficient` is exported by `pallet-governance`, not recomputed ad hoc inside `pallet-staking`
-
-The canonical weight contract is **one-epoch lag**:
-
-- Stake / unstake / transfer changes during epoch `E` affect reward weight only from `E + 1`
-- Governance-coefficient changes during epoch `E` affect reward weight only from `E + 1`
-
-This keeps reward semantics stable and avoids same-epoch gaming.
-
-A conforming implementation SHOULD realize this with bounded sparse snapshots or another equally honest bounded mechanism.
-If a legacy ownership bridge still exists, reward-weight accounting MUST continue to include every ownership source that still carries valid unstake and claim rights until the bridge is retired.
-Bootstrap or warm-up paths for already-live holders are allowed, but they MUST be explicit and MUST NOT rewrite an epoch whose reward denominator has already been fixed.
-
-### 16.3 Winning-Vote Sliding Window in `pallet-governance`
-
-The future governance-side coefficient should come from a bounded sliding window of **winning-vote counters**, not from raw vote extrinsic count and not from mere participation.
-
-Canonical rules:
-
-- A counted event is a vote whose account-side final position matches the final winning side of the resolved referendum / proposal
-- One governance item may contribute at most one counted winning-vote point per account
-- The lookback horizon is runtime-configured (e.g. `WinningVoteLookbackEpochs`)
-- Per-epoch counted votes MUST be bounded by runtime configuration (e.g. `MaxWinningVotesCountedPerEpoch`)
-- Governance storage for an account MUST be deleted once the sliding-window rolling sum falls to zero
-
-A conforming governance implementation MUST realize that sliding-window coefficient through bounded per-account winning-memory, bounded item-scoped uniqueness inside the live horizon, and bounded expiry / zero-sum eviction.
-The staking pallet should consume only the exported coefficient / snapshot surface; it should not hardcode a specific governance formula internally.
-
-This gives the desired sparse-memory invariant:
-
-> if the sum of all stored winning-vote counters for an account becomes zero, that account leaves governance reward memory entirely
-
-### 16.4 Canonical Reward Claim Path
-
-The preferred reward settlement path is not liquid payout.
-It is **same-asset auto-compound into fresh `stXXX`**.
-
-For a claimable reward amount `reward_out` in the same asset as the staking pool:
-
-1. transfer `reward_out` from `reward_account(asset_id)` into `pool_account(asset_id)`
-2. mint new pool shares against the pre-compound pool price
-3. issue the corresponding `stXXX` directly to the claimant
-
-Conceptually this is:
-
-```text
-claim_reward(asset_id, epochs...) = claim + immediate stake of the same asset
-```
-
-A conforming implementation SHOULD expose a bounded claim surface for one closed epoch and MAY expose a bounded batch-claim surface for multiple closed epochs.
-
-So the canonical user-visible result is:
-
-- Reward entitlement is consumed
-- Pool backing increases by the claimed amount
-- The account receives freshly minted `stXXX`
-- No intermediate liquid payout surface is required for the baseline path
-
-### 16.5 Runtime-as-Config Boundary
-
-This evolution must remain generic at the pallet layer.
-The concrete policy belongs in runtime configuration.
-
-The runtime-as-config boundary SHOULD provide deterministic helpers or equivalent adapters for:
-
-- Reward-account derivation
-- Governance-domain resolution per staking asset
-- Governance-coefficient export
-- Reward-epoch source
-- Reward-ingress attribution
-- Bounded reward bootstrap when already-live holders need explicit initialization
-- Bounded claim settlement under the same-asset auto-compound contract
-
-Any alternative claim mode remains future work and MUST NOT silently replace the baseline same-asset auto-compound contract.
-
-`pallet-governance` should expose runtime-configured bounds / formulas for surfaces such as:
-
-- Winning-vote lookback length
-- Per-epoch counted-vote cap
-- Coefficient formula and caps
-- GovXP / SBT contribution to the exported coefficient
-
-This preserves forkability:
-
-- The pallets remain reusable framework components
-- Each runtime can tune the reward-politics model without rewriting staking core math
-- Future ecosystems may replace the exact governance formula while keeping the same dual-inflow staking contract
+> Transferable `stNTVE` and transferable LP tokens are liquid economic assets, not hidden governance or security triggers. Security, voting power, and rewards arise only from explicit locks and epoch snapshots.
 
 ---
 

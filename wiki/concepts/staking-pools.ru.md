@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Пулы стейкинга
-summary: Стейкинг в DEOS использует multi-asset share-vault модель. У каждого актива есть свой пул и sovereign-канал притока, новое обеспечение повышает стоимость доли вместо fan-out записей наград, а долгосрочное направление — transferable receipt-токены `stXXX` с отдельным security-путем для native-актива.
+summary: Стейкинг DEOS использует multi-asset share-vault модель с передаваемыми receipt-токенами `stXXX`. Нативный `$NTVE` теперь минтит ликвидный `stNTVE`, а безопасность коллаторов и native nomination rewards идут через явно заблокированный `NTVE/stNTVE` LP, а не через live-привязку баланса `stNTVE`.
 locale: ru
 canonical_page_id: staking-pools
 translation_of: staking-pools.en.md
@@ -11,6 +11,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/staking.specification.en.md
+  - ../../docs/staking.architecture.en.md
   - ../../docs/governance.specification.en.md
 status: active
 audience: newcomer
@@ -23,70 +24,87 @@ related:
   - Контур маршрутизации и минтинга
   - Базовые термины
   - FAQ для новичков
-last_compiled: 2026-04-16
-confidence: 0.92
+last_compiled: 2026-04-25
+confidence: 0.94
 ---
 
 # Пулы стейкинга
 
 ## Кратко
 
-Стейкинг в DEOS не устроен как классическая система веерной раздачи наград по эпохам. Спецификация описывает multi-asset share-vault модель, в которой каждый зарегистрированный актив получает собственный стейкинг-пул и собственный sovereign-канал притока.
+Стейкинг DEOS — это multi-asset share-vault система. У каждого зарегистрированного staking-актива есть пул, детерминированные аккаунты и учет долей/receipt-токенов, чтобы backing мог расти без записи наград каждому holder-у.
 
-Главная идея проста: когда в пул приходит новое обеспечение, ценность уже существующей доли растет. Runtime не должен перебирать всех стейкеров только ради того, чтобы обработать один новый inflow.
+Текущая native staking линия специально разделена на две поверхности: `$NTVE -> stNTVE` — это ликвидный share-vault staking, а collator nomination и native reward exposure идут через заблокированный `NTVE/stNTVE` LP. Обычный баланс `stNTVE` не является сигналом безопасности коллатора.
 
 ## Модель share-vault
 
-Для каждого staking-актива система держит:
+Для каждого staking-актива система хранит:
 
 - Один детерминированный аккаунт пула
 - Один объект состояния пула
-- Множество позиций, которые представляют долевое владение
+- Transferable receipt supply, если существует актив `stXXX`
+- Ограниченные read-поверхности для exchange rate, account value и reward claimability
 
-Право собственности выражается через доли. Приток средств в пул повышает стоимость каждой доли вместо того, чтобы записывать награды на каждый пользовательский аккаунт.
+Право собственности выражается долями. Приток средств в пул повышает стоимость каждой доли вместо fan-out записи по всем пользовательским аккаунтам.
 
-## Почему это лучше масштабируется
+## Receipt-токены `stXXX`
 
-Спецификация стейкинга прямо отвергает идею итерировать всех стейкеров при каждом новом поступлении. Вместо этого inflow отражается как рост цены доли.
+`stXXX` — это yield-bearing receipts для staking-пулов:
 
-Поэтому важные bounded-read поверхности выглядят так:
+- Локальные и native receipts используют namespace `TYPE_STAKED`
+- Foreign staking receipts используют `TYPE_STAKED_FOREIGN`
+- Supply receipt-токена отслеживает выпущенные доли пула
+- Стоимость доли растет, когда backing пула увеличивается, а receipt supply остается прежним
 
-- Общее количество долей
-- Учтенный баланс
-- Доли конкретного аккаунта
-- Текущая стоимость стейка, вычисляемая из этих чисел
+Для native staking конкретный receipt — это `stNTVE`.
 
-## Sovereign-канал притока
+## Native `$NTVE -> stNTVE`
 
-У каждого staking-актива есть детерминированный sovereign-аккаунт. Средства, переведенные на него в том же активе, становятся обеспечением пула.
+Нативный вход теперь ликвидный и не требует выбора оператора:
 
-Это делает путь притока явным и хорошо сочетается с общим DEOS-подходом к token-driven координации.
+```text
+$NTVE
+  -> Staking::stake_native(amount)
+  -> mint stNTVE receipt shares
+```
 
-## Направление `stXXX`
+Это vault deposit и receipt mint, а не обычный AMM swap. Он увеличивает backing native staking pool и минтит receipt-доли по accounting-правилам staking-пула.
 
-Долгосрочное направление развития — это токенизированные staking-receipts:
+## Безопасность коллаторов идет через locked LP
 
-- Локальные и native receipts живут в пространстве имен `TYPE_STAKED`
-- Foreign receipts живут в `TYPE_STAKED_FOREIGN`
-- Предложение receipts отслеживает выпущенные доли пула
-- Цена доли растет, когда backing пула увеличивается, а количество receipts остается прежним
+Native collator backing больше не выводится из live-балансов `stNTVE` или transfer-driven native bindings. Текущий security path — это явная LP custody:
 
-Короче говоря, `stXXX` должен представлять передаваемое, доходное право собственности на пул.
+```text
+$NTVE + stNTVE
+  -> add liquidity to NTVE/stNTVE
+  -> receive NTVE/stNTVE LP
+  -> lock_native_lp_for_collator(lp_asset_id, amount, operator)
+```
 
-## Особый случай native-актива
+Заблокированный `NTVE/stNTVE` LP оценивается консервативно через runtime native-equivalent read model и питает ranking коллаторов / native nomination reward exposure.
 
-Путь нативного токена — особый. Ненативный стейкинг остается чисто экономическим, а native `$NTVE` дополнительно участвует в контуре безопасности коллаторов или операторов.
+## Governance custody
 
-Целевой дизайн сохраняет одну нативную квитанцию, `stNTVE`, но требует явного operator-aware входа или перепривязки для security-поверхности.
+Та же native-value поверхность может блокироваться только для governance `NativeVotePower`, без nomination коллатора. В текущем runtime есть отдельные LP и native-asset custody paths для tactical protection voting, а unlock requests блокируются, пока активны governance lock horizons.
+
+## Native nomination rewards
+
+Native nomination rewards рассчитываются через native-specific claim paths. Generic same-asset reward settlement отвергает native staking asset, чтобы `$NTVE` nomination rewards не уходили через legacy auto-compound семантику.
+
+Нативные settlement paths включают:
+
+- `claim_nomination_reward(epoch)` для ликвидной выплаты `$NTVE`
+- `claim_and_compound_nomination_reward(epoch, operator)` для превращения выплаты в locked LP
+- `claim_nomination_reward_batch(epochs)` для ограниченного multi-epoch native claiming
 
 ## Связь с governance-наградами
 
-Спецификации стейкинга и governance связаны, но не слиты в одну подсистему:
+Staking и governance остаются отдельными подсистемами:
 
-- Staking отвечает за математику пула, receipts и расчет наград
-- Governance отвечает за ограниченную память об участии и экспортируемый reward coefficient
+- Staking отвечает за математику пула, receipts, locked LP custody, reward snapshots и settlement
+- Governance отвечает за bounded participation memory, vote-power policy, execution state и exported reward coefficients
 
-Целевое направление награды — same-asset auto-compound в свежие `stXXX`, а не отдельная ликвидная выплата.
+Для ненативных активов same-asset reward settlement по-прежнему может auto-compound в свежие receipts. Native `$NTVE` nomination rewards используют выделенные native paths выше.
 
 ## Связанные страницы
 
@@ -98,4 +116,5 @@ confidence: 0.92
 ## Источники
 
 - `docs/staking.specification.en.md`
+- `docs/staking.architecture.en.md`
 - `docs/governance.specification.en.md`

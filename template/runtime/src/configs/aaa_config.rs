@@ -19,14 +19,13 @@ use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_runtime::{DispatchError, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
-use pallet_aaa::{AssetOps, DexOps};
+use pallet_aaa::{AssetOps, DexOps, LiquidityDonationOps};
 
 parameter_types! {
   // --- Identity and ownership ---
 
   pub const AaaPalletId: PalletId = PalletId(*ecosystem::pallet_ids::AAA_PALLET_ID);
   pub const AaaNativeAssetId: AssetKind = AssetKind::Native;
-  pub const AaaNativeStakingAssetId: AssetKind = AssetKind::Local(0);
   /// User AAA slot capacity per owner; System AAA is not constrained by this limit
   pub const AaaMaxOwnerSlots: u8 = 8;
 
@@ -238,6 +237,30 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
 }
 
 pub struct TmctolDexOps;
+
+pub struct TmctolLiquidityDonationOps;
+impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDonationOps {
+  fn donate_liquidity(
+    who: &AccountId,
+    asset_a: AssetKind,
+    asset_b: AssetKind,
+    amount: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(Balance, Balance), DispatchError> {
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    if asset_a == AssetKind::Local(native_asset_id) && asset_b == AssetKind::Local(staked_asset_id)
+    {
+      return crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
+        who,
+        amount,
+        max_ratio_error,
+      );
+    }
+    Err(DispatchError::Other("LiquidityDonationUnsupported"))
+  }
+}
 
 impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
   fn swap_exact_in(
@@ -623,6 +646,15 @@ impl
       // Receives 50% of minted $BLDR from Splitter; Noop until governance activates spending
       (
         ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
+        governance.clone(),
+        noop_timer_schedule(),
+        None,
+        noop_execution_plan(),
+      ),
+      // --- Native Staking LP Farmer (aaa_id = 14) ---
+      // Timer-driven skeleton; governance activates donation after the NTVE/stNTVE pool exists.
+      (
+        ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
         governance,
         noop_timer_schedule(),
         None,
@@ -1010,6 +1042,77 @@ impl TmctolGenesisSystemAaas {
       .expect("BLDR ZM execution_plan fits within MaxSystemExecutionPlanSteps")
   }
 
+  /// Builds the Native Staking LP Farmer execution_plan.
+  ///
+  /// ExecutionPlan steps:
+  /// 1. DonateLiquidity — stake the calculated NTVE side and donate balanced reserves
+  pub fn activate_native_staking_lp_farming(
+    dust_threshold: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    Self::ensure_native_staking_lp_farming_ready()?;
+    let execution_plan = Self::build_native_staking_lp_farming_execution_plan(dust_threshold);
+    crate::AAA::update_execution_plan(
+      RuntimeOrigin::root(),
+      ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+      execution_plan,
+    )
+  }
+
+  pub fn ensure_native_staking_lp_farming_ready() -> polkadot_sdk::sp_runtime::DispatchResult {
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    if !<pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::asset_exists(
+      staked_asset_id,
+    ) {
+      return Err(DispatchError::Other("StakedAssetUnavailable"));
+    }
+    pallet_staking::Pools::<Runtime>::get(native_asset_id)
+      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
+    if crate::AAA::aaa_instances(ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID).is_none() {
+      return Err(DispatchError::Other("NativeStakingLpFarmerUnavailable"));
+    }
+    let base_asset = AssetKind::Local(native_asset_id);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    AssetConversion::get_reserves(base_asset, staked_asset)
+      .map_err(|_| DispatchError::Other("NativeStakingAmmUnavailable"))?;
+    Ok(())
+  }
+
+  pub fn build_native_staking_lp_farming_execution_plan(
+    dust_threshold: Balance,
+  ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
+    use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    type Conditions = polkadot_sdk::frame_support::BoundedVec<
+      Condition<AssetKind, Balance>,
+      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
+    >;
+    let native_staking_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let native_asset = AssetKind::Local(native_staking_asset_id);
+    let staked_asset_id = crate::Staking::staked_asset_id(native_staking_asset_id)
+      .expect("native staking LP farming activation checks staked asset first");
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    let native_dust: Conditions = alloc::vec![Condition::BalanceAbove {
+      asset: native_asset,
+      threshold: dust_threshold,
+    }]
+    .try_into()
+    .expect("single condition fits");
+    let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![Step {
+      conditions: native_dust,
+      task: Task::DonateLiquidity {
+        asset_a: native_asset,
+        asset_b: staked_asset,
+        amount: AmountResolution::AllBalance,
+        max_ratio_error: ecosystem::params::NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR,
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    }];
+    steps
+      .try_into()
+      .expect("native staking LP farming execution_plan fits within MaxSystemExecutionPlanSteps")
+  }
+
   /// Builds the Treasury B BLDR buyback-and-burn execution_plan.
   ///
   /// ExecutionPlan steps:
@@ -1071,30 +1174,20 @@ impl TmctolGenesisSystemAaas {
 pub struct TmctolStakingOps;
 impl pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance> for TmctolStakingOps {
   fn stake(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), DispatchError> {
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let staking_asset_id = match asset {
-      primitives::AssetKind::Native => {
-        return Err(pallet_staking::Error::<Runtime>::NativeStakeRequiresOperator.into());
-      }
+      primitives::AssetKind::Native => native_asset_id,
       primitives::AssetKind::Foreign(id) => id,
       primitives::AssetKind::Local(id) => id,
     };
+    if staking_asset_id == native_asset_id {
+      let _ = crate::Staking::stake_native(RuntimeOrigin::signed(who.clone()).into(), amount)?;
+      return Ok(());
+    }
     let _ = crate::Staking::stake(
       RuntimeOrigin::signed(who.clone()).into(),
       staking_asset_id,
       amount,
-    )?;
-    Ok(())
-  }
-
-  fn stake_native(
-    who: &AccountId,
-    amount: Balance,
-    operator: &AccountId,
-  ) -> Result<(), DispatchError> {
-    let _ = crate::Staking::stake_native(
-      RuntimeOrigin::signed(who.clone()).into(),
-      amount,
-      operator.clone(),
     )?;
     Ok(())
   }
@@ -1119,11 +1212,11 @@ impl pallet_aaa::Config for Runtime {
   type SystemOrigin = EnsureRoot<AccountId>;
   type AssetId = AssetKind;
   type NativeAssetId = AaaNativeAssetId;
-  type NativeStakingAssetId = AaaNativeStakingAssetId;
   type Balance = Balance;
   type AssetOps = TmctolAssetOps;
   type DexOps = TmctolDexOps;
   type StakingOps = TmctolStakingOps;
+  type LiquidityDonationOps = TmctolLiquidityDonationOps;
   type AaaCreationFee = AaaCreationFee;
   type AddressEventIngressHook = RuntimeAddressEventIngressHook;
   type AtomicityHook = ();

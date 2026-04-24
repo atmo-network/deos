@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-20",
+  "generated_at": "2026-04-25",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -70,7 +70,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.94,
+      "confidence": 0.95,
       "sources": {
         "en": [
           "../docs/aaa.specification.en.md",
@@ -78,7 +78,7 @@
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../docs/aaa.specification.ru.md",
+          "../docs/aaa.specification.en.md",
           "../docs/aaa.architecture.en.md",
           "../docs/core.architecture.en.md"
         ]
@@ -104,7 +104,7 @@
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../docs/aaa.specification.ru.md",
+          "../docs/aaa.specification.en.md",
           "../docs/aaa.architecture.en.md",
           "../docs/core.architecture.en.md"
         ]
@@ -154,7 +154,7 @@
         ],
         "ru": [
           "../docs/tmc.architecture.en.md",
-          "../docs/tmctol.specification.ru.md"
+          "../docs/tmctol.specification.en.md"
         ]
       }
     },
@@ -180,7 +180,7 @@
         "ru": [
           "../docs/governance.specification.en.md",
           "../docs/governance.architecture.en.md",
-          "../docs/manifesto.ru.md"
+          "../docs/manifesto.en.md"
         ]
       }
     },
@@ -228,7 +228,7 @@
         ],
         "ru": [
           "../docs/randomness.strategy.en.md",
-          "../docs/manifesto.ru.md"
+          "../docs/manifesto.en.md"
         ]
       }
     },
@@ -327,7 +327,7 @@
           "../README.md"
         ],
         "ru": [
-          "../docs/tmctol.specification.ru.md",
+          "../docs/tmctol.specification.en.md",
           "../README.md"
         ]
       }
@@ -353,7 +353,7 @@
         ],
         "ru": [
           "../docs/core.architecture.en.md",
-          "../docs/aaa.specification.ru.md",
+          "../docs/aaa.specification.en.md",
           "../README.md"
         ]
       }
@@ -380,7 +380,7 @@
         "ru": [
           "../docs/axial-router.architecture.en.md",
           "../docs/tmc.architecture.en.md",
-          "../docs/tmctol.specification.ru.md"
+          "../docs/tmctol.specification.en.md"
         ]
       }
     },
@@ -396,14 +396,16 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.92,
+      "confidence": 0.94,
       "sources": {
         "en": [
           "../docs/staking.specification.en.md",
+          "../docs/staking.architecture.en.md",
           "../docs/governance.specification.en.md"
         ],
         "ru": [
           "../docs/staking.specification.en.md",
+          "../docs/staking.architecture.en.md",
           "../docs/governance.specification.en.md"
         ]
       }
@@ -478,9 +480,9 @@
           "../docs/tmctol.specification.en.md"
         ],
         "ru": [
-          "../docs/manifesto.ru.md",
+          "../docs/manifesto.en.md",
           "../docs/governance.specification.en.md",
-          "../docs/tmctol.specification.ru.md"
+          "../docs/tmctol.specification.en.md"
         ]
       }
     },
@@ -511,8 +513,8 @@
         "ru": [
           "../README.md",
           "../docs/README.md",
-          "../docs/manifesto.ru.md",
-          "../docs/aaa.specification.ru.md",
+          "../docs/manifesto.en.md",
+          "../docs/aaa.specification.en.md",
           "../docs/governance.specification.en.md",
           "../docs/staking.specification.en.md",
           "../docs/read-model.contract.en.md",
@@ -547,9 +549,9 @@
         "ru": [
           "../README.md",
           "../docs/README.md",
-          "../docs/tmctol.specification.ru.md",
+          "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/aaa.specification.ru.md",
+          "../docs/aaa.specification.en.md",
           "../docs/governance.specification.en.md",
           "../docs/governance.architecture.en.md",
           "../docs/read-model.contract.en.md"

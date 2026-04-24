@@ -15,7 +15,7 @@
 
 `pallet-aaa` is the execution platform for deterministic protocol behavior in DEOS. It provides a deterministic scheduler, bounded execution model, and adapter-driven task runtime for both user-owned and system-owned actors.
 
-In the current DEOS reference runtime, thirteen System actors are provisioned at genesis, with one additional reserved ID for deterministic Fee Sink derivation. This shipped topology currently instantiates the TMCTOL standard:
+In the current DEOS reference runtime, fourteen System actors are provisioned at genesis, with one additional reserved ID for deterministic Fee Sink derivation. This shipped topology currently instantiates the TMCTOL standard:
 
 - `aaa_id = 0`: Burning Manager execution plan
 - `aaa_id = 1`: reserved deterministic Fee Sink address for unified fee collection (no System AAA execution plan)
@@ -26,6 +26,7 @@ In the current DEOS reference runtime, thirteen System actors are provisioned at
 - `aaa_id = 11`: BLDR Zap Manager skeleton execution plan
 - `aaa_id = 12`: BLDR Bucket A actor, initialized as timer + noop
 - `aaa_id = 13`: BLDR Treasury actor, initialized as timer + noop
+- `aaa_id = 14`: Native Staking LP Farmer actor, initialized as timer + noop until the canonical `NTVE/stNTVE` pool is activated
 
 The pallet itself is generic and runtime-agnostic. Chain-specific behavior is injected through `AssetOps`, `DexOps`, weight/fee conversion, bounds, and genesis actor specs.
 
@@ -51,6 +52,7 @@ This table is the full current runtime System AAA catalog, including the reserve
 | BLDR Zap Manager              | 11     | `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221` | `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17` |
 | BLDR Bucket A (Anchor)        | 12     | `0xb31a379c50afe1ba1ad65f1afafaf51df1c40ed2b6c08e9faf1a1ac2caf026de` | `5G7YDX7r2L8q5Wn73dNyhp8cnbpP3sTGUcRW6Eos5Urrxax8` |
 | BLDR Treasury                 | 13     | `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45` | `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG` |
+| Native Staking LP Farmer      | 14     | `0xbb27f4956462189d16c7f9e207222ce9691308c6a55bb0141f139ebe071394d2` | `5GJ6gSae5dZhxJm6EuD82gaxiLkvokMeLFMNmtuSz8htoidu` |
 
 ---
 
@@ -81,7 +83,7 @@ AAA orchestrates actions against these pallets through adapter traits.
 
 ### Genesis actor matrix
 
-`TmctolGenesisSystemAaas` currently provisions thirteen System actors plus one reserved fee-sink ID:
+`TmctolGenesisSystemAaas` currently provisions fourteen System actors plus one reserved fee-sink ID:
 
 | Lane     | Actor               | aaa_id | Genesis schedule | Genesis execution plan                                 |
 | :------- | :------------------ | -----: | :--------------- | :----------------------------------------------------- |
@@ -99,6 +101,7 @@ AAA orchestrates actions against these pallets through adapter traits.
 | BLDR     | BLDR Zap Manager    |     11 | `Timer(1)`       | `Noop` skeleton until NTVE-BLDR pool activation        |
 | BLDR     | BLDR Bucket A       |     12 | `Timer(1)`       | `Noop`                                                 |
 | BLDR     | BLDR Treasury       |     13 | `Timer(1)`       | `Noop`                                                 |
+| Staking  | Native Staking LP Farmer | 14 | `Timer(1)`       | `Noop` skeleton until `NTVE/stNTVE` pool activation    |
 
 All timer schedules use `SYSTEM_AAA_COOLDOWN_BLOCKS`; all actors are `AaaType::System`, `Mutability::Mutable`, and perpetual (`schedule_window = None`).
 These `aaa_id` values remain the stable recovery addresses for System AAA: closing preserves balances on the same sovereign account, and governance regains control only through `reopen_system_aaa` on that exact `aaa_id`.
@@ -115,18 +118,21 @@ The runtime keeps System AAA topology declarative. Governance evolves concrete e
 | `build_bldr_splitter_execution_plan`      | BLDR Splitter    | transfer all NTVE collateral to BLDR ZM -> split minted BLDR 50/50 to BLDR ZM + BLDR Treasury         | active at genesis                             |
 | `build_bldr_zm_execution_plan`            | BLDR Zap Manager | opportunistic `AddLiquidity(NTVE, BLDR)` -> transfer LP to BLDR Bucket A                              | activate after NTVE-BLDR pool creation        |
 | `build_treasury_b_buyback_execution_plan` | Treasury B       | swap NTVE percentage into target asset -> `Burn` acquired balance                                     | optional governance policy lane               |
+| `build_native_staking_lp_farming_execution_plan` | Native Staking LP Farmer | `$NTVE` budget -> deterministic stake split -> balanced `NTVE/stNTVE` donation without minting LP | activate after native staking pool + `NTVE/stNTVE` AMM creation |
 
 This split keeps AAA generic: the pallet owns bounded scheduling/execution, while the current DEOS reference runtime wires the TMCTOL standard's economic composition into concrete System actors.
 
 ### Governance activation flows
 
-Current runtime operations reduce to three repeatable flows:
+Current runtime operations reduce to four repeatable flows:
 
 1. `Foreign asset + TOL lane`
    Register foreign asset -> create Native/foreign pool -> update Burning Manager -> update Zap Manager -> optionally activate Bucket B/C/D unwind plans.
 2. `BLDR lane`
    Keep BLDR Splitter live at genesis -> create NTVE-BLDR pool -> activate BLDR ZM -> optionally activate Treasury B buyback/burn policy.
-3. `Emergency controls`
+3. `Native staking LP farming lane`
+   Register native staking -> initialize `stNTVE` -> create and seed the `NTVE/stNTVE` AMM -> call `activate_native_staking_lp_farming`, which refuses activation until the receipt asset, staking pool, actor, and non-empty AMM are all live.
+4. `Emergency controls`
    Pause single actors with `pause_aaa` when policy needs surgical intervention; use `set_global_circuit_breaker(true)` when cycle execution as a whole must stop while bookkeeping stays alive.
 
 ---
@@ -181,7 +187,7 @@ Task set in implementation:
 - `Burn`
 - `Mint` (System only)
 - `Stake`
-- `StakeNative`
+- `DonateLiquidity`
 - `Unstake`
 - `Noop`
 
@@ -445,10 +451,9 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
   - swaps via Axial Router (`execute_swap_for`)
   - liquidity via `pallet-asset-conversion`
 - `StakingOps = TmctolStakingOps`
-  - generic `Stake { asset, amount }` delegates to `pallet-staking::stake(...)` for non-native assets
-  - explicit `StakeNative { amount, operator }` delegates to `pallet-staking::stake_native(...)`
-  - current DEOS reference runtime resolves `StakeNative` amounts against `AaaNativeStakingAssetId = AssetKind::Local(0)` (`StakeNativeRepresentation` in the polished spec), not against the fee-charged `Balances` surface (`FeeNativeAsset`)
-  - native operator context is therefore first-class in the AAA task surface instead of being hidden behind adapter-side rejection
+  - generic `Stake { asset, amount }` delegates to the runtime staking adapter for all staking assets
+  - the DEOS adapter routes its native staking asset representation to `pallet-staking::stake_native(amount)` and routes other staking assets to `pallet-staking::stake(...)`
+  - collator nomination and LP custody remain outside AAA task semantics; they belong to staking/runtime-specific adapter or pallet surfaces, not to the portable AAA execution-plan shape
 
 Additional runtime bindings:
 

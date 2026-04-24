@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: AAA System
-summary: AAA is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors. It combines deterministic scheduling, bounded execution, and event-driven reactions, including balance-ingress triggers and larger behavior emerging from composed actor graphs.
+summary: AAA is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors. The current contract keeps AAA portable because staking automation uses generic `Stake { asset, amount }` / `Unstake { asset, shares }`, while DEOS-native liquid staking, LP nomination, and custody policy live in runtime adapters and staking/governance pallets.
 locale: en
 canonical_page_id: aaa-system
 translation_status: source
@@ -25,8 +25,8 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-04-16
-confidence: 0.94
+last_compiled: 2026-04-25
+confidence: 0.95
 ---
 
 # AAA System
@@ -50,7 +50,20 @@ At a high level, the system provides:
 - Typed tasks such as transfer, swap, liquidity actions, burn, mint, and staking
 - Explicit lifecycle rules for pause, failure, auto-close, and manual close
 - A split between user-owned actors and governance-owned system actors
-- Adapter boundaries so AAA can orchestrate runtime mechanics without embedding DEX or asset logic directly
+- Adapter boundaries so AAA can orchestrate runtime mechanics without embedding DEX, staking, or asset logic directly
+
+## Portability Boundary
+
+The current AAA staking contract is intentionally generic:
+
+```text
+Task::Stake { asset, amount }
+Task::Unstake { asset, shares }
+```
+
+AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic stake means for the chain. In DEOS, the runtime adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
+
+This keeps AAA useful outside one tokenomic configuration.
 
 ## System vs Actor
 
@@ -71,9 +84,9 @@ The math and domain rules live in subsystem contracts such as TMC, the Axial Rou
 
 ## Current System Topology
 
-The shipped DEOS runtime currently provisions a fixed set of System actors at genesis, plus one reserved deterministic fee-sink address.
+The shipped DEOS runtime provisions System actors at genesis, plus one reserved deterministic fee-sink address. The current System actor set includes burning, Zap/liquidity, TOL bucket, treasury, BLDR lane, and Native Staking LP Farmer roles.
 
-In newcomer terms, that means the current line already uses AAA as real protocol infrastructure, not as a future concept. The runtime ships named actor lanes for burning, liquidity, bucket handling, treasury flows, and the current BLDR lane.
+The Native Staking LP Farmer starts as a guarded skeleton. It can only be activated after the native staking receipt, staking pool, actor, and non-empty `NTVE/stNTVE` AMM are ready.
 
 ## Why the System Exists
 

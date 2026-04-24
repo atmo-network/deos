@@ -16,6 +16,7 @@ use frame_support::{
   parameter_types,
   traits::{
     ConstBool, ConstU8, ConstU32, ConstU64, EitherOfDiverse, TransformOrigin, VariantCountOf,
+    fungibles::Inspect as FungiblesInspect,
   },
   weights::{ConstantMultiplier, Weight},
 };
@@ -28,11 +29,12 @@ use parachains_common::message_queue::{NarrowOriginToSibling, ParaIdToSibling};
 use polkadot_runtime_common::{
   BlockHashCount, SlowAdjustingFeeUpdate, xcm_sender::ExponentialPrice,
 };
+use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::{staging_parachain_info as parachain_info, staging_xcm as xcm, *};
 #[cfg(not(feature = "runtime-benchmarks"))]
 use polkadot_sdk::{staging_xcm_builder as xcm_builder, staging_xcm_executor as xcm_executor};
 use sp_consensus_aura::sr25519::AuthorityId as AuraId;
-use sp_runtime::Perbill;
+use sp_runtime::{Perbill, traits::Zero};
 use sp_staking::SessionIndex;
 use sp_std::{collections::btree_map::BTreeMap, vec::Vec};
 use sp_version::RuntimeVersion;
@@ -313,20 +315,20 @@ impl DelegationWeightedCollatorSessionManager {
   pub(crate) fn rank_candidates(
     mut candidates: Vec<polkadot_sdk::pallet_collator_selection::CandidateInfo<AccountId, Balance>>,
   ) -> Vec<polkadot_sdk::pallet_collator_selection::CandidateInfo<AccountId, Balance>> {
-    let mut delegated_backing_by_candidate = BTreeMap::new();
+    let mut backing_by_candidate = BTreeMap::new();
     for candidate in &candidates {
       Self::note_ranking_backing_lookup();
-      delegated_backing_by_candidate.insert(
+      backing_by_candidate.insert(
         candidate.who.clone(),
-        crate::Staking::cached_delegated_native_backing(&candidate.who),
+        Self::collator_backing_value(&candidate.who),
       );
     }
     candidates.sort_by(|left, right| {
-      let left_backing = delegated_backing_by_candidate
+      let left_backing = backing_by_candidate
         .get(&left.who)
         .copied()
         .unwrap_or_default();
-      let right_backing = delegated_backing_by_candidate
+      let right_backing = backing_by_candidate
         .get(&right.who)
         .copied()
         .unwrap_or_default();
@@ -336,6 +338,75 @@ impl DelegationWeightedCollatorSessionManager {
         .then_with(|| left.who.cmp(&right.who))
     });
     candidates
+  }
+
+  pub(crate) fn collator_backing_value(candidate: &AccountId) -> Balance {
+    Self::conservative_native_lp_backing_value(candidate)
+  }
+
+  pub(crate) fn conservative_native_lp_backing_value(candidate: &AccountId) -> Balance {
+    Self::conservative_native_lp_value(crate::Staking::operator_native_lp_locked(candidate))
+  }
+
+  pub(crate) fn native_nomination_reward_base_weight(account: &AccountId) -> Balance {
+    Self::conservative_native_lp_value(crate::Staking::account_native_collator_lp_locked(account))
+  }
+
+  pub(crate) fn conservative_native_lp_value(locked_lp: Balance) -> Balance {
+    if locked_lp.is_zero() {
+      return Balance::zero();
+    }
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let Some(staked_asset_id) = crate::Staking::staked_asset_id(native_asset_id) else {
+      return Balance::zero();
+    };
+    let base_asset = AssetKind::Local(native_asset_id);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    let Ok(pool_id) = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &base_asset,
+      &staked_asset,
+    ) else {
+      return Balance::zero();
+    };
+    let Some(pool) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pool_id) else {
+      return Balance::zero();
+    };
+    let lp_supply =
+      <Runtime as pallet_asset_conversion::Config>::PoolAssets::total_issuance(pool.lp_token);
+    if lp_supply.is_zero() {
+      return Balance::zero();
+    }
+    let Ok((reserve_native, reserve_staked)) =
+      crate::AssetConversion::get_reserves(base_asset, staked_asset)
+    else {
+      return Balance::zero();
+    };
+    let Some(staking_pool) = pallet_staking::Pools::<Runtime>::get(native_asset_id) else {
+      return Balance::zero();
+    };
+    if staking_pool.total_shares.is_zero() {
+      return Balance::zero();
+    }
+    let staked_reserve_native_value = Self::mul_div_floor(
+      reserve_staked,
+      staking_pool.accounted_balance,
+      staking_pool.total_shares,
+    );
+    let balanced_pool_native_value = reserve_native
+      .min(staked_reserve_native_value)
+      .saturating_mul(2);
+    Self::mul_div_floor(locked_lp, balanced_pool_native_value, lp_supply)
+  }
+
+  fn mul_div_floor(value: Balance, numerator: Balance, denominator: Balance) -> Balance {
+    if denominator.is_zero() {
+      return Balance::zero();
+    }
+    let result = sp_core::U256::from(value)
+      .saturating_mul(sp_core::U256::from(numerator))
+      .checked_div(sp_core::U256::from(denominator))
+      .unwrap_or_default();
+    result.try_into().unwrap_or(Balance::MAX)
   }
 }
 

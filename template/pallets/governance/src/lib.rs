@@ -177,6 +177,13 @@ impl<DomainId> ProposalUrgentPolicyProvider<DomainId> for () {}
 
 impl<DomainId> ProposalSubmissionAuthorityProvider<DomainId> for () {}
 
+pub trait WinningVoteRewardTouchHandler<AccountId, DomainId> {
+  fn note_winning_vote_recorded(_domain: DomainId, _account: &AccountId) {}
+  fn note_winning_vote_evicted(_domain: DomainId, _account: &AccountId) {}
+}
+
+impl<AccountId, DomainId> WinningVoteRewardTouchHandler<AccountId, DomainId> for () {}
+
 impl<Hash> ProposalRuntimeUpgradeAuthorizationProvider<Hash> for () {}
 
 impl<Balance> ProposalPayloadPreimageNoteCostProvider<Balance> for () {}
@@ -429,7 +436,7 @@ mod proposal_execution;
 mod proposal_resolution;
 mod reward_memory;
 
-const STORAGE_VERSION: StorageVersion = StorageVersion::new(1);
+const STORAGE_VERSION: StorageVersion = StorageVersion::new(3);
 
 #[frame::pallet]
 pub mod pallet {
@@ -551,6 +558,7 @@ pub mod pallet {
         Self::WinningVoteItemId,
         Self::Hash,
       >;
+    type WinningVoteRewardTouchHandler: crate::WinningVoteRewardTouchHandler<Self::AccountId, Self::DomainId>;
     type WeightInfo: crate::WeightInfo;
   }
 
@@ -965,6 +973,39 @@ pub mod pallet {
   pub struct ProposalBallot<AccountId, Epoch> {
     pub account: AccountId,
     pub vote_epoch: Epoch,
+    pub weight: u64,
+    pub raw_power: u64,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct GovernanceLock<Epoch> {
+    pub lock_until: Epoch,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct ProposalFrozenBallot<Epoch> {
+    pub vote: ProposalVoteKind,
+    pub vote_epoch: Epoch,
+    pub weight: u64,
+    pub raw_power: u64,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct AccountGovernancePowerView<Epoch> {
+    pub governance_lock_until: Option<Epoch>,
+    pub ordinary_power_profile: crate::ProposalVotePowerProfile,
+    pub protection_power_profile: crate::ProposalVotePowerProfile,
+    pub current_ordinary_weight: u64,
+    pub current_protection_weight: u64,
+    pub current_protection_raw_power: u64,
+    pub frozen_ordinary_ballot: Option<ProposalFrozenBallot<Epoch>>,
+    pub frozen_protection_ballot: Option<ProposalFrozenBallot<Epoch>>,
   }
 
   #[derive(
@@ -1126,6 +1167,11 @@ pub mod pallet {
     ProposalVotes<T::AccountId, T::Epoch, T::MaxWinningVoteAccountsPerCall>,
     OptionQuery,
   >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn governance_lock)]
+  pub type GovernanceLocks<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AccountId, GovernanceLock<T::Epoch>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn active_proposal_count)]
@@ -1296,6 +1342,11 @@ pub mod pallet {
       nay_count: u32,
       veto_count: u32,
       pass_count: u32,
+    },
+    GovernanceLockExtended {
+      account: T::AccountId,
+      previous_lock_until: Option<T::Epoch>,
+      new_lock_until: T::Epoch,
     },
     ProposalUrgentAuthorized {
       domain: T::DomainId,
@@ -1675,6 +1726,14 @@ pub mod pallet {
       item_id: T::WinningVoteItemId,
     ) -> Option<ProposalVoteTally> {
       Self::do_proposal_vote_tally(domain, item_id)
+    }
+
+    pub fn account_governance_power_view(
+      domain: T::DomainId,
+      item_id: T::WinningVoteItemId,
+      account: T::AccountId,
+    ) -> Option<AccountGovernancePowerView<T::Epoch>> {
+      Self::do_account_governance_power_view(domain, item_id, account)
     }
 
     pub fn proposal_primary_track_tally(

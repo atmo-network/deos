@@ -37,7 +37,10 @@ fn genesis_burning_manager_aaa_has_deterministic_sovereign_and_correct_state() {
     assert!(!instance.is_paused);
     assert_eq!(instance.consecutive_failures, 0);
     assert!(!instance.manual_trigger_pending);
-    assert_eq!(AAA::next_aaa_id(), 14);
+    assert_eq!(
+      AAA::next_aaa_id(),
+      aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID + 1
+    );
     assert_eq!(
       pallet_aaa::SovereignIndex::<Runtime>::get(&expected_sovereign),
       Some(aaa_id)

@@ -11,7 +11,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
-  - ../../docs/aaa.specification.ru.md
+  - ../../docs/aaa.specification.en.md
   - ../../README.md
 status: active
 audience: newcomer
@@ -90,5 +90,5 @@ Origin-agnostic исполнение делает систему устойчи�
 ## Источники
 
 - `docs/core.architecture.en.md`
-- `docs/aaa.specification.ru.md`
+- `docs/aaa.specification.en.md`
 - `README.md`

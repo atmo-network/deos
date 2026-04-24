@@ -163,6 +163,8 @@ fn seed_proposal_votes<T: Config>(
     let push_result = vote_state.ayes.try_push(ProposalBallot {
       account: account("aye", index, voter_seed),
       vote_epoch: submitted_epoch,
+      weight: 1,
+      raw_power: 1,
     });
     if push_result.is_err() {
       panic!("benchmark aye vote seed must fit configured max")
@@ -172,6 +174,8 @@ fn seed_proposal_votes<T: Config>(
     let push_result = vote_state.nays.try_push(ProposalBallot {
       account: account("nay", index, voter_seed),
       vote_epoch: submitted_epoch,
+      weight: 1,
+      raw_power: 1,
     });
     if push_result.is_err() {
       panic!("benchmark nay vote seed must fit configured max")

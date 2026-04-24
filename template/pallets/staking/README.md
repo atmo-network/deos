@@ -23,7 +23,8 @@ The current core/runtime slice provides:
 - Governance bootstrap of live reward snapshots through `bootstrap_reward_snapshot(asset_id, account)`
 - Same-asset auto-compound reward settlement through `claim_reward(asset_id, epoch)` and bounded sweeping via `claim_reward_batch(asset_id, epochs)`
 - Efficient ownership lookup through shares rather than per-inflow writes
-- Native binding attribution (`bind_native`, `clear_native_binding`, `delegated_native_backing`)
+- Liquid native `$NTVE -> stNTVE` staking through `stake_native(amount)` without operator binding
+- Locked `NTVE/stNTVE` LP nomination lifecycle (`lock_native_lp_for_collator`, `request_unlock_native_lp`, `withdraw_unlocked_native_lp`, `redelegate_native_lp`)
 - Per-operator commission configuration (`set_operator_commission`, `OperatorCommissions`, `MaxOperatorCommission`)
 - Explicit native query helpers (`native_stake_value`, `passive_native_stake_value`, `delegated_native_stake_value`)
 
@@ -53,11 +54,11 @@ The pallet now also provides explicit governance recovery:
 - The pool returns to a clean empty state
 - Normal first stake becomes possible again
 
-## Native binding rule
+## Native nomination rule
 
-Native collator binding is the first security-oriented extension of the generic staking substrate.
-In the current runtime phase, native binding targets are validated only against the trusted invulnerable collator set; permissionless collators stay inactive until a relay-beacon-backed design is ready.
-The binding extrinsics now also have dedicated benchmarks and generated runtime weights.
+Native `$NTVE` staking mints liquid `stNTVE`; it does not bind liquid receipts to operators.
+Collator nomination is represented by explicitly locked canonical `NTVE/stNTVE` LP, with targets validated against the trusted invulnerable collator set in the current runtime phase.
+Permissionless collators stay inactive until a relay-beacon-backed design is ready.
 
 ## Runtime-as-Config rule
 

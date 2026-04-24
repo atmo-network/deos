@@ -1,7 +1,6 @@
 use crate::{
-  CachedNativeDelegation, CachedNativeDelegations, CachedOperatorNativeShares, Error, Event,
-  NativeBindings, NativeDelegationCacheDirty, NativeDelegationRepairCursor,
-  NativeDelegationRepairPhase, NativeDelegationRepairPhaseState, PoolState, Pools, mock::*,
+  Error, Event, NativeLpLocks, OperatorNativeLpLocked, PendingNativeLpUnlocks,
+  PendingRewardEpochRollover, RewardEpochTouchedAccounts, RewardEpochWeightSnapshots, mock::*,
 };
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
@@ -23,6 +22,344 @@ fn advance_to_block(target: u64) {
     System::set_block_number(next);
     let _ = Staking::on_initialize(next);
   }
+}
+
+#[test]
+fn lock_native_lp_for_collator_moves_lp_into_lock_account() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    let lock_account = Staking::native_lp_lock_account();
+    assert_ok!(Staking::lock_native_lp_for_collator(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+      99,
+    ));
+    assert_eq!(<Assets as Inspect<AccountId>>::balance(LP_ASSET, &1), 60);
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(LP_ASSET, &lock_account),
+      40
+    );
+    assert_eq!(
+      NativeLpLocks::<Test>::get(1, 99)
+        .expect("lock must exist")
+        .amount,
+      40
+    );
+    assert_eq!(OperatorNativeLpLocked::<Test>::get(99), 40);
+    assert_eq!(Staking::account_native_lp_locked(1), 40);
+    assert_eq!(Staking::account_native_collator_lp_locked(1), 40);
+    assert_eq!(Staking::total_native_lp_locked(), 40);
+    assert!(RewardEpochTouchedAccounts::<Test>::get(1, 1).contains(&1));
+    System::assert_last_event(RuntimeEvent::Staking(Event::NativeLpLocked {
+      account: 1,
+      operator: 99,
+      lp_asset_id: LP_ASSET,
+      amount: 40,
+      total_locked: 40,
+    }));
+  });
+}
+
+#[test]
+fn lock_native_lp_rejects_invalid_lp_asset() {
+  new_test_ext().execute_with(|| {
+    assert_noop!(
+      Staking::lock_native_lp_for_collator(RuntimeOrigin::signed(1), 2, 10, 99),
+      Error::<Test>::InvalidNativeLpAsset
+    );
+  });
+}
+
+#[test]
+fn native_lp_unlock_lifecycle_releases_after_delay() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    assert_ok!(Staking::lock_native_lp_for_collator(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+      99,
+    ));
+    assert_ok!(Staking::request_unlock_native_lp(
+      RuntimeOrigin::signed(1),
+      99,
+      15,
+    ));
+    let pending = PendingNativeLpUnlocks::<Test>::get(1, 99).expect("pending unlock must exist");
+    assert_eq!(pending.amount, 15);
+    assert_eq!(pending.unlock_block, 4);
+    assert_eq!(
+      NativeLpLocks::<Test>::get(1, 99)
+        .expect("lock remains")
+        .amount,
+      25
+    );
+    assert_eq!(OperatorNativeLpLocked::<Test>::get(99), 25);
+    assert_eq!(Staking::account_native_lp_locked(1), 25);
+    assert_eq!(Staking::account_native_collator_lp_locked(1), 25);
+    assert_eq!(Staking::total_native_lp_locked(), 25);
+    assert!(RewardEpochTouchedAccounts::<Test>::get(1, 1).contains(&1));
+    assert_noop!(
+      Staking::withdraw_unlocked_native_lp(RuntimeOrigin::signed(1), 99),
+      Error::<Test>::NativeLpUnlockNotReady
+    );
+    advance_to_block(4);
+    assert_ok!(Staking::withdraw_unlocked_native_lp(
+      RuntimeOrigin::signed(1),
+      99,
+    ));
+    assert!(PendingNativeLpUnlocks::<Test>::get(1, 99).is_none());
+    assert_eq!(<Assets as Inspect<AccountId>>::balance(LP_ASSET, &1), 75);
+  });
+}
+
+#[test]
+fn native_lp_unlock_respects_account_governance_lock_horizon() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    assert_ok!(Staking::lock_native_lp_for_collator(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+      99,
+    ));
+    crate::mock::set_native_governance_lock(1, 4);
+    assert_noop!(
+      Staking::request_unlock_native_lp(RuntimeOrigin::signed(1), 99, 15),
+      Error::<Test>::NativeGovernanceLockActive
+    );
+    assert_eq!(Staking::account_native_lp_locked(1), 40);
+    advance_to_block(4);
+    assert_ok!(Staking::request_unlock_native_lp(
+      RuntimeOrigin::signed(1),
+      99,
+      15,
+    ));
+    assert_eq!(Staking::account_native_lp_locked(1), 25);
+  });
+}
+
+#[test]
+fn native_governance_lp_lock_unlock_lifecycle_updates_vote_power_aggregates() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    assert_ok!(Staking::lock_native_lp_for_governance(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+    ));
+    let lock_account = Staking::native_lp_lock_account();
+    assert_eq!(<Assets as Inspect<AccountId>>::balance(LP_ASSET, &1), 60);
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(LP_ASSET, &lock_account),
+      40
+    );
+    assert_eq!(
+      Staking::native_governance_lp_lock(1)
+        .expect("governance lock must exist")
+        .amount,
+      40
+    );
+    assert_eq!(Staking::account_native_lp_locked(1), 40);
+    assert_eq!(Staking::account_native_collator_lp_locked(1), 0);
+    assert_eq!(Staking::total_native_lp_locked(), 40);
+    assert_ok!(Staking::request_unlock_native_lp_for_governance(
+      RuntimeOrigin::signed(1),
+      15,
+    ));
+    assert_eq!(Staking::account_native_lp_locked(1), 25);
+    assert_eq!(Staking::account_native_collator_lp_locked(1), 0);
+    assert_eq!(Staking::total_native_lp_locked(), 25);
+    assert_eq!(
+      Staking::pending_native_governance_lp_unlock(1)
+        .expect("pending unlock must exist")
+        .amount,
+      15
+    );
+    advance_to_block(4);
+    assert_ok!(Staking::withdraw_unlocked_native_lp_for_governance(
+      RuntimeOrigin::signed(1),
+    ));
+    assert_eq!(<Assets as Inspect<AccountId>>::balance(LP_ASSET, &1), 75);
+  });
+}
+
+#[test]
+fn native_governance_lp_unlock_respects_account_governance_lock_horizon() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    assert_ok!(Staking::lock_native_lp_for_governance(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+    ));
+    crate::mock::set_native_governance_lock(1, 4);
+    assert_noop!(
+      Staking::request_unlock_native_lp_for_governance(RuntimeOrigin::signed(1), 15),
+      Error::<Test>::NativeGovernanceLockActive
+    );
+    assert_eq!(Staking::account_native_lp_locked(1), 40);
+    advance_to_block(4);
+    assert_ok!(Staking::request_unlock_native_lp_for_governance(
+      RuntimeOrigin::signed(1),
+      15,
+    ));
+    assert_eq!(Staking::account_native_lp_locked(1), 25);
+  });
+}
+
+#[test]
+fn native_governance_asset_lock_unlock_lifecycle_updates_aggregates() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(1, &1, 100));
+    let balance_before = <Assets as Inspect<AccountId>>::balance(1, &1);
+    assert_ok!(Staking::lock_native_asset_for_governance(
+      RuntimeOrigin::signed(1),
+      1,
+      40,
+    ));
+    let lock_account = Staking::native_lp_lock_account();
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(1, &lock_account),
+      40
+    );
+    assert_eq!(Staking::native_governance_asset_locked(1, 1), 40);
+    assert_eq!(Staking::total_native_governance_asset_locked(1), 40);
+    assert_ok!(Staking::request_unlock_native_asset_for_governance(
+      RuntimeOrigin::signed(1),
+      1,
+      15,
+    ));
+    assert_eq!(Staking::native_governance_asset_locked(1, 1), 25);
+    assert_eq!(Staking::total_native_governance_asset_locked(1), 25);
+    assert_eq!(
+      Staking::pending_native_governance_asset_unlock(1, 1)
+        .expect("pending unlock must exist")
+        .amount,
+      15
+    );
+    advance_to_block(4);
+    assert_ok!(Staking::withdraw_unlocked_native_asset_for_governance(
+      RuntimeOrigin::signed(1),
+      1,
+    ));
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(1, &1),
+      balance_before - 25
+    );
+  });
+}
+
+#[test]
+fn native_governance_asset_unlock_respects_account_governance_lock_horizon() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(1, &1, 100));
+    assert_ok!(Staking::lock_native_asset_for_governance(
+      RuntimeOrigin::signed(1),
+      1,
+      40,
+    ));
+    crate::mock::set_native_governance_lock(1, 4);
+    assert_noop!(
+      Staking::request_unlock_native_asset_for_governance(RuntimeOrigin::signed(1), 1, 15),
+      Error::<Test>::NativeGovernanceLockActive
+    );
+    assert_eq!(Staking::native_governance_asset_locked(1, 1), 40);
+    advance_to_block(4);
+    assert_ok!(Staking::request_unlock_native_asset_for_governance(
+      RuntimeOrigin::signed(1),
+      1,
+      15,
+    ));
+    assert_eq!(Staking::native_governance_asset_locked(1, 1), 25);
+  });
+}
+
+#[test]
+fn native_lp_redelegate_moves_backing_between_operators() {
+  const LP_ASSET: AssetId = 0x7000_0001;
+  new_test_ext().execute_with(|| {
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      LP_ASSET,
+      1,
+      true,
+      1,
+    ));
+    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(LP_ASSET, &1, 100));
+    assert_ok!(Staking::lock_native_lp_for_collator(
+      RuntimeOrigin::signed(1),
+      LP_ASSET,
+      40,
+      99,
+    ));
+    assert_ok!(Staking::redelegate_native_lp(
+      RuntimeOrigin::signed(1),
+      99,
+      100,
+      15,
+    ));
+    assert_eq!(
+      NativeLpLocks::<Test>::get(1, 99)
+        .expect("source lock remains")
+        .amount,
+      25
+    );
+    assert_eq!(
+      NativeLpLocks::<Test>::get(1, 100)
+        .expect("target lock exists")
+        .amount,
+      15
+    );
+    assert_eq!(OperatorNativeLpLocked::<Test>::get(99), 25);
+    assert_eq!(OperatorNativeLpLocked::<Test>::get(100), 15);
+    assert_eq!(Staking::account_native_lp_locked(1), 40);
+    assert_eq!(Staking::account_native_collator_lp_locked(1), 40);
+    assert_eq!(Staking::total_native_lp_locked(), 40);
+  });
 }
 
 #[test]
@@ -348,6 +685,48 @@ fn note_reward_inflow_tracks_epoch_accrual_and_liability_after_prefunding_reward
 }
 
 #[test]
+fn reconcile_reward_inflow_records_unaccounted_reward_account_balance_once() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
+    let reward_account = Staking::reward_account_for(2);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      2,
+      &1,
+      &reward_account,
+      40,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    assert_ok!(Staking::reconcile_reward_inflow(2), 40);
+    assert_eq!(Staking::reward_epoch_accrued(2, 1), 40);
+    assert_eq!(Staking::reward_liability_balance(2), 40);
+    assert_ok!(Staking::reconcile_reward_inflow(2), 0);
+    assert_eq!(Staking::reward_epoch_accrued(2, 1), 40);
+  });
+}
+
+#[test]
+fn native_reward_inflow_reconciles_at_epoch_rollover() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    let reward_account = Staking::reward_account_for(1);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      1,
+      &1,
+      &reward_account,
+      40,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    System::reset_events();
+    advance_to_block(2);
+    assert_eq!(Staking::reward_epoch_accrued(1, 2), 40);
+    assert_eq!(Staking::reward_liability_balance(1), 40);
+    advance_to_block(3);
+    assert_eq!(Staking::reward_epoch_accrued(1, 3), 0);
+    assert_eq!(Staking::reward_liability_balance(1), 40);
+  });
+}
+
+#[test]
 fn reward_weight_snapshot_uses_one_epoch_lag_after_stake() {
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
@@ -509,6 +888,61 @@ fn claim_reward_auto_compounds_same_asset_into_new_receipts() {
 }
 
 #[test]
+fn reward_epoch_rollover_resumes_across_blocks() {
+  new_test_ext().execute_with(|| {
+    for asset_id in [2u32, 3u32, 4u32] {
+      if asset_id > 2 {
+        assert_ok!(Assets::force_create(
+          RuntimeOrigin::root(),
+          asset_id,
+          1,
+          true,
+          1
+        ));
+        assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
+          asset_id, &1, 1_000
+        ));
+      }
+      assert_ok!(Staking::register_staking_asset(
+        RuntimeOrigin::root(),
+        asset_id
+      ));
+      assert_ok!(Staking::stake(RuntimeOrigin::signed(1), asset_id, 100));
+      assert_ok!(Staking::bootstrap_reward_snapshot(
+        RuntimeOrigin::root(),
+        asset_id,
+        1,
+      ));
+      assert!(Staking::note_reward_touch(asset_id, &1));
+    }
+    advance_to_block(2);
+    assert_eq!(
+      PendingRewardEpochRollover::<Test>::get().map(|state| (state.from_epoch, state.to_epoch)),
+      Some((1, 2))
+    );
+    let remaining_after_first_rollover = RewardEpochTouchedAccounts::<Test>::iter_prefix(1).count();
+    let processed_after_first_rollover = [2u32, 3u32, 4u32]
+      .into_iter()
+      .filter(|asset_id| RewardEpochWeightSnapshots::<Test>::contains_key((*asset_id, 2), 1))
+      .count();
+    assert_eq!(remaining_after_first_rollover, 1);
+    assert_eq!(processed_after_first_rollover, 2);
+    advance_to_block(3);
+    assert!(PendingRewardEpochRollover::<Test>::get().is_none());
+    assert_eq!(Staking::last_processed_reward_epoch(), Some(2));
+    assert_eq!(
+      RewardEpochTouchedAccounts::<Test>::iter_prefix(1).count(),
+      0
+    );
+    assert!(
+      [2u32, 3u32, 4u32]
+        .into_iter()
+        .all(|asset_id| RewardEpochWeightSnapshots::<Test>::contains_key((asset_id, 2), 1))
+    );
+  });
+}
+
+#[test]
 fn claim_reward_rejects_open_or_already_claimed_epoch() {
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
@@ -590,6 +1024,95 @@ fn claim_reward_batch_claims_multiple_closed_epochs() {
       200
     );
     assert_eq!(Staking::stake_value(2, &1), Some(200));
+  });
+}
+
+#[test]
+fn native_nomination_rewards_require_dedicated_claim_surfaces() {
+  new_test_ext().execute_with(|| {
+    let epochs = polkadot_sdk::frame_support::BoundedVec::try_from(vec![1u64])
+      .expect("batch epochs must fit runtime bound");
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
+    assert_ok!(Staking::bootstrap_reward_snapshot(
+      RuntimeOrigin::root(),
+      1,
+      1,
+    ));
+    let reward_account = Staking::reward_account_for(1);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      1,
+      &1,
+      &reward_account,
+      40,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    assert_ok!(Staking::note_reward_inflow(1, 40));
+    advance_to_block(2);
+    assert_noop!(
+      Staking::claim_reward(RuntimeOrigin::signed(1), 1, 1),
+      Error::<Test>::NativeRewardRequiresDedicatedClaim
+    );
+    assert_noop!(
+      Staking::claim_reward_batch(RuntimeOrigin::signed(1), 1, epochs),
+      Error::<Test>::NativeRewardRequiresDedicatedClaim
+    );
+    assert_ok!(Staking::claim_nomination_reward(
+      RuntimeOrigin::signed(1),
+      1
+    ));
+    assert_eq!(Staking::reward_claimed((1, 1), 1), Some(40));
+    assert_eq!(Staking::reward_liability_balance(1), 0);
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(1, &reward_account),
+      0
+    );
+  });
+}
+
+#[test]
+fn claim_nomination_reward_batch_claims_multiple_closed_native_epochs() {
+  new_test_ext().execute_with(|| {
+    let epochs = polkadot_sdk::frame_support::BoundedVec::try_from(vec![1u64, 2u64])
+      .expect("batch epochs must fit runtime bound");
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
+    assert_ok!(Staking::bootstrap_reward_snapshot(
+      RuntimeOrigin::root(),
+      1,
+      1,
+    ));
+    let reward_account = Staking::reward_account_for(1);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      1,
+      &1,
+      &reward_account,
+      40,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    assert_ok!(Staking::note_reward_inflow(1, 40));
+    assert!(Staking::note_reward_touch(1, &1));
+    advance_to_block(2);
+    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
+      1,
+      &1,
+      &reward_account,
+      60,
+      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+    ));
+    assert_ok!(Staking::note_reward_inflow(1, 60));
+    advance_to_block(3);
+    assert_ok!(Staking::claim_nomination_reward_batch(
+      RuntimeOrigin::signed(1),
+      epochs,
+    ));
+    assert_eq!(Staking::reward_claimed((1, 1), 1), Some(40));
+    assert_eq!(Staking::reward_claimed((1, 2), 1), Some(60));
+    assert_eq!(Staking::reward_liability_balance(1), 0);
+    assert_eq!(
+      <Assets as Inspect<AccountId>>::balance(1, &reward_account),
+      0
+    );
   });
 }
 
@@ -1129,202 +1652,11 @@ fn recover_unowned_pool_rejects_non_empty_pool() {
 }
 
 #[test]
-fn native_binding_tracks_operator_backing_from_native_stake() {
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(2), 50, 99));
-    assert_eq!(Staking::native_binding(1), Some(99));
-    assert_eq!(Staking::native_binding(2), Some(99));
-    assert_eq!(Staking::delegated_native_backing(&99), 150);
-    System::assert_has_event(RuntimeEvent::Staking(Event::NativeBindingSet {
-      account: 2,
-      operator: 99,
-    }));
-  });
-}
-
-#[test]
-fn clearing_native_binding_removes_operator_backing() {
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    assert_eq!(Staking::delegated_native_backing(&99), 100);
-    assert_ok!(Staking::clear_native_binding(RuntimeOrigin::signed(1)));
-    assert_eq!(Staking::native_binding(1), None);
-    assert_eq!(Staking::delegated_native_backing(&99), 0);
-    System::assert_has_event(RuntimeEvent::Staking(Event::NativeBindingCleared {
-      account: 1,
-    }));
-  });
-}
-
-#[test]
-fn dirty_native_delegation_cache_repairs_across_multiple_on_idle_passes() {
-  const TYPE_STAKED: AssetId = 0x5000_0000;
-  const LIVE_OPERATOR: AccountId = 99;
-  const STALE_OPERATOR: AccountId = 98;
-  const ACCOUNTS: AccountId = 130;
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    Pools::<Test>::insert(
-      1,
-      PoolState {
-        total_shares: ACCOUNTS as Balance,
-        accounted_balance: ACCOUNTS as Balance,
-        active_staker_count: 0,
-      },
-    );
-    CachedOperatorNativeShares::<Test>::insert(STALE_OPERATOR, ACCOUNTS as Balance);
-    for account in 1..=ACCOUNTS {
-      assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-        TYPE_STAKED,
-        &account,
-        1
-      ));
-      NativeBindings::<Test>::insert(account, LIVE_OPERATOR);
-      CachedNativeDelegations::<Test>::insert(
-        account,
-        CachedNativeDelegation {
-          operator: STALE_OPERATOR,
-          shares: 1,
-        },
-      );
-    }
-    NativeDelegationCacheDirty::<Test>::put(true);
-    NativeDelegationRepairPhaseState::<Test>::put(NativeDelegationRepairPhase::ClearingCache);
-    NativeDelegationRepairCursor::<Test>::kill();
-    System::reset_events();
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert!(NativeDelegationCacheDirty::<Test>::get());
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert!(NativeDelegationCacheDirty::<Test>::get());
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert!(!NativeDelegationCacheDirty::<Test>::get());
-    assert_eq!(CachedOperatorNativeShares::<Test>::get(STALE_OPERATOR), 0);
-    assert_eq!(
-      Staking::cached_delegated_native_backing(&LIVE_OPERATOR),
-      ACCOUNTS as Balance
-    );
-  });
-}
-
-#[test]
-fn clearing_binding_updates_cached_native_backing_without_waiting_for_on_idle() {
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
-    assert_ok!(Staking::clear_native_binding(RuntimeOrigin::signed(1)));
-    assert_eq!(Staking::cached_delegated_native_backing(&99), 0);
-  });
-}
-
-#[test]
-fn delegated_native_backing_follows_live_receipt_balance_after_transfer() {
+fn stake_native_mints_liquid_receipt_without_binding() {
   const TYPE_STAKED: AssetId = 0x5000_0000;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    assert_eq!(Staking::delegated_native_backing(&99), 100);
-    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
-      TYPE_STAKED,
-      &1,
-      &2,
-      30,
-      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
-    ));
-    assert_eq!(Staking::delegated_native_backing(&99), 70);
-  });
-}
-
-#[test]
-fn cached_native_backing_follows_transfer_after_on_idle() {
-  const TYPE_STAKED: AssetId = 0x5000_0000;
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
-    System::reset_events();
-    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
-      TYPE_STAKED,
-      &1,
-      &2,
-      30,
-      polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
-    ));
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert_eq!(Staking::cached_delegated_native_backing(&99), 70);
-  });
-}
-
-#[test]
-fn dirty_native_delegation_cache_repairs_stale_entries_over_on_idle() {
-  const TYPE_STAKED: AssetId = 0x5000_0000;
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
-    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
-      TYPE_STAKED,
-      &1,
-      &2,
-      100,
-      polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
-    ));
-    NativeBindings::<Test>::remove(1);
-    NativeBindings::<Test>::insert(2, 99);
-    NativeDelegationCacheDirty::<Test>::put(true);
-    NativeDelegationRepairPhaseState::<Test>::put(NativeDelegationRepairPhase::ClearingCache);
-    NativeDelegationRepairCursor::<Test>::kill();
-    System::reset_events();
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert!(!NativeDelegationCacheDirty::<Test>::get());
-    assert!(CachedNativeDelegations::<Test>::get(&1).is_none());
-    assert_eq!(
-      CachedNativeDelegations::<Test>::get(&2).map(|cached| cached.operator),
-      Some(99)
-    );
-    assert_eq!(Staking::cached_delegated_native_backing(&99), 100);
-  });
-}
-
-#[test]
-fn zero_native_exposure_retires_stale_binding_after_on_idle() {
-  const TYPE_STAKED: AssetId = 0x5000_0000;
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert_eq!(Staking::native_binding(1), Some(99));
-    System::reset_events();
-    assert_ok!(<Assets as Mutate<AccountId>>::transfer(
-      TYPE_STAKED,
-      &1,
-      &2,
-      100,
-      polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
-    ));
-    let _ = Staking::on_idle(System::block_number(), Weight::MAX);
-    assert_eq!(Staking::native_binding(1), None);
-    assert_eq!(Staking::delegated_native_stake_value(&1), None);
-    System::assert_has_event(RuntimeEvent::Staking(Event::NativeBindingCleared {
-      account: 1,
-    }));
-  });
-}
-
-#[test]
-fn stake_native_stakes_and_binds_in_one_step() {
-  const TYPE_STAKED: AssetId = 0x5000_0000;
-  new_test_ext().execute_with(|| {
-    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    assert_eq!(Staking::native_binding(1), Some(99));
-    assert_eq!(Staking::delegated_native_backing(&99), 100);
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
     assert_eq!(
       <Assets as Inspect<AccountId>>::balance(TYPE_STAKED, &1),
       100
@@ -1333,32 +1665,12 @@ fn stake_native_stakes_and_binds_in_one_step() {
 }
 
 #[test]
-fn generic_native_stake_requires_operator() {
+fn generic_native_stake_requires_dedicated_native_call() {
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
     assert_noop!(
       Staking::stake(RuntimeOrigin::signed(1), 1, 100),
-      Error::<Test>::NativeStakeRequiresOperator
-    );
-  });
-}
-
-#[test]
-fn native_binding_rejects_self_binding() {
-  new_test_ext().execute_with(|| {
-    assert_noop!(
-      Staking::bind_native(RuntimeOrigin::signed(1), 1),
-      Error::<Test>::CannotBindToSelf
-    );
-  });
-}
-
-#[test]
-fn native_binding_rejects_invalid_operator_target() {
-  new_test_ext().execute_with(|| {
-    assert_noop!(
-      Staking::bind_native(RuntimeOrigin::signed(1), 2),
-      Error::<Test>::InvalidBindingTarget
+      Error::<Test>::NativeStakeRequiresDedicatedCall
     );
   });
 }
@@ -1409,12 +1721,12 @@ fn operator_commission_can_be_updated() {
 }
 
 #[test]
-fn native_stake_helpers_distinguish_passive_and_delegated_positions() {
+fn native_stake_helpers_treat_stntve_as_passive_liquid_receipt() {
   const TYPE_STAKED: AssetId = 0x5000_0000;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(2), 50, 99));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(2), 50));
     assert_ok!(<Assets as Mutate<AccountId>>::transfer(
       TYPE_STAKED,
       &2,
@@ -1423,20 +1735,20 @@ fn native_stake_helpers_distinguish_passive_and_delegated_positions() {
       polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
     ));
     assert_eq!(Staking::native_stake_value(&1), Some(100));
-    assert_eq!(Staking::passive_native_stake_value(&1), None);
-    assert_eq!(Staking::delegated_native_stake_value(&1), Some((99, 100)));
+    assert_eq!(Staking::passive_native_stake_value(&1), Some(100));
+    assert_eq!(Staking::delegated_native_stake_value(&1), None);
     assert_eq!(
       Staking::stake_exposure(1, &1),
       Some(crate::StakeExposure {
         total_value: 100,
-        passive_value: 0,
-        delegated_value: 100,
-        delegated_operator: Some(99),
+        passive_value: 100,
+        delegated_value: 0,
+        delegated_operator: None,
       })
     );
     assert_eq!(Staking::native_stake_value(&2), Some(30));
-    assert_eq!(Staking::passive_native_stake_value(&2), None);
-    assert_eq!(Staking::delegated_native_stake_value(&2), Some((99, 30)));
+    assert_eq!(Staking::passive_native_stake_value(&2), Some(30));
+    assert_eq!(Staking::delegated_native_stake_value(&2), None);
     assert_eq!(Staking::native_stake_value(&3), Some(20));
     assert_eq!(Staking::passive_native_stake_value(&3), Some(20));
     assert_eq!(Staking::delegated_native_stake_value(&3), None);
@@ -1448,7 +1760,7 @@ fn non_native_stake_exposure_stays_passive_even_when_native_position_is_delegate
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 1));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
-    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100, 99));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(1), 100));
     assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 2, 250));
     assert_eq!(Staking::passive_stake_value(2, &1), Some(250));
     assert_eq!(Staking::delegated_stake_value(2, &1), None);

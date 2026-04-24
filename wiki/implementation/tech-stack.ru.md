@@ -1,7 +1,7 @@
 ---
 page_type: implementation
 title: Технологический стек
-summary: Ключевые технологии, на которых построен фреймворк DEOS: Polkadot SDK, Rust, SvelteKit, JavaScript/BigInt и локальный слой автоматизации.
+summary: Ключевые технологии фреймворка DEOS — Polkadot SDK, Rust, SvelteKit, JavaScript/BigInt и локальный слой автоматизации.
 locale: ru
 canonical_page_id: tech-stack
 translation_of: tech-stack.en.md

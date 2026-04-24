@@ -12,6 +12,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 CHAIN_TYPE="${CHAIN_TYPE:-Development}"
 PARA_ID="${PARA_ID:-2000}"
 RELAY_CHAIN="${RELAY_CHAIN:-rococo-local}"
+LOCAL_WEB_CLIENT_NATIVE_STAKING_ID="${LOCAL_WEB_CLIENT_NATIVE_STAKING_ID:-0}"
 LOCAL_WEB_CLIENT_FOREIGN_ID="${LOCAL_WEB_CLIENT_FOREIGN_ID:-4026531841}"
 LOCAL_WEB_CLIENT_INITIAL_PRICE="${LOCAL_WEB_CLIENT_INITIAL_PRICE:-1000000000000}"
 LOCAL_WEB_CLIENT_SLOPE="${LOCAL_WEB_CLIENT_SLOPE:-1000000}"
@@ -30,6 +31,7 @@ Environment:
   CHAIN_TYPE=Development|Local|Live
   PARA_ID=2000
   RELAY_CHAIN=rococo-local
+  LOCAL_WEB_CLIENT_NATIVE_STAKING_ID=0
   LOCAL_WEB_CLIENT_FOREIGN_ID=4026531841
   LOCAL_WEB_CLIENT_INITIAL_PRICE=1000000000000
   LOCAL_WEB_CLIENT_SLOPE=1000000
@@ -136,7 +138,8 @@ patch_chain_spec() {
 
     python3 -c "
 import json, sys
-spec_path, chain_type, chain_name, chain_id, foreign_id, initial_price, slope, foreign_balance = sys.argv[1:9]
+spec_path, chain_type, chain_name, chain_id, native_staking_id, foreign_id, initial_price, slope, foreign_balance = sys.argv[1:10]
+native_staking_id = int(native_staking_id)
 foreign_id = int(foreign_id)
 initial_price = int(initial_price)
 slope = int(slope)
@@ -162,6 +165,15 @@ if balances:
         bootstrap_asset_owner = first_balance_entry[0]
 if bootstrap_asset_owner is None:
     raise SystemExit('Chain spec patching requires at least one endowed balance account to own local dev bootstrap assets')
+native_staking_asset_entry = [native_staking_id, bootstrap_asset_owner, True, 1]
+if native_staking_asset_entry not in asset_entries:
+    asset_entries.append(native_staking_asset_entry)
+native_staking_metadata_entry = [native_staking_id, list(b'Native Staking Token'), list(b'NTVE'), 12]
+if native_staking_metadata_entry not in metadata_entries:
+    metadata_entries.append(native_staking_metadata_entry)
+native_staking_account_entry = [native_staking_id, bootstrap_asset_owner, foreign_balance]
+if native_staking_account_entry not in account_entries:
+    account_entries.append(native_staking_account_entry)
 foreign_asset_entry = [foreign_id, bootstrap_asset_owner, True, 1]
 if foreign_asset_entry not in asset_entries:
     asset_entries.append(foreign_asset_entry)
@@ -177,10 +189,13 @@ patch['axialRouter'] = {
 patch['tokenMintingCurve'] = {
     'curves': [['Native', {'Foreign': foreign_id}, initial_price, slope]],
 }
+patch['staking'] = {
+    'registeredAssets': [native_staking_id],
+}
 with open(spec_path, 'w') as f:
     json.dump(spec, f, indent=2)
     f.write('\n')
-" "$spec_path" "$CHAIN_TYPE" "$CHAIN_NAME" "$CHAIN_ID" "$LOCAL_WEB_CLIENT_FOREIGN_ID" "$LOCAL_WEB_CLIENT_INITIAL_PRICE" "$LOCAL_WEB_CLIENT_SLOPE" "$LOCAL_WEB_CLIENT_FOREIGN_BALANCE"
+" "$spec_path" "$CHAIN_TYPE" "$CHAIN_NAME" "$CHAIN_ID" "$LOCAL_WEB_CLIENT_NATIVE_STAKING_ID" "$LOCAL_WEB_CLIENT_FOREIGN_ID" "$LOCAL_WEB_CLIENT_INITIAL_PRICE" "$LOCAL_WEB_CLIENT_SLOPE" "$LOCAL_WEB_CLIENT_FOREIGN_BALANCE"
 }
 
 verify_output() {

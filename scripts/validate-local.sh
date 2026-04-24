@@ -4,7 +4,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 RUN_CI="${RUN_CI:-1}"
-RUN_RELEASE="${RUN_RELEASE:-1}"
+RUN_BUILD="${RUN_BUILD:-1}"
 RUN_E2E="${RUN_E2E:-0}"
 PREPARE_E2E="${PREPARE_E2E:-0}"
 KEEP_NETWORK="${KEEP_NETWORK:-0}"
@@ -20,21 +20,21 @@ Usage: validate-local.sh [OPTIONS]
 DEOS local validation orchestrator
 
 Options:
-  --all            Run CI + release + E2E
+  --all            Run CI + runtime build + E2E
   --ci-only        Run only CI validation
-  --release-only   Run only release validation
+  --build-only     Run only runtime build validation
   --e2e-only       Run only E2E validation
   --with-e2e       Add E2E validation to current plan
   --prepare-e2e    Run 01..04 setup before E2E (implies --with-e2e)
   --no-ci          Disable CI validation
-  --no-release     Disable release validation
+  --no-build       Disable runtime build validation
   --no-e2e         Disable E2E validation
   --keep-network   Keep zombienet running after completion
   -h, --help       Show this help message
 
 Environment flags:
   RUN_CI=0|1
-  RUN_RELEASE=0|1
+  RUN_BUILD=0|1
   RUN_E2E=0|1
   PREPARE_E2E=0|1
   KEEP_NETWORK=0|1
@@ -48,22 +48,22 @@ parse_args() {
         case "$1" in
             --all)
                 RUN_CI=1
-                RUN_RELEASE=1
+                RUN_BUILD=1
                 RUN_E2E=1
                 ;;
             --ci-only)
                 RUN_CI=1
-                RUN_RELEASE=0
+                RUN_BUILD=0
                 RUN_E2E=0
                 ;;
-            --release-only)
+            --build-only)
                 RUN_CI=0
-                RUN_RELEASE=1
+                RUN_BUILD=1
                 RUN_E2E=0
                 ;;
             --e2e-only)
                 RUN_CI=0
-                RUN_RELEASE=0
+                RUN_BUILD=0
                 RUN_E2E=1
                 ;;
             --with-e2e)
@@ -76,8 +76,8 @@ parse_args() {
             --no-ci)
                 RUN_CI=0
                 ;;
-            --no-release)
-                RUN_RELEASE=0
+            --no-build)
+                RUN_BUILD=0
                 ;;
             --no-e2e)
                 RUN_E2E=0
@@ -101,11 +101,11 @@ parse_args() {
 
 check_plan() {
     phase_banner "Step 1: Validation plan"
-    if (( RUN_CI == 0 && RUN_RELEASE == 0 && RUN_E2E == 0 )); then
+    if (( RUN_CI == 0 && RUN_BUILD == 0 && RUN_E2E == 0 )); then
         log_error "Nothing to run. Enable at least one validation stage"
         exit 1
     fi
-    log_info "Plan: ci=$RUN_CI release=$RUN_RELEASE e2e=$RUN_E2E prepare_e2e=$PREPARE_E2E"
+    log_info "Plan: ci=$RUN_CI build=$RUN_BUILD e2e=$RUN_E2E prepare_e2e=$PREPARE_E2E"
 }
 
 run_requested_stages() {
@@ -113,8 +113,8 @@ run_requested_stages() {
     if (( RUN_CI == 1 )); then
         run_script_step "CI local workflow" "ci-local.sh"
     fi
-    if (( RUN_RELEASE == 1 )); then
-        run_script_step "Release local workflow" "release-local.sh"
+    if (( RUN_BUILD == 1 )); then
+        run_script_step "Runtime build" "03-build-runtime.sh"
     fi
     if (( RUN_E2E == 1 )); then
         run_e2e

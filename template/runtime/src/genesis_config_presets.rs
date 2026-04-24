@@ -28,6 +28,7 @@ pub fn template_session_keys(keys: AuraId) -> SessionKeys {
   SessionKeys { aura: keys }
 }
 
+const LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID: u32 = 0;
 const LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID: u32 = 0xF000_0001;
 const LOCAL_WEB_CLIENT_INITIAL_PRICE: u128 = 1_000_000_000_000;
 const LOCAL_WEB_CLIENT_SLOPE: u128 = 1_000_000;
@@ -35,12 +36,24 @@ const LOCAL_WEB_CLIENT_FOREIGN_BALANCE: u128 = 1u128 << 60;
 
 fn local_web_client_assets(owner: &AccountId) -> Vec<(u32, AccountId, bool, u128)> {
   let mut assets = genesis_protocol_assets();
+  assets.push((
+    LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID,
+    owner.clone(),
+    true,
+    1,
+  ));
   assets.push((LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID, owner.clone(), true, 1));
   assets
 }
 
 fn local_web_client_asset_metadata() -> Vec<(u32, Vec<u8>, Vec<u8>, u8)> {
   let mut metadata = genesis_protocol_asset_metadata();
+  metadata.push((
+    LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID,
+    b"Native Staking Token".to_vec(),
+    b"NTVE".to_vec(),
+    12,
+  ));
   metadata.push((
     LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID,
     b"Foreign Token".to_vec(),
@@ -51,11 +64,18 @@ fn local_web_client_asset_metadata() -> Vec<(u32, Vec<u8>, Vec<u8>, u8)> {
 }
 
 fn local_web_client_asset_accounts(owner: &AccountId) -> Vec<(u32, AccountId, u128)> {
-  vec![(
-    LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID,
-    owner.clone(),
-    LOCAL_WEB_CLIENT_FOREIGN_BALANCE,
-  )]
+  vec![
+    (
+      LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID,
+      owner.clone(),
+      LOCAL_WEB_CLIENT_FOREIGN_BALANCE,
+    ),
+    (
+      LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID,
+      owner.clone(),
+      LOCAL_WEB_CLIENT_FOREIGN_BALANCE,
+    ),
+  ]
 }
 
 fn local_web_client_tracked_assets() -> Vec<AssetKind> {
@@ -126,6 +146,10 @@ fn testnet_genesis(
     },
     token_minting_curve: pallet_tmc::GenesisConfig {
       curves: local_web_client_curves(),
+      _marker: Default::default(),
+    },
+    staking: pallet_staking::GenesisConfig {
+      registered_assets: vec![LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID],
       _marker: Default::default(),
     },
   });
@@ -224,21 +248,42 @@ mod tests {
     assert_eq!(genesis["assets"]["metadata"][0][3], Value::from(12));
     assert_eq!(
       genesis["assets"]["assets"][1][0],
-      Value::from(LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID)
+      Value::from(LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID)
     );
     assert_eq!(
       genesis["assets"]["metadata"][1][0],
-      Value::from(LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID)
+      Value::from(LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID)
     );
     assert_eq!(
       genesis["assets"]["metadata"][1][1],
-      serde_json::json!(b"Foreign Token".to_vec())
+      serde_json::json!(b"Native Staking Token".to_vec())
     );
     assert_eq!(
       genesis["assets"]["metadata"][1][2],
-      serde_json::json!(b"FRGN".to_vec())
+      serde_json::json!(b"NTVE".to_vec())
     );
     assert_eq!(genesis["assets"]["metadata"][1][3], Value::from(12));
+    assert_eq!(
+      genesis["assets"]["assets"][2][0],
+      Value::from(LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID)
+    );
+    assert_eq!(
+      genesis["assets"]["metadata"][2][0],
+      Value::from(LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID)
+    );
+    assert_eq!(
+      genesis["assets"]["metadata"][2][1],
+      serde_json::json!(b"Foreign Token".to_vec())
+    );
+    assert_eq!(
+      genesis["assets"]["metadata"][2][2],
+      serde_json::json!(b"FRGN".to_vec())
+    );
+    assert_eq!(genesis["assets"]["metadata"][2][3], Value::from(12));
+    assert_eq!(
+      genesis["staking"]["registeredAssets"],
+      serde_json::json!([LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID])
+    );
     assert_eq!(
       genesis["axialRouter"]["trackedAssets"],
       serde_json::json!([

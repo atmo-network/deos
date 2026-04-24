@@ -5,7 +5,7 @@ extern crate alloc;
 use frame::traits::StorageVersion;
 use polkadot_sdk::{
   frame_support::weights::Weight,
-  sp_runtime::{DispatchResult, FixedU128},
+  sp_runtime::{DispatchError, DispatchResult, FixedU128},
 };
 
 pub use pallet::*;
@@ -13,7 +13,7 @@ pub use pallet::*;
 pub mod weights;
 pub use weights::WeightInfo;
 
-pub trait NativeBindingTargetValidator<AccountId> {
+pub trait NativeOperatorValidator<AccountId> {
   fn is_valid_operator(_account: &AccountId) -> bool {
     true
   }
@@ -22,7 +22,29 @@ pub trait NativeBindingTargetValidator<AccountId> {
   fn benchmark_prepare_valid_operator(_account: &AccountId) {}
 }
 
-impl<AccountId> NativeBindingTargetValidator<AccountId> for () {}
+impl<AccountId> NativeOperatorValidator<AccountId> for () {}
+
+pub trait NativeStakingLpAssetValidator<AssetId> {
+  fn is_valid_native_staking_lp_asset(_asset_id: AssetId) -> bool {
+    false
+  }
+}
+
+impl<AssetId> NativeStakingLpAssetValidator<AssetId> for () {}
+
+pub trait NativeLpAssetNamespaceInitializer {
+  fn ensure_namespace() {}
+}
+
+impl NativeLpAssetNamespaceInitializer for () {}
+
+pub trait NativeGovernanceLockProvider<AccountId, BlockNumber> {
+  fn lock_until(_account: &AccountId) -> Option<BlockNumber> {
+    None
+  }
+}
+
+impl<AccountId, BlockNumber> NativeGovernanceLockProvider<AccountId, BlockNumber> for () {}
 
 pub trait StakedAssetIdResolver<AssetId> {
   fn staked_asset_id(_asset_id: AssetId) -> Option<AssetId> {
@@ -83,6 +105,38 @@ impl<AccountId, GovernanceDomainId> RewardCoefficientProvider<AccountId, Governa
 {
 }
 
+pub trait RewardBaseWeightProvider<AccountId, AssetId, Balance> {
+  fn reward_base_weight(_asset_id: AssetId, _account: &AccountId) -> Option<Balance> {
+    None
+  }
+}
+
+impl<AccountId, AssetId, Balance> RewardBaseWeightProvider<AccountId, AssetId, Balance> for () {}
+
+pub trait NativeNominationRewardCompounder<AccountId, Balance> {
+  fn compound(
+    _account: &AccountId,
+    _operator: &AccountId,
+    _amount: Balance,
+  ) -> Result<Balance, DispatchError> {
+    Err(DispatchError::Other("NominationRewardCompoundUnsupported"))
+  }
+}
+
+impl<AccountId, Balance> NativeNominationRewardCompounder<AccountId, Balance> for () {}
+
+pub trait NativeStakingReadModelProvider<AssetId, Balance> {
+  fn native_staking_liquidity_pool() -> Option<(AssetId, Balance, Balance, Balance)> {
+    None
+  }
+
+  fn native_lp_value(_locked_lp: Balance) -> Option<Balance> {
+    None
+  }
+}
+
+impl<AssetId, Balance> NativeStakingReadModelProvider<AssetId, Balance> for () {}
+
 pub trait RewardSnapshotEventIngress<Epoch> {
   fn ingest(_epoch: Epoch, _max_scan: usize, _remaining_weight: Weight) -> Weight {
     Weight::zero()
@@ -91,23 +145,38 @@ pub trait RewardSnapshotEventIngress<Epoch> {
 
 impl<Epoch> RewardSnapshotEventIngress<Epoch> for () {}
 
-pub struct NativeDelegationIngress<AccountId> {
-  pub touched_accounts: alloc::vec::Vec<AccountId>,
-  pub weight: Weight,
-  pub truncated: bool,
+#[cfg(feature = "runtime-benchmarks")]
+pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
+  fn prepare_native_staking_lp(
+    account: &AccountId,
+    amount: Balance,
+  ) -> Result<AssetId, DispatchError>;
+  fn prepare_native_governance_asset(
+    account: &AccountId,
+    amount: Balance,
+  ) -> Result<AssetId, DispatchError>;
 }
 
-pub trait NativeDelegationEventIngress<AccountId> {
-  fn ingress(_max_scan: usize, _remaining_weight: Weight) -> NativeDelegationIngress<AccountId> {
-    NativeDelegationIngress {
-      touched_accounts: alloc::vec::Vec::new(),
-      weight: Weight::zero(),
-      truncated: false,
-    }
+#[cfg(feature = "runtime-benchmarks")]
+impl<AccountId, AssetId, Balance> BenchmarkHelper<AccountId, AssetId, Balance> for () {
+  fn prepare_native_staking_lp(
+    _account: &AccountId,
+    _amount: Balance,
+  ) -> Result<AssetId, DispatchError> {
+    Err(DispatchError::Other(
+      "StakingBenchmarkHelper not configured",
+    ))
+  }
+
+  fn prepare_native_governance_asset(
+    _account: &AccountId,
+    _amount: Balance,
+  ) -> Result<AssetId, DispatchError> {
+    Err(DispatchError::Other(
+      "StakingBenchmarkHelper not configured",
+    ))
   }
 }
-
-impl<AccountId> NativeDelegationEventIngress<AccountId> for () {}
 
 #[cfg(test)]
 mod mock;
@@ -117,20 +186,21 @@ mod tests;
 #[cfg(feature = "runtime-benchmarks")]
 mod benchmarking;
 
-const STORAGE_VERSION: StorageVersion = StorageVersion::new(5);
+const STORAGE_VERSION: StorageVersion = StorageVersion::new(11);
 
 #[frame::pallet]
 pub mod pallet {
   use crate::{
-    NativeBindingTargetValidator as _, NativeDelegationEventIngress as _,
-    RewardCoefficientProvider as _, RewardEpochProvider as _, RewardGovernanceDomainResolver as _,
-    RewardSnapshotEventIngress as _, StakedAssetIdResolver as _, StakedAssetLifecycle as _,
-    weights::WeightInfo as _,
+    NativeGovernanceLockProvider as _, NativeLpAssetNamespaceInitializer as _,
+    NativeNominationRewardCompounder as _, NativeOperatorValidator as _,
+    NativeStakingLpAssetValidator as _, NativeStakingReadModelProvider as _,
+    RewardBaseWeightProvider as _, RewardCoefficientProvider as _, RewardEpochProvider as _,
+    RewardGovernanceDomainResolver as _, RewardSnapshotEventIngress as _,
+    StakedAssetIdResolver as _, StakedAssetLifecycle as _, weights::WeightInfo as _,
   };
   use alloc::{collections::BTreeSet, vec::Vec};
   use codec::{Decode, Encode};
   use frame::prelude::*;
-  use polkadot_sdk::frame_support::storage::generator::StorageMap as _;
   use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
   use polkadot_sdk::frame_support::traits::tokens::{Fortitude, Precision, Preservation};
   use polkadot_sdk::frame_support::{PalletId, transactional, weights::Weight};
@@ -138,35 +208,53 @@ pub mod pallet {
   use polkadot_sdk::sp_runtime::{
     FixedU128, Perbill,
     traits::{
-      AccountIdConversion, AtLeast32BitUnsigned, CheckedAdd, CheckedSub, SaturatedConversion, Zero,
+      AccountIdConversion, AtLeast32BitUnsigned, CheckedAdd, CheckedSub, MaybeSerializeDeserialize,
+      SaturatedConversion, Zero,
     },
   };
 
   #[pallet::config]
   pub trait Config: frame_system::Config<RuntimeEvent: From<Event<Self>>> {
     type AdminOrigin: EnsureOrigin<Self::RuntimeOrigin>;
-    type AssetId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
+    type AssetId: Parameter
+      + MaxEncodedLen
+      + Member
+      + Copy
+      + Ord
+      + TypeInfo
+      + MaybeSerializeDeserialize;
     type NativeStakingAssetId: Get<Self::AssetId>;
     type GovernanceDomainId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
     type RewardEpoch: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
-    type NativeBindingTargetValidator: crate::NativeBindingTargetValidator<Self::AccountId>;
+    type NativeOperatorValidator: crate::NativeOperatorValidator<Self::AccountId>;
+    type NativeStakingLpAssetValidator: crate::NativeStakingLpAssetValidator<Self::AssetId>;
+    type NativeLpAssetNamespaceInitializer: crate::NativeLpAssetNamespaceInitializer;
+    type NativeGovernanceLockProvider: crate::NativeGovernanceLockProvider<Self::AccountId, BlockNumberFor<Self>>;
     type StakedAssetIdResolver: crate::StakedAssetIdResolver<Self::AssetId>;
     type StakedAssetLifecycle: crate::StakedAssetLifecycle<Self::AccountId, Self::AssetId>;
     type RewardGovernanceDomainResolver: crate::RewardGovernanceDomainResolver<Self::AssetId, Self::GovernanceDomainId>;
     type RewardEpochProvider: crate::RewardEpochProvider<Self::RewardEpoch>;
     type RewardCoefficientProvider: crate::RewardCoefficientProvider<Self::AccountId, Self::GovernanceDomainId>;
+    type RewardBaseWeightProvider: crate::RewardBaseWeightProvider<Self::AccountId, Self::AssetId, Self::Balance>;
+    type NativeNominationRewardCompounder: crate::NativeNominationRewardCompounder<Self::AccountId, Self::Balance>;
+    type NativeStakingReadModelProvider: crate::NativeStakingReadModelProvider<Self::AssetId, Self::Balance>;
     type RewardSnapshotEventIngress: crate::RewardSnapshotEventIngress<Self::RewardEpoch>;
-    type NativeDelegationEventIngress: crate::NativeDelegationEventIngress<Self::AccountId>;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::AssetId, Self::Balance>;
     #[pallet::constant]
     type MaxOperatorCommission: Get<Perbill>;
     #[pallet::constant]
     type MaxRewardEventScanPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxRewardRolloverAssetsPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxRewardAccountsPerAssetEpoch: Get<u32>;
     #[pallet::constant]
     type MaxRewardAssetsPerGovernanceDomain: Get<u32>;
     #[pallet::constant]
     type MaxClaimEpochsPerCall: Get<u32>;
+    #[pallet::constant]
+    type NativeLpUnlockDelay: Get<BlockNumberFor<Self>>;
     type Balance: Parameter
       + MaxEncodedLen
       + Member
@@ -195,23 +283,7 @@ pub mod pallet {
     fn on_idle(_n: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
       let epoch = T::RewardEpochProvider::current_reward_epoch();
       let max_scan = T::MaxRewardEventScanPerBlock::get() as usize;
-      let (native_delegation_weight, native_delegation_truncated) =
-        Self::ingest_native_delegation_events(max_scan, remaining_weight);
-      let remaining_after_native = remaining_weight.saturating_sub(native_delegation_weight);
-      let native_delegation_repair_weight = Self::repair_native_delegation_cache(
-        max_scan,
-        native_delegation_truncated,
-        remaining_after_native,
-      );
-      let reward_ingress_budget =
-        remaining_after_native.saturating_sub(native_delegation_repair_weight);
-      native_delegation_weight
-        .saturating_add(native_delegation_repair_weight)
-        .saturating_add(T::RewardSnapshotEventIngress::ingest(
-          epoch,
-          max_scan,
-          reward_ingress_budget,
-        ))
+      T::RewardSnapshotEventIngress::ingest(epoch, max_scan, remaining_weight)
     }
   }
 
@@ -242,11 +314,66 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
+  pub struct NativeStakingLiquidityPool<AssetId, Balance> {
+    pub native_asset_id: AssetId,
+    pub staked_asset_id: AssetId,
+    pub lp_asset_id: AssetId,
+    pub reserve_native: Balance,
+    pub reserve_staked: Balance,
+    pub lp_total_issuance: Balance,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct NativeLockedLpPosition<Balance> {
+    pub total_locked_lp: Balance,
+    pub collator_locked_lp: Balance,
+    pub governance_locked_lp: Balance,
+    pub conservative_native_value: Option<Balance>,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct NativeCollatorLpPosition<AssetId, Balance, BlockNumber> {
+    pub lp_asset_id: Option<AssetId>,
+    pub locked_lp: Balance,
+    pub pending_unlock_lp: Balance,
+    pub pending_unlock_block: Option<BlockNumber>,
+    pub conservative_native_value: Option<Balance>,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct NativeGovernanceCustodyPosition<AssetId, Balance, BlockNumber> {
+    pub lp_asset_id: Option<AssetId>,
+    pub governance_locked_lp: Balance,
+    pub pending_governance_lp_unlock: Balance,
+    pub pending_governance_lp_unlock_block: Option<BlockNumber>,
+    pub asset_id: AssetId,
+    pub asset_locked: Balance,
+    pub pending_asset_unlock: Balance,
+    pub pending_asset_unlock_block: Option<BlockNumber>,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
   pub struct RewardWeightSnapshot<Epoch, Balance> {
     pub effective_from_epoch: Epoch,
     pub shares: Balance,
     pub coefficient: FixedU128,
     pub weight: Balance,
+  }
+
+  #[derive(
+    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+  )]
+  pub struct RewardEpochRolloverState<Epoch> {
+    pub from_epoch: Epoch,
+    pub to_epoch: Epoch,
   }
 
   #[pallet::storage]
@@ -272,11 +399,6 @@ pub mod pallet {
   >;
 
   #[pallet::storage]
-  #[pallet::getter(fn native_binding)]
-  pub type NativeBindings<T: Config> =
-    StorageMap<_, Blake2_128Concat, T::AccountId, T::AccountId, OptionQuery>;
-
-  #[pallet::storage]
   #[pallet::getter(fn operator_commission)]
   pub type OperatorCommissions<T: Config> =
     StorageMap<_, Blake2_128Concat, T::AccountId, Perbill, ValueQuery>;
@@ -294,46 +416,148 @@ pub mod pallet {
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
-  pub struct CachedNativeDelegation<AccountId, Balance> {
-    pub operator: AccountId,
-    pub shares: Balance,
+  pub struct NativeLpLock<AssetId, Balance> {
+    pub lp_asset_id: AssetId,
+    pub amount: Balance,
   }
-
-  #[pallet::storage]
-  #[pallet::getter(fn cached_native_delegation)]
-  pub type CachedNativeDelegations<T: Config> = StorageMap<
-    _,
-    Blake2_128Concat,
-    T::AccountId,
-    CachedNativeDelegation<T::AccountId, T::Balance>,
-    OptionQuery,
-  >;
-
-  #[pallet::storage]
-  #[pallet::getter(fn cached_operator_native_shares)]
-  pub type CachedOperatorNativeShares<T: Config> =
-    StorageMap<_, Blake2_128Concat, T::AccountId, T::Balance, ValueQuery>;
 
   #[derive(
     Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
   )]
-  pub enum NativeDelegationRepairPhase {
-    ClearingCache,
-    RebuildingBindings,
+  pub struct PendingNativeLpUnlock<AssetId, Balance, BlockNumber> {
+    pub lp_asset_id: AssetId,
+    pub amount: Balance,
+    pub unlock_block: BlockNumber,
   }
 
   #[pallet::storage]
-  #[pallet::getter(fn native_delegation_cache_dirty)]
-  pub type NativeDelegationCacheDirty<T: Config> = StorageValue<_, bool, ValueQuery>;
+  #[pallet::getter(fn native_lp_lock)]
+  pub type NativeLpLocks<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    Blake2_128Concat,
+    T::AccountId,
+    NativeLpLock<T::AssetId, T::Balance>,
+    OptionQuery,
+  >;
 
   #[pallet::storage]
-  #[pallet::getter(fn native_delegation_repair_phase)]
-  pub type NativeDelegationRepairPhaseState<T: Config> =
-    StorageValue<_, NativeDelegationRepairPhase, OptionQuery>;
+  #[pallet::getter(fn operator_native_lp_locked)]
+  pub type OperatorNativeLpLocked<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AccountId, T::Balance, ValueQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn native_delegation_repair_cursor)]
-  pub type NativeDelegationRepairCursor<T: Config> = StorageValue<_, T::AccountId, OptionQuery>;
+  #[pallet::getter(fn account_native_lp_locked)]
+  pub type AccountNativeLpLocked<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AccountId, T::Balance, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn account_native_collator_lp_locked)]
+  pub type AccountNativeCollatorLpLocked<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AccountId, T::Balance, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn total_native_lp_locked)]
+  pub type TotalNativeLpLocked<T: Config> = StorageValue<_, T::Balance, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn pending_native_lp_unlock)]
+  pub type PendingNativeLpUnlocks<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    Blake2_128Concat,
+    T::AccountId,
+    PendingNativeLpUnlock<T::AssetId, T::Balance, BlockNumberFor<T>>,
+    OptionQuery,
+  >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn native_governance_lp_lock)]
+  pub type NativeGovernanceLpLocks<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    NativeLpLock<T::AssetId, T::Balance>,
+    OptionQuery,
+  >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn pending_native_governance_lp_unlock)]
+  pub type PendingNativeGovernanceLpUnlocks<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    PendingNativeLpUnlock<T::AssetId, T::Balance, BlockNumberFor<T>>,
+    OptionQuery,
+  >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn native_governance_asset_locked)]
+  pub type NativeGovernanceAssetLocked<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    Blake2_128Concat,
+    T::AssetId,
+    T::Balance,
+    ValueQuery,
+  >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn total_native_governance_asset_locked)]
+  pub type TotalNativeGovernanceAssetLocked<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::AssetId, T::Balance, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn pending_native_governance_asset_unlock)]
+  pub type PendingNativeGovernanceAssetUnlocks<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::AccountId,
+    Blake2_128Concat,
+    T::AssetId,
+    PendingNativeLpUnlock<T::AssetId, T::Balance, BlockNumberFor<T>>,
+    OptionQuery,
+  >;
+
+  #[pallet::genesis_config]
+  pub struct GenesisConfig<T: Config> {
+    pub registered_assets: Vec<T::AssetId>,
+    pub _marker: core::marker::PhantomData<T>,
+  }
+
+  impl<T: Config> Default for GenesisConfig<T> {
+    fn default() -> Self {
+      Self {
+        registered_assets: Vec::new(),
+        _marker: Default::default(),
+      }
+    }
+  }
+
+  #[pallet::genesis_build]
+  impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
+    fn build(&self) {
+      T::NativeLpAssetNamespaceInitializer::ensure_namespace();
+      for asset_id in &self.registered_assets {
+        if Pools::<T>::contains_key(asset_id) {
+          continue;
+        }
+        Pools::<T>::insert(
+          asset_id,
+          PoolState {
+            total_shares: Zero::zero(),
+            accounted_balance: Zero::zero(),
+            active_staker_count: 0,
+          },
+        );
+        Pallet::<T>::initialize_staked_asset_for_pool(*asset_id)
+          .expect("genesis staked asset initialization must succeed");
+      }
+    }
+  }
 
   #[pallet::storage]
   #[pallet::getter(fn reward_epoch_accrued)]
@@ -419,6 +643,11 @@ pub mod pallet {
   pub type LastProcessedRewardEpoch<T: Config> = StorageValue<_, T::RewardEpoch, OptionQuery>;
 
   #[pallet::storage]
+  #[pallet::getter(fn pending_reward_epoch_rollover)]
+  pub type PendingRewardEpochRollover<T: Config> =
+    StorageValue<_, RewardEpochRolloverState<T::RewardEpoch>, OptionQuery>;
+
+  #[pallet::storage]
   #[pallet::getter(fn last_reward_ingress_truncated_epoch)]
   pub type LastRewardIngressTruncatedEpoch<T: Config> =
     StorageValue<_, T::RewardEpoch, OptionQuery>;
@@ -465,6 +694,18 @@ pub mod pallet {
       reward_amount: T::Balance,
       minted_shares: T::Balance,
     },
+    NominationRewardClaimed {
+      account: T::AccountId,
+      epoch: T::RewardEpoch,
+      reward_amount: T::Balance,
+    },
+    NominationRewardCompounded {
+      account: T::AccountId,
+      operator: T::AccountId,
+      epoch: T::RewardEpoch,
+      reward_amount: T::Balance,
+      locked_lp_amount: T::Balance,
+    },
     RewardIngressTruncated {
       epoch: T::RewardEpoch,
       scanned: u32,
@@ -497,12 +738,69 @@ pub mod pallet {
       beneficiary: T::AccountId,
       amount: T::Balance,
     },
-    NativeBindingSet {
+    NativeLpLocked {
       account: T::AccountId,
       operator: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+      total_locked: T::Balance,
     },
-    NativeBindingCleared {
+    NativeLpUnlockRequested {
       account: T::AccountId,
+      operator: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+      remaining_locked: T::Balance,
+      unlock_block: BlockNumberFor<T>,
+    },
+    NativeLpWithdrawn {
+      account: T::AccountId,
+      operator: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+    },
+    NativeLpRedelegated {
+      account: T::AccountId,
+      from_operator: T::AccountId,
+      to_operator: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+    },
+    NativeGovernanceLpLocked {
+      account: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+      total_locked: T::Balance,
+    },
+    NativeGovernanceLpUnlockRequested {
+      account: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+      remaining_locked: T::Balance,
+      unlock_block: BlockNumberFor<T>,
+    },
+    NativeGovernanceLpWithdrawn {
+      account: T::AccountId,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+    },
+    NativeGovernanceAssetLocked {
+      account: T::AccountId,
+      asset_id: T::AssetId,
+      amount: T::Balance,
+      total_locked: T::Balance,
+    },
+    NativeGovernanceAssetUnlockRequested {
+      account: T::AccountId,
+      asset_id: T::AssetId,
+      amount: T::Balance,
+      remaining_locked: T::Balance,
+      unlock_block: BlockNumberFor<T>,
+    },
+    NativeGovernanceAssetWithdrawn {
+      account: T::AccountId,
+      asset_id: T::AssetId,
+      amount: T::Balance,
     },
     OperatorCommissionSet {
       operator: T::AccountId,
@@ -527,9 +825,17 @@ pub mod pallet {
     StakedAssetUnsupported,
     StakedAssetNotInitialized,
     StakedAssetAlreadyInitialized,
-    NativeStakeRequiresOperator,
-    CannotBindToSelf,
-    InvalidBindingTarget,
+    NativeStakeRequiresDedicatedCall,
+    NativeRewardRequiresDedicatedClaim,
+    CannotNominateSelf,
+    InvalidNativeOperatorTarget,
+    NativeGovernanceLockActive,
+    InvalidNativeGovernanceAsset,
+    InvalidNativeLpAsset,
+    NativeLpAssetMismatch,
+    InsufficientLockedLp,
+    NoPendingNativeLpUnlock,
+    NativeLpUnlockNotReady,
     CommissionExceedsMaximum,
     RewardAccountUnderfunded,
     RewardAccountingOverflow,
@@ -598,7 +904,7 @@ pub mod pallet {
       let account = ensure_signed(origin)?;
       ensure!(
         asset_id != T::NativeStakingAssetId::get(),
-        Error::<T>::NativeStakeRequiresOperator
+        Error::<T>::NativeStakeRequiresDedicatedCall
       );
       let minted_shares = Self::do_stake(asset_id, &account, amount)?;
       Self::deposit_event(Event::Staked {
@@ -738,31 +1044,6 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(5)]
-    #[pallet::weight(T::WeightInfo::bind_native())]
-    pub fn bind_native(origin: OriginFor<T>, operator: T::AccountId) -> DispatchResult {
-      let account = ensure_signed(origin)?;
-      ensure!(account != operator, Error::<T>::CannotBindToSelf);
-      ensure!(
-        T::NativeBindingTargetValidator::is_valid_operator(&operator),
-        Error::<T>::InvalidBindingTarget
-      );
-      NativeBindings::<T>::insert(&account, &operator);
-      Self::refresh_cached_native_delegation_if_clean(&account);
-      Self::deposit_event(Event::NativeBindingSet { account, operator });
-      Ok(())
-    }
-
-    #[pallet::call_index(6)]
-    #[pallet::weight(T::WeightInfo::clear_native_binding())]
-    pub fn clear_native_binding(origin: OriginFor<T>) -> DispatchResult {
-      let account = ensure_signed(origin)?;
-      NativeBindings::<T>::remove(&account);
-      Self::refresh_cached_native_delegation_if_clean(&account);
-      Self::deposit_event(Event::NativeBindingCleared { account });
-      Ok(())
-    }
-
     #[pallet::call_index(7)]
     #[pallet::weight(T::WeightInfo::set_operator_commission())]
     pub fn set_operator_commission(origin: OriginFor<T>, commission: Perbill) -> DispatchResult {
@@ -780,28 +1061,540 @@ pub mod pallet {
     }
 
     #[pallet::call_index(8)]
-    #[pallet::weight(T::WeightInfo::stake().saturating_add(T::WeightInfo::bind_native()))]
-    pub fn stake_native(
+    #[pallet::weight(T::WeightInfo::stake())]
+    pub fn stake_native(origin: OriginFor<T>, amount: T::Balance) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let asset_id = T::NativeStakingAssetId::get();
+      let minted_shares = Self::do_stake(asset_id, &account, amount)?;
+      Self::deposit_event(Event::Staked {
+        asset_id,
+        account,
+        amount_in: amount,
+        minted_shares,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(15)]
+    #[pallet::weight(T::WeightInfo::lock_native_lp_for_collator())]
+    #[transactional]
+    pub fn lock_native_lp_for_collator(
       origin: OriginFor<T>,
+      lp_asset_id: T::AssetId,
       amount: T::Balance,
       operator: T::AccountId,
     ) -> DispatchResult {
       let account = ensure_signed(origin)?;
-      ensure!(account != operator, Error::<T>::CannotBindToSelf);
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      ensure!(account != operator, Error::<T>::CannotNominateSelf);
       ensure!(
-        T::NativeBindingTargetValidator::is_valid_operator(&operator),
-        Error::<T>::InvalidBindingTarget
+        T::NativeOperatorValidator::is_valid_operator(&operator),
+        Error::<T>::InvalidNativeOperatorTarget
       );
-      let asset_id = T::NativeStakingAssetId::get();
-      let minted_shares = Self::do_stake(asset_id, &account, amount)?;
-      NativeBindings::<T>::insert(&account, &operator);
-      Self::deposit_event(Event::Staked {
-        asset_id,
+      ensure!(
+        T::NativeStakingLpAssetValidator::is_valid_native_staking_lp_asset(lp_asset_id),
+        Error::<T>::InvalidNativeLpAsset
+      );
+      let prior_lock = NativeLpLocks::<T>::get(&account, &operator);
+      if let Some(lock) = prior_lock.as_ref() {
+        ensure!(
+          lock.lp_asset_id == lp_asset_id,
+          Error::<T>::NativeLpAssetMismatch
+        );
+      }
+      let prior_account_operator_amount = prior_lock
+        .as_ref()
+        .map(|lock| lock.amount)
+        .unwrap_or_else(Zero::zero);
+      let new_account_operator_amount = prior_account_operator_amount
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let prior_operator_amount = OperatorNativeLpLocked::<T>::get(&operator);
+      let new_operator_amount = prior_operator_amount
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let new_account_amount = AccountNativeLpLocked::<T>::get(&account)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let new_account_collator_amount = AccountNativeCollatorLpLocked::<T>::get(&account)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let new_total_amount = TotalNativeLpLocked::<T>::get()
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let lock_account = Self::native_lp_lock_account();
+      if frame_system::Pallet::<T>::providers(&lock_account).is_zero() {
+        let _ = frame_system::Pallet::<T>::inc_providers(&lock_account);
+      }
+      T::Assets::transfer(
+        lp_asset_id,
+        &account,
+        &lock_account,
+        amount,
+        Preservation::Expendable,
+      )?;
+      NativeLpLocks::<T>::insert(
+        &account,
+        &operator,
+        NativeLpLock {
+          lp_asset_id,
+          amount: new_account_operator_amount,
+        },
+      );
+      OperatorNativeLpLocked::<T>::insert(&operator, new_operator_amount);
+      AccountNativeLpLocked::<T>::insert(&account, new_account_amount);
+      AccountNativeCollatorLpLocked::<T>::insert(&account, new_account_collator_amount);
+      TotalNativeLpLocked::<T>::put(new_total_amount);
+      Self::deposit_event(Event::NativeLpLocked {
         account: account.clone(),
-        amount_in: amount,
-        minted_shares,
+        operator,
+        lp_asset_id,
+        amount,
+        total_locked: new_account_operator_amount,
       });
-      Self::deposit_event(Event::NativeBindingSet { account, operator });
+      let _ = Self::note_reward_touch(T::NativeStakingAssetId::get(), &account);
+      Ok(())
+    }
+
+    #[pallet::call_index(16)]
+    #[pallet::weight(T::WeightInfo::request_unlock_native_lp())]
+    #[transactional]
+    pub fn request_unlock_native_lp(
+      origin: OriginFor<T>,
+      operator: T::AccountId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      Self::ensure_native_governance_unlocked(&account)?;
+      let mut lock =
+        NativeLpLocks::<T>::get(&account, &operator).ok_or(Error::<T>::InsufficientLockedLp)?;
+      ensure!(lock.amount >= amount, Error::<T>::InsufficientLockedLp);
+      lock.amount = lock
+        .amount
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if lock.amount.is_zero() {
+        NativeLpLocks::<T>::remove(&account, &operator);
+      } else {
+        NativeLpLocks::<T>::insert(&account, &operator, &lock);
+      }
+      Self::decrease_operator_native_lp_locked(&operator, amount)?;
+      Self::decrease_account_native_lp_locked(&account, amount)?;
+      Self::decrease_account_native_collator_lp_locked(&account, amount)?;
+      Self::decrease_total_native_lp_locked(amount)?;
+      let unlock_block =
+        frame_system::Pallet::<T>::block_number().saturating_add(T::NativeLpUnlockDelay::get());
+      let pending = PendingNativeLpUnlocks::<T>::get(&account, &operator);
+      let pending_amount = pending
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      if let Some(item) = pending.as_ref() {
+        ensure!(
+          item.lp_asset_id == lock.lp_asset_id,
+          Error::<T>::NativeLpAssetMismatch
+        );
+      }
+      let total_pending = pending_amount
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let effective_unlock_block = pending
+        .as_ref()
+        .map(|item| item.unlock_block.max(unlock_block))
+        .unwrap_or(unlock_block);
+      PendingNativeLpUnlocks::<T>::insert(
+        &account,
+        &operator,
+        PendingNativeLpUnlock {
+          lp_asset_id: lock.lp_asset_id,
+          amount: total_pending,
+          unlock_block: effective_unlock_block,
+        },
+      );
+      Self::deposit_event(Event::NativeLpUnlockRequested {
+        account: account.clone(),
+        operator,
+        lp_asset_id: lock.lp_asset_id,
+        amount,
+        remaining_locked: lock.amount,
+        unlock_block: effective_unlock_block,
+      });
+      let _ = Self::note_reward_touch(T::NativeStakingAssetId::get(), &account);
+      Ok(())
+    }
+
+    #[pallet::call_index(17)]
+    #[pallet::weight(T::WeightInfo::withdraw_unlocked_native_lp())]
+    #[transactional]
+    pub fn withdraw_unlocked_native_lp(
+      origin: OriginFor<T>,
+      operator: T::AccountId,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let pending = PendingNativeLpUnlocks::<T>::get(&account, &operator)
+        .ok_or(Error::<T>::NoPendingNativeLpUnlock)?;
+      ensure!(
+        frame_system::Pallet::<T>::block_number() >= pending.unlock_block,
+        Error::<T>::NativeLpUnlockNotReady
+      );
+      PendingNativeLpUnlocks::<T>::remove(&account, &operator);
+      T::Assets::transfer(
+        pending.lp_asset_id,
+        &Self::native_lp_lock_account(),
+        &account,
+        pending.amount,
+        Preservation::Expendable,
+      )?;
+      Self::deposit_event(Event::NativeLpWithdrawn {
+        account,
+        operator,
+        lp_asset_id: pending.lp_asset_id,
+        amount: pending.amount,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(18)]
+    #[pallet::weight(T::WeightInfo::redelegate_native_lp())]
+    #[transactional]
+    pub fn redelegate_native_lp(
+      origin: OriginFor<T>,
+      from_operator: T::AccountId,
+      to_operator: T::AccountId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      ensure!(
+        from_operator != to_operator,
+        Error::<T>::InvalidNativeOperatorTarget
+      );
+      ensure!(account != to_operator, Error::<T>::CannotNominateSelf);
+      ensure!(
+        T::NativeOperatorValidator::is_valid_operator(&to_operator),
+        Error::<T>::InvalidNativeOperatorTarget
+      );
+      let mut from_lock = NativeLpLocks::<T>::get(&account, &from_operator)
+        .ok_or(Error::<T>::InsufficientLockedLp)?;
+      ensure!(from_lock.amount >= amount, Error::<T>::InsufficientLockedLp);
+      let to_lock = NativeLpLocks::<T>::get(&account, &to_operator);
+      if let Some(lock) = to_lock.as_ref() {
+        ensure!(
+          lock.lp_asset_id == from_lock.lp_asset_id,
+          Error::<T>::NativeLpAssetMismatch
+        );
+      }
+      from_lock.amount = from_lock
+        .amount
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if from_lock.amount.is_zero() {
+        NativeLpLocks::<T>::remove(&account, &from_operator);
+      } else {
+        NativeLpLocks::<T>::insert(&account, &from_operator, &from_lock);
+      }
+      let new_to_amount = to_lock
+        .as_ref()
+        .map(|lock| lock.amount)
+        .unwrap_or_else(Zero::zero)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      NativeLpLocks::<T>::insert(
+        &account,
+        &to_operator,
+        NativeLpLock {
+          lp_asset_id: from_lock.lp_asset_id,
+          amount: new_to_amount,
+        },
+      );
+      Self::decrease_operator_native_lp_locked(&from_operator, amount)?;
+      Self::increase_operator_native_lp_locked(&to_operator, amount)?;
+      Self::deposit_event(Event::NativeLpRedelegated {
+        account,
+        from_operator,
+        to_operator,
+        lp_asset_id: from_lock.lp_asset_id,
+        amount,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(19)]
+    #[pallet::weight(T::WeightInfo::lock_native_lp_for_governance())]
+    #[transactional]
+    pub fn lock_native_lp_for_governance(
+      origin: OriginFor<T>,
+      lp_asset_id: T::AssetId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      ensure!(
+        T::NativeStakingLpAssetValidator::is_valid_native_staking_lp_asset(lp_asset_id),
+        Error::<T>::InvalidNativeLpAsset
+      );
+      let prior_lock = NativeGovernanceLpLocks::<T>::get(&account);
+      if let Some(lock) = prior_lock.as_ref() {
+        ensure!(
+          lock.lp_asset_id == lp_asset_id,
+          Error::<T>::NativeLpAssetMismatch
+        );
+      }
+      let new_governance_amount = prior_lock
+        .as_ref()
+        .map(|lock| lock.amount)
+        .unwrap_or_else(Zero::zero)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let new_account_amount = AccountNativeLpLocked::<T>::get(&account)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let new_total_amount = TotalNativeLpLocked::<T>::get()
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let lock_account = Self::native_lp_lock_account();
+      if frame_system::Pallet::<T>::providers(&lock_account).is_zero() {
+        let _ = frame_system::Pallet::<T>::inc_providers(&lock_account);
+      }
+      T::Assets::transfer(
+        lp_asset_id,
+        &account,
+        &lock_account,
+        amount,
+        Preservation::Expendable,
+      )?;
+      NativeGovernanceLpLocks::<T>::insert(
+        &account,
+        NativeLpLock {
+          lp_asset_id,
+          amount: new_governance_amount,
+        },
+      );
+      AccountNativeLpLocked::<T>::insert(&account, new_account_amount);
+      TotalNativeLpLocked::<T>::put(new_total_amount);
+      Self::deposit_event(Event::NativeGovernanceLpLocked {
+        account,
+        lp_asset_id,
+        amount,
+        total_locked: new_governance_amount,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(20)]
+    #[pallet::weight(T::WeightInfo::request_unlock_native_lp_for_governance())]
+    #[transactional]
+    pub fn request_unlock_native_lp_for_governance(
+      origin: OriginFor<T>,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      Self::ensure_native_governance_unlocked(&account)?;
+      let mut lock =
+        NativeGovernanceLpLocks::<T>::get(&account).ok_or(Error::<T>::InsufficientLockedLp)?;
+      ensure!(lock.amount >= amount, Error::<T>::InsufficientLockedLp);
+      lock.amount = lock
+        .amount
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if lock.amount.is_zero() {
+        NativeGovernanceLpLocks::<T>::remove(&account);
+      } else {
+        NativeGovernanceLpLocks::<T>::insert(&account, &lock);
+      }
+      Self::decrease_account_native_lp_locked(&account, amount)?;
+      Self::decrease_total_native_lp_locked(amount)?;
+      let unlock_block =
+        frame_system::Pallet::<T>::block_number().saturating_add(T::NativeLpUnlockDelay::get());
+      let pending = PendingNativeGovernanceLpUnlocks::<T>::get(&account);
+      let pending_amount = pending
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      if let Some(item) = pending.as_ref() {
+        ensure!(
+          item.lp_asset_id == lock.lp_asset_id,
+          Error::<T>::NativeLpAssetMismatch
+        );
+      }
+      let total_pending = pending_amount
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let effective_unlock_block = pending
+        .as_ref()
+        .map(|item| item.unlock_block.max(unlock_block))
+        .unwrap_or(unlock_block);
+      PendingNativeGovernanceLpUnlocks::<T>::insert(
+        &account,
+        PendingNativeLpUnlock {
+          lp_asset_id: lock.lp_asset_id,
+          amount: total_pending,
+          unlock_block: effective_unlock_block,
+        },
+      );
+      Self::deposit_event(Event::NativeGovernanceLpUnlockRequested {
+        account,
+        lp_asset_id: lock.lp_asset_id,
+        amount,
+        remaining_locked: lock.amount,
+        unlock_block: effective_unlock_block,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(21)]
+    #[pallet::weight(T::WeightInfo::withdraw_unlocked_native_lp_for_governance())]
+    #[transactional]
+    pub fn withdraw_unlocked_native_lp_for_governance(origin: OriginFor<T>) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let pending = PendingNativeGovernanceLpUnlocks::<T>::get(&account)
+        .ok_or(Error::<T>::NoPendingNativeLpUnlock)?;
+      ensure!(
+        frame_system::Pallet::<T>::block_number() >= pending.unlock_block,
+        Error::<T>::NativeLpUnlockNotReady
+      );
+      PendingNativeGovernanceLpUnlocks::<T>::remove(&account);
+      T::Assets::transfer(
+        pending.lp_asset_id,
+        &Self::native_lp_lock_account(),
+        &account,
+        pending.amount,
+        Preservation::Expendable,
+      )?;
+      Self::deposit_event(Event::NativeGovernanceLpWithdrawn {
+        account,
+        lp_asset_id: pending.lp_asset_id,
+        amount: pending.amount,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(22)]
+    #[pallet::weight(T::WeightInfo::lock_native_asset_for_governance())]
+    #[transactional]
+    pub fn lock_native_asset_for_governance(
+      origin: OriginFor<T>,
+      asset_id: T::AssetId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      ensure!(
+        Self::is_native_governance_asset(asset_id),
+        Error::<T>::InvalidNativeGovernanceAsset
+      );
+      let updated = NativeGovernanceAssetLocked::<T>::get(&account, asset_id)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let updated_total = TotalNativeGovernanceAssetLocked::<T>::get(asset_id)
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let lock_account = Self::native_lp_lock_account();
+      if frame_system::Pallet::<T>::providers(&lock_account).is_zero() {
+        let _ = frame_system::Pallet::<T>::inc_providers(&lock_account);
+      }
+      T::Assets::transfer(
+        asset_id,
+        &account,
+        &lock_account,
+        amount,
+        Preservation::Expendable,
+      )?;
+      NativeGovernanceAssetLocked::<T>::insert(&account, asset_id, updated);
+      TotalNativeGovernanceAssetLocked::<T>::insert(asset_id, updated_total);
+      Self::deposit_event(Event::NativeGovernanceAssetLocked {
+        account,
+        asset_id,
+        amount,
+        total_locked: updated,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(23)]
+    #[pallet::weight(T::WeightInfo::request_unlock_native_asset_for_governance())]
+    #[transactional]
+    pub fn request_unlock_native_asset_for_governance(
+      origin: OriginFor<T>,
+      asset_id: T::AssetId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      Self::ensure_native_governance_unlocked(&account)?;
+      let locked = NativeGovernanceAssetLocked::<T>::get(&account, asset_id);
+      ensure!(locked >= amount, Error::<T>::InsufficientLockedLp);
+      let updated = locked
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if updated.is_zero() {
+        NativeGovernanceAssetLocked::<T>::remove(&account, asset_id);
+      } else {
+        NativeGovernanceAssetLocked::<T>::insert(&account, asset_id, updated);
+      }
+      Self::decrease_total_native_governance_asset_locked(asset_id, amount)?;
+      let unlock_block =
+        frame_system::Pallet::<T>::block_number().saturating_add(T::NativeLpUnlockDelay::get());
+      let pending = PendingNativeGovernanceAssetUnlocks::<T>::get(&account, asset_id);
+      let pending_amount = pending
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      let total_pending = pending_amount
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      let effective_unlock_block = pending
+        .as_ref()
+        .map(|item| item.unlock_block.max(unlock_block))
+        .unwrap_or(unlock_block);
+      PendingNativeGovernanceAssetUnlocks::<T>::insert(
+        &account,
+        asset_id,
+        PendingNativeLpUnlock {
+          lp_asset_id: asset_id,
+          amount: total_pending,
+          unlock_block: effective_unlock_block,
+        },
+      );
+      Self::deposit_event(Event::NativeGovernanceAssetUnlockRequested {
+        account,
+        asset_id,
+        amount,
+        remaining_locked: updated,
+        unlock_block: effective_unlock_block,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(24)]
+    #[pallet::weight(T::WeightInfo::withdraw_unlocked_native_asset_for_governance())]
+    #[transactional]
+    pub fn withdraw_unlocked_native_asset_for_governance(
+      origin: OriginFor<T>,
+      asset_id: T::AssetId,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let pending = PendingNativeGovernanceAssetUnlocks::<T>::get(&account, asset_id)
+        .ok_or(Error::<T>::NoPendingNativeLpUnlock)?;
+      ensure!(
+        frame_system::Pallet::<T>::block_number() >= pending.unlock_block,
+        Error::<T>::NativeLpUnlockNotReady
+      );
+      PendingNativeGovernanceAssetUnlocks::<T>::remove(&account, asset_id);
+      T::Assets::transfer(
+        asset_id,
+        &Self::native_lp_lock_account(),
+        &account,
+        pending.amount,
+        Preservation::Expendable,
+      )?;
+      Self::deposit_event(Event::NativeGovernanceAssetWithdrawn {
+        account,
+        asset_id,
+        amount: pending.amount,
+      });
       Ok(())
     }
 
@@ -881,11 +1674,87 @@ pub mod pallet {
       epoch: T::RewardEpoch,
     ) -> DispatchResult {
       let account = ensure_signed(origin)?;
+      ensure!(
+        asset_id != T::NativeStakingAssetId::get(),
+        Error::<T>::NativeRewardRequiresDedicatedClaim
+      );
       Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
       let current_epoch = T::RewardEpochProvider::current_reward_epoch();
       Self::ensure_reward_epoch_claimable(&account, asset_id, epoch, current_epoch)?;
       let reward_amount = Self::do_claim_reward(&account, asset_id, epoch)?;
       ensure!(!reward_amount.is_zero(), Error::<T>::NoRewardClaimable);
+      Ok(())
+    }
+
+    #[pallet::call_index(25)]
+    #[pallet::weight(T::WeightInfo::claim_nomination_reward())]
+    #[transactional]
+    pub fn claim_nomination_reward(origin: OriginFor<T>, epoch: T::RewardEpoch) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let asset_id = T::NativeStakingAssetId::get();
+      Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
+      let current_epoch = T::RewardEpochProvider::current_reward_epoch();
+      Self::ensure_reward_epoch_claimable(&account, asset_id, epoch, current_epoch)?;
+      let reward_amount = Self::do_claim_nomination_reward(&account, epoch)?;
+      ensure!(!reward_amount.is_zero(), Error::<T>::NoRewardClaimable);
+      Ok(())
+    }
+
+    #[pallet::call_index(26)]
+    #[pallet::weight(T::WeightInfo::claim_and_compound_nomination_reward())]
+    #[transactional]
+    pub fn claim_and_compound_nomination_reward(
+      origin: OriginFor<T>,
+      epoch: T::RewardEpoch,
+      operator: T::AccountId,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let asset_id = T::NativeStakingAssetId::get();
+      Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
+      let current_epoch = T::RewardEpochProvider::current_reward_epoch();
+      Self::ensure_reward_epoch_claimable(&account, asset_id, epoch, current_epoch)?;
+      let reward_amount = Self::do_claim_nomination_reward(&account, epoch)?;
+      ensure!(!reward_amount.is_zero(), Error::<T>::NoRewardClaimable);
+      let locked_lp_amount =
+        T::NativeNominationRewardCompounder::compound(&account, &operator, reward_amount)?;
+      ensure!(!locked_lp_amount.is_zero(), Error::<T>::NoRewardClaimable);
+      Self::deposit_event(Event::NominationRewardCompounded {
+        account,
+        operator,
+        epoch,
+        reward_amount,
+        locked_lp_amount,
+      });
+      Ok(())
+    }
+
+    #[pallet::call_index(27)]
+    #[pallet::weight(T::WeightInfo::claim_nomination_reward_batch(epochs.len().saturated_into()))]
+    #[transactional]
+    pub fn claim_nomination_reward_batch(
+      origin: OriginFor<T>,
+      epochs: BoundedVec<T::RewardEpoch, T::MaxClaimEpochsPerCall>,
+    ) -> DispatchResult {
+      let account = ensure_signed(origin)?;
+      let asset_id = T::NativeStakingAssetId::get();
+      Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
+      let current_epoch = T::RewardEpochProvider::current_reward_epoch();
+      let mut seen_epochs = BTreeSet::new();
+      let mut index = 0usize;
+      while index < epochs.len() {
+        let epoch = epochs[index];
+        ensure!(seen_epochs.insert(epoch), Error::<T>::DuplicateRewardEpoch);
+        Self::ensure_reward_epoch_claimable(&account, asset_id, epoch, current_epoch)?;
+        index += 1;
+      }
+      let mut claimed_any = false;
+      let mut index = 0usize;
+      while index < epochs.len() {
+        let reward_amount = Self::do_claim_nomination_reward(&account, epochs[index])?;
+        claimed_any = claimed_any || !reward_amount.is_zero();
+        index += 1;
+      }
+      ensure!(claimed_any, Error::<T>::NoRewardClaimable);
       Ok(())
     }
 
@@ -897,6 +1766,10 @@ pub mod pallet {
       epochs: BoundedVec<T::RewardEpoch, T::MaxClaimEpochsPerCall>,
     ) -> DispatchResult {
       let account = ensure_signed(origin)?;
+      ensure!(
+        asset_id != T::NativeStakingAssetId::get(),
+        Error::<T>::NativeRewardRequiresDedicatedClaim
+      );
       Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
       let current_epoch = T::RewardEpochProvider::current_reward_epoch();
       let mut seen_epochs = BTreeSet::new();
@@ -939,6 +1812,41 @@ pub mod pallet {
         Error::<T>::RewardAlreadyClaimed
       );
       Ok(())
+    }
+
+    fn do_claim_nomination_reward(
+      account: &T::AccountId,
+      epoch: T::RewardEpoch,
+    ) -> Result<T::Balance, DispatchError> {
+      let asset_id = T::NativeStakingAssetId::get();
+      let reward_amount = match Self::reward_claimable(asset_id, epoch, account) {
+        Some(reward_amount) => reward_amount,
+        None => return Ok(Zero::zero()),
+      };
+      let reward_account = Self::reward_account_for(asset_id);
+      let actual_balance = T::Assets::balance(asset_id, &reward_account);
+      ensure!(
+        actual_balance >= reward_amount,
+        Error::<T>::RewardAccountUnderfunded
+      );
+      let liability_after = RewardLiabilityBalances::<T>::get(asset_id)
+        .checked_sub(&reward_amount)
+        .ok_or(Error::<T>::RewardAccountingOverflow)?;
+      T::Assets::transfer(
+        asset_id,
+        &reward_account,
+        account,
+        reward_amount,
+        Preservation::Expendable,
+      )?;
+      RewardLiabilityBalances::<T>::insert(asset_id, liability_after);
+      RewardClaims::<T>::insert((asset_id, epoch), account, reward_amount);
+      Self::deposit_event(Event::NominationRewardClaimed {
+        account: account.clone(),
+        epoch,
+        reward_amount,
+      });
+      Ok(reward_amount)
     }
 
     fn do_claim_reward(
@@ -1061,6 +1969,116 @@ pub mod pallet {
         .expect("hashed reward seed always decodes into AccountId")
     }
 
+    pub fn native_lp_lock_account() -> T::AccountId {
+      let seed = frame::hashing::blake2_256(&(T::PalletId::get(), b"native-lp-lock").encode());
+      T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
+        .expect("hashed native LP lock seed always decodes into AccountId")
+    }
+
+    fn ensure_native_governance_unlocked(account: &T::AccountId) -> DispatchResult {
+      let Some(lock_until) = T::NativeGovernanceLockProvider::lock_until(account) else {
+        return Ok(());
+      };
+      ensure!(
+        frame_system::Pallet::<T>::block_number() >= lock_until,
+        Error::<T>::NativeGovernanceLockActive
+      );
+      Ok(())
+    }
+
+    fn is_native_governance_asset(asset_id: T::AssetId) -> bool {
+      if asset_id == T::NativeStakingAssetId::get() {
+        return true;
+      }
+      Self::staked_asset_id(T::NativeStakingAssetId::get())
+        .is_some_and(|staked_asset_id| staked_asset_id == asset_id)
+    }
+
+    fn decrease_total_native_governance_asset_locked(
+      asset_id: T::AssetId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let current = TotalNativeGovernanceAssetLocked::<T>::get(asset_id);
+      let updated = current
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if updated.is_zero() {
+        TotalNativeGovernanceAssetLocked::<T>::remove(asset_id);
+      } else {
+        TotalNativeGovernanceAssetLocked::<T>::insert(asset_id, updated);
+      }
+      Ok(())
+    }
+
+    fn increase_operator_native_lp_locked(
+      operator: &T::AccountId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let current = OperatorNativeLpLocked::<T>::get(operator);
+      let updated = current
+        .checked_add(&amount)
+        .ok_or(ArithmeticError::Overflow)?;
+      OperatorNativeLpLocked::<T>::insert(operator, updated);
+      Ok(())
+    }
+
+    fn decrease_operator_native_lp_locked(
+      operator: &T::AccountId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let current = OperatorNativeLpLocked::<T>::get(operator);
+      let updated = current
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if updated.is_zero() {
+        OperatorNativeLpLocked::<T>::remove(operator);
+      } else {
+        OperatorNativeLpLocked::<T>::insert(operator, updated);
+      }
+      Ok(())
+    }
+
+    fn decrease_account_native_lp_locked(
+      account: &T::AccountId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let current = AccountNativeLpLocked::<T>::get(account);
+      let updated = current
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if updated.is_zero() {
+        AccountNativeLpLocked::<T>::remove(account);
+      } else {
+        AccountNativeLpLocked::<T>::insert(account, updated);
+      }
+      Ok(())
+    }
+
+    fn decrease_account_native_collator_lp_locked(
+      account: &T::AccountId,
+      amount: T::Balance,
+    ) -> DispatchResult {
+      let current = AccountNativeCollatorLpLocked::<T>::get(account);
+      let updated = current
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      if updated.is_zero() {
+        AccountNativeCollatorLpLocked::<T>::remove(account);
+      } else {
+        AccountNativeCollatorLpLocked::<T>::insert(account, updated);
+      }
+      Ok(())
+    }
+
+    fn decrease_total_native_lp_locked(amount: T::Balance) -> DispatchResult {
+      let current = TotalNativeLpLocked::<T>::get();
+      let updated = current
+        .checked_sub(&amount)
+        .ok_or(ArithmeticError::Underflow)?;
+      TotalNativeLpLocked::<T>::put(updated);
+      Ok(())
+    }
+
     pub fn reward_governance_domain(asset_id: T::AssetId) -> Option<T::GovernanceDomainId> {
       T::RewardGovernanceDomainResolver::reward_governance_domain(asset_id)
     }
@@ -1165,11 +2183,35 @@ pub mod pallet {
     }
 
     pub fn note_reward_inflow(asset_id: T::AssetId, amount: T::Balance) -> DispatchResult {
+      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      Self::record_reward_inflow(asset_id, amount).map(|_| ())
+    }
+
+    pub fn reconcile_reward_inflow(asset_id: T::AssetId) -> Result<T::Balance, DispatchError> {
       ensure!(
         Pools::<T>::contains_key(asset_id),
         Error::<T>::AssetNotRegistered
       );
-      ensure!(!amount.is_zero(), Error::<T>::ZeroAmount);
+      let reward_account = Self::reward_account_for(asset_id);
+      let actual_balance = T::Assets::balance(asset_id, &reward_account);
+      let liability = RewardLiabilityBalances::<T>::get(asset_id);
+      if actual_balance <= liability {
+        return Ok(Zero::zero());
+      }
+      let amount = actual_balance
+        .checked_sub(&liability)
+        .ok_or(Error::<T>::RewardAccountingOverflow)?;
+      Self::record_reward_inflow(asset_id, amount)
+    }
+
+    fn record_reward_inflow(
+      asset_id: T::AssetId,
+      amount: T::Balance,
+    ) -> Result<T::Balance, DispatchError> {
+      ensure!(
+        Pools::<T>::contains_key(asset_id),
+        Error::<T>::AssetNotRegistered
+      );
       let reward_account = Self::reward_account_for(asset_id);
       let actual_balance = T::Assets::balance(asset_id, &reward_account);
       let liability_after = RewardLiabilityBalances::<T>::get(asset_id)
@@ -1200,7 +2242,7 @@ pub mod pallet {
         epoch,
         amount,
       });
-      Ok(())
+      Ok(amount)
     }
 
     pub fn staked_asset_id(asset_id: T::AssetId) -> Option<T::AssetId> {
@@ -1351,19 +2393,11 @@ pub mod pallet {
           delegated_operator: None,
         });
       }
-      let Some(operator) = NativeBindings::<T>::get(account) else {
-        return Some(StakeExposure {
-          total_value,
-          passive_value: total_value,
-          delegated_value: Zero::zero(),
-          delegated_operator: None,
-        });
-      };
       Some(StakeExposure {
         total_value,
-        passive_value: Zero::zero(),
-        delegated_value: total_value,
-        delegated_operator: Some(operator),
+        passive_value: total_value,
+        delegated_value: Zero::zero(),
+        delegated_operator: None,
       })
     }
 
@@ -1401,207 +2435,62 @@ pub mod pallet {
       Self::delegated_stake_value(T::NativeStakingAssetId::get(), delegator)
     }
 
-    // O(B) where B = total NativeBindings entries; acceptable at current
-    // scale but should migrate to a cached per-operator counter if B grows
-    // into thousands.
-    pub fn delegated_native_backing(operator: &T::AccountId) -> T::Balance {
-      let asset_id = T::NativeStakingAssetId::get();
-      NativeBindings::<T>::iter()
-        .filter_map(|(account, bound_operator)| {
-          if &bound_operator == operator {
-            Self::stake_value(asset_id, &account)
-          } else {
-            None
-          }
-        })
-        .fold(Zero::zero(), |total, value| total.saturating_add(value))
-    }
-
-    pub fn cached_delegated_native_backing(operator: &T::AccountId) -> T::Balance {
-      if NativeDelegationCacheDirty::<T>::get() {
-        return Self::delegated_native_backing(operator);
-      }
-      let Some(pool) = Pools::<T>::get(T::NativeStakingAssetId::get()) else {
-        return Zero::zero();
-      };
-      if pool.total_shares.is_zero() {
-        return Zero::zero();
-      }
-      let shares = CachedOperatorNativeShares::<T>::get(operator);
-      if shares.is_zero() {
-        return Zero::zero();
-      }
-      Self::mul_div_floor(shares, pool.accounted_balance, pool.total_shares)
-    }
-
-    fn ingest_native_delegation_events(
-      max_scan: usize,
-      remaining_weight: Weight,
-    ) -> (Weight, bool) {
-      let ingress = T::NativeDelegationEventIngress::ingress(max_scan, remaining_weight);
-      if ingress.truncated {
-        NativeDelegationCacheDirty::<T>::put(true);
-        if NativeDelegationRepairPhaseState::<T>::get().is_none() {
-          NativeDelegationRepairPhaseState::<T>::put(NativeDelegationRepairPhase::ClearingCache);
-          NativeDelegationRepairCursor::<T>::kill();
-        }
-      }
-      for account in ingress.touched_accounts {
-        Self::refresh_cached_native_delegation(&account);
-      }
-      (ingress.weight, ingress.truncated)
-    }
-
-    fn refresh_cached_native_delegation_if_clean(account: &T::AccountId) {
-      if NativeDelegationCacheDirty::<T>::get() {
-        return;
-      }
-      Self::refresh_cached_native_delegation(account);
-    }
-
-    fn clear_cached_native_delegation(account: &T::AccountId) {
-      let Some(cached_delegation) = CachedNativeDelegations::<T>::take(account) else {
-        return;
-      };
-      let updated = CachedOperatorNativeShares::<T>::get(&cached_delegation.operator)
-        .saturating_sub(cached_delegation.shares);
-      if updated.is_zero() {
-        CachedOperatorNativeShares::<T>::remove(&cached_delegation.operator);
-      } else {
-        CachedOperatorNativeShares::<T>::insert(&cached_delegation.operator, updated);
-      }
-    }
-
-    fn repair_native_delegation_cache(
-      max_accounts: usize,
-      native_delegation_truncated: bool,
-      remaining_weight: Weight,
-    ) -> Weight {
-      const REPAIR_ACCOUNT_WEIGHT_REF_TIME: u64 = 8_000;
-      if !NativeDelegationCacheDirty::<T>::get() {
-        return Weight::zero();
-      }
-      let max_ref_time = remaining_weight.ref_time();
-      let mut remaining = max_accounts;
-      let mut repaired_accounts = 0u64;
-      while remaining > 0 {
-        let next_repaired_accounts = repaired_accounts.saturating_add(1);
-        let projected_ref_time =
-          next_repaired_accounts.saturating_mul(REPAIR_ACCOUNT_WEIGHT_REF_TIME);
-        if projected_ref_time > max_ref_time {
-          break;
-        }
-        let Some(phase) = NativeDelegationRepairPhaseState::<T>::get() else {
-          break;
-        };
-        match phase {
-          NativeDelegationRepairPhase::ClearingCache => {
-            let next_cached = match NativeDelegationRepairCursor::<T>::get() {
-              Some(cursor) => CachedNativeDelegations::<T>::iter_from_key(cursor).next(),
-              None => CachedNativeDelegations::<T>::iter_from(
-                CachedNativeDelegations::<T>::prefix_hash().to_vec(),
-              )
-              .next(),
-            };
-            let Some((account, _)) = next_cached else {
-              NativeDelegationRepairPhaseState::<T>::put(
-                NativeDelegationRepairPhase::RebuildingBindings,
-              );
-              NativeDelegationRepairCursor::<T>::kill();
-              continue;
-            };
-            Self::clear_cached_native_delegation(&account);
-            NativeDelegationRepairCursor::<T>::put(account);
-          }
-          NativeDelegationRepairPhase::RebuildingBindings => {
-            let next_binding = match NativeDelegationRepairCursor::<T>::get() {
-              Some(cursor) => NativeBindings::<T>::iter_from_key(cursor).next(),
-              None => {
-                NativeBindings::<T>::iter_from(NativeBindings::<T>::prefix_hash().to_vec()).next()
-              }
-            };
-            let Some((account, _)) = next_binding else {
-              if !native_delegation_truncated {
-                NativeDelegationCacheDirty::<T>::put(false);
-                NativeDelegationRepairPhaseState::<T>::kill();
-                NativeDelegationRepairCursor::<T>::kill();
-              }
-              break;
-            };
-            Self::refresh_cached_native_delegation(&account);
-            NativeDelegationRepairCursor::<T>::put(account);
-          }
-        }
-        repaired_accounts = repaired_accounts.saturating_add(1);
-        remaining = remaining.saturating_sub(1);
-      }
-      Weight::from_parts(
-        repaired_accounts.saturating_mul(REPAIR_ACCOUNT_WEIGHT_REF_TIME),
-        0,
-      )
-    }
-
-    fn refresh_cached_native_delegation(account: &T::AccountId) {
-      let old_delegation = CachedNativeDelegations::<T>::get(account);
-      let should_retire_binding = old_delegation.is_some();
-      let live_binding = NativeBindings::<T>::get(account);
-      let new_delegation = live_binding.clone().and_then(|operator| {
-        let shares = Self::effective_share_balance(T::NativeStakingAssetId::get(), account)
-          .unwrap_or_else(Zero::zero);
-        if shares.is_zero() {
-          return None;
-        }
-        Some(CachedNativeDelegation { operator, shares })
-      });
-      if old_delegation.is_some() {
-        Self::clear_cached_native_delegation(account);
-      }
-      if let Some(ref new_delegation) = new_delegation {
-        let updated = CachedOperatorNativeShares::<T>::get(&new_delegation.operator)
-          .saturating_add(new_delegation.shares);
-        CachedOperatorNativeShares::<T>::insert(&new_delegation.operator, updated);
-        CachedNativeDelegations::<T>::insert(account, new_delegation);
-      } else {
-        CachedNativeDelegations::<T>::remove(account);
-        if should_retire_binding && live_binding.is_some() {
-          NativeBindings::<T>::remove(account);
-          Self::deposit_event(Event::NativeBindingCleared {
-            account: account.clone(),
-          });
-        }
-      }
-    }
-
     fn roll_reward_epoch_if_needed() -> Weight {
       const REWARD_ASSET_ROLLOVER_WEIGHT_REF_TIME: u64 = 5_000;
       const REWARD_ACCOUNT_ROLLOVER_WEIGHT_REF_TIME: u64 = 20_000;
+      const REWARD_RECONCILIATION_WEIGHT_REF_TIME: u64 = 10_000;
       let current_epoch = T::RewardEpochProvider::current_reward_epoch();
       let Some(last_epoch) = LastProcessedRewardEpoch::<T>::get() else {
         LastProcessedRewardEpoch::<T>::put(current_epoch);
         return Weight::zero();
       };
-      if current_epoch == last_epoch {
+      let Some(rollover) = PendingRewardEpochRollover::<T>::get().or_else(|| {
+        (current_epoch != last_epoch).then_some(RewardEpochRolloverState {
+          from_epoch: last_epoch,
+          to_epoch: current_epoch,
+        })
+      }) else {
         return Weight::zero();
-      }
-      let touched_assets: Vec<_> =
-        RewardEpochTouchedAccounts::<T>::iter_prefix(last_epoch).collect();
+      };
+      let max_assets = (T::MaxRewardRolloverAssetsPerBlock::get() as usize).max(1);
       let mut processed_assets = 0u64;
       let mut processed_accounts = 0u64;
-      for (asset_id, accounts) in touched_assets {
+      while (processed_assets as usize) < max_assets {
+        let Some((asset_id, accounts)) =
+          RewardEpochTouchedAccounts::<T>::iter_prefix(rollover.from_epoch).next()
+        else {
+          break;
+        };
         processed_assets = processed_assets.saturating_add(1);
-        RewardEpochTouchedAccounts::<T>::remove(last_epoch, asset_id);
+        RewardEpochTouchedAccounts::<T>::remove(rollover.from_epoch, asset_id);
         for account in accounts {
           processed_accounts = processed_accounts.saturating_add(1);
-          Self::roll_reward_account_snapshot(asset_id, current_epoch, &account);
+          Self::roll_reward_account_snapshot(asset_id, rollover.to_epoch, &account);
         }
       }
-      LastProcessedRewardEpoch::<T>::put(current_epoch);
+      let rollover_complete = RewardEpochTouchedAccounts::<T>::iter_prefix(rollover.from_epoch)
+        .next()
+        .is_none();
+      let reconciled_assets = if rollover_complete {
+        PendingRewardEpochRollover::<T>::kill();
+        LastProcessedRewardEpoch::<T>::put(rollover.to_epoch);
+        if Pools::<T>::contains_key(T::NativeStakingAssetId::get()) {
+          let _ = Self::reconcile_reward_inflow(T::NativeStakingAssetId::get());
+          1u64
+        } else {
+          0u64
+        }
+      } else {
+        PendingRewardEpochRollover::<T>::put(rollover);
+        0u64
+      };
       Weight::from_parts(
         processed_assets
           .saturating_mul(REWARD_ASSET_ROLLOVER_WEIGHT_REF_TIME)
           .saturating_add(
             processed_accounts.saturating_mul(REWARD_ACCOUNT_ROLLOVER_WEIGHT_REF_TIME),
-          ),
+          )
+          .saturating_add(reconciled_assets.saturating_mul(REWARD_RECONCILIATION_WEIGHT_REF_TIME)),
         0,
       )
     }
@@ -1636,7 +2525,10 @@ pub mod pallet {
       epoch: T::RewardEpoch,
       account: &T::AccountId,
     ) -> RewardWeightSnapshot<T::RewardEpoch, T::Balance> {
-      let shares = Self::effective_share_balance(asset_id, account).unwrap_or_else(Zero::zero);
+      let shares = T::RewardBaseWeightProvider::reward_base_weight(asset_id, account)
+        .unwrap_or_else(|| {
+          Self::effective_share_balance(asset_id, account).unwrap_or_else(Zero::zero)
+        });
       let coefficient =
         Self::reward_coefficient(asset_id, account).unwrap_or_else(|| FixedU128::from_inner(0));
       let weight = Self::reward_weight_from_snapshot(shares, coefficient);
@@ -1681,6 +2573,130 @@ pub mod pallet {
       let c_u128: u128 = c.saturated_into();
       let result = (U256::from(a_u128) * U256::from(b_u128)) / U256::from(c_u128);
       result.low_u128().saturated_into()
+    }
+  }
+
+  #[pallet::view_functions]
+  impl<T: Config> Pallet<T> {
+    pub fn native_staking_exchange_rate() -> Option<FixedU128> {
+      let pool = Pools::<T>::get(T::NativeStakingAssetId::get())?;
+      if pool.total_shares.is_zero() || pool.accounted_balance.is_zero() {
+        return None;
+      }
+      Some(FixedU128::from_rational(
+        pool.accounted_balance.saturated_into::<u128>(),
+        pool.total_shares.saturated_into::<u128>(),
+      ))
+    }
+
+    pub fn native_staking_liquidity_pool()
+    -> Option<NativeStakingLiquidityPool<T::AssetId, T::Balance>> {
+      let native_asset_id = T::NativeStakingAssetId::get();
+      let staked_asset_id = Self::staked_asset_id(native_asset_id)?;
+      let (lp_asset_id, reserve_native, reserve_staked, lp_total_issuance) =
+        T::NativeStakingReadModelProvider::native_staking_liquidity_pool()?;
+      Some(NativeStakingLiquidityPool {
+        native_asset_id,
+        staked_asset_id,
+        lp_asset_id,
+        reserve_native,
+        reserve_staked,
+        lp_total_issuance,
+      })
+    }
+
+    pub fn native_locked_lp_position(account: T::AccountId) -> NativeLockedLpPosition<T::Balance> {
+      let total_locked_lp = AccountNativeLpLocked::<T>::get(&account);
+      let collator_locked_lp = AccountNativeCollatorLpLocked::<T>::get(&account);
+      let governance_locked_lp = NativeGovernanceLpLocks::<T>::get(&account)
+        .map(|lock| lock.amount)
+        .unwrap_or_else(Zero::zero);
+      let conservative_native_value =
+        T::NativeStakingReadModelProvider::native_lp_value(total_locked_lp);
+      NativeLockedLpPosition {
+        total_locked_lp,
+        collator_locked_lp,
+        governance_locked_lp,
+        conservative_native_value,
+      }
+    }
+
+    pub fn native_collator_lp_position(
+      account: T::AccountId,
+      operator: T::AccountId,
+    ) -> NativeCollatorLpPosition<T::AssetId, T::Balance, BlockNumberFor<T>> {
+      let lock = NativeLpLocks::<T>::get(&account, &operator);
+      let pending = PendingNativeLpUnlocks::<T>::get(&account, &operator);
+      let locked_lp = lock
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      let pending_unlock_lp = pending
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      let pending_unlock_block = pending.as_ref().map(|item| item.unlock_block);
+      let lp_asset_id = lock
+        .as_ref()
+        .map(|item| item.lp_asset_id)
+        .or_else(|| pending.as_ref().map(|item| item.lp_asset_id));
+      let conservative_native_value = T::NativeStakingReadModelProvider::native_lp_value(locked_lp);
+      NativeCollatorLpPosition {
+        lp_asset_id,
+        locked_lp,
+        pending_unlock_lp,
+        pending_unlock_block,
+        conservative_native_value,
+      }
+    }
+
+    pub fn native_governance_custody_position(
+      account: T::AccountId,
+      asset_id: T::AssetId,
+    ) -> NativeGovernanceCustodyPosition<T::AssetId, T::Balance, BlockNumberFor<T>> {
+      let lp_lock = NativeGovernanceLpLocks::<T>::get(&account);
+      let pending_lp = PendingNativeGovernanceLpUnlocks::<T>::get(&account);
+      let pending_asset = PendingNativeGovernanceAssetUnlocks::<T>::get(&account, asset_id);
+      let governance_locked_lp = lp_lock
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      let pending_governance_lp_unlock = pending_lp
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      let pending_governance_lp_unlock_block = pending_lp.as_ref().map(|item| item.unlock_block);
+      let lp_asset_id = lp_lock
+        .as_ref()
+        .map(|item| item.lp_asset_id)
+        .or_else(|| pending_lp.as_ref().map(|item| item.lp_asset_id));
+      let pending_asset_unlock = pending_asset
+        .as_ref()
+        .map(|item| item.amount)
+        .unwrap_or_else(Zero::zero);
+      let pending_asset_unlock_block = pending_asset.as_ref().map(|item| item.unlock_block);
+      NativeGovernanceCustodyPosition {
+        lp_asset_id,
+        governance_locked_lp,
+        pending_governance_lp_unlock,
+        pending_governance_lp_unlock_block,
+        asset_id,
+        asset_locked: NativeGovernanceAssetLocked::<T>::get(&account, asset_id),
+        pending_asset_unlock,
+        pending_asset_unlock_block,
+      }
+    }
+
+    pub fn native_nomination_reward_claimable(
+      epoch: T::RewardEpoch,
+      account: T::AccountId,
+    ) -> Option<T::Balance> {
+      let asset_id = T::NativeStakingAssetId::get();
+      let current_epoch = T::RewardEpochProvider::current_reward_epoch();
+      if Self::ensure_reward_epoch_claimable(&account, asset_id, epoch, current_epoch).is_err() {
+        return None;
+      }
+      Self::reward_claimable(asset_id, epoch, &account)
     }
   }
 }

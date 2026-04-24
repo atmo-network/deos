@@ -8,7 +8,7 @@ usage() {
 Usage: teardown-local-network.sh [OPTIONS]
 
 Stops local network processes and removes Zombienet temp directories.
-This includes the local `web-client` Vite dev server when it was started by the bootstrap workflow.
+This includes a foreground local `web-client` Vite dev server when one is running on the default port.
 
 Options:
   -h, --help        Show this help message
@@ -53,11 +53,8 @@ stop_processes() {
         stopped_processes+=("polkadot")
     fi
 
-    if pgrep -f "vite dev --host .* --port 5173 --strictPort" &>/dev/null; then
-        pkill -f "vite dev --host .* --port 5173 --strictPort" || true
-        stopped_processes+=("web-client")
-    elif pgrep -f "07-start-web-client.sh" &>/dev/null; then
-        pkill -f "07-start-web-client.sh" || true
+    if pgrep -f "vite dev.*(--port 5173|5173)" &>/dev/null; then
+        pkill -f "vite dev.*(--port 5173|5173)" || true
         stopped_processes+=("web-client")
     fi
 

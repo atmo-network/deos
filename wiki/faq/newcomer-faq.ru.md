@@ -12,8 +12,8 @@ available_locales:
 sources:
   - ../../README.md
   - ../../docs/README.md
-  - ../../docs/manifesto.ru.md
-  - ../../docs/aaa.specification.ru.md
+  - ../../docs/manifesto.en.md
+  - ../../docs/aaa.specification.en.md
   - ../../docs/governance.specification.en.md
   - ../../docs/staking.specification.en.md
   - ../../docs/read-model.contract.en.md
@@ -93,8 +93,8 @@ confidence: 0.92
 
 - `README.md`
 - `docs/README.md`
-- `docs/manifesto.ru.md`
-- `docs/aaa.specification.ru.md`
+- `docs/manifesto.en.md`
+- `docs/aaa.specification.en.md`
 - `docs/governance.specification.en.md`
 - `docs/staking.specification.en.md`
 - `docs/read-model.contract.en.md`

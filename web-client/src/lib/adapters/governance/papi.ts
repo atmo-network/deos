@@ -13,6 +13,7 @@ import {
 
 import type {
   GovernanceAccountId,
+  GovernanceAccountPowerView,
   GovernanceAuthorizedRuntimeUpgrade,
   GovernanceDomainId,
   GovernanceFinalizedProposalOutcome,
@@ -110,6 +111,37 @@ function mapVotePowerProfile(
       return profile.type;
     case "ConstantProtectedActor":
     case "ProxyGovernedActor":
+      return null;
+  }
+}
+
+function mapProposalVoteKind(
+  voteKind: GovernanceEnum<{
+    Aye: undefined;
+    Nay: undefined;
+    Amplify: undefined;
+    Approve: undefined;
+    Reduce: undefined;
+    Veto: undefined;
+    Pass: undefined;
+  }> | undefined,
+): GovernanceVoteKind | null {
+  switch (voteKind?.type) {
+    case "Aye":
+      return "aye";
+    case "Nay":
+      return "nay";
+    case "Amplify":
+      return "amplify";
+    case "Approve":
+      return "approve";
+    case "Reduce":
+      return "reduce";
+    case "Veto":
+      return "veto";
+    case "Pass":
+      return "pass";
+    default:
       return null;
   }
 }
@@ -638,6 +670,88 @@ function mapProposalVoteTally(
     passWeight: tally.pass_weight,
     turnoutWeight: tally.turnout_weight,
     vetoTurnoutWeight: tally.veto_turnout_weight,
+  };
+}
+
+function mapAccountPowerView(
+  view:
+    | {
+        governance_lock_until?: number | null;
+        ordinary_power_profile: GovernanceEnum<{
+          DecliningDirectStake: undefined;
+          DecliningVetoAsset: undefined;
+          DecliningNativeStake: undefined;
+          FlatUrgentDirectStake: undefined;
+        }>;
+        protection_power_profile: GovernanceEnum<{
+          DecliningDirectStake: undefined;
+          DecliningVetoAsset: undefined;
+          DecliningNativeStake: undefined;
+          FlatUrgentDirectStake: undefined;
+        }>;
+        current_ordinary_weight: bigint;
+        current_protection_weight: bigint;
+        current_protection_raw_power: bigint;
+        frozen_ordinary_ballot?: {
+          vote: GovernanceEnum<{
+            Aye: undefined;
+            Nay: undefined;
+            Amplify: undefined;
+            Approve: undefined;
+            Reduce: undefined;
+            Veto: undefined;
+            Pass: undefined;
+          }>;
+          vote_epoch: number;
+          weight: bigint;
+          raw_power: bigint;
+        } | null;
+        frozen_protection_ballot?: {
+          vote: GovernanceEnum<{
+            Aye: undefined;
+            Nay: undefined;
+            Amplify: undefined;
+            Approve: undefined;
+            Reduce: undefined;
+            Veto: undefined;
+            Pass: undefined;
+          }>;
+          vote_epoch: number;
+          weight: bigint;
+          raw_power: bigint;
+        } | null;
+      }
+    | undefined,
+): GovernanceAccountPowerView | null {
+  if (!view) {
+    return null;
+  }
+  const ordinaryPowerProfile = mapVotePowerProfile(view.ordinary_power_profile);
+  const protectionPowerProfile = mapVotePowerProfile(view.protection_power_profile);
+  if (!ordinaryPowerProfile || !protectionPowerProfile) {
+    return null;
+  }
+  const mapFrozenBallot = (ballot: typeof view.frozen_ordinary_ballot) => {
+    const voteKind = mapProposalVoteKind(ballot?.vote);
+    if (!ballot || !voteKind) {
+      return null;
+    }
+    return {
+      voteKind,
+      voteEpoch: ballot.vote_epoch,
+      weight: ballot.weight,
+      rawPower: ballot.raw_power,
+    };
+  };
+  return {
+    governanceLockUntil: view.governance_lock_until ?? null,
+    ordinaryPowerProfile,
+    protectionPowerProfile,
+    currentOrdinaryWeight: view.current_ordinary_weight,
+    currentProtectionWeight: view.current_protection_weight,
+    currentProtectionRawPower: view.current_protection_raw_power,
+    frozenOrdinaryBallot: mapFrozenBallot(view.frozen_ordinary_ballot),
+    frozenProtectionBallot: mapFrozenBallot(view.frozen_protection_ballot),
   };
 }
 
@@ -1315,6 +1429,22 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
         {
           at: snapshot.at,
         },
+      ),
+    );
+  }
+
+  async getAccountGovernancePowerView(
+    domainId: GovernanceDomainId,
+    itemId: GovernanceItemId,
+    accountId: GovernanceAccountId,
+  ): Promise<GovernanceAccountPowerView | null> {
+    const snapshot = await this.snapshot();
+    return mapAccountPowerView(
+      await snapshot.typedApi.view.Governance.account_governance_power_view(
+        domainId,
+        itemId,
+        accountId,
+        { at: snapshot.at },
       ),
     );
   }

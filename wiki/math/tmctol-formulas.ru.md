@@ -1,7 +1,7 @@
 ---
 page_type: math
 title: Формулы TMCTOL
-summary: Основные математические модели TMCTOL: кривая эмиссии, интегральный расчет минтинга, XYK-поддержка пола и динамика сжатия предложения.
+summary: Основные математические модели TMCTOL — кривая эмиссии, интегральный расчет минтинга, XYK-поддержка пола и динамика сжатия предложения.
 locale: ru
 canonical_page_id: tmctol-formulas
 translation_of: tmctol-formulas.en.md
@@ -10,7 +10,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmctol.specification.ru.md
+  - ../../docs/tmctol.specification.en.md
 status: active
 audience: developer
 tags:
@@ -118,4 +118,4 @@ burn_rate = f_router × V_trade
 
 ## Источники
 
-- `docs/tmctol.specification.ru.md`
+- `docs/tmctol.specification.en.md`

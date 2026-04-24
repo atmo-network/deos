@@ -260,6 +260,7 @@ pub fn create_pool(
   asset1: crate::configs::AssetKind,
   asset2: crate::configs::AssetKind,
 ) -> DispatchResult {
+  crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
   crate::AssetConversion::create_pool(origin, Box::new(asset1), Box::new(asset2))
 }
 

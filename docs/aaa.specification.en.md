@@ -1,7 +1,7 @@
 # AAA Specification
 
 - **Component:** `pallet-aaa` (Account Abstraction Actors)
-- **Version:** `0.1.0`
+- **Version:** `0.3.0`
 - **Date:** March 2026
 - **Status:** Normative
 
@@ -37,7 +37,7 @@ This specification MUST stay at or below **1080 lines** (formatting-preserving c
 ### 2.1 Instance
 
 - **Terminology:** An **Execution Plan** is the static bounded list of steps configured on the actor. An **Execution Run (Cycle)** is one admitted execution attempt of the current plan, identified by `(aaa_id, cycle_nonce)`. All external observability and indexer correlation MUST be run-centric. Execution plans, trigger filters, and actor-to-actor asset flows are part of the on-chain behavioral surface of AAA, but they operate inside the scheduler, fee, lifecycle, and safety contract of this runtime; within existing task, adapter, and safety limits, protocol workflow changes SHOULD prefer actor-graph reconfiguration over runtime rewrites.
-- **Native-asset terminology:** `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, and fee reservation. `StakeNativeRepresentation` denotes the asset representation used by `StakeNative`; it MAY differ from `FeeNativeAsset` and MUST be treated as a separate concept by the runtime and UI.
+- **Native-asset terminology:** `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, and fee reservation. Staking uses the generic `Stake { asset, amount }` task only; any native staking representation is a runtime-defined `AssetId` interpreted by `StakingOps`, not a separate AAA task.
 - **Stable plan shape:** `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty in the current stable contract; actors that want no close-time side effects MUST use an explicit `Noop` close plan. `Noop` exists for explicit observability/padding and as the canonical zero-side-effect plan, not as a substitute for an omitted plan.
 
 ```rust
@@ -242,18 +242,11 @@ Adapter contract:
 ```rust
 trait StakingOps<AccountId, AssetId, Balance> {
     fn stake(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError>;
-    fn stake_native(
-        who: &AccountId,
-        amount: Balance,
-        operator: &AccountId,
-    ) -> Result<(), DispatchError>;
     fn unstake(who: &AccountId, asset: AssetId, shares: Balance) -> Result<(), DispatchError>;
 }
 ```
 
-Current TMCTOL direction no longer leaves native AAA staking as a generic rejection-only surface.
-The explicit native path is now `StakeNative { amount, operator }`, keeping generic `Stake { asset, amount }` for non-native staking while making the required collator/operator context first-class for `$NTVE` entry.
-`StakeNative` amount resolution is runtime-configured against `StakeNativeRepresentation`, which MAY be distinct from `FeeNativeAsset` and MUST NOT be inferred from fee-reservation semantics.
+AAA MUST NOT encode runtime-specific staking topology such as collator choice, nomination custody, receipt naming, or native liquid-staking mechanics in the task enum. Runtime adapters MAY route `Stake { asset, amount }` for a native-asset `AssetId` into native staking, liquid staking, or another chain-local staking primitive, but those semantics remain adapter policy outside the AAA pallet contract.
 
 ### 3.4 Task Weight Contract
 
@@ -272,13 +265,13 @@ Requirements:
 
 Runtime SHOULD classify tasks into coarse weight buckets to reduce maintenance fragility:
 
-| Bucket          | Tasks                                     |
-| --------------- | ----------------------------------------- |
-| `SimpleAssetOp` | `Transfer`, `Burn`, `Mint`                |
-| `DexSwap`       | `SwapExactIn` / `SwapExactOut`            |
-| `DexLiquidity`  | `AddLiquidity`, `RemoveLiquidity`         |
-| `Fanout`        | `SplitTransfer` (parameterized by `legs`) |
-| `Noop`          | `Noop`                                    |
+| Bucket          | Tasks                                                |
+| --------------- | ---------------------------------------------------- |
+| `SimpleAssetOp` | `Transfer`, `Burn`, `Mint`                           |
+| `DexSwap`       | `SwapExactIn` / `SwapExactOut`                       |
+| `DexLiquidity`  | `AddLiquidity`, `RemoveLiquidity`, `DonateLiquidity` |
+| `Fanout`        | `SplitTransfer` (parameterized by `legs`)            |
+| `Noop`          | `Noop`                                               |
 
 ---
 
@@ -451,20 +444,20 @@ If an early step mutates asset composition and a later step fails, post-mutation
 
 ### 6.1 Task Set and Parameters
 
-| Task              | Description                                                         |
-| ----------------- | ------------------------------------------------------------------- |
-| `Transfer`        | Single asset transfer                                               |
-| `SplitTransfer`   | Atomic bounded fan-out (Section 6.2)                                |
-| `Burn`            | Asset burn                                                          |
-| `Mint`            | Asset mint (System AAA only)                                        |
-| `SwapExactIn`     | DEX exact-in with `Perbill` slippage tolerance                      |
-| `SwapExactOut`    | DEX exact-out target with deterministic input resolution            |
-| `AddLiquidity`    | Provide liquidity                                                   |
-| `RemoveLiquidity` | Withdraw liquidity                                                  |
-| `Stake`           | Deposit non-native asset into staking pool                          |
-| `StakeNative`     | Deposit `StakeNativeRepresentation` into staking pool with operator |
-| `Unstake`         | Withdraw shares from staking pool                                   |
-| `Noop`            | Observation/padding step                                            |
+| Task              | Description                                                                                                                            |
+| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `Transfer`        | Single asset transfer                                                                                                                  |
+| `SplitTransfer`   | Atomic bounded fan-out (Section 6.2)                                                                                                   |
+| `Burn`            | Asset burn                                                                                                                             |
+| `Mint`            | Asset mint (System AAA only)                                                                                                           |
+| `SwapExactIn`     | DEX exact-in with `Perbill` slippage tolerance                                                                                         |
+| `SwapExactOut`    | DEX exact-out target with deterministic input resolution                                                                               |
+| `AddLiquidity`    | Provide liquidity                                                                                                                      |
+| `RemoveLiquidity` | Withdraw liquidity                                                                                                                     |
+| `Stake`           | Deposit the declared asset into the runtime staking adapter; native staking, if supported, is represented by the runtime's chosen `AssetId` |
+| `DonateLiquidity` | Donate value into a declared liquidity pair without minting LP; runtime adapters own any pair-specific acquisition or balancing policy |
+| `Unstake`         | Withdraw shares from staking pool                                                                                                      |
+| `Noop`            | Observation/padding step                                                                                                               |
 
 `SwapExactIn` parameter contract:
 
@@ -818,6 +811,7 @@ GlobalCircuitBreakerSet { paused: bool }
 IdleStarvationDetected { consecutive_blocks: u32 }
 LiquidityAdded { aaa_id, asset_a, asset_b, lp_minted }
 LiquidityRemoved { aaa_id, lp_asset, amount_a, amount_b }
+LiquidityDonated { aaa_id, asset_a, asset_b, amount, amount_a, amount_b }
 ManualTriggerSet { aaa_id }
 MintExecuted { aaa_id, asset, amount }
 OnCloseExecutionPlanSummary { aaa_id, executed_steps, skipped_steps, failed_steps }
@@ -826,7 +820,6 @@ OnCloseStepFailed { aaa_id, step_index, error: DispatchError }
 ScheduleUpdated { aaa_id }
 SplitTransferExecuted { aaa_id, asset, total, distributed, retained, legs: u32, effective_legs: u32 }
 StakeExecuted { aaa_id, asset, amount }
-StakeNativeExecuted { aaa_id, amount, operator }
 StepFailed { aaa_id, cycle_nonce, step_index, error: DispatchError }
 StepSkipped { aaa_id, cycle_nonce, step_index, reason: StepSkippedReason }
 SwapExecuted { aaa_id, asset_in, asset_out, amount_in, amount_out }
@@ -927,7 +920,7 @@ enum Task<AccountId, AssetId, Balance> {
     AddLiquidity { asset_a: AssetId, asset_b: AssetId, amount_a: AmountResolution<Balance>, amount_b: AmountResolution<Balance> },
     RemoveLiquidity { lp_asset: AssetId, amount: AmountResolution<Balance> },
     Stake { asset: AssetId, amount: AmountResolution<Balance> },
-    StakeNative { amount: AmountResolution<Balance>, operator: AccountId },
+    DonateLiquidity { asset_a: AssetId, asset_b: AssetId, amount: AmountResolution<Balance>, max_ratio_error: Perbill },
     Unstake { asset: AssetId, shares: AmountResolution<Balance> },
     Noop,
 }

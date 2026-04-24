@@ -540,10 +540,10 @@ impl pallet_aaa::Config for Test {
   type AssetId = TestAsset;
   type Balance = Balance;
   type NativeAssetId = NativeAsset;
-  type NativeStakingAssetId = NativeAsset;
   type AssetOps = MockAssetOps;
   type DexOps = MockDexOps;
   type StakingOps = ();
+  type LiquidityDonationOps = ();
   type MinWindowLength = frame::traits::ConstU64<100>;
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;

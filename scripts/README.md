@@ -29,28 +29,19 @@ This directory is intentionally split into two classes:
 - [06-zombienet-e2e.sh](./06-zombienet-e2e.sh)
   Run the runtime-facing E2E scenario set against a live local network.
 
-- [07-start-web-client.sh](./07-start-web-client.sh)
-  Start the local `web-client` Vite dev server in the foreground.
-
-- [08-seed-web-client-state.sh](./08-seed-web-client-state.sh)
-  Top up the remaining live local parachain state needed for real `web-client` wallet and swap testing. The current dev/local chain specs are expected to already ship the foreign asset, router tracking, and native curve in genesis, so this script now focuses on Alice funding plus pool/liquidity bootstrapping rather than Root/Sudo-driven runtime setup.
-
-- [09-web-client-live-probe.sh](./09-web-client-live-probe.sh)
-  Run live wallet + swap probes against the local parachain using the same Alice/Bob dev identities and signing stack as the web-client.
-
-- [10-web-client-bundle-report.sh](./10-web-client-bundle-report.sh)
-  Report the largest generated web-client client-side bundle artifacts, annotate them back to Vite manifest entries/sources plus both static and dynamic manifest importers, surface each top asset's own static/dynamic dependency fan-out, and highlight chunks above a warning threshold.
+- [07-seed-web-client-state.sh](./07-seed-web-client-state.sh)
+  Top up the remaining live local parachain state needed for real `web-client` wallet, swap, and native-staking testing. The current dev/local chain specs are expected to already ship the foreign asset, local native-staking asset, `stNTVE` receipt, router tracking, native curve, and staking registration in genesis, so this script focuses on Alice funding plus native/foreign and `NTVE/stNTVE` pool/liquidity bootstrapping rather than Root/Sudo-driven runtime setup.
 
 ## Orchestrators
 
 - [bootstrap-local-network.sh](./bootstrap-local-network.sh)
-  Run the local bootstrap chain: binaries -> tools -> runtime build -> chain spec -> web-client dev server -> Zombienet.
+  Run the local bootstrap chain: binaries -> tools -> runtime build -> chain spec -> Zombienet. Start the web client directly from `web-client` with `npm run dev`.
 
 - [validate-local.sh](./validate-local.sh)
-  Run the local CI/release/E2E validation workflow.
+  Run the local CI/build/E2E validation workflow.
 
 - [aaa-release-gate.sh](./aaa-release-gate.sh)
-  Run the heavy AAA scheduler release gate.
+  Run the heavy AAA scheduler stress gate used by the scheduled stress lane.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
@@ -61,16 +52,16 @@ This directory is intentionally split into two classes:
 - [ci-local.sh](./ci-local.sh)
   Reproduce the local CI workflow.
 
-- [release-local.sh](./release-local.sh)
-  Reproduce the local release workflow.
-
 ## Admin Utilities
 
-- [check-authorized-upgrade-local.sh](./check-authorized-upgrade-local.sh)
-  Read the chain's current canonical governance/runtime authorized-upgrade view, optionally build the local runtime first, hash a local runtime WASM blob, and report whether the local code matches the pending authorized runtime-upgrade hash. It can also emit offline `apply_authorized_upgrade` call data on request. The helper makes the current launch-line role split explicit, emits a machine-readable operator phase (`awaiting-governance-authorization`, `authorized-hash-mismatch`, `ready-to-relay-code`), and remains plan-only without submitting the live call.
+- [export-papi-metadata.sh](./export-papi-metadata.sh)
+  Export native runtime metadata through the committed `deos-runtime` metadata example and optionally regenerate the web-client PAPI descriptors. This replaces the old ad hoc temporary-test metadata export workflow.
 
-- [apply-authorized-upgrade-local.sh](./apply-authorized-upgrade-local.sh)
-  Operator-facing companion to the verifier above. It re-checks the currently authorized hash against a local WASM blob and, only with explicit `--submit`, relays matching code bytes through `System.apply_authorized_upgrade { code }` using a local signer URI. Default mode remains plan-only.
+- [bootstrap-native-staking-local.sh](./bootstrap-native-staking-local.sh)
+  Consolidated native staking bootstrap helper. `check` reads live readiness for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding. It never signs or submits transactions.
+
+- [authorized-upgrade-local.sh](./authorized-upgrade-local.sh)
+  Consolidated authorized runtime-upgrade helper. `check` verifies a local WASM hash against the chain's pending authorized hash and can emit offline call data; `apply` stays plan-only unless explicit `--submit` relays matching code bytes through `System.apply_authorized_upgrade { code }`.
 
 - [teardown-local-network.sh](./teardown-local-network.sh)
   Stop local `zombienet` / `polkadot*` / `vite` dev-server processes and remove Zombienet temp directories.

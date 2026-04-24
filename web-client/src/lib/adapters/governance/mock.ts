@@ -1273,6 +1273,27 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     return proposal ? { ...proposal.tally } : null;
   }
 
+  async getAccountGovernancePowerView(
+    domainId: GovernanceDomainId,
+    itemId: GovernanceItemId,
+    accountId: GovernanceAccountId,
+  ) {
+    const proposal = this.domain(domainId).activeProposals[itemId];
+    if (!proposal) {
+      return null;
+    }
+    return {
+      governanceLockUntil: null,
+      ordinaryPowerProfile: proposal.profiles.aye ?? proposal.profiles.approve ?? "DecliningDirectStake",
+      protectionPowerProfile: proposal.profiles.veto ?? "DecliningVetoAsset",
+      currentOrdinaryWeight: BigInt(voteWeight(accountId, proposalPrimaryTrackFamily(domainId, proposal) === "Invoice" ? "approve" : "aye")),
+      currentProtectionWeight: BigInt(voteWeight(accountId, "veto")),
+      currentProtectionRawPower: BigInt(voteWeight(accountId, "veto")),
+      frozenOrdinaryBallot: null,
+      frozenProtectionBallot: null,
+    };
+  }
+
   async getProposalWinningPrimaryOption(
     domainId: GovernanceDomainId,
     itemId: GovernanceItemId,

@@ -188,6 +188,7 @@ impl<T: Config> Pallet<T> {
       Ok(())
     })?;
     Self::schedule_expiry(domain, &account, current_epoch)?;
+    T::WinningVoteRewardTouchHandler::note_winning_vote_recorded(domain, &account);
     Self::deposit_event(Event::WinningVoteRecorded {
       domain,
       item_id,

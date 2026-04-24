@@ -3,14 +3,20 @@
 //! Configures the minimalist multi-token routing system optimized for TMC ecosystems
 //! with Native-anchored routing and advanced fee processing.
 
+use super::assets_config::AssetId as LocalAssetId;
 use super::*;
 
 use alloc::{boxed::Box, vec::Vec};
 use codec::{Decode, Encode};
 use polkadot_sdk::frame_support::pallet_prelude::Zero;
 use polkadot_sdk::frame_support::traits::fungible::Inspect as NativeInspect;
-use polkadot_sdk::frame_support::traits::{Currency, Get, fungibles::Inspect as FungiblesInspect};
+use polkadot_sdk::frame_support::traits::{
+  Currency, Get,
+  fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
+};
 
+use polkadot_sdk::pallet_asset_conversion::PoolLocator;
+use polkadot_sdk::sp_core::U256;
 use polkadot_sdk::sp_runtime::{DispatchError, Perbill, Saturating, TokenError};
 use polkadot_sdk::*;
 
@@ -80,6 +86,320 @@ impl AssetConversionAdapter {
   pub fn decode_pool_id(pool_id: [u8; 32]) -> Option<(AssetKind, AssetKind)> {
     let mut slice = &pool_id[..];
     <(AssetKind, AssetKind)>::decode(&mut slice).ok()
+  }
+
+  pub fn ensure_lp_asset_namespace() {
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
+    if current_next_lp < lp_namespace_start {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+  }
+
+  pub fn native_staking_liquidity_pool_read_model()
+  -> Option<(LocalAssetId, Balance, Balance, Balance)> {
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)?;
+    let base_asset = AssetKind::Local(native_asset_id);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    let pool_id = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &base_asset,
+      &staked_asset,
+    )
+    .ok()?;
+    let pool = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)?;
+    let pool_account = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(
+      &base_asset,
+      &staked_asset,
+    )
+    .ok()?;
+    let reserve_native = Self::asset_balance(base_asset, &pool_account);
+    let reserve_staked = Self::asset_balance(staked_asset, &pool_account);
+    let lp_total_issuance =
+      <Runtime as pallet_asset_conversion::Config>::PoolAssets::total_issuance(pool.lp_token);
+    Some((
+      pool.lp_token,
+      reserve_native,
+      reserve_staked,
+      lp_total_issuance,
+    ))
+  }
+
+  pub fn donate_balanced_liquidity(
+    donor: &AccountId,
+    asset1: AssetKind,
+    asset2: AssetKind,
+    amount1: Balance,
+    amount2: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(), DispatchError> {
+    if amount1.is_zero() || amount2.is_zero() || asset1 == asset2 {
+      return Err(DispatchError::Other("InvalidDonation"));
+    }
+    let pool_account =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset1, &asset2)
+        .map_err(|_| DispatchError::Other("DonationPoolUnavailable"))?;
+    let reserve1 = Self::asset_balance(asset1, &pool_account);
+    let reserve2 = Self::asset_balance(asset2, &pool_account);
+    if reserve1.is_zero() || reserve2.is_zero() {
+      return Err(DispatchError::Other("DonationPoolEmpty"));
+    }
+    Self::ensure_ratio_within_tolerance(amount1, amount2, reserve1, reserve2, max_ratio_error)?;
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(error) = Self::transfer_asset(asset1, donor, &pool_account, amount1) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      if let Err(error) = Self::transfer_asset(asset2, donor, &pool_account, amount2) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+    })
+  }
+
+  pub fn compound_native_nomination_reward_to_locked_lp(
+    account: &AccountId,
+    operator: &AccountId,
+    total_native: Balance,
+  ) -> Result<Balance, DispatchError> {
+    if total_native.is_zero() {
+      return Err(DispatchError::Other("InvalidCompoundAmount"));
+    }
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    let base_asset = AssetKind::Local(native_asset_id);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    let pool_id = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(
+      &base_asset,
+      &staked_asset,
+    )
+    .map_err(|_| DispatchError::Other("NativeStakingAmmUnavailable"))?;
+    let pool = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or(DispatchError::Other("NativeStakingAmmUnavailable"))?;
+    let pool_account = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(
+      &base_asset,
+      &staked_asset,
+    )
+    .map_err(|_| DispatchError::Other("NativeStakingAmmUnavailable"))?;
+    let reserve_native = Self::asset_balance(base_asset, &pool_account);
+    let reserve_staked = Self::asset_balance(staked_asset, &pool_account);
+    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id)
+      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
+    if reserve_native.is_zero()
+      || reserve_staked.is_zero()
+      || staking_pool.accounted_balance.is_zero()
+      || staking_pool.total_shares.is_zero()
+    {
+      return Err(DispatchError::Other("NativeStakingAmmEmpty"));
+    }
+    let stake_amount = Self::native_stake_amount_for_balanced_donation(
+      total_native,
+      reserve_native,
+      reserve_staked,
+      staking_pool.accounted_balance,
+      staking_pool.total_shares,
+    )?;
+    let native_liquidity = total_native
+      .checked_sub(stake_amount)
+      .ok_or(DispatchError::Other("CompoundAmountOverflow"))?;
+    if stake_amount.is_zero() || native_liquidity.is_zero() {
+      return Err(DispatchError::Other("CompoundAmountTooSmall"));
+    }
+    let staked_before = Self::asset_balance(staked_asset, account);
+    let lp_before =
+      <Runtime as pallet_asset_conversion::Config>::PoolAssets::balance(pool.lp_token, account);
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(error) =
+        crate::Staking::stake_native(RuntimeOrigin::signed(account.clone()), stake_amount)
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      let staked_after = Self::asset_balance(staked_asset, account);
+      let staked_liquidity = staked_after.saturating_sub(staked_before);
+      if staked_liquidity.is_zero() {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          DispatchError::Other("CompoundAmountTooSmall"),
+        ));
+      }
+      if let Err(error) = AssetConversion::add_liquidity(
+        RuntimeOrigin::signed(account.clone()),
+        Box::new(base_asset),
+        Box::new(staked_asset),
+        native_liquidity,
+        staked_liquidity,
+        1,
+        1,
+        account.clone(),
+      ) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      let lp_after =
+        <Runtime as pallet_asset_conversion::Config>::PoolAssets::balance(pool.lp_token, account);
+      let lp_minted = lp_after.saturating_sub(lp_before);
+      if lp_minted.is_zero() {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          DispatchError::Other("CompoundLpNotMinted"),
+        ));
+      }
+      if let Err(error) = crate::Staking::lock_native_lp_for_collator(
+        RuntimeOrigin::signed(account.clone()),
+        pool.lp_token,
+        lp_minted,
+        operator.clone(),
+      ) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(lp_minted))
+    })
+  }
+
+  pub fn donate_native_staking_liquidity_from_ntve(
+    donor: &AccountId,
+    total_native: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(Balance, Balance), DispatchError> {
+    if total_native.is_zero() {
+      return Err(DispatchError::Other("InvalidDonation"));
+    }
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    let base_asset = AssetKind::Local(native_asset_id);
+    let staked_asset = AssetKind::Local(staked_asset_id);
+    let pool_account = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(
+      &base_asset,
+      &staked_asset,
+    )
+    .map_err(|_| DispatchError::Other("DonationPoolUnavailable"))?;
+    let reserve_native = Self::asset_balance(base_asset, &pool_account);
+    let reserve_staked = Self::asset_balance(staked_asset, &pool_account);
+    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id)
+      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
+    if reserve_native.is_zero()
+      || reserve_staked.is_zero()
+      || staking_pool.accounted_balance.is_zero()
+      || staking_pool.total_shares.is_zero()
+    {
+      return Err(DispatchError::Other("DonationPoolEmpty"));
+    }
+    let stake_amount = Self::native_stake_amount_for_balanced_donation(
+      total_native,
+      reserve_native,
+      reserve_staked,
+      staking_pool.accounted_balance,
+      staking_pool.total_shares,
+    )?;
+    let native_donation = total_native
+      .checked_sub(stake_amount)
+      .ok_or(DispatchError::Other("DonationAmountOverflow"))?;
+    if stake_amount.is_zero() || native_donation.is_zero() {
+      return Err(DispatchError::Other("DonationAmountTooSmall"));
+    }
+    let staked_before = Self::asset_balance(staked_asset, donor);
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(error) =
+        crate::Staking::stake_native(RuntimeOrigin::signed(donor.clone()), stake_amount)
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      let staked_after = Self::asset_balance(staked_asset, donor);
+      let staked_donation = staked_after.saturating_sub(staked_before);
+      if staked_donation.is_zero() {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          DispatchError::Other("DonationAmountTooSmall"),
+        ));
+      }
+      if let Err(error) = Self::donate_balanced_liquidity(
+        donor,
+        base_asset,
+        staked_asset,
+        native_donation,
+        staked_donation,
+        max_ratio_error,
+      ) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok((
+        native_donation,
+        staked_donation,
+      )))
+    })
+  }
+
+  fn native_stake_amount_for_balanced_donation(
+    total_native: Balance,
+    reserve_native: Balance,
+    reserve_staked: Balance,
+    staking_accounted_balance: Balance,
+    staking_total_shares: Balance,
+  ) -> Result<Balance, DispatchError> {
+    let numerator = U256::from(reserve_staked)
+      .saturating_mul(U256::from(total_native))
+      .saturating_mul(U256::from(staking_accounted_balance));
+    let denominator = U256::from(reserve_staked)
+      .saturating_mul(U256::from(staking_accounted_balance))
+      .saturating_add(U256::from(reserve_native).saturating_mul(U256::from(staking_total_shares)));
+    if denominator.is_zero() {
+      return Err(DispatchError::Other("DonationAmountOverflow"));
+    }
+    numerator
+      .checked_div(denominator)
+      .ok_or(DispatchError::Other("DonationAmountOverflow"))?
+      .try_into()
+      .map_err(|_| DispatchError::Other("DonationAmountOverflow"))
+  }
+
+  fn ensure_ratio_within_tolerance(
+    amount1: Balance,
+    amount2: Balance,
+    reserve1: Balance,
+    reserve2: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(), DispatchError> {
+    let left = U256::from(amount1).saturating_mul(U256::from(reserve2));
+    let right = U256::from(amount2).saturating_mul(U256::from(reserve1));
+    let difference = left.abs_diff(right);
+    let reference = left.max(right);
+    let allowed = max_ratio_error * reference;
+    if difference > allowed {
+      return Err(DispatchError::Other("DonationRatioExceeded"));
+    }
+    Ok(())
+  }
+
+  fn asset_balance(asset: AssetKind, account: &AccountId) -> Balance {
+    match asset {
+      AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(account),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, account)
+      }
+    }
+  }
+
+  fn transfer_asset(
+    asset: AssetKind,
+    from: &AccountId,
+    to: &AccountId,
+    amount: Balance,
+  ) -> Result<(), DispatchError> {
+    match asset {
+      AssetKind::Native => <Balances as Currency<AccountId>>::transfer(
+        from,
+        to,
+        amount,
+        polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+      ),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::transfer(
+          id,
+          from,
+          to,
+          amount,
+          polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
+        )
+        .map(|_| ())
+      }
+    }
   }
 }
 
@@ -357,6 +677,7 @@ impl pallet_axial_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
     let creator = BurningManagerAccount::get();
     let _ =
       <Balances as Currency<AccountId>>::deposit_creating(&creator, 1_000_000_000_000_000_000);
+    AssetConversionAdapter::ensure_lp_asset_namespace();
     AssetConversion::create_pool(
       RuntimeOrigin::signed(creator),
       Box::new(asset1),

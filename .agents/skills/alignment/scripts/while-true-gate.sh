@@ -75,7 +75,7 @@ collect_changed_paths() {
     while IFS= read -r path; do
         [[ -z "$path" ]] && continue
         CHANGED_PATHS+=("$path")
-        if [[ "$path" =~ \.sh$ ]]; then
+        if [[ "$path" =~ \.sh$ && -f "$PROJECT_ROOT/$path" ]]; then
             CHANGED_SHELL_PATHS+=("$PROJECT_ROOT/$path")
         fi
     done < <(printf '%s\n%s\n' "$tracked" "$untracked" | awk 'NF' | sort -u)

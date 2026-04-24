@@ -7,3 +7,5 @@
 {"timestamp":"2026-04-22T20:53:54Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/staking/src/lib.rs,/home/llb/Repos/deos/template/runtime/src/configs/mod.rs"}
 {"timestamp":"2026-04-22T23:10:42Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/staking_config.rs"}
 {"timestamp":"2026-04-22T23:12:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/staking_config.rs"}
+{"timestamp":"2026-04-24T20:25:07Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/proposal_resolution.rs"}
+{"timestamp":"2026-04-24T21:27:21Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/examples/export_metadata.rs"}

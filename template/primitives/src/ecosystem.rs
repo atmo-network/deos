@@ -135,6 +135,10 @@ pub mod aaa_ids {
   ///   hex:  `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45`
   ///   SS58: `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG`
   pub const BLDR_TREASURY_AAA_ID: u64 = 13;
+
+  /// Native Staking LP Farmer — donates NTVE/stNTVE reserves without minting LP
+  /// Created at genesis (`aaa_id = 14`), Noop until the canonical pool is activated
+  pub const NATIVE_STAKING_LP_FARMER_AAA_ID: u64 = 14;
 }
 
 /// Protocol-native token asset IDs.
@@ -301,6 +305,9 @@ pub mod params {
   /// At this native reserve depth, the clamp still allows the configured Zap max;
   /// deeper pools tighten inversely from there.
   pub const ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance = 1_000 * PRECISION;
+
+  /// Maximum accepted donation ratio error for native staking LP farming (1%).
+  pub const NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR: Perbill = Perbill::from_percent(1);
 
   /// Burning Manager polling interval (10 blocks ≈ 1 minute).
   pub const BURNING_MANAGER_POLL_BLOCKS: u32 = 10;

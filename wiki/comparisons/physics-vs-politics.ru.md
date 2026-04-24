@@ -10,9 +10,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/manifesto.ru.md
+  - ../../docs/manifesto.en.md
   - ../../docs/governance.specification.en.md
-  - ../../docs/tmctol.specification.ru.md
+  - ../../docs/tmctol.specification.en.md
 status: active
 audience: newcomer
 tags:
@@ -92,6 +92,6 @@ TMCTOL выражает такую «физику» через mint-only эми�
 
 ## Источники
 
-- `docs/manifesto.ru.md`
+- `docs/manifesto.en.md`
 - `docs/governance.specification.en.md`
-- `docs/tmctol.specification.ru.md`
+- `docs/tmctol.specification.en.md`

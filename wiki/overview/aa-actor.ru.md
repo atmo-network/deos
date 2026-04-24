@@ -10,7 +10,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/aaa.specification.ru.md
+  - ../../docs/aaa.specification.en.md
   - ../../docs/aaa.architecture.en.md
   - ../../docs/core.architecture.en.md
 status: active
@@ -162,6 +162,6 @@ execution_plan:
 
 ## Источники
 
-- `docs/aaa.specification.ru.md`
+- `docs/aaa.specification.en.md`
 - `docs/aaa.architecture.en.md`
 - `docs/core.architecture.en.md`

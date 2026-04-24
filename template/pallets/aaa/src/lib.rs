@@ -10,7 +10,7 @@ mod execution;
 mod scheduler;
 
 pub mod adapters;
-pub use adapters::{AssetOps, DexOps, StakingOps};
+pub use adapters::{AssetOps, DexOps, LiquidityDonationOps, StakingOps};
 pub use types::{SYSTEM_OWNER_SLOT_SENTINEL, Task};
 
 pub mod weights;
@@ -74,8 +74,8 @@ impl<Hash> EntropyProvider<Hash> for NoEntropyProvider {
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider, TaskWeightInfo,
-    WeightInfo,
+    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider,
+    LiquidityDonationOps, TaskWeightInfo, WeightInfo,
   };
   use frame::prelude::*;
   use polkadot_sdk::{
@@ -101,12 +101,11 @@ pub mod pallet {
 
     #[pallet::constant]
     type NativeAssetId: Get<Self::AssetId>;
-    #[pallet::constant]
-    type NativeStakingAssetId: Get<Self::AssetId>;
 
     type AssetOps: AssetOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type DexOps: DexOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type StakingOps: crate::adapters::StakingOps<Self::AccountId, Self::AssetId, Self::Balance>;
+    type LiquidityDonationOps: LiquidityDonationOps<Self::AccountId, Self::AssetId, Self::Balance>;
 
     #[pallet::constant]
     type MinWindowLength: Get<BlockNumberFor<Self>>;
@@ -635,15 +634,18 @@ pub mod pallet {
       asset: T::AssetId,
       amount: T::Balance,
     },
-    StakeNativeExecuted {
-      aaa_id: AaaId,
-      amount: T::Balance,
-      operator: T::AccountId,
-    },
     UnstakeExecuted {
       aaa_id: AaaId,
       asset: T::AssetId,
       shares: T::Balance,
+    },
+    LiquidityDonated {
+      aaa_id: AaaId,
+      asset_a: T::AssetId,
+      asset_b: T::AssetId,
+      amount: T::Balance,
+      amount_a: T::Balance,
+      amount_b: T::Balance,
     },
     LiquidityAdded {
       aaa_id: AaaId,
@@ -1274,9 +1276,9 @@ pub mod pallet {
         AaaTask::Stake { .. } => T::DbWeight::get()
           .reads(2)
           .saturating_add(T::DbWeight::get().writes(2)),
-        AaaTask::StakeNative { .. } => T::DbWeight::get()
-          .reads(3)
-          .saturating_add(T::DbWeight::get().writes(3)),
+        AaaTask::DonateLiquidity { .. } => {
+          T::TaskWeightInfo::dex_liquidity().saturating_add(T::DbWeight::get().reads_writes(6, 6))
+        }
         AaaTask::Unstake { .. } => T::DbWeight::get()
           .reads(2)
           .saturating_add(T::DbWeight::get().writes(2)),
@@ -1726,7 +1728,7 @@ pub mod pallet {
           | AaaTask::AddLiquidity { .. }
           | AaaTask::Noop
           | AaaTask::Stake { .. }
-          | AaaTask::StakeNative { .. }
+          | AaaTask::DonateLiquidity { .. }
           | AaaTask::Unstake { .. } => {}
         }
       }
@@ -1782,8 +1784,10 @@ pub mod pallet {
           AaaTask::Stake { asset, amount } => {
             check_amount(amount, *asset);
           }
-          AaaTask::StakeNative { amount, .. } => {
-            check_amount(amount, T::NativeStakingAssetId::get());
+          AaaTask::DonateLiquidity {
+            asset_a, amount, ..
+          } => {
+            check_amount(amount, *asset_a);
           }
           AaaTask::Noop | AaaTask::Unstake { .. } => {}
         }

@@ -174,7 +174,10 @@ fn track_base_weight(
       )
     }
     RuntimeGovernanceTrackBacking::NativeStake => {
-      crate::Staking::native_stake_value(account).unwrap_or_default()
+      DelegationWeightedCollatorSessionManager::conservative_native_lp_value(
+        crate::Staking::account_native_lp_locked(account),
+      )
+      .saturating_add(native_governance_asset_vote_power(account))
     }
   }
 }
@@ -203,6 +206,47 @@ fn protection_track_base_weight(domain: AssetId, account: &AccountId) -> u128 {
 }
 
 #[cfg_attr(feature = "runtime-benchmarks", allow(dead_code))]
+fn native_governance_asset_vote_power(account: &AccountId) -> Balance {
+  let native_asset_id = native_staking_asset_id();
+  let native_power = crate::Staking::native_governance_asset_locked(account, native_asset_id);
+  let Some(staked_asset_id) = crate::Staking::staked_asset_id(native_asset_id) else {
+    return native_power;
+  };
+  native_power.saturating_add(staked_receipt_governance_power(
+    crate::Staking::native_governance_asset_locked(account, staked_asset_id),
+  ))
+}
+
+#[cfg_attr(feature = "runtime-benchmarks", allow(dead_code))]
+fn total_native_governance_asset_vote_power() -> Balance {
+  let native_asset_id = native_staking_asset_id();
+  let native_power = crate::Staking::total_native_governance_asset_locked(native_asset_id);
+  let Some(staked_asset_id) = crate::Staking::staked_asset_id(native_asset_id) else {
+    return native_power;
+  };
+  native_power.saturating_add(staked_receipt_governance_power(
+    crate::Staking::total_native_governance_asset_locked(staked_asset_id),
+  ))
+}
+
+fn staked_receipt_governance_power(shares: Balance) -> Balance {
+  if shares == 0 {
+    return 0;
+  }
+  let Some(pool) = crate::Staking::pool(native_staking_asset_id()) else {
+    return 0;
+  };
+  if pool.total_shares == 0 {
+    return 0;
+  }
+  let result = sp_core::U256::from(shares)
+    .saturating_mul(sp_core::U256::from(pool.accounted_balance))
+    .checked_div(sp_core::U256::from(pool.total_shares))
+    .unwrap_or_default();
+  result.try_into().unwrap_or(Balance::MAX)
+}
+
+#[cfg_attr(feature = "runtime-benchmarks", allow(dead_code))]
 fn track_total_issuance(backing: RuntimeGovernanceTrackBacking, domain: AssetId) -> u128 {
   match backing {
     RuntimeGovernanceTrackBacking::DirectStake => crate::Staking::pool(domain)
@@ -215,9 +259,12 @@ fn track_total_issuance(backing: RuntimeGovernanceTrackBacking, domain: AssetId)
       }
       <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::total_issuance(asset_id)
     }
-    RuntimeGovernanceTrackBacking::NativeStake => crate::Staking::pool(native_staking_asset_id())
-      .map(|pool| pool.accounted_balance)
-      .unwrap_or_default(),
+    RuntimeGovernanceTrackBacking::NativeStake => {
+      DelegationWeightedCollatorSessionManager::conservative_native_lp_value(
+        crate::Staking::total_native_lp_locked(),
+      )
+      .saturating_add(total_native_governance_asset_vote_power())
+    }
   }
 }
 
@@ -320,6 +367,23 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<AssetId>
       return pallet_governance::ProposalSubmissionAuthority::Signed;
     }
     pallet_governance::ProposalSubmissionAuthority::AdminOnly
+  }
+}
+
+pub struct RuntimeWinningVoteRewardTouchHandler;
+impl pallet_governance::WinningVoteRewardTouchHandler<AccountId, AssetId>
+  for RuntimeWinningVoteRewardTouchHandler
+{
+  fn note_winning_vote_recorded(domain: AssetId, account: &AccountId) {
+    if domain == native_staking_asset_id() {
+      let _ = crate::Staking::note_reward_touch(native_staking_asset_id(), account);
+    }
+  }
+
+  fn note_winning_vote_evicted(domain: AssetId, account: &AccountId) {
+    if domain == native_staking_asset_id() {
+      let _ = crate::Staking::note_reward_touch(native_staking_asset_id(), account);
+    }
   }
 }
 
@@ -638,6 +702,7 @@ impl pallet_governance::Config for Runtime {
   type VetoVotePowerProvider = RuntimeVetoVotePowerProvider;
   type ProposalPayloadPreimageProvider = RuntimeProposalPayloadPreimageProvider;
   type ProposalPayloadExecutor = RuntimeProposalPayloadExecutor;
+  type WinningVoteRewardTouchHandler = RuntimeWinningVoteRewardTouchHandler;
   type WeightInfo = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
 }
 

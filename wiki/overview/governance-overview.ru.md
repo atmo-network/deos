@@ -12,7 +12,7 @@ available_locales:
 sources:
   - ../../docs/governance.specification.en.md
   - ../../docs/governance.architecture.en.md
-  - ../../docs/manifesto.ru.md
+  - ../../docs/manifesto.en.md
 status: active
 audience: newcomer
 tags:
@@ -150,4 +150,4 @@ Overview — это карта. Concept pages — это более близко
 
 - `docs/governance.specification.en.md`
 - `docs/governance.architecture.en.md`
-- `docs/manifesto.ru.md`
+- `docs/manifesto.en.md`

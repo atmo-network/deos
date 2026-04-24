@@ -101,6 +101,49 @@ export type AutomationActorSnapshot = {
   nativeBalance: bigint;
 };
 
+export type NativeStakingPoolProjection = {
+  nativeAssetId: number;
+  stakedAssetId: number;
+  lpAssetId: number;
+  reserveNative: bigint;
+  reserveStaked: bigint;
+  lpTotalIssuance: bigint;
+};
+
+export type NativeLockedLpPositionProjection = {
+  totalLockedLp: bigint;
+  collatorLockedLp: bigint;
+  governanceLockedLp: bigint;
+  conservativeNativeValue: bigint | null;
+};
+
+export type NativeCollatorLpPositionProjection = {
+  lpAssetId: number | null;
+  lockedLp: bigint;
+  pendingUnlockLp: bigint;
+  pendingUnlockBlock: number | null;
+  conservativeNativeValue: bigint | null;
+};
+
+export type NativeGovernanceCustodyPositionProjection = {
+  lpAssetId: number | null;
+  governanceLockedLp: bigint;
+  pendingGovernanceLpUnlock: bigint;
+  pendingGovernanceLpUnlockBlock: number | null;
+  assetId: number;
+  assetLocked: bigint;
+  pendingAssetUnlock: bigint;
+  pendingAssetUnlockBlock: number | null;
+};
+
+export type NativeStakingProjection = {
+  isAvailable: boolean;
+  accountAddress: string | null;
+  exchangeRate: bigint | null;
+  pool: NativeStakingPoolProjection | null;
+  accountPosition: NativeLockedLpPositionProjection | null;
+};
+
 export type SystemSnapshot = {
   blockNumber: number | null;
   supply: bigint;
@@ -120,6 +163,7 @@ export type SystemSnapshot = {
   bufferForeign: bigint;
   nativeAsset: AssetPresentation;
   foreignAsset: AssetPresentation;
+  nativeStaking: NativeStakingProjection;
 };
 
 // Runtime constants (not in .d.ts)

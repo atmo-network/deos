@@ -337,6 +337,7 @@ impl pallet_governance::Config for Test {
   type VetoVotePowerProvider = MockVetoVotePowerProvider;
   type ProposalPayloadPreimageProvider = MockProposalPayloadPreimageProvider;
   type ProposalPayloadExecutor = MockProposalPayloadExecutor;
+  type WinningVoteRewardTouchHandler = ();
   type WeightInfo = ();
 }
 

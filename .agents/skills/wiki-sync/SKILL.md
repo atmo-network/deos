@@ -289,6 +289,8 @@ The agent MUST avoid:
 
 The agent SHOULD assume that page titles, summaries, tags, related links, and page types may be consumed directly by frontend code.
 
+Wiki frontmatter is consumed through a simple TOML-like `key: value` contract. The agent MUST NOT put additional value-side colons on scalar metadata lines such as `summary:` because downstream parsers treat colons as key/value separators. Rewrite such summaries with dashes, commas, or sentence structure instead of `summary: Topic: details`.
+
 If the repository renders wiki markdown directly in the browser as trusted repo-local content, the agent SHOULD also keep the emitted markdown inside that trust contract by avoiding raw HTML blocks, dangerous URL schemes, and inline DOM event-handler attributes so repo-level validation (e.g. via `scripts/validate-wiki-trust.sh`) can stay the primary safety boundary.
 
 ## Onboarding Requirement
