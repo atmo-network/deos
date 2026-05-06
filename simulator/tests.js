@@ -14,6 +14,9 @@ import {
   PRECISION,
   Router,
   User,
+  distribute_fee_sink_phase1,
+  distribute_fee_sink_phase2,
+  split_collator_fee,
 } from "./model.js";
 
 /** @typedef {import("./model.js").SystemConfig} SystemConfig */
@@ -151,7 +154,7 @@ const TEST_SECTIONS = [
   [9, 2], // Multi-User & Chaos Testing
   [10, 6], // Emergent Properties & System Intelligence
   [11, 4], // Economic Security & Attack Resistance
-  [12, 4], // Adaptive System Behaviors
+  [12, 7], // Adaptive System Behaviors
 ];
 
 let testCount = 0;
@@ -2082,6 +2085,31 @@ runTest("Router Intelligence - XYK Route Selection", () => {
     result.route === "XYK",
     `Router should choose XYK when it has established liquidity. Got: ${result.route}, type: ${typeof result.route}`,
   );
+});
+
+runTest("Two-Phase Reward Routing - 20/80 Collection", () => {
+  const amount = 100n * PRECISION;
+  const split = split_collator_fee(amount);
+  assert(split.collator === 20n * PRECISION, "Collator should receive 20% of collected rewards");
+  assert(split.fee_sink === 80n * PRECISION, "Fee Sink should receive 80% of collected rewards");
+  assert(split.collator + split.fee_sink === amount, "20/80 split must conserve collected amount");
+});
+
+runTest("Two-Phase Reward Routing - Phase 1 Pools", () => {
+  const feeSinkAmount = 80n * PRECISION;
+  const split = distribute_fee_sink_phase1(feeSinkAmount);
+  assert(split.staking_pool === 40n * PRECISION, "Phase 1 staking pool should receive half of Fee Sink flow");
+  assert(split.liquidity_pool === 40n * PRECISION, "Phase 1 liquidity pool should receive half of Fee Sink flow");
+  assert(split.staking_pool + split.liquidity_pool === feeSinkAmount, "Phase 1 distribution must conserve Fee Sink amount");
+});
+
+runTest("Two-Phase Reward Routing - Phase 2 1:1:4", () => {
+  const feeSinkAmount = 60n * PRECISION;
+  const split = distribute_fee_sink_phase2(feeSinkAmount);
+  assert(split.staking_pool === 10n * PRECISION, "Phase 2 staking pool should receive one part");
+  assert(split.liquidity_pool === 10n * PRECISION, "Phase 2 liquidity pool should receive one part");
+  assert(split.claimable_lp_nomination === 40n * PRECISION, "Phase 2 claimable LP nomination should receive four parts");
+  assert(split.staking_pool + split.liquidity_pool + split.claimable_lp_nomination === feeSinkAmount, "Phase 2 distribution must conserve Fee Sink amount");
 });
 
 runTest("Economic Incentive Alignment", () => {

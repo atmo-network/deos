@@ -638,9 +638,17 @@ fn register_asset_creates_empty_pool() {
 }
 
 #[test]
-fn reward_account_and_governance_domain_follow_distinct_runtime_configured_surface() {
+fn reward_ingress_accounts_and_governance_domain_follow_distinct_runtime_configured_surface() {
   new_test_ext().execute_with(|| {
     assert_ne!(Staking::pool_account_for(2), Staking::reward_account_for(2));
+    assert_ne!(
+      Staking::pool_account_for(2),
+      Staking::lp_reward_account_for(2)
+    );
+    assert_ne!(
+      Staking::reward_account_for(2),
+      Staking::lp_reward_account_for(2)
+    );
     assert_eq!(Staking::reward_governance_domain(2), Some(2));
   });
 }

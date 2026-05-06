@@ -16,10 +16,10 @@ use polkadot_sdk::frame_support::traits::{
   tokens::{Fortitude, Precision, Preservation},
 };
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
-use polkadot_sdk::sp_runtime::{DispatchError, Perbill, TokenError};
+use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
-use pallet_aaa::{AssetOps, DexOps, LiquidityDonationOps};
+use pallet_aaa::{AssetOps, DexOps, FeeRouter, LiquidityDonationOps};
 
 parameter_types! {
   // --- Identity and ownership ---
@@ -100,10 +100,37 @@ impl Get<Balance> for AaaMinUserBalanceGuard {
 /// Fee sink — canonical unified fee-collection address.
 ///
 /// AAA evaluation and execution fees route here today. The address stays derived from
-/// reserved `aaa_id = FEE_SINK_AAA_ID` so the fee collector remains stable even though
-/// no System AAA execution plan is bound to that slot. The broader economic contract for
-/// this sink is a deterministic downstream split between Burning Manager processing and
-/// staking reward funding.
+/// `aaa_id = FEE_SINK_AAA_ID` so the fee collector remains stable while System AAA #1
+/// owns the Phase 1 redistribution execution plan. The broader economic contract is
+/// a unified 20% collator / 80% Fee Sink collection rule, followed by phase-aware Fee Sink
+/// redistribution into staking-pool yield, native LP donation, and later claimable
+/// LP-nomination rewards.
+pub struct TmctolFeeRouter;
+impl FeeRouter<AccountId, AssetKind, Balance> for TmctolFeeRouter {
+  fn route_fee(
+    payer: &AccountId,
+    fee_sink: &AccountId,
+    native_asset: AssetKind,
+    amount: Balance,
+  ) -> DispatchResult {
+    if amount == 0 {
+      return Ok(());
+    }
+    let Some(author) = Authorship::author() else {
+      return TmctolAssetOps::transfer(payer, fee_sink, native_asset, amount);
+    };
+    let author_share = Perbill::from_percent(20) * amount;
+    let fee_sink_share = amount.saturating_sub(author_share);
+    if author_share > 0 {
+      TmctolAssetOps::transfer(payer, &author, native_asset, author_share)?;
+    }
+    if fee_sink_share > 0 {
+      TmctolAssetOps::transfer(payer, fee_sink, native_asset, fee_sink_share)?;
+    }
+    Ok(())
+  }
+}
+
 pub struct AaaFeeRecipient;
 impl Get<crate::AccountId> for AaaFeeRecipient {
   fn get() -> crate::AccountId {
@@ -509,8 +536,18 @@ impl
     let burn_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> =
       Self::build_burn_execution_plan(alloc::vec![], dust);
 
-    // aaa_id = 1 is reserved for fee-sink address derivation and intentionally
-    // not materialized as a System actor.
+    // --- Fee Sink (aaa_id = 1) ---
+    // Timer-driven Phase 1 fan-out: distributes accumulated native fees/rewards
+    // into staking-pool yield and native LP-donation ingress channels.
+    let fee_sink_schedule = Schedule {
+      trigger: Trigger::Timer {
+        every_blocks: 1,
+        probability: None,
+      },
+      cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
+    };
+    let fee_sink_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> =
+      Self::build_phase1_fee_sink_execution_plan();
 
     // --- Zap Manager (aaa_id = 2) ---
     // Timer-driven skeleton; real LP provisioning steps are added by governance
@@ -537,6 +574,13 @@ impl
         burn_schedule,
         None,
         burn_execution_plan,
+      ),
+      (
+        ecosystem::aaa_ids::FEE_SINK_AAA_ID,
+        governance.clone(),
+        fee_sink_schedule,
+        None,
+        fee_sink_execution_plan,
       ),
       (
         ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID,
@@ -686,6 +730,65 @@ fn noop_execution_plan() -> pallet_aaa::ExecutionPlanOf<Runtime> {
 }
 
 impl TmctolGenesisSystemAaas {
+  pub fn build_phase1_fee_sink_execution_plan() -> pallet_aaa::ExecutionPlanOf<Runtime> {
+    use pallet_aaa::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
+    alloc::vec![Step {
+      conditions: Default::default(),
+      task: Task::SplitTransfer {
+        asset: AssetKind::Native,
+        amount: AmountResolution::AllBalance,
+        legs: alloc::vec![
+          SplitLeg {
+            to: crate::Staking::pool_account_for(0),
+            share: Perbill::from_percent(50),
+          },
+          SplitLeg {
+            to: crate::Staking::lp_reward_account_for(0),
+            share: Perbill::from_percent(50),
+          },
+        ]
+        .try_into()
+        .expect("phase1 fee-sink split legs fit"),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    }]
+    .try_into()
+    .expect("phase1 fee-sink execution_plan fits")
+  }
+
+  pub fn build_phase2_fee_sink_execution_plan() -> pallet_aaa::ExecutionPlanOf<Runtime> {
+    use pallet_aaa::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
+    // Phase 2 1:1:4 fee-sink distribution.
+    // Not activated at Phase 1 launch; reserved for a later runtime-upgrade boundary
+    // when permissionless collators and GovXP-weighted LP-nomination rewards ship.
+    alloc::vec![Step {
+      conditions: Default::default(),
+      task: Task::SplitTransfer {
+        asset: AssetKind::Native,
+        amount: AmountResolution::AllBalance,
+        legs: alloc::vec![
+          SplitLeg {
+            to: crate::Staking::pool_account_for(0),
+            share: Perbill::from_parts(166_666_667),
+          },
+          SplitLeg {
+            to: crate::Staking::lp_reward_account_for(0),
+            share: Perbill::from_parts(166_666_667),
+          },
+          SplitLeg {
+            to: crate::Staking::reward_account_for(0),
+            share: Perbill::from_parts(666_666_666),
+          },
+        ]
+        .try_into()
+        .expect("phase2 fee-sink split legs fit"),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    }]
+    .try_into()
+    .expect("phase2 fee-sink execution_plan fits")
+  }
+
   /// Builds the Burning Manager execution_plan: for each known foreign asset, add a
   /// conditional SwapExactIn step (skip if balance < dust), then a final Burn step.
   pub fn build_burn_execution_plan(
@@ -1225,6 +1328,7 @@ impl pallet_aaa::Config for Runtime {
   type FairnessWeightSystem = AaaFairnessWeightSystem;
   type FairnessWeightUser = AaaFairnessWeightUser;
   type FeeSink = AaaFeeRecipient;
+  type FeeRouter = TmctolFeeRouter;
   type GenesisSystemAaas = TmctolGenesisSystemAaas;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = AaaMaxActiveActors;

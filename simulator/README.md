@@ -6,7 +6,7 @@ This module is the **spec-side executable model** used to:
 
 - Validate economic formulas before runtime implementation
 - Explore parameter behavior (`price_initial`, `slope`, fees, mint shares)
-- Run deterministic regression scenarios (`57` tests)
+- Run deterministic regression scenarios (`60` tests)
 
 ---
 
@@ -29,8 +29,8 @@ node ./simulator/tests.js
 
 Expected output ends with:
 
-- `Total: 57`
-- `Passed: 57`
+- `Total: 60`
+- `Passed: 60`
 - `Failed: 0`
 
 ---
@@ -43,6 +43,7 @@ Expected output ends with:
 - `PPB = 10^9`
 - `create_system(config_override?)`
 - Classes: `Tmc`, `Tol`, `Xyk`, `Router`, `FeeManager`, `User`, `BigMath`
+- Reward routing helpers: `split_collator_fee`, `distribute_fee_sink_phase1`, `distribute_fee_sink_phase2`
 
 Minimal example:
 

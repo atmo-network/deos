@@ -194,7 +194,7 @@ Truth for protocol and economic changes is established in three layers. Use ever
 - `Antifragile Simplicity`: Default to the simplest deterministic rule that preserves invariants. Add complexity only when a concrete failure mode or constraint proves it necessary.
 - `Transactional Mutation Discipline`: Any extrinsic or runtime entrypoint that can fail after mutating multiple storage locations SHOULD either pre-validate all fallible conditions first or use transactional semantics so capacity / late-guard failures cannot strand partial state.
 - `Workspace Lint Hygiene`: `Cargo.toml` must declare `unexpected_cfgs` with Substrate-specific cfg values (`substrate_runtime`). Clippy lints must track upstream parachain template — currently 25 rules.
-- `SDK Version Tracking`: `substrate-wasm-builder` version must match the polkadot-sdk umbrella (`2603.0.0 -> 32.0.0` on the current line). `system_version` in `RuntimeVersion` must be `3` or higher on SDK 2603 to activate the staged `:pending_code -> :code` runtime-upgrade path from RFC-123.
+- `SDK Version Tracking`: `substrate-wasm-builder` version must match the polkadot-sdk umbrella (`2603.0.0 -> 32.0.0` on the current line). Current operator binary tag is `polkadot-stable2603-1` (node v1.22.1); the 2603 patch release is represented by targeted `Cargo.lock` patch updates rather than a new umbrella crate version. `system_version` in `RuntimeVersion` must be `3` or higher on SDK 2603 to activate the staged `:pending_code -> :code` runtime-upgrade path from RFC-123.
 
 ### 6.4 Evolution Principles
 

@@ -4,7 +4,7 @@
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.0` line.
+This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.1` line.
 The 2603 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/session/XCM integration surfaces rather than in `pallet-staking` core logic.
 
 ## Scope

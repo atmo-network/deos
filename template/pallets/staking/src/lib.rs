@@ -1969,6 +1969,12 @@ pub mod pallet {
         .expect("hashed reward seed always decodes into AccountId")
     }
 
+    pub fn lp_reward_account_for(asset_id: T::AssetId) -> T::AccountId {
+      let seed = frame::hashing::blake2_256(&(T::PalletId::get(), b"lp-reward", asset_id).encode());
+      T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
+        .expect("hashed LP reward seed always decodes into AccountId")
+    }
+
     pub fn native_lp_lock_account() -> T::AccountId {
       let seed = frame::hashing::blake2_256(&(T::PalletId::get(), b"native-lp-lock").encode());
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))

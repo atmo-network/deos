@@ -1108,6 +1108,35 @@ export class Router {
   }
 }
 
+// --- Reward Routing ---
+
+export function split_collator_fee(/** @type {bigint} */ amount) {
+  const collator = BigMath.mul_div(amount, 200_000_000n, PPB);
+  return {
+    collator,
+    fee_sink: amount - collator,
+  };
+}
+
+export function distribute_fee_sink_phase1(/** @type {bigint} */ amount) {
+  const staking_pool = amount / 2n;
+  return {
+    staking_pool,
+    liquidity_pool: amount - staking_pool,
+  };
+}
+
+export function distribute_fee_sink_phase2(/** @type {bigint} */ amount) {
+  const unit = amount / 6n;
+  const staking_pool = unit;
+  const liquidity_pool = unit;
+  return {
+    staking_pool,
+    liquidity_pool,
+    claimable_lp_nomination: amount - staking_pool - liquidity_pool,
+  };
+}
+
 // --- Factory ---
 
 export function create_system(

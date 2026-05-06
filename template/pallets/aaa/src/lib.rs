@@ -53,6 +53,15 @@ pub trait AtomicityHook {
 
 impl AtomicityHook for () {}
 
+pub trait FeeRouter<AccountId, AssetId, Balance> {
+  fn route_fee(
+    payer: &AccountId,
+    fee_sink: &AccountId,
+    native_asset: AssetId,
+    amount: Balance,
+  ) -> polkadot_sdk::frame_support::dispatch::DispatchResult;
+}
+
 pub trait AddressEventIngressHook<BlockNumber> {
   fn ingest(_now: BlockNumber) -> polkadot_sdk::frame_support::weights::Weight;
 }
@@ -74,7 +83,7 @@ impl<Hash> EntropyProvider<Hash> for NoEntropyProvider {
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider,
+    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider, FeeRouter,
     LiquidityDonationOps, TaskWeightInfo, WeightInfo,
   };
   use frame::prelude::*;
@@ -189,6 +198,7 @@ pub mod pallet {
     type AddressEventIngressHook: AddressEventIngressHook<BlockNumberFor<Self>>;
 
     type FeeSink: Get<Self::AccountId>;
+    type FeeRouter: FeeRouter<Self::AccountId, Self::AssetId, Self::Balance>;
 
     #[pallet::constant]
     type MaxConsecutiveFailures: Get<u32>;
@@ -1372,7 +1382,7 @@ pub mod pallet {
       }
       let native = T::NativeAssetId::get();
       let fee_sink = T::FeeSink::get();
-      T::AssetOps::transfer(owner, &fee_sink, native, creation_fee)
+      T::FeeRouter::route_fee(owner, &fee_sink, native, creation_fee)
         .map_err(|_| Error::<T>::InsufficientFee.into())
     }
 

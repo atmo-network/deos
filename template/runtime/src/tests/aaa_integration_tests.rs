@@ -2689,10 +2689,10 @@ fn assert_core_stability(aaa_ids: &[u64], diag: &StressDiagnostics) {
   }
 }
 
-/// Under-capacity: 35 chain actors + ~12 genesis actors active in worst block.
+/// Under-capacity: 33 chain actors + ≤15 genesis actors active in worst block.
 /// Runtime has MaxExecutionsPerBlock=48.
-/// Genesis creates 14 System AAAs (cooldown=10): in worst block ~13 compete.
-/// 35 + 13 = 48 <= 48 → all chain actors must fire every block.
+/// Genesis creates 15 System AAAs (cooldown=10): in worst block ~15 compete.
+/// 33 + 15 = 48 ≤ 48 → all chain actors must fire every block.
 ///
 /// Asserts: exact balance conservation, 100% per-block coverage, zero deferrals,
 /// zero failures, uniform cycle_nonce, zero consecutive_failures.
@@ -2701,8 +2701,8 @@ fn circular_chain_under_capacity_every_actor_every_block() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    // 35 chain + ≤13 active genesis = ≤48 <= MaxExecutionsPerBlock(48)
-    let chain_len = 35u64;
+    // 33 chain + ≤15 active genesis = 48 ≤ MaxExecutionsPerBlock(48)
+    let chain_len = 33u64;
     let num_blocks = 50u32;
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
     let (aaa_ids, sovereign_accounts) = setup_circular_chain(chain_len, initial_balance);
@@ -3331,9 +3331,9 @@ fn genesis_sparse_id_space_all_actors_execute_every_block() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
-    // Genesis AAAs occupy IDs: 0, 2-14 (Fee Sink keeps reserved id 1, no actor) (14 actors).
-    // The gaps after ID 1 are empty until a new actor is created.
-    // This is a genuine sparse ID space: ~2000 slots, only 14 occupied.
+    // Genesis AAAs occupy IDs: 0-14 (15 actors).
+    // The gap after ID 14 stays empty until a new actor is created.
+    // This is a genuine sparse ID space: ~2000 slots, only 15 occupied.
     //
     // Ringless scheduler iterates ActiveActors BTreeSet directly,
     // so sparse IDs are handled efficiently — no scanning over empty slots.
@@ -3342,14 +3342,14 @@ fn genesis_sparse_id_space_all_actors_execute_every_block() {
     // ID 0 (Burning Manager) has every_blocks=10, so it won't fire at block 2;
     // all other genesis actors have every_blocks=1.
     let genesis_ids_all: alloc::vec::Vec<u64> =
-      alloc::vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,];
+      alloc::vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,];
     for &id in &genesis_ids_all {
       let sov = AAA::sovereign_account_id_system(id);
       let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&sov, initial_balance);
     }
     // Actors expected to fire every block (every_blocks=1, nonce=0 skips cooldown)
     let every_block_genesis: alloc::vec::Vec<u64> =
-      alloc::vec![2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,];
+      alloc::vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,];
     // Create a fresh actor at the high end (ID 2005) to extend the space
     let fresh_id = crate::AAA::next_aaa_id();
     assert_eq!(fresh_id, 15);

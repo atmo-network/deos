@@ -4,6 +4,29 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the new DEOS monorepo. The changelog therefore focuses on achieved epics and the current shipped baseline of this repo, not on preserving every intermediate refactor step or pre-reset chronology.
 
+## [Unreleased]
+
+### Collator Economics & Fee Routing
+
+- `deos-runtime`: Added the first unified fee-collection slice for transaction fees: `RuntimeFeeSplit` routes 20% of resolved transaction-fee credit to the current author / collator and 80% to Fee Sink, with a safe fallback that sends all fees to Fee Sink when no author can be resolved.
+- `pallet-aaa` + `deos-runtime`: Replaced direct AAA fee transfers with a runtime-bound `FeeRouter`, so user-AAA creation/evaluation/execution fees can use the same 20% author / 80% Fee Sink contour when the author is resolvable and otherwise safely fall back to Fee Sink.
+- `pallet-staking`: Added deterministic `lp_reward_account(asset_id)` ingress alongside `pool_account(asset_id)` and `reward_account(asset_id)`, giving Phase 1 Fee Sink redistribution explicit destinations for staking-pool yield and LP donation while reserving `reward_account` for future claimable nomination rewards.
+- `simulator`: Added pure reward-routing helpers and regressions for the 20/80 outer collection split, Phase 1 two-pool Fee Sink redistribution, and Phase 2 `1:1:4` Fee Sink redistribution.
+- `pallet-aaa` + `deos-runtime`: Materialized Fee Sink as System AAA #1 with a Phase 1 `SplitTransfer` execution plan that fans out accumulated native fees/rewards 50/50 into the native staking pool account and `lp_reward_account(NTVE)`.
+- `docs` + `BACKLOG.md`: Fixed the launch economics contract around the two-phase model: Phase 1 keeps trusted collators and only two pool reward flows, while Phase 2 is an explicit runtime-upgrade boundary for permissionless collators, LP nomination, and GovXP-weighted claimable nomination rewards.
+
+## [0.3.1] - 2026-05-06
+
+### Staking Specification Hardening
+
+- `docs/staking.specification.en.md`: Merged the accepted staking proposal clarifications into the canonical contract: non-locked `NTVE/stNTVE` LP transfer isolation, the empty-pool precondition for `staking_exchange_rate`, bounded skip/defer behavior for AAA liquidity donation, and the governance-custody ordering rule that prevents double counting while `lock_until` is active.
+- `docs` + `BACKLOG.md`: Removed the temporary staking proposal document after merging its accepted items and closed the corresponding backlog slice so the canonical staking specification remains the only source of truth.
+
+### Polkadot SDK stable2603-1 Patch Migration
+
+- `template/Cargo.lock`: Applied the `polkadot-stable2603-1` patch release by updating the corresponding 2603 patch crates in lockfile, including client/collator-protocol fixes, `frame-support`, Westend runtime, prospective-parachains, statement-store, and related node-side crates while keeping the 2603.0.0 umbrella crate baseline.
+- `scripts` + docs: Retargeted local Polkadot SDK binary/tool guidance from `polkadot-v1.22.0` to `polkadot-stable2603-1` (node v1.22.1) and recorded that stable2603-1 is a patch-level lockfile/operator binary migration with no DEOS runtime API shape change required.
+
 ## [0.3.0] - 2026-04-25
 
 ### Native Staking Launch Contract

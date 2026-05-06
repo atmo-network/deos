@@ -15,10 +15,10 @@
 
 `pallet-aaa` is the execution platform for deterministic protocol behavior in DEOS. It provides a deterministic scheduler, bounded execution model, and adapter-driven task runtime for both user-owned and system-owned actors.
 
-In the current DEOS reference runtime, fourteen System actors are provisioned at genesis, with one additional reserved ID for deterministic Fee Sink derivation. This shipped topology currently instantiates the TMCTOL standard:
+In the current DEOS reference runtime, fifteen System actors are provisioned at genesis. This shipped topology currently instantiates the TMCTOL standard:
 
 - `aaa_id = 0`: Burning Manager execution plan
-- `aaa_id = 1`: reserved deterministic Fee Sink address for unified fee collection (no System AAA execution plan)
+- `aaa_id = 1`: Fee Sink System AAA for unified fee collection and Phase 1 staking/LP redistribution
 - `aaa_id = 2`: Zap Manager skeleton execution plan
 - `aaa_id = 3..6`: TOL bucket actors (A/B/C/D), initialized as timer + noop
 - `aaa_id = 7..9`: Treasury B/C/D actors, initialized as timer + noop
@@ -33,7 +33,7 @@ The pallet itself is generic and runtime-agnostic. Chain-specific behavior is in
 ### Canonical Address Catalog (Current Runtime, Full System Map)
 
 All addresses below are deterministic for `AaaPalletId = *b"aaactor0"` (`AccountId32`, SS58 prefix 42).
-This table is the full current runtime System AAA catalog, including the reserved Fee Sink address.
+This table is the full current runtime System AAA catalog, including the Fee Sink actor address.
 
 | Entity                        | aaa_id | Hex                                                                  | SS58                                               |
 | ----------------------------- | ------ | -------------------------------------------------------------------- | -------------------------------------------------- |
@@ -88,7 +88,7 @@ AAA orchestrates actions against these pallets through adapter traits.
 | Lane     | Actor               | aaa_id | Genesis schedule | Genesis execution plan                                 |
 | :------- | :------------------ | -----: | :--------------- | :----------------------------------------------------- |
 | Core     | Burning Manager     |      0 | `Timer(10)`      | `build_burn_execution_plan([], dust)`                  |
-| Core     | Fee Sink (reserved) |      1 | —                | no actor; deterministic unified fee-collection address |
+| Core     | Fee Sink |      1 | timer + split    | unified fee collection; Phase 1 50/50 staking-pool and LP-donation fan-out |
 | Core     | Zap Manager         |      2 | `Timer(1)`       | `Noop` skeleton until pool activation                  |
 | TOL      | Bucket A (Anchor)   |      3 | `Timer(1)`       | `Noop`                                                 |
 | TOL      | Bucket B (Building) |      4 | `Timer(1)`       | `Noop`                                                 |
@@ -459,7 +459,7 @@ Additional runtime bindings:
 
 - `WeightToFee` conversion used for execution-fee charging
 - `TaskWeightInfo` for coarse per-task upper bounds
-- `FeeSink` account derived from reserved `aaa_id = 1` (`FEE_SINK_AAA_ID`)
+- `FeeSink` account is the sovereign account of System AAA `aaa_id = 1` (`FEE_SINK_AAA_ID`)
 - `GenesisSystemAaas = TmctolGenesisSystemAaas`
 
 ---

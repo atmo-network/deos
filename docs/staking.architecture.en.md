@@ -72,16 +72,25 @@ graph TD
 
 ## Account and Asset Topology
 
+### Launch reward phases
+
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators and keeps user nomination economics disabled: Fee Sink redistribution targets only staking-pool backing inflow and native LP donation. Phase 2 may enable permissionless collators, explicit LP nomination to a collator, and claimable native nomination rewards weighted by locked collator LP plus GovXP.
+
+Phase 2 is treated as a runtime-upgrade boundary. The current launch line should not expose a governance parameter that can silently enable LP nomination or claimable nomination rewards while collator selection is still permissioned.
+
+The intended outer collection rule is unified across block rewards and eligible fees once implemented: 20% to the author / collator and 80% to Fee Sink. Fee Sink then fans out to the active staking ingress channels for the current phase.
+
 ### Per-asset sovereign channels
 
-Each registered staking asset has two deterministic accounts:
+Each registered staking asset has three deterministic ingress accounts:
 
 | Account | Role |
 | :------ | :--- |
 | `pool_account(asset_id)` | Holds backing for the share-vault and receives stake deposits, external backing inflows, and same-asset auto-compound settlement for non-native rewards |
-| `reward_account(asset_id)` | Holds reward funding and backs reward liabilities without directly changing pool share price |
+| `lp_reward_account(asset_id)` | Holds LP-donation funding before an actor/runtime path converts it into balanced AMM donation |
+| `reward_account(asset_id)` | Holds claimable reward funding and backs reward liabilities without directly changing pool share price |
 
-The account split is essential: backing inflow changes `stXXX` value, while reward inflow stays claimable through bounded epoch accounting.
+The account split is essential: backing inflow changes `stXXX` value, LP reward inflow strengthens AMM reserves, and claimable reward inflow stays claimable through bounded epoch accounting. Phase 1 uses `pool_account` plus `lp_reward_account`; Phase 2 additionally activates `reward_account` for native nomination rewards.
 
 ### Receipt asset lifecycle
 

@@ -13,6 +13,8 @@ pub mod common;
 #[cfg(test)]
 pub mod economic_metrics;
 #[cfg(test)]
+pub mod fee_integration_tests;
+#[cfg(test)]
 pub mod governance_integration_tests;
 #[cfg(test)]
 pub mod load_testing;

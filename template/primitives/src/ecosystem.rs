@@ -24,14 +24,14 @@ pub mod aaa_ids {
   ///   SS58: `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv`
   pub const BURNING_MANAGER_AAA_ID: u64 = 0;
 
-  /// Reserved AAA-derived address for the Fee Sink
-  /// Reserved slot (`aaa_id = 1`), no System AAA execution plan is bound
+  /// Fee Sink System AAA — unified fee collection and phase-aware redistribution
+  /// Created at genesis (`aaa_id = 1`)
   ///
   /// Canonical role: unified fee-collection address for protocol fees.
-  /// It is the stable sink for AAA-originated fees today and is reserved as the
-  /// deterministic collection point for broader system fee routing as the launch
-  /// line evolves. The canonical downstream policy for funds accumulated here is
-  /// a 50/50 split between Burning Manager processing and staking reward funding.
+  /// It is the stable 80% sink for block rewards and eligible fees after the
+  /// collator/author 20% share is paid. Fee Sink redistribution is phase-aware:
+  /// Phase 1 routes only to staking-pool yield and native LP donation flows;
+  /// Phase 2 may add claimable LP-nomination rewards weighted by GovXP.
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
   ///   hex:  `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084`

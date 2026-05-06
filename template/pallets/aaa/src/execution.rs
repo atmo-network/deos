@@ -1,6 +1,6 @@
 use super::pallet::*;
 use super::types::Task as AaaTask;
-use super::{AssetOps, DexOps, LiquidityDonationOps, StakingOps};
+use super::{AssetOps, DexOps, FeeRouter, LiquidityDonationOps, StakingOps};
 use alloc::vec::Vec;
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
@@ -186,7 +186,7 @@ impl<T: Config> Pallet<T> {
             }
             continue;
           }
-          if T::AssetOps::transfer(&actor, &fee_sink, native, eval_fee).is_err() {
+          if T::FeeRouter::route_fee(&actor, &fee_sink, native, eval_fee).is_err() {
             failed_steps = failed_steps.saturating_add(1);
             Self::deposit_event(Event::StepFailed {
               aaa_id,
@@ -322,7 +322,7 @@ impl<T: Config> Pallet<T> {
           }
           continue;
         }
-        if T::AssetOps::transfer(&actor, &fee_sink, native, exec_fee).is_err() {
+        if T::FeeRouter::route_fee(&actor, &fee_sink, native, exec_fee).is_err() {
           reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::StepFailed {
@@ -445,7 +445,7 @@ impl<T: Config> Pallet<T> {
             });
             continue;
           }
-          if T::AssetOps::transfer(actor, &fee_sink, native, eval_fee).is_err() {
+          if T::FeeRouter::route_fee(actor, &fee_sink, native, eval_fee).is_err() {
             let error = DispatchError::Other("EvaluationFeeTransferFailed");
             failed_steps = failed_steps.saturating_add(1);
             Self::deposit_event(Event::OnCloseStepFailed {
@@ -537,7 +537,7 @@ impl<T: Config> Pallet<T> {
           });
           continue;
         }
-        if T::AssetOps::transfer(actor, &fee_sink, native, exec_fee).is_err() {
+        if T::FeeRouter::route_fee(actor, &fee_sink, native, exec_fee).is_err() {
           let error = DispatchError::Other("ExecutionFeeTransferFailed");
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::OnCloseStepFailed {

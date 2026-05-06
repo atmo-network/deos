@@ -15,7 +15,7 @@ use polkadot_sdk::{
 use alloc::vec;
 use core::cell::RefCell;
 
-use crate::{AssetOps, DexOps};
+use crate::{AssetOps, DexOps, FeeRouter};
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
 pub type AccountId = u64;
@@ -169,6 +169,18 @@ pub fn reset_mock_adapters() {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+}
+
+pub struct MockFeeRouter;
+impl FeeRouter<AccountId, TestAsset, Balance> for MockFeeRouter {
+  fn route_fee(
+    payer: &AccountId,
+    fee_sink: &AccountId,
+    native_asset: TestAsset,
+    amount: Balance,
+  ) -> DispatchResult {
+    MockAssetOps::transfer(payer, fee_sink, native_asset, amount)
+  }
 }
 
 pub struct MockAssetOps;
@@ -581,6 +593,7 @@ impl pallet_aaa::Config for Test {
   type AtomicityHook = MockAtomicityHook;
   type AddressEventIngressHook = ();
   type FeeSink = TestFeeSink;
+  type FeeRouter = MockFeeRouter;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
   type MinUserBalance = TestMinUserBalance;
   type WeightInfo = ();

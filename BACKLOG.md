@@ -27,7 +27,7 @@
 > - reserve-aware Zap slippage intentionally frozen to execution-plan build time for the current launch line
 > - same-asset auto-compound reward settlement
 > - mirror implementation-architecture docs for staking and governance
-> - Polkadot SDK `2603` / node `1.22.0` runtime line with `system_version >= 3` and staged `:pending_code -> :code` runtime-upgrade behavior
+> - Polkadot SDK `2603` / node `1.22.1` runtime line with `system_version >= 3` and staged `:pending_code -> :code` runtime-upgrade behavior
 
 ## Open Runtime / Security Hardening
 
@@ -156,7 +156,7 @@
 ### 2. Web-client wallet and execution UX hardening
 
 - [x] `Finish transaction-grade wallet UX in web-client:` account/signer ownership, bounded asset projection, send-surface provenance, native safe-max honesty, tracked-asset transfer coverage, and draft-keyed in-flight send behavior across watch-only/signer transitions are now landed on the current line.
-- [ ] `Extend the Wallet widget beyond the bounded tracked-asset contract:` the wallet now discovers the bounded tracked-asset set with live balances for the selected account and the send surface can already transfer Native plus those bounded tracked assets, but any future expansion beyond that bounded runtime-facing contract still needs a wider authoritative asset-presentation / discovery surface before the wallet should pretend to expose a full portfolio UX.
+- [~] `Extend the Wallet widget beyond the bounded tracked-asset contract:` the wallet now discovers the bounded tracked-asset set with live balances for the selected account and the send surface can already transfer Native plus those bounded tracked assets; any expansion to a full portfolio UX is blocked until a materialized / indexed asset-discovery surface exists beyond live chain storage.
 - [x] `Harden the Swap widget execution path:` signer guidance, safe-max, minimum-buy, quote gating, submit self-validation, slippage-aligned quote eligibility, and buy/sell execution log wording are now all aligned on the current line.
 - [x] `Keep web-client bundle growth honest after local dev signing landed:` the first lazy-loading, bootstrap deferral, and bundle-report slices are already in place. The remaining shared `deos` / metadata bootstrap cost is now treated as consciously accepted startup weight under the current on-chain-first/eager product contract rather than as hidden optimization debt.
   - [x] `Trace the current bootstrap importer graph and choose the next concrete boundary to cut:` the current bundle report now points to governance advisory payload hashing as the next honest cut, because `GovernanceWidget` still statically pulls the heavy `@polkadot/util-crypto` path through advisory-payload derivation.
@@ -182,7 +182,32 @@
   - [x] `Keep native staking operations readable after the write-surface expansion:` `StakingWidget` now groups nomination rewards, collator LP nomination, and governance-only NativeVotePower custody through an inline collapsible action-section snippet instead of a separate one-off component or one long uninterrupted action card stack.
   - [ ] `If another frontend store or widget regrows into a hotspot, extract one named sub-slice with explicit ownership instead of reopening a generic refactor umbrella`
 
-## Conditional / Externally Gated Work
+### Collator Economics & Fee Routing — two-phase launch configuration
+
+> Reference block-reward distribution design for launching the network in two phases.
+> Phase 1 uses trusted, permissioned collators and only pool-level reward flows.
+> Phase 2 introduces permissionless collators, LP nomination, and claimable LP-staking nomination rewards.
+
+- [x] `Define the two-phase reward contract before code changes:` all rewards and fees follow one outer split: 20% to the block author / trusted collator, 80% to Fee Sink (AAA #1), then Fee Sink redistributes by the active phase.
+  - [x] `Phase 1 — trusted-collator launch:` no permissionless collator nomination, no LP-point nomination, no claimable nomination reward path; Fee Sink routes only into the staking-pool yield flow and the `NTVE/stNTVE` liquidity donation flow.
+  - [x] `Phase 2 — permissionless collators:` enable LP nomination to specific collators and introduce the claimable LP-staking nomination reward path where GovXP affects each nominator's reward share.
+  - [x] `Freeze the phase-switch contract:` Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter; LP nomination and claimable nomination rewards stay inactive until a later runtime line enables permissionless collators.
+- [x] `Implement the unified 20/80 collection rule:` route 20% of block rewards and eligible fees to the collator and 80% to Fee Sink (AAA #1).
+  - [x] `Transaction fee routing:` runtime transaction fees now use `RuntimeFeeSplit`, sending 20% to the current author when resolvable and routing the remainder to Fee Sink, with no-author fallback routing all fees to Fee Sink.
+  - [x] `AAA fee routing:` user-AAA creation/evaluation/execution fees now route through an author-aware `FeeRouter`; when the current author is resolvable it applies the same 20% collator / 80% Fee Sink split, otherwise it falls back to routing fees to Fee Sink.
+  - [ ] `Block reward routing:` blocked on explicit block reward source/amount design decision; the split infrastructure is ready when the economic parameters land.
+- [x] `Implement Phase 1 Fee Sink redistribution:` Fee Sink is now materialized as System AAA #1 and redistributes accumulated native fees/rewards into exactly two Phase 1 pool flows.
+  - [x] `Staking pool flow:` Fee Sink sends 50% of native balance into the native staking pool account so later pool sync raises `stNTVE/NTVE` exchange rate.
+  - [x] `Liquidity pool flow:` Fee Sink sends 50% of native balance into `lp_reward_account(NTVE)` as the dedicated native LP-donation ingress.
+  - [x] `Keep collator-specific reward accounting disabled in Phase 1:` trusted collators remain permissioned operators; the Phase 1 Fee Sink execution plan fans out only to pool-level ingress accounts, not to per-account LP nomination reward snapshots.
+- [~] `Prepare Phase 2 reward routing without activating it at launch:` `build_phase2_fee_sink_execution_plan` with 1:1:4 split target is defined alongside the Phase 1 plan in AAA config, but Fee Sink runtime activation remains on the Phase 1 50/50 plan; full Phase 2 activation gate is the permissionless-collator runtime-upgrade boundary.
+  - [~] `Claimable LP nomination flow:` `reward_account(NTVE)` ingress is defined; the Phase 2 Fee Sink plan routes 4/6 into it; GovXP-weighted distribution is already partially wired through `pallet-governance` reward-touch hooks and `pallet-staking` nomination claim surfaces but needs explicit LP-nomination reward-weight provider activation when permissionless collators ship.
+  - [ ] `LP nomination activation:` expose LP-point nomination to specific collators only when permissionless collator selection is enabled.
+- [x] `Define staking pallet reward ingress accounts:` `pool_account(asset_id)`, `lp_reward_account(asset_id)`, and `reward_account(asset_id)` now separate staking-pool yield, liquidity-pool donation, and future claimable nomination rewards so Fee Sink distribution has explicit destinations instead of implicit balance conventions.
+- [x] `Add a /simulator model for the two-phase distribution:` simulator helpers and regressions now verify the 20/80 collection split, Phase 1 two-pool Fee Sink distribution, and Phase 2 `1:1:4` distribution conservation.
+- [x] `Update the canonical architecture docs:` `core.architecture.en.md`, `staking.architecture.en.md`, `staking.specification.en.md`, and `aaa.architecture.en.md` now reflect the two-phase fee/reward flow without adding a separate system-map document.
+
+### Conditional / Externally Gated Work
 
 ### 4. Governance execution expansion policy
 

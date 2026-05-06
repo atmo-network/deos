@@ -54,7 +54,16 @@ It would not participate in native collator nomination unless a future governanc
 
 ---
 
-## 3. Three Reward Flows
+## 3. Reward Flows
+
+The launch line is phase-aware:
+
+- Phase 1 uses trusted permissioned collators and activates only staking-yield and LP-donation flows
+- Phase 2 may add permissionless collators, explicit LP nomination, and the claimable governance-conditioned nomination reward flow
+
+Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter. LP nomination and claimable nomination rewards MUST remain inactive while the runtime is in the trusted-collator Phase 1 line.
+
+Upstream collection follows one outer rule when the author can be resolved: 20% to the collator / block author and 80% to Fee Sink. Fee Sink redistribution selects the active downstream flows for the current phase.
 
 ### 3.1 Staking yield
 
@@ -97,7 +106,7 @@ This reward is not separately claimable. Existing LP holders receive it through 
 
 ### 3.3 Governance-conditioned nomination reward
 
-Nomination reward is the selective claimable flow. It belongs only to accounts that lock `NTVE/stNTVE` LP for collator nomination and maintain useful governance activity.
+Nomination reward is the selective claimable Phase 2 flow. It belongs only to accounts that lock `NTVE/stNTVE` LP for collator nomination and maintain useful governance activity.
 
 ```text
 locked_lp_native_value * governance_coefficient -> nomination_reward_weight
@@ -109,7 +118,7 @@ Reward funding stays outside the staking pool until epoch settlement:
 reward_account(NTVE) -> epoch pot -> claim_nomination_reward
 ```
 
-A conforming implementation MAY expose a compound path that turns claimed nomination reward into more `NTVE/stNTVE` LP and locks it to an explicit collator target chosen at claim time. The launch contract intentionally keeps nomination rewards account-scoped rather than per-collator-scoped so compound settlement does not require historical per-operator attribution.
+A conforming Phase 2 implementation MAY expose a compound path that turns claimed nomination reward into more `NTVE/stNTVE` LP and locks it to an explicit collator target chosen at claim time. The Phase 1 launch contract keeps this path inactive: trusted collators do not receive user LP nominations, and Fee Sink redistribution targets only staking-pool yield plus native LP donation.
 
 ---
 
@@ -165,6 +174,8 @@ It MUST NOT change:
 - Governance coefficient
 - Frozen vote power
 - Epoch reward snapshots
+
+A transfer of a non-locked `NTVE/stNTVE` LP token changes only liquid LP ownership. It MUST NOT change collator backing, nomination reward eligibility, governance coefficient, frozen vote power, or epoch reward snapshots. Only locked LP positions carry those properties.
 
 ---
 
@@ -247,6 +258,12 @@ stake the required NTVE side into stNTVE
 donate balanced NTVE + stNTVE into AMM pool
 ```
 
+The donation MUST be skipped or deferred when:
+
+- The computed stake side exceeds available AAA `$NTVE` balance
+- Current reserves would require a split outside the configured ratio tolerance
+- The `NTVE/stNTVE` pool is not yet created or has zero reserves on either side
+
 The donation operation SHOULD enforce configured ratio tolerance and emit a donation event suitable for wallets, analytics, and route-quality accounting. Swap or mixed-route acquisition MAY be added later only as an explicit policy extension when reserve divergence proves the deterministic stake-acquisition baseline insufficient.
 
 ---
@@ -299,6 +316,8 @@ locked_lp_native_value(account) =
   locked_lp_amount(account) / lp_total_supply
   * balanced_pool_native_value
 ```
+
+`staking_exchange_rate` is defined only when `total_shares > 0`. When the native staking pool is empty, no `stNTVE` exists, therefore no `NTVE/stNTVE` LP can be created and this formula is never evaluated against an empty staking pool.
 
 Using `min` prevents excess on one side of a skewed pool from inflating backing power. The weight rewards useful two-sided liquidity rather than raw reserve size.
 
@@ -358,6 +377,8 @@ Therefore:
 - `stNTVE` deposited into an LP no longer votes as standalone `stNTVE`
 - LP locked for collator may be reused as governance power only through an explicit governance-use record
 - Transferable balances outside a lock do not vote
+
+An account MUST NOT simultaneously hold the same token units in both a governance lock and an LP position. Governance custody withdrawal is blocked while the aggregate `lock_until` horizon is active, which naturally prevents double counting: token units must first exit governance custody before they can be deposited into an LP.
 
 ---
 

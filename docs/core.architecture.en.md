@@ -128,6 +128,18 @@ _The deflationary engine._
 - `Execution Plan`: For each registered foreign asset — `SwapExactIn(foreign→native, AllBalance, 5% slippage)` with `BalanceAbove` dust guard. Final step — `Burn(native, AllBalance)`.
 - `Resilience`: Swap failures → `ContinueNextStep` → skip to next asset or burn step. Cooldown prevents retry storms.
 
+#### 💸 Fee Sink (System AAA #1 — Unified Fee Collection and Phase 1 Redistribution)
+
+_The launch economics fan-out hub._
+
+- `Function`: Collects all protocol fees and routes them into the active reward flows for the current launch phase.
+- `Collection Rule`: Unified 20% collator / 80% Fee Sink split applied to transaction fees, AAA fees, and future block rewards once the block reward source is defined. When the author cannot be resolved, 100% goes to Fee Sink.
+- `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — every block, timer-driven `every_blocks = 1`:
+  1. 50% → `pool_account(NTVE)`: staking-pool backing inflow → raises `stNTVE/NTVE` exchange rate
+  2. 50% → `lp_reward_account(NTVE)`: native LP-donation ingress → feeds AAA #14 balanced donation into `NTVE/stNTVE`
+- `Phase 2 (future)`: 1∶1∶4 redistribution into staking pool, liquidity pool, and claimable LP-nomination rewards weighted by GovXP.
+- `Resilience`: Phase 1 SplitTransfer legs are unwrapped synchronously, with ED preservation for the Fee Sink sovereign account.
+
 #### ⚡ Zap Manager (System AAA #2 — The Transformer)
 
 _The liquidity compositor._

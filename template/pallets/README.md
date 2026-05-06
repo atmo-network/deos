@@ -2,7 +2,7 @@
 
 This directory contains the custom pallets that implement the DEOS runtime kernel and its current reference economic configuration. Each pallet is designed with modern FRAME patterns and follows the project's architectural principles for production-ready blockchain applications.
 
-The current pallet set is maintained against the repository's `Polkadot SDK 2603 / node 1.22.0` line. Most of the 2603 migration fallout landed in runtime/session/XCM integration surfaces rather than in pallet cores, and the pallet-local README files now record where pallet-specific cleanup was or was not needed.
+The current pallet set is maintained against the repository's `Polkadot SDK 2603 / node 1.22.1` line. Most of the 2603 migration fallout landed in runtime/session/XCM integration surfaces rather than in pallet cores, and the pallet-local README files now record where pallet-specific cleanup was or was not needed.
 
 ## 🏗️ Available Pallets
 

@@ -3,7 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-POLKADOT_VERSION="${POLKADOT_VERSION:-polkadot-v1.22.0}"
+POLKADOT_VERSION="${POLKADOT_VERSION:-polkadot-stable2603-1}"
 RELEASE_URL="https://github.com/paritytech/polkadot-sdk/releases/download/${POLKADOT_VERSION}"
 
 BINARIES=(
@@ -23,7 +23,7 @@ Options:
   -h, --help        Show this help message
 
 Environment:
-  POLKADOT_VERSION=polkadot-v1.22.0
+  POLKADOT_VERSION=polkadot-stable2603-1
 EOF
 }
 
