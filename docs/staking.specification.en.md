@@ -58,12 +58,12 @@ It would not participate in native collator nomination unless a future governanc
 
 The launch line is phase-aware:
 
-- Phase 1 uses trusted permissioned collators and activates only staking-yield and LP-donation flows
+- Phase 1 uses trusted permissioned collators, wires LP-donation funding through AAA #14, and bridges staking-yield native-balance holdings into staking pool truth after donation execution
 - Phase 2 may add permissionless collators, explicit LP nomination, and the claimable governance-conditioned nomination reward flow
 
 Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter. LP nomination and claimable nomination rewards MUST remain inactive while the runtime is in the trusted-collator Phase 1 line.
 
-Upstream collection follows one outer rule when the author can be resolved: 20% to the collator / block author and 80% to Fee Sink. Fee Sink redistribution selects the active downstream flows for the current phase.
+Upstream collection follows one outer rule when the author can be resolved: 20% to the collator / block author and 80% to Fee Sink. Fee Sink redistribution selects the active downstream flows for the current phase; the current release line wires the LP-donation half into AAA #14 and bridges staking-yield native balances into staking pool truth after donation execution.
 
 ### 3.1 Staking yield
 

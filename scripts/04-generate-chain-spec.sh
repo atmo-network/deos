@@ -94,7 +94,7 @@ check_prerequisites() {
 
 generate_chain_spec() {
     phase_banner "Step 2: Generate chain spec"
-    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
+    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
     local chain_spec_path="$TEMPLATE_DIR/chain_spec.json"
 
     log_info "Generating chain specification"

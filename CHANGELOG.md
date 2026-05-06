@@ -6,11 +6,21 @@
 
 ## [Unreleased]
 
+### Release Readiness Fixes
+
+- `deos-runtime`: Wired the Phase 1 Fee Sink LP-donation half into the Native Staking LP Farmer by routing native fee balances to AAA #14 and bridging that sovereign ingress into the local native-staking asset used by the donation task.
+- `deos-runtime`: Added the post-donation staking-yield bridge, burning native balance held by the staking pool account and minting the local native-staking asset into pool truth after AAA #14 donation execution.
+- `deos-runtime`: Added runtime regression proving Fee Sink redistribution can increase `NTVE/stNTVE` reserves through AAA #14 without minting extra LP to the donor and can bridge the staking-yield side without leaving native balances stranded.
+- `docs` + `BACKLOG.md`: Closed the Phase 1 Fee Sink redistribution release gate for eligible fees; block reward routing remains gated on the explicit source/amount design decision.
+- `deos-runtime`: Cleaned runtime-benchmark feature-gated test imports/helpers so the all-features local CI clippy lane stays warning-free.
+- `scripts`: Repaired stale runtime WASM artifact paths in build, chain-spec, and try-runtime helpers after the DEOS runtime artifact rename.
+- `scripts`: Made the Zombienet E2E block-stability probe tolerate parachain startup/onboarding latency and the existing 100-block local target's six-second cadence before declaring failure.
+
 ## [0.3.2] - 2026-05-06
 
 ### Template Workspace Hygiene
 
-- `release`: Prepared the `0.3.2` release line by bumping Rust workspace package versions, web-client package metadata, and runtime `spec_version` to `208` for the XCM weight/config update.
+- `release`: Prepared the `0.3.2` release line by bumping Rust workspace package versions and web-client package metadata, with runtime `spec_version` now at `209` after the XCM weight/config update plus Phase 1 Fee Sink bridge fix.
 - `template`: Refreshed staking workspace README wording around the current liquid `stXXX` / locked `NTVE/stNTVE` LP nomination contract and normalized the asset-conversion runtime integration test module spelling.
 - `deos-runtime`: Replaced most placeholder runtime `WeightInfo = ()` bindings with concrete upstream SDK `SubstrateWeight<Runtime>` implementations for timestamp, transaction-payment, parachain-system, message queue, XCMP queue, session, and collator selection; the remaining weight-reclaim placeholder is documented as an SDK 2603 visibility constraint where the public fallback returns the same measured constant weight.
 - `scripts`: Added `audit-template-readiness.sh`, a lightweight static gate for template readiness smells covering XCM fallback weights, unclassified runtime weight placeholders, stale staking aliases, and asset-conversion naming drift.
@@ -20,9 +30,9 @@
 
 - `deos-runtime`: Added the first unified fee-collection slice for transaction fees: `RuntimeFeeSplit` routes 20% of resolved transaction-fee credit to the current author / collator and 80% to Fee Sink, with a safe fallback that sends all fees to Fee Sink when no author can be resolved.
 - `pallet-aaa` + `deos-runtime`: Replaced direct AAA fee transfers with a runtime-bound `FeeRouter`, so user-AAA creation/evaluation/execution fees can use the same 20% author / 80% Fee Sink contour when the author is resolvable and otherwise safely fall back to Fee Sink.
-- `pallet-staking`: Added deterministic `lp_reward_account(asset_id)` ingress alongside `pool_account(asset_id)` and `reward_account(asset_id)`, giving Phase 1 Fee Sink redistribution explicit destinations for staking-pool yield and LP donation while reserving `reward_account` for future claimable nomination rewards.
+- `pallet-staking`: Added deterministic `lp_reward_account(asset_id)` ingress alongside `pool_account(asset_id)` and `reward_account(asset_id)`, preserving separate staking-pool yield, liquidity-pool donation, and future claimable reward channels while the current Phase 1 Fee Sink plan routes native LP-donation funding directly into AAA #14.
 - `simulator`: Added pure reward-routing helpers and regressions for the 20/80 outer collection split, Phase 1 two-pool Fee Sink redistribution, and Phase 2 `1:1:4` Fee Sink redistribution.
-- `pallet-aaa` + `deos-runtime`: Materialized Fee Sink as System AAA #1 with a Phase 1 `SplitTransfer` execution plan that fans out accumulated native fees/rewards 50/50 into the native staking pool account and `lp_reward_account(NTVE)`.
+- `pallet-aaa` + `deos-runtime`: Materialized Fee Sink as System AAA #1 with a Phase 1 `SplitTransfer` execution plan that fans out accumulated native fees/rewards 50/50 into the native staking pool account and the Native Staking LP Farmer AAA #14.
 - `docs` + `BACKLOG.md`: Fixed the launch economics contract around the two-phase model: Phase 1 keeps trusted collators and only two pool reward flows, while Phase 2 is an explicit runtime-upgrade boundary for permissionless collators, LP nomination, and GovXP-weighted claimable nomination rewards.
 
 ## [0.3.1] - 2026-05-06

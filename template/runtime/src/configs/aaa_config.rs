@@ -140,6 +140,66 @@ impl Get<crate::AccountId> for AaaFeeRecipient {
 
 pub struct TmctolAssetOps;
 
+impl TmctolAssetOps {
+  fn bridge_native_staking_ingress(to: &AccountId, amount: Balance) -> Result<(), DispatchError> {
+    if amount == 0 {
+      return Ok(());
+    }
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    if !<pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::asset_exists(
+      native_asset_id,
+    ) {
+      return Ok(());
+    }
+    let lp_farmer = crate::AAA::sovereign_account_id_system(
+      primitives::ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+    );
+    if to != &lp_farmer {
+      return Ok(());
+    }
+    let (_, remainder) = <Balances as Currency<AccountId>>::slash(to, amount);
+    if remainder > 0 {
+      return Err(DispatchError::Token(TokenError::FundsUnavailable));
+    }
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      native_asset_id,
+      to,
+      amount,
+    )?;
+    Ok(())
+  }
+
+  pub fn bridge_native_staking_pool_yield() -> Result<(), DispatchError> {
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    if !<pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::asset_exists(
+      native_asset_id,
+    ) {
+      return Ok(());
+    }
+    let staking_pool = crate::Staking::pool_account_for(native_asset_id);
+    let amount = <Balances as Currency<AccountId>>::free_balance(&staking_pool);
+    if amount == 0 {
+      return Ok(());
+    }
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let (_, remainder) = <Balances as Currency<AccountId>>::slash(&staking_pool, amount);
+      if remainder > 0 {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          DispatchError::Token(TokenError::FundsUnavailable),
+        ));
+      }
+      if let Err(error) = <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+        native_asset_id,
+        &staking_pool,
+        amount,
+      ) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+    })
+  }
+}
+
 impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
   fn transfer(
     from: &AccountId,
@@ -149,12 +209,20 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
   ) -> Result<(), DispatchError> {
     match asset {
       AssetKind::Native => {
-        <Balances as Currency<AccountId>>::transfer(
-          from,
-          to,
-          amount,
-          polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
-        )?;
+        polkadot_sdk::frame_support::storage::with_transaction(|| {
+          if let Err(error) = <Balances as Currency<AccountId>>::transfer(
+            from,
+            to,
+            amount,
+            polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+          ) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+          if let Err(error) = Self::bridge_native_staking_ingress(to, amount) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+        })?;
       }
       AssetKind::Local(id) | AssetKind::Foreign(id) => {
         <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::transfer(
@@ -279,11 +347,14 @@ impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDona
       .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
     if asset_a == AssetKind::Local(native_asset_id) && asset_b == AssetKind::Local(staked_asset_id)
     {
-      return crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
-        who,
-        amount,
-        max_ratio_error,
-      );
+      let donation =
+        crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
+          who,
+          amount,
+          max_ratio_error,
+        )?;
+      TmctolAssetOps::bridge_native_staking_pool_yield()?;
+      return Ok(donation);
     }
     Err(DispatchError::Other("LiquidityDonationUnsupported"))
   }
@@ -743,7 +814,9 @@ impl TmctolGenesisSystemAaas {
             share: Perbill::from_percent(50),
           },
           SplitLeg {
-            to: crate::Staking::lp_reward_account_for(0),
+            to: crate::AAA::sovereign_account_id_system(
+              ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+            ),
             share: Perbill::from_percent(50),
           },
         ]

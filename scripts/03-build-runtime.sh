@@ -67,7 +67,7 @@ build_runtime() {
 
 verify_build() {
     phase_banner "Step 4: Verify output"
-    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/tmctol_runtime.compact.compressed.wasm"
+    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
 
     if [[ -f "$wasm_path" ]]; then
         local wasm_size=$(du -h "$wasm_path" | cut -f1)

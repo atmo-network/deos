@@ -10,6 +10,7 @@ use polkadot_sdk::frame_support::{
   },
   weights::Weight,
 };
+#[cfg(not(feature = "runtime-benchmarks"))]
 use polkadot_sdk::sp_arithmetic::FixedPointNumber;
 use polkadot_sdk::sp_runtime::FixedU128;
 
@@ -40,10 +41,12 @@ fn governance_maturity_epoch() -> crate::BlockNumber {
   governance_primary_last_open_epoch().saturating_add(1)
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn governance_protection_last_open_epoch() -> crate::BlockNumber {
   crate::configs::governance_config::ProposalProtectionPeriod::get()
 }
 
+#[cfg(not(feature = "runtime-benchmarks"))]
 fn governance_protection_close_epoch() -> crate::BlockNumber {
   governance_protection_last_open_epoch().saturating_add(1)
 }

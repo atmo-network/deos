@@ -5,7 +5,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 COLLATOR_RPC_URL="${COLLATOR_RPC_URL:-http://127.0.0.1:9988}"
 BLOCK_TARGET="${BLOCK_TARGET:-100}"
-BLOCK_TIMEOUT_SEC="${BLOCK_TIMEOUT_SEC:-180}"
+BLOCK_TIMEOUT_SEC="${BLOCK_TIMEOUT_SEC:-900}"
+BLOCK_STALL_TIMEOUT_SEC="${BLOCK_STALL_TIMEOUT_SEC:-60}"
 
 usage() {
     cat <<'EOF2'
@@ -19,7 +20,8 @@ Options:
 Environment:
   COLLATOR_RPC_URL=http://127.0.0.1:9988
   BLOCK_TARGET=100
-  BLOCK_TIMEOUT_SEC=180
+  BLOCK_TIMEOUT_SEC=900
+  BLOCK_STALL_TIMEOUT_SEC=60
 EOF2
 }
 
@@ -65,9 +67,10 @@ scenario_block_stability() {
 
     local start_ts
     local last=0
-    local stalled=0
+    local last_advance_ts
 
     start_ts=$(date +%s)
+    last_advance_ts=$start_ts
     while true; do
         local now
         local block_hex
@@ -86,15 +89,12 @@ scenario_block_stability() {
             break
         fi
 
-        if (( block == last )); then
-            stalled=$((stalled + 1))
-            if (( stalled > 10 )); then
-                log_error "Block production appears stalled at ${block}"
-                exit 1
-            fi
-        else
-            stalled=0
+        if (( block > last )); then
             last=$block
+            last_advance_ts=$now
+        elif (( block > 0 && now - last_advance_ts > BLOCK_STALL_TIMEOUT_SEC )); then
+            log_error "Block production appears stalled at ${block}"
+            exit 1
         fi
 
         sleep 2

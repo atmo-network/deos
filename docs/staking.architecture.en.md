@@ -74,7 +74,7 @@ graph TD
 
 ### Launch reward phases
 
-The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators and keeps user nomination economics disabled: Fee Sink redistribution targets only staking-pool backing inflow and native LP donation. Phase 2 may enable permissionless collators, explicit LP nomination to a collator, and claimable native nomination rewards weighted by locked collator LP plus GovXP.
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators and keeps user nomination economics disabled. The LP-donation half is wired through Fee Sink → AAA #14 with a native-balance bridge into the local native-staking asset before donation execution. The staking-yield half is bridged after that donation hook by burning native balance held by the staking pool account and minting the local native-staking asset into pool truth. Phase 2 may enable permissionless collators, explicit LP nomination to a collator, and claimable native nomination rewards weighted by locked collator LP plus GovXP.
 
 Phase 2 is treated as a runtime-upgrade boundary. The current launch line should not expose a governance parameter that can silently enable LP nomination or claimable nomination rewards while collator selection is still permissioned.
 
@@ -84,13 +84,13 @@ The intended outer collection rule is unified across block rewards and eligible 
 
 Each registered staking asset has three deterministic ingress accounts:
 
-| Account | Role |
-| :------ | :--- |
-| `pool_account(asset_id)` | Holds backing for the share-vault and receives stake deposits, external backing inflows, and same-asset auto-compound settlement for non-native rewards |
-| `lp_reward_account(asset_id)` | Holds LP-donation funding before an actor/runtime path converts it into balanced AMM donation |
-| `reward_account(asset_id)` | Holds claimable reward funding and backs reward liabilities without directly changing pool share price |
+| Account                       | Role                                                                                                                                                    |
+| :---------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pool_account(asset_id)`      | Holds backing for the share-vault and receives stake deposits, external backing inflows, and same-asset auto-compound settlement for non-native rewards |
+| `lp_reward_account(asset_id)` | Holds LP-donation funding before an actor/runtime path converts it into balanced AMM donation                                                           |
+| `reward_account(asset_id)`    | Holds claimable reward funding and backs reward liabilities without directly changing pool share price                                                  |
 
-The account split is essential: backing inflow changes `stXXX` value, LP reward inflow strengthens AMM reserves, and claimable reward inflow stays claimable through bounded epoch accounting. Phase 1 uses `pool_account` plus `lp_reward_account`; Phase 2 additionally activates `reward_account` for native nomination rewards.
+The account split is essential: backing inflow changes `stXXX` value, LP reward inflow strengthens AMM reserves, and claimable reward inflow stays claimable through bounded epoch accounting. Phase 1 now wires the LP-donation half directly into AAA #14 rather than through `lp_reward_account`, while `pool_account` receives staking-yield truth through the post-donation native-balance bridge. Phase 2 additionally activates `reward_account` for native nomination rewards.
 
 ### Receipt asset lifecycle
 
@@ -117,56 +117,56 @@ The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace befor
 
 ### Core pool and receipt state
 
-| Storage | Role | Notes |
-| :------ | :--- | :---- |
-| `Pools[asset_id]` | Share-vault totals | `total_shares`, `accounted_balance`, `active_staker_count` |
-| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | Bounded direct lookup for receipt -> base |
-| `Positions[(asset_id, account)]` | Legacy share ownership | Compatibility bridge for pre-receipt positions |
-| `OperatorCommissions[operator]` | Operator commission | Bounded by runtime `MaxOperatorCommission` |
+| Storage                                      | Role                   | Notes                                                      |
+| :------------------------------------------- | :--------------------- | :--------------------------------------------------------- |
+| `Pools[asset_id]`                            | Share-vault totals     | `total_shares`, `accounted_balance`, `active_staker_count` |
+| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | Bounded direct lookup for receipt -> base                  |
+| `Positions[(asset_id, account)]`             | Legacy share ownership | Compatibility bridge for pre-receipt positions             |
+| `OperatorCommissions[operator]`              | Operator commission    | Bounded by runtime `MaxOperatorCommission`                 |
 
 `Positions` is retained only for legacy compatibility. Fresh ownership is receipt-based.
 
 ### Native LP security state
 
-| Storage | Role |
-| :------ | :--- |
-| `NativeLpLocks[(account, operator)]` | Collator-specific locked LP position |
-| `OperatorNativeLpLocked[operator]` | Aggregate LP backing for session ranking |
-| `AccountNativeLpLocked[account]` | Aggregate account LP custody for NativeVotePower |
-| `AccountNativeCollatorLpLocked[account]` | Collator-locked LP only, used for native nomination rewards |
-| `TotalNativeLpLocked` | Aggregate native LP custody |
-| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal |
+| Storage                                       | Role                                                        |
+| :-------------------------------------------- | :---------------------------------------------------------- |
+| `NativeLpLocks[(account, operator)]`          | Collator-specific locked LP position                        |
+| `OperatorNativeLpLocked[operator]`            | Aggregate LP backing for session ranking                    |
+| `AccountNativeLpLocked[account]`              | Aggregate account LP custody for NativeVotePower            |
+| `AccountNativeCollatorLpLocked[account]`      | Collator-locked LP only, used for native nomination rewards |
+| `TotalNativeLpLocked`                         | Aggregate native LP custody                                 |
+| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal   |
 
 Unlock requests immediately remove LP from backing and reward/governance aggregates, then delay token withdrawal by `NativeLpUnlockDelay`.
 
 ### Native governance custody state
 
-| Storage | Role |
-| :------ | :--- |
-| `NativeGovernanceLpLocks[account]` | Standalone `NTVE/stNTVE` LP locked for NativeVotePower only |
-| `PendingNativeGovernanceLpUnlocks[account]` | Delayed standalone LP withdrawal |
-| `NativeGovernanceAssetLocked[(account, asset_id)]` | Locked `$NTVE` or `stNTVE` for NativeVotePower |
-| `TotalNativeGovernanceAssetLocked[asset_id]` | Aggregate locked native-governance asset amount |
-| `PendingNativeGovernanceAssetUnlocks[(account, asset_id)]` | Delayed native-governance asset withdrawal |
+| Storage                                                    | Role                                                        |
+| :--------------------------------------------------------- | :---------------------------------------------------------- |
+| `NativeGovernanceLpLocks[account]`                         | Standalone `NTVE/stNTVE` LP locked for NativeVotePower only |
+| `PendingNativeGovernanceLpUnlocks[account]`                | Delayed standalone LP withdrawal                            |
+| `NativeGovernanceAssetLocked[(account, asset_id)]`         | Locked `$NTVE` or `stNTVE` for NativeVotePower              |
+| `TotalNativeGovernanceAssetLocked[asset_id]`               | Aggregate locked native-governance asset amount             |
+| `PendingNativeGovernanceAssetUnlocks[(account, asset_id)]` | Delayed native-governance asset withdrawal                  |
 
 Standalone governance LP feeds NativeVotePower but does not feed `AccountNativeCollatorLpLocked`, so it cannot earn nomination rewards.
 
 ### Reward accounting and snapshot state
 
-| Storage | Role |
-| :------ | :--- |
-| `RewardEpochAccruals[(asset_id, epoch)]` | Reward funding attributed to one epoch |
-| `RewardLiabilityBalances[asset_id]` | Unsettled reward liability still held by `reward_account(asset_id)` |
-| `RewardEpochTouchedAccounts[(epoch, asset_id)]` | Sparse touch set rolled into the next epoch snapshot |
-| `RewardActiveWeightSnapshots[(asset_id, account)]` | Current reward snapshot for an account |
-| `RewardActiveTotalWeights[asset_id]` | Current denominator candidate |
-| `RewardEpochTotalWeights[(asset_id, epoch)]` | Frozen claim denominator |
-| `RewardEpochWeightSnapshots[((asset_id, epoch), account)]` | Frozen per-account claim numerator |
-| `RewardClaims[((asset_id, epoch), account)]` | Claim-consumption marker and claimed amount |
-| `LastProcessedRewardEpoch` | Last fully completed reward epoch rollover |
-| `PendingRewardEpochRollover` | Bounded rollover cursor from the prior epoch to the target epoch |
-| `LastRewardIngressTruncatedEpoch` | Latest legacy event-scan truncation signal |
-| `RewardTruncatedEpochs[epoch]` | Incomplete epoch marker; claims are rejected |
+| Storage                                                    | Role                                                                |
+| :--------------------------------------------------------- | :------------------------------------------------------------------ |
+| `RewardEpochAccruals[(asset_id, epoch)]`                   | Reward funding attributed to one epoch                              |
+| `RewardLiabilityBalances[asset_id]`                        | Unsettled reward liability still held by `reward_account(asset_id)` |
+| `RewardEpochTouchedAccounts[(epoch, asset_id)]`            | Sparse touch set rolled into the next epoch snapshot                |
+| `RewardActiveWeightSnapshots[(asset_id, account)]`         | Current reward snapshot for an account                              |
+| `RewardActiveTotalWeights[asset_id]`                       | Current denominator candidate                                       |
+| `RewardEpochTotalWeights[(asset_id, epoch)]`               | Frozen claim denominator                                            |
+| `RewardEpochWeightSnapshots[((asset_id, epoch), account)]` | Frozen per-account claim numerator                                  |
+| `RewardClaims[((asset_id, epoch), account)]`               | Claim-consumption marker and claimed amount                         |
+| `LastProcessedRewardEpoch`                                 | Last fully completed reward epoch rollover                          |
+| `PendingRewardEpochRollover`                               | Bounded rollover cursor from the prior epoch to the target epoch    |
+| `LastRewardIngressTruncatedEpoch`                          | Latest legacy event-scan truncation signal                          |
+| `RewardTruncatedEpochs[epoch]`                             | Incomplete epoch marker; claims are rejected                        |
 
 Native reward snapshots use `RuntimeRewardBaseWeightProvider`, which replaces the default share-balance base with conservative collator-locked LP value.
 
@@ -390,20 +390,20 @@ Staking unlock paths consult this horizon before reducing NativeVotePower custod
 
 The reference runtime wires `pallet-staking` with these key adapters:
 
-| Runtime adapter | Role |
-| :-------------- | :--- |
-| `RuntimeNativeOperatorValidator` | Accepts trusted invulnerables and enabled permissionless collator candidates |
-| `RuntimeNativeStakingLpAssetValidator` | Validates canonical `NTVE/stNTVE` LP token |
-| `RuntimeStakedAssetIdResolver` | Resolves base asset -> receipt asset id |
-| `RuntimeStakedAssetLifecycle` | Creates receipt assets and metadata |
-| `RuntimeRewardGovernanceDomainResolver` | Maps reward asset to governance domain |
-| `RuntimeRewardEpochProvider` | Uses block number as reward epoch on the current line |
-| `RuntimeRewardCoefficientProvider` | Reads governance reward-memory coefficient |
-| `RuntimeRewardBaseWeightProvider` | Overrides native reward base to collator-locked LP value |
-| `RuntimeNativeNominationRewardCompounder` | Routes claim+compound into Asset Conversion and LP locking |
-| `RuntimeNativeStakingReadModelProvider` | Exposes native pool/LP valuation for bounded views |
-| `RuntimeLegacyRewardSnapshotEventIngress` | Legacy non-native event scanner |
-| `RuntimeNativeGovernanceLockProvider` | Reads governance lock horizon |
+| Runtime adapter                           | Role                                                                         |
+| :---------------------------------------- | :--------------------------------------------------------------------------- |
+| `RuntimeNativeOperatorValidator`          | Accepts trusted invulnerables and enabled permissionless collator candidates |
+| `RuntimeNativeStakingLpAssetValidator`    | Validates canonical `NTVE/stNTVE` LP token                                   |
+| `RuntimeStakedAssetIdResolver`            | Resolves base asset -> receipt asset id                                      |
+| `RuntimeStakedAssetLifecycle`             | Creates receipt assets and metadata                                          |
+| `RuntimeRewardGovernanceDomainResolver`   | Maps reward asset to governance domain                                       |
+| `RuntimeRewardEpochProvider`              | Uses block number as reward epoch on the current line                        |
+| `RuntimeRewardCoefficientProvider`        | Reads governance reward-memory coefficient                                   |
+| `RuntimeRewardBaseWeightProvider`         | Overrides native reward base to collator-locked LP value                     |
+| `RuntimeNativeNominationRewardCompounder` | Routes claim+compound into Asset Conversion and LP locking                   |
+| `RuntimeNativeStakingReadModelProvider`   | Exposes native pool/LP valuation for bounded views                           |
+| `RuntimeLegacyRewardSnapshotEventIngress` | Legacy non-native event scanner                                              |
+| `RuntimeNativeGovernanceLockProvider`     | Reads governance lock horizon                                                |
 
 ## AAA and Asset Conversion Integration
 

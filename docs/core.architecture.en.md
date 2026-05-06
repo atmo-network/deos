@@ -135,8 +135,9 @@ _The launch economics fan-out hub._
 - `Function`: Collects all protocol fees and routes them into the active reward flows for the current launch phase.
 - `Collection Rule`: Unified 20% collator / 80% Fee Sink split applied to transaction fees, AAA fees, and future block rewards once the block reward source is defined. When the author cannot be resolved, 100% goes to Fee Sink.
 - `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — every block, timer-driven `every_blocks = 1`:
-  1. 50% → `pool_account(NTVE)`: staking-pool backing inflow → raises `stNTVE/NTVE` exchange rate
-  2. 50% → `lp_reward_account(NTVE)`: native LP-donation ingress → feeds AAA #14 balanced donation into `NTVE/stNTVE`
+  1. 50% → staking-pool ingress holding account as native balance, later burned and minted into the local native-staking asset after AAA #14 donation execution
+  2. 50% → Native Staking LP Farmer AAA #14 as native balance, immediately burned and bridged into the local native-staking asset for donation execution
+- `Release Gate`: the Phase 1 staking-yield and LP-donation bridge is wired; block reward source/amount design remains the separate future gate.
 - `Phase 2 (future)`: 1∶1∶4 redistribution into staking pool, liquidity pool, and claimable LP-nomination rewards weighted by GovXP.
 - `Resilience`: Phase 1 SplitTransfer legs are unwrapped synchronously, with ED preservation for the Fee Sink sovereign account.
 
