@@ -140,8 +140,10 @@ impl frame_system::Config for Runtime {
   type SingleBlockMigrations = ();
 }
 
-/// Configure the palelt weight reclaim tx.
+/// Configure the pallet weight reclaim transaction extension.
 impl cumulus_pallet_weight_reclaim::Config for Runtime {
+  // The crate keeps its generated `SubstrateWeight` type private in SDK 2603.
+  // Its public `()` implementation returns the same measured constant weight.
   type WeightInfo = ();
 }
 
@@ -150,7 +152,7 @@ impl pallet_timestamp::Config for Runtime {
   type Moment = u64;
   type OnTimestampSet = Aura;
   type MinimumPeriod = ConstU64<0>;
-  type WeightInfo = ();
+  type WeightInfo = pallet_timestamp::weights::SubstrateWeight<Runtime>;
 }
 
 impl pallet_authorship::Config for Runtime {
@@ -210,7 +212,7 @@ impl pallet_transaction_payment::Config for Runtime {
   type LengthToFee = ConstantMultiplier<Balance, TransactionByteFee>;
   type FeeMultiplierUpdate = SlowAdjustingFeeUpdate<Self>;
   type OperationalFeeMultiplier = ConstU8<5>;
-  type WeightInfo = ();
+  type WeightInfo = pallet_transaction_payment::weights::SubstrateWeight<Runtime>;
 }
 
 parameter_types! {
@@ -220,7 +222,7 @@ parameter_types! {
 }
 
 impl cumulus_pallet_parachain_system::Config for Runtime {
-  type WeightInfo = ();
+  type WeightInfo = cumulus_pallet_parachain_system::weights::SubstrateWeight<Runtime>;
   type RuntimeEvent = RuntimeEvent;
   type OnSystemEvent = ();
   type SelfParaId = parachain_info::Pallet<Runtime>;
@@ -242,7 +244,7 @@ parameter_types! {
 
 impl pallet_message_queue::Config for Runtime {
   type RuntimeEvent = RuntimeEvent;
-  type WeightInfo = ();
+  type WeightInfo = pallet_message_queue::weights::SubstrateWeight<Runtime>;
   #[cfg(feature = "runtime-benchmarks")]
   type MessageProcessor = pallet_message_queue::mock_helpers::NoopMessageProcessor<
     cumulus_primitives_core::AggregateMessageOrigin,
@@ -296,7 +298,7 @@ impl cumulus_pallet_xcmp_queue::Config for Runtime {
   type MaxPageSize = ConstU32<{ 1 << 16 }>;
   type ControllerOrigin = EnsureRoot<AccountId>;
   type ControllerOriginConverter = XcmOriginToTransactDispatchOrigin;
-  type WeightInfo = ();
+  type WeightInfo = cumulus_pallet_xcmp_queue::weights::SubstrateWeight<Runtime>;
   type PriceForSiblingDelivery = PriceForSiblingParachainDelivery;
 }
 
@@ -498,7 +500,7 @@ impl pallet_session::Config for Runtime {
   type SessionHandler = <SessionKeys as sp_runtime::traits::OpaqueKeys>::KeyTypeIdProviders;
   type Keys = SessionKeys;
   type DisablingStrategy = ();
-  type WeightInfo = ();
+  type WeightInfo = pallet_session::weights::SubstrateWeight<Runtime>;
 }
 
 #[docify::export(aura_config)]
@@ -537,5 +539,5 @@ impl pallet_collator_selection::Config for Runtime {
   type ValidatorId = <Self as frame_system::Config>::AccountId;
   type ValidatorIdOf = pallet_collator_selection::IdentityCollator;
   type ValidatorRegistration = Session;
-  type WeightInfo = ();
+  type WeightInfo = pallet_collator_selection::weights::SubstrateWeight<Runtime>;
 }

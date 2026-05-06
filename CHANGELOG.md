@@ -6,6 +6,16 @@
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-05-06
+
+### Template Workspace Hygiene
+
+- `release`: Prepared the `0.3.2` release line by bumping Rust workspace package versions, web-client package metadata, and runtime `spec_version` to `208` for the XCM weight/config update.
+- `template`: Refreshed staking workspace README wording around the current liquid `stXXX` / locked `NTVE/stNTVE` LP nomination contract and normalized the asset-conversion runtime integration test module spelling.
+- `deos-runtime`: Replaced most placeholder runtime `WeightInfo = ()` bindings with concrete upstream SDK `SubstrateWeight<Runtime>` implementations for timestamp, transaction-payment, parachain-system, message queue, XCMP queue, session, and collator selection; the remaining weight-reclaim placeholder is documented as an SDK 2603 visibility constraint where the public fallback returns the same measured constant weight.
+- `scripts`: Added `audit-template-readiness.sh`, a lightweight static gate for template readiness smells covering XCM fallback weights, unclassified runtime weight placeholders, stale staking aliases, and asset-conversion naming drift.
+- `deos-runtime` + `scripts`: Added the correct `pallet_xcm` benchmark registration path through `pallet_xcm::benchmarking::Pallet::<Runtime>`, generated and wired runtime-local `pallet_xcm` weights, and taught benchmark normalization to use `polkadot_sdk` paths plus repository-relative generated comments.
+
 ### Collator Economics & Fee Routing
 
 - `deos-runtime`: Added the first unified fee-collection slice for transaction fees: `RuntimeFeeSplit` routes 20% of resolved transaction-fee credit to the current author / collator and 80% to Fee Sink, with a safe fallback that sends all fees to Fee Sink when no author can be resolved.

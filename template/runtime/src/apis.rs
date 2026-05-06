@@ -306,6 +306,15 @@ impl_runtime_apis! {
                 }
             }
 
+            impl pallet_xcm::benchmarking::Config for Runtime {
+                type DeliveryHelper = ();
+
+                fn get_asset() -> polkadot_sdk::staging_xcm::latest::Asset {
+                    use polkadot_sdk::staging_xcm::latest::prelude::*;
+                    Asset { id: AssetId(Location::here()), fun: Fungible(EXISTENTIAL_DEPOSIT) }
+                }
+            }
+
             use polkadot_sdk::frame_support::traits::WhitelistedStorageKeys;
             let whitelist = AllPalletsWithSystem::whitelisted_storage_keys();
 

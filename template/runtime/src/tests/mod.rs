@@ -3,7 +3,7 @@
 #[cfg(test)]
 pub mod aaa_integration_tests;
 #[cfg(test)]
-pub mod asset_convertion_integration_tests;
+pub mod asset_conversion_integration_tests;
 #[cfg(test)]
 pub mod asset_registry_integration_tests;
 #[cfg(test)]

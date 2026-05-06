@@ -18,6 +18,7 @@ PALLETS=(
     "pallet_asset_registry"
     "pallet_governance"
     "pallet_staking"
+    "pallet_xcm"
 )
 
 BENCHER_MODE=""
@@ -28,7 +29,7 @@ usage() {
     cat <<EOF2
 Usage: $(basename "$0") [OPTIONS] [PALLET_NAME]
 
-Run benchmarks and generate weight files for the current DEOS reference pallets.
+Run benchmarks and generate weight files for the current DEOS reference runtime pallets.
 
 Options:
   --steps N       Number of steps per benchmark (default: $STEPS)
@@ -158,7 +159,9 @@ normalize_weight_file() {
     sed -i 's/pub struct WeightInfo/pub struct SubstrateWeight/' "$file"
     sed -i 's/impl<T: frame_system::Config>/impl<T: polkadot_sdk::frame_system::Config>/' "$file"
     sed -i 's/for WeightInfo<T>/for SubstrateWeight<T>/' "$file"
-    log_info "  Normalized imports and struct name"
+    sed -i 's/ pallet_xcm::WeightInfo/ polkadot_sdk::pallet_xcm::WeightInfo/' "$file"
+    sed -i "s#${TEMPLATE_DIR}#template#g" "$file"
+    log_info "  Normalized imports, struct name, and local paths"
 }
 
 verify_weight_file_contract() {

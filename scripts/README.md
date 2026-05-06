@@ -46,6 +46,9 @@ This directory is intentionally split into two classes:
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
 
+- [audit-template-readiness.sh](./audit-template-readiness.sh)
+  Run lightweight static checks for template launch-readiness smells such as fallback XCM weights, unclassified runtime weight placeholders, stale staking aliases, and asset-conversion test naming drift.
+
 - [benchmarks.sh](./benchmarks.sh)
   Run pallet benchmarking flows and weight generation helpers. Supports `--extra` to include AAA circular-chain diagnostics outside the default production-weight set.
 

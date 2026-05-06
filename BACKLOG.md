@@ -31,7 +31,22 @@
 
 ## Open Runtime / Security Hardening
 
-### 0. Migrate staking to the new `NTVE/stNTVE` liquidity-backed nomination contract
+### 0. Harden template runtime weight and launch-readiness surfaces
+
+- [x] `Generate and wire production XCM weights:` runtime benchmark registration now uses `pallet_xcm::benchmarking::Pallet::<Runtime>` plus a minimal runtime benchmark config, `./scripts/benchmarks.sh pallet_xcm` generates `template/runtime/src/weights/pallet_xcm.rs` with the standard `steps=50` / `repeat=20`, runtime config wires `pallet_xcm` to the generated `SubstrateWeight<Runtime>`, targeted XCM tests pass, and `scripts/audit-template-readiness.sh` passes without `--warn`.
+- [x] `Classify and reduce placeholder runtime WeightInfo bindings:` timestamp, transaction-payment, parachain-system, message-queue, XCMP queue, session, and collator-selection now use concrete upstream `SubstrateWeight<Runtime>` implementations. The remaining `cumulus_pallet_weight_reclaim::Config` placeholder is documented near the config because SDK 2603 keeps its generated `SubstrateWeight` type private and the public `()` implementation returns the same measured constant weight.
+
+### 1. Refresh template workspace documentation and navigation hygiene
+
+- [x] `Repair stale staking wording in template workspace docs:` `template/README.md` and `template/pallets/README.md` now describe staking as liquid `stXXX` receipts, native `$NTVE -> stNTVE`, locked `NTVE/stNTVE` LP nomination, governance custody, and reward settlement instead of live native-binding security.
+- [x] `Normalize asset-conversion test naming:` runtime integration test module/file spelling now uses `asset_conversion_integration_tests`, and the targeted runtime test set passes.
+
+### 2. Progressively harden template review gates
+
+- [x] `Add a lightweight template readiness audit script or documented command set:` `scripts/audit-template-readiness.sh` now checks production XCM fallback weights, unclassified runtime weight placeholders, stale template staking aliases, and asset-conversion test naming drift without building the workspace; `scripts/README.md` documents the entrypoint.
+- [x] `Turn template review findings into regression coverage where practical:` `scripts/audit-template-readiness.sh` now catches fallback XCM weights, unclassified runtime weight placeholders, stale live-contract staking aliases, and asset-conversion naming drift; generated XCM weights and targeted XCM/runtime tests cover the fixed production-weight surface.
+
+### 3. Migrate staking to the new `NTVE/stNTVE` liquidity-backed nomination contract
 
 > Target spec: [`docs/staking.specification.en.md`](./docs/staking.specification.en.md).
 > Architecture docs should be updated only after implementation truth lands in code.

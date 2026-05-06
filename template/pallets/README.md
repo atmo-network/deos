@@ -28,7 +28,7 @@ Unidirectional minting pallet implementing the TMCTOL standard's curve mechanics
 
 ### [Staking](./staking/README.md)
 
-Multi-asset share-vault staking pallet with one sovereign backing channel per registered asset, proportional inflow distribution via share ownership, and a planned second governance-conditioned reward channel that compounds into fresh same-asset `stXXX`.
+Multi-asset share-vault staking pallet with sovereign backing channels, liquid `stXXX` receipts, native `$NTVE -> stNTVE`, locked `NTVE/stNTVE` LP nomination, governance custody, and reward settlement.
 
 ## 🎯 Pallet Architecture Philosophy
 
@@ -45,7 +45,7 @@ For detailed technical implementation, architectural decisions, and production d
 
 - **[Axial Router Architecture Guide](../../docs/axial-router.architecture.en.md)** - Modern multi-token routing system optimized for TMC ecosystems
 - **[Randomness Strategy](../../docs/randomness.strategy.en.md)** - Post-VRF simplification note covering the relay-beacon-first direction and the conditions for replacing local entropy logic with a relay-chain beacon adapter
-- **[Staking Specification](../../docs/staking.specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, lazy sync, share-based ownership accounting, and isolated native delegation for the security path
+- **[Staking Specification](../../docs/staking.specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, share-based ownership accounting, native liquid staking, locked native LP nomination, and governance-conditioned reward channels
 
 ## 🚀 Quick Start
 

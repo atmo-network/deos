@@ -34,7 +34,7 @@ Custom DEOS runtime pallets in the current reference configuration:
 - [`asset-registry/`](./pallets/asset-registry/) — XCM location to asset-id registry
 - [`axial-router/`](./pallets/axial-router/) — routing and fee/burn execution gateway
 - [`governance/`](./pallets/governance/) — bounded governance reward-memory and proposal lifecycle
-- [`staking/`](./pallets/staking/) — share-vault staking, receipts, native binding, reward settlement
+- [`staking/`](./pallets/staking/) — share-vault staking, liquid `stXXX` receipts, locked native LP nomination, governance custody, and reward settlement
 - [`tmc/`](./pallets/tmc/) — token minting curve logic
 
 See [`pallets/README.md`](./pallets/README.md) for the pallet index.
