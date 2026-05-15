@@ -186,6 +186,10 @@ pub mod pallet {
     #[pallet::constant]
     type DefaultRouterFee: Get<Perbill>;
 
+    /// Maximum router fee allowed for governance updates.
+    #[pallet::constant]
+    type MaxRouterFee: Get<Perbill>;
+
     /// Precision constant for all calculations (10^12)
     #[pallet::constant]
     type Precision: Get<Balance>;
@@ -332,6 +336,8 @@ pub mod pallet {
     NoMultiHopRoute,
     /// Maximum tracked assets limit reached
     MaxTrackedAssetsExceeded,
+    /// Router fee exceeds the configured governance mutation bound
+    RouterFeeTooHigh,
   }
 
   impl<T: Config> From<DispatchError> for Error<T> {
@@ -399,6 +405,10 @@ pub mod pallet {
     }
 
     pub fn apply_router_fee_update(new_fee: Perbill) -> DispatchResult {
+      ensure!(
+        new_fee <= T::MaxRouterFee::get(),
+        Error::<T>::RouterFeeTooHigh
+      );
       let old_fee = RouterFee::<T>::get();
       RouterFee::<T>::put(new_fee);
       Self::deposit_event(Event::RouterFeeUpdated { old_fee, new_fee });
@@ -827,10 +837,12 @@ pub mod pallet {
     #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
-      // Invariant 1: RouterFee ≤ 100% (Perbill::one)
+      // Invariant 1: RouterFee stays within the configured governance mutation bound
       let fee = RouterFee::<T>::get();
-      if fee > Perbill::one() {
-        return Err(TryRuntimeError::Other("RouterFee exceeds 100%"));
+      if fee > T::MaxRouterFee::get() {
+        return Err(TryRuntimeError::Other(
+          "RouterFee exceeds configured maximum",
+        ));
       }
       // Invariant 2: TrackedAssets has no duplicates
       let tracked = TrackedAssets::<T>::get();

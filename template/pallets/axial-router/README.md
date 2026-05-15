@@ -4,7 +4,7 @@
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.1` line.
+This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.2` line.
 The 2603 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/XCM/session integration surfaces rather than in `pallet-axial-router` core logic.
 
 ## Scope
@@ -42,7 +42,7 @@ Concrete chain policy belongs in runtime configuration, including:
 - TMC interface wiring
 - Fee-routing adapter
 - Oracle parameters and tracked-asset limits
-- Admin origin, Native asset, and router fee defaults
+- Admin origin, Native asset, router fee defaults, and max fee bounds
 
 ## Non-goals of the current slice
 

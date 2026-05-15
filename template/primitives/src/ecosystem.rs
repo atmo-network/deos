@@ -250,6 +250,12 @@ pub mod params {
   /// XYK pool fee is 0.0% — all fee revenue flows through the Router to the Burning Manager.
   pub const AXIAL_ROUTER_FEE: Perbill = Perbill::from_parts(5_000_000); // 50 bps
 
+  /// Maximum governance-settable Axial Router fee (1%).
+  ///
+  /// Bounds fee mutation so router policy cannot silently invalidate TMCTOL liveness
+  /// or conservation assumptions while preserving a narrow launch-line adjustment band.
+  pub const MAX_AXIAL_ROUTER_FEE: Perbill = Perbill::from_percent(1);
+
   /// TMC curve slope parameter (0.000001 per token).
   ///
   /// Controls the rate at which the price increases as more tokens are minted.

@@ -582,11 +582,12 @@ impl
   fn system_aaas() -> alloc::vec::Vec<(
     pallet_aaa::AaaId,
     AccountId,
+    pallet_aaa::Mutability,
     pallet_aaa::ScheduleOf<Runtime>,
     Option<pallet_aaa::ScheduleWindow<crate::BlockNumber>>,
     pallet_aaa::ExecutionPlanOf<Runtime>,
   )> {
-    use pallet_aaa::{Schedule, Step, StepErrorPolicy, Task, Trigger};
+    use pallet_aaa::{Mutability, Schedule, Step, StepErrorPolicy, Task, Trigger};
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
     let governance: AccountId = AaaPalletId::get().into_account_truncating();
 
@@ -642,6 +643,7 @@ impl
       (
         ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         burn_schedule,
         None,
         burn_execution_plan,
@@ -649,6 +651,7 @@ impl
       (
         ecosystem::aaa_ids::FEE_SINK_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         fee_sink_schedule,
         None,
         fee_sink_execution_plan,
@@ -656,6 +659,7 @@ impl
       (
         ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         zap_schedule,
         None,
         zap_execution_plan,
@@ -664,6 +668,7 @@ impl
       (
         ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID,
         governance.clone(),
+        Mutability::Immutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -672,6 +677,7 @@ impl
       (
         ecosystem::aaa_ids::TOL_BUCKET_B_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -680,6 +686,7 @@ impl
       (
         ecosystem::aaa_ids::TOL_BUCKET_C_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -688,6 +695,7 @@ impl
       (
         ecosystem::aaa_ids::TOL_BUCKET_D_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -697,6 +705,7 @@ impl
       (
         ecosystem::aaa_ids::TREASURY_B_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -706,6 +715,7 @@ impl
       (
         ecosystem::aaa_ids::TREASURY_C_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -715,6 +725,7 @@ impl
       (
         ecosystem::aaa_ids::TREASURY_D_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -724,6 +735,7 @@ impl
       (
         ecosystem::aaa_ids::BLDR_SPLITTER_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         Schedule {
           trigger: Trigger::Timer {
             every_blocks: 1,
@@ -744,6 +756,7 @@ impl
       (
         ecosystem::aaa_ids::BLDR_ZM_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -753,6 +766,7 @@ impl
       (
         ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID,
         governance.clone(),
+        Mutability::Immutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -762,6 +776,7 @@ impl
       (
         ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
         governance.clone(),
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),
@@ -771,6 +786,7 @@ impl
       (
         ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
         governance,
+        Mutability::Mutable,
         noop_timer_schedule(),
         None,
         noop_execution_plan(),

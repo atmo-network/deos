@@ -711,16 +711,29 @@ fn governance_can_update_router_fee() {
 fn only_governance_can_update_router_fee() {
   new_test_ext().execute_with(|| {
     // Regular user cannot update router fee
-    let new_fee = Perbill::from_percent(2);
+    let new_fee = Perbill::from_percent(1);
     assert_noop!(
       AxialRouter::update_router_fee(RuntimeOrigin::signed(1), new_fee),
       polkadot_sdk::sp_runtime::DispatchError::BadOrigin
     );
-    // Root can update
+    // Root can update within the configured bound
     assert_ok!(AxialRouter::update_router_fee(
       RuntimeOrigin::root(),
       new_fee
     ));
+  });
+}
+
+#[test]
+fn router_fee_update_rejects_values_above_configured_bound() {
+  new_test_ext().execute_with(|| {
+    let initial_fee = AxialRouter::router_fee();
+    let too_high = Perbill::from_percent(2);
+    assert_noop!(
+      AxialRouter::update_router_fee(RuntimeOrigin::root(), too_high),
+      Error::<Test>::RouterFeeTooHigh
+    );
+    assert_eq!(AxialRouter::router_fee(), initial_fee);
   });
 }
 

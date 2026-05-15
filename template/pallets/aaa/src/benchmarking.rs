@@ -297,7 +297,14 @@ mod benches {
       cooldown_blocks: 100,
     };
     #[extrinsic_call]
-    create_system_aaa(RawOrigin::Root, owner, schedule, None, execution_plan);
+    create_system_aaa(
+      RawOrigin::Root,
+      owner,
+      Mutability::Mutable,
+      schedule,
+      None,
+      execution_plan,
+    );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_system_aaa");
     assert_eq!(inst.owner_slot, SYSTEM_OWNER_SLOT_SENTINEL);
@@ -317,6 +324,7 @@ mod benches {
     Pallet::<T>::create_system_aaa(
       RawOrigin::Root.into(),
       owner.clone(),
+      Mutability::Mutable,
       schedule.clone(),
       None,
       execution_plan.clone(),
@@ -330,6 +338,7 @@ mod benches {
       RawOrigin::Root,
       aaa_id,
       owner,
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -416,6 +425,7 @@ mod benches {
     Pallet::<T>::create_system_aaa(
       RawOrigin::Root.into(),
       owner.clone(),
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -535,6 +545,7 @@ mod benches {
     Pallet::<T>::create_system_aaa(
       RawOrigin::Root.into(),
       owner.clone(),
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -657,6 +668,7 @@ mod benches {
     Pallet::<T>::create_system_aaa(
       RawOrigin::Root.into(),
       owner,
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -700,6 +712,7 @@ mod benches {
       Pallet::<T>::create_system_aaa(
         RawOrigin::Root.into(),
         owner,
+        Mutability::Mutable,
         schedule.clone(),
         None,
         execution_plan.clone(),
@@ -739,6 +752,7 @@ mod benches {
       Pallet::<T>::create_system_aaa(
         RawOrigin::Root.into(),
         owner,
+        Mutability::Mutable,
         schedule.clone(),
         None,
         execution_plan.clone(),
@@ -896,6 +910,7 @@ mod benches {
       Pallet::<T>::create_system_aaa(
         RawOrigin::Root.into(),
         owner,
+        Mutability::Mutable,
         schedule.clone(),
         None,
         temp_execution_plan,

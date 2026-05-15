@@ -238,6 +238,45 @@ fn l2_parameter_change_updates_router_fee_via_governance_executor() {
 }
 
 #[test]
+fn l2_parameter_change_rejects_router_fee_above_runtime_bound() {
+  new_test_ext().execute_with(|| {
+    let failed_epoch = ordinary_enactment_epoch(1);
+    let initial_fee = AxialRouter::router_fee();
+    let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(2);
+    let call: crate::RuntimeCall =
+      pallet_axial_router::Call::<Runtime>::update_router_fee { new_fee }.into();
+    let encoded_call = call.encode();
+    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_call);
+    assert_ok!(Preimage::note_preimage(
+      RuntimeOrigin::signed(ALICE),
+      encoded_call,
+    ));
+    assert_ok!(Governance::submit_proposal(
+      RuntimeOrigin::root(),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      113,
+      ALICE,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::L2ParameterChange,
+      payload_hash,
+    ));
+    resolve_root_action_proposal(113);
+    assert_eq!(AxialRouter::router_fee(), initial_fee);
+    assert_eq!(
+      Governance::proposal_execution_detail(PROTOCOL_GOVERNANCE_DOMAIN, 113),
+      Some(
+        pallet_governance::ProposalExecutionDetail::ExecutionFailed {
+          payload_kind: pallet_governance::ProposalPayloadKind::L2ParameterChange,
+          authority: pallet_governance::ProposalExecutionAuthority::DomainParameters,
+          failed_epoch,
+          reason: pallet_governance::ProposalExecutionFailureReason::DispatchFailed,
+        }
+      )
+    );
+  });
+}
+
+#[test]
 fn l2_parameter_change_adds_tracked_asset_via_governance_executor() {
   new_test_ext().execute_with(|| {
     let approved_epoch = 1;

@@ -78,6 +78,7 @@ scale-info = { version = "2.11", default-features = false, features = ["derive"]
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smallvec = "1.11"
+sp-api = { version = "41.0.0", default-features = false }
 sp-arithmetic = { version = "28.0.1", default-features = false }
 
 [profile.release]

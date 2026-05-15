@@ -2,7 +2,7 @@
 
 > Project-wide rule for separating authoritative on-chain client data from externally indexed materializations
 
-## 1. Purpose
+## Purpose
 
 DEOS treats frontend and operator data needs through an explicit two-class read model.
 This split is part of the project protocol, not only a UI implementation detail.
@@ -19,7 +19,7 @@ The default rule is:
 - If a bounded on-chain projection is the real protocol contract, clients SHOULD read it directly from chain state
 - If a view is unbounded, historical, search-heavy, or analytics-oriented, it SHOULD stay off-chain instead of being pushed into consensus storage
 
-## 2. Why the split exists
+## Why the Split Exists
 
 Without this discipline, projects drift into two bad failure modes:
 
@@ -30,55 +30,78 @@ Without this discipline, projects drift into two bad failure modes:
 
 DEOS explicitly rejects both defaults.
 
-## 3. Classification Rules
+## Classification Rules
 
-### 3.1 Put data on-chain when all of these are true
+### Put Data On-Chain When All of These Are True
 
 - It is part of the live protocol contract or current bounded control surface
 - Canonical clients need it without replaying unbounded history
 - It can stay bounded in storage, proof size, and servicing cost
 - Ambiguity would otherwise force every client to reconstruct the same view ad hoc
 
-### 3.2 Prefer external indexing when any of these are true
+### Prefer External Indexing When Any of These Are True
 
 - The view is archival or effectively unbounded
 - The view is mainly for search, ranking, dashboards, or time-series analysis
 - Correctness does not require the runtime to preserve it as canonical state
 - Replaying events or batching off-chain aggregation is acceptable
 
-### 3.3 Product honesty rule
+### Product Honesty Rule
 
 If a user-facing screen depends on indexed data rather than canonical on-chain projections, the product contract SHOULD treat that as a derived/materialized view, not as indistinguishable protocol truth.
 
-## 4. Subsystem Audit Matrix
+## Subsystem Classification Matrix
 
-### 4.1 TMC (Curve)
+Each subsystem below uses the same two buckets:
 
-### On-Chain Canonical Projection
+- `On-Chain Canonical Projection`: bounded live protocol state or bounded derived state that clients can rely on without an indexer
+- `Indexed / Materialized View`: historical, analytical, search, dashboard, or convenience data that should remain outside consensus storage
+
+### TMC Curve
+
+#### On-Chain Canonical Projection
 
 - Curve parameters and enablement
 - Minted/collateral asset binding
 - Live supply-dependent pricing state
 - Balances and downstream token-flow effects produced by mint execution
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - Mint history timelines
 - Issuance analytics
 - Cohort or wallet behavior analysis
 - Long-horizon curve usage dashboards
 
-### 4.2 Asset Conversion + Axial Router
+### TMCTOL Guarantee State
 
-### On-Chain Canonical Projection
+#### On-Chain Canonical Projection
+
+- Current System Immutable Bucket A anchor status for TOL and BLDR domains
+- Current anchor-pool existence, reserves, LP issuance, and Bucket A LP balance
+- Bounded live inputs needed to recompute the reported floor metric
+- Separate live burn-liveness status for framework native burn and reference BLDR buyback/burn paths
+- Current Zap postcondition status for add-liquidity, foreign-to-native swap, and LP bucket-split configuration
+- Explicit live statuses for guarantee classes, including `NotInitialized` and `NotGuaranteed`
+
+#### Indexed / Materialized View
+
+- Floor history charts
+- Bucket balance timelines
+- Zap execution history beyond bounded live state
+- Burn-liveness analytics before a bounded protocol contract classifies them
+
+### Asset Conversion and Axial Router
+
+#### On-Chain Canonical Projection
 
 - Current pool reserves
 - LP issuance / balances
 - Tracked-asset configuration
-- Live router fee parameters
+- Live router fee parameters, including the configured mutation bound
 - Any bounded runtime-facing routing configuration needed for execution
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - Volume charts
 - TVL history
@@ -86,25 +109,25 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - Fee-revenue time series
 - Historical execution traces per swap path
 
-### 4.3 Asset Registry
+### Asset Registry
 
-### On-Chain Canonical Projection
+#### On-Chain Canonical Projection
 
 - Bidirectional `Location <-> AssetId` mapping
 - Deterministic foreign-asset identity and metadata
 - Governance-controlled registration/migration state
 - Well-known protocol asset identity surfaces
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - Registration history timelines
 - Migration history timelines
 - Ecosystem catalog browsing/search beyond the bounded reverse projection
 - Operational asset onboarding dashboards
 
-### 4.4 AAA / Automation Kernel
+### AAA / Automation Kernel
 
-### On-Chain Canonical Projection
+#### On-Chain Canonical Projection
 
 - Actor configuration and lifecycle state
 - Schedule / trigger state needed for execution
@@ -113,16 +136,16 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - Live balances and execution-side effects
 - Bounded operational telemetry surfaces already exposed as storage/events when they are part of runtime observability
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - Long-lived execution history per actor
 - Per-step timeline replay across many cycles
 - Fleet dashboards, rankings, and operator analytics
 - Archived run logs beyond bounded on-chain observability
 
-### 4.5 Staking
+### Staking
 
-### On-Chain Canonical Projection
+#### On-Chain Canonical Projection
 
 - Pool state, shares, receipts, and live ownership surface
 - Native binding / operator linkage
@@ -130,7 +153,7 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - Current reward snapshot state needed for settlement
 - Any bounded client-facing helper that determines live claimability or position state
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - APY charts
 - Wallet PnL history
@@ -138,9 +161,9 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - Leaderboards and comparative analytics
 - Archival receipt-transfer narratives
 
-### 4.6 Governance
+### Governance
 
-### On-Chain Canonical Projection
+#### On-Chain Canonical Projection
 
 - Active proposal registry
 - Bounded active proposal discovery index
@@ -151,7 +174,7 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - GovXP input counters
 - Any bounded per-proposal or per-account projection needed for canonical live voting UX
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - Full referendum archive
 - Ballot timelines across expired proposals
@@ -159,14 +182,14 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - Long-range participation analytics
 - Proposal feeds that outlive bounded retention windows
 
-### 4.7 DEOS Product Layer / Web Client
+### DEOS Product Layer / Web Client
 
-### On-Chain Canonical Projection
+#### On-Chain Canonical Projection
 
 - Current balances, positions, live statuses, and bounded helper surfaces required for canonical flows
 - Any runtime-exposed projection whose absence would make the product silently depend on indexers
 
-### Indexed / Materialized View
+#### Indexed / Materialized View
 
 - Portfolio history
 - Cross-subsystem dashboards
@@ -175,14 +198,14 @@ If a user-facing screen depends on indexed data rather than canonical on-chain p
 - Deep historical explorer views
 - DEX/TMC historical chart series beyond the current session
 
-Current web-client note:
+#### Current Web-Client Note
 
 - `ChartWidget` may honestly show a bounded recent on-chain historical sampler over finalized blocks as an intermediate product slice before any longer-range retained provider exists
 - once chart history is meant to provide deeper retention, search, or archive semantics beyond that bounded recent on-chain window, it MUST be treated explicitly as either a stronger bounded on-chain projection or an indexed/materialized view rather than silently remaining browser-local state
 - any future materialized/archive provider in the browser MUST declare its provenance explicitly enough that the user can distinguish it from live chain truth: at minimum the surface must identify `(a)` that it is `materialized`, `(b)` which provider family produced it (`indexer`, `archive-api`, or `analytics-api`), `(c)` whether the scope is `historical`, `archive`, or `search`, and `(d)` the provider/source reference backing that data
 - future materialized/archive screens SHOULD keep their fallback behavior honest too: if the provider is unavailable, the client may degrade to no data, a smaller bounded canonical-chain slice, or an explicitly different widget mode, but it MUST NOT silently preserve stale materialized semantics under a live-chain presentation label
 
-## 5. Design Checklist for New Work
+## Design Checklist for New Work
 
 For every new subsystem, pallet feature, runtime API, or product-facing query surface:
 
@@ -192,7 +215,7 @@ For every new subsystem, pallet feature, runtime API, or product-facing query su
 4. Avoid forcing every client to reverse-engineer raw storage topology when one bounded projection is the true contract
 5. Avoid introducing permanent on-chain archival state when events plus indexing are enough
 
-## 6. DEOS-Specific Heuristic
+## DEOS-Specific Heuristic
 
 When in doubt, ask:
 
@@ -203,12 +226,18 @@ If the answer is:
 - `needed to safely understand or execute now` -> bias toward a bounded on-chain projection
 - `mainly needed to understand history/analytics/search` -> bias toward external indexing
 
-## 7. Consequence for Repository Work
+## Consequence for Repository Work
 
 This document means future DEOS work SHOULD not phrase frontend data needs vaguely as just "the UI needs data".
 Instead, each such need should be framed as one of:
 
 - `add/keep a bounded on-chain canonical projection`
 - `materialize/index this externally`
+
+Repository placement follows the same boundary:
+
+- runtime modules may expose bounded live projections when they are part of the protocol contract
+- tests may keep local analytical helpers for validation scenarios
+- durable analytics, dashboards, trends, alerting, and historical metrics belong in external indexers, operator tooling, or product services, not in runtime modules
 
 That vocabulary is now the default project mental model.

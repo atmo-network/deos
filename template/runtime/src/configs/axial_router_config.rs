@@ -26,6 +26,8 @@ use primitives::{AssetKind, ecosystem};
 parameter_types! {
   /// Router fee as Perbill (derived from ecosystem constant 50bps = 0.5%)
   pub const AxialRouterFee: Perbill = ecosystem::params::AXIAL_ROUTER_FEE;
+  /// Maximum governance-settable router fee for the current launch line
+  pub const AxialRouterMaxFee: Perbill = ecosystem::params::MAX_AXIAL_ROUTER_FEE;
   /// Native asset (AssetKind::Native)
   pub const NativeAsset: AssetKind = AssetKind::Native;
   /// Pallet ID for the Axial router
@@ -567,8 +569,8 @@ impl<T: pallet_axial_router::pallet::Config> pallet_axial_router::PriceOracle<Ba
         polkadot_sdk::sp_runtime::Perbill::from_rational(ema_price - current_price, ema_price)
       };
       if deviation > max_price_deviation {
-        // Price deviation events are handled by the Axial Router pallet's monitoring system
-        // The deviation is logged through standard error mechanisms
+        // This is a bounded runtime safety check. Durable price-deviation analytics,
+        // dashboards, and alert history belong in external indexers/operator tooling.
         return Err(DispatchError::Other("Price deviation exceeded"));
       }
     }
@@ -622,6 +624,7 @@ impl pallet_axial_router::pallet::Config for Runtime {
   type EmaHalfLife = AxialRouterEmaHalfLife;
   type FeeAdapter = FeeManagerImpl<Runtime>;
   type MaxPriceDeviation = AxialRouterMaxPriceDeviation;
+  type MaxRouterFee = AxialRouterMaxFee;
   type MaxTrackedAssets = ConstU32<64>;
   type MinSwapForeign = MinSwapForeign;
   type NativeAsset = NativeAsset;

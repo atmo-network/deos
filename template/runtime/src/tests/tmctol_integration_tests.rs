@@ -14,16 +14,271 @@ use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_aaa::{AmountResolution, DexOps, Event, ExecutionPlanOf, StepErrorPolicy, Task};
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
-  traits::{Currency, Hooks, fungibles::Inspect as FungiblesInspect},
+  traits::{
+    Currency, Hooks,
+    fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
+  },
   weights::Weight,
 };
 use polkadot_sdk::sp_runtime::Perbill;
-use primitives::AssetKind;
-use primitives::ecosystem::aaa_ids;
+use primitives::ecosystem::{aaa_ids, protocol_tokens};
+use primitives::{AssetKind, GuaranteeStatus, TmctolConformanceStatus};
 
 use super::aaa_integration_tests::has_aaa_event;
 
 // --- Genesis System AAA ---
+
+#[test]
+fn tmctol_guarantee_state_reports_anchor_protection_without_pool_initialization() {
+  new_test_ext().execute_with(|| {
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.tol_anchor.status, GuaranteeStatus::Satisfied);
+    assert_eq!(state.bldr_anchor.status, GuaranteeStatus::Satisfied);
+    assert_eq!(state.anchor_status, GuaranteeStatus::Satisfied);
+    assert_eq!(state.tol_pool.status, GuaranteeStatus::NotInitialized);
+    assert_eq!(state.bldr_pool.status, GuaranteeStatus::NotInitialized);
+    assert_eq!(state.pool_status, GuaranteeStatus::NotInitialized);
+    assert_eq!(
+      state.zap_postconditions.status,
+      GuaranteeStatus::NotInitialized
+    );
+    assert_eq!(state.zap_status, GuaranteeStatus::NotInitialized);
+    assert_eq!(
+      state.native_burn_liveness.status,
+      GuaranteeStatus::Satisfied
+    );
+    assert!(state.native_burn_liveness.has_required_burn_step);
+    assert!(!state.native_burn_liveness.requires_swap);
+    assert_eq!(
+      state.bldr_buyback_liveness.status,
+      GuaranteeStatus::NotInitialized
+    );
+    assert_eq!(state.burn_liveness_status, GuaranteeStatus::NotInitialized);
+    assert_eq!(
+      state.native_floor_inputs.status,
+      GuaranteeStatus::NotInitialized
+    );
+    assert_eq!(
+      state.conformance_status,
+      TmctolConformanceStatus::NotInitialized
+    );
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_reports_bldr_anchor_pool_when_initialized() {
+  seeded_test_ext().execute_with(|| {
+    super::common::setup_bldr_pool(10 * crate::UNIT);
+    let lp_asset = get_pool_lp_asset(
+      AssetKind::Native,
+      AssetKind::Local(protocol_tokens::BLDR_ASSET_ID),
+    );
+    let AssetKind::Local(lp_asset_id) = lp_asset else {
+      panic!("pool LP asset must be local");
+    };
+    let bldr_anchor = AAA::sovereign_account_id_system(aaa_ids::BLDR_BUCKET_A_AAA_ID);
+    assert_ok!(
+      <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
+        lp_asset_id,
+        &bldr_anchor,
+        1_000,
+      )
+    );
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.bldr_anchor.status, GuaranteeStatus::Satisfied);
+    assert_eq!(state.bldr_pool.status, GuaranteeStatus::Satisfied);
+    assert_eq!(state.bldr_pool.lp_asset_id, Some(lp_asset_id));
+    assert!(state.bldr_pool.reserve_a > 0);
+    assert!(state.bldr_pool.reserve_b > 0);
+    assert_eq!(state.bldr_pool.anchor_lp_balance, 1_000);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
+  seeded_test_ext().execute_with(|| {
+    super::common::setup_bldr_pool(10 * crate::UNIT);
+    let execution_plan =
+      crate::configs::aaa_config::TmctolGenesisSystemAaas::build_treasury_b_buyback_execution_plan(
+        AssetKind::Local(protocol_tokens::BLDR_ASSET_ID),
+        primitives::ecosystem::params::TREASURY_B_BUYBACK_PCT,
+        primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD,
+        primitives::ecosystem::params::SYSTEM_AAA_MAX_SWAP_SLIPPAGE,
+      );
+    assert_ok!(AAA::update_execution_plan(
+      RuntimeOrigin::root(),
+      aaa_ids::TREASURY_B_AAA_ID,
+      execution_plan,
+    ));
+    assert_ok!(AAA::update_schedule(
+      RuntimeOrigin::root(),
+      aaa_ids::TREASURY_B_AAA_ID,
+      pallet_aaa::Schedule {
+        trigger: pallet_aaa::Trigger::Timer {
+          every_blocks: 10,
+          probability: None,
+        },
+        cooldown_blocks: 5,
+      },
+      None,
+    ));
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(
+      state.bldr_buyback_liveness.status,
+      GuaranteeStatus::Satisfied
+    );
+    assert!(state.bldr_buyback_liveness.requires_swap);
+    assert!(state.bldr_buyback_liveness.has_required_swap_step);
+    assert!(state.bldr_buyback_liveness.has_required_burn_step);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
+  new_test_ext().execute_with(|| {
+    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_ids::BURNING_MANAGER_AAA_ID, |maybe| {
+      let actor = maybe.as_mut().expect("Burning Manager exists");
+      actor.execution_plan = alloc::vec![pallet_aaa::Step {
+        conditions: Default::default(),
+        task: pallet_aaa::Task::Noop,
+        on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
+      }]
+      .try_into()
+      .expect("noop plan fits");
+    });
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.native_burn_liveness.status, GuaranteeStatus::Violated);
+    assert_eq!(state.burn_liveness_status, GuaranteeStatus::Violated);
+    assert_eq!(state.conformance_status, TmctolConformanceStatus::Violated);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let foreign = AssetKind::Local(ASSET_A);
+    let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
+    let execution_plan =
+      crate::configs::aaa_config::TmctolGenesisSystemAaas::build_zap_execution_plan(
+        foreign,
+        lp_asset,
+        primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD,
+      );
+    assert_ok!(AAA::update_execution_plan(
+      RuntimeOrigin::root(),
+      aaa_ids::ZAP_MANAGER_AAA_ID,
+      execution_plan,
+    ));
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.zap_postconditions.status, GuaranteeStatus::Satisfied);
+    assert_eq!(state.zap_status, GuaranteeStatus::Satisfied);
+    assert_eq!(
+      state.zap_postconditions.configured_foreign_asset,
+      Some(foreign)
+    );
+    assert_eq!(state.zap_postconditions.configured_lp_asset, Some(lp_asset));
+    assert!(state.zap_postconditions.has_add_liquidity_step);
+    assert!(state.zap_postconditions.has_foreign_to_native_swap_step);
+    assert!(state.zap_postconditions.has_lp_split_step);
+    assert!(state.zap_postconditions.split_targets_all_buckets);
+    assert!(state.zap_postconditions.split_shares_sum_to_one);
+    assert!(state.zap_postconditions.split_shares_match_policy);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let foreign = AssetKind::Local(ASSET_A);
+    let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
+    let malformed_plan: ExecutionPlanOf<Runtime> = alloc::vec![
+      pallet_aaa::Step {
+        conditions: Default::default(),
+        task: Task::AddLiquidity {
+          asset_a: AssetKind::Native,
+          asset_b: foreign,
+          amount_a: AmountResolution::AllBalance,
+          amount_b: AmountResolution::AllBalance,
+        },
+        on_error: StepErrorPolicy::ContinueNextStep,
+      },
+      pallet_aaa::Step {
+        conditions: Default::default(),
+        task: Task::SwapExactIn {
+          asset_in: foreign,
+          asset_out: AssetKind::Native,
+          amount_in: AmountResolution::AllBalance,
+          slippage_tolerance: primitives::ecosystem::params::SYSTEM_AAA_MAX_SWAP_SLIPPAGE,
+        },
+        on_error: StepErrorPolicy::ContinueNextStep,
+      },
+      pallet_aaa::Step {
+        conditions: Default::default(),
+        task: Task::SplitTransfer {
+          asset: lp_asset,
+          amount: AmountResolution::AllBalance,
+          legs: alloc::vec![
+            pallet_aaa::SplitLeg {
+              to: AAA::sovereign_account_id_system(aaa_ids::TOL_BUCKET_A_AAA_ID),
+              share: Perbill::from_percent(40),
+            },
+            pallet_aaa::SplitLeg {
+              to: AAA::sovereign_account_id_system(aaa_ids::TOL_BUCKET_B_AAA_ID),
+              share: Perbill::from_percent(20),
+            },
+            pallet_aaa::SplitLeg {
+              to: AAA::sovereign_account_id_system(aaa_ids::TOL_BUCKET_C_AAA_ID),
+              share: Perbill::from_percent(20),
+            },
+            pallet_aaa::SplitLeg {
+              to: AAA::sovereign_account_id_system(aaa_ids::TOL_BUCKET_D_AAA_ID),
+              share: Perbill::from_percent(20),
+            },
+          ]
+          .try_into()
+          .expect("split legs fit"),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+    ]
+    .try_into()
+    .expect("malformed zap plan still fits runtime bounds");
+    assert_ok!(AAA::update_execution_plan(
+      RuntimeOrigin::root(),
+      aaa_ids::ZAP_MANAGER_AAA_ID,
+      malformed_plan,
+    ));
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.zap_postconditions.status, GuaranteeStatus::Violated);
+    assert_eq!(state.zap_status, GuaranteeStatus::Violated);
+    assert!(state.zap_postconditions.split_targets_all_buckets);
+    assert!(state.zap_postconditions.split_shares_sum_to_one);
+    assert!(!state.zap_postconditions.split_shares_match_policy);
+    assert_eq!(state.conformance_status, TmctolConformanceStatus::Violated);
+  });
+}
+
+#[test]
+fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
+  new_test_ext().execute_with(|| {
+    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_ids::TOL_BUCKET_A_AAA_ID, |maybe| {
+      let actor = maybe.as_mut().expect("TOL Bucket A exists");
+      actor.mutability = pallet_aaa::Mutability::Mutable;
+    });
+
+    let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
+    assert_eq!(state.tol_anchor.status, GuaranteeStatus::Violated);
+    assert_eq!(state.anchor_status, GuaranteeStatus::Violated);
+    assert_eq!(state.conformance_status, TmctolConformanceStatus::Violated);
+  });
+}
 
 #[test]
 fn genesis_burning_manager_aaa_has_deterministic_sovereign_and_correct_state() {
@@ -1727,8 +1982,8 @@ fn router_multi_hop_foreign_to_bldr() {
 }
 
 #[test]
-fn tol_bucket_drainage_pressure_all_four_buckets_is_bounded() {
-  use polkadot_sdk::frame_support::{BoundedVec, traits::fungibles::Mutate};
+fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
+  use polkadot_sdk::frame_support::{BoundedVec, assert_noop, traits::fungibles::Mutate};
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
@@ -1764,12 +2019,19 @@ fn tol_bucket_drainage_pressure_all_four_buckets_is_bounded() {
       }]
       .try_into()
       .expect("execution_plan must fit");
-      assert_ok!(AAA::update_execution_plan(
-        RuntimeOrigin::root(),
-        bucket_id,
-        execution_plan
-      ));
-      assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), bucket_id));
+      if bucket_id == aaa_ids::TOL_BUCKET_A_AAA_ID {
+        assert_noop!(
+          AAA::update_execution_plan(RuntimeOrigin::root(), bucket_id, execution_plan),
+          pallet_aaa::Error::<Runtime>::ImmutableAaa
+        );
+      } else {
+        assert_ok!(AAA::update_execution_plan(
+          RuntimeOrigin::root(),
+          bucket_id,
+          execution_plan
+        ));
+        assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), bucket_id));
+      }
       before_lp.push((bucket_id, crate::Assets::balance(lp_asset_id, &bucket)));
     }
     for block in 20..=40 {
@@ -1780,14 +2042,18 @@ fn tol_bucket_drainage_pressure_all_four_buckets_is_bounded() {
     for (bucket_id, before) in before_lp {
       let bucket = AAA::sovereign_account_id_system(bucket_id);
       let after = crate::Assets::balance(lp_asset_id, &bucket);
-      assert!(
-        after < before,
-        "Bucket {} LP should decrease under drainage pressure ({} -> {})",
-        bucket_id,
-        before,
-        after
-      );
-      assert!(after > 0, "Bucket {} should retain non-zero LP", bucket_id);
+      if bucket_id == aaa_ids::TOL_BUCKET_A_AAA_ID {
+        assert_eq!(after, before, "Bucket A LP principal must remain anchored");
+      } else {
+        assert!(
+          after < before,
+          "Bucket {} LP should decrease under drainage pressure ({} -> {})",
+          bucket_id,
+          before,
+          after
+        );
+        assert!(after > 0, "Bucket {} should retain non-zero LP", bucket_id);
+      }
     }
   });
 }

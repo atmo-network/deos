@@ -105,6 +105,7 @@ fn create_system(
   assert_ok!(AAA::create_system_aaa(
     RuntimeOrigin::root(),
     owner,
+    Mutability::Mutable,
     schedule,
     schedule_window,
     execution_plan,
@@ -121,6 +122,40 @@ fn aaa_account(aaa_id: AaaId) -> crate::AccountId {
 fn fund_native(aaa_id: AaaId, amount: u128) {
   let aaa_acc = aaa_account(aaa_id);
   let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&aaa_acc, amount);
+}
+
+#[test]
+fn genesis_anchor_buckets_are_system_immutable() {
+  seeded_test_ext().execute_with(|| {
+    for aaa_id in [
+      primitives::ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID,
+      primitives::ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID,
+    ] {
+      let instance = AAA::aaa_instances(aaa_id).expect("anchor AAA exists");
+      assert_eq!(instance.mutability, Mutability::Immutable);
+      let plan = transfer_execution_plan(BOB, AssetKind::Native, 1);
+      assert_noop!(
+        AAA::update_execution_plan(RuntimeOrigin::root(), aaa_id, plan.clone()),
+        Error::<Runtime>::ImmutableAaa
+      );
+      assert_noop!(
+        AAA::update_on_close_execution_plan(RuntimeOrigin::root(), aaa_id, plan),
+        Error::<Runtime>::ImmutableAaa
+      );
+      assert_noop!(
+        AAA::pause_aaa(RuntimeOrigin::root(), aaa_id),
+        Error::<Runtime>::ImmutableAaa
+      );
+      assert_noop!(
+        AAA::manual_trigger(RuntimeOrigin::root(), aaa_id),
+        Error::<Runtime>::ImmutableAaa
+      );
+      assert_noop!(
+        AAA::close_aaa(RuntimeOrigin::root(), aaa_id),
+        Error::<Runtime>::ImmutableAaa
+      );
+    }
+  });
 }
 
 fn fund_native_via_call(funder: crate::AccountId, aaa_id: AaaId, amount: u128) {
@@ -421,6 +456,7 @@ fn runtime_policy_allows_probabilistic_financial_timer_without_secure_entropy_pr
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       schedule,
       None,
       transfer_execution_plan(BOB, AssetKind::Native, 1),
@@ -2466,6 +2502,7 @@ fn setup_noop_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       Schedule {
         trigger: Trigger::Timer {
           every_blocks: 1,
@@ -2497,6 +2534,7 @@ fn setup_noop_actors_sparse(n: u64, initial_balance: u128, stride: u64) -> alloc
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       Schedule {
         trigger: Trigger::Timer {
           every_blocks: 1,
@@ -2536,6 +2574,7 @@ fn setup_circular_chain(
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       Schedule {
         trigger: Trigger::Timer {
           every_blocks: 1,
@@ -2912,7 +2951,14 @@ fn circular_chain_over_capacity_fair_rotation() {
 fn close_genesis_system_actors() {
   let genesis_ids: alloc::vec::Vec<u64> = alloc::vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
   for id in genesis_ids {
-    if AAA::aaa_instances(id).is_some() {
+    let Some(instance) = AAA::aaa_instances(id) else {
+      continue;
+    };
+    if instance.mutability == Mutability::Immutable {
+      pallet_aaa::AaaInstances::<Runtime>::remove(id);
+      pallet_aaa::AaaReadiness::<Runtime>::remove(id);
+      pallet_aaa::SovereignIndex::<Runtime>::remove(&instance.sovereign_account);
+    } else {
       assert_ok!(AAA::close_aaa(RuntimeOrigin::root(), id));
     }
   }
@@ -3356,6 +3402,7 @@ fn genesis_sparse_id_space_all_actors_execute_every_block() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       Schedule {
         trigger: Trigger::Timer {
           every_blocks: 1,
@@ -3448,6 +3495,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       Schedule {
         trigger: Trigger::Timer {
           every_blocks: 1,
@@ -3472,6 +3520,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       Schedule {
         trigger: Trigger::Timer {
           every_blocks: 1,

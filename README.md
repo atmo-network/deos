@@ -2,7 +2,7 @@
 
 > A forkable parachain framework for launching sovereign token economies with protocol-owned liquidity and deterministic automation.
 
-DEOS replaces unbounded political governance and vulnerable redemption models with immutable "physics". By encoding liquidity accumulation and token distribution directly into the protocol, it transforms unlimited downside risk into calculable bounded risk.
+DEOS replaces unbounded political governance and vulnerable redemption models with explicit economic physics. By encoding liquidity accumulation and token distribution directly into the protocol, it turns unbounded downside narratives into calculable, condition-dependent risk surfaces.
 
 DEOS is intentionally the foundation layer, not a finished product. It provides the execution substrate for partner teams to fork, customize, and launch their own dApps and living ecosystems.
 
@@ -24,18 +24,18 @@ The protocol issues new tokens along a linear price curve. There is no redemptio
 
 ### Treasury-Owned Liquidity (TOL)
 
-When tokens are minted, the protocol automatically allocates a fixed share (66.6% in TMCTOL) into XYK liquidity pools. This creates a hyperbolic price floor that cannot reach zero. TOL liquidity is split across four buckets:
+When tokens are minted, the protocol automatically allocates a fixed share (66.6% in TMCTOL) into treasury-owned liquidity. Counted floor support is reported through the canonical stress-floor metric in the TMCTOL specification, including reserve scope, bucket state, supply basis, sellable-pressure assumption, and governance state.
 
-| Bucket       | Role                                               | Share |
-| ------------ | -------------------------------------------------- | ----- |
-| A — Anchor   | Permanent pool liquidity, never withdrawn          | 50%   |
-| B — Building | LP unwind → BLDR buyback for ecosystem development | 16.6% |
-| C — Capital  | Gradual LP unwind for treasury operations          | 16.6% |
-| D — Dormant  | LP held until governance decides future policy     | 16.6% |
+TOL liquidity is split across four buckets:
+
+- `A — Anchor`: protected floor-support liquidity, 50% of TOL
+- `B — Building`: governed LP unwind / BLDR buyback / ecosystem development, 16.6% of TOL
+- `C — Capital`: gradual LP unwind for treasury operations, 16.6% of TOL
+- `D — Dormant`: LP held until governance decides future policy, 16.6% of TOL
 
 ### Bidirectional Compression & The Ratchet Effect
 
-A built-in fee is taken on trades and burned, reducing the circulating supply. The true power of this mechanic is its systemic outcome: a bidirectional squeeze that simultaneously lowers the minting ceiling and raises the pool-based floor. This continuously narrows the price corridor and drives the economy toward **Elasticity Inversion**—a mathematical threshold where new supply expansion no longer degrades the effective floor. Together, these mechanics create a powerful **Ratchet Effect**: the economy can expand and compress upward, but its baseline value cannot collapse backward.
+A built-in fee is taken on trades and burned, reducing live supply when burn execution remains live. Under the named preconditions in the TMCTOL specification — counted reserves stay protected, sellable-pressure assumptions are explicit, and burn/Zap execution remains healthy — the mechanism can compress the corridor from both sides: lower live-supply ceiling pressure and stronger stress-floor support. The ratchet is therefore a condition-dependent protocol dynamic, not an unconditional price promise.
 
 ---
 

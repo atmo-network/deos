@@ -3,6 +3,10 @@
 //! This module provides comprehensive economic metrics testing capabilities for the DEOS reference runtime,
 //! focusing on economic property validation, burn velocity tracking, capital efficiency monitoring,
 //! and system health assessment under realistic economic conditions.
+//!
+//! Boundary: these structures are test-only analytical helpers. Canonical bounded protocol read
+//! surfaces live in runtime read-model modules such as `crate::tmctol_read_model`; durable
+//! dashboards, trends, and history belong in external indexers or operator tooling.
 
 // Use common module account constants and standardized asset constants
 

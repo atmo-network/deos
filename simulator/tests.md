@@ -6,7 +6,7 @@ Comprehensive test suite detalization synchronized with `/simulator/tests.js`
 
 ## Test Structure Overview
 
-- Total Tests: 57
+- Total Tests: 65
 - Purpose: Formal verification of TMCTOL mathematical guarantees, component behavior, and emergent properties
 - Methodology: Mathematical Foundations → Core Components → Integration Flows → System Properties → Economic Security
 - Architecture Symmetry: Tests mirror TMCTOL system architecture for progressive comprehension
@@ -467,12 +467,74 @@ Validation of adaptive system behaviors, intelligent routing decisions, and econ
 - Validates: Router chooses XYK route when pool has sufficient liquidity; XYK provides better price than TMC in established state; router correctly compares TMC vs XYK prices
 - Failure Criteria: Router selects TMC when XYK provides better price; incorrect price comparison
 
-### 12.4 Economic Incentive Alignment
+### 12.4 Two-Phase Reward Routing - 20/80 Collection
 
-- Nature: Tests that system rewards beneficial behaviors and penalizes harmful ones
-- Necessity: Validates economic incentives align with system stability and long-term holding
-- Validates: Arbitrage unprofitable due to router fees; long-term holding more profitable than active trading; system penalizes manipulation attempts; TOL accumulation continues during all activities
-- Failure Criteria: Arbitrage profitable; trading more profitable than holding; manipulation rewarded
+- Nature: Tests the outer fee split between collator and Fee Sink.
+- Necessity: Validates the shared collection rule before phase-specific redistribution.
+- Validates: 20% collator share, 80% Fee Sink share, and exact conservation.
+- Failure Criteria: Split ratio wrong or total amount not conserved.
+
+### 12.5 Two-Phase Reward Routing - Phase 1 Pools
+
+- Nature: Tests trusted-collator launch redistribution from Fee Sink.
+- Necessity: Validates Phase 1 routes only to staking-pool yield and LP donation flows.
+- Validates: 50/50 pool split and exact conservation.
+- Failure Criteria: Any missing half, extra destination, or conservation failure.
+
+### 12.6 Two-Phase Reward Routing - Phase 2 1:1:4
+
+- Nature: Tests future permissionless-collator redistribution shape.
+- Necessity: Keeps the gated Phase 2 target explicit without activating it at launch.
+- Validates: 1 part staking pool, 1 part liquidity pool, 4 parts claimable LP nomination.
+- Failure Criteria: Wrong ratio or non-conserved Fee Sink amount.
+
+### 12.7 Economic Incentive Alignment
+
+- Nature: Tests that system rewards beneficial behaviors and penalizes harmful ones.
+- Necessity: Validates economic incentives align with system stability and long-term holding.
+- Validates: Arbitrage unprofitable due to router fees; holding outperforms active churn under tested conditions; TOL accumulation continues during activity.
+- Failure Criteria: Arbitrage profitable; trading more profitable than holding; manipulation rewarded.
+
+---
+
+## 13. Reporting & Conformance Metrics
+
+Executable vectors for durable TMCTOL reporting metrics and conformance boundaries.
+
+### 13.1 Reported Floor Metric Scenario Ratios
+
+- Nature: Tests the canonical reported floor ratio under named scenario assumptions.
+- Necessity: Prevents the `11–25%` public range from drifting across denominators or hidden reserve scopes.
+- Validates: User-exit ratio near 25%, system-exit ratio near 11.11%, and default `λ = 1` sellable pressure.
+- Failure Criteria: Scenario ratio or sellable-pressure basis deviates from the canonical formula.
+
+### 13.2 Ledger Conservation With Burns
+
+- Nature: Tests supply accounting after mint and burn flows.
+- Necessity: Separates mint-time distribution conservation from burned-supply ledger conservation.
+- Validates: `cumulative_minted - cumulative_burned = live simulated supply` when initial issuance is zero.
+- Failure Criteria: Live supply does not reconcile after burns.
+
+### 13.3 Burn Liveness Threshold Behavior
+
+- Nature: Tests discrete fee-buffer threshold behavior.
+- Necessity: Makes burn-ratchet liveness executable instead of only continuous commentary.
+- Validates: Sub-threshold foreign fees remain buffered; threshold-crossing fees burn native when liquidity exists.
+- Failure Criteria: Premature burn, stuck threshold-crossing buffer, or missing native burn.
+
+### 13.4 Zap Bucket Accounting Conservation
+
+- Nature: Tests bucket-level LP/native/foreign accounting after Zap allocation.
+- Necessity: Supports the floor-reporting bucket state model with executable accounting conservation.
+- Validates: Sum of bucket LP/native/foreign fields equals aggregate Zap totals and Bucket_A receives classifiable LP.
+- Failure Criteria: Bucket sums diverge from aggregate totals or Bucket_A cannot be classified as anchor LP.
+
+### 13.5 Stress Floor Monotonicity
+
+- Nature: Tests stress-floor response to larger sellable pressure.
+- Necessity: Pins the canonical `P_stress(x)` direction used by floor reports.
+- Validates: Larger sellable pressure lowers the stress floor for fixed reserves.
+- Failure Criteria: Stress floor increases or stays equal as sellable pressure grows.
 
 ---
 
@@ -484,7 +546,7 @@ node ./simulator/tests.js
 
 - Expected Output: Minimal statistics, error codes only for failures
 - Tolerance: ~0.01% for emergent behaviors (multi-step calculations)
-- Coverage: 57 tests validating 12 system layers across 2147 lines
+- Coverage: 65 tests validating 13 system layers
 - Documentation Standard: Each test includes Nature/Necessity/Validates/Failure Criteria
 
 ---
@@ -511,7 +573,8 @@ node ./simulator/tests.js
 - Multi-User Testing: 2 tests for chaos and concurrency
 - Emergent Properties: 6 tests for system behavior analysis
 - Economic Security: 4 tests for attack resistance and capital efficiency (continuous deployment vs idle vaults)
-- Adaptive System Behaviors: 4 tests for intelligent system responses
+- Adaptive System Behaviors: 7 tests for intelligent system responses and two-phase reward routing
+- Reporting & Conformance Metrics: 5 tests for floor reporting, burn liveness, Zap accounting, and ledger conservation
 - Philosophy: Tests prove specifications; specifications guide implementation; implementation validates mathematics.
 
 ---
@@ -531,6 +594,7 @@ node ./simulator/tests.js
 * `9.1-9.2`: Multi-User & Chaos Testing
 * `10.1-10.6`: Emergent Properties & System Intelligence
 * `11.1-11.4`: Economic Security & Attack Resistance
-* `12.1-12.4`: Adaptive System Behaviors
+* `12.1-12.7`: Adaptive System Behaviors
+* `13.1-13.5`: Reporting & Conformance Metrics
 
 - Use these codes in error messages for quick reference to this documentation.

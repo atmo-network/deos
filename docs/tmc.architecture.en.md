@@ -271,23 +271,21 @@ BM doesn't call TMC directly, but their interaction is critical:
 - BM burns native tokens → `Currency::total_issuance()` decreases
 - TMC reads `effective_supply = total_issuance - initial_issuance`
 - Lower supply → lower spot price → ceiling compresses
-- This creates `bidirectional pressure`: BM lowers ceiling, TOL raises floor
+- This can create `bidirectional pressure` when burn liveness and TOL accounting preconditions hold: BM lowers live-supply pressure while TOL supports counted reserves
 
 ### Connection to TOL (Price Floor)
 
-While TMC provides the ceiling, TOL provides the floor:
+While TMC provides the ceiling, TOL provides floor support:
 
-- TOL buys at oracle-backed minimum price
+- TOL contributes qualifying reserves under the TMCTOL floor metric
 - TMC sells at curve-determined maximum price
 - The spread between them is the `minting profit margin`
-- As BM burns tokens, the ceiling compresses toward the floor
+- As BM burns tokens under liveness assumptions, the ceiling can compress toward qualifying floor support
 
 ## Events
 
-| Event                                                                                       | Emitted When            | Purpose                                        |
-| :------------------------------------------------------------------------------------------ | :---------------------- | :--------------------------------------------- |
-| `CurveCreated { token_asset, initial_price, slope, foreign_asset }`                         | New curve initialized   | Track curve genesis and collateral binding     |
-| `ZapAllocationDistributed { token_asset, user_allocation, zap_allocation, foreign_amount }` | Tokens split after mint | Track distribution ratio and collateral inflow |
+- `CurveCreated { token_asset, initial_price, slope, foreign_asset }`: emitted on curve initialization; tracks genesis and collateral binding
+- `ZapAllocationDistributed { token_asset, user_allocation, zap_allocation, foreign_amount }`: emitted after mint split; tracks distribution ratio and collateral inflow
 
 ## Error Conditions
 

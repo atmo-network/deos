@@ -405,6 +405,7 @@ pub mod pallet {
     fn system_aaas() -> alloc::vec::Vec<(
       AaaId,
       AccountId,
+      Mutability,
       Schedule,
       Option<ScheduleWindow>,
       ExecutionPlan,
@@ -418,6 +419,7 @@ pub mod pallet {
     fn system_aaas() -> alloc::vec::Vec<(
       AaaId,
       AccountId,
+      Mutability,
       Schedule,
       Option<ScheduleWindowT>,
       ExecutionPlan,
@@ -439,7 +441,7 @@ pub mod pallet {
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
       }
-      for (aaa_id, owner, schedule, schedule_window, execution_plan) in
+      for (aaa_id, owner, mutability, schedule, schedule_window, execution_plan) in
         T::GenesisSystemAaas::system_aaas()
       {
         assert!(
@@ -457,6 +459,10 @@ pub mod pallet {
           !SovereignIndex::<T>::contains_key(&sovereign_account),
           "genesis System AAA sovereign collision at aaa_id={aaa_id}"
         );
+        assert!(
+          mutability == Mutability::Mutable || schedule_window.is_none(),
+          "genesis System Immutable AAA must be perpetual"
+        );
         Pallet::<T>::validate_probability_entropy_policy(&schedule, &execution_plan)
           .expect("genesis probabilistic financial actor requires secure entropy provider");
         let on_close_execution_plan = Pallet::<T>::default_on_close_execution_plan();
@@ -473,7 +479,7 @@ pub mod pallet {
           owner: owner.clone(),
           owner_slot: SYSTEM_OWNER_SLOT_SENTINEL,
           aaa_type: AaaType::System,
-          mutability: Mutability::Mutable,
+          mutability,
           is_paused: false,
           pause_reason: None,
           schedule,
@@ -806,12 +812,20 @@ pub mod pallet {
     pub fn create_system_aaa(
       origin: OriginFor<T>,
       owner: T::AccountId,
+      mutability: Mutability,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
-      Self::do_create_system_aaa(owner, schedule, schedule_window, execution_plan, None)
+      Self::do_create_system_aaa(
+        owner,
+        mutability,
+        schedule,
+        schedule_window,
+        execution_plan,
+        None,
+      )
     }
 
     #[pallet::call_index(17)]
@@ -820,11 +834,13 @@ pub mod pallet {
       origin: OriginFor<T>,
       aaa_id: AaaId,
       owner: T::AccountId,
+      mutability: Mutability,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
+      ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
       ensure!(
         !AaaInstances::<T>::contains_key(aaa_id),
         Error::<T>::AaaIdOccupied
@@ -835,6 +851,7 @@ pub mod pallet {
       );
       Self::do_create_system_aaa(
         owner,
+        mutability,
         schedule,
         schedule_window,
         execution_plan,
@@ -847,6 +864,7 @@ pub mod pallet {
     pub fn pause_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -876,6 +894,7 @@ pub mod pallet {
     pub fn resume_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -902,6 +921,7 @@ pub mod pallet {
     pub fn manual_trigger(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -964,6 +984,7 @@ pub mod pallet {
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
+      Self::ensure_not_system_immutable(&instance)?;
       Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated)
     }
 
@@ -981,6 +1002,7 @@ pub mod pallet {
       }
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -1030,6 +1052,7 @@ pub mod pallet {
       Self::validate_execution_plan_shape(&execution_plan)?;
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -1223,6 +1246,7 @@ pub mod pallet {
       Self::validate_execution_plan_shape(&on_close_execution_plan)?;
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -1471,6 +1495,7 @@ pub mod pallet {
 
     fn do_create_system_aaa(
       owner: T::AccountId,
+      mutability: Mutability,
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
@@ -1481,6 +1506,9 @@ pub mod pallet {
         Error::<T>::GlobalCircuitBreakerActive
       );
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      if mutability == Mutability::Immutable {
+        ensure!(schedule_window.is_none(), Error::<T>::InvalidScheduleWindow);
+      }
       ensure!(
         (execution_plan.len() as u32) <= T::MaxSystemExecutionPlanSteps::get(),
         Error::<T>::ExecutionPlanTooLong
@@ -1488,7 +1516,7 @@ pub mod pallet {
       Self::do_create_aaa(
         owner,
         AaaType::System,
-        Mutability::Mutable,
+        mutability,
         schedule,
         schedule_window,
         execution_plan,
@@ -1848,6 +1876,14 @@ pub mod pallet {
       Ok(())
     }
 
+    fn ensure_not_system_immutable(instance: &AaaInstanceOf<T>) -> DispatchResult {
+      ensure!(
+        !(instance.aaa_type == AaaType::System && instance.mutability == Mutability::Immutable),
+        Error::<T>::ImmutableAaa
+      );
+      Ok(())
+    }
+
     fn ensure_control_origin(origin: OriginFor<T>, instance: &AaaInstanceOf<T>) -> DispatchResult {
       if let Ok(who) = ensure_signed(origin.clone()) {
         ensure!(who == instance.owner, Error::<T>::NotOwner);
@@ -1915,6 +1951,7 @@ pub mod pallet {
       instance: &AaaInstanceOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
+      Self::ensure_not_system_immutable(instance)?;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         let reserved_fee_remaining = Self::admit_on_close_execution_plan(instance);
         Self::execute_on_close_execution_plan(aaa_id, instance, reserved_fee_remaining);

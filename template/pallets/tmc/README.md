@@ -4,7 +4,7 @@
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.1` line.
+This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.2` line.
 The 2603 upgrade required one pallet-local cleanup here: the old `RuntimeDebug` derive was replaced with standard `Debug` for the current line, while the larger compatibility fallout still landed in runtime/session/XCM integration surfaces.
 
 ## Scope

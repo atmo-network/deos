@@ -33,26 +33,56 @@ The pallet itself is generic and runtime-agnostic. Chain-specific behavior is in
 ### Canonical Address Catalog (Current Runtime, Full System Map)
 
 All addresses below are deterministic for `AaaPalletId = *b"aaactor0"` (`AccountId32`, SS58 prefix 42).
-This table is the full current runtime System AAA catalog, including the Fee Sink actor address.
+This catalog is the full current runtime System AAA catalog, including the Fee Sink actor address.
 
-| Entity                        | aaa_id | Hex                                                                  | SS58                                               |
-| ----------------------------- | ------ | -------------------------------------------------------------------- | -------------------------------------------------- |
-| `pallet-aaa` (pallet account) | —      | `0x6d6f646c61616163746f72300000000000000000000000000000000000000000` | `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1` |
-| Burning Manager               | 0      | `0xeba61f8494ba498cb84ce3b771bc3c193dbd82f9a999153a55c383349f6e512e` | `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv` |
-| Fee Sink                      | 1      | `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084` | `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh` |
-| Zap Manager                   | 2      | `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab` | `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C` |
-| TOL Bucket A (Anchor)         | 3      | `0x6f9a5aa8cd9ba27b2e69f1bac1c521d2ffde543275ebd787da11dbd131c50d25` | `5Eb32Qkj9FpPMUXZMNreJzRESQRbYQWwiKXK4zf9VXifTEqX` |
-| TOL Bucket B (Building)       | 4      | `0x03699bb4549d77d91390fc161867ccd3ef97d4f305f01757708905c84cb7d882` | `5C9BNb4AoxDngwC6nzu8SEtAEbtGHiKeBjzJwgUewA9qDNL3` |
-| TOL Bucket C (Capital)        | 5      | `0x313e7fb07ed6681741b54c3d421f8c261027048e2a9b0668e1058654d369de29` | `5DBGmawvmUvHAg9e2A4bcwZm3NiGX5KE5sPCKepN36SMJvfX` |
-| TOL Bucket D (Dormant)        | 6      | `0xd23baab9890a6990ff23e7ad7ab9d1ad34712d7add2344917d110e3cec5b9242` | `5GpMdwY6iMiA8LRUczsZH6p9WoxN4rX15U7FJWbeqTqTrPLX` |
-| Treasury B (Building)         | 7      | `0xa027809984f38031e61246efe8ad1f28ddacd9870f6bed081560089c15f9b966` | `5FghFeZDxtGWmvASpM4etxnYtreW9yamSx1Pwh1aGYkny2uv` |
-| Treasury C (Capital)          | 8      | `0xcae77c85e5665e0cbe994898429478d3facf4c29a9b7539902f95ad7b3b4bf9b` | `5GekJ6zNwu6ABqhpcagnxbPmP6UtJ1gUKdvJywZKugWkCLhe` |
-| Treasury D (Dormant)          | 9      | `0xc81b0eb40aea260eb09b950cfbe2c43f9be1dc73bf62cf081c376cff4bdae0ca` | `5Gb5UKWyYyyttHG3GCsyEhN2Qtb92auewWLZzPaQCvp1RHaj` |
-| BLDR Splitter                 | 10     | `0x8a420d09aa8842c9075deefab7791be5e9f9471bc68baa8c926128cfc29b6962` | `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N` |
-| BLDR Zap Manager              | 11     | `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221` | `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17` |
-| BLDR Bucket A (Anchor)        | 12     | `0xb31a379c50afe1ba1ad65f1afafaf51df1c40ed2b6c08e9faf1a1ac2caf026de` | `5G7YDX7r2L8q5Wn73dNyhp8cnbpP3sTGUcRW6Eos5Urrxax8` |
-| BLDR Treasury                 | 13     | `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45` | `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG` |
-| Native Staking LP Farmer      | 14     | `0xbb27f4956462189d16c7f9e207222ce9691308c6a55bb0141f139ebe071394d2` | `5GJ6gSae5dZhxJm6EuD82gaxiLkvokMeLFMNmtuSz8htoidu` |
+- aaa_id: `—`; pallet-aaa` (pallet account)
+  - Hex: `0x6d6f646c61616163746f72300000000000000000000000000000000000000000`
+  - SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
+- aaa_id: `0`; Burning Manager
+  - Hex: `0xeba61f8494ba498cb84ce3b771bc3c193dbd82f9a999153a55c383349f6e512e`
+  - SS58: `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv`
+- aaa_id: `1`; Fee Sink
+  - Hex: `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084`
+  - SS58: `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh`
+- aaa_id: `2`; Zap Manager
+  - Hex: `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab`
+  - SS58: `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C`
+- aaa_id: `3`; TOL Bucket A (Anchor)
+  - Hex: `0x6f9a5aa8cd9ba27b2e69f1bac1c521d2ffde543275ebd787da11dbd131c50d25`
+  - SS58: `5Eb32Qkj9FpPMUXZMNreJzRESQRbYQWwiKXK4zf9VXifTEqX`
+- aaa_id: `4`; TOL Bucket B (Building)
+  - Hex: `0x03699bb4549d77d91390fc161867ccd3ef97d4f305f01757708905c84cb7d882`
+  - SS58: `5C9BNb4AoxDngwC6nzu8SEtAEbtGHiKeBjzJwgUewA9qDNL3`
+- aaa_id: `5`; TOL Bucket C (Capital)
+  - Hex: `0x313e7fb07ed6681741b54c3d421f8c261027048e2a9b0668e1058654d369de29`
+  - SS58: `5DBGmawvmUvHAg9e2A4bcwZm3NiGX5KE5sPCKepN36SMJvfX`
+- aaa_id: `6`; TOL Bucket D (Dormant)
+  - Hex: `0xd23baab9890a6990ff23e7ad7ab9d1ad34712d7add2344917d110e3cec5b9242`
+  - SS58: `5GpMdwY6iMiA8LRUczsZH6p9WoxN4rX15U7FJWbeqTqTrPLX`
+- aaa_id: `7`; Treasury B (Building)
+  - Hex: `0xa027809984f38031e61246efe8ad1f28ddacd9870f6bed081560089c15f9b966`
+  - SS58: `5FghFeZDxtGWmvASpM4etxnYtreW9yamSx1Pwh1aGYkny2uv`
+- aaa_id: `8`; Treasury C (Capital)
+  - Hex: `0xcae77c85e5665e0cbe994898429478d3facf4c29a9b7539902f95ad7b3b4bf9b`
+  - SS58: `5GekJ6zNwu6ABqhpcagnxbPmP6UtJ1gUKdvJywZKugWkCLhe`
+- aaa_id: `9`; Treasury D (Dormant)
+  - Hex: `0xc81b0eb40aea260eb09b950cfbe2c43f9be1dc73bf62cf081c376cff4bdae0ca`
+  - SS58: `5Gb5UKWyYyyttHG3GCsyEhN2Qtb92auewWLZzPaQCvp1RHaj`
+- aaa_id: `10`; BLDR Splitter
+  - Hex: `0x8a420d09aa8842c9075deefab7791be5e9f9471bc68baa8c926128cfc29b6962`
+  - SS58: `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N`
+- aaa_id: `11`; BLDR Zap Manager
+  - Hex: `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221`
+  - SS58: `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17`
+- aaa_id: `12`; BLDR Bucket A (Anchor)
+  - Hex: `0xb31a379c50afe1ba1ad65f1afafaf51df1c40ed2b6c08e9faf1a1ac2caf026de`
+  - SS58: `5G7YDX7r2L8q5Wn73dNyhp8cnbpP3sTGUcRW6Eos5Urrxax8`
+- aaa_id: `13`; BLDR Treasury
+  - Hex: `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45`
+  - SS58: `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG`
+- aaa_id: `14`; Native Staking LP Farmer
+  - Hex: `0xbb27f4956462189d16c7f9e207222ce9691308c6a55bb0141f139ebe071394d2`
+  - SS58: `5GJ6gSae5dZhxJm6EuD82gaxiLkvokMeLFMNmtuSz8htoidu`
 
 ---
 
@@ -83,42 +113,40 @@ AAA orchestrates actions against these pallets through adapter traits.
 
 ### Genesis actor matrix
 
-`TmctolGenesisSystemAaas` currently provisions fourteen System actors plus one reserved fee-sink ID:
+`TmctolGenesisSystemAaas` currently provisions fifteen System actors:
 
-| Lane     | Actor               | aaa_id | Genesis schedule | Genesis execution plan                                 |
-| :------- | :------------------ | -----: | :--------------- | :----------------------------------------------------- |
-| Core     | Burning Manager     |      0 | `Timer(10)`      | `build_burn_execution_plan([], dust)`                  |
-| Core     | Fee Sink |      1 | timer + split    | unified fee collection; Phase 1 50/50 staking-pool and LP-donation fan-out |
-| Core     | Zap Manager         |      2 | `Timer(1)`       | `Noop` skeleton until pool activation                  |
-| TOL      | Bucket A (Anchor)   |      3 | `Timer(1)`       | `Noop`                                                 |
-| TOL      | Bucket B (Building) |      4 | `Timer(1)`       | `Noop`                                                 |
-| TOL      | Bucket C (Capital)  |      5 | `Timer(1)`       | `Noop`                                                 |
-| TOL      | Bucket D (Dormant)  |      6 | `Timer(1)`       | `Noop`                                                 |
-| Treasury | Treasury B          |      7 | `Timer(1)`       | `Noop`                                                 |
-| Treasury | Treasury C          |      8 | `Timer(1)`       | `Noop`                                                 |
-| Treasury | Treasury D          |      9 | `Timer(1)`       | `Noop`                                                 |
-| BLDR     | BLDR Splitter       |     10 | `Timer(1)`       | `build_bldr_splitter_execution_plan(BLDR, dust)`       |
-| BLDR     | BLDR Zap Manager    |     11 | `Timer(1)`       | `Noop` skeleton until NTVE-BLDR pool activation        |
-| BLDR     | BLDR Bucket A       |     12 | `Timer(1)`       | `Noop`                                                 |
-| BLDR     | BLDR Treasury       |     13 | `Timer(1)`       | `Noop`                                                 |
-| Staking  | Native Staking LP Farmer | 14 | `Timer(1)`       | `Noop` skeleton until `NTVE/stNTVE` pool activation    |
+| Lane     | Actor                    | aaa_id | Genesis plan summary                   |
+| :------- | :----------------------- | -----: | :------------------------------------- |
+| Core     | Burning Manager          |      0 | `build_burn_execution_plan([], dust)`  |
+| Core     | Fee Sink                 |      1 | Phase 1 50/50 staking + LP donation    |
+| Core     | Zap Manager              |      2 | `Noop` skeleton until pool activation  |
+| TOL      | Bucket A (Anchor)        |      3 | Immutable `[Noop]`                     |
+| TOL      | Bucket B (Building)      |      4 | `Noop`                                 |
+| TOL      | Bucket C (Capital)       |      5 | `Noop`                                 |
+| TOL      | Bucket D (Dormant)       |      6 | `Noop`                                 |
+| Treasury | Treasury B               |      7 | `Noop`                                 |
+| Treasury | Treasury C               |      8 | `Noop`                                 |
+| Treasury | Treasury D               |      9 | `Noop`                                 |
+| BLDR     | BLDR Splitter            |     10 | `build_bldr_splitter_execution_plan`   |
+| BLDR     | BLDR Zap Manager         |     11 | `Noop` until NTVE-BLDR pool activation |
+| BLDR     | BLDR Bucket A            |     12 | Immutable `[Noop]`                     |
+| BLDR     | BLDR Treasury            |     13 | `Noop`                                 |
+| Staking  | Native Staking LP Farmer |     14 | `Noop` until `NTVE/stNTVE` activation  |
 
-All timer schedules use `SYSTEM_AAA_COOLDOWN_BLOCKS`; all actors are `AaaType::System`, `Mutability::Mutable`, and perpetual (`schedule_window = None`).
-These `aaa_id` values remain the stable recovery addresses for System AAA: closing preserves balances on the same sovereign account, and governance regains control only through `reopen_system_aaa` on that exact `aaa_id`.
+All timer schedules use `SYSTEM_AAA_COOLDOWN_BLOCKS`; all actors are `AaaType::System` and perpetual (`schedule_window = None`). TOL Bucket A (`aaa_id=3`) and BLDR Bucket A (`aaa_id=12`) are `Mutability::Immutable`; the remaining genesis System AAA are Mutable.
+These `aaa_id` values remain the stable recovery addresses for Mutable System AAA: closing preserves balances on the same sovereign account, and governance regains control only through `reopen_system_aaa` on that exact `aaa_id`. System Immutable actors cannot be closed or reopened through runtime extrinsics.
 
 ### Canonical execution-plan families
 
 The runtime keeps System AAA topology declarative. Governance evolves concrete execution plans through builder functions in `runtime/src/configs/aaa_config.rs`:
 
-| Builder                                   | Actor(s)         | Canonical flow                                                                                        | Activation point                              |
-| :---------------------------------------- | :--------------- | :---------------------------------------------------------------------------------------------------- | :-------------------------------------------- |
-| `build_burn_execution_plan`               | Burning Manager  | foreign balances -> `SwapExactIn` to Native -> `Burn`                                                 | extend after foreign asset registration       |
-| `build_zap_execution_plan`                | Zap Manager      | opportunistic `AddLiquidity` -> patriotic foreign-to-native swap -> LP `SplitTransfer` to TOL buckets | activate after Native/foreign pool creation   |
-| `build_bucket_unwind_execution_plan`      | Buckets B/C/D    | `RemoveLiquidity` percentage -> transfer reclaimed Native + foreign to paired treasury                | activate after pool + treasury lane are ready |
-| `build_bldr_splitter_execution_plan`      | BLDR Splitter    | transfer all NTVE collateral to BLDR ZM -> split minted BLDR 50/50 to BLDR ZM + BLDR Treasury         | active at genesis                             |
-| `build_bldr_zm_execution_plan`            | BLDR Zap Manager | opportunistic `AddLiquidity(NTVE, BLDR)` -> transfer LP to BLDR Bucket A                              | activate after NTVE-BLDR pool creation        |
-| `build_treasury_b_buyback_execution_plan` | Treasury B       | swap NTVE percentage into target asset -> `Burn` acquired balance                                     | optional governance policy lane               |
-| `build_native_staking_lp_farming_execution_plan` | Native Staking LP Farmer | `$NTVE` budget -> deterministic stake split -> balanced `NTVE/stNTVE` donation without minting LP | activate after native staking pool + `NTVE/stNTVE` AMM creation |
+- `build_burn_execution_plan` / Burning Manager: foreign balances → Native swap → burn; extend after foreign asset registration
+- `build_zap_execution_plan` / Zap Manager: add LP, foreign→native swap, split LP to buckets; activate after pool creation
+- `build_bucket_unwind_execution_plan` / Buckets B/C/D: remove LP percentage, send reclaimed assets to treasury; activate after pool + treasury readiness
+- `build_bldr_splitter_execution_plan` / BLDR Splitter: send NTVE collateral to BLDR ZM and split BLDR 50/50 to ZM/Treasury; active at genesis
+- `build_bldr_zm_execution_plan` / BLDR Zap Manager: add NTVE/BLDR liquidity and transfer LP to BLDR Bucket A; activate after pool creation
+- `build_treasury_b_buyback_execution_plan` / Treasury B: swap NTVE percentage into target and burn acquired balance; optional policy lane
+- `build_native_staking_lp_farming_execution_plan` / Native Staking LP Farmer: donate balanced `NTVE/stNTVE` without minting LP; activate after native pool + AMM creation
 
 This split keeps AAA generic: the pallet owns bounded scheduling/execution, while the current DEOS reference runtime wires the TMCTOL standard's economic composition into concrete System actors.
 
@@ -328,15 +356,13 @@ Runtime ingress shape in the shipped line:
 
 Ingress matrix (current runtime):
 
-| Producer path                                  | Ingress wiring                                                                               | Source semantics                                                     | Weight payer                    |
-| :--------------------------------------------- | :------------------------------------------------------------------------------------------- | :------------------------------------------------------------------- | :------------------------------ |
-| `fund_aaa`                                     | Yes (via `AssetOps::transfer` -> ingress adapter)                                            | `source = funder account`                                            | `fund_aaa` caller               |
-| AAA task `Transfer`                            | Yes (`TmctolAssetOps::transfer` -> ingress adapter)                                          | `source = transfer sender`                                           | Executing actor                 |
-| AAA task `Mint`                                | Yes (`TmctolAssetOps::mint` -> ingress adapter)                                              | `source = None`                                                      | Executing actor                 |
-| TMC distribution to Zap                        | Submit-first (`TolZapAdapter::transfer_to_zap_manager` -> ingress adapter), scanner fallback | direct path keeps exact sender; fallback derives from transfer event | TMC call path (primary)         |
-| Router fee routing to Burning Manager          | Submit-first (`FeeManagerImpl::route_fee` -> ingress adapter), scanner fallback              | direct path keeps exact fee payer; fallback derives from event       | Router swap call path (primary) |
-| Generic pallet-assets transfer/mint extrinsics | Fallback via `RuntimeAddressEventIngressHook` scan                                           | `Transferred`: `source = from`; `Issued/Deposited`: `source = None`  | Originating extrinsic path      |
-| XCM reserve/local mint ingress                 | Submit-first (`AaaAwareAssetTransactor` direct) + scanner fallback                           | `source = context.origin` when convertible; else `None`              | XCM execution path/trader       |
+- `fund_aaa`: `AssetOps::transfer` ingress; source is funder account; weight paid by caller
+- AAA task `Transfer`: `TmctolAssetOps::transfer` ingress; source is transfer sender; weight paid by actor
+- AAA task `Mint`: `TmctolAssetOps::mint` ingress; source is `None`; weight paid by actor
+- TMC distribution to Zap: submit-first `TolZapAdapter`, scanner fallback; direct path keeps sender; TMC call pays primary weight
+- Router fee routing to Burning Manager: submit-first `FeeManagerImpl`, scanner fallback; direct path keeps fee payer; swap pays primary weight
+- Generic `pallet-assets` transfer/mint: scanner fallback; `Transferred` source is `from`, `Issued/Deposited` source is `None`; originating extrinsic pays
+- XCM reserve/local mint ingress: submit-first `AaaAwareAssetTransactor` plus scanner fallback; source is convertible origin or `None`; XCM path/trader pays
 
 `notify_address_event*` remains the single canonical ingress API for inbox updates, source/asset filtering, and System AAA funding snapshot side effects. The runtime ingress strategy is submit-first where hooks are available, scanner-fallback where hooks are unavailable. To prevent duplication across submit and fallback paths, AAA applies deterministic same-block dedup fingerprints. The runtime hook ingests block events at most once per block (`LastIngressIngestBlock`) with bounded scan/admission controls (`AaaMaxIngressScanEventsPerBlock`, `AaaMaxIngressEventsPerBlock`) and calibrated per-event ingestion weight. Before admission, scanner candidates are coalesced by `(aaa_id, asset, source)` to reduce duplicate processing in event-dense blocks. If admission budget is exhausted, recognized events are deferred into bounded carry-over storage (`IngressOverflowHead/Len/Slots` ring-buffer) and drained in subsequent blocks before new event scanning.
 
@@ -348,7 +374,7 @@ Funding snapshot policy is intentionally asymmetric:
 
 ### Manual
 
-`manual_trigger` sets `manual_trigger_pending = true` only for unpaused actors (paused calls fail with `AaaPaused`). It is cleared when a cycle starts and preserved across deferrals.
+`manual_trigger` sets `manual_trigger_pending = true` only for eligible unpaused actors: paused calls fail with `AaaPaused`, and System Immutable calls fail with `ImmutableAaa`. It is cleared when a cycle starts and preserved across deferrals.
 
 ---
 
@@ -356,25 +382,41 @@ Funding snapshot policy is intentionally asymmetric:
 
 Primary storage in pallet implementation:
 
-| Storage                                                   | Purpose                                                                                                                                        |
-| :-------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NextAaaId`                                               | monotonic AAA id allocator                                                                                                                     |
-| `AaaInstances`                                            | full actor state (plan, lifecycle, funding snapshots, metadata)                                                                                |
-| `AaaReadiness`                                            | compact hot-state for scheduler readiness checks                                                                                               |
-| `CurrentQueue`                                            | bounded run queue for current block                                                                                                            |
-| `NextQueue`                                               | staged queue merged into the active run queue on the next `on_idle`                                                                            |
-| `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock` | time-ordered wakeup layer for overdue actor activation (currently block-bucketed + actor-keyed live pointer, bounded by `MaxWakeupBucketSize`) |
-| `QueueEpoch` / `ActorQueueEpoch`                          | deterministic queue dedup and epoch tracking                                                                                                   |
-| `ActiveActorLimit`                                        | governance-configurable operational active-cap (≤ hard cap)                                                                                    |
-| `OwnerSlotMask`                                           | user owner-slot occupancy bitmask; System AAA never consumes it even though storage/events expose `owner_slot = 0`                             |
-| `SovereignIndex`                                          | reverse index: sovereign account → aaa_id                                                                                                      |
-| `ClosedSystemAaaIds`                                      | closed System AAA id tombstones used to authorize governance reopen                                                                            |
-| `AddressEventInbox`                                       | event trigger pending-latch per actor                                                                                                          |
-| `IngressOverflowHead/Len/Slots`                           | bounded O(1) ring-buffer carry-over for over-cap recognized ingress                                                                            |
-| `IngressSeenBlock/Set`                                    | same-block dedup fingerprints across submit + scanner paths                                                                                    |
-| `GlobalCircuitBreaker`                                    | global scheduler halt flag                                                                                                                     |
-| `IdleStarvationBlocks`                                    | starvation detector                                                                                                                            |
-| `SweepCursor`                                             | zombie sweep cursor                                                                                                                            |
+- `NextAaaId`: monotonic AAA id allocator
+- `AaaInstances`: full actor state: plan, lifecycle, funding snapshots, metadata
+- `AaaReadiness`: compact hot-state for scheduler readiness checks
+- `CurrentQueue`: bounded run queue for current block
+- `NextQueue`: staged queue merged into active run queue on next `on_idle`
+- `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock`: time-ordered overdue wakeup layer
+- `QueueEpoch` / `ActorQueueEpoch`: deterministic queue dedup and epoch tracking
+- `ActiveActorLimit`: governance-configurable operational active cap
+- `OwnerSlotMask`: user owner-slot occupancy bitmask; System AAA never consumes it
+- `SovereignIndex`: reverse index from sovereign account to `aaa_id`
+- `ClosedSystemAaaIds`: closed System AAA id tombstones for governance reopen
+- `AddressEventInbox`: event-trigger pending latch per actor
+- `IngressOverflowHead/Len/Slots`: bounded O(1) carry-over ring for over-cap ingress
+- `IngressSeenBlock/Set`: same-block dedup fingerprints across submit + scanner paths
+- `GlobalCircuitBreaker`: global scheduler halt flag
+- `IdleStarvationBlocks`: starvation detector
+- `SweepCursor`: zombie sweep cursor
+
+## Lifecycle State Machine
+
+The implementation now mirrors the specification's single lifecycle machine:
+
+```text
+Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed
+```
+
+Runtime interpretation:
+
+- `Normal cycle`: scheduler-owned `execution_plan` run; increments `cycle_nonce`; emits `CycleStarted` and `CycleSummary`
+- `Close tail`: terminal `on_close_execution_plan` run; does not increment `cycle_nonce`; emits close-tail events followed by `AaaClosed`
+- `Lifecycle touch`: extrinsics such as `fund_aaa`, `manual_trigger`, `pause_aaa`, `permissionless_sweep`, and plan/schedule updates may detect terminal state before their normal mutation path
+
+Creation injects the canonical `[Noop]` close plan. Mutable actors can replace it through `update_on_close_execution_plan`; User actors cannot admit `Mint` in either the normal plan or close plan. System Immutable actors are hard protocol anchors: no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, close, or reopen them; only a runtime upgrade can change that invariant.
+
+Scheduler hygiene follows the bounded liveness matrix in the specification: manual triggers enqueue/schedule while preserving the pending flag across deferral, AddressEvent overflow keeps the inbox latch, delayed probability misses re-arm timers, paused actors are skipped without clearing latches, and closed/missing stale queue or wakeup entries are ignored deterministically.
 
 ## AAA Read-Model Contract
 
@@ -413,26 +455,26 @@ AAA discovery is intentionally split by use case:
 
 ## Extrinsics (Implementation Surface)
 
-| Call | Extrinsic                        | Notes                                                                                                   |
-| :--- | :------------------------------- | :------------------------------------------------------------------------------------------------------ |
-| `0`  | `create_user_aaa`                | charges `AaaCreationFee`, forbids `Mint`, allocates the lowest free user slot                           |
-| `1`  | `create_system_aaa`              | governance/system origin                                                                                |
-| `2`  | `pause_aaa`                      | mutable actors only                                                                                     |
-| `3`  | `resume_aaa`                     | mutable actors only                                                                                     |
-| `4`  | `manual_trigger`                 | sets pending manual trigger                                                                             |
-| `5`  | `fund_aaa`                       | enforces tracked-asset funding discipline                                                               |
-| `6`  | `close_aaa`                      | owner/governance close path                                                                             |
-| `7`  | `update_schedule`                | mutable actors only                                                                                     |
-| `8`  | `set_global_circuit_breaker`     | breaker control                                                                                         |
-| `9`  | `permissionless_sweep`           | public lifecycle touchpoint; evaluates liveness only, never enqueues directly                           |
-| `10` | `update_execution_plan`          | mutable actors only, tracked assets re-derived                                                          |
-| `11` | `set_active_actor_limit`         | governance operational cap (`0 < limit ≤ min(MaxActiveActors, MaxQueueLength)`) tuning                  |
-| `12` | `permissionless_sweep_many`      | bounded batch lifecycle touchpoint (`len <= MaxSweepPerBlock`), no direct enqueue                       |
-| `13` | `set_auto_close_at_cycle_nonce`  | set/clear cycle lease target (`Option<u64>`) with horizon checks                                        |
-| `14` | `increment_auto_close_nonce`     | extend cycle lease by `by` (`by > 0`, checked add, bounded horizon)                                     |
-| `15` | `update_on_close_execution_plan` | configure best-effort close cleanup execution plan (same task/condition surface as main execution plan) |
-| `16` | `create_user_aaa_at_slot`        | charges `AaaCreationFee`, forbids `Mint`, and binds creation to an exact user slot for recovery         |
-| `17` | `reopen_system_aaa`              | governance-only reopen of a previously closed System AAA at the same `aaa_id`                           |
+| Call | Extrinsic                        | Notes                                          |
+| :--- | :------------------------------- | :--------------------------------------------- |
+| `0`  | `create_user_aaa`                | fee, no `Mint`, default `[Noop]` close         |
+| `1`  | `create_system_aaa`              | governance origin, explicit mutability         |
+| `2`  | `pause_aaa`                      | mutable actors only                            |
+| `3`  | `resume_aaa`                     | mutable actors only                            |
+| `4`  | `manual_trigger`                 | set flag and enqueue/schedule                  |
+| `5`  | `fund_aaa`                       | signed caller funds tracked asset              |
+| `6`  | `close_aaa`                      | close tail, then destruction in place          |
+| `7`  | `update_schedule`                | mutable actors only                            |
+| `8`  | `set_global_circuit_breaker`     | breaker control                                |
+| `9`  | `permissionless_sweep`           | liveness touchpoint, no normal cycle           |
+| `10` | `update_execution_plan`          | mutable actors only, re-derive assets          |
+| `11` | `set_active_actor_limit`         | governance operational cap tuning              |
+| `12` | `permissionless_sweep_many`      | bounded batch touchpoint, no direct enqueue    |
+| `13` | `set_auto_close_at_cycle_nonce`  | set/clear cycle lease with horizon checks      |
+| `14` | `increment_auto_close_nonce`     | extend cycle lease, checked and bounded        |
+| `15` | `update_on_close_execution_plan` | best-effort close cleanup plan                 |
+| `16` | `create_user_aaa_at_slot`        | exact slot, default `[Noop]` close             |
+| `17` | `reopen_system_aaa`              | governance reopen for closed Mutable System id |
 
 Calls `2`, `3`, `4`, `6`, `7`, `10`, `13`, `14`, and `15` all share the same authority gate: signed owner for both actor types, plus governance origin for System AAA only.
 

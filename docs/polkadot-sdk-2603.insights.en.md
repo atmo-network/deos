@@ -1,7 +1,7 @@
 # Polkadot SDK: Comprehensive Architecture Patterns and Best Practices [SDK 2603]
 
 > `Status`: Active Standard (April 2026)
-> `Version`: Polkadot SDK 2603.0.0 crate baseline + stable2603-1 patch lockfile (node v1.22.1)
+> `Version`: Polkadot SDK 2603.0.0 crate baseline + stable2603-2 patch lockfile (node v1.22.2)
 > `Rust`: 1.88.0+ runtime build baseline, 1.93.0 stable toolchain tested upstream
 
 ## Overview
@@ -38,9 +38,9 @@ The 2603 line is not a conceptual reset, but it does tighten several concrete co
 - `Session key ownership`: session-key generation/runtime API now carries an owner payload and proof-of-possession surface, matching the newer `author_rotateKeysWithOwner` flow
 - `XCM transactor signatures`: `TransactAsset` deposit hooks now accept `AssetsInHolding`, and some internal transfer hooks now return plain `Asset` instead of holding sets
 - `XCM executor config`: older `AssetClaims` wiring is gone from the executor config surface
-- `Client/operator line`: the current stable patch release is `polkadot-stable2603-1` (node v1.22.1), while the underlying Rust umbrella crate remains on the 2603.0.0 baseline
+- `Client/operator line`: the current stable patch release is `polkadot-stable2603-2` (node v1.22.2), while the underlying Rust umbrella crate remains on the 2603.0.0 baseline
 
-For DEOS specifically, the most relevant 2603 deltas are `system_version = 3`, the session-keys runtime API change, and the XCM transactor/executor signature updates. For stable2603-1, the relevant migration is a patch-level lockfile and local binary/tool tag update; no DEOS runtime API shape change is required.
+For DEOS specifically, the most relevant 2603 deltas are `system_version = 3`, the session-keys runtime API change, and the XCM transactor/executor signature updates. For stable2603-2, the relevant migration is a patch-level lockfile and local binary/tool tag update; no DEOS runtime API shape change is required.
 
 ---
 
@@ -594,10 +594,8 @@ Use this guide as the authoritative reference for all code generation tasks targ
 
 `on_initialize` runs every block with guaranteed weight. `on_idle` runs only when spare weight exists. Choose based on actor requirements:
 
-| Pattern                                  | When to use                                                      | Example                                                 |
-| :--------------------------------------- | :--------------------------------------------------------------- | :------------------------------------------------------ |
-| `on_initialize` scan + `on_idle` execute | Actor needs guaranteed state awareness every block               | Zap Manager (scan balances → populate PendingZaps)      |
-| `on_idle` only                           | Actor can tolerate delayed processing, no guaranteed scan needed | Burning Manager (check balances + process in same call) |
+- `on_initialize` scan + `on_idle` execute: use when actors need guaranteed state awareness every block; example: Zap Manager scanning balances before later execution
+- `on_idle` only: use when delayed processing is acceptable and no guaranteed scan is needed; example: Burning Manager checking and processing balances in one call
 
 `Key insight`: `on_initialize` is expensive (runs every block even when idle). Only use it when guaranteed-per-block scanning is essential (e.g., cooldown timers that must be checked before user transactions execute). For pure "process when possible" actors, `on_idle` alone is simpler and wastes zero weight on empty blocks.
 

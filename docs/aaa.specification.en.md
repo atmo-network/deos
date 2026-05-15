@@ -1,7 +1,7 @@
 # AAA Specification
 
 - **Component:** `pallet-aaa` (Account Abstraction Actors)
-- **Version:** `0.3.0`
+- **Version:** `0.4.0`
 - **Date:** March 2026
 - **Status:** Normative
 
@@ -38,7 +38,7 @@ This specification MUST stay at or below **1080 lines** (formatting-preserving c
 
 - **Terminology:** An **Execution Plan** is the static bounded list of steps configured on the actor. An **Execution Run (Cycle)** is one admitted execution attempt of the current plan, identified by `(aaa_id, cycle_nonce)`. All external observability and indexer correlation MUST be run-centric. Execution plans, trigger filters, and actor-to-actor asset flows are part of the on-chain behavioral surface of AAA, but they operate inside the scheduler, fee, lifecycle, and safety contract of this runtime; within existing task, adapter, and safety limits, protocol workflow changes SHOULD prefer actor-graph reconfiguration over runtime rewrites.
 - **Native-asset terminology:** `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, and fee reservation. Staking uses the generic `Stake { asset, amount }` task only; any native staking representation is a runtime-defined `AssetId` interpreted by `StakingOps`, not a separate AAA task.
-- **Stable plan shape:** `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty in the current stable contract; actors that want no close-time side effects MUST use an explicit `Noop` close plan. `Noop` exists for explicit observability/padding and as the canonical zero-side-effect plan, not as a substitute for an omitted plan.
+- **Stable plan shape:** `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty; creation extrinsics that omit it MUST inject the canonical `[Noop]` close plan. Actors that want no close-time side effects keep `[Noop]`; mutable actors MAY replace it through `update_on_close_execution_plan`.
 
 ```rust
 struct AaaInstance<AccountId, BlockNumber, Balance> {
@@ -77,14 +77,15 @@ struct FundingSnapshot<Balance, BlockNumber> {
 ### 2.2 Types and Mutability
 
 - **User AAA:** Subject to evaluation/execution fees and bounded by `MaxOwnerSlots` via user slot allocation.
-- **System AAA:** Governance-created, exempt from User fee model, **MUST be Mutable**, MUST NOT be limited by user slot count, and MUST keep `owner_slot = 0` as a storage/event compatibility sentinel.
+- **System AAA:** Governance-created, exempt from User fee model, MAY be Mutable or Immutable, MUST NOT be limited by user slot count, and MUST keep `owner_slot = 0` as a storage/event compatibility sentinel.
 
 Mutability rules:
 
 - **Mutable:** control origin MAY pause/resume/update schedule/update execution plan/update on-close execution plan/set or increment auto-close target.
 - **Control origin:** signed owner for both actor types; governance origin is additionally valid for System AAA only.
-- **Immutable (User only):** update and pause/resume calls MUST fail with `ImmutableAaa`.
-- `fund_aaa`, `manual_trigger`, and `close_aaa` MUST remain available to owner for both mutability classes; governance override over User AAA remains out of stable-contract scope.
+- **User Immutable:** owner mutation calls MUST fail with `ImmutableAaa`; a runtime MAY expose emergency governance override for User actors only.
+- **System Immutable:** no runtime extrinsic, including governance/root, may mutate, pause/resume, manually trigger, close, or reopen the actor; only runtime upgrade may alter the invariant.
+- `fund_aaa` MUST remain available for both mutability classes when the asset is tracked. `manual_trigger` MUST remain available for User AAA and System Mutable AAA unless another lifecycle gate rejects it; System Immutable `manual_trigger` MUST fail with `ImmutableAaa`.
 
 ### 2.3 Sovereign Derivation and Slot Allocation
 
@@ -117,8 +118,8 @@ OwnerSlotMask::insert(&owner, mask & valid_mask(MaxOwnerSlots));
 
 System AAA id rules:
 
-1. `create_system_aaa(...)` MUST allocate a fresh `aaa_id` from `NextAaaId`; governance MUST NOT choose an explicit fresh `aaa_id` through the stable surface.
-2. `reopen_system_aaa(aaa_id, ...)` is the only stable explicit-id System AAA creation path. It MAY reopen only a previously closed System AAA id and MUST fail with `SystemAaaNotClosed` otherwise.
+1. `create_system_aaa(mutability, ...)` MUST allocate a fresh `aaa_id` from `NextAaaId`; governance MUST NOT choose an explicit fresh `aaa_id` through the stable surface.
+2. `reopen_system_aaa(aaa_id, mutability, ...)` is the only stable explicit-id System AAA creation path. It MAY reopen only a previously closed Mutable System AAA id and MUST fail with `SystemAaaNotClosed` otherwise.
 3. `reopen_system_aaa` MUST fail with `AaaIdOccupied` if the requested `aaa_id` is already active.
 4. System AAA creation/reopen MUST insert `SovereignIndex[sovereign_account] = aaa_id` atomically with `AaaInstances`; active occupancy of that sovereign account remains the only collision criterion.
 5. `NextAaaId` MUST remain monotonic. Reopening a previously closed lower id MUST NOT rewind it.
@@ -127,31 +128,35 @@ System AAA id rules:
 
 Terminal conditions:
 
-| Condition                                                              | Check Point          | Outcome                                                                          |
-| ---------------------------------------------------------------------- | -------------------- | -------------------------------------------------------------------------------- |
-| `fee_native_balance < MinUserBalance`                                  | Before cycle start   | `AaaClosed(BalanceExhausted)` (User)                                             |
-| `consecutive_failures >= MaxConsecutiveFailures`                       | After cycle failure  | `AaaClosed(ConsecutiveFailures)`                                                 |
-| `current_block > schedule_window.end`                                  | All touch points     | `AaaClosed(WindowExpired)`                                                       |
-| `fee_native_balance < cycle_fee_upper`                                 | Scheduler admission  | `AaaClosed(FeeBudgetExhausted)` (User)                                           |
-| `cycle_nonce == u64::MAX`                                              | After admission      | User: `AaaClosed(CycleNonceExhausted)`; System: `AaaPaused(CycleNonceExhausted)` |
-| `auto_close_at_cycle_nonce = Some(target)` AND `cycle_nonce >= target` | After successful run | `AaaClosed(AutoCloseNonceReached)`                                               |
+- `fee_native_balance < MinUserBalance`: before cycle start → User `AaaClosed(BalanceExhausted)`
+- `consecutive_failures >= MaxConsecutiveFailures`: after cycle failure → `AaaClosed(ConsecutiveFailures)`
+- `current_block > schedule_window.end`: all touch points → `AaaClosed(WindowExpired)`
+- `fee_native_balance < cycle_fee_upper`: scheduler admission → User `AaaClosed(FeeBudgetExhausted)`
+- `cycle_nonce == u64::MAX`: after admission → User closes, System pauses with `CycleNonceExhausted`
+- auto-close target reached after successful run → `AaaClosed(AutoCloseNonceReached)`
 
-System AAA is exempt from `MinUserBalance` checks and MUST NOT auto-pause on `FundingUnavailable`; unresolved funding is modeled as `StepSkipped(FundingUnavailable)`. Runtime configuration MUST enforce `MinUserBalance >= ExistentialDeposit(FeeNativeAsset)`. System owner/governance `close_aaa` MUST stay unconditionally available (no mutability/funding/trigger preconditions) to remove long-paused actors.
+System AAA is exempt from `MinUserBalance` checks and MUST NOT auto-pause on `FundingUnavailable`; unresolved funding is modeled as `StepSkipped(FundingUnavailable)`. Runtime configuration MUST enforce `MinUserBalance >= ExistentialDeposit(FeeNativeAsset)`. System Mutable owner/governance `close_aaa` MUST stay available without funding/trigger preconditions to remove long-paused actors. System Immutable `close_aaa` MUST fail with `ImmutableAaa`.
 
-`WindowExpired` MUST be evaluated at every lifecycle touch point (scheduler admission, sweep extrinsics, `manual_trigger`, `fund_aaa`, pause/resume, schedule/execution-plan update). If `current_block > schedule_window.end`, runtime closes before other mutations in that call.
+`WindowExpired` MUST be evaluated at every lifecycle touch point (scheduler admission, sweep extrinsics, `manual_trigger`, `fund_aaa`, pause/resume, schedule/execution-plan update). If `current_block > schedule_window.end`, runtime closes before other mutations in that call. Schedule window eligibility is inclusive on `end`: `start <= current_block <= end`; closure starts only when `current_block > end`.
 
-Schedule window eligibility is inclusive on `end`: `start <= current_block <= end`. Closure starts only when `current_block > end`.
+Lifecycle is a single state machine: `Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed`. Normal cycles are scheduler-owned runs of `execution_plan`, increment `cycle_nonce` at admission, and emit `CycleStarted`/`CycleSummary`. Close tails are terminal runs of `on_close_execution_plan`; they are not normal cycles, MUST NOT increment `cycle_nonce`, and emit close-tail events followed by `AaaClosed`. Lifecycle touch extrinsics MAY detect terminal state and enter the close path, but MUST NOT present that path as a normal cycle.
 
-Close precedence is checkpoint-scoped and deterministic: `WindowExpired` dominates all external/admission touch points; for unpaused User AAA admission, `BalanceExhausted` dominates `FeeBudgetExhausted`; the nonce-exhaustion checkpoint above is the only after-admission / before-step transition; after an admitted cycle, `ConsecutiveFailures` is the only post-failure terminal close and `AutoCloseNonceReached` is the only post-success terminal close.
+Close precedence is checkpoint-scoped and deterministic: `WindowExpired` dominates all external/admission touch points; for unpaused User AAA admission, `BalanceExhausted` dominates `FeeBudgetExhausted`; nonce exhaustion is the only after-admission / before-step transition; after an admitted cycle, `ConsecutiveFailures` is the only post-failure terminal close and `AutoCloseNonceReached` is the only post-success terminal close.
 
-Before terminal state removal, runtime MUST enter close-tail execution for `on_close_execution_plan` on both explicit and automatic close paths. The close tail uses the same task, condition, amount-resolution, error-policy, adapter, and weight-upper-bound semantics as the main execution plan. For User AAA, runtime MUST derive deterministic `close_cycle_weight_upper` and `close_cycle_fee_upper`, initialize transient close-tail fee reservation as `min(fee_native_balance_at_close_entry, close_cycle_fee_upper)`, and build a fresh `TriggerSnapshot` against close-entry balances. For System AAA, the same execution semantics apply while User fee charging remains exempt. Scheduler-driven automatic closes MUST reserve enough dispatch budget to admit the tail or defer closure until that budget exists. Close-tail execution MUST NOT recurse into another close.
-If fee-native balance depletes or fee routing fails during admitted close execution, affected close steps MUST fail/skip observably while final closure still completes. Whole-tail skip is not part of the active contract for the current line.
+Before terminal state removal, runtime MUST enter close-tail execution for explicit and automatic close paths. The close tail uses the same task, condition, amount-resolution, error-policy, adapter, and weight-upper-bound semantics as the main plan. User close-tail admission derives `close_cycle_weight_upper`/`close_cycle_fee_upper`, reserves `min(fee_native_balance_at_close_entry, close_cycle_fee_upper)`, and builds a fresh `TriggerSnapshot`; System AAA uses the same execution semantics with zero User fee charging. Close-tail execution MUST NOT recurse into another close. If fee-native balance depletes or fee routing fails during admitted close execution, affected close steps MUST fail/skip observably while final closure still completes; whole-tail skip is not part of the current contract.
 
-On terminal condition or owner `close_aaa`, runtime atomically removes actor state/indexes, clears User slot bit (System has none), preserves sovereign balances, and emits `AaaClosed`.
+Close-tail contract matrix:
 
-Create/close transitions MUST atomically synchronize `AaaInstances` and `SovereignIndex`; queue state (`CurrentQueue`, `NextQueue`, `ActorQueueEpoch`) MUST remain deterministic under the same transition.
+- Creation: omitted close plan injects canonical `[Noop]`; mutable actors MAY replace it later
+- Explicit close: control origin enters close tail inline before deletion, independent of mutability
+- Automatic close: scheduler admits close tail only when bounded budget fits; otherwise closure defers
+- Sweep close: sweep is a lifecycle touchpoint; it may enter terminal close but MUST NOT admit a normal cycle
+- Fee depletion: per-step close failure/skip is observable and MUST NOT block later steps or final closure
+- Nonce: close tail MUST NOT increment `cycle_nonce` or emit `CycleStarted`/`CycleSummary`
+- Deletion: remove actor/readiness/index state, clear User slot, preserve sovereign balances, emit `AaaClosed`
+- Recovery: User reattaches with `create_user_aaa_at_slot`; System reopens with `reopen_system_aaa`
 
-Recovery is owner-operated via `create_user_aaa_at_slot` for User AAA and governance-operated via `reopen_system_aaa(aaa_id, ...)` for previously closed System AAA; direct post-destruction balance-rescue extrinsics remain out of the stable contract.
+Create/close transitions MUST synchronize `AaaInstances` and `SovereignIndex`; queue/readiness entries MUST be removed, or deterministic stale queue entries MUST be ignored at pop. Direct post-destruction balance-rescue extrinsics remain out of the stable contract.
 
 ### 2.5 Funding Snapshots
 
@@ -160,9 +165,9 @@ The per-asset snapshot map `funding_snapshots` is the canonical baseline for `Pe
 Required behavior:
 
 1. **Execution-Plan Scanning:** On creation, `update_execution_plan(aaa_id, execution_plan)`, or `update_on_close_execution_plan(aaa_id, on_close_execution_plan)`, runtime MUST scan BOTH execution plans (`execution_plan` + `on_close_execution_plan`) and populate `funding_tracked_assets` with every `AssetId` involved in a step that uses `PercentageOfLastFunding`. Any execution-plan update MUST fully recompute tracked assets and prune `funding_snapshots` entries for assets no longer tracked.
-2. **Snapshot Update via `fund_aaa`:** Every successful `fund_aaa(_, aaa_id, asset, amount)` with `amount > 0` MUST update `funding_snapshots[asset]` to the new amount and `current_block` for BOTH User and System AAA, but ONLY if `asset` is in `funding_tracked_assets`. Untracked assets MUST fail with `SnapshotUnavailable`.
+2. **Snapshot Update via `fund_aaa`:** `fund_aaa` is permissionless for any signed caller, transfers `amount > 0` from caller to the actor sovereign account, and MUST update `funding_snapshots[asset]` for BOTH User and System AAA only when `asset` is in `funding_tracked_assets`; untracked assets MUST fail with `SnapshotUnavailable`.
 3. **Snapshot Update via `notify_address_event`:** Every `notify_address_event(aaa_id, asset, amount, source)` with `amount > 0` MUST update `funding_snapshots[asset]`, BUT ONLY if the actor is System AAA AND `asset` is in `funding_tracked_assets`.
-4. Snapshot update MUST NOT depend on caller identity (owner/governance/third-party all valid).
+4. Snapshot update MUST be independent of funding caller identity after the tracked-asset gate passes.
 5. Funding events that update tracked snapshots MUST remain valid regardless of pause state; they MUST NOT imply automatic pause/resume transitions.
 6. `FundingUnavailable` is a deterministic non-terminal execution outcome for both User and System AAA; it covers missing/zero tracked snapshots and tracked-balance overspend, while untracked assets remain `SnapshotUnavailable` and stale tracked snapshots remain valid until overwritten.
 7. `cycle_weight_upper` and `cycle_fee_upper` are run-plan cache fields that MUST be recomputed on create/update execution plan and MUST only affect admission/preflight efficiency, not functional execution semantics. Close-tail upper bounds (`close_cycle_weight_upper`, `close_cycle_fee_upper`) MUST also remain deterministically derivable from `on_close_execution_plan` on create/update, whether cached or recomputed, and MUST NOT alter functional task semantics.
@@ -200,7 +205,7 @@ trait AssetOps<AccountId, AssetId, Balance> {
 
 **Balance semantics:** `balance()` MUST return the adapter-visible immediately transferable balance for the asset before any AAA-local reservation is applied. For `FeeNativeAsset` this is runtime policy (typically `free_balance` after adapter-level locks/reserves/holds); for assets without hold semantics it may equal total balance. AAA then derives `spendable_fee_native` by subtracting transient `reserved_fee_remaining` from `FeeNativeAsset` `balance()` only; non-`FeeNativeAsset` balances are passed through unchanged for spendability checks.
 
-`Mint` MUST be rejected for User AAA. Validation MUST occur at **plan admission time** (create/update_execution_plan): if a User AAA execution plan contains `Mint`, the call MUST fail with `MintNotAllowedForUserAaa`. This prevents fee waste and confusing UX from runtime rejection at execution time.
+`Mint` MUST be rejected for User AAA in both the run plan and close plan. Validation MUST occur at every plan-admission path (`create_*`, `update_execution_plan`, `update_on_close_execution_plan`, and any default close-plan injection); if a User plan contains `Mint`, the call MUST fail with `MintNotAllowedForUserAaa`.
 `can_deposit`/`minimum_balance` are REQUIRED for ED-safe split-transfer normalization (Section 6.2).
 
 ### 3.2 DexOps
@@ -373,22 +378,18 @@ Semantics:
 
 Resolution policies — runtime MUST apply one per task:
 
-| Policy            | Used by                                                                       | `AllBalance`                       | Source sufficiency                 |
-| ----------------- | ----------------------------------------------------------------------------- | ---------------------------------- | ---------------------------------- |
-| `PreserveSpend`   | `Transfer`, `SplitTransfer`, `SwapExactIn`, `AddLiquidity`, `RemoveLiquidity` | Subtracts `minimum_balance(asset)` | Required against spendable balance |
-| `Mint`            | `Mint`, `SwapExactOut`                                                        | No ED subtraction                  | No spendability requirement        |
-| `ExpendableSpend` | `Burn`                                                                        | Full spendable balance             | MAY delegate to adapter            |
+- `PreserveSpend`: `Transfer`, `SplitTransfer`, `SwapExactIn`, `AddLiquidity`, `RemoveLiquidity`; subtract ED; require spendable source
+- `Mint`: `Mint`, `SwapExactOut`; no ED subtraction; no spendability requirement
+- `ExpendableSpend`: `Burn`; full spendable balance; source check MAY delegate to adapter
 
 For `SwapExactOut`, `Mint` policy semantics apply only to resolving target output amount. The DEX adapter MUST still enforce actual input sufficiency and fail atomically if required input cannot be paid from actor balances.
 
 Execution mapping:
 
-| Resolution           | Runtime behavior                                                                                          |
-| -------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Resolved(amount)`   | Task executes normally                                                                                    |
-| `Skipped`            | Emit `StepSkipped { reason: ResolutionSkipped }` — non-failing, does not increment `consecutive_failures` |
-| `FundingUnavailable` | Emit `StepSkipped { reason: FundingUnavailable }`; non-terminal for both actor classes (Section 2.4)      |
-| Conditions not met   | Emit `StepSkipped { reason: ConditionsNotMet }`                                                           |
+- `Resolved(amount)`: task executes normally
+- `Skipped`: emit `StepSkipped { reason: ResolutionSkipped }`; non-failing and does not increment `consecutive_failures`
+- `FundingUnavailable`: emit `StepSkipped { reason: FundingUnavailable }`; non-terminal for both actor classes (Section 2.4)
+- Conditions not met: emit `StepSkipped { reason: ConditionsNotMet }`
 
 ### 5.4 Trigger Snapshot
 
@@ -396,11 +397,9 @@ Execution mapping:
 
 Example (sovereign holds 1000 Native, 3-step execution plan):
 
-| Step | Task                                | Resolution                | Effect        |
-| ---- | ----------------------------------- | ------------------------- | ------------- |
-| 0    | Transfer `PercentageOfTrigger(10%)` | `floor(1000 × 10%) = 100` | balance → 900 |
-| 1    | Transfer `PercentageOfTrigger(10%)` | `floor(1000 × 10%) = 100` | balance → 800 |
-| 2    | Swap `PercentageOfTrigger(50%)`     | `floor(1000 × 50%) = 500` | balance → 300 |
+- Step 0: transfer `PercentageOfTrigger(10%)`; resolves `100`; balance → 900
+- Step 1: transfer `PercentageOfTrigger(10%)`; resolves `100`; balance → 800
+- Step 2: swap `PercentageOfTrigger(50%)`; resolves `500`; balance → 300
 
 Construction rules:
 
@@ -444,20 +443,18 @@ If an early step mutates asset composition and a later step fails, post-mutation
 
 ### 6.1 Task Set and Parameters
 
-| Task              | Description                                                                                                                            |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `Transfer`        | Single asset transfer                                                                                                                  |
-| `SplitTransfer`   | Atomic bounded fan-out (Section 6.2)                                                                                                   |
-| `Burn`            | Asset burn                                                                                                                             |
-| `Mint`            | Asset mint (System AAA only)                                                                                                           |
-| `SwapExactIn`     | DEX exact-in with `Perbill` slippage tolerance                                                                                         |
-| `SwapExactOut`    | DEX exact-out target with deterministic input resolution                                                                               |
-| `AddLiquidity`    | Provide liquidity                                                                                                                      |
-| `RemoveLiquidity` | Withdraw liquidity                                                                                                                     |
-| `Stake`           | Deposit the declared asset into the runtime staking adapter; native staking, if supported, is represented by the runtime's chosen `AssetId` |
-| `DonateLiquidity` | Donate value into a declared liquidity pair without minting LP; runtime adapters own any pair-specific acquisition or balancing policy |
-| `Unstake`         | Withdraw shares from staking pool                                                                                                      |
-| `Noop`            | Observation/padding step                                                                                                               |
+- `Transfer`: single asset transfer
+- `SplitTransfer`: atomic bounded fan-out (Section 6.2)
+- `Burn`: asset burn
+- `Mint`: asset mint (System AAA only)
+- `SwapExactIn`: DEX exact-in with `Perbill` slippage tolerance
+- `SwapExactOut`: DEX exact-out target with deterministic input resolution
+- `AddLiquidity`: provide liquidity
+- `RemoveLiquidity`: withdraw liquidity
+- `Stake`: deposit declared asset into staking adapter; native support uses the runtime's chosen `AssetId`
+- `DonateLiquidity`: donate value into a pair without minting LP; adapters own pair-specific balancing
+- `Unstake`: withdraw shares from staking pool
+- `Noop`: observation/padding step
 
 `SwapExactIn` parameter contract:
 
@@ -569,7 +566,7 @@ Timer rules:
 6. If `RequireSecureEntropyForProbabilisticTasks=true`, schedules with `0 < p < 1` and any task other than `Noop` MUST require `EntropyProvider::is_secure_for_financial_probability()` or fail with `InsecureEntropyProvider` at admission time
 7. Those same strict financial schedules MUST use `EntropyProvider::secure_entropy_for_financial_probability(subject)` at execution time and MUST NOT fall back to block hashes; if secure entropy is unavailable, the probability gate is a readiness miss and the cycle does not execute
 8. For non-strict probability sampling, the entropy fallback chain is deterministic: external provider `(aaa_id, current_block)` → `parent_hash` → `block_hash(current_block - 1)`; `block_hash(current_block)` is forbidden in runtime dispatch
-9. Probability sampling occurs only after cadence/cooldown readiness is met; a miss is a readiness miss, not a defer/error/event, and leaves nonce/manual/failure state unchanged
+9. Probability sampling occurs only after cadence/cooldown readiness is met; a miss is a readiness miss, not a defer/error/event, leaves nonce/manual/failure state unchanged, and MUST re-arm delayed timers
 10. Final sampled entropy MUST be domain-separated with resolved entropy hash, `aaa_id`, and `cycle_nonce`; off-chain nondeterministic entropy is forbidden
 
 ### 7.2 OnAddressEvent
@@ -624,7 +621,7 @@ Ingress contract:
 
 `manual_trigger` bypasses schedule timing only. It MUST NOT bypass admission or fee checks.
 
-1. Calling `manual_trigger` on an unpaused actor MUST set `manual_trigger_pending = true`; calling it on a paused actor MUST fail with `AaaPaused`.
+1. Calling `manual_trigger` on an eligible unpaused actor MUST set `manual_trigger_pending = true` and perform a bounded enqueue/schedule request; calling it on a paused actor MUST fail with `AaaPaused`; calling it on System Immutable AAA MUST fail with `ImmutableAaa`.
 2. `manual_trigger_pending` MUST be cleared exactly when a cycle is admitted and `CycleStarted` is emitted.
 3. Deferrals MUST NOT clear `manual_trigger_pending`.
 4. If the actor closes before admission, the flag is removed with actor state deletion.
@@ -673,33 +670,31 @@ The AAA runtime is a **deterministic event-driven actor runtime**. Actors are ne
 
 ### 8.2 Execution Flow
 
-Each block MUST execute the following sequence in order:
+Each block MUST seed the active queue from `CurrentQueue + NextQueue`, drain overdue timers, ingest address events, pop actors in deterministic FIFO order up to `MaxExecutionsPerBlock`, then persist deferred/leftover actors into next-block queue storage and increment `QueueEpoch`.
 
-1. **Seed Active Queue:** Load `CurrentQueue`, merge staged `NextQueue`, and clear same-epoch dedup markers for that active set.
-2. **Drain Overdue Timers:** Iterate `MinWakeupBlock` up to `current_block`. Extract delayed actors from `WakeupIndex` and enqueue them into the active run queue. Bounded by `MaxWakeupsPerBlock` for both admitted wakeups and scanned overdue block slots per `on_idle` pass; close-path cleanup is intentionally lazy rather than scanning future buckets.
-3. **Ingest Address Events:** Process coalesced `AddressEvent` trigger-messages. Enqueue matching subscribed actors into the active run queue.
-4. **Execute Actors:** Pop actors from the active run queue. Execute up to `MaxExecutionsPerBlock`. Deferred or leftover actors are carried into next-block queue storage.
-5. **Persist Carry-Over:** Write deferred backlog into `CurrentQueue`, clear `NextQueue`, and increment `QueueEpoch`.
+### 8.3 Scheduler Liveness Matrix
 
-### 8.3 Enqueue Deduplication & Amplification Protection
+- Queue carry-over: deferred or leftover actors persist in deterministic FIFO order and MUST be revalidated at pop
+- Timer due: delayed wakeup moves to active queue; actor wakeup pointer clears when drained
+- Timer probability miss: no cycle/event/failure; delayed timers MUST re-arm, every-block timers use continuation
+- AddressEvent matched: set/keep inbox latch; enqueue best effort; overflow MUST NOT clear the latch
+- Manual trigger: set flag and enqueue/schedule; deferral preserves flag until admitted cycle start
+- Queue/wakeup full: spill deterministically; if no bucket fits, emit drop and retain source latch when any
+- Paused actor: queued/wakeup entries MAY remain; pop skips without clearing manual or inbox latches
+- Closed/missing actor: stale queue/wakeup entries are ignored; close removes canonical readiness/pointers
+- Window expired at touch/pop: enter terminal close before normal mutation or execution
+- Breaker active: bounded housekeeping may continue; normal cycles halt; sweep-time terminal close remains allowed
 
-1. **Deduplication:** An actor MUST NOT appear multiple times in the queue during the same block, and delayed timers MUST keep at most one live future wakeup per actor. If `ActorQueueEpoch[actor] == QueueEpoch`, the enqueue request MUST be ignored.
-2. **Amplification Limit:** The scheduler MUST enforce `MaxQueueInsertionsPerBlock`. If this limit is exceeded, wakeup scheduling MUST probe deterministic buckets in order: `requested_block`, `requested_block + 1`, ..., `requested_block + MaxSpilloverBlocks`.
-3. **Bounded Spillover Horizon:** In the reference pallet, `MaxSpilloverBlocks` is `8` (up to 9 probed buckets including requested block).
-4. **Overflow Observability:** If wakeup scheduling cannot find capacity inside this horizon, runtime MUST increment `WakeupScheduleDrops` and emit `WakeupScheduleDropped { aaa_id, requested_block }`.
-5. **Inbox Latch Retention:** `WakeupScheduleDropped` MUST NOT clear `AddressEventInbox.is_pending`. Retry requires a later enqueue attempt (next matching ingress event, manual trigger, or explicit schedule priming path).
+### 8.4 Enqueue Deduplication, Budget, and Fairness
 
-### 8.4 Budget and Fairness
-
-1. Runtime MUST reserve at least `MinOnIdleReservePct` of total block weight for `on_idle` paths.
-2. The AAA execution cycle uses the residual `on_idle` weight after bounds.
-3. Execution order within the run queue MUST remain deterministic.
-4. If the block weight or `MaxExecutionsPerBlock` limit is reached, remaining items in the active run queue MUST carry forward through bounded next-block queue storage to ensure natural round-robin fairness across blocks.
-5. High-density fairness validation target for the reference runtime is nonce spread `<= 3` in stress-lane matrix scenarios; starvation (`min_nonce == 0`) is forbidden.
+1. An actor MUST NOT appear multiple times in the queue during one block, and delayed timers MUST keep at most one live future wakeup per actor; `ActorQueueEpoch` enforces block-local dedup.
+2. The scheduler MUST enforce `MaxQueueInsertionsPerBlock`; overflow probes `requested_block..requested_block + MaxSpilloverBlocks`, then emits `WakeupScheduleDropped` and increments `WakeupScheduleDrops` if no bucket fits.
+3. Runtime MUST reserve at least `MinOnIdleReservePct` for `on_idle`; cycles use the residual budget after bounded housekeeping.
+4. If weight or `MaxExecutionsPerBlock` is reached, remaining actors carry forward through bounded next-block queue storage; high-density fairness target is nonce spread `<= 3` and starvation-free.
 
 ### 8.5 Sweep
 
-1. `permissionless_sweep` and `permissionless_sweep_many` are lifecycle touchpoints only: they MUST evaluate terminal liveness immediately and MUST NOT enqueue, admit, or execute cycles directly.
+1. `permissionless_sweep` and `permissionless_sweep_many` are lifecycle touchpoints only: they evaluate terminal liveness immediately and MUST NOT enqueue, admit, or execute normal cycles.
 2. Breaker state MUST NOT block sweep-time liveness evaluation or terminal closure; if an actor remains alive, the call returns without queue mutation.
 3. `SweepCursor` iteration and batch accounting MUST tolerate missing/closed `AaaId` entries and continue without aborting traversal.
 
@@ -739,23 +734,21 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 
 ### 10.1 Owner / Control Extrinsics
 
-| Extrinsic                                                                                    | Description                                                        |
-| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `create_user_aaa(mutability, schedule, schedule_window, execution_plan)`                     | Create actor and allocate the lowest free owner slot               |
-| `create_user_aaa_at_slot(owner_slot, mutability, schedule, schedule_window, execution_plan)` | Create actor in an exact owner slot for deterministic recovery     |
-| `pause_aaa(aaa_id)`                                                                          | Pause actor (Mutable only)                                         |
-| `resume_aaa(aaa_id)`                                                                         | Resume actor (Mutable only)                                        |
-| `manual_trigger(aaa_id)`                                                                     | Set manual trigger flag                                            |
-| `fund_aaa(aaa_id, asset, amount)`                                                            | Deposit tracked asset                                              |
-| `close_aaa(aaa_id)`                                                                          | Owner-initiated close (destruction in place)                       |
-| `update_schedule(aaa_id, schedule, schedule_window)`                                         | Update schedule/window (Mutable only)                              |
-| `update_execution_plan(aaa_id, execution_plan)`                                              | Replace run execution plan; reset `consecutive_failures` (Mutable) |
-| `set_auto_close_at_cycle_nonce(aaa_id, target)`                                              | Set/clear cycle lease target (Mutable only, bounded horizon)       |
-| `increment_auto_close_nonce(aaa_id, by)`                                                     | Extend cycle lease target (`by > 0`, checked-add, bounded horizon) |
-| `update_on_close_execution_plan(aaa_id, on_close_execution_plan)`                            | Replace close-time execution plan (Mutable only)                   |
+- `create_user_aaa(mutability, schedule, schedule_window, execution_plan)`: create actor, lowest free owner slot, default `[Noop]` close plan
+- `create_user_aaa_at_slot(owner_slot, mutability, schedule, schedule_window, execution_plan)`: exact recovery slot, default `[Noop]` close plan
+- `pause_aaa(aaa_id)`: pause actor (Mutable only)
+- `resume_aaa(aaa_id)`: resume actor (Mutable only)
+- `manual_trigger(aaa_id)`: set manual trigger flag
+- `fund_aaa(aaa_id, asset, amount)`: deposit tracked asset
+- `close_aaa(aaa_id)`: owner-initiated close, destruction in place
+- `update_schedule(aaa_id, schedule, schedule_window)`: update schedule/window (Mutable only)
+- `update_execution_plan(aaa_id, execution_plan)`: replace run plan and reset `consecutive_failures` (Mutable)
+- `set_auto_close_at_cycle_nonce(aaa_id, target)`: set/clear bounded cycle lease target
+- `increment_auto_close_nonce(aaa_id, by)`: extend cycle lease target (`by > 0`, checked-add, bounded horizon)
+- `update_on_close_execution_plan(aaa_id, on_close_execution_plan)`: replace close-time plan (Mutable only)
 
 `execution_plan` is the normative term for the run-step vector.
-`pause_aaa`, `resume_aaa`, `manual_trigger`, `close_aaa`, `update_schedule`, `update_execution_plan`, `set_auto_close_at_cycle_nonce`, `increment_auto_close_nonce`, and `update_on_close_execution_plan` share the same control gate: signed owner for both actor types, plus governance origin for System AAA only; governance MUST NOT control User AAA through this path.
+`pause_aaa`, `resume_aaa`, `manual_trigger`, `close_aaa`, `update_schedule`, `update_execution_plan`, `set_auto_close_at_cycle_nonce`, `increment_auto_close_nonce`, and `update_on_close_execution_plan` share the same control gate: signed owner for both actor types, plus governance origin for System AAA only; governance MUST NOT control User AAA through this path. After origin passes, System Immutable actors MUST reject these control paths with `ImmutableAaa`.
 
 `create_user_aaa` MUST pay normal transaction fees, charge `AaaCreationFee` to `FeeSink` (Section 4.4), and enforce the deferred-horizon cap (Section 7.4).
 
@@ -763,14 +756,12 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 
 ### 10.2 Governance Extrinsics
 
-| Extrinsic                                  | Description                                                                                 |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `create_system_aaa(...)`                   | Create System AAA (always Mutable)                                                          |
-| `reopen_system_aaa(aaa_id, ...)`           | Reopen a previously closed System AAA at the same `aaa_id`                                  |
-| `set_global_circuit_breaker(paused: bool)` | Global scheduler stop/resume                                                                |
-| `set_active_actor_limit(new_limit: u32)`   | Governance operational cap update (`0 < new_limit <= min(MaxActiveActors, MaxQueueLength)`) |
+- `create_system_aaa(mutability, ...)`: create Mutable or Immutable System AAA, default `[Noop]` close plan
+- `reopen_system_aaa(aaa_id, mutability, ...)`: reopen a closed Mutable System AAA at same `aaa_id`, default `[Noop]` close plan
+- `set_global_circuit_breaker(paused: bool)`: global scheduler stop/resume
+- `set_active_actor_limit(new_limit: u32)`: operational cap update (`0 < new_limit <= min(MaxActiveActors, MaxQueueLength)`)
 
-`create_system_aaa(...)` MUST allocate the fresh `aaa_id = NextAaaId`. `reopen_system_aaa(aaa_id, ...)` is the only stable explicit-id governance path and MUST preserve deterministic sovereign re-derivation without rewinding `NextAaaId`; detailed id/occupancy rules are defined in Section 2.3.
+`create_system_aaa(mutability, ...)` MUST allocate the fresh `aaa_id = NextAaaId`. `reopen_system_aaa(aaa_id, mutability, ...)` is the only stable explicit-id governance path for closed Mutable System AAA and MUST preserve deterministic sovereign re-derivation without rewinding `NextAaaId`; detailed id/occupancy rules are defined in Section 2.3.
 
 ### 10.3 Tooling Extrinsics
 
@@ -977,25 +968,23 @@ Resolution-time non-terminal cases (`Skipped`, `FundingUnavailable`) are modeled
 
 > All collections MUST remain bounded by `Max*` constants. Storage-layout changes MUST use versioned, idempotent, bounded `OnRuntimeUpgrade` migrations.
 
-This table defines the stable storage surface. `WakeupIndex` and `MinWakeupBlock` are part of the canonical temporal wakeup contract in the current stable line, not merely reference-runtime implementation notes. Runtime support stores such as `AaaReadiness`, `ActiveActorLimit`, ingress overflow/dedup state, and `LastIngressIngestBlock` remain implementation-documented in architecture docs unless promoted here explicitly.
+This section defines the stable storage surface. `WakeupIndex` and `MinWakeupBlock` are part of the canonical temporal wakeup contract in the current stable line, not merely reference-runtime implementation notes. Runtime support stores such as `AaaReadiness`, `ActiveActorLimit`, ingress overflow/dedup state, and `LastIngressIngestBlock` remain implementation-documented in architecture docs unless promoted here explicitly.
 
-| Storage                | Type                                                                | Description                                                                          |
-| ---------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `NextAaaId`            | `AaaId`                                                             | Monotonic AAA id allocator upper bound; reopen never rewinds                         |
-| `AaaInstances`         | `Map<Blake2_128Concat(AaaId), AaaInstance>`                         | Full actor state (`execution_plan`, lifecycle, funding data)                         |
-| `CurrentQueue`         | `BoundedVec<AaaId, MaxQueueLength>`                                 | Block-local run queue for the current block                                          |
-| `NextQueue`            | `BoundedVec<AaaId, MaxQueueLength>`                                 | Staged queue storage merged on the next `on_idle`                                    |
-| `WakeupIndex`          | `Map<Blake2_128(BlockNum), BoundedVec<AaaId, MaxWakeupBucketSize>>` | Canonical block-bucketed time-ordered wakeup index                                   |
-| `MinWakeupBlock`       | `BlockNumber`                                                       | Earliest unresolved block in the canonical wakeup index                              |
-| `WakeupScheduleDrops`  | `u64`                                                               | Counter of wakeups that could not be scheduled                                       |
-| `ActorQueueEpoch`      | `Map<Blake2_128Concat(AaaId), u64>`                                 | Enqueue deduplication tracking per actor                                             |
-| `QueueEpoch`           | `u64`                                                               | Global queue generation counter                                                      |
-| `AddressEventInbox`    | `Map<Blake2_128Concat(AaaId), InboxState>`                          | Per-AAA pending-latch state for `OnAddressEvent`                                     |
-| `OwnerSlotMask`        | `Map<Blake2_128Concat(AccountId), u8>`                              | User-slot occupancy bitmask                                                          |
-| `SovereignIndex`       | `Map<Blake2_128Concat(AccountId), AaaId>`                           | Active sovereign-account ownership guard                                             |
-| `SweepCursor`          | `AaaId`                                                             | Cursor for zombie sweep                                                              |
-| `GlobalCircuitBreaker` | `bool`                                                              | Pallet-wide scheduler halt                                                           |
-| `IdleStarvationBlocks` | `u32`                                                               | Consecutive breaker-inactive blocks with zero post-housekeeping AAA execution budget |
+- `NextAaaId` (`AaaId`): monotonic allocator; reopen never rewinds
+- `AaaInstances` (`Map<Blake2_128Concat(AaaId), AaaInstance>`): full actor state
+- `CurrentQueue` (`BoundedVec<AaaId, MaxQueueLength>`): block-local run queue
+- `NextQueue` (`BoundedVec<AaaId, MaxQueueLength>`): staged queue merged on next `on_idle`
+- `WakeupIndex` (`Map<Blake2_128(BlockNum), BoundedVec<AaaId, MaxWakeupBucketSize>>`): canonical wakeup index
+- `MinWakeupBlock` (`BlockNumber`): earliest unresolved wakeup block
+- `WakeupScheduleDrops` (`u64`): counter of wakeups that could not be scheduled
+- `ActorQueueEpoch` (`Map<Blake2_128Concat(AaaId), u64>`): per-actor enqueue deduplication
+- `QueueEpoch` (`u64`): global queue generation counter
+- `AddressEventInbox` (`Map<Blake2_128Concat(AaaId), InboxState>`): `OnAddressEvent` pending latch
+- `OwnerSlotMask` (`Map<Blake2_128Concat(AccountId), u8>`): User-slot occupancy bitmask
+- `SovereignIndex` (`Map<Blake2_128Concat(AccountId), AaaId>`): active sovereign-account guard
+- `SweepCursor` (`AaaId`): zombie sweep cursor
+- `GlobalCircuitBreaker` (`bool`): pallet-wide scheduler halt
+- `IdleStarvationBlocks` (`u32`): consecutive zero-budget blocks while breaker inactive
 
 ---
 
@@ -1037,35 +1026,33 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 
 ## 15. Runtime Constants
 
-| Constant                                                    | Recommended Value                                  | Description                                                        |
-| ----------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------------------------------ |
-| `AaaCreationFee`                                            | Runtime-specific                                   | Non-refundable opening fee routed to `FeeSink`                     |
-| `AaaPalletId`                                               | `PalletId(*b"aaactor0")`                           | 8-byte pallet identifier for sovereign derivation (Section 2.3)    |
-| `ActiveActorLimit`                                          | 1..`min(MaxActiveActors, MaxQueueLength)`          | Operational creation cap; default/effective value is queue-bounded |
-| `ConditionReadFee`                                          | 0.0005 Native                                      | Per-condition read fee                                             |
-| `MaxActiveActors`                                           | 10,000                                             | Hard cap for simultaneously active AAA instances                   |
-| `MaxQueueLength`                                            | 1,024–16,384                                       | Upper bound for `CurrentQueue`/`NextQueue` length                  |
-| `MaxWakeupBucketSize`                                       | 1,024–16,384                                       | Upper bound for one `WakeupIndex` block bucket                     |
-| `MaxQueueInsertionsPerBlock`                                | 64–1,024                                           | Per-block enqueue cap before deferred wakeup                       |
-| `MaxSpilloverBlocks`                                        | 8                                                  | Wakeup spillover horizon in blocks                                 |
-| `MaxWakeupsPerBlock`                                        | 64–1,024                                           | Bounded overdue wakeup-drain throughput                            |
-| `MaxConditionsPerStep`                                      | 4                                                  | Condition bound per step                                           |
-| `MaxConsecutiveFailures`                                    | 10                                                 | Terminal threshold                                                 |
-| `MaxExecutionDelayBlocks`                                   | 10 years in blocks (e.g. 52,560,000 @ 6s)          | Maximum allowed first-execution deferral                           |
-| `MaxTimerJitterBlocks`                                      | 32–128                                             | Deterministic timer jitter cap for delayed timers                  |
-| `MaxExecutionsPerBlock`                                     | 16–64                                              | Global per-block admitted execution cap                            |
-| `MaxFundingTrackedAssets`                                   | 3–10                                               | Assets tracked by `PercentageOfLastFunding` per AAA                |
-| `MaxIdleStarvationBlocks`                                   | 10–50                                              | Zero-`on_idle` threshold before starvation event                   |
-| `MaxK`                                                      | Runtime-specific                                   | Adapter O(K) ceiling                                               |
-| `MaxOwnerSlots`                                             | 8                                                  | User AAA slot namespace (`u8` bitmask)                             |
-| `MaxSplitTransferLegs`                                      | 8                                                  | Split fan-out recipient bound                                      |
-| `MaxSweepPerBlock`                                          | 5                                                  | Zombie sweep throughput                                            |
-| `MaxSystemExecutionPlanSteps` / `MaxUserExecutionPlanSteps` | 10 / 3                                             | System/User AAA step bounds                                        |
-| `MaxWhitelistSize`                                          | 16                                                 | Max source-filter whitelist length                                 |
-| `MinOnIdleReservePct`                                       | 10%                                                | Minimum block-weight headroom reserved for `on_idle` paths         |
-| `MinUserBalance`                                            | Runtime-specific, MUST be `>=` `FeeNativeAsset` ED | Pre-cycle user safety floor and anti-reap guard                    |
-| `MinWindowLength`                                           | 100 blocks                                         | Minimum schedule window                                            |
-| `StepBaseFee`                                               | 0.001 Native                                       | Per-step evaluation base fee                                       |
+- `AaaCreationFee`: runtime-specific; non-refundable opening fee to `FeeSink`
+- `AaaPalletId`: `PalletId(*b"aaactor0")`; sovereign derivation id (Section 2.3)
+- `ActiveActorLimit`: 1..`min(MaxActiveActors, MaxQueueLength)`; queue-bounded creation cap
+- `ConditionReadFee`: 0.0005 Native; per-condition read fee
+- `MaxActiveActors`: 10,000; hard cap for active AAA instances
+- `MaxQueueLength`: 1,024–16,384; `CurrentQueue`/`NextQueue` bound
+- `MaxWakeupBucketSize`: 1,024–16,384; one-block `WakeupIndex` bucket bound
+- `MaxQueueInsertionsPerBlock`: 64–1,024; per-block enqueue cap before deferred wakeup
+- `MaxSpilloverBlocks`: 8; wakeup spillover horizon in blocks
+- `MaxWakeupsPerBlock`: 64–1,024; bounded overdue wakeup-drain throughput
+- `MaxConditionsPerStep`: 4; condition bound per step
+- `MaxConsecutiveFailures`: 10; terminal threshold
+- `MaxExecutionDelayBlocks`: 10 years in blocks; maximum first-execution deferral
+- `MaxTimerJitterBlocks`: 32–128; deterministic timer jitter cap
+- `MaxExecutionsPerBlock`: 16–64; global per-block admitted execution cap
+- `MaxFundingTrackedAssets`: 3–10; assets tracked by `PercentageOfLastFunding` per AAA
+- `MaxIdleStarvationBlocks`: 10–50; zero-`on_idle` threshold before starvation event
+- `MaxK`: runtime-specific; adapter O(K) ceiling
+- `MaxOwnerSlots`: 8; User AAA slot namespace (`u8` bitmask)
+- `MaxSplitTransferLegs`: 8; split fan-out recipient bound
+- `MaxSweepPerBlock`: 5; zombie sweep throughput
+- `MaxSystemExecutionPlanSteps` / `MaxUserExecutionPlanSteps`: 10 / 3; System/User step bounds
+- `MaxWhitelistSize`: 16; max source-filter whitelist length
+- `MinOnIdleReservePct`: 10%; block-weight headroom reserved for `on_idle` paths
+- `MinUserBalance`: runtime-specific, `>= FeeNativeAsset` ED; pre-cycle user safety floor
+- `MinWindowLength`: 100 blocks; minimum schedule window
+- `StepBaseFee`: 0.001 Native; per-step evaluation base fee
 
 ---
 

@@ -6,10 +6,17 @@ TMCTOL (Token Minting Curve + Treasury-Owned Liquidity) is a tokenomic standard 
 
 `Key Properties`:
 
-- Linear price ceiling via minting curve: `P_ceiling = P₀ + m·S/PRECISION`
+- Linear price ceiling via minting curve: `P_ceiling = P₀ + m·S_curve/PRECISION`
 - XYK price model with two references: spot pool price `P_xyk = R_foreign/R_native` and stress-floor envelope `P_stress(x) = k/(R_native + x)²`, where `k = R_native × R_foreign`
-- Supply compression through fee burning (0.5% router fee)
-- Multi-bucket TOL architecture enabling governance flexibility
+- Supply compression through fee burning under explicit liveness assumptions
+- Multi-bucket TOL architecture with explicit floor-reporting accounting
+
+`Normative Scope`:
+
+- `MUST` and `SHOULD` statements define conformance for TMCTOL realizations
+- `Theorem`, `Analysis`, `Proof Sketch`, and scenario tables define mathematical or economic claims only under their stated preconditions
+- Public floor statements MUST cite the canonical reported floor metric in Section 3.2 rather than quoting scenario tables without context
+- Implementation-specific storage, queueing, and runtime wiring belong in paired architecture documents, but they MUST preserve the normative contract defined here
 
 `2×2 Positioning Matrix (abbreviations only)`:
 
@@ -25,14 +32,12 @@ TMCTOL (Token Minting Curve + Treasury-Owned Liquidity) is a tokenomic standard 
 - `POL`: Protocol-Owned Liquidity — ownership class where LP inventory is held by protocol accounts; permanence depends on policy (hard-locked or governance-withdrawable)
 - `TOL`: Treasury-Owned Liquidity — treasury policy framework over protocol-owned liquidity with explicit bucket roles; in TMCTOL, Bucket_A is the anchor permanence layer while B/C/D are policy-flex buckets
 
-`Combination Profiles (feasibility and properties)`:
+`Combination Profiles`:
 
-| Combination | Core properties                                                                                                                                                           |
-| :---------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `TBC + POL` | Possible only if protocol has an explicit accumulation source (fees/spread/surplus/seed); otherwise redeem flow tends to consume reserves and POL cannot grow sustainably |
-| `TBC + TOL` | Adds treasury discipline/segmentation, but still requires dedicated LP inflow into treasury logic; redeem path continues to create extraction pressure                    |
-| `TMC + POL` | Naturally supports reserve accumulation when mint-side allocations are routed into protocol LP; floor quality then depends on treasury policy strictness                  |
-| `TMC + TOL` | Unidirectional minting plus explicit treasury floor policy (Anchor/Building/Capital/Dormant), maximizing floor hardness and governance clarity                            |
+- `TBC + POL`: Possible only with an explicit accumulation source such as fees, spread, surplus, or seed capital. Otherwise the redeem flow tends to consume reserves and POL cannot grow sustainably
+- `TBC + TOL`: Adds treasury discipline and segmentation, but still requires dedicated LP inflow into treasury logic. The redeem path continues to create extraction pressure
+- `TMC + POL`: Naturally supports reserve accumulation when mint-side allocations route into protocol LP. Floor quality then depends on treasury policy strictness
+- `TMC + TOL`: Combines unidirectional minting with explicit treasury floor policy across Anchor, Building, Capital, and Dormant buckets. This maximizes floor hardness and governance clarity
 
 `Relationship note`: TOL is a structured policy layer over POL. All TOL LP is POL by ownership, but not every POL design is TOL.
 
@@ -58,10 +63,12 @@ All price protection properties are `conditional guarantees` requiring:
 
 `Conditional Requirements`:
 
-- TOL liquidity remains allocated to XYK pools (governance must not withdraw reserves)
-- Distribution ratios maintained per protocol specification (66.6% TOL, 33.3% user allocation)
-- Fee burning mechanism operates continuously (router fee collection and burn execution)
-- Multi-bucket parameters enforced (Bucket_A dedicated to floor protection)
+- TOL liquidity counted in the reported floor remains deployed in qualifying XYK reserves
+- Distribution ratios are maintained per protocol specification: 66.6% TOL and 33.3% user allocation
+- Fee burning remains live within the liveness contract in Section 6.1
+- Router fee policy remains inside the bounded mutation range declared by the realization
+- Bucket_A remains the protected anchor bucket under the invariant in Section 6.2
+- Any governance action that removes a precondition MUST downgrade the reported floor state before or with the action
 
 `Governance Risks`:
 
@@ -82,7 +89,7 @@ All price protection properties are `conditional guarantees` requiring:
 
 - `Balance`: Native token quantities
 - `Price [Foreign/Native]`: Exchange rates scaled by PRECISION
-- `Slope [Foreign/Native²]`: Linear emission rate parameter
+- `Slope [scaled Foreign/Native²]`: Linear emission rate parameter stored in `PRECISION`-scaled units
 - `Perbill`: Parts-per-billion ratio (10⁹) for dimensionless quantities
 
 `Purpose`: Type system encodes physical units preventing categorical errors. Price operations preserve dimensional correctness; ratio operations maintain scale separation.
@@ -92,12 +99,12 @@ All price protection properties are `conditional guarantees` requiring:
 `Linear Emission Model`:
 
 ```
-spot_price(S) = P₀ + m·S/PRECISION
+spot_price(S_curve) = P₀ + m·S_curve/PRECISION
 
 where:
-  P₀ = initial_price
-  m = slope parameter [Foreign/Native²]
-  S = current supply
+  P₀ = initial_price, scaled as Foreign/Native
+  m = stored slope parameter, scaled as Foreign/Native²
+  S_curve = curve-accounted minted supply after initial issuance
 ```
 
 `Quadratic Integration for Minting`:
@@ -121,33 +128,33 @@ where:
 - User allocation: 33.3% (immediate liquidity)
 - TOL allocation: 66.6% (protocol reserves)
 
-`Conservation Invariant`:
+`Mint-Time Distribution Invariant`:
 
 ```
-user_amount + tol_amount ≡ total_minted
+user_amount + tol_amount ≡ total_minted_in_transaction
 ```
 
-Distribution occurs atomically within minting transaction; no tokens exist outside these two allocations. This eliminates traditional tokenomics complexity (team vesting, treasury separate from liquidity) by consolidating into governance-controlled TOL structure.
+Distribution occurs atomically within minting transaction; no newly minted tokens exist outside these two allocations at mint time. Later burns, transfers, LP operations, and treasury actions are accounted by separate ledger invariants rather than by this transaction-local equality.
 
 ### 2.4 Multi-Bucket TOL Architecture
 
 `Bucket Structure (66.6% total allocation)`:
 
-- `Bucket_A (33.3% total supply)`: Anchor liquidity — primary floor protection mechanism. The floor guarantee is maintained by preserving 33.3% of circulating supply in liquidity. If Bucket_A exceeds this threshold (due to supply compression or strategic accumulation), excess liquidity can be migrated to external DEX ecosystems for expansion.
-- `Bucket_B (11.1% total supply)`: Building budget — ecosystem construction spending (engineering, infrastructure, tooling, integrations).
-- `Bucket_C (11.1% total supply)`: Capital bucket — operational liquidity reserve for controlled redeployment between LP positions and treasury balances.
-- `Bucket_D (11.1% total supply)`: Dormant LP reserve — governance-controlled liquidity parked until strategic activation.
+- `Bucket_A (33.3% total supply)`: Anchor liquidity — primary floor protection mechanism. Bucket_A is protected floor capital while it remains in an anchor-qualified state under Section 6.2. If Bucket_A exceeds its required anchor target due to supply compression or strategic accumulation, governance may migrate only the excess under the migration rules below
+- `Bucket_B (11.1% total supply)`: Building budget — ecosystem construction spending through governed LP unwind, buyback, treasury, or deployment actions
+- `Bucket_C (11.1% total supply)`: Capital bucket — operational liquidity reserve for controlled redeployment between LP positions and treasury balances
+- `Bucket_D (11.1% total supply)`: Dormant LP reserve — governance-controlled LP held in a passive or delayed-use state until a later policy activates it
 
 `Allocation vs. Circulating Share`: Initial bucket allocations represent fixed percentages of total supply at minting. However, circulating shares (percentage of current supply held by each bucket) evolve dynamically through token burning and strategic reallocations. This distinction enables the system to maintain floor protection guarantees while allowing treasury expansion.
 
-`Capital Efficiency`: Four independent XYK pools achieve ~100% capital utilization through continuous deployment cycles (with temporary buffers recycled into subsequent mints) versus 0% for traditional treasuries holding idle unbacked tokens. Each bucket maintains separate LP positions enabling granular governance control.
+`Capital Efficiency`: Four independent bucket positions target near-full reserve deployment rather than idle treasury custody. This does not imply one deep pool or identical user slippage across buckets. Any realization that advertises aggregate utilization MUST also report whether floor depth is concentrated, fragmented, migrated, or externally deployed.
 
-`Floor Protection Range`: Effective floor varies based on bucket utilization:
+`Floor Protection Range`: Effective floor varies based on bucket state:
 
-- `Maximum (25%)`: All buckets providing floor support, no deployment
-- `Minimum (11%)`: Only Bucket_A providing floor support, others deployed
-- `Typical`: Governance balances between floor protection and ecosystem development
-- `Excess Liquidity Migration`: Token burning increases all buckets' relative shares of circulating supply. For Bucket_A, floor protection is guaranteed by maintaining 33.3% of circulating supply in liquidity. When Bucket_A's share exceeds this threshold due to supply compression, governance can authorize migration of excess liquidity to other DEX ecosystems to stimulate arbitrage and ecosystem expansion
+- `Maximum model case (25%)`: All TOL buckets are in floor-supporting reserve state under the same stress metric
+- `Minimum model case (11%)`: Only Bucket_A is in floor-supporting reserve state and other buckets are treated as sellable pressure or non-supporting deployment
+- `Typical live state`: Governance balances protection, development, capital use, and external deployment; clients MUST report the current bucket-state classification rather than assuming either endpoint
+- `Excess Liquidity Migration`: Token burning increases Bucket_A's relative share of circulating supply. Governance MAY migrate only Bucket_A liquidity above the required anchor target, and the migrated portion MUST stop counting toward in-domain floor support unless it satisfies the external LP reporting rules in Section 6.2
 
 ### 2.5 Axial Router Mechanism
 
@@ -160,9 +167,10 @@ Distribution occurs atomically within minting transaction; no tokens exist outsi
 
 `Fee Structure`:
 
-- Router fee: 0.5% → 100% burned (supply compression)
+- Router fee: 0.5% default → 100% burned (supply compression)
+- Router fee mutation MUST be bounded by an explicit maximum; the reference line caps governance updates at 1%
 - XYK fee: 0.0% (default) → maximizes spread tightness
-- Governance may activate XYK fees for additional deflation
+- Governance may activate XYK fees for additional deflation only under a declared bounded policy
 
 `Critical Function`: Router ensures consistent price discovery while creating deflationary pressure through mandatory fee burning. Without router, arbitrage opportunities would exist between TMC and XYK pricing.
 
@@ -177,21 +185,34 @@ Distribution occurs atomically within minting transaction; no tokens exist outsi
 3. Adds liquidity with balanced ratios
 4. Maximizes LP tokens received per contribution
 
-`Protection`: Reserve-aware slippage tolerance prevents value extraction during pool initialization or large imbalances. A conforming realization SHOULD derive Zap swap tolerance from native reserve depth, clamp it within explicit lower/upper bounds, and avoid a flat one-size-fits-all ceiling once deeper pools make tighter bounds materially safer. The exact realization strategy belongs in the paired architecture/runtime docs. Mechanism ensures TOL allocations achieve maximum liquidity depth.
+`Normative Output Contract`:
+
+- Zap execution MUST define a maximum slippage bound and a maximum tolerated post-zap reserve-ratio error
+- Zap execution MUST fail, defer, or enter a flagged degraded mode when those bounds cannot be met
+- Initial pool seeding MUST have explicit rules for empty or one-sided pools
+- A conforming realization SHOULD derive swap tolerance from native reserve depth, clamp it within explicit lower/upper bounds, and avoid a flat one-size-fits-all ceiling once deeper pools make tighter bounds materially safer
+- The exact route-search and optimization strategy belongs in paired architecture/runtime docs, but the postconditions above are part of the TMCTOL contract
 
 ### 2.7 Fee Burning System
 
 `Accumulation Phase`:
 
-- Router collects fees in foreign asset
-- Fees accumulate in buffer until minimum threshold
-- Prevents dust burns wasting gas
+- Router collects fees in the configured fee asset or assets
+- Fees accumulate in bounded buffers until an execution threshold is met
+- Thresholds prevent dust burns wasting weight or fees
 
 `Execution Phase`:
 
-- Swaps fees for native tokens through the router (best-route execution across available mechanisms, typically XYK)
-- Burns native tokens (removes from total supply)
-- Updates total_burned metric for transparency
+- Burn execution swaps accumulated fees for native tokens through an allowed route set
+- Burn execution removes acquired native tokens from total issuance
+- Burn execution updates transparent burned-supply accounting
+
+`Liveness Contract`:
+
+- A realization MUST define a maximum fee-buffer threshold or equivalent bounded trigger condition
+- A realization MUST define retry, cooldown, and failure-reporting behavior for failed swaps or burns
+- A realization MUST expose a degraded state when burn execution is unable to progress while fee buffers keep accumulating
+- Continuous ratchet equations in this document are analytical approximations; conformance MUST also cover discrete batch execution and bounded approximation error
 
 `Supply Dynamics`: Burning creates bidirectional compression—ceiling decreases (fewer tokens at given slope), floor increases (fixed reserves divided by smaller supply). This accelerates convergence toward equilibrium.
 
@@ -254,9 +275,27 @@ Stress-floor envelope for selloff size x:
 P_stress(x) = k / (R_native + x)²
 ```
 
+`Canonical Reported Floor Metric`:
+
+The public TMCTOL floor metric is the stress-floor ratio against the parity reference ceiling for a named bucket state:
+
+```
+reported_floor_ratio = P_stress(x_reported) / P_ceiling_ref
+P_ceiling_ref = P_xyk_ref = R_foreign / R_native
+x_reported = λ_reported · S_circ_support_scope
+```
+
+A conforming report MUST state:
+
+- `Reserve scope`: which in-domain and external reserves are counted
+- `Bucket state`: which bucket balances are anchor, active support, dormant, migrated, deployed, or spent
+- `Supply basis`: whether `S_total`, `S_curve`, or `S_circ` is used
+- `Sellable pressure`: the chosen `λ_reported` assumption and rationale
+- `Governance state`: intact, degraded, emergency, or forked guarantee surface
+
 `Reference-state assumption for ratio estimates`:
 
-To express stress floor as a fraction of ceiling using only `s` and `a`, we normalize at a parity reference state:
+To express scenario estimates using only `s` and `a`, we normalize at a parity reference state:
 
 ```
 P_ceiling_ref = P_xyk_ref = R_foreign / R_native
@@ -267,12 +306,12 @@ Then:
 P_stress / P_ceiling_ref = 1 / (1 + s/a)²
 ```
 
+These scenario estimates are not standalone public guarantees unless the report also supplies the canonical metric fields above.
+
 `Scenario Analysis` (assuming `a = 33.3%` Base Support):
 
-| Scenario    | Sellable Source                | Sold Fraction (`s`) | Stress/Ceiling Ratio | Volatility |
-| :---------- | :----------------------------- | :------------------ | :------------------- | :--------- |
-| User Exit   | Public Allocation (33%) sold   | 0.333               | 25%                  | 4×         |
-| System Exit | Public + Treasury (B/C/D) sold | 0.667               | 11%                  | 9×         |
+- `User Exit`: public allocation sold, `s = 0.333`, stress/ceiling ratio `25%`, volatility `4×`
+- `System Exit`: public plus Treasury buckets B/C/D sold, `s = 0.667`, stress/ceiling ratio `11%`, volatility `9×`
 
 `Key Dependency`:
 
@@ -289,11 +328,19 @@ P_stress / P_ceiling_ref = 1 / (1 + s/a)²
 2. `TOL Allocation`: Fixed reserve ratio maintained by governance
 3. `Supply Burning`: Fee-driven compression `dS/dt = -f·V_trade`
 
+`Supply Symbols`:
+
+- `S_curve`: curve-accounted minted supply after initial issuance, used by TMC pricing
+- `S_total`: total issued native supply before applying sellable-pressure assumptions
+- `S_circ`: circulating or economically sellable supply after excluding explicitly locked or non-sellable balances under the reporting policy
+- `x_max`: modeled sellable pressure
+- `λ`: sellable-pressure fraction, selected by scenario or reporting policy
+
 `System Interaction`:
 
-When burning reduces circulating supply (`S_circ`) by `ΔS`, the stress-envelope improves because maximum sellable inventory contracts.
+When burning reduces `S_circ` by `ΔS`, the stress-envelope improves because maximum sellable inventory contracts.
 
-Define sellable pressure as `x_max = λ · S_circ`, where `λ ∈ (0, 1]` is governance/market dependent.
+Define sellable pressure as `x_max = λ · S_circ`, where `λ ∈ (0, 1]` is governance/market dependent and MUST be named in any public floor report.
 
 1.  `Supply Contraction`: `S'_circ = S_circ - ΔS`
 2.  `Stress-Floor Elevation`: reduced `x_max` raises the stress envelope.
@@ -531,7 +578,7 @@ P_backing ≈ √(1,000,000 × 1,000,000,000 / 10¹²)
 
 `Interpretation`: `P_backing` is the backing-reference level where curve-implied market cap equals foreign reserves. It is distinct from instantaneous mechanism parity (`P_parity`), while convergence dynamics remain burn-rate dependent.
 
-`Governance Dependency`: `P_backing` explicitly depends on `R_foreign` and `m` parameters. Changes to TOL allocation or slope directly alter this backing target. This enables governance to adjust long-term price references through parameter modification.
+`Governance Dependency`: `P_backing` explicitly depends on `R_foreign` and `m` parameters. Changes to TOL allocation alter this backing target. In the default TMCTOL launch contract, curve launch parameters such as `m` are immutable after curve creation; changing them is a fork or runtime-upgrade extension that owns a different guarantee surface.
 
 ---
 
@@ -632,7 +679,7 @@ Narrower range → Reduced volatility → Increased confidence → Adoption
 - `Equilibrium band`: Balanced forces; stable trading reflects fair value
 - `Ceiling proximity`: Minting incentivized; emission accelerates
 
-`Volatility Dynamics`: Stress spread compression (`P_ceiling - P_stress,max`) decreases monotonically over time given sustained burning. This represents mathematical consequence of supply compression with fixed reserve ratios, not an economic promise but a deterministic outcome contingent on governance maintaining conditions.
+`Volatility Dynamics`: Stress spread compression decreases monotonically over burn time only under the named metric and preconditions: sustained burning, fixed counted reserves, stable `λ`, and no governance action that removes floor-supporting liquidity. If the metric is absolute spread (`P_ceiling - P_stress,max`) rather than relative spread (`P_ceiling / P_stress,max`), the report MUST name that choice explicitly.
 
 ### 5.3 Evolution Path
 
@@ -669,9 +716,10 @@ Narrower range → Reduced volatility → Increased confidence → Adoption
 `TOL Reserve Management`:
 
 - Treasury controls allocation via governance
-- Withdrawal requires consensus (no unilateral admin keys)
-- Multi-bucket structure with independent LP positions
-- Share-based accounting prevents edge cases from pool state changes
+- Withdrawal requires consensus and MUST NOT be possible through unilateral admin keys in the default guarantee surface
+- Multi-bucket structure uses independent LP positions or explicitly mapped accounting positions
+- Share-based accounting MUST prevent pool-state changes from corrupting bucket ownership
+- Any reserve movement that reduces counted floor support MUST update the floor-reporting state in the same governance/runtime release path
 
 `XYK Mechanism`:
 
@@ -682,10 +730,11 @@ Narrower range → Reduced volatility → Increased confidence → Adoption
 
 `Fee Routing`:
 
-- Router collects 0.5% fee (configurable via governance)
-- Foreign fees accumulate until minimum threshold
-- Burn execution swaps to native, removes from supply
-- Total burned tracked for transparency
+- Router collects the configured default fee, currently 0.5% in the reference standard
+- Fee mutability MUST follow the parameter table below
+- Fee buffers accumulate only under bounded liveness rules
+- Burn execution swaps to native and removes supply
+- Total burned MUST be tracked or derivable for transparency
 
 `TMC Launch Physics`:
 
@@ -695,20 +744,65 @@ Narrower range → Reduced volatility → Increased confidence → Adoption
 
 `Precision Requirements`:
 
-- PRECISION = 10¹² for Price and Slope types
-- PPB = 10⁹ for dimensionless ratios
-- All arithmetic checked for overflow
-- Dimensional correctness enforced by type system
+- `PRECISION = 10¹²` for price and stored slope values
+- Stored slope is already scaled; formulas MUST NOT apply an extra hidden precision division beyond the stated `m·S/PRECISION` form
+- `PPB = 10⁹` for dimensionless ratios
+- Multiplication before division MUST use a width that cannot overflow for the configured asset bounds
+- Rounding direction MUST be specified for mint quotes, mint execution, bucket splits, fee collection, and burn execution
+- Dimensional correctness SHOULD be enforced by types or conformance tests
+
+`Parameter Mutability`:
+
+- `Curve launch parameters`: immutable after `create_curve` in the default TMCTOL launch contract
+- `TOL user/bucket split ratios`: immutable after launch unless a fork or explicit runtime-upgrade standard revision changes the guarantee surface
+- `Router fee`: bounded-mutable by governance only when the bounds, authority, and effective delay are specified
+- `XYK fee`: bounded-mutable by governance only when the floor and best-execution impact is disclosed
+- `Burn threshold and cooldown`: bounded-mutable operational parameters; changes MUST preserve the burn liveness contract
+- `Zap slippage bounds`: bounded-mutable operational parameters; changes MUST preserve the Zap postconditions
+- `Bucket migration policy`: governance-mutable only for non-anchor or anchor-excess liquidity; protected anchor liquidity follows the TOL Anchor Invariant
+- `Emergency controls`: unavailable by default unless a realization defines scope, duration, authority, veto/timelock, and reporting semantics
 
 ### 6.2 Critical Invariants
 
-`Conservation`:
+`Mint-Time Conservation`:
 
 ```
-user_amount + tol_amount ≡ total_minted
+user_amount + tol_amount ≡ total_minted_in_transaction
 ```
 
 Violation indicates distribution calculation error.
+
+`Ledger Conservation with Burns`:
+
+```
+initial_issuance + cumulative_minted - cumulative_burned = live_issuance
+```
+
+Realizations MAY express this as a derived invariant when the runtime can derive burned supply from issuance history.
+
+`TOL Anchor Invariant`:
+
+Bucket_A counted as protected anchor support MUST satisfy all conditions below:
+
+- It is held in protocol-owned or treasury-owned accounts governed by the default protected governance surface
+- It is deployed in an in-domain XYK pool or another explicitly qualifying floor-supporting reserve position
+- It is held by a System Immutable AAA or equivalent hard protocol anchor that runtime extrinsics, including governance/root, cannot mutate, pause, close, or reopen
+- It cannot be withdrawn, migrated, spent, or reclassified by unilateral admin authority
+- Any migration is limited to anchor-excess liquidity above the required anchor target unless a runtime upgrade, fork, or explicit standard revision degrades the guarantee surface
+- Any emergency path that can bypass this invariant MUST classify the floor state as emergency or degraded before users can rely on the former reported floor
+
+`Bucket and LP Accounting`:
+
+Each bucket balance MUST be classifiable into exactly one live state for floor reporting:
+
+- `Anchor support`: protected Bucket_A liquidity that satisfies the TOL Anchor Invariant
+- `Active support`: non-anchor bucket liquidity currently counted in the reported floor metric
+- `Dormant LP`: LP held without active spending policy but not necessarily counted as anchor support
+- `Migrated LP`: liquidity deployed outside the primary in-domain pool set
+- `Treasury liquid`: assets withdrawn from LP and held for spending or redeployment
+- `Spent`: assets no longer controlled by the TOL bucket
+
+Only `Anchor support` and explicitly reported `Active support` count toward the canonical reported floor. `Migrated LP` counts only when the report states the external venue, liquidity ownership, withdrawal rules, and stress model.
 
 `Constant Product`:
 
@@ -729,12 +823,34 @@ Reserve depletion would break floor guarantee.
 `Monotonic Ceiling`:
 
 ```
-P_ceiling(S₂) ≥ P_ceiling(S₁) for S₂ ≥ S₁
+P_ceiling(S_curve₂) ≥ P_ceiling(S_curve₁) for S_curve₂ ≥ S_curve₁
 ```
 
-Price ceiling never decreases except via burning.
+For a fixed curve, the ceiling is monotonic in curve-accounted minted supply. Burn-time ceiling compression is a separate statement about lower live supply or reporting basis, not about mutating the curve function.
 
-### 6.3 Economic Conditions
+### 6.3 Conformance Matrix
+
+A TMCTOL realization MUST map every public claim to one of these states:
+
+- `Normative and tested`: required behavior with conformance tests
+- `Normative and inspected`: required behavior covered by runtime inspection or static validation
+- `Analytical only`: theorem or model with named preconditions, not an implementation requirement
+- `Commentary`: explanatory prose with no conformance claim
+
+Current required coverage:
+
+- `Mint-time distribution`: normative and tested
+- `Ledger conservation with burns`: normative and tested or inspected
+- `TOL Anchor Invariant`: normative and inspected through governance/storage/accounting surfaces
+- `Canonical reported floor metric`: normative and tested for representative bucket states
+- `Burn liveness`: normative and tested for threshold, retry, and degraded reporting paths
+- `Zap postconditions`: normative and tested with initialization and imbalanced-pool vectors
+- `Elasticity inversion`: analytical unless the simulator/runtime test suite explicitly covers the selected formula and parameters
+- `Relative compression, absolute-gap compression, and overtake`: analytical until each regime has dedicated conformance vectors
+
+A conforming reference runtime SHOULD expose a bounded live guarantee-state projection for inspection. This projection MUST NOT add dashboard/history storage; it MAY report uninitialized or explicitly non-guaranteed classes separately from violations. Native burn liveness and BLDR buyback/burn liveness MUST be reported as separate domains when both exist. Zap postcondition inspection MUST verify the configured liquidity-add, residual swap, and LP bucket split as one coherent plan before reporting the Zap domain as satisfied.
+
+### 6.4 Economic Conditions
 
 `Utility Requirement`: Token demand must derive from genuine use cases. Without utility, downside protection mechanisms operate in isolation without recovery catalyst.
 
@@ -752,29 +868,29 @@ Price ceiling never decreases except via burning.
 
 `Mathematically Defined Boundaries`:
 
-- Floor: 11-25% range depending on buckets utilization
-- Ceiling: Deterministic via linear curve
-- Both verifiable on-chain through transparent formulas
+- Floor: 11-25% scenario range under the canonical reported floor metric and intact preconditions
+- Ceiling: Deterministic via immutable launch curve in the default TMCTOL contract
+- Both verifiable through transparent formulas plus bucket-state and reserve accounting
 
 `Governance Flexibility`:
 
 - Multi-bucket enables balancing protection vs. development
-- Fee parameters adjustable for economic optimization
-- Deployment strategies adaptable to market conditions
+- Operational parameters are adjustable only within their declared mutability class
+- Deployment strategies are adaptable when reports stop counting moved liquidity as protected floor support unless it still qualifies
 
 `Capital Efficiency`:
 
-- ~100% capital utilization via independent bucket structure with buffer recycling
-- No mercenary capital requiring yield incentives
-- Protocol owns liquidity, governance controls strategy
+- Near-full reserve deployment is possible through independent bucket structure with buffer recycling
+- No mercenary capital requiring yield incentives is required for protocol-owned liquidity
+- Protocol owns liquidity, governance controls strategy, and clients must distinguish aggregate utilization from concentrated executable depth
 
 ### 7.2 Framework Limitations
 
 `Governance Dependencies`:
 
 - Floor protection requires continuous parameter enforcement
-- Reserve withdrawal would reduce effective floor proportionally
-- Emergency mechanisms could bypass normal constraints
+- Reserve withdrawal reduces effective floor proportionally and must downgrade reports
+- Emergency mechanisms are out of the default guarantee surface unless fully specified by scope, authority, duration, veto/timelock, and recovery reporting
 
 `Market Dependencies`:
 
@@ -797,9 +913,9 @@ TMCTOL establishes a framework with mathematically derived price relationships a
 `Core Mechanisms`:
 
 - Unidirectional minting via linear curve creates deterministic ceiling
-- 66.6% TOL allocation to XYK reserves establishes hyperbolic floor
-- Fee burning (0.5% router fee) compresses supply driving floor elevation
-- Multi-bucket architecture enables governance flexibility between protection and development
+- 66.6% TOL allocation to XYK reserves establishes conditional hyperbolic floor support
+- Fee burning compresses supply when burn liveness holds
+- Multi-bucket architecture enables governance flexibility between protection and development with explicit floor accounting
 
 `Mathematical Framework`:
 
@@ -814,18 +930,19 @@ Stress Velocity: dP_stress,max/dt ∝ (burn_rate × λ × k)/(R_native + λ·S_c
 
 `Critical Dependencies`:
 
-1. Governance maintains TOL allocation (66.6% of mints)
-2. Bucket distribution enforced (Bucket_A for floor support)
-3. Fee burning mechanism operates continuously
-4. Reserves protected from withdrawal without consensus
+1. Governance maintains TOL allocation: 66.6% of mints
+2. Bucket distribution is enforced and Bucket_A satisfies the TOL Anchor Invariant
+3. Fee burning mechanism satisfies the liveness contract
+4. Counted reserves are protected from withdrawal without protected-governance consensus
+5. Public reports classify bucket state, supply basis, reserve scope, and sellable pressure
 
 `Framework Boundaries`:
 
-Floor protection operates within 11-25% range based on bucket deployment:
+Floor protection operates within the modeled 11-25% scenario range only when the canonical reported floor metric fields are stated:
 
-- Maximum protection (25%): All buckets providing support, no deployment
-- Minimum protection (11%): Bucket_A only providing support, others deployed
-- Governance controls trade-off between floor strength and ecosystem development
+- Maximum model case (25%): all buckets counted as support under the same stress metric
+- Minimum model case (11%): only Bucket_A counted as support while other buckets are non-supporting or sellable pressure
+- Governance controls the trade-off between floor strength and ecosystem development, but moved or spent liquidity no longer counts unless it still satisfies reporting rules
 
 `Realization Requirements`:
 
@@ -833,7 +950,7 @@ System exhibits predicted dynamics (floor elevation, range compression) only whe
 
 ---
 
-- `Version`: 0.1.0
-- `Date`: April 2026
+- `Version`: 0.4.0
+- `Date`: May 2026
 - `Author`: LLB Lab
 - `License`: MIT

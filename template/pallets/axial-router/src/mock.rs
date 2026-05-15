@@ -546,6 +546,13 @@ impl Get<Perbill> for MaxPriceDeviationStub {
   }
 }
 
+pub struct MaxRouterFeeStub;
+impl Get<Perbill> for MaxRouterFeeStub {
+  fn get() -> Perbill {
+    primitives::ecosystem::params::MAX_AXIAL_ROUTER_FEE
+  }
+}
+
 impl pallet_axial_router::Config for Test {
   type AdminOrigin = polkadot_sdk::frame_system::EnsureRoot<u64>;
   type Currency = Balances;
@@ -558,6 +565,7 @@ impl pallet_axial_router::Config for Test {
   type Precision = ConstU128<1_000_000_000_000>;
   type EmaHalfLife = ConstU32<3600>;
   type MaxPriceDeviation = MaxPriceDeviationStub;
+  type MaxRouterFee = MaxRouterFeeStub;
   type MaxTrackedAssets = ConstU32<64>;
   type FeeAdapter = MockFeeAdapter;
   type BurningManagerAccount = ConstU64<123>;

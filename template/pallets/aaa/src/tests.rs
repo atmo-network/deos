@@ -120,6 +120,7 @@ fn create_system_with(
   assert_ok!(AAA::create_system_aaa(
     RuntimeOrigin::root(),
     owner,
+    Mutability::Mutable,
     schedule,
     schedule_window,
     execution_plan,
@@ -138,6 +139,7 @@ fn reopen_system_with_id(
     RuntimeOrigin::root(),
     aaa_id,
     owner,
+    Mutability::Mutable,
     schedule,
     schedule_window,
     execution_plan,
@@ -441,6 +443,7 @@ fn active_actor_capacity_is_enforced() {
       AAA::create_system_aaa(
         RuntimeOrigin::root(),
         ALICE,
+        Mutability::Mutable,
         manual_schedule(),
         None,
         transfer_execution_plan(BOB, 1),
@@ -559,6 +562,7 @@ fn reopen_system_aaa_rejects_id_that_was_not_closed_system_actor() {
         RuntimeOrigin::root(),
         42,
         ALICE,
+        Mutability::Mutable,
         manual_schedule(),
         None,
         transfer_execution_plan(BOB, 1),
@@ -576,6 +580,7 @@ fn reopen_system_aaa_rejects_id_that_was_not_closed_system_actor() {
         RuntimeOrigin::root(),
         active_id,
         ALICE,
+        Mutability::Mutable,
         manual_schedule(),
         None,
         transfer_execution_plan(BOB, 1),
@@ -3787,6 +3792,7 @@ fn global_circuit_breaker_blocks_creation() {
       AAA::create_system_aaa(
         RuntimeOrigin::root(),
         ALICE,
+        Mutability::Mutable,
         manual_schedule(),
         None,
         transfer_execution_plan(BOB, 10),
@@ -3829,6 +3835,7 @@ fn governance_updates_active_actor_limit_and_creation_respects_it() {
       AAA::create_system_aaa(
         RuntimeOrigin::root(),
         ALICE,
+        Mutability::Mutable,
         manual_schedule(),
         None,
         transfer_execution_plan(BOB, 1),
@@ -4732,7 +4739,14 @@ fn probabilistic_financial_schedule_rejected_without_secure_entropy_provider() {
     let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
     let execution_plan = transfer_execution_plan(BOB, 10);
     assert_noop!(
-      AAA::create_system_aaa(RuntimeOrigin::root(), ALICE, schedule, None, execution_plan),
+      AAA::create_system_aaa(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        schedule,
+        None,
+        execution_plan,
+      ),
       Error::<Test>::InsecureEntropyProvider
     );
   });
@@ -4748,6 +4762,7 @@ fn probabilistic_financial_schedule_allows_secure_entropy_provider() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -4765,6 +4780,7 @@ fn probabilistic_noop_schedule_is_allowed_without_secure_entropy_provider() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -5404,6 +5420,7 @@ fn scheduler_ignores_sparse_id_gaps() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       schedule.clone(),
       None,
       execution_plan.clone(),
@@ -5415,6 +5432,7 @@ fn scheduler_ignores_sparse_id_gaps() {
     assert_ok!(AAA::create_system_aaa(
       RuntimeOrigin::root(),
       ALICE,
+      Mutability::Mutable,
       schedule,
       None,
       execution_plan,
@@ -5460,6 +5478,7 @@ fn active_actors_set_maintains_integrity() {
       assert_ok!(AAA::create_system_aaa(
         RuntimeOrigin::root(),
         ALICE,
+        Mutability::Mutable,
         schedule.clone(),
         None,
         noop_execution_plan.clone(),
@@ -6199,6 +6218,149 @@ fn update_on_close_execution_plan_rejects_mint_for_user_actor() {
       ),
       Error::<Test>::MintNotAllowedForUserAaa
     );
+  });
+}
+
+#[test]
+fn system_immutable_rejects_runtime_control_paths_even_for_root() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let execution_plan = execution_plan_with_step(make_step(Task::Noop));
+    assert_ok!(AAA::create_system_aaa(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Immutable,
+      manual_schedule(),
+      None,
+      execution_plan.clone(),
+    ));
+    let aaa_id = AAA::next_aaa_id().saturating_sub(1);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").mutability,
+      Mutability::Immutable
+    );
+    assert_noop!(
+      AAA::update_schedule(RuntimeOrigin::root(), aaa_id, timer_schedule(1, None), None),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::update_execution_plan(RuntimeOrigin::root(), aaa_id, execution_plan.clone()),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::update_on_close_execution_plan(RuntimeOrigin::root(), aaa_id, execution_plan),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::pause_aaa(RuntimeOrigin::root(), aaa_id),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::resume_aaa(RuntimeOrigin::root(), aaa_id),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::manual_trigger(RuntimeOrigin::root(), aaa_id),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::close_aaa(RuntimeOrigin::root(), aaa_id),
+      Error::<Test>::ImmutableAaa
+    );
+    assert_noop!(
+      AAA::reopen_system_aaa(
+        RuntimeOrigin::root(),
+        aaa_id,
+        ALICE,
+        Mutability::Immutable,
+        manual_schedule(),
+        None,
+        execution_plan_with_step(make_step(Task::Noop)),
+      ),
+      Error::<Test>::ImmutableAaa
+    );
+    assert!(AAA::aaa_instances(aaa_id).is_some());
+    assert!(!crate::pallet::ClosedSystemAaaIds::<Test>::contains_key(
+      aaa_id
+    ));
+  });
+}
+
+#[test]
+fn system_immutable_creation_rejects_schedule_window() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    assert_noop!(
+      AAA::create_system_aaa(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Immutable,
+        manual_schedule(),
+        Some(ScheduleWindow { start: 1, end: 101 }),
+        execution_plan_with_step(make_step(Task::Noop)),
+      ),
+      Error::<Test>::InvalidScheduleWindow
+    );
+  });
+}
+
+#[test]
+fn default_close_plan_is_canonical_noop_for_created_actors() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let user_id = create_user_with(
+      ALICE,
+      Mutability::Immutable,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::Noop)),
+    );
+    let system_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::Noop)),
+    );
+    for aaa_id in [user_id, system_id] {
+      let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+      assert_eq!(instance.on_close_execution_plan.len(), 1);
+      assert!(matches!(
+        instance.on_close_execution_plan[0].task,
+        Task::Noop
+      ));
+    }
+  });
+}
+
+#[test]
+fn close_tail_does_not_start_normal_cycle() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::Noop)),
+    );
+    let sovereign = sovereign_account(aaa_id);
+    fund_native_raw(&sovereign, 1_000);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    let before_close_nonce = AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce;
+    assert_eq!(before_close_nonce, 1);
+    frame_system::Pallet::<Test>::reset_events();
+    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert!(AAA::aaa_instances(aaa_id).is_none());
+    assert!(!has_aaa_event(|event| {
+      matches!(event, Event::CycleStarted { aaa_id: id, .. } if *id == aaa_id)
+    }));
+    assert!(!has_aaa_event(|event| {
+      matches!(event, Event::CycleSummary { aaa_id: id, .. } if *id == aaa_id)
+    }));
+    assert!(has_aaa_event(|event| {
+      matches!(event, Event::OnCloseExecutionPlanSummary { aaa_id: id, .. } if *id == aaa_id)
+    }));
   });
 }
 

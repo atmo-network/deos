@@ -41,7 +41,7 @@ The most important current gaps are:
    signed users can cast votes, the browser now exposes both the bounded advisory submit path and the first minimal tactical treasury invoice submit path, and the current runtime now also opts tactical `$BLDR` `L2TreasurySpend` into signed submission alongside the earlier advisory combinations; manual resolution/rejection, requeue, and policy-aware early finalization otherwise remain `Root`-gated in the current runtime
 
 4. `Pallet-side payload executor scaffold now exists, and the first executable runtime slices are live`
-   the governance kernel now has a canonical bounded enactment scaffold: finalized proposals can either stay as approved-only outcomes, enter bounded pending-enactment buckets, finalize advisory payloads explicitly without dispatch, or record generic execution success / execution failure once a runtime payload executor is enabled. The current reference runtime now enables one bounded slice for each executable payload kind: `(a)` `L1RootAction` may dispatch preimage-backed `RuntimeCall::System(authorize_upgrade { code_hash })` under Root-equivalent authority in the strategic domain, `(b)` `L2ParameterChange` may now dispatch two narrow domain-local parameter paths by applying preimage-backed `RuntimeCall::AxialRouter(add_tracked_asset { asset })` and `RuntimeCall::AxialRouter(update_router_fee { new_fee })` through governance-owned internal setters instead of Root dispatch, and `(c)` tactical `L2TreasurySpend` now decodes a dedicated bounded invoice payload (`beneficiary`, `payout_asset`, `base_amount`, explicit funding source), reads the resolved winning primary option from bounded governance state, applies the on-chain invoice scalar, and executes the final transfer from the designated BLDR Treasury sovereign account rather than as Root. The current treasury authority topology is therefore explicit rather than implicit: the tactical `$BLDR` domain declares exactly one executable funding source (`BldrTreasury`), that source resolves to the domain treasury sovereign account only for the tactical domain, and wider source families or native payout topologies remain future opt-in governance/runtime work rather than hidden rights of the current invoice payload. Launch-line `$BLDR` referenda are now not just conceptually invoice-centric but live invoice-shaped on the reference line, while changes to System AAA behavior still require `L2SignalToL1` or an explicit delegation of those control surfaces into the domain. A current scan of Root-only custom-pallet control surfaces also narrows the next truthful `L2ParameterChange` search space: TMC launch-physics mutation remains out of contract, staking onboarding/recovery/admin reward-bootstrap paths remain system-owned, AAA global breaker/actor-limit controls remain system-owned, and asset-registry registration/migration remains L1-owned. The remaining runtime gap is therefore narrower than a generic "more setters" wishlist: the next valid slice is a genuinely delegated/domain-owned parameter surface, not opportunistic reuse of unrelated Root setters.
+   the governance kernel now has a canonical bounded enactment scaffold: finalized proposals can either stay as approved-only outcomes, enter bounded pending-enactment buckets, finalize advisory payloads explicitly without dispatch, or record generic execution success / execution failure once a runtime payload executor is enabled. The current reference runtime now enables one bounded slice for each executable payload kind: `(a)` `L1RootAction` may dispatch preimage-backed `RuntimeCall::System(authorize_upgrade { code_hash })` under Root-equivalent authority in the strategic domain, `(b)` `L2ParameterChange` may now dispatch two narrow domain-local parameter paths by applying preimage-backed `RuntimeCall::AxialRouter(add_tracked_asset { asset })` and bounded `RuntimeCall::AxialRouter(update_router_fee { new_fee })` through governance-owned internal setters instead of Root dispatch, and `(c)` tactical `L2TreasurySpend` now decodes a dedicated bounded invoice payload (`beneficiary`, `payout_asset`, `base_amount`, explicit funding source), reads the resolved winning primary option from bounded governance state, applies the on-chain invoice scalar, and executes the final transfer from the designated BLDR Treasury sovereign account rather than as Root. The current treasury authority topology is therefore explicit rather than implicit: the tactical `$BLDR` domain declares exactly one executable funding source (`BldrTreasury`), that source resolves to the domain treasury sovereign account only for the tactical domain, and wider source families or native payout topologies remain future opt-in governance/runtime work rather than hidden rights of the current invoice payload. Launch-line `$BLDR` referenda are now not just conceptually invoice-centric but live invoice-shaped on the reference line, while changes to System AAA behavior still require `L2SignalToL1` or an explicit delegation of those control surfaces into the domain. A current scan of Root-only custom-pallet control surfaces also narrows the next truthful `L2ParameterChange` search space: TMC launch-physics mutation remains out of contract, staking onboarding/recovery/admin reward-bootstrap paths remain system-owned, AAA global breaker/actor-limit controls remain system-owned, and asset-registry registration/migration remains L1-owned. The remaining runtime gap is therefore narrower than a generic "more setters" wishlist: the next valid slice is a genuinely delegated/domain-owned parameter surface, not opportunistic reuse of unrelated Root setters.
 
 5. `Runtime-upgrade execution now matches the intended post-bootstrap line closely`
    governance can now drive the first parachain-safe runtime-upgrade step through a dedicated bounded `L1RootAction` payload that carries only `code_hash` and dispatches `System::authorize_upgrade { code_hash }`, and the current line now also emits `ProposalRuntimeUpgradeAuthorized` as a runtime-upgrade-specific success event distinct from generic execution success. Pending relay of that authorized code is now exposed canonically through the bounded governance/runtime view `authorized_runtime_upgrade()` rather than requiring browser/product code to read raw `System.AuthorizedUpgrade` storage layout directly, and the browser governance surface uses that view so product UX can say when a governance-authorized upgrade is still awaiting `apply_authorized_upgrade { code }` while also stating that the browser does not expose that live write path. Integration coverage now also proves the paired system-level second step itself is already live after authorization: any origin may submit the matching code bytes to `System.apply_authorized_upgrade { code }`, and invalid authorized code clears the pending authorization with an explicit system rejection event instead of silently wedging state. The current line now also adds one constitutional acceleration rule on top of that path: unanimous raw protection-track `Pass` over the full eligible `$VETO` supply immediately resolves and executes the runtime-upgrade authorization step without waiting for a separate primary-track ballot, while the ordinary/urgent machinery for other payload kinds remains untouched. That means the current role split is now explicit and post-bootstrap: governance owns authorization of the code hash, while the later `apply_authorized_upgrade` call is only a transport/relay step for already-authorized bytes rather than a second governance decision. The repo now also ships `/scripts/authorized-upgrade-local.sh check` as a plan-only operator verifier for local WASM vs pending authorized hash, `/scripts/authorized-upgrade-local.sh apply` as the explicit relay submit surface, and the local dev bootstrap no longer depends on Sudo for the wallet/swap seeding surfaces that previously blocked this handoff.
@@ -273,28 +273,26 @@ Active proposer identity is also chain-native today through the bounded `Proposa
 
 ## Storage Topology
 
-| Storage                                                 | Role                                           | Notes                                                                                                                                                                  |
-| :------------------------------------------------------ | :--------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WinningVoteWindows[(domain, account)]`                 | Per-account rolling winning-memory tail        | Sparse, zero-sum evicted                                                                                                                                               |
-| `ParticipationTotalsByAccount[(domain, account)]`       | Per-account cumulative participation totals    | Monotonic `total_participations` + `winning_participations`                                                                                                            |
-| `ProposalAuthorshipTotalsByAccount[(domain, account)]`  | Per-account cumulative authorship totals       | Monotonic `authored_proposals` + `successful_authored_proposals`                                                                                                       |
-| `WinningVoteResolutionWindows[domain]`                  | Resolution-once memory                         | Prevents duplicate item ingestion within live horizon                                                                                                                  |
-| `ActiveProposals[(domain, item_id)]`                    | Live proposal registry                         | Stores `submitted_epoch`                                                                                                                                               |
-| `ProposalAuthorsByItem[(domain, item_id)]`              | Live proposal proposer identity                | One explicit logical proposer / sponsor per active proposal                                                                                                            |
-| `ProposalMetadataByItem[(domain, item_id)]`             | Additive proposal-meaning scaffold             | `CadenceMode + ProposalPayloadKind + payload_hash`                                                                                                                     |
-| `ProposalVotesByItem[(domain, item_id)]`                | Bounded primary + protection-track ballot sets | One account, one stored vote per track family, plus `vote_epoch`, frozen vote `weight`, and frozen `raw_power`; primary storage can hold binary `Aye / Nay` or invoice-family `Amplify / Approve / Reduce / Nay` |
-| `GovernanceLocks[account]`                              | Account-level governance lock horizon          | One aggregate `lock_until`, extended to the maximum enactment horizon touched by accepted ballots                                                                       |
-| `ProposalUrgentAuthorizedAt[(domain, item_id)]`         | Additive urgent-open timing scaffold           | Written exactly once when expeditable protection-track `Pass` crosses the configured raw threshold                                                                     |
-| `ProposalPendingEnactmentAt[(domain, item_id)]`         | Additive enactment scheduling state            | Written on successful approval when enactment delay is positive                                                                                                        |
-| `PendingEnactmentBuckets[epoch]`                        | Due enactment service index                    | Epoch-keyed bounded servicing for pending enactment attempts                                                                                                           |
-| `ActiveProposalCounts[domain]`                          | Domain-local active cap tracking               | Enforces bounded active set                                                                                                                                            |
-| `ActiveProposalIdsByDomain[domain]`                     | Bounded active proposal discovery              | Canonical live list for active item ids in one domain                                                                                                                  |
-| `ProposalMaturityBuckets[epoch]`                        | Auto-finalization schedule                     | Epoch-keyed, no global active scan                                                                                                                                     |
-| `FinalizedProposalOutcomes[(domain, item_id)]`          | Recent finalized result                        | Queryable but temporary                                                                                                                                                |
-| `ProposalWinningPrimaryOptionByItem[(domain, item_id)]` | Retained resolved primary-side winner          | Preserves the already-selected `Aye / Nay / Amplify / Approve / Reduce` outcome for later enactment/execution                                                          |
-| `FinalizedProposalOutcomeExpiryBuckets[epoch]`          | Finalized-outcome retention control            | Deletes recent history later                                                                                                                                           |
-| `ExpiryBuckets[epoch]`                                  | Winning-vote expiry schedule                   | Touches only accounts whose rolling winner memory may decay                                                                                                            |
-| `LastProcessedEpoch`                                    | on_initialize service cursor                   | Prevents repeated work                                                                                                                                                 |
+- `WinningVoteWindows[(domain, account)]`: per-account rolling winning-memory tail; sparse, zero-sum evicted
+- `ParticipationTotalsByAccount[(domain, account)]`: cumulative participation totals
+- `ProposalAuthorshipTotalsByAccount[(domain, account)]`: cumulative authorship totals
+- `WinningVoteResolutionWindows[domain]`: resolution-once memory; prevents duplicate live-horizon ingestion
+- `ActiveProposals[(domain, item_id)]`: live proposal registry storing `submitted_epoch`
+- `ProposalAuthorsByItem[(domain, item_id)]`: explicit logical proposer / sponsor per active proposal
+- `ProposalMetadataByItem[(domain, item_id)]`: `CadenceMode`, payload kind, and payload hash scaffold
+- `ProposalVotesByItem[(domain, item_id)]`: bounded primary/protection ballot sets with frozen weight/raw power
+- `GovernanceLocks[account]`: aggregate `lock_until` extended to the maximum touched enactment horizon
+- `ProposalUrgentAuthorizedAt[(domain, item_id)]`: written once when expeditable `Pass` crosses raw threshold
+- `ProposalPendingEnactmentAt[(domain, item_id)]`: approval scheduling state when enactment delay is positive
+- `PendingEnactmentBuckets[epoch]`: epoch-keyed bounded servicing for pending enactment attempts
+- `ActiveProposalCounts[domain]`: domain-local active cap tracking
+- `ActiveProposalIdsByDomain[domain]`: canonical bounded live list for active item ids in one domain
+- `ProposalMaturityBuckets[epoch]`: epoch-keyed auto-finalization schedule, no global active scan
+- `FinalizedProposalOutcomes[(domain, item_id)]`: queryable but temporary recent finalized result
+- `ProposalWinningPrimaryOptionByItem[(domain, item_id)]`: retained resolved primary-side winner for enactment
+- `FinalizedProposalOutcomeExpiryBuckets[epoch]`: finalized-outcome retention control
+- `ExpiryBuckets[epoch]`: winning-vote expiry schedule for accounts whose memory may decay
+- `LastProcessedEpoch`: `on_initialize` service cursor preventing repeated work
 
 `Migration state`:
 The current pre-fork storage baseline is `3` in this repository line. The active ballot schema stores vote-time epoch plus frozen computed weight and raw protection power directly in `ProposalVotesByItem`, and `GovernanceLocks` stores account-level lock horizons; downstream live forks must own explicit migrations if they carry an older deployed governance schema.
@@ -497,58 +495,54 @@ The related state distinction is also important:
 
 ## Public Call Surface
 
-| Call Index | Extrinsic                                                                              | Role                                                                                 |
-| :--------- | :------------------------------------------------------------------------------------- | :----------------------------------------------------------------------------------- |
-| `0`        | `record_winning_vote(domain, item_id, account)`                                        | Low-level admin ingress                                                              |
-| `1`        | `record_winning_vote_batch(domain, item_id, accounts)`                                 | Bounded admin batch ingress                                                          |
-| `2`        | `submit_proposal(domain, item_id, proposer, cadence_mode, payload_kind, payload_hash)` | Admin create active proposal with explicit proposer and payload metadata             |
-| `3`        | `submit_signed_proposal(domain, item_id, cadence_mode, payload_kind, payload_hash)`    | Signed create path for runtime-approved public combinations, with burned opening fee |
-| `4`        | `resolve_proposal(domain, item_id, winners)`                                           | Manual bounded resolution                                                            |
-| `5`        | `reject_proposal(domain, item_id)`                                                     | Manual rejection                                                                     |
-| `6`        | `cast_vote(domain, item_id, vote)`                                                     | Signed ballot (`Aye`, `Nay`, `Amplify`, `Approve`, `Reduce`, `Veto`, `Pass`)         |
-| `7`        | `resolve_proposal_from_votes(domain, item_id)`                                         | Policy-driven resolution after maturity                                              |
-| `8`        | `requeue_proposal_for_auto_finalization(domain, item_id)`                              | Recovery if a deferred item needs re-scheduling                                      |
-| `9`        | `force_resolve_proposal_from_votes(domain, item_id)`                                   | Policy-aware early finalization                                                      |
+| Call | Extrinsic                                | Role                            |
+| :--- | :--------------------------------------- | :------------------------------ |
+| `0`  | `record_winning_vote`                    | low-level admin ingress         |
+| `1`  | `record_winning_vote_batch`              | bounded admin batch ingress     |
+| `2`  | `submit_proposal`                        | admin proposal create path      |
+| `3`  | `submit_signed_proposal`                 | signed create with burn fee     |
+| `4`  | `resolve_proposal`                       | manual bounded resolution       |
+| `5`  | `reject_proposal`                        | manual rejection                |
+| `6`  | `cast_vote`                              | signed ballot                   |
+| `7`  | `resolve_proposal_from_votes`            | maturity resolution             |
+| `8`  | `requeue_proposal_for_auto_finalization` | deferred-item recovery          |
+| `9`  | `force_resolve_proposal_from_votes`      | policy-aware early finalization |
 
 ## Events and Errors
 
 ### Events that form the live operational surface
 
-| Event                              | Why it matters                                                                                                                                                                                                               |
-| :--------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ProposalOpeningFeeBurned`         | Confirms that a signed public submission actually paid and burned the configured opening fee before proposal admission                                                                                                       |
-| `ProposalSubmitted`                | Confirms active proposal creation, explicit proposer identity, cadence/payload metadata, and current active-count pressure                                                                                                   |
-| `ProposalVoteCast`                 | Confirms bounded ballot ingress, the recorded vote epoch, any protection-side replacement, and the current stored primary/protection vote counts across `Aye / Nay / Amplify / Approve / Reduce / Veto / Pass` as applicable |
-| `GovernanceLockExtended`           | Reports account-level governance lock horizon extension after an accepted ballot |
-| `ProposalUrgentAuthorized`         | Confirms that an expeditable proposal crossed the raw protection-track `Pass` threshold and records the authorization epoch plus the triggering raw pass/supply context                                                      |
-| `ProposalResolved`                 | Confirms proposal closure and winner count credited into reward memory                                                                                                                                                       |
-| `ProposalEnactmentScheduled`       | Confirms that approval moved into bounded pending-enactment servicing rather than stopping at a pure status marker                                                                                                           |
-| `ProposalExecuted`                 | Confirms that the canonical enactment scaffold recorded successful executable-payload handling and names which payload kind succeeded                                                                                        |
-| `ProposalRuntimeUpgradeAuthorized` | Confirms the current `L1RootAction` success slice with the concrete authorized code hash                                                                                                                                     |
-| `ProposalParameterChangeExecuted`  | Confirms the current `L2ParameterChange` success slices with an explicit bounded parameter surface identity                                                                                                                  |
-| `ProposalTreasurySpendExecuted`    | Confirms the current `L2TreasurySpend` success slice with funding source, beneficiary, payout asset, base amount, winning scalar, final payout amount, and settlement kind so scalar invoice transfer is explicit on-chain   |
-| `ProposalExecutionFailed`          | Confirms that bounded enactment attempted execution but the payload did not enact successfully, and names which payload kind failed plus the bounded failure-reason category                                                 |
-| `ProposalAdvisoryFinalized`        | Confirms explicit non-dispatch finalization for advisory payload kinds and names whether the outcome was `Intent` or `L2SignalToL1`                                                                                          |
-| `ProposalRejected`                 | Confirms proposal closure and explicit rejection reason                                                                                                                                                                      |
-| `ProposalVetoCancelled`            | Confirms that the separate protection track cancelled the proposal without reward credit                                                                                                                                     |
-| `ProposalAutoFinalizationDeferred` | Signals that maturity servicing did not finish cleanly and requeue may be needed                                                                                                                                             |
-| `ProposalAutoFinalizationRequeued` | Signals manual recovery of deferred maturity scheduling                                                                                                                                                                      |
-| `WinningVoteRecorded`              | Confirms reward-memory credit for one winner account                                                                                                                                                                         |
-| `WinningVoteWindowEvicted`         | Confirms zero-sum reward-memory eviction after expiry                                                                                                                                                                        |
+- `ProposalOpeningFeeBurned`: signed public submission paid and burned the opening fee
+- `ProposalSubmitted`: active proposal creation, proposer identity, payload metadata, active-count pressure
+- `ProposalVoteCast`: bounded ballot ingress with vote epoch, replacement state, and stored track counts
+- `GovernanceLockExtended`: account-level lock horizon extension after an accepted ballot
+- `ProposalUrgentAuthorized`: expeditable `Pass` threshold crossed, with epoch and raw pass/supply context
+- `ProposalResolved`: proposal closure and winner count credited into reward memory
+- `ProposalEnactmentScheduled`: approval moved into bounded pending-enactment servicing
+- `ProposalExecuted`: executable payload handling succeeded and names the successful payload kind
+- `ProposalRuntimeUpgradeAuthorized`: current `L1RootAction` success slice and authorized code hash
+- `ProposalParameterChangeExecuted`: current `L2ParameterChange` success slice and bounded parameter identity
+- `ProposalTreasurySpendExecuted`: treasury spend funding source, beneficiary, asset, scalar, payout, settlement
+- `ProposalExecutionFailed`: bounded enactment attempted but failed, with payload kind and failure category
+- `ProposalAdvisoryFinalized`: non-dispatch advisory finalization as `Intent` or `L2SignalToL1`
+- `ProposalRejected`: proposal closure and explicit rejection reason
+- `ProposalVetoCancelled`: separate protection track cancelled the proposal without reward credit
+- `ProposalAutoFinalizationDeferred`: maturity servicing did not finish cleanly and may need requeue
+- `ProposalAutoFinalizationRequeued`: manual recovery of deferred maturity scheduling
+- `WinningVoteRecorded`: reward-memory credit for one winner account
+- `WinningVoteWindowEvicted`: zero-sum reward-memory eviction after expiry
 
 ### Errors that expose real runtime boundaries
 
-| Error                                                                               | Meaning                                                                                                                                                              |
-| :---------------------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ProposalAlreadyActive` / `ProposalNotActive`                                       | Active-state identity guard for the current bounded lifecycle                                                                                                        |
-| `ProposalVotingWindowStillOpen`                                                     | Vote-derived resolution was attempted before maturity on the normal path                                                                                             |
-| `ProposalVoteAlreadyCast` / `ProposalVoteSetFull` / `ProposalProtectionTrackClosed` | Ballot storage is bounded, one-account-one-vote per track family applies, and protection-track ballots are rejected once the configured protection window has closed |
-| `ProposalWinnerSetEmpty`                                                            | Manual resolution cannot inject an empty winner set                                                                                                                  |
-| `ActiveProposalCapReached`                                                          | Domain-local active proposal budget is exhausted                                                                                                                     |
-| `ProposalMaturityBucketFull`                                                        | Auto-finalization scheduling cap for one epoch was hit                                                                                                               |
-| `DuplicateWinningVoteItem` / `DuplicateWinningVoteResolutionItem`                   | Winner ingress uniqueness was violated inside the live memory horizon                                                                                                |
-| `FinalizedProposalOutcomeExpiryBucketFull`                                          | Recent finalized-outcome retention hit its bounded expiry scheduling cap                                                                                             |
-| `ExpiryBucketFull`                                                                  | Account-expiry scheduling hit its bounded service bucket cap                                                                                                         |
+- `ProposalAlreadyActive` / `ProposalNotActive`: active-state identity guard
+- `ProposalVotingWindowStillOpen`: vote-derived resolution attempted before maturity
+- `ProposalVoteAlreadyCast` / `ProposalVoteSetFull` / `ProposalProtectionTrackClosed`: bounded ballot and protection-window guards
+- `ProposalWinnerSetEmpty`: manual resolution cannot inject an empty winner set
+- `ActiveProposalCapReached`: domain-local active proposal budget exhausted
+- `ProposalMaturityBucketFull`: auto-finalization scheduling cap hit for one epoch
+- `DuplicateWinningVoteItem` / `DuplicateWinningVoteResolutionItem`: live memory uniqueness violation
+- `FinalizedProposalOutcomeExpiryBucketFull`: finalized-outcome retention expiry cap hit
+- `ExpiryBucketFull`: account-expiry scheduling hit its bounded service bucket cap
 
 ## Runtime Binding
 
@@ -563,28 +557,26 @@ Current runtime wiring in `template/runtime/src/configs/governance_config.rs`:
 
 Current runtime policy values:
 
-| Constant                                  | Value                                                                                                                                                                                  |
-| :---------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WinningVoteLookbackEpochs`               | `3`                                                                                                                                                                                    |
-| `MaxWinningVotesPerEpoch`                 | `4`                                                                                                                                                                                    |
-| `MaxWinningVoteItemsPerEpoch`             | `4`                                                                                                                                                                                    |
-| `MaxWinningVoteResolutionItemsPerEpoch`   | `64`                                                                                                                                                                                   |
-| `MaxWinningVoteAccountsPerCall`           | `256`                                                                                                                                                                                  |
-| `MaxActiveProposalsPerDomain`             | `128`                                                                                                                                                                                  |
-| `MaxMaturingProposalsPerEpoch`            | `4`                                                                                                                                                                                    |
-| `ProposalVotingPeriod`                    | `7 days` (`7 * 24 * HOURS = 100,800` blocks)                                                                                                                                           |
-| `ProposalLeadInPeriod`                    | `3 days` (`3 * 24 * HOURS = 43,200` blocks)                                                                                                                                            |
-| `ProposalProtectionPeriod`                | `7 days` (`7 * 24 * HOURS = 100,800` blocks)                                                                                                                                           |
-| `ProposalUrgentVotingPeriod`              | `1 day` (`24 * HOURS = 14,400` blocks)                                                                                                                                                 |
-| `ProposalEnactmentDelay`                  | `3 days` (`3 * 24 * HOURS = 43,200` blocks)                                                                                                                                            |
-| `ProposalFastTrackPassThreshold`          | `100%` of eligible protection supply on the current strategic runtime-upgrade line, so unanimous raw protection-track `Pass` is required before the urgent authorization path triggers |
-| `ProposalApprovalThreshold`               | `60%`                                                                                                                                                                                  |
-| `ProposalVetoThreshold`                   | `50%` of eligible protection supply (strict `>` for immediate cancellation)                                                                                                            |
-| `ProposalVetoMinimumVetoTurnout`          | `1%` of eligible protection supply (raw veto dust floor)                                                                                                                               |
-| `ProposalMinimumTurnout`                  | `200` weighted units                                                                                                                                                                   |
-| `FinalizedProposalOutcomeRetentionEpochs` | `16`                                                                                                                                                                                   |
-| `MaxFinalizedProposalOutcomesPerEpoch`    | `1024`                                                                                                                                                                                 |
-| `MaxExpiringAccountsPerEpoch`             | `1024`                                                                                                                                                                                 |
+- `WinningVoteLookbackEpochs = 3`
+- `MaxWinningVotesPerEpoch = 4`
+- `MaxWinningVoteItemsPerEpoch = 4`
+- `MaxWinningVoteResolutionItemsPerEpoch = 64`
+- `MaxWinningVoteAccountsPerCall = 256`
+- `MaxActiveProposalsPerDomain = 128`
+- `MaxMaturingProposalsPerEpoch = 4`
+- `ProposalVotingPeriod = 7 days` (`100,800` blocks)
+- `ProposalLeadInPeriod = 3 days` (`43,200` blocks)
+- `ProposalProtectionPeriod = 7 days` (`100,800` blocks)
+- `ProposalUrgentVotingPeriod = 1 day` (`14,400` blocks)
+- `ProposalEnactmentDelay = 3 days` (`43,200` blocks)
+- `ProposalFastTrackPassThreshold = 100%` of eligible protection supply on the current upgrade line
+- `ProposalApprovalThreshold = 60%`
+- `ProposalVetoThreshold = 50%` of eligible protection supply, strict `>` for immediate cancellation
+- `ProposalVetoMinimumVetoTurnout = 1%` of eligible protection supply
+- `ProposalMinimumTurnout = 200` weighted units
+- `FinalizedProposalOutcomeRetentionEpochs = 16`
+- `MaxFinalizedProposalOutcomesPerEpoch = 1024`
+- `MaxExpiringAccountsPerEpoch = 1024`
 
 ### Vote weight providers
 

@@ -6,15 +6,30 @@
 
 ## [Unreleased]
 
-### Release Readiness Fixes
+_No unreleased changes._
 
-- `deos-runtime`: Wired the Phase 1 Fee Sink LP-donation half into the Native Staking LP Farmer by routing native fee balances to AAA #14 and bridging that sovereign ingress into the local native-staking asset used by the donation task.
-- `deos-runtime`: Added the post-donation staking-yield bridge, burning native balance held by the staking pool account and minting the local native-staking asset into pool truth after AAA #14 donation execution.
-- `deos-runtime`: Added runtime regression proving Fee Sink redistribution can increase `NTVE/stNTVE` reserves through AAA #14 without minting extra LP to the donor and can bridge the staking-yield side without leaving native balances stranded.
-- `docs` + `BACKLOG.md`: Closed the Phase 1 Fee Sink redistribution release gate for eligible fees; block reward routing remains gated on the explicit source/amount design decision.
-- `deos-runtime`: Cleaned runtime-benchmark feature-gated test imports/helpers so the all-features local CI clippy lane stays warning-free.
-- `scripts`: Repaired stale runtime WASM artifact paths in build, chain-spec, and try-runtime helpers after the DEOS runtime artifact rename.
-- `scripts`: Made the Zombienet E2E block-stability probe tolerate parachain startup/onboarding latency and the existing 100-block local target's six-second cadence before declaring failure.
+## [0.4.0] - 2026-05-15
+
+### AAA Kernel Hardening
+
+- `pallet-aaa` + `docs`: Crystallized the AAA lifecycle contract around normal cycles, close tails, lifecycle touchpoints, scheduler liveness, canonical `[Noop]` close plans, tracked funding, manual-trigger semantics, timer re-arm behavior, and close-tail finality without expanding the AAA feature surface.
+- `pallet-aaa` + `deos-runtime`: Added System Immutable AAA support for hard protocol anchors; TOL Bucket A (`aaa_id=3`) and BLDR Bucket A (`aaa_id=12`) are immutable in the reference topology and cannot be mutated, paused, closed, or reopened by runtime extrinsics, including governance/root.
+- `tests`: Added durable lifecycle and System Immutable conformance coverage; the pallet suite passes with `181` tests and the runtime suite passes with `305` tests.
+
+### TMCTOL Contract Hardening
+
+- `docs` + `simulator`: Hardened the TMCTOL public guarantee contract around conditional floor claims, canonical reported floor inputs, the TOL Anchor Invariant, bucket/LP accounting states, burn-liveness classification, Zap postconditions, bounded router-fee mutability, conservation rules, and conformance status; the simulator suite covers 65 passing vectors.
+- `primitives` + `deos-runtime`: Added a storage-free `TmctolReadModelApi` that exposes bounded live guarantee state from existing AAA, TMC, Assets, and Asset Conversion state without adding a new pallet or consensus analytics storage; native burn liveness, reference BLDR buyback/burn liveness, and Zap postcondition status are reported as separate domains.
+- `pallet-axial-router` + `deos-runtime`: Bounded governance-settable router fees with an explicit `MaxRouterFee` contract so Root or governance parameter changes cannot silently invalidate TMCTOL burn-liveness or conservation assumptions.
+- `deos-runtime` + `docs`: Removed runtime analytics/dashboard scaffolding from the runtime source tree and codified the boundary that dashboards, trends, alerts, and historical metrics belong in test helpers, external indexers, operator tooling, or product services.
+
+### Release Line Readiness
+
+- `release`: Prepared the `0.4.0` release line by bumping Rust workspace package versions, web-client package metadata, runtime `spec_version` to `210`, and refreshed committed runtime metadata / PAPI descriptors for the new runtime API and economic hardening surfaces.
+- `deos-runtime`: Completed the Phase 1 Fee Sink to Native Staking LP Farmer bridge, including staking-yield reconciliation into pool truth and runtime regression coverage for reserve strengthening without donor LP minting.
+- `template` + `scripts` + `docs`: Advanced the operator/tooling baseline to Polkadot `stable2603-2` / node `v1.22.2` while keeping the SDK `2603.0.0` umbrella crate baseline and updating only the patch crates present in this workspace lockfile.
+- `scripts`: Repaired stale runtime WASM artifact paths and hardened local Zombienet block-stability probing against startup/onboarding latency.
+- `BACKLOG.md`: Removed completed hardening sections so the backlog now tracks only remaining open work while this changelog records delivered release content.
 
 ## [0.3.2] - 2026-05-06
 
@@ -42,10 +57,6 @@
 - `docs/staking.specification.en.md`: Merged the accepted staking proposal clarifications into the canonical contract: non-locked `NTVE/stNTVE` LP transfer isolation, the empty-pool precondition for `staking_exchange_rate`, bounded skip/defer behavior for AAA liquidity donation, and the governance-custody ordering rule that prevents double counting while `lock_until` is active.
 - `docs` + `BACKLOG.md`: Removed the temporary staking proposal document after merging its accepted items and closed the corresponding backlog slice so the canonical staking specification remains the only source of truth.
 
-### Polkadot SDK stable2603-1 Patch Migration
-
-- `template/Cargo.lock`: Applied the `polkadot-stable2603-1` patch release by updating the corresponding 2603 patch crates in lockfile, including client/collator-protocol fixes, `frame-support`, Westend runtime, prospective-parachains, statement-store, and related node-side crates while keeping the 2603.0.0 umbrella crate baseline.
-- `scripts` + docs: Retargeted local Polkadot SDK binary/tool guidance from `polkadot-v1.22.0` to `polkadot-stable2603-1` (node v1.22.1) and recorded that stable2603-1 is a patch-level lockfile/operator binary migration with no DEOS runtime API shape change required.
 
 ## [0.3.0] - 2026-04-25
 

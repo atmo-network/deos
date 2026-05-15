@@ -1,6 +1,6 @@
 [package]
 name = "primitives"
-version = "0.3.2"
+version = "0.4.0"
 description = "Shared primitive types for the DEOS reference runtime"
 authors.workspace = true
 homepage.workspace = true
@@ -16,6 +16,7 @@ workspace = true
 codec = { workspace = true, features = ["max-encoded-len"] }
 scale-info = { workspace = true }
 serde = { workspace = true, features = ["derive", "alloc"] }
+sp-api = { workspace = true }
 sp-arithmetic = { workspace = true }
 
 [features]
@@ -24,5 +25,6 @@ std = [
 	"codec/std",
 	"scale-info/std",
 	"serde/std",
+	"sp-api/std",
 	"sp-arithmetic/std",
 ]

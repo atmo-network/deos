@@ -141,6 +141,42 @@ const calculateRelativeSpread = (ceiling, floor) => {
  */
 const calculateArithmeticSpread = (ceiling, floor) => ceiling - floor;
 
+const calculateStressFloor = (reserveNative, reserveForeign, sellablePressure) => {
+  if (reserveNative <= 0n || reserveForeign <= 0n) return 0n;
+  if (sellablePressure < 0n) {
+    throw new Error("Sellable pressure must be non-negative");
+  }
+  const k = reserveNative * reserveForeign;
+  const stressedNative = reserveNative + sellablePressure;
+  return BigMath.mul_div(k, PRECISION, stressedNative * stressedNative);
+};
+
+const calculateReportedFloorRatio = ({
+  reserveNative,
+  reserveForeign,
+  referenceCeiling,
+  sellableSupply,
+  lambdaPpb = PPB,
+}) => {
+  if (lambdaPpb < 0n || lambdaPpb > PPB) {
+    throw new Error("lambdaPpb must be in [0, PPB]");
+  }
+  if (referenceCeiling <= 0n) {
+    throw new Error("Reference ceiling must be positive");
+  }
+  const sellablePressure = BigMath.mul_div(sellableSupply, lambdaPpb, PPB);
+  const stressFloor = calculateStressFloor(
+    reserveNative,
+    reserveForeign,
+    sellablePressure,
+  );
+  return {
+    stressFloor,
+    sellablePressure,
+    ratioPpb: BigMath.mul_div(stressFloor, PPB, referenceCeiling),
+  };
+};
+
 // Test section structure: [section, count_in_section]
 const TEST_SECTIONS = [
   [1, 4], // Mathematical Foundations
@@ -155,6 +191,7 @@ const TEST_SECTIONS = [
   [10, 6], // Emergent Properties & System Intelligence
   [11, 4], // Economic Security & Attack Resistance
   [12, 7], // Adaptive System Behaviors
+  [13, 5], // Reporting & Conformance Metrics
 ];
 
 let testCount = 0;
@@ -2154,6 +2191,101 @@ runTest("Economic Incentive Alignment", () => {
     holder_final >= trader_balance,
     "Long-term holding should be more profitable than active trading due to fees",
   );
+});
+
+runTest("Reported Floor Metric Scenario Ratios", () => {
+  const reserveNative = 333_333n * PRECISION;
+  const referenceCeiling = PRECISION;
+  const reserveForeign = BigMath.mul_div(
+    reserveNative,
+    referenceCeiling,
+    PRECISION,
+  );
+  const userExit = calculateReportedFloorRatio({
+    reserveNative,
+    reserveForeign,
+    referenceCeiling,
+    sellableSupply: 333_333n * PRECISION,
+  });
+  const systemExit = calculateReportedFloorRatio({
+    reserveNative,
+    reserveForeign,
+    referenceCeiling,
+    sellableSupply: 666_666n * PRECISION,
+  });
+  assertApprox(userExit.ratioPpb, 250_000_000n, 1n, "User exit should report ~25% floor ratio");
+  assertApprox(systemExit.ratioPpb, 111_111_111n, 1n, "System exit should report ~11.11% floor ratio");
+  assert(userExit.sellablePressure === 333_333n * PRECISION, "Default λ should use full sellable supply");
+});
+
+runTest("Ledger Conservation With Burns", () => {
+  const system = create_system({
+    tmc: {
+      price_initial: PRECISION / 1_000n,
+      slope: PRECISION / 1_000n,
+    },
+  });
+  const firstMint = system.tmc.mint_native(1_000n * PRECISION);
+  const secondMint = system.tmc.mint_native(500n * PRECISION);
+  const cumulativeMinted = firstMint.total_minted + secondMint.total_minted;
+  const burnAmount = cumulativeMinted / 7n;
+  system.tmc.burn_native(burnAmount);
+  const liveIssuance = system.tmc.supply;
+  assert(
+    cumulativeMinted - burnAmount === liveIssuance,
+    "Cumulative minted minus burned should equal live simulated supply",
+  );
+});
+
+runTest("Burn Liveness Threshold Behavior", () => {
+  const system = create_system({
+    router: {
+      min_initial_foreign: PRECISION,
+      min_swap_foreign: 10n * PRECISION,
+      fee_router_ppb: (5n * PPB) / 1_000n,
+    },
+  });
+  system.tmc.mint_native(1_000n * PRECISION);
+  system.fee_manager.receive_fee_foreign(5n * PRECISION);
+  assert(system.fee_manager.buffer_foreign === 5n * PRECISION, "Sub-threshold foreign fees should remain buffered");
+  assert(system.fee_manager.total_native_burned === 0n, "Sub-threshold foreign fees should not burn native");
+  system.fee_manager.receive_fee_foreign(10n * PRECISION);
+  assert(system.fee_manager.buffer_foreign === 0n, "Threshold-crossing foreign fees should be consumed");
+  assert(system.fee_manager.total_native_burned > 0n, "Threshold-crossing foreign fees should burn native when liquidity exists");
+});
+
+runTest("Zap Bucket Accounting Conservation", () => {
+  const system = create_system();
+  const result = system.tmc.mint_native(1_000n * PRECISION);
+  const buckets = [
+    result.tol.bucket_a,
+    result.tol.bucket_b,
+    result.tol.bucket_c,
+    result.tol.bucket_d,
+  ];
+  const lpTotal = buckets.reduce((sum, bucket) => sum + bucket.lp_tokens, 0n);
+  const nativeTotal = buckets.reduce((sum, bucket) => sum + bucket.contributed_native, 0n);
+  const foreignTotal = buckets.reduce((sum, bucket) => sum + bucket.contributed_foreign, 0n);
+  assert(lpTotal === result.tol.total_lp_minted, "Bucket LP accounting should conserve total LP minted");
+  assert(nativeTotal === result.tol.total_native_used, "Bucket native accounting should conserve total native used");
+  assert(foreignTotal === result.tol.total_foreign_used, "Bucket foreign accounting should conserve total foreign used");
+  assert(result.tol.bucket_a.lp_tokens > 0n, "Bucket_A should be classifiable as anchor-support LP after initial mint");
+});
+
+runTest("Stress Floor Monotonicity", () => {
+  const reserveNative = 500n * PRECISION;
+  const reserveForeign = 1_000n * PRECISION;
+  const smallSell = calculateStressFloor(
+    reserveNative,
+    reserveForeign,
+    100n * PRECISION,
+  );
+  const largeSell = calculateStressFloor(
+    reserveNative,
+    reserveForeign,
+    300n * PRECISION,
+  );
+  assert(smallSell > largeSell, "Stress floor should decrease as sellable pressure increases");
 });
 
 // FINAL STATISTICS

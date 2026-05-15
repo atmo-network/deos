@@ -6,7 +6,7 @@ The DEOS (Deterministic Economic Operating System) framework, currently instanti
 
 The system operates as a deterministic state machine where specialized actors coordinate exclusively through `Balance Ingress`. It abandons the traditional "Request-Response" model in favor of `Continuous Flow Processing`. The network coordinates through explicit, permissionless token flows between dedicated accounts, ensuring that every state transition is mathematically bounded, economically productive, and immune to intra-block manipulation.
 
-All deterministic economic flows — deflationary burning, liquidity provisioning, treasury management, and protocol-token buyback — are expressed as declarative execution plans on a single runtime platform: `pallet-aaa` (Account Abstraction Actors). Thirteen genesis System actors replace three former standalone pallets, reducing total code by ~6000 LOC while expanding capability to a multi-token protocol economy.
+All deterministic economic flows — deflationary burning, liquidity provisioning, treasury management, and protocol-token buyback — are expressed as declarative execution plans on a single runtime platform: `pallet-aaa` (Account Abstraction Actors). Fifteen genesis System actors replace three former standalone pallets, reducing total code by ~6000 LOC while expanding capability to a multi-token protocol economy.
 
 ## 2. Core Philosophy: The "Omnivorous" Machine
 
@@ -32,17 +32,17 @@ All actors are System instances managed by `pallet-aaa`. The Axial Router and TM
 
 #### L1 Actors (Native Token Domain)
 
-| Actor                   | aaa_id | Execution Plan                                                    | Trigger                      |
-| ----------------------- | ------ | ----------------------------------------------------------------- | ---------------------------- |
-| Burning Manager         | 0      | `[SwapExactIn(foreign→native)]* → Burn(native)`                   | `Timer { every_blocks: 10 }` |
-| Zap Manager             | 2      | `AddLiquidity → SwapExactIn(patriotic) → SplitTransfer(→buckets)` | `Timer { every_blocks: 1 }`  |
-| TOL Bucket A (Anchor)   | 3      | `Noop` — permanent LP accumulation                                | `Timer` (Noop)               |
-| TOL Bucket B (Building) | 4      | `RemoveLiquidity → Transfer × 2 (→ Treasury B)`                   | `Timer` (future)             |
-| TOL Bucket C (Capital)  | 5      | `RemoveLiquidity → Transfer × 2 (→ Treasury C)`                   | `Timer` (future)             |
-| TOL Bucket D (Dormant)  | 6      | `Noop` — held for future governance policy                        | `Timer` (Noop)               |
-| Treasury B (Building)   | 7      | `SwapExactIn(NTVE→BLDR) → Burn(BLDR)` — buyback & burn            | `Timer { every: 600 }`       |
-| Treasury C (Capital)    | 8      | `Noop` — receives Native + Foreign from Bucket C unwind           | `Timer` (Noop)               |
-| Treasury D (Dormant)    | 9      | `Noop` — receives Native + Foreign from Bucket D unwind           | `Timer` (Noop)               |
+| Actor                   | aaa_id | Plan summary                         | Trigger                      |
+| ----------------------- | ------ | ------------------------------------ | ---------------------------- |
+| Burning Manager         | 0      | foreign → native swaps, then burn    | `Timer { every_blocks: 10 }` |
+| Zap Manager             | 2      | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }`  |
+| TOL Bucket A (Anchor)   | 3      | `Noop`; permanent LP accumulation    | `Timer` (Noop)               |
+| TOL Bucket B (Building) | 4      | LP unwind to Treasury B              | `Timer` (future)             |
+| TOL Bucket C (Capital)  | 5      | LP unwind to Treasury C              | `Timer` (future)             |
+| TOL Bucket D (Dormant)  | 6      | `Noop`; future governance policy     | `Timer` (Noop)               |
+| Treasury B (Building)   | 7      | NTVE → BLDR buyback and burn         | `Timer { every: 600 }`       |
+| Treasury C (Capital)    | 8      | `Noop`; receives Bucket C unwind     | `Timer` (Noop)               |
+| Treasury D (Dormant)    | 9      | `Noop`; receives Bucket D unwind     | `Timer` (Noop)               |
 
 #### L2 Actors (BLDR Protocol Token Domain)
 
@@ -268,10 +268,8 @@ The system implements "Economic Backpressure" to handle volatility gracefully.
 
 AAA delegates all external operations to two adapter traits:
 
-| Adapter    | Responsibility                                                         | Runtime Implementation                    |
-| ---------- | ---------------------------------------------------------------------- | ----------------------------------------- |
-| `DexOps`   | `swap_exact_in`, `swap_exact_out`, `add_liquidity`, `remove_liquidity` | Routes through Axial Router               |
-| `AssetOps` | `balance`, `transfer`, `burn`, `mint`, `total_issuance`                | Wraps `pallet-balances` + `pallet-assets` |
+- `DexOps`: `swap_exact_in`, `swap_exact_out`, `add_liquidity`, `remove_liquidity`; routes through Axial Router
+- `AssetOps`: `balance`, `transfer`, `burn`, `mint`, `total_issuance`; wraps `pallet-balances` + `pallet-assets`
 
 Adapters are pure pass-through — they execute operations without reinterpreting execution-plan parameters. `swap_exact_in` computes `min_out` internally via DEX quote, while `swap_exact_out` deterministically resolves required input before execution.
 
@@ -279,13 +277,13 @@ Adapters are pure pass-through — they execute operations without reinterpretin
 
 Execution-plan steps specify amounts via `AmountResolution`, enabling both static and dynamic resolution:
 
-| Variant                            | Description                                   | Use Case                           |
-| ---------------------------------- | --------------------------------------------- | ---------------------------------- |
-| `Fixed(Balance)`                   | Absolute amount                               | Known-quantity transfers           |
-| `PercentageOfCurrent(Perbill)`     | % of actor's current spendable balance        | Gradual unwind (1%/day)            |
-| `PercentageOfTrigger(Perbill)`     | % of balance at trigger evaluation time       | Event-proportional actions         |
-| `PercentageOfLastFunding(Perbill)` | % of last funding snapshot                    | DCA-style repeated purchases       |
-| `AllBalance`                       | Entire spendable balance (ED-safe for native) | Drain steps (burn, final transfer) |
+| Variant                   | Description                    | Use case            |
+| ------------------------- | ------------------------------ | ------------------- |
+| `Fixed(Balance)`          | Absolute amount                | Known transfers     |
+| `PercentageOfCurrent`     | % of current spendable balance | Gradual unwind      |
+| `PercentageOfTrigger`     | % of trigger-time balance      | Event-proportional  |
+| `PercentageOfLastFunding` | % of last funding snapshot     | DCA repeats         |
+| `AllBalance`              | Spendable balance              | Burn/final transfer |
 
 ## 5. Code Integration Patterns
 
@@ -399,11 +397,11 @@ The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridg
 
 ### 7.1 The Price Corridor
 
-The interaction of actors creates a mathematically bounded economy:
+The interaction of actors creates a conditionally bounded economy:
 
-- `Ceiling`: Enforced by TMC (Infinite supply at Curve Price). Multiple curves (Native, BLDR) each define independent ceilings.
-- `Floor`: Enforced by TOL buckets (Deep Protocol-Owned Liquidity via AAA #3..#6 for L1, AAA #12 for L2 BLDR).
-- `Compression`: BM burns reduce `TotalIssuance` (lowering ceiling). ZM LP provisioning into TOL raises the floor. Treasury B BLDR buyback-burn creates deflationary pressure on BLDR. Together they create **bidirectional compression** — the Gravity Well.
+- `Ceiling`: Enforced by TMC. Multiple curves such as Native and BLDR each define independent ceilings.
+- `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. L1 support flows through AAA #3..#6; L2 BLDR support flows through AAA #12.
+- `Compression`: BM burns reduce live supply and ZM LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy Zap/liquidity accounting.
 
 ### 7.2 Deflationary Velocity
 
@@ -423,21 +421,21 @@ User buys BLDR (via Router TMC)
   → Bucket B unwind → Treasury B → buyback BLDR on XYK → burn (supply ↓)
 ```
 
-Both BLDR floor (LP accumulation) and ceiling (supply burn) compress over time.
+BLDR floor support and ceiling pressure can compress over time when LP accumulation remains counted as support and buyback-burn execution remains live.
 
 ## 8. Runtime Topology
 
 ### 8.1 Pallet Inventory
 
-| Pallet                    | Role                                                     | Hooks                                                |
-| ------------------------- | -------------------------------------------------------- | ---------------------------------------------------- |
-| `pallet-aaa`              | Deterministic actor platform (13 System + N User actors) | `on_initialize` (bookkeeping), `on_idle` (scheduler) |
-| `pallet-axial-router`     | Trade routing, fee collection, oracle                    | Extrinsic-driven                                     |
-| `pallet-tmc`              | Unidirectional token emission (multi-curve)              | Extrinsic-driven                                     |
-| `pallet-asset-registry`   | Foreign asset registration, Location→AssetId mapping     | Extrinsic-driven                                     |
-| `pallet-asset-conversion` | Uniswap V2-like AMM pools                                | Extrinsic-driven                                     |
-| `pallet-assets`           | Fungible asset ledger                                    | —                                                    |
-| `pallet-balances`         | Native token ledger                                      | —                                                    |
+| Pallet                    | Role                              | Hooks                      |
+| ------------------------- | --------------------------------- | -------------------------- |
+| `pallet-aaa`              | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
+| `pallet-axial-router`     | Routing, fees, oracle             | Extrinsic-driven           |
+| `pallet-tmc`              | Multi-curve native emission       | Extrinsic-driven           |
+| `pallet-asset-registry`   | Foreign asset registry            | Extrinsic-driven           |
+| `pallet-asset-conversion` | Uniswap V2-like AMM pools         | Extrinsic-driven           |
+| `pallet-assets`           | Fungible asset ledger             | —                          |
+| `pallet-balances`         | Native token ledger               | —                          |
 
 ### 8.2 Former Pallets (Consolidated into AAA)
 

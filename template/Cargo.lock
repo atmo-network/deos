@@ -3907,7 +3907,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d162beedaa69905488a8da94f5ac3edb4dd4788b732fadb7bd120b2625c1976"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.111",
 ]
 
 [[package]]
@@ -3921,7 +3921,7 @@ dependencies = [
 
 [[package]]
 name = "deos-runtime"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "cumulus-pallet-parachain-system",
  "docify",
@@ -8264,7 +8264,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8366,7 +8366,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-asset-registry"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8542,7 +8542,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-axial-router"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "pallet-tmc",
  "parity-scale-codec",
@@ -9046,7 +9046,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-governance"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9056,7 +9056,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-staking"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -10295,7 +10295,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmc"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -12767,11 +12767,12 @@ dependencies = [
 
 [[package]]
 name = "primitives"
-version = "0.3.2"
+version = "0.4.0"
 dependencies = [
  "parity-scale-codec",
  "scale-info",
  "serde",
+ "sp-api",
  "sp-arithmetic",
 ]
 
@@ -14997,9 +14998,9 @@ dependencies = [
 
 [[package]]
 name = "sc-network-sync"
-version = "0.55.0"
+version = "0.55.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8387ffb7f5c25f1868c7e75fca813ec7ed49312f68a3de79574c4da68fd85ab9"
+checksum = "3251096defcf112c15565c8721b3c8158ae8d182db66525de67de8374fb55cc2"
 dependencies = [
  "array-bytes 6.2.3",
  "async-channel 1.9.0",
@@ -17382,9 +17383,9 @@ dependencies = [
 
 [[package]]
 name = "staging-xcm"
-version = "22.0.0"
+version = "22.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ecb0dcfe26176c9a34b4ebca3bc0040e72ef5e6df0c9a577789881cf1bdc7044"
+checksum = "bbced916c34c6c56ba0aa7941e7bb20e62a773ae59633dd264df8ca94a501574"
 dependencies = [
  "array-bytes 6.2.3",
  "bounded-collections 0.3.2",

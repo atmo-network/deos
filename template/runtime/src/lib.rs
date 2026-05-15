@@ -29,11 +29,13 @@ mod genesis_config_presets;
 #[cfg(any(test, feature = "std"))]
 mod governance;
 #[cfg(any(test, feature = "std"))]
-mod monitoring;
-
-#[cfg(any(test, feature = "std"))]
 mod tests;
 
+/// Storage-free canonical TMCTOL read projection.
+///
+/// This module is runtime API surface, not analytics/dashboard code. Historical metrics,
+/// trends, alerts, and dashboards belong in tests, tools, or external indexers.
+pub mod tmctol_read_model;
 mod weights;
 use weights::ExtrinsicBaseWeight;
 
@@ -50,7 +52,7 @@ pub const VERSION: sp_version::RuntimeVersion = sp_version::RuntimeVersion {
   authoring_version: 1,
   impl_version: 1,
   system_version: 3,
-  spec_version: 209,
+  spec_version: 210,
   transaction_version: 100,
 };
 

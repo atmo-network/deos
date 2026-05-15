@@ -107,6 +107,12 @@ impl_runtime_apis! {
         }
     }
 
+    impl primitives::TmctolReadModelApi<Block, AccountId, Balance> for Runtime {
+        fn tmctol_guarantee_state() -> primitives::TmctolGuaranteeState<AccountId, Balance> {
+            crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state()
+        }
+    }
+
     impl sp_block_builder::BlockBuilder<Block> for Runtime {
         fn apply_extrinsic(extrinsic: <Block as BlockT>::Extrinsic) -> ApplyExtrinsicResult {
             Executive::apply_extrinsic(extrinsic)

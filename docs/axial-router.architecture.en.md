@@ -69,11 +69,9 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 The router utilizes a `Lazy Discovery` algorithm via `find_optimal_route()`. It evaluates up to 3 candidate routes and selects the one with the highest efficiency score:
 
-| Route Type    | Mechanism                      | Condition                                                                        |
-| :------------ | :----------------------------- | :------------------------------------------------------------------------------- |
-| `Direct XYK`  | `DirectXyk { pool_id }`        | Pool exists for `(from, to)` pair                                                |
-| `Direct Mint` | `DirectMint { foreign_asset }` | `from != Native`, `to == Native`, TMC curve exists for `to`                      |
-| `Multi-Hop`   | `MultiHopNative { hops }`      | `from != Native`, `to != Native`, both `from→Native` and `Native→to` pools exist |
+- `Direct XYK`: `DirectXyk { pool_id }`; pool exists for `(from, to)` pair
+- `Direct Mint`: `DirectMint { foreign_asset }`; `from != Native`, `to == Native`, TMC curve exists for `to`
+- `Multi-Hop`: `MultiHopNative { hops }`; non-native pair routed through both native pools
 
 ### Efficiency Score
 
@@ -92,7 +90,7 @@ Price impact is calculated against EMA oracle prices for direct routes, or again
 | `Default Fee`   | `0.5%` (`Perbill::from_parts(5_000_000)`)                        |
 | `Math`          | `Perbill::mul_floor(amount_in)` — overflow-safe                  |
 | `Routing`       | One-hop: `User → Burning Manager` (no intermediate buffer)       |
-| `Governance`    | Updatable via `update_router_fee` (Root origin)                  |
+| `Governance`    | Updatable via `update_router_fee` within `MaxRouterFee`          |
 | `Self-Taxation` | Router, BM, and ZM accounts are fee-exempt via `is_fee_exempt()` |
 
 The `FeeRoutingAdapter` trait provides the transfer interface:
@@ -223,12 +221,12 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ## Storage Summary
 
-| Storage Item       | Type                       | Description                                                              |
-| :----------------- | :------------------------- | :----------------------------------------------------------------------- |
-| `RouterFee<T>`     | `StorageValue<Perbill>`    | Current fee rate (governance-updatable, default from `DefaultRouterFee`) |
-| `TrackedAssets<T>` | `StorageValue<BoundedVec>` | Governance-managed asset tracking list                                   |
-| `EmaPrices<T>`     | `StorageDoubleMap`         | EMA prices per directional pair                                          |
-| `EmaLastUpdate<T>` | `StorageDoubleMap`         | Last update block per pair                                               |
+| Storage            | Type                    | Description                            |
+| :----------------- | :---------------------- | :------------------------------------- |
+| `RouterFee<T>`     | `StorageValue<Perbill>` | Current bounded governance fee rate     |
+| `TrackedAssets<T>` | `BoundedVec`            | Governance-managed asset tracking list |
+| `EmaPrices<T>`     | `StorageDoubleMap`      | EMA prices per directional pair        |
+| `EmaLastUpdate<T>` | `StorageDoubleMap`      | Last update block per pair             |
 
 ## Extrinsics
 
@@ -260,6 +258,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 | `FeeRoutingFailed`         | Fee transfer to Burning Manager failed        |
 | `PriceDeviationExceeded`   | Spot price deviates from EMA beyond threshold |
 | `MaxTrackedAssetsExceeded` | `TrackedAssets` at capacity (64)              |
+| `RouterFeeTooHigh`         | New router fee exceeds `MaxRouterFee`         |
 
 ## Configuration Constants
 
@@ -269,6 +268,7 @@ All constants are sourced from `primitives::ecosystem` — single source of trut
 | :------------------ | :-------------------------------------- | :---------------------------------------------- |
 | `PalletId`          | `*b"axialrt0"`                          | `ecosystem::pallet_ids::AXIAL_ROUTER_PALLET_ID` |
 | `DefaultRouterFee`  | `Perbill::from_parts(5_000_000)` (0.5%) | `ecosystem::params::AXIAL_ROUTER_FEE`           |
+| `MaxRouterFee`      | `Perbill::from_percent(1)`              | `ecosystem::params::MAX_AXIAL_ROUTER_FEE`       |
 | `Precision`         | `1_000_000_000_000` (10¹²)              | `ecosystem::params::PRECISION`                  |
 | `EmaHalfLife`       | `100` blocks (~10 min @ 6s/block)       | `ecosystem::params::EMA_HALF_LIFE_BLOCKS`       |
 | `MaxPriceDeviation` | `Perbill::from_percent(20)`             | `ecosystem::params::MAX_PRICE_DEVIATION`        |
@@ -315,20 +315,21 @@ Those belong to events plus external indexing/materialization rather than extra 
 
 ### Current launch-line decision for quote and route discovery
 
-For the current launch line, router quote/route discovery is intentionally a `simulated / materialized` surface, not a canonical on-chain projection.
+For the current launch line, exact-input router quote/route discovery is a bounded canonical on-chain projection through `quote_exact_input(who, from, to, amount_in)`.
 
 Why:
 
 - The runtime owns the canonical routing and execution policy
-- But the current docs/code do **not** define a stable frontend-facing quote/route preview contract for arbitrary swaps
-- Consumers would otherwise be forced into ad-hoc duplicated client math or raw storage reconstruction, which is not an honest protocol contract
+- The view function mirrors caller-aware fee handling and current route selection without mutating oracle state
+- Consumers should use this bounded view instead of duplicating router math or reconstructing route truth from raw storage
 
 So the current product contract is:
 
 - `actual swap execution result` -> canonical on-chain
-- `pre-execution quote / route preview` -> explicit simulated/materialized surface
+- `current exact-input quote / route preview` -> canonical bounded on-chain projection
+- `history, trends, route-quality analytics, and broad discovery` -> indexed/materialized surface
 
-If a future launch line wants chain-native preview UX, it SHOULD add an explicit bounded runtime projection / view surface rather than letting client-side reimplementation become the de facto standard.
+If a future launch line wants wider quote families, multi-scenario simulation, or historical route comparison, it SHOULD add explicit bounded projections or materialized provider contracts rather than letting ad-hoc client math become the de facto standard.
 
 ## Runtime Adapters
 
