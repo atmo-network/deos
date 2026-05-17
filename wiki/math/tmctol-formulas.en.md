@@ -103,3 +103,11 @@ burn_rate = f_router × V_trade
 ```
 
 Burning reduces the supply ($S$), which simultaneously lowers the price ceiling on the TMC curve and increases the absolute floor support in the XYK pool, compressing the spread.
+
+## Related
+
+- [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+- [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
+- [Token Minting Curve](../overview/token-minting-curve.en.md)
+- [Axial Router](../overview/axial-router.en.md)
+- [Three-Layer Validation](../development/three-layer-validation.en.md)

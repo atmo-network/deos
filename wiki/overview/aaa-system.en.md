@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: AAA System
-summary: AAA is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors. The current contract keeps AAA portable because staking automation uses generic `Stake { asset, amount }` / `Unstake { asset, shares }`, while DEOS-native liquid staking, LP nomination, and custody policy live in runtime adapters and staking/governance pallets.
+summary: AAA is the Account Abstraction Actors system in DEOS — the pallet, scheduler, lifecycle rules, fee model, and deterministic execution environment that host individual actors while keeping domain logic in adapters and pallets.
 locale: en
 canonical_page_id: aaa-system
 translation_status: source
@@ -25,7 +25,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-04-25
+last_compiled: 2026-05-17
 confidence: 0.95
 ---
 
@@ -33,70 +33,53 @@ confidence: 0.95
 
 ## Summary
 
-`AAA` means `Account Abstraction Actors`. In DEOS, that names the whole runtime system: `pallet-aaa`, its scheduler, its lifecycle and fee rules, and the typed execution environment for bounded protocol flows.
+`AAA` means `Account Abstraction Actors`. In DEOS, it names the whole runtime system: `pallet-aaa`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
 
-An `AA-Actor` is one concrete instance inside that system. This page explains the system-level contract; the separate [AA-Actor](aa-actor.en.md) page explains the single-instance view.
+An [AA-Actor](aa-actor.en.md) is one concrete instance inside that system. This page explains the system-level contract.
 
-## What the System Provides
+## System Contract
 
-AAA gives the runtime one reusable way to run bounded execution plans instead of hardcoding every recurring flow into a dedicated pallet.
+AAA gives the runtime one reusable way to run bounded execution plans instead of hardcoding every recurring workflow into a dedicated pallet.
 
-The full picture has several parts at once: deterministic scheduling, bounded execution, explicit lifecycle and fee rules, and bounded reactions to events. In the DEOS model, actor balances can work like trigger messages: the arrival of specific assets on a specific actor account can be the thing that decides which execution plan should wake up and what economic action should happen next.
+At system level it provides:
 
-At a high level, the system provides:
+- Deterministic scheduling;
+- Balance/event-driven triggering;
+- Typed tasks such as transfer, swap, liquidity, burn, mint, stake, and unstake;
+- Lifecycle rules for pause, failure, auto-close, and manual close;
+- Separation between user-owned actors and governance-owned System actors;
+- Adapter boundaries so AAA orchestrates runtime mechanics without owning DEX, staking, or asset logic.
 
-- Deterministic scheduling
-- Event-driven triggering, especially through balance ingress
-- Typed tasks such as transfer, swap, liquidity actions, burn, mint, and staking
-- Explicit lifecycle rules for pause, failure, auto-close, and manual close
-- A split between user-owned actors and governance-owned system actors
-- Adapter boundaries so AAA can orchestrate runtime mechanics without embedding DEX, staking, or asset logic directly
+Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan.
 
 ## Portability Boundary
 
-The current AAA staking contract is intentionally generic:
+The current staking contract is intentionally generic:
 
 ```text
 Task::Stake { asset, amount }
 Task::Unstake { asset, shares }
 ```
 
-AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic stake means for the chain. In DEOS, the runtime adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
+AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic stake means for the chain. In DEOS, the adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
 
 This keeps AAA useful outside one tokenomic configuration.
 
-## System vs Actor
+## Current DEOS Role
 
-The distinction matters:
+On the current reference line, AAA is the execution substrate for runtime-side protocol behavior: burning, liquidity provisioning, treasury splitting, bucket handling, BLDR lane flows, and native staking LP provisioning.
 
-- `AAA` = the system, pallet, scheduler, and all actors together
-- `AA-Actor` = one bounded runtime instance inside that system
+The shipped runtime provisions System actors at genesis, plus one deterministic fee-sink address. Native staking LP provisioning starts dormant and can activate only after the native staking receipt, staking pool, actor, and non-empty `NTVE/stNTVE` AMM are ready.
 
-That is why DEOS can talk about AAA as infrastructure while still talking about many different actors with different jobs.
+AAA does not replace TMC, Axial Router, staking, or governance. Those subsystems own math and domain rules. AAA gives them a deterministic way to be orchestrated together.
 
-## Current Role in DEOS
+## Why It Exists
 
-On the current reference line, AAA is the execution substrate for runtime-side protocol behavior. It is how DEOS expresses burning, liquidity provisioning, treasury splitting, bucket handling, and other bounded economic reactions.
+Without AAA, recurring economic workflows would keep becoming bespoke pallet logic. AAA makes those workflows explicit, bounded, governable, and composable as typed actor graphs.
 
-Some of those reactions are timer-driven. Others are balance-driven: an asset arriving on an actor account can function like a message that triggers the next bounded step. That is one of the most important ideas in the system.
+One actor's balance outflow can become another actor's trigger message. Larger protocol behavior can therefore emerge from small bounded parts while still running inside deterministic scheduling and execution limits.
 
-The math and domain rules live in subsystem contracts such as TMC, the Axial Router, staking, and governance. AAA does not replace those subsystems. It gives them a deterministic way to be orchestrated together.
-
-## Current System Topology
-
-The shipped DEOS runtime provisions System actors at genesis, plus one reserved deterministic fee-sink address. The current System actor set includes burning, Zap/liquidity, TOL bucket, treasury, BLDR lane, and Native Staking LP Farmer roles.
-
-The Native Staking LP Farmer starts as a guarded skeleton. It can only be activated after the native staking receipt, staking pool, actor, and non-empty `NTVE/stNTVE` AMM are ready.
-
-## Why the System Exists
-
-Without AAA, the runtime would have to keep adding more bespoke pallet logic for every recurring economic workflow. AAA makes those workflows explicit, bounded, and governable through execution plans, scheduler semantics, lifecycle rules, and trigger semantics.
-
-One important effect appears when actor graphs are composed. One actor's balance outflow can become another actor's trigger message, and chains of such reactions can produce larger protocol behavior from small bounded parts. But that graph composition still runs inside the same deterministic scheduler and bounded execution contract.
-
-Within the existing task and adapter language, this shifts a large class of protocol evolution from runtime rewrites into on-chain actor-graph reconfiguration. Runtime upgrades are still needed for new primitives, adapter surfaces, or safety invariants, but many workflow and topology changes can stay at the configuration layer.
-
-That keeps the kernel smaller and keeps more protocol behavior visible as typed automation instead of hidden glue code.
+Within the existing task and adapter language, many workflow/topology changes can move from runtime rewrites into on-chain actor-graph configuration. Runtime upgrades remain necessary for new primitives, adapter surfaces, or safety invariants.
 
 ## Related
 
@@ -105,9 +88,3 @@ That keeps the kernel smaller and keeps more protocol behavior visible as typed 
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Governance Overview](governance-overview.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/aaa.specification.en.md`
-- `docs/aaa.architecture.en.md`
-- `docs/core.architecture.en.md`

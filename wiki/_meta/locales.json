@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-16",
+  "generated_at": "2026-05-17",
   "default_locale": "en",
   "supported_locales": [
     "en",
@@ -9,10 +9,6 @@
     "index": {
       "en": "index.en.md",
       "ru": "index.ru.md"
-    },
-    "log": {
-      "en": "log.en.md",
-      "ru": "log.ru.md"
     }
   },
   "metadata": {
@@ -70,6 +66,10 @@
       "en": "getting-started/first-steps.en.md",
       "ru": "getting-started/first-steps.ru.md"
     },
+    "reading-paths": {
+      "en": "getting-started/reading-paths.en.md",
+      "ru": "getting-started/reading-paths.ru.md"
+    },
     "tmctol-standard": {
       "en": "concepts/tmctol-standard.en.md",
       "ru": "concepts/tmctol-standard.ru.md"
@@ -93,6 +93,18 @@
     "governance-domains": {
       "en": "concepts/governance-domains.en.md",
       "ru": "concepts/governance-domains.ru.md"
+    },
+    "ui-kit-and-domain-dag": {
+      "en": "concepts/ui-kit-and-domain-dag.en.md",
+      "ru": "concepts/ui-kit-and-domain-dag.ru.md"
+    },
+    "generated-wiki": {
+      "en": "concepts/generated-wiki.en.md",
+      "ru": "concepts/generated-wiki.ru.md"
+    },
+    "domain-map": {
+      "en": "concepts/domain-map.en.md",
+      "ru": "concepts/domain-map.ru.md"
     },
     "physics-vs-politics": {
       "en": "comparisons/physics-vs-politics.en.md",
@@ -133,6 +145,90 @@
     "status": {
       "en": "development/status.en.md",
       "ru": "development/status.ru.md"
+    },
+    "end-to-end-flows": {
+      "en": "concepts/end-to-end-flows.en.md",
+      "ru": "concepts/end-to-end-flows.ru.md"
+    },
+    "architecture-diagrams": {
+      "en": "concepts/architecture-diagrams.en.md",
+      "ru": "concepts/architecture-diagrams.ru.md"
+    },
+    "token-surfaces": {
+      "en": "concepts/token-surfaces.en.md",
+      "ru": "concepts/token-surfaces.ru.md"
+    },
+    "economic-thresholds": {
+      "en": "concepts/economic-thresholds.en.md",
+      "ru": "concepts/economic-thresholds.ru.md"
+    },
+    "forking-deos": {
+      "en": "usage/forking-deos.en.md",
+      "ru": "usage/forking-deos.ru.md"
+    },
+    "validation-troubleshooting": {
+      "en": "usage/validation-troubleshooting.en.md",
+      "ru": "usage/validation-troubleshooting.ru.md"
+    },
+    "agent-coordination": {
+      "en": "usage/agent-coordination.en.md",
+      "ru": "usage/agent-coordination.ru.md"
+    },
+    "parachain-context": {
+      "en": "concepts/parachain-context.en.md",
+      "ru": "concepts/parachain-context.ru.md"
+    },
+    "tol-bucket-scenarios": {
+      "en": "concepts/tol-bucket-scenarios.en.md",
+      "ru": "concepts/tol-bucket-scenarios.ru.md"
+    },
+    "wiki-graph-metadata": {
+      "en": "usage/wiki-graph-metadata.en.md",
+      "ru": "usage/wiki-graph-metadata.ru.md"
+    },
+    "invariant-map": {
+      "en": "concepts/invariant-map.en.md",
+      "ru": "concepts/invariant-map.ru.md"
+    },
+    "threat-model": {
+      "en": "concepts/threat-model.en.md",
+      "ru": "concepts/threat-model.ru.md"
+    },
+    "what-deos-is-not": {
+      "en": "concepts/what-deos-is-not.en.md",
+      "ru": "concepts/what-deos-is-not.ru.md"
+    },
+    "economic-claim-levels": {
+      "en": "concepts/economic-claim-levels.en.md",
+      "ru": "concepts/economic-claim-levels.ru.md"
+    },
+    "minimal-fork-profile": {
+      "en": "usage/minimal-fork-profile.en.md",
+      "ru": "usage/minimal-fork-profile.ru.md"
+    },
+    "deos-in-60-seconds": {
+      "en": "getting-started/deos-in-60-seconds.en.md",
+      "ru": "getting-started/deos-in-60-seconds.ru.md"
+    },
+    "who-deos-is-for": {
+      "en": "getting-started/who-deos-is-for.en.md",
+      "ru": "getting-started/who-deos-is-for.ru.md"
+    },
+    "partner-pitch": {
+      "en": "getting-started/partner-pitch.en.md",
+      "ru": "getting-started/partner-pitch.ru.md"
+    },
+    "deos-vs-dao-treasury": {
+      "en": "comparisons/deos-vs-dao-treasury.en.md",
+      "ru": "comparisons/deos-vs-dao-treasury.ru.md"
+    },
+    "executive-summary": {
+      "en": "getting-started/executive-summary.en.md",
+      "ru": "getting-started/executive-summary.ru.md"
+    },
+    "partner-evaluation-route": {
+      "en": "usage/partner-evaluation-route.en.md",
+      "ru": "usage/partner-evaluation-route.ru.md"
     }
   },
   "localization_strategy": {

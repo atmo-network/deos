@@ -69,8 +69,3 @@ confidence: 0.91
 - [Пулы стейкинга](../concepts/staking-pools.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)
-
-## Источники
-
-- `docs/asset-registry.architecture.en.md`
-- `docs/core.architecture.en.md`

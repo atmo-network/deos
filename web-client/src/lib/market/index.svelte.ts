@@ -1,17 +1,19 @@
-import type { Adapter } from "$lib/adapters/types";
-import { toFloat } from "$lib/shared/format";
+/*
+Domain: Market store
+Owns: Swap quote/session state, market projections, runtime market refresh, and derived price/TOL views.
+Excludes: Adapter transport implementation, wallet custody, layout state, and widget presentation.
+Zone: Market state slice; may depend on adapter contract, read-model provenance, and UI formatting helpers.
+*/
+import type { Adapter } from '$lib/adapters/contract';
+import { PRECISION } from '$lib/economics';
+import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
 import {
+  type ReadModelValue,
   fromRuntimeView,
   fromSessionDerivedChain,
-  type ReadModelValue,
-} from "$lib/shared/read-model";
-import { PRECISION } from "$lib/shared/types";
-import type {
-  PricePoint,
-  Quote,
-  SwapResult,
-  SystemSnapshot,
-} from "$lib/shared/types";
+} from '$lib/read-model';
+import type { SystemSnapshot } from '$lib/system/types';
+import { toFloat } from '$lib/ui/format';
 
 const PROBE_AMOUNT = 100n * PRECISION;
 
@@ -22,7 +24,7 @@ type MarketBridge = {
 };
 
 class MarketStore {
-  direction: "buy" | "sell" = $state("buy");
+  direction: 'buy' | 'sell' = $state('buy');
   history: PricePoint[] = $state([]);
   historyView: ReadModelValue<PricePoint[]> | null = $state(null);
   quoteView: ReadModelValue<Quote> | null = $state(null);
@@ -34,7 +36,7 @@ class MarketStore {
   }
 
   reset() {
-    this.direction = "buy";
+    this.direction = 'buy';
     this.history = [];
     this.historyView = null;
     this.quoteView = null;
@@ -57,7 +59,8 @@ class MarketStore {
     }
     const lastPoint = this.history.at(-1) ?? null;
     const blockNumber = snapshot.blockNumber;
-    const step = blockNumber ?? (lastPoint ? lastPoint.step + 1 : this.history.length);
+    const step =
+      blockNumber ?? (lastPoint ? lastPoint.step + 1 : this.history.length);
 
     let pEffTMC = 0;
     try {
@@ -68,7 +71,7 @@ class MarketStore {
     const pXYK = snapshot.priceXyk ? toFloat(snapshot.priceXyk) : 0;
 
     let priceRouter: number | null = null;
-    let routeRouter: "TMC" | "XYK" | null = null;
+    let routeRouter: 'TMC' | 'XYK' | null = null;
     try {
       const probeRouter = PROBE_AMOUNT;
       const quoteBuy = await adapter.getQuoteBuy(probeRouter);
@@ -97,29 +100,35 @@ class MarketStore {
     this.history = nextHistory;
     this.historyView = fromSessionDerivedChain(
       nextHistory,
-      "bounded-block-sampler",
-      "marketStore.syncHistory",
-      "bounded-recent",
+      'bounded-block-sampler',
+      'marketStore.syncHistory',
+      'bounded-recent',
       {
         asOfBlock: blockNumber ?? undefined,
       },
     );
   }
 
-  async buyNative(foreignAmount: bigint, slippageBps?: number): Promise<SwapResult> {
+  async buyNative(
+    foreignAmount: bigint,
+    slippageBps?: number,
+  ): Promise<SwapResult> {
     const adapter = this.adapter();
     if (!adapter || !this.bridge) {
-      throw new Error("Market bridge not initialized");
+      throw new Error('Market bridge not initialized');
     }
     const result = await adapter.buyNative(foreignAmount, slippageBps);
     await this.bridge.refreshSystem();
     return result;
   }
 
-  async sellNative(nativeAmount: bigint, slippageBps?: number): Promise<SwapResult> {
+  async sellNative(
+    nativeAmount: bigint,
+    slippageBps?: number,
+  ): Promise<SwapResult> {
     const adapter = this.adapter();
     if (!adapter || !this.bridge) {
-      throw new Error("Market bridge not initialized");
+      throw new Error('Market bridge not initialized');
     }
     const result = await adapter.sellNative(nativeAmount, slippageBps);
     await this.bridge.refreshSystem();
@@ -137,7 +146,7 @@ class MarketStore {
       const quote = await adapter.getQuoteBuy(foreignAmount);
       if (requestId === this.quoteRequestId) {
         this.quoteView = quote
-          ? fromRuntimeView(quote, "AxialRouter.quote_exact_input", {
+          ? fromRuntimeView(quote, 'AxialRouter.quote_exact_input', {
               asOfBlock: this.snapshot()?.blockNumber ?? undefined,
             })
           : null;
@@ -162,7 +171,7 @@ class MarketStore {
       const quote = await adapter.getQuoteSell(nativeAmount);
       if (requestId === this.quoteRequestId) {
         this.quoteView = quote
-          ? fromRuntimeView(quote, "AxialRouter.quote_exact_input", {
+          ? fromRuntimeView(quote, 'AxialRouter.quote_exact_input', {
               asOfBlock: this.snapshot()?.blockNumber ?? undefined,
             })
           : null;
@@ -177,7 +186,7 @@ class MarketStore {
   }
 
   flipDirection() {
-    this.direction = this.direction === "buy" ? "sell" : "buy";
+    this.direction = this.direction === 'buy' ? 'sell' : 'buy';
   }
 }
 

@@ -1,7 +1,13 @@
+/*
+Domain: Governance store
+Owns: Governance query/write state, proposal drafts, vote/preimage flows, and provider-backed refresh lifecycle.
+Excludes: Adapter RPC internals, wallet signer custody, layout state, and reusable UI primitives.
+Zone: Governance state slice; composes governance provider contracts with local session/draft state.
+*/
 import {
-  GovernanceUnavailableBlockchainProvider,
   type GovernanceBlockchainProvider,
-} from "$lib/adapters/governance/provider";
+  GovernanceUnavailableBlockchainProvider,
+} from '$lib/adapters/governance/provider';
 import type {
   GovernanceAdapter,
   GovernancePrimaryTrackOption,
@@ -9,28 +15,29 @@ import type {
   GovernanceProposalExecutionDetail,
   GovernanceProposalPayloadKind,
   GovernanceVoteKind,
-} from "$lib/governance";
+} from '$lib/governance';
 import {
   getGovernanceDomainId,
   setGovernanceDomainId,
-} from "$lib/governance/session";
-import { logStore } from "$lib/log/index.svelte";
-import { fromClientBoundedProjection } from "$lib/shared/read-model";
+} from '$lib/governance/session';
+import { logStore } from '$lib/log/index.svelte';
+import { fromClientBoundedProjection } from '$lib/read-model';
 import {
   getBlockchainEndpoint,
   setBlockchainEndpoint,
-} from "$lib/system/endpoint";
-import { walletStore } from "$lib/wallet/index.svelte";
+} from '$lib/system/endpoint';
+import { walletStore } from '$lib/wallet/index.svelte';
+
 import type {
   GovernancePanelProposal,
   GovernancePublicSubmissionOption,
   GovernanceRetainedFinalizedProposal,
   GovernanceViewerState,
-} from "./types";
+} from './types';
 
 const DEFAULT_ACCOUNT_ID = walletStore.selectedAddress;
 const DEFAULT_BLOCKCHAIN_PROVIDER = new GovernanceUnavailableBlockchainProvider(
-  "Governance provider not initialized yet",
+  'Governance provider not initialized yet',
 );
 
 function buildGovernanceAdapter(
@@ -41,11 +48,11 @@ function buildGovernanceAdapter(
 
 const DEFAULT_ADAPTER = buildGovernanceAdapter(DEFAULT_BLOCKCHAIN_PROVIDER);
 const PUBLIC_SUBMISSION_PAYLOAD_KINDS: GovernanceProposalPayloadKind[] = [
-  "Intent",
-  "L2SignalToL1",
-  "L1RootAction",
-  "L2TreasurySpend",
-  "L2ParameterChange",
+  'Intent',
+  'L2SignalToL1',
+  'L1RootAction',
+  'L2TreasurySpend',
+  'L2ParameterChange',
 ];
 
 async function loadPublicSubmissionOptions(
@@ -63,7 +70,7 @@ async function loadPublicSubmissionOptions(
     })),
   );
   return entries
-    .filter((entry) => entry.authority === "Signed")
+    .filter((entry) => entry.authority === 'Signed')
     .map((entry) => ({
       payloadKind: entry.payloadKind,
       openingFee: entry.openingFee,
@@ -134,13 +141,13 @@ async function loadProposal(
     adapter.getProposalPrimaryTrackTally(domainId, itemId),
     adapter.getProposalTally(domainId, itemId),
     adapter.getAccountGovernancePowerView(domainId, itemId, accountId),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "aye"),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "nay"),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "amplify"),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "approve"),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "reduce"),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "veto"),
-    adapter.getProposalVotePowerProfile(domainId, itemId, "pass"),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'aye'),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'nay'),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'amplify'),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'approve'),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'reduce'),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'veto'),
+    adapter.getProposalVotePowerProfile(domainId, itemId, 'pass'),
   ]);
   return {
     itemId,
@@ -222,13 +229,13 @@ class GovernanceStore {
     if (normalizedEndpoint.length === 0) {
       this.setBlockchainProvider(
         new GovernanceUnavailableBlockchainProvider(
-          "No blockchain PAPI endpoint configured",
+          'No blockchain PAPI endpoint configured',
         ),
       );
       return;
     }
     const { GovernancePapiProvider } =
-      await import("$lib/adapters/governance/papi");
+      await import('$lib/adapters/governance/papi');
     if (this.state.endpoint.trim() !== normalizedEndpoint) {
       return;
     }
@@ -265,7 +272,7 @@ class GovernanceStore {
 
   private recordWriteError(message: string) {
     this.state.writeError = message;
-    logStore.add(message, "error", {
+    logStore.add(message, 'error', {
       blockNumber: null,
     });
   }
@@ -291,7 +298,7 @@ class GovernanceStore {
       this.state.providerState = this.adapter.getProviderState();
       this.state.writeSurfaceAvailability =
         this.adapter.getWriteSurfaceAvailability(this.state.accountId);
-      if (this.state.providerState.status !== "connected") {
+      if (this.state.providerState.status !== 'connected') {
         this.clearReadState();
         return;
       }
@@ -318,7 +325,12 @@ class GovernanceStore {
       ]);
       const activeProposals = await Promise.all(
         activeProposalIds.map((itemId) =>
-          loadProposal(this.adapter, this.state.domainId, itemId, this.state.accountId),
+          loadProposal(
+            this.adapter,
+            this.state.domainId,
+            itemId,
+            this.state.accountId,
+          ),
         ),
       );
       const recentRetainedDetails = await Promise.all(
@@ -395,8 +407,8 @@ class GovernanceStore {
       this.state.recentFinalizedProposals = recentFinalizedWithDetail;
       this.state.recentFinalizedProposalsView = fromClientBoundedProjection(
         recentFinalizedWithDetail,
-        "governanceStore.recentFinalizedProposals <- Governance.recent_finalized_proposals + Governance.proposal_metadata + Governance.proposal_execution_authority + Governance.proposal_payload_availability + Governance.proposal_execution_detail + Governance.retained_proposal_winning_primary_option",
-        "bounded-recent",
+        'governanceStore.recentFinalizedProposals <- Governance.recent_finalized_proposals + Governance.proposal_metadata + Governance.proposal_execution_authority + Governance.proposal_payload_availability + Governance.proposal_execution_detail + Governance.retained_proposal_winning_primary_option',
+        'bounded-recent',
       );
       this.state.rewardCoefficient = rewardCoefficient;
       this.state.govxpCounters = govxpCounters;
@@ -405,7 +417,7 @@ class GovernanceStore {
       this.state.error =
         error instanceof Error
           ? error.message
-          : "Unknown governance adapter error";
+          : 'Unknown governance adapter error';
     } finally {
       this.state.loading = false;
     }
@@ -438,7 +450,7 @@ class GovernanceStore {
           itemId,
           voteKind,
         }),
-      "Unknown governance vote error",
+      'Unknown governance vote error',
     );
   }
 
@@ -452,13 +464,13 @@ class GovernanceStore {
 
   async submitProposal(input: {
     itemId: number;
-    cadenceMode: "Ordinary" | "Fast";
+    cadenceMode: 'Ordinary' | 'Fast';
     payloadKind:
-      | "L1RootAction"
-      | "L2TreasurySpend"
-      | "L2ParameterChange"
-      | "Intent"
-      | "L2SignalToL1";
+      | 'L1RootAction'
+      | 'L2TreasurySpend'
+      | 'L2ParameterChange'
+      | 'Intent'
+      | 'L2SignalToL1';
     payloadHash: string;
   }) {
     await this.runWrite(
@@ -471,7 +483,7 @@ class GovernanceStore {
           payloadKind: input.payloadKind,
           payloadHash: input.payloadHash,
         }),
-      "Unknown governance proposal submission error",
+      'Unknown governance proposal submission error',
     );
   }
 
@@ -482,7 +494,7 @@ class GovernanceStore {
           accountId: walletStore.selectedAddress,
           payloadBytes,
         }),
-      "Unknown governance preimage note error",
+      'Unknown governance preimage note error',
     );
   }
 
@@ -493,7 +505,7 @@ class GovernanceStore {
           domainId: this.state.domainId,
           itemId,
         }),
-      "Unknown governance proposal rejection error",
+      'Unknown governance proposal rejection error',
     );
   }
 
@@ -505,7 +517,7 @@ class GovernanceStore {
           itemId,
           winners,
         }),
-      "Unknown governance proposal resolution error",
+      'Unknown governance proposal resolution error',
     );
   }
 
@@ -516,7 +528,7 @@ class GovernanceStore {
           domainId: this.state.domainId,
           itemId,
         }),
-      "Unknown governance vote resolution error",
+      'Unknown governance vote resolution error',
     );
   }
 
@@ -527,7 +539,7 @@ class GovernanceStore {
           domainId: this.state.domainId,
           itemId,
         }),
-      "Unknown forced governance vote resolution error",
+      'Unknown forced governance vote resolution error',
     );
   }
 
@@ -538,7 +550,7 @@ class GovernanceStore {
           domainId: this.state.domainId,
           itemId,
         }),
-      "Unknown governance requeue error",
+      'Unknown governance requeue error',
     );
   }
 }

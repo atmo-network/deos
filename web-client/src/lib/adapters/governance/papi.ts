@@ -1,15 +1,10 @@
-import { Enum as PapiEnum, type Enum as PapiRuntimeEnum } from "polkadot-api";
-
-import type {
-  DeosChainSnapshot,
-  DeosPapiConnection,
-} from "../blockchain/deos";
-import {
-  connectDeosSigner,
-  DEFAULT_DEOS_DAPP_NAME,
-  hasBuiltInDevSigner,
-  injectedSignerAvailability,
-} from "../blockchain/signer";
+/*
+Domain: Governance PAPI adapter
+Owns: Typed governance runtime queries, write calls, payload/preimage RPC bridging, and PAPI-backed provider behavior.
+Excludes: Governance store state, mock fixture behavior, wallet account selection, and widget presentation.
+Zone: Concrete governance adapter implementation; consumes blockchain transport and governance contracts.
+*/
+import { Enum as PapiEnum, type Enum as PapiRuntimeEnum } from 'polkadot-api';
 
 import type {
   GovernanceAccountId,
@@ -50,13 +45,22 @@ import type {
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
-} from "$lib/governance";
+} from '$lib/governance';
 import {
-  buildWriteSurfaceAvailability,
   DEFAULT_GOVERNANCE_WS_ENDPOINT,
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
-} from "$lib/governance";
-import type { GovernanceBlockchainProvider } from "./provider";
+  buildWriteSurfaceAvailability,
+} from '$lib/governance';
+import {
+  DEFAULT_DEOS_DAPP_NAME,
+  connectDeosSigner,
+  hasBuiltInDevSigner,
+  injectedSignerAvailability,
+} from '$lib/wallet/signer';
+
+import type { GovernanceBlockchainProvider } from './provider';
+
+import type { DeosChainSnapshot, DeosPapiConnection } from '../blockchain/deos';
 
 const FIXED_U128_SCALE = 10n ** 18n;
 
@@ -81,10 +85,10 @@ function unavailableWriteSurface(
 
 function fixedU128String(value: bigint): GovernanceRewardCoefficient {
   if (value <= 0n) {
-    return "0.000000000000000000";
+    return '0.000000000000000000';
   }
   const whole = value / FIXED_U128_SCALE;
-  const fraction = (value % FIXED_U128_SCALE).toString().padStart(18, "0");
+  const fraction = (value % FIXED_U128_SCALE).toString().padStart(18, '0');
   return `${whole}.${fraction}`;
 }
 
@@ -104,43 +108,45 @@ function mapVotePowerProfile(
     return null;
   }
   switch (profile.type) {
-    case "DecliningDirectStake":
-    case "DecliningVetoAsset":
-    case "DecliningNativeStake":
-    case "FlatUrgentDirectStake":
+    case 'DecliningDirectStake':
+    case 'DecliningVetoAsset':
+    case 'DecliningNativeStake':
+    case 'FlatUrgentDirectStake':
       return profile.type;
-    case "ConstantProtectedActor":
-    case "ProxyGovernedActor":
+    case 'ConstantProtectedActor':
+    case 'ProxyGovernedActor':
       return null;
   }
 }
 
 function mapProposalVoteKind(
-  voteKind: GovernanceEnum<{
-    Aye: undefined;
-    Nay: undefined;
-    Amplify: undefined;
-    Approve: undefined;
-    Reduce: undefined;
-    Veto: undefined;
-    Pass: undefined;
-  }> | undefined,
+  voteKind:
+    | GovernanceEnum<{
+        Aye: undefined;
+        Nay: undefined;
+        Amplify: undefined;
+        Approve: undefined;
+        Reduce: undefined;
+        Veto: undefined;
+        Pass: undefined;
+      }>
+    | undefined,
 ): GovernanceVoteKind | null {
   switch (voteKind?.type) {
-    case "Aye":
-      return "aye";
-    case "Nay":
-      return "nay";
-    case "Amplify":
-      return "amplify";
-    case "Approve":
-      return "approve";
-    case "Reduce":
-      return "reduce";
-    case "Veto":
-      return "veto";
-    case "Pass":
-      return "pass";
+    case 'Aye':
+      return 'aye';
+    case 'Nay':
+      return 'nay';
+    case 'Amplify':
+      return 'amplify';
+    case 'Approve':
+      return 'approve';
+    case 'Reduce':
+      return 'reduce';
+    case 'Veto':
+      return 'veto';
+    case 'Pass':
+      return 'pass';
     default:
       return null;
   }
@@ -148,20 +154,20 @@ function mapProposalVoteKind(
 
 function proposalVoteKindEnum(voteKind: GovernanceVoteKind) {
   switch (voteKind) {
-    case "aye":
-      return PapiEnum("Aye");
-    case "nay":
-      return PapiEnum("Nay");
-    case "amplify":
-      return PapiEnum("Amplify");
-    case "approve":
-      return PapiEnum("Approve");
-    case "reduce":
-      return PapiEnum("Reduce");
-    case "veto":
-      return PapiEnum("Veto");
-    case "pass":
-      return PapiEnum("Pass");
+    case 'aye':
+      return PapiEnum('Aye');
+    case 'nay':
+      return PapiEnum('Nay');
+    case 'amplify':
+      return PapiEnum('Amplify');
+    case 'approve':
+      return PapiEnum('Approve');
+    case 'reduce':
+      return PapiEnum('Reduce');
+    case 'veto':
+      return PapiEnum('Veto');
+    case 'pass':
+      return PapiEnum('Pass');
   }
 }
 
@@ -171,8 +177,8 @@ function papiWriteSurfaceAvailability(options: {
   adminReason: string;
 }): GovernanceWriteSurfaceAvailability {
   const signedStatus = options.signedWriteAvailable
-    ? "available"
-    : "unavailable";
+    ? 'available'
+    : 'unavailable';
   return buildWriteSurfaceAvailability({
     castVote: {
       providerStatus: signedStatus,
@@ -204,11 +210,11 @@ function mapRejectionReason(
   }>,
 ): GovernanceProposalRejectionReason {
   switch (reason.type) {
-    case "AdminRejected":
-    case "NoVotes":
-    case "VoteTie":
-    case "TurnoutBelowMinimum":
-    case "ApprovalThresholdNotMet":
+    case 'AdminRejected':
+    case 'NoVotes':
+    case 'VoteTie':
+    case 'TurnoutBelowMinimum':
+    case 'ApprovalThresholdNotMet':
       return reason.type;
   }
 }
@@ -220,8 +226,8 @@ function mapVetoCancellationMode(
   }>,
 ): GovernanceVetoCancellationMode {
   switch (mode.type) {
-    case "ImmediateThreshold":
-    case "TrackOutcome":
+    case 'ImmediateThreshold':
+    case 'TrackOutcome':
       return mode.type;
   }
 }
@@ -405,21 +411,21 @@ function mapProposalExecutionSuccessDetail(
   }>,
 ): GovernanceProposalExecutionSuccessDetail {
   switch (detail.type) {
-    case "Generic":
-      return { kind: "Generic" };
-    case "RuntimeUpgradeAuthorized":
+    case 'Generic':
+      return { kind: 'Generic' };
+    case 'RuntimeUpgradeAuthorized':
       return {
-        kind: "RuntimeUpgradeAuthorized",
+        kind: 'RuntimeUpgradeAuthorized',
         codeHash: detail.value.code_hash,
       };
-    case "ParameterChangeExecuted":
+    case 'ParameterChangeExecuted':
       return {
-        kind: "ParameterChangeExecuted",
+        kind: 'ParameterChangeExecuted',
         surface: mapProposalParameterChangeSurface(detail.value.surface),
       };
-    case "TreasurySpendExecuted":
+    case 'TreasurySpendExecuted':
       return {
-        kind: "TreasurySpendExecuted",
+        kind: 'TreasurySpendExecuted',
         fundingSource: detail.value.funding_source,
         beneficiary: detail.value.beneficiary,
         payoutAsset: detail.value.payout_asset,
@@ -521,25 +527,25 @@ function mapProposalExecutionDetail(
     return null;
   }
   switch (detail.type) {
-    case "Executed":
+    case 'Executed':
       return {
-        kind: "Executed",
+        kind: 'Executed',
         payloadKind: mapProposalPayloadKind(detail.value.payload_kind),
         authority: mapProposalExecutionAuthority(detail.value.authority),
         executedEpoch: detail.value.executed_epoch,
         detail: mapProposalExecutionSuccessDetail(detail.value.detail),
       };
-    case "ExecutionFailed":
+    case 'ExecutionFailed':
       return {
-        kind: "ExecutionFailed",
+        kind: 'ExecutionFailed',
         payloadKind: mapProposalPayloadKind(detail.value.payload_kind),
         authority: mapProposalExecutionAuthority(detail.value.authority),
         failedEpoch: detail.value.failed_epoch,
         reason: mapProposalExecutionFailureReason(detail.value.reason),
       };
-    case "AdvisoryFinalized":
+    case 'AdvisoryFinalized':
       return {
-        kind: "AdvisoryFinalized",
+        kind: 'AdvisoryFinalized',
         payloadKind: mapProposalPayloadKind(detail.value.payload_kind),
         finalizedEpoch: detail.value.finalized_epoch,
       };
@@ -584,41 +590,41 @@ function mapFinalizedProposalOutcome(
   }>,
 ): GovernanceFinalizedProposalOutcome {
   switch (outcome.type) {
-    case "Resolved":
+    case 'Resolved':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: outcome.value.epoch,
         winnerCount: outcome.value.winner_count,
       };
-    case "Rejected":
+    case 'Rejected':
       return {
-        kind: "Rejected",
+        kind: 'Rejected',
         epoch: outcome.value.epoch,
         reason: mapRejectionReason(outcome.value.reason),
       };
-    case "VetoCancelled":
+    case 'VetoCancelled':
       return {
-        kind: "VetoCancelled",
+        kind: 'VetoCancelled',
         epoch: outcome.value.epoch,
         vetoWeight: outcome.value.veto_weight,
       };
-    case "Enacted":
+    case 'Enacted':
       return {
-        kind: "Enacted",
+        kind: 'Enacted',
         approvedEpoch: outcome.value.approved_epoch,
         executedEpoch: outcome.value.executed_epoch,
         winnerCount: outcome.value.winner_count,
       };
-    case "ExecutionFailed":
+    case 'ExecutionFailed':
       return {
-        kind: "ExecutionFailed",
+        kind: 'ExecutionFailed',
         approvedEpoch: outcome.value.approved_epoch,
         failedEpoch: outcome.value.failed_epoch,
         winnerCount: outcome.value.winner_count,
       };
-    case "AdvisoryFinalized":
+    case 'AdvisoryFinalized':
       return {
-        kind: "AdvisoryFinalized",
+        kind: 'AdvisoryFinalized',
         approvedEpoch: outcome.value.approved_epoch,
         finalizedEpoch: outcome.value.finalized_epoch,
         winnerCount: outcome.value.winner_count,
@@ -639,33 +645,31 @@ function mapProposalVoteTally(
         pass_weight: bigint;
         turnout_weight: bigint;
         veto_turnout_weight: bigint;
+        amplify_voters?: number;
+        approve_voters?: number;
+        reduce_voters?: number;
+        amplify_weight?: bigint;
+        approve_weight?: bigint;
+        reduce_weight?: bigint;
       }
     | undefined,
 ): GovernanceProposalVoteTally | null {
   if (!tally) {
     return null;
   }
-  const maybeExtended = tally as {
-    amplify_voters?: number;
-    approve_voters?: number;
-    reduce_voters?: number;
-    amplify_weight?: bigint;
-    approve_weight?: bigint;
-    reduce_weight?: bigint;
-  };
   return {
     ayeVoters: tally.aye_voters,
     nayVoters: tally.nay_voters,
-    amplifyVoters: maybeExtended.amplify_voters ?? 0,
-    approveVoters: maybeExtended.approve_voters ?? 0,
-    reduceVoters: maybeExtended.reduce_voters ?? 0,
+    amplifyVoters: tally.amplify_voters ?? 0,
+    approveVoters: tally.approve_voters ?? 0,
+    reduceVoters: tally.reduce_voters ?? 0,
     vetoVoters: tally.veto_voters,
     passVoters: tally.pass_voters,
     ayeWeight: tally.aye_weight,
     nayWeight: tally.nay_weight,
-    amplifyWeight: maybeExtended.amplify_weight ?? 0n,
-    approveWeight: maybeExtended.approve_weight ?? 0n,
-    reduceWeight: maybeExtended.reduce_weight ?? 0n,
+    amplifyWeight: tally.amplify_weight ?? 0n,
+    approveWeight: tally.approve_weight ?? 0n,
+    reduceWeight: tally.reduce_weight ?? 0n,
     vetoWeight: tally.veto_weight,
     passWeight: tally.pass_weight,
     turnoutWeight: tally.turnout_weight,
@@ -727,7 +731,9 @@ function mapAccountPowerView(
     return null;
   }
   const ordinaryPowerProfile = mapVotePowerProfile(view.ordinary_power_profile);
-  const protectionPowerProfile = mapVotePowerProfile(view.protection_power_profile);
+  const protectionPowerProfile = mapVotePowerProfile(
+    view.protection_power_profile,
+  );
   if (!ordinaryPowerProfile || !protectionPowerProfile) {
     return null;
   }
@@ -803,9 +809,9 @@ function mapProposalPrimaryTrackTally(
     return null;
   }
   switch (tally.type) {
-    case "Binary":
+    case 'Binary':
       return {
-        kind: "Binary",
+        kind: 'Binary',
         ayeVoters: tally.value.aye_voters,
         nayVoters: tally.value.nay_voters,
         ayeWeight: tally.value.aye_weight,
@@ -813,9 +819,9 @@ function mapProposalPrimaryTrackTally(
         turnoutWeight: tally.value.turnout_weight,
         leadingOption: mapPrimaryTrackOption(tally.value.leading_option),
       };
-    case "Invoice":
+    case 'Invoice':
       return {
-        kind: "Invoice",
+        kind: 'Invoice',
         amplifyVoters: tally.value.amplify_voters,
         approveVoters: tally.value.approve_voters,
         reduceVoters: tally.value.reduce_voters,
@@ -869,38 +875,38 @@ function mapProposalResolutionState(
   }>,
 ): GovernanceProposalResolutionState {
   switch (resolution.type) {
-    case "VotingWindowOpen":
+    case 'VotingWindowOpen':
       return {
-        kind: "VotingWindowOpen",
+        kind: 'VotingWindowOpen',
         currentEpoch: resolution.value.current_epoch,
         maturityEpoch: resolution.value.maturity_epoch,
       };
-    case "VetoPassing":
+    case 'VetoPassing':
       return {
-        kind: "VetoPassing",
+        kind: 'VetoPassing',
         vetoWeight: resolution.value.veto_weight,
         passWeight: resolution.value.pass_weight,
         mode: mapVetoCancellationMode(resolution.value.mode),
       };
-    case "PassingAye":
-      return { kind: "PassingAye" };
-    case "PassingAmplify":
-      return { kind: "PassingAmplify" };
-    case "PassingApprove":
-      return { kind: "PassingApprove" };
-    case "PassingReduce":
-      return { kind: "PassingReduce" };
-    case "PassingNay":
-      return { kind: "PassingNay" };
-    case "Confirming":
+    case 'PassingAye':
+      return { kind: 'PassingAye' };
+    case 'PassingAmplify':
+      return { kind: 'PassingAmplify' };
+    case 'PassingApprove':
+      return { kind: 'PassingApprove' };
+    case 'PassingReduce':
+      return { kind: 'PassingReduce' };
+    case 'PassingNay':
+      return { kind: 'PassingNay' };
+    case 'Confirming':
       return {
-        kind: "Confirming",
+        kind: 'Confirming',
         confirmStartedEpoch: resolution.value.confirm_started_epoch,
         confirmEndEpoch: resolution.value.confirm_end_epoch,
       };
-    case "Rejected":
+    case 'Rejected':
       return {
-        kind: "Rejected",
+        kind: 'Rejected',
         reason: mapRejectionReason(resolution.value.reason),
       };
   }
@@ -1021,20 +1027,20 @@ function mapProposalStatus(
     return null;
   }
   switch (status.type) {
-    case "Active":
+    case 'Active':
       return {
-        kind: "Active",
+        kind: 'Active',
         resolution: mapProposalResolutionState(status.value),
       };
-    case "PendingEnactment":
+    case 'PendingEnactment':
       return {
-        kind: "PendingEnactment",
+        kind: 'PendingEnactment',
         outcome: mapFinalizedProposalOutcome(status.value.outcome),
         enactmentEpoch: status.value.enactment_epoch,
       };
-    case "Finalized":
+    case 'Finalized':
       return {
-        kind: "Finalized",
+        kind: 'Finalized',
         outcome: mapFinalizedProposalOutcome(status.value),
       };
   }
@@ -1050,8 +1056,8 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
 
   private uninitializedProviderState(): GovernanceProviderState {
     return {
-      status: "unconfigured",
-      label: "Governance PAPI provider",
+      status: 'unconfigured',
+      label: 'Governance PAPI provider',
       endpoint: this.endpoint.trim().length > 0 ? this.endpoint.trim() : null,
       chainName: null,
       nodeName: null,
@@ -1059,7 +1065,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
       genesisHash: null,
       finalizedBlockHash: null,
       finalizedBlockNumber: null,
-      message: "Governance PAPI connection not checked yet",
+      message: 'Governance PAPI connection not checked yet',
     };
   }
 
@@ -1070,7 +1076,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     if (this.connectionLoading) {
       return this.connectionLoading;
     }
-    this.connectionLoading = import("../blockchain/deos").then(
+    this.connectionLoading = import('../blockchain/deos').then(
       ({ DeosPapiConnection }) => {
         const connection = new DeosPapiConnection(this.endpoint);
         this.connection = connection;
@@ -1084,13 +1090,13 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
   private governanceProviderState(): GovernanceProviderState {
     const state =
       this.connection?.connectionState() ?? this.uninitializedProviderState();
-    if (state.status !== "connected") {
+    if (state.status !== 'connected') {
       return state;
     }
     return {
       ...state,
       message:
-        "PAPI connected; live governance runtime views now provide canonical recent-finalized discovery, retained execution detail, proposal status/tally/profile, submission-authority, reward coefficient, and GovXP counter reads, cast_vote is available when the selected account matches either an injected wallet or a built-in local dev signer, materialized history stays external, and admin signing is not implemented yet",
+        'PAPI connected; live governance runtime views now provide canonical recent-finalized discovery, retained execution detail, proposal status/tally/profile, submission-authority, reward coefficient, and GovXP counter reads, cast_vote is available when the selected account matches either an injected wallet or a built-in local dev signer, materialized history stays external, and admin signing is not implemented yet',
     };
   }
 
@@ -1139,24 +1145,23 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     accountId?: string | null,
   ): GovernanceWriteSurfaceAvailability {
     const state = this.governanceProviderState();
-    if (state.status !== "connected") {
+    if (state.status !== 'connected') {
       return unavailableWriteSurface(
-        state.message ?? "PAPI provider unavailable",
+        state.message ?? 'PAPI provider unavailable',
       );
     }
     const signerSupport = injectedSignerAvailability();
     const isDevSigner = hasBuiltInDevSigner(accountId ?? null);
     return papiWriteSurfaceAvailability({
-      signedWriteAvailable:
-        signerSupport.status === "available" || isDevSigner,
+      signedWriteAvailable: signerSupport.status === 'available' || isDevSigner,
       signedWriteReason:
-        signerSupport.status === "available"
+        signerSupport.status === 'available'
           ? `${signerSupport.message}; signed governance writes are enabled when the selected account matches either an injected signer account or a built-in Zombienet dev identity`
           : isDevSigner
-            ? "Built-in Zombienet dev signer is active for the selected account; signed governance writes are available for local testing even without an injected extension"
+            ? 'Built-in Zombienet dev signer is active for the selected account; signed governance writes are available for local testing even without an injected extension'
             : `${signerSupport.message}; signed governance writes still work for built-in Zombienet dev identities, while custom addresses need a matching injected signer account`,
       adminReason:
-        "Runtime admin governance extrinsics remain unavailable in the browser provider until an explicit admin signing/origin flow exists",
+        'Runtime admin governance extrinsics remain unavailable in the browser provider until an explicit admin signing/origin flow exists',
     });
   }
 
@@ -1558,7 +1563,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
       input.domainId,
       input.payloadKind,
     );
-    if (authority !== "Signed") {
+    if (authority !== 'Signed') {
       throw new Error(
         `Browser submission currently supports only runtime-signed public proposal kinds; ${input.payloadKind} is still admin-only for domain ${input.domainId}.`,
       );
@@ -1617,7 +1622,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
     throw new Error(
-      "Browser-side admin governance extrinsic submission is not implemented yet",
+      'Browser-side admin governance extrinsic submission is not implemented yet',
     );
   }
 
@@ -1625,7 +1630,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
     throw new Error(
-      "Browser-side admin governance extrinsic submission is not implemented yet",
+      'Browser-side admin governance extrinsic submission is not implemented yet',
     );
   }
 
@@ -1633,7 +1638,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
     throw new Error(
-      "Browser-side admin governance extrinsic submission is not implemented yet",
+      'Browser-side admin governance extrinsic submission is not implemented yet',
     );
   }
 
@@ -1641,7 +1646,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
     throw new Error(
-      "Browser-side admin governance extrinsic submission is not implemented yet",
+      'Browser-side admin governance extrinsic submission is not implemented yet',
     );
   }
 
@@ -1649,7 +1654,7 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
     const connection = await this.ensureConnection();
     await connection.ensureConnected();
     throw new Error(
-      "Browser-side admin governance extrinsic submission is not implemented yet",
+      'Browser-side admin governance extrinsic submission is not implemented yet',
     );
   }
 }

@@ -1,19 +1,41 @@
+<!--
+Domain: Swap widget
+Owns: Swap form composition, quote display, route diagnostics, and swap execution controls.
+Excludes: Market store ownership, adapter transport, asset registry logic, and UI Kit primitive implementation.
+Zone: Presentation widget; consumes market/portfolio/system state and UI Kit without importing concrete chain internals.
+-->
 <script lang="ts">
-  import { Select } from "bits-ui";
-  import { ArrowUpDown, Check, ChevronDown } from "@lucide/svelte";
-  import { onMount } from "svelte";
+  import { ArrowUpDown } from '@lucide/svelte';
+  import { onMount } from 'svelte';
 
-  import { logStore } from "$lib/log/index.svelte";
-  import { marketStore } from "$lib/market/index.svelte";
-  import { portfolioStore } from "$lib/portfolio/index.svelte";
-  import type { ReadModelProvenance } from "$lib/shared/read-model";
-  import { systemStore } from "$lib/system/index.svelte";
-  import { walletStore } from "$lib/wallet/index.svelte";
-  import { fmt, fmtInputAmount, fmtOut, fmtPrice, toBigInt, toFloat } from "$lib/shared/format";
-  import type { Quote } from "$lib/shared/types";
-  import { Badge, Card, Notice, ReadModelBadge, StatCard } from "$lib/shared/ui";
+  import { logStore } from '$lib/log/index.svelte';
+  import { marketStore } from '$lib/market/index.svelte';
+  import type { Quote } from '$lib/market/types';
+  import { portfolioStore } from '$lib/portfolio/index.svelte';
+  import type { ReadModelProvenance } from '$lib/read-model';
+  import { systemStore } from '$lib/system/index.svelte';
+  import {
+    Badge,
+    Button,
+    Card,
+    IconButton,
+    Notice,
+    NumberInput,
+    ReadModelBadge,
+    RichSelect,
+    StatCard,
+  } from '$lib/ui';
+  import {
+    fmt,
+    fmtInputAmount,
+    fmtOut,
+    fmtPrice,
+    toBigInt,
+    toFloat,
+  } from '$lib/ui/format';
+  import { walletStore } from '$lib/wallet/index.svelte';
 
-  type SwapAssetValue = "native" | "foreign";
+  type SwapAssetValue = 'native' | 'foreign';
   type SwapAssetOption = {
     value: SwapAssetValue;
     badge: string;
@@ -24,6 +46,9 @@
   type SwapSelectItem = {
     value: string;
     label: string;
+    badge: string;
+    badgeClass: string;
+    detail: string;
   };
   type QuoteStatView = {
     label: string;
@@ -40,8 +65,6 @@
     items: SwapSelectItem[];
     label: string;
     onValueChange: (value: string) => void;
-    options: SwapAssetOption[];
-    selectedAsset: SwapAssetOption;
     selectedValue: SwapAssetValue;
     surfaceClass: string;
   };
@@ -71,24 +94,28 @@
     stats: QuoteStatView[];
     warnings: string[];
   };
+  type ParsedInputState = {
+    raw: number;
+    amount: bigint | null;
+  };
 
   const NATIVE_SWAP_FEE_HEADROOM = 100_000_000_000n;
 
   let rootEl = $state<HTMLDivElement | null>(null);
   let viewport = $state({ width: 0 });
-  let inputValue = $state("");
-  let slippagePercent = $state("0.50");
+  let inputValue = $state('');
+  let slippagePercent = $state('0.50');
   let submitting = $state(false);
   let currentQuote = $state<Quote | null>(null);
   let quoteLoading = $state(false);
   let quoteRequestId = 0;
 
   function nativeSymbol() {
-    return systemStore.snapshot?.nativeAsset.symbol ?? "NTVE";
+    return systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE';
   }
 
   function foreignSymbol() {
-    return systemStore.snapshot?.foreignAsset.symbol ?? "FOREIGN";
+    return systemStore.snapshot?.foreignAsset.symbol ?? 'FOREIGN';
   }
 
   function foreignAssetIsCanonical() {
@@ -106,26 +133,26 @@
   }
 
   function parseAssetValue(value: string): SwapAssetValue | null {
-    if (value === "native" || value === "foreign") {
+    if (value === 'native' || value === 'foreign') {
       return value;
     }
     return null;
   }
 
-  function nextDirectionForInput(value: SwapAssetValue): "buy" | "sell" {
-    return value === "foreign" ? "buy" : "sell";
+  function nextDirectionForInput(value: SwapAssetValue): 'buy' | 'sell' {
+    return value === 'foreign' ? 'buy' : 'sell';
   }
 
-  function nextDirectionForOutput(value: SwapAssetValue): "buy" | "sell" {
-    return value === "native" ? "buy" : "sell";
+  function nextDirectionForOutput(value: SwapAssetValue): 'buy' | 'sell' {
+    return value === 'native' ? 'buy' : 'sell';
   }
 
-  function applyDirection(nextDirection: "buy" | "sell") {
+  function applyDirection(nextDirection: 'buy' | 'sell') {
     if (marketStore.direction === nextDirection) {
       return;
     }
     marketStore.flipDirection();
-    inputValue = "";
+    inputValue = '';
   }
 
   function selectInputAsset(value: string) {
@@ -144,6 +171,11 @@
     applyDirection(nextDirectionForOutput(asset));
   }
 
+  function inputEventValue(event: Event) {
+    const target = event.currentTarget;
+    return target instanceof HTMLInputElement ? target.value : '';
+  }
+
   function updateInputValue(value: string) {
     inputValue = value;
   }
@@ -152,80 +184,72 @@
     slippagePercent = value;
   }
 
+  function toSwapSelectItem(asset: SwapAssetOption) {
+    return {
+      value: asset.value,
+      label: asset.label,
+      badge: asset.badge,
+      badgeClass: asset.badgeClass,
+      detail: `Balance: ${fmt(toFloat(asset.balance))}`,
+    };
+  }
+
   function flipTokens() {
-    applyDirection(marketStore.direction === "buy" ? "sell" : "buy");
+    applyDirection(marketStore.direction === 'buy' ? 'sell' : 'buy');
   }
 
   function setMax() {
     inputValue = fmtInputAmount(toFloat(safeInputBalance));
   }
 
-  const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
-  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-  const isBuy = $derived(marketStore.direction === "buy");
-  const inputAssetValue = $derived<SwapAssetValue>(isBuy ? "foreign" : "native");
-  const outputAssetValue = $derived<SwapAssetValue>(isBuy ? "native" : "foreign");
-  const inputSymbol = $derived(isBuy ? foreignSymbol() : nativeSymbol());
-  const outputSymbol = $derived(isBuy ? nativeSymbol() : foreignSymbol());
-  const inBalance = $derived(
-    isBuy ? portfolioStore.userBalance.foreign : portfolioStore.userBalance.native,
-  );
-  const outBalance = $derived(
-    isBuy ? portfolioStore.userBalance.native : portfolioStore.userBalance.foreign,
-  );
-  const safeInputBalance = $derived.by(() => {
+  function parseInputState(value: string) {
+    const raw = Number.parseFloat(value);
+    if (!Number.isFinite(raw) || raw <= 0) {
+      return { raw: 0, amount: null };
+    }
+    try {
+      return { raw, amount: toBigInt(raw) };
+    } catch {
+      return { raw, amount: null };
+    }
+  }
+
+  function assetOptionsValue() {
+    const nativeOption: SwapAssetOption = {
+      value: 'native',
+      badge: '◆',
+      badgeClass: 'bg-(--mono-green)/20 text-(--mono-green)',
+      balance: portfolioStore.userBalance.native,
+      label: nativeSymbol(),
+    };
+    const foreignOption: SwapAssetOption = {
+      value: 'foreign',
+      badge: String.fromCharCode(36),
+      badgeClass: 'bg-(--mono-orange)/20 text-(--mono-orange)',
+      balance: portfolioStore.userBalance.foreign,
+      label: foreignSymbol() + (foreignAssetIsCanonical() ? '' : '*'),
+    };
+    return [nativeOption, foreignOption];
+  }
+
+  function safeInputBalanceValue() {
     if (isBuy) {
       return inBalance;
     }
     return inBalance > NATIVE_SWAP_FEE_HEADROOM
       ? inBalance - NATIVE_SWAP_FEE_HEADROOM
       : 0n;
-  });
-  const fillMaxAvailable = $derived(safeInputBalance > 0n);
-  const assetOptions = $derived.by<SwapAssetOption[]>(() => [
-    {
-      value: "native",
-      badge: "◆",
-      badgeClass: "bg-(--mono-green)/20 text-(--mono-green)",
-      balance: portfolioStore.userBalance.native,
-      label: nativeSymbol(),
-    },
-    {
-      value: "foreign",
-      badge: "$",
-      badgeClass: "bg-(--mono-orange)/20 text-(--mono-orange)",
-      balance: portfolioStore.userBalance.foreign,
-      label: `${foreignSymbol()}${foreignAssetIsCanonical() ? "" : "*"}`,
-    },
-  ]);
-  const assetSelectItems = $derived.by<SwapSelectItem[]>(() =>
-    assetOptions.map((asset) => ({ value: asset.value, label: asset.label })),
-  );
-
-  function assetOption(value: SwapAssetValue): SwapAssetOption {
-    return assetOptions.find((asset) => asset.value === value) ?? assetOptions[0];
   }
 
-  const parsedInput = $derived.by(() => {
-    const raw = Number.parseFloat(inputValue);
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return { raw: 0, amount: null as bigint | null };
-    }
-    try {
-      return { raw, amount: toBigInt(raw) };
-    } catch {
-      return { raw, amount: null as bigint | null };
-    }
-  });
-  const slippageState = $derived.by(() => {
+  function slippageStateValue() {
     const raw = Number.parseFloat(slippagePercent);
     if (!Number.isFinite(raw)) {
       return {
         valid: false,
         percent: null,
         bps: null,
-        label: "—",
-        reason: "Enter slippage 0.01-50%",
+        label: '—',
+        reason: 'Enter slippage 0.01-50%',
       };
     }
     if (raw < 0.01 || raw > 50) {
@@ -234,7 +258,7 @@
         percent: raw,
         bps: null,
         label: `${raw}%`,
-        reason: "Slippage must stay between 0.01% and 50%",
+        reason: 'Slippage must stay between 0.01% and 50%',
       };
     }
     return {
@@ -244,37 +268,43 @@
       label: `${raw.toFixed(raw < 1 ? 2 : raw < 10 ? 1 : 0)}%`,
       reason: null,
     };
-  });
-  const buttonState = $derived.by(() => {
+  }
+
+  function buttonStateValue() {
     const snapshot = systemStore.snapshot;
     if (submitting) {
-      return { text: "Submitting swap...", disabled: true };
+      return { text: 'Submitting swap...', disabled: true };
     }
     if (!snapshot) {
-      return { text: "Waiting for chain state", disabled: true };
+      return { text: 'Waiting for chain state', disabled: true };
     }
     if (!snapshot.hasNativeCurve) {
-      return { text: "Native curve not bootstrapped", disabled: true };
+      return { text: 'Native curve not bootstrapped', disabled: true };
     }
     if (snapshot.trackedForeignAssetCount === 0) {
-      return { text: "No foreign collateral registered", disabled: true };
+      return { text: 'No foreign collateral registered', disabled: true };
     }
-    if (walletStore.state.signerStatus === "readonly") {
-      return { text: "Selected account is watch-only", disabled: true };
+    if (walletStore.state.signerStatus === 'readonly') {
+      return { text: 'Selected account is watch-only', disabled: true };
     }
-    if (walletStore.state.signerStatus !== "available") {
+    if (walletStore.state.signerStatus !== 'available') {
       return {
-        text: walletStore.state.signerMessage === "No injected wallet extension detected"
-          ? "No injected wallet extension detected"
-          : "Open the sidebar and connect a signer",
+        text:
+          walletStore.state.signerMessage ===
+          'No injected wallet extension detected'
+            ? 'No injected wallet extension detected'
+            : 'Open the sidebar and connect a signer',
         disabled: true,
       };
     }
     if (safeInputBalance === 0n) {
-      return { text: `No spendable ${inputSymbol} balance available`, disabled: true };
+      return {
+        text: `No spendable ${inputSymbol} balance available`,
+        disabled: true,
+      };
     }
     if (parsedInput.raw <= 0 || !parsedInput.amount) {
-      return { text: "Enter an amount", disabled: true };
+      return { text: 'Enter an amount', disabled: true };
     }
     if (!slippageState.valid) {
       return { text: slippageState.reason, disabled: true };
@@ -298,244 +328,381 @@
       };
     }
     if (!isBuy && !snapshot.hasPool) {
-      return { text: "Pool not initialized yet", disabled: true };
+      return { text: 'Pool not initialized yet', disabled: true };
     }
     if (quoteLoading) {
-      return { text: "Fetching quote...", disabled: true };
+      return { text: 'Fetching quote...', disabled: true };
     }
     if (!currentQuote) {
-      return { text: "No route available", disabled: true };
+      return { text: 'No route available', disabled: true };
     }
     return { text: `Swap ${inputSymbol} for ${outputSymbol}`, disabled: false };
-  });
-  const quoteProvenance = $derived(marketStore.quoteView?.provenance ?? null);
-  const routeInfo = $derived.by(() => {
+  }
+
+  function routeInfoValue() {
     const snapshot = systemStore.snapshot;
     if (!snapshot) {
       return null;
     }
-    const last = marketStore.history.length > 0 ? marketStore.history[marketStore.history.length - 1] : null;
+    const last =
+      marketStore.history.length > 0
+        ? marketStore.history[marketStore.history.length - 1]
+        : null;
     const tmcPrice = last?.priceEffTMC ?? 0;
     const xykPrice = last?.priceXYK ?? 0;
     const routerPrice = last?.priceRouter ?? null;
-    const bestRoute = last?.routeRouter ?? (xykPrice > 0 && xykPrice < tmcPrice ? "XYK" : "TMC");
+    const bestRoute =
+      last?.routeRouter ??
+      (xykPrice > 0 && xykPrice < tmcPrice ? 'XYK' : 'TMC');
     return { tmcPrice, xykPrice, routerPrice, bestRoute };
-  });
-  const minimumReceived = $derived.by(() => {
+  }
+
+  function minimumReceivedValue() {
     if (!currentQuote || !slippageState.valid || slippageState.bps === null) {
       return null;
     }
     return currentQuote.out > 0n
-      ? (currentQuote.out * BigInt(Math.max(0, 10_000 - slippageState.bps))) / 10_000n
+      ? (currentQuote.out * BigInt(Math.max(0, 10_000 - slippageState.bps))) /
+          10_000n
       : 0n;
-  });
-  const compactQuoteFacts = $derived.by<string[]>(() => {
+  }
+
+  function compactQuoteFactsValue() {
     if (!currentQuote) {
       return [];
     }
     return [
-      `$${fmtPrice(currentQuote.effectivePrice)}`,
+      `${fmtPrice(currentQuote.effectivePrice)}`,
       `fee ${fmt(toFloat(currentQuote.fee))} ${inputSymbol}`,
-      `min ${minimumReceived !== null ? fmtOut(toFloat(minimumReceived)) : "—"} ${outputSymbol}`,
+      `min ${minimumReceived !== null ? fmtOut(toFloat(minimumReceived)) : '—'} ${outputSymbol}`,
     ];
-  });
-  const quoteStats = $derived.by<QuoteStatView[]>(() => [
-    {
-      label: "Route",
-      value: currentQuote ? currentQuote.route : routeInfo?.bestRoute ?? "—",
-    },
-    {
-      label: "Rate",
-      value: currentQuote
-        ? `$${fmtPrice(currentQuote.effectivePrice)}`
-        : routeInfo?.routerPrice
-          ? `$${fmtPrice(routeInfo.routerPrice)}`
-          : "—",
-    },
-    {
-      label: "Input fee",
-      value: currentQuote ? `${fmt(toFloat(currentQuote.fee))} ${inputSymbol}` : "—",
-    },
-    {
-      label: "Min receive",
-      value: minimumReceived !== null ? `${fmtOut(toFloat(minimumReceived))} ${outputSymbol}` : "—",
-    },
-  ]);
-  const warnings = $derived.by<string[]>(() => {
+  }
+
+  function quoteStatsValue() {
+    return [
+      {
+        label: 'Route',
+        value: currentQuote
+          ? currentQuote.route
+          : (routeInfo?.bestRoute ?? '—'),
+      },
+      {
+        label: 'Rate',
+        value: currentQuote
+          ? `${fmtPrice(currentQuote.effectivePrice)}`
+          : routeInfo?.routerPrice
+            ? `${fmtPrice(routeInfo.routerPrice)}`
+            : '—',
+      },
+      {
+        label: 'Input fee',
+        value: currentQuote
+          ? `${fmt(toFloat(currentQuote.fee))} ${inputSymbol}`
+          : '—',
+      },
+      {
+        label: 'Min receive',
+        value:
+          minimumReceived !== null
+            ? `${fmtOut(toFloat(minimumReceived))} ${outputSymbol}`
+            : '—',
+      },
+    ];
+  }
+
+  function warningsValue() {
     const snapshot = systemStore.snapshot;
     const items: string[] = [];
     if (!snapshot) {
       return items;
     }
     if (!snapshot.hasNativeCurve) {
-      items.push("Local chain has no native curve yet");
+      items.push('Local chain has no native curve yet');
     }
-    if (walletStore.state.signerStatus === "readonly") {
-      items.push("Selected account is watch-only. Open the sidebar and connect an injected signer for the same address before submitting a live swap");
-    } else if (walletStore.state.signerStatus !== "available") {
+    if (walletStore.state.signerStatus === 'readonly') {
       items.push(
-        walletStore.state.signerMessage === "No injected wallet extension detected"
-          ? "No injected wallet extension is available in this browser. Use a built-in local dev signer or install a supported wallet extension before submitting a live swap"
-          : "Open the sidebar and connect an injected wallet or local dev signer before submitting a live swap",
+        'Selected account is watch-only. Open the sidebar and connect an injected signer for the same address before submitting a live swap',
+      );
+    } else if (walletStore.state.signerStatus !== 'available') {
+      items.push(
+        walletStore.state.signerMessage ===
+          'No injected wallet extension detected'
+          ? 'No injected wallet extension is available in this browser. Use a built-in local dev signer or install a supported wallet extension before submitting a live swap'
+          : 'Open the sidebar and connect an injected wallet or local dev signer before submitting a live swap',
       );
     }
     if (snapshot.trackedForeignAssetCount === 0) {
-      items.push("No foreign collateral is registered yet");
+      items.push('No foreign collateral is registered yet');
     }
     if (!isBuy && !snapshot.hasPool) {
-      items.push("Pool not initialized yet");
+      items.push('Pool not initialized yet');
     }
     if (!foreignAssetIsCanonical() && snapshot.trackedForeignAssetCount > 0) {
       items.push(`Showing fallback foreign surface for ${nativeSymbol()}`);
     }
     if (safeInputBalance === 0n) {
-      items.push(`No spendable ${inputSymbol} balance is currently available for swap input`);
+      items.push(
+        `No spendable ${inputSymbol} balance is currently available for swap input`,
+      );
     }
     if (!slippageState.valid && parsedInput.raw > 0) {
-      items.push(slippageState.reason ?? "Enter a valid slippage cap");
+      items.push(slippageState.reason ?? 'Enter a valid slippage cap');
     }
-    if (slippageState.valid && slippageState.percent !== null && slippageState.percent > 5) {
-      items.push(`Wide slippage cap ${slippageState.label}; minimum receive can move materially before inclusion`);
+    if (
+      slippageState.valid &&
+      slippageState.percent !== null &&
+      slippageState.percent > 5
+    ) {
+      items.push(
+        `Wide slippage cap ${slippageState.label}; minimum receive can move materially before inclusion`,
+      );
     }
-    if (isBuy && parsedInput.amount !== null && parsedInput.amount < snapshot.minForeignSwapAmount) {
-      items.push(`Minimum buy is ${fmt(toFloat(snapshot.minForeignSwapAmount))} ${foreignSymbol()}`);
+    if (
+      isBuy &&
+      parsedInput.amount !== null &&
+      parsedInput.amount < snapshot.minForeignSwapAmount
+    ) {
+      items.push(
+        `Minimum buy is ${fmt(toFloat(snapshot.minForeignSwapAmount))} ${foreignSymbol()}`,
+      );
     }
     if (parsedInput.amount !== null && parsedInput.amount > inBalance) {
-      items.push(`Selected amount exceeds the available ${inputSymbol} balance`);
-    } else if (!isBuy && parsedInput.amount !== null && parsedInput.amount > safeInputBalance) {
-      items.push(`Native sells still need some ${nativeSymbol()} left in the account for fees, so amounts above the safe max can fail`);
+      items.push(
+        `Selected amount exceeds the available ${inputSymbol} balance`,
+      );
+    } else if (
+      !isBuy &&
+      parsedInput.amount !== null &&
+      parsedInput.amount > safeInputBalance
+    ) {
+      items.push(
+        `Native sells still need some ${nativeSymbol()} left in the account for fees, so amounts above the safe max can fail`,
+      );
     }
-    const quoteEligible = snapshot.hasNativeCurve
-      && snapshot.trackedForeignAssetCount > 0
-      && (isBuy || snapshot.hasPool)
-      && parsedInput.amount !== null
-      && parsedInput.amount <= inBalance
-      && (!isBuy || parsedInput.amount >= snapshot.minForeignSwapAmount)
-      && (isBuy || parsedInput.amount <= safeInputBalance)
-      && slippageState.valid;
-    if (quoteEligible && quoteLoading && snapshot.hasNativeCurve && snapshot.trackedForeignAssetCount > 0) {
-      items.push("Fetching a live route quote from chain state");
+    const quoteEligible =
+      snapshot.hasNativeCurve &&
+      snapshot.trackedForeignAssetCount > 0 &&
+      (isBuy || snapshot.hasPool) &&
+      parsedInput.amount !== null &&
+      parsedInput.amount <= inBalance &&
+      (!isBuy || parsedInput.amount >= snapshot.minForeignSwapAmount) &&
+      (isBuy || parsedInput.amount <= safeInputBalance) &&
+      slippageState.valid;
+    if (
+      quoteEligible &&
+      quoteLoading &&
+      snapshot.hasNativeCurve &&
+      snapshot.trackedForeignAssetCount > 0
+    ) {
+      items.push('Fetching a live route quote from chain state');
     }
     if (quoteEligible && !quoteLoading && !currentQuote) {
-      items.push("No route available for this size yet");
+      items.push('No route available for this size yet');
     }
     return items;
-  });
-  const compactQuoteView = $derived.by<CompactQuoteStripView>(() => ({
-    facts: compactQuoteFacts,
-    provenance: quoteProvenance,
-    route: currentQuote?.route ?? null,
-    visible: compactPane && currentQuote !== null,
-  }));
-  const inputAssetSelectView = $derived.by<AssetSelectView>(() => ({
-    dense: densePane,
-    items: assetSelectItems,
-    label: "Select input asset",
-    onValueChange: selectInputAsset,
-    options: assetOptions,
-    selectedAsset: assetOption(inputAssetValue),
-    selectedValue: inputAssetValue,
-    surfaceClass: "bg-white",
-  }));
-  const outputAssetSelectView = $derived.by<AssetSelectView>(() => ({
-    dense: densePane,
-    items: assetSelectItems,
-    label: "Select output asset",
-    onValueChange: selectOutputAsset,
-    options: assetOptions,
-    selectedAsset: assetOption(outputAssetValue),
-    selectedValue: outputAssetValue,
-    surfaceClass: "bg-(--mono-bg)",
-  }));
-  const payLegView = $derived.by<SwapInputLegView>(() => ({
-    amountValue: inputValue,
-    assetSelect: inputAssetSelectView,
-    balanceLabel: isBuy ? "Balance" : "Safe max",
-    balanceText: fmt(toFloat(isBuy ? inBalance : safeInputBalance)),
-    dense: densePane,
-    fillMaxEnabled: fillMaxAvailable,
-    onAmountInput: updateInputValue,
-    onFillMax: setMax,
-  }));
-  const receiveLegView = $derived.by<SwapOutputLegView>(() => ({
-    amountText: currentQuote ? fmtOut(toFloat(currentQuote.out)) : "0.00",
-    assetSelect: outputAssetSelectView,
-    balanceText: fmt(toFloat(outBalance)),
-    dense: densePane,
-  }));
-  const diagnosticsPanelView = $derived.by<DiagnosticsPanelView>(() => ({
-    compact: compactPane,
-    dense: densePane,
-    onSlippageInput: updateSlippagePercent,
-    provenance: currentQuote ? quoteProvenance : null,
-    slippageLabel: slippageState.label,
-    slippageValue: slippagePercent,
-    stats: quoteStats,
-    warnings,
-  }));
+  }
+
+  function compactQuoteViewValue() {
+    return {
+      facts: compactQuoteFacts,
+      provenance: quoteProvenance,
+      route: currentQuote?.route ?? null,
+      visible: compactPane && currentQuote !== null,
+    };
+  }
+
+  function inputAssetSelectViewValue() {
+    return {
+      dense: densePane,
+      items: assetSelectItems,
+      label: 'Select input asset',
+      onValueChange: selectInputAsset,
+      selectedValue: inputAssetValue,
+      surfaceClass: 'bg-white',
+    };
+  }
+
+  function outputAssetSelectViewValue() {
+    return {
+      dense: densePane,
+      items: assetSelectItems,
+      label: 'Select output asset',
+      onValueChange: selectOutputAsset,
+      selectedValue: outputAssetValue,
+      surfaceClass: 'bg-(--mono-bg)',
+    };
+  }
+
+  function payLegViewValue() {
+    return {
+      amountValue: inputValue,
+      assetSelect: inputAssetSelectView,
+      balanceLabel: isBuy ? 'Balance' : 'Safe max',
+      balanceText: fmt(toFloat(isBuy ? inBalance : safeInputBalance)),
+      dense: densePane,
+      fillMaxEnabled: fillMaxAvailable,
+      onAmountInput: updateInputValue,
+      onFillMax: setMax,
+    };
+  }
+
+  function receiveLegViewValue() {
+    return {
+      amountText: currentQuote ? fmtOut(toFloat(currentQuote.out)) : '0.00',
+      assetSelect: outputAssetSelectView,
+      balanceText: fmt(toFloat(outBalance)),
+      dense: densePane,
+    };
+  }
+
+  function diagnosticsPanelViewValue() {
+    return {
+      compact: compactPane,
+      dense: densePane,
+      onSlippageInput: updateSlippagePercent,
+      provenance: currentQuote ? quoteProvenance : null,
+      slippageLabel: slippageState.label,
+      slippageValue: slippagePercent,
+      stats: quoteStats,
+      warnings,
+    };
+  }
+
+  const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
+  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
+  const isBuy = $derived(marketStore.direction === 'buy');
+  const inputAssetValue: SwapAssetValue = $derived(
+    isBuy ? 'foreign' : 'native',
+  );
+  const outputAssetValue: SwapAssetValue = $derived(
+    isBuy ? 'native' : 'foreign',
+  );
+  const inputSymbol = $derived(isBuy ? foreignSymbol() : nativeSymbol());
+  const outputSymbol = $derived(isBuy ? nativeSymbol() : foreignSymbol());
+  const inBalance = $derived(
+    isBuy
+      ? portfolioStore.userBalance.foreign
+      : portfolioStore.userBalance.native,
+  );
+  const outBalance = $derived(
+    isBuy
+      ? portfolioStore.userBalance.native
+      : portfolioStore.userBalance.foreign,
+  );
+  const safeInputBalance = $derived(safeInputBalanceValue());
+  const fillMaxAvailable = $derived(safeInputBalance > 0n);
+  const assetOptions = $derived(assetOptionsValue());
+  const assetSelectItems = $derived(assetOptions.map(toSwapSelectItem));
+  const parsedInput = $derived(parseInputState(inputValue));
+  const slippageState = $derived(slippageStateValue());
+  const buttonState = $derived(buttonStateValue());
+  const quoteProvenance = $derived(marketStore.quoteView?.provenance ?? null);
+  const routeInfo = $derived(routeInfoValue());
+  const minimumReceived = $derived(minimumReceivedValue());
+  const compactQuoteFacts = $derived(compactQuoteFactsValue());
+  const quoteStats = $derived(quoteStatsValue());
+  const warnings = $derived(warningsValue());
+  const compactQuoteView = $derived(compactQuoteViewValue());
+  const inputAssetSelectView = $derived(inputAssetSelectViewValue());
+  const outputAssetSelectView = $derived(outputAssetSelectViewValue());
+  const payLegView = $derived(payLegViewValue());
+  const receiveLegView = $derived(receiveLegViewValue());
+  const diagnosticsPanelView = $derived(diagnosticsPanelViewValue());
+
+  function formatSwapAssetAmount(
+    amount: bigint | undefined,
+    symbol: string,
+  ): string {
+    return amount === undefined
+      ? `unknown ${symbol}`
+      : `${fmt(toFloat(amount))} ${symbol}`;
+  }
 
   async function executeSwap() {
-    if (parsedInput.raw <= 0 || !parsedInput.amount || buttonState.disabled || !slippageState.valid || slippageState.bps === null || !currentQuote) {
+    if (
+      parsedInput.raw <= 0 ||
+      !parsedInput.amount ||
+      buttonState.disabled ||
+      !slippageState.valid ||
+      slippageState.bps === null ||
+      !currentQuote
+    ) {
       return;
     }
     submitting = true;
     try {
       const snapshot = systemStore.snapshot;
       if (!snapshot) {
-        throw new Error("Waiting for chain state");
+        throw new Error('Waiting for chain state');
       }
       if (!snapshot.hasNativeCurve) {
-        throw new Error("Local chain has no native curve yet");
+        throw new Error('Local chain has no native curve yet');
       }
       if (snapshot.trackedForeignAssetCount === 0) {
-        throw new Error("No foreign collateral is registered yet");
+        throw new Error('No foreign collateral is registered yet');
       }
-      if (walletStore.state.signerStatus === "readonly") {
-        throw new Error("Selected account is watch-only. Open the sidebar and connect an injected signer for the same address before submitting a live swap");
-      }
-      if (walletStore.state.signerStatus !== "available") {
+      if (walletStore.state.signerStatus === 'readonly') {
         throw new Error(
-          walletStore.state.signerMessage === "No injected wallet extension detected"
-            ? "No injected wallet extension is available in this browser. Use a built-in local dev signer or install a supported wallet extension before submitting a live swap"
-            : "Open the sidebar and connect an injected wallet or local dev signer before submitting a live swap",
+          'Selected account is watch-only. Open the sidebar and connect an injected signer for the same address before submitting a live swap',
+        );
+      }
+      if (walletStore.state.signerStatus !== 'available') {
+        throw new Error(
+          walletStore.state.signerMessage ===
+            'No injected wallet extension detected'
+            ? 'No injected wallet extension is available in this browser. Use a built-in local dev signer or install a supported wallet extension before submitting a live swap'
+            : 'Open the sidebar and connect an injected wallet or local dev signer before submitting a live swap',
         );
       }
       if (isBuy && parsedInput.amount < snapshot.minForeignSwapAmount) {
-        throw new Error(`Minimum buy is ${fmt(toFloat(snapshot.minForeignSwapAmount))} ${foreignSymbol()}`);
+        throw new Error(
+          `Minimum buy is ${fmt(toFloat(snapshot.minForeignSwapAmount))} ${foreignSymbol()}`,
+        );
       }
       if (parsedInput.amount > inBalance) {
-        throw new Error(`Selected amount exceeds the available ${inputSymbol} balance`);
+        throw new Error(
+          `Selected amount exceeds the available ${inputSymbol} balance`,
+        );
       }
       if (!isBuy && parsedInput.amount > safeInputBalance) {
-        throw new Error(`Native sells still need some ${nativeSymbol()} left in the account for fees, so amounts above the safe max can fail`);
+        throw new Error(
+          `Native sells still need some ${nativeSymbol()} left in the account for fees, so amounts above the safe max can fail`,
+        );
       }
       if (!isBuy && !snapshot.hasPool) {
-        throw new Error("Pool not initialized yet");
+        throw new Error('Pool not initialized yet');
       }
       if (isBuy) {
-        const result = await marketStore.buyNative(parsedInput.amount, slippageState.bps);
+        const result = await marketStore.buyNative(
+          parsedInput.amount,
+          slippageState.bps,
+        );
         logStore.add(
-          `Bought ${fmt(toFloat(result.native_out!))} ${nativeSymbol()} for ${fmt(parsedInput.raw)} ${foreignSymbol()} via ${result.route}`,
-          "buy",
+          `Bought ${formatSwapAssetAmount(result.native_out, nativeSymbol())} for ${fmt(parsedInput.raw)} ${foreignSymbol()} via ${result.route}`,
+          'buy',
           {
             blockNumber: systemStore.snapshot?.blockNumber ?? null,
             step: marketStore.history.length - 1,
           },
         );
       } else {
-        const result = await marketStore.sellNative(parsedInput.amount, slippageState.bps);
+        const result = await marketStore.sellNative(
+          parsedInput.amount,
+          slippageState.bps,
+        );
         logStore.add(
-          `Sold ${fmt(parsedInput.raw)} ${nativeSymbol()} for ${fmt(toFloat(result.foreign_out!))} ${foreignSymbol()} via ${result.route}`,
-          "sell",
+          `Sold ${fmt(parsedInput.raw)} ${nativeSymbol()} for ${formatSwapAssetAmount(result.foreign_out, foreignSymbol())} via ${result.route}`,
+          'sell',
           {
             blockNumber: systemStore.snapshot?.blockNumber ?? null,
             step: marketStore.history.length - 1,
           },
         );
       }
-      inputValue = "";
-    } catch (error: any) {
-      logStore.add(error.message, "error", {
+      inputValue = '';
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Swap failed';
+      logStore.add(message, 'error', {
         blockNumber: systemStore.snapshot?.blockNumber ?? null,
         step: marketStore.history.length - 1,
       });
@@ -553,13 +720,14 @@
       quoteLoading = false;
       return;
     }
-    const quoteEligible = snapshot.hasNativeCurve
-      && snapshot.trackedForeignAssetCount > 0
-      && (isBuy || snapshot.hasPool)
-      && amount <= inBalance
-      && (!isBuy || amount >= snapshot.minForeignSwapAmount)
-      && (isBuy || amount <= safeInputBalance)
-      && slippageState.valid;
+    const quoteEligible =
+      snapshot.hasNativeCurve &&
+      snapshot.trackedForeignAssetCount > 0 &&
+      (isBuy || snapshot.hasPool) &&
+      amount <= inBalance &&
+      (!isBuy || amount >= snapshot.minForeignSwapAmount) &&
+      (isBuy || amount <= safeInputBalance) &&
+      slippageState.valid;
     if (!quoteEligible) {
       quoteRequestId += 1;
       currentQuote = null;
@@ -569,7 +737,9 @@
     const requestId = ++quoteRequestId;
     quoteLoading = true;
     currentQuote = null;
-    const request = isBuy ? marketStore.getQuoteBuy(amount) : marketStore.getQuoteSell(amount);
+    const request = isBuy
+      ? marketStore.getQuoteBuy(amount)
+      : marketStore.getQuoteSell(amount);
     void Promise.resolve(request)
       .then((nextQuote) => {
         if (requestId !== quoteRequestId) {
@@ -600,21 +770,27 @@
 
 <Card class="min-h-full w-full py-1">
   <div bind:this={rootEl} class="@container grid gap-2.5 pb-2">
-    <div class={[
-      "grid gap-2.5",
-      !compactPane && "@xl:grid-cols-[minmax(0,1.1fr)_minmax(12.5rem,0.9fr)]",
-    ]}>
-      <section class={[
-        "grid rounded-xl bg-white shadow-[0_2px_8px_rgba(44,50,30,0.04)]",
-        densePane ? "gap-2 p-2" : "gap-2.5 p-2.5",
-      ]}>
+    <div
+      class={[
+        'grid gap-2.5',
+        !compactPane && '@xl:grid-cols-[minmax(0,1.1fr)_minmax(12.5rem,0.9fr)]',
+      ]}
+    >
+      <section
+        class={[
+          'grid rounded-xl bg-white shadow-[0_2px_8px_rgba(44,50,30,0.04)]',
+          densePane ? 'gap-2 p-2' : 'gap-2.5 p-2.5',
+        ]}
+      >
         {#snippet compactQuoteStrip(view: CompactQuoteStripView)}
           {#if view.visible && view.route}
             <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
               <ReadModelBadge provenance={view.provenance} />
               <Badge variant="info">{view.route}</Badge>
               {#each view.facts as fact}
-                <span class="rounded-full border border-(--mono-border) bg-(--mono-bg) px-2 py-0.5 tabnum text-(--mono-text)">
+                <span
+                  class="rounded-full border border-(--mono-border) bg-(--mono-bg) px-2 py-0.5 tabnum text-(--mono-text)"
+                >
                   {fact}
                 </span>
               {/each}
@@ -623,91 +799,49 @@
         {/snippet}
         {@render compactQuoteStrip(compactQuoteView)}
         {#snippet assetSelect(view: AssetSelectView)}
-          <Select.Root
-            type="single"
+          <RichSelect
             value={view.selectedValue}
             items={view.items}
-            allowDeselect={false}
+            label={view.label}
+            dense={view.dense}
+            triggerClass={view.surfaceClass}
             onValueChange={view.onValueChange}
-          >
-            <Select.Trigger
-              class={[
-                "inline-flex min-w-31 items-center gap-1.5 rounded-lg border border-(--mono-border) font-medium transition-colors hover:border-(--mono-purple) data-[state=open]:border-(--mono-purple)",
-                view.dense ? "px-2 py-0.5 text-[11px]" : "px-2 py-1 text-xs",
-                view.surfaceClass,
-              ]}
-              aria-label={view.label}
-            >
-              <span class={[
-                "flex h-4 w-4 items-center justify-center rounded-full text-[9px]",
-                view.selectedAsset.badgeClass,
-              ]}>
-                {view.selectedAsset.badge}
-              </span>
-              <span class="min-w-0 truncate">{view.selectedAsset.label}</span>
-              <ChevronDown size={12} class="shrink-0 text-(--mono-muted)" />
-            </Select.Trigger>
-            <Select.Portal>
-              <Select.Content
-                sideOffset={8}
-                class="z-50 min-w-44 rounded-xl border border-(--mono-border) bg-[linear-gradient(135deg,#ffffff_0%,#f7fbef_46%,#edf6fa_100%)] p-1 shadow-[0_8px_24px_rgba(44,50,30,0.06)]"
-              >
-                <Select.Viewport class="grid gap-1">
-                  {#each view.options as asset}
-                    <Select.Item
-                      value={asset.value}
-                      label={asset.label}
-                      class="group grid cursor-default grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-transparent px-2.5 py-2 text-xs outline-none transition-colors data-highlighted:border-(--mono-purple)/20 data-highlighted:bg-(--mono-bg) `data-selected:border-(--mono-purple)/25 data-selected:bg-(--mono-bg)"
-                    >
-                      <span class={[
-                        "flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-medium",
-                        asset.badgeClass,
-                      ]}>
-                        {asset.badge}
-                      </span>
-                      <span class="min-w-0">
-                        <span class="block truncate font-medium text-(--mono-text)">{asset.label}</span>
-                        <span class="block truncate text-[10px] text-(--mono-muted)">
-                          Balance: {fmt(toFloat(asset.balance))}
-                        </span>
-                      </span>
-                      <Check size={12} class="shrink-0 text-(--mono-purple) opacity-0 transition-opacity group-data-selected:opacity-100" />
-                    </Select.Item>
-                  {/each}
-                </Select.Viewport>
-              </Select.Content>
-            </Select.Portal>
-          </Select.Root>
+          />
         {/snippet}
         {#snippet inputLeg(view: SwapInputLegView)}
-          <div class={[
-            "grid gap-2 overflow-hidden rounded-xl border bg-(--mono-bg)",
-            view.dense ? "px-2 py-1.5" : "px-2.5 py-2",
-          ]}>
+          <div
+            class={[
+              'grid gap-2 overflow-hidden rounded-xl border bg-(--mono-bg)',
+              view.dense ? 'px-2 py-1.5' : 'px-2.5 py-2',
+            ]}
+          >
             <div class="flex items-center justify-between gap-2">
-              <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">You pay</span>
-              <button
-                type="button"
+              <span
+                class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
+                >You pay</span
+              >
+              <Button
+                size="sm"
+                variant="ghost"
                 onclick={view.onFillMax}
                 class={view.fillMaxEnabled
-                  ? "text-[10px] text-(--mono-purple) hover:underline tabnum"
-                  : "text-[10px] text-(--mono-muted) opacity-60 tabnum"}
+                  ? 'px-0 py-0 text-[10px] text-(--mono-purple) hover:underline tabnum'
+                  : 'px-0 py-0 text-[10px] text-(--mono-muted) opacity-60 tabnum'}
                 disabled={!view.fillMaxEnabled}
               >
                 {view.balanceLabel}: {view.balanceText}
-              </button>
+              </Button>
             </div>
             <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-              <input
-                type="number"
+              <NumberInput
                 value={view.amountValue}
                 placeholder="0.00"
                 min="0"
                 step="any"
-                oninput={(event) => view.onAmountInput((event.currentTarget as HTMLInputElement).value)}
+                oninput={(event) => view.onAmountInput(inputEventValue(event))}
                 class={[
-                  "min-w-0 border-none bg-transparent font-semibold tabnum placeholder-(--mono-border) focus:outline-none",
-                  view.dense ? "text-base" : "text-lg",
+                  'min-w-0 border-none bg-transparent px-0 py-0 font-semibold tabnum placeholder-(--mono-border) focus:outline-none',
+                  view.dense ? 'text-base' : 'text-lg',
                 ]}
               />
               {@render assetSelect(view.assetSelect)}
@@ -715,103 +849,137 @@
           </div>
         {/snippet}
         {#snippet outputLeg(view: SwapOutputLegView)}
-          <div class={[
-            "grid gap-2 overflow-hidden rounded-xl border bg-white",
-            view.dense ? "px-2 py-1.5" : "px-2.5 py-2",
-          ]}>
+          <div
+            class={[
+              'grid gap-2 overflow-hidden rounded-xl border bg-white',
+              view.dense ? 'px-2 py-1.5' : 'px-2.5 py-2',
+            ]}
+          >
             <div class="flex items-center justify-between gap-2">
-              <span class="text-[10px] uppercase tracking-wider text-(--mono-muted)">You receive</span>
-              <span class="text-[10px] text-(--mono-border) tabnum">Balance: {view.balanceText}</span>
+              <span
+                class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
+                >You receive</span
+              >
+              <span class="text-[10px] text-(--mono-border) tabnum"
+                >Balance: {view.balanceText}</span
+              >
             </div>
             <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-              <div class={[
-                "min-w-0 truncate font-semibold tabnum text-(--mono-muted)",
-                view.dense ? "text-base" : "text-lg",
-              ]}>
+              <div
+                class={[
+                  'min-w-0 truncate font-semibold tabnum text-(--mono-muted)',
+                  view.dense ? 'text-base' : 'text-lg',
+                ]}
+              >
                 {view.amountText}
               </div>
               {@render assetSelect(view.assetSelect)}
             </div>
           </div>
         {/snippet}
-        <div class={[
-          "grid gap-2.5",
-          compactPane
-            ? "grid-cols-1"
-            : "@2xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @2xl:items-center",
-        ]}>
+        <div
+          class={[
+            'grid gap-2.5',
+            compactPane
+              ? 'grid-cols-1'
+              : '@2xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @2xl:items-center',
+          ]}
+        >
           {@render inputLeg(payLegView)}
-          <div class={[
-            "flex -my-4 z-1",
-            compactPane ? "justify-center" : "justify-center @2xl:justify-self-center",
-          ]}>
-            <button
-              type="button"
+          <div
+            class={[
+              'flex -my-4 z-1',
+              compactPane
+                ? 'justify-center'
+                : 'justify-center @2xl:justify-self-center',
+            ]}
+          >
+            <IconButton
               onclick={flipTokens}
               class="flex h-8 w-8 items-center justify-center rounded-full border bg-white shadow-sm"
-              aria-label="Flip swap direction"
+              label="Flip swap direction"
             >
-              <ArrowUpDown class="transition-all duration-200 hover:rotate-180 hover:text-(--mono-purple)" size={14} />
-            </button>
+              <ArrowUpDown
+                class="transition-all duration-200 hover:rotate-180 hover:text-(--mono-purple)"
+                size={14}
+              />
+            </IconButton>
           </div>
           {@render outputLeg(receiveLegView)}
         </div>
-        <button
-          type="button"
+        <Button
+          variant="primary"
           onclick={executeSwap}
           disabled={buttonState.disabled}
           class={[
-            "w-full rounded-xl font-semibold bg-(--mono-border) text-white transition-opacity",
-            densePane ? "py-2 text-[11px]" : "py-2.5 text-xs",
+            'w-full rounded-xl font-semibold bg-(--mono-border) text-white transition-opacity',
+            densePane ? 'py-2 text-[11px]' : 'py-2.5 text-xs',
           ]}
-          style:opacity={buttonState.disabled ? 0.5 : 1}
+          style={`opacity: ${buttonState.disabled ? 0.5 : 1}`}
         >
           {buttonState.text}
-        </button>
+        </Button>
       </section>
       {#snippet diagnosticsPanel(view: DiagnosticsPanelView)}
-        <section class={[
-          "grid rounded-xl bg-white shadow-[0_2px_8px_rgba(44,50,30,0.04)]",
-          view.dense ? "gap-2 p-2" : "gap-2 p-2.5",
-        ]}>
+        <section
+          class={[
+            'grid rounded-xl bg-white shadow-[0_2px_8px_rgba(44,50,30,0.04)]',
+            view.dense ? 'gap-2 p-2' : 'gap-2 p-2.5',
+          ]}
+        >
           <div class="flex justify-end">
             <ReadModelBadge provenance={view.provenance} />
           </div>
-          <div class={[
-            "grid gap-1.5 text-xs",
-            view.dense ? "grid-cols-1 @xs:grid-cols-2" : "grid-cols-2",
-          ]}>
+          <div
+            class={[
+              'grid gap-1.5 text-xs',
+              view.dense ? 'grid-cols-1 @xs:grid-cols-2' : 'grid-cols-2',
+            ]}
+          >
             {#each view.stats as stat}
               <StatCard label={stat.label} value={stat.value} />
             {/each}
           </div>
-          <div class={[
-            "rounded-xl border bg-(--mono-bg)",
-            view.compact ? "grid gap-2 px-2.5 py-2" : "grid gap-2 px-2.5 py-2 text-xs",
-          ]}>
-            <div class={[
+          <div
+            class={[
+              'rounded-xl border bg-(--mono-bg)',
               view.compact
-                ? "grid gap-1 @xs:grid-cols-[auto_minmax(0,1fr)_auto] @xs:items-center"
-                : "flex items-center justify-between gap-2",
-            ]}>
-              <span class="text-[9px] uppercase tracking-wider text-(--mono-muted)">Slippage</span>
-              <input
-                type="number"
+                ? 'grid gap-2 px-2.5 py-2'
+                : 'grid gap-2 px-2.5 py-2 text-xs',
+            ]}
+          >
+            <div
+              class={[
+                view.compact
+                  ? 'grid gap-1 @xs:grid-cols-[auto_minmax(0,1fr)_auto] @xs:items-center'
+                  : 'flex items-center justify-between gap-2',
+              ]}
+            >
+              <span
+                class="text-[9px] uppercase tracking-wider text-(--mono-muted)"
+                >Slippage</span
+              >
+              <NumberInput
                 value={view.slippageValue}
                 min="0.01"
                 max="50"
                 step="0.01"
-                oninput={(event) => view.onSlippageInput((event.currentTarget as HTMLInputElement).value)}
+                oninput={(event) =>
+                  view.onSlippageInput(inputEventValue(event))}
                 class={[
-                  "rounded-lg border border-(--mono-border) bg-white focus:border-(--mono-purple) focus:outline-none",
-                  view.compact ? "w-full px-2 py-1 text-[11px]" : "w-full px-2.5 py-1.5 text-[10px]",
+                  'rounded-lg border border-(--mono-border) bg-white focus:border-(--mono-purple) focus:outline-none',
+                  view.compact
+                    ? 'w-full px-2 py-1 text-[11px]'
+                    : 'w-full px-2.5 py-1.5 text-[10px]',
                 ]}
               />
-              <span class="tabnum text-[10px] text-(--mono-text)">{view.slippageLabel}</span>
+              <span class="tabnum text-[10px] text-(--mono-text)"
+                >{view.slippageLabel}</span
+              >
             </div>
           </div>
           {#if view.warnings.length > 0}
-            <div class={["grid gap-1.5", !view.dense && "@2xl:grid-cols-2"]}>
+            <div class={['grid gap-1.5', !view.dense && '@2xl:grid-cols-2']}>
               {#each view.warnings as warning}
                 <Notice variant="warn" class="text-[9px]">{warning}</Notice>
               {/each}

@@ -1,17 +1,17 @@
+<!--
+Domain: Automation widget
+Owns: System AAA actor snapshot presentation, automation health cards, and bounded automation read-model display.
+Excludes: Runtime actor scheduling, system store ownership, adapter transport, and layout state.
+Zone: Presentation widget; consumes system automation projections and UI Kit helpers.
+-->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount } from 'svelte';
 
-  import { systemStore } from "$lib/system/index.svelte";
-  import { fmt, toFloat } from "$lib/shared/format";
-  import { fromClientBoundedProjection } from "$lib/shared/read-model";
-  import type { AutomationActorSnapshot } from "$lib/shared/types";
-  import {
-    Badge,
-    Card,
-    DetailRow,
-    Notice,
-    ReadModelBadge,
-  } from "$lib/shared/ui";
+  import type { AutomationActorSnapshot } from '$lib/automation/types';
+  import { fromClientBoundedProjection } from '$lib/read-model';
+  import { systemStore } from '$lib/system/index.svelte';
+  import { Badge, Card, DetailRow, Notice } from '$lib/ui';
+  import { fmt, toFloat } from '$lib/ui/format';
 
   let rootEl = $state<HTMLDivElement | null>(null);
   let viewport = $state({ width: 0, height: 0 });
@@ -21,7 +21,7 @@
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    "automationWidget <- AAA.AaaInstances + AAA.AaaReadiness + System.Account",
+    'automationWidget <- AAA.AaaInstances + AAA.AaaReadiness + System.Account',
   ).provenance;
 
   function syncViewport() {
@@ -44,7 +44,7 @@
     if (!adapter.getAutomationActors) {
       actors = [];
       loading = false;
-      error = "Automation surface not available in the current adapter";
+      error = 'Automation surface not available in the current adapter';
       return;
     }
     loading = true;
@@ -65,7 +65,7 @@
         error =
           refreshError instanceof Error
             ? refreshError.message
-            : "Actor refresh failed";
+            : 'Actor refresh failed';
         loading = false;
       });
     return () => {
@@ -95,15 +95,15 @@
         {#each actors as actor}
           <div
             class={[
-              "rounded-xl border bg-white",
-              densePane ? "grid gap-2 p-2" : "grid gap-2 p-3",
+              'rounded-xl border bg-white',
+              densePane ? 'grid gap-2 p-2' : 'grid gap-2 p-3',
             ]}
           >
             <div
               class={[
                 densePane
-                  ? "grid gap-1"
-                  : "flex flex-wrap items-start justify-between gap-2",
+                  ? 'grid gap-1'
+                  : 'flex flex-wrap items-start justify-between gap-2',
               ]}
             >
               <div>
@@ -113,9 +113,9 @@
               <Badge
                 variant={actor.exists
                   ? actor.paused
-                    ? "info"
-                    : "tmc"
-                  : "info"}
+                    ? 'info'
+                    : 'tmc'
+                  : 'info'}
               >
                 {#if !actor.exists}
                   missing
@@ -137,12 +137,12 @@
                 />
                 <DetailRow
                   label="Cycle"
-                  value={actor.lastCycleBlock?.toString() ?? "—"}
+                  value={actor.lastCycleBlock?.toString() ?? '—'}
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow
                   label="Balance"
-                  value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? "NTVE"}`}
+                  value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                   valueClass="tabnum text-(--mono-text)"
                 />
               </div>
@@ -155,12 +155,12 @@
                 />
                 <DetailRow
                   label="Last cycle"
-                  value={actor.lastCycleBlock?.toString() ?? "—"}
+                  value={actor.lastCycleBlock?.toString() ?? '—'}
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow
                   label="Native balance"
-                  value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? "NTVE"}`}
+                  value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                   valueClass="tabnum text-(--mono-text)"
                 />
               </div>

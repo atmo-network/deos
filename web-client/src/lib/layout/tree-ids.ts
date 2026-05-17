@@ -1,4 +1,10 @@
-import type { TileNode } from "./types";
+/*
+Domain: Layout tree ids
+Owns: Local tile id generation, reset, and sequence recalculation from existing trees.
+Excludes: Persistence keys, DOM ids outside tile nodes, and widget/panel identity.
+Zone: Layout algorithm helper; depends only on layout tree contracts.
+*/
+import type { TileNode } from './types';
 
 let nextId = 0;
 
@@ -11,11 +17,11 @@ export function resetTileIdSequence(): void {
 }
 
 export function recalcNextTileId(node: TileNode): void {
-  const num = Number.parseInt(node.id.replace("t", ""), 10);
+  const num = Number.parseInt(node.id.replace('t', ''), 10);
   if (!Number.isNaN(num) && num >= nextId) {
     nextId = num + 1;
   }
-  if (node.type === "split") {
+  if (node.type === 'split') {
     recalcNextTileId(node.children[0]);
     recalcNextTileId(node.children[1]);
   }

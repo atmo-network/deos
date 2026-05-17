@@ -1,7 +1,7 @@
 ---
 page_type: process
 title: Contributing Guidelines
-summary: How to contribute to the DEOS framework, understand the philosophy, and navigate the validation gates.
+summary: How to contribute to DEOS by choosing the right domain, preserving physics-first constraints, and running the correct validation layer.
 locale: en
 canonical_page_id: contributing
 translation_status: source
@@ -18,9 +18,11 @@ tags:
   - contributing
   - workflow
 related:
+  - Domain Map
   - Three-Layer Validation
   - DEOS Framework Overview
-last_compiled: 2026-04-15
+  - Scripts Layer
+last_compiled: 2026-05-17
 confidence: 0.95
 ---
 
@@ -28,54 +30,70 @@ confidence: 0.95
 
 ## Summary
 
-Contributing to the DEOS framework requires understanding its dual nature: it is both a mathematical economic engine and a modern Polkadot SDK Parachain runtime. Contributions must pass rigorous validation and respect the "Physics-First" philosophy.
+Contributing to DEOS means changing a domain without weakening the rest of the graph. A contribution may touch runtime code, economic formulas, client UX, wiki pages, scripts, or release metadata, but it should preserve the same core discipline: explicit contracts, deterministic economic behavior, honest read models, and validated boundaries.
 
-## Before Writing Code
+## Before writing code
 
-### 1. Understand the Philosophy
+### 1. Find the domain
 
-The DEOS framework is built on a "Physics-First" paradigm. Code should reinforce structural economic guarantees (the "physics") rather than implementing "politics-by-default" (manual interventions).
+Use [Domain Map](../concepts/domain-map.en.md) first. Decide whether the change belongs to economic physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, or future-gated work.
 
-### 2. Read the Normative Contracts
+### 2. Respect physics-first design
 
-Before touching the `/template` (runtime) or `/web-client` (frontend), you must read the authoritative contracts in `/docs`.
+DEOS prefers bounded protocol-managed reactions over manual intervention. Governance can steer and authorize changes, but survival-critical economic behavior should remain explicit, deterministic, and validated.
 
-- Implementation follows the spec, not the other way around.
-- See `docs/README.md` for the index of required reading, especially the `Polkadot SDK 2603 Best Practices`.
+See [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md).
 
-## Development Workflow
+### 3. Keep forkability in mind
 
-### The Adoption Model
+DEOS is a framework intended for downstream ecosystems. Upstream contributions should harden reusable framework surfaces: runtime reliability, read models, validation, tooling, docs/wiki clarity, and reference-client honesty. Product-specific business logic should normally stay downstream.
 
-DEOS is designed as a "Foundation in a Box". Downstream ecosystems are expected to fork DEOS to build their products. Upstream contributions to DEOS should focus on:
+## Development workflow
 
-- Framework hardening
-- Read-model improvements
-- Tooling and Scripts
-- Universal stabilizations
+### Pick the right validation layer
 
-Business logic should stay in downstream forks, not accrete inside the core repo.
+Use [Three-Layer Validation](../development/three-layer-validation.en.md):
 
-### Zero Warnings Policy
+1. simulation for economic formulas and invariants;
+2. runtime behavior checks for pallets and integrations;
+3. systemic validation for cross-domain behavior.
 
-All Rust code must compile with zero `clippy` warnings. The repository maintains a strict linting hygiene tracker matching the upstream Polkadot SDK.
+Client work should also run the web-client validation stack, and wiki work should run the trusted wiki validation gate.
 
-### Three-Layer Validation
+### Preserve zero-warning hygiene
 
-If your PR touches economic logic, it must pass all three layers of validation:
+Runtime and client code should not accumulate warnings, debug leakage, unsafe type escapes, or stale terminology. If a shortcut becomes necessary, document why it is local and bounded.
 
-1. **Simulation**: JavaScript/BigInt math checks (`/simulator`)
-2. **Implementation**: Rust unit tests and benchmarks (`/template/pallets`)
-3. **Integration**: Parachain E2E and XCM tests (`/template/runtime`)
+### Keep knowledge synchronized
 
-## Documentation Discipline
+When behavior changes, update the right knowledge surface:
 
-When contributing features or fixes, you are also responsible for the knowledge sync:
+- Wiki pages for newcomer-facing explanation and cross-links;
+- Backlog for open work;
+- Changelog for completed delivery;
+- Durable context when a reusable rule or pattern changes.
 
-1. Update the authoritative `/docs` if logic changes.
-2. The `/wiki` will be automatically recompiled from `/docs` by the `wiki-sync` agent, or you can run the sync manually.
-3. Keep the terminology exact. Do not use colloquial terms (e.g., "agents" or "smart contracts") for precise architecture concepts like "Account Abstraction Actors" (AAA) or "Pallets".
+## Contribution boundaries
 
-## Getting Help
+Good contributions usually:
 
-Check the `Scripts Layer` for local automation tools to easily spin up a dev environment, seed state, and run tests. Use the issue tracker for architectural discussions before starting large PRs.
+- Close a concrete backlog item or a clear discovered slice;
+- Improve validation or reduce ambiguity;
+- Remove repeated UI, docs, or terminology drift;
+- Strengthen runtime/client honesty;
+- Keep future-gated work gated until the external condition exists.
+
+Risky contributions usually:
+
+- Add feature growth without an identified domain pressure;
+- Move unbounded history into consensus state;
+- Make indexers a silent dependency for canonical flows;
+- Reintroduce manager/farmer wording for current System AAA actors;
+- Turn wiki pages into release notes or duplicate docs.
+
+## Related
+
+- [Domain Map](../concepts/domain-map.en.md)
+- [Three-Layer Validation](../development/three-layer-validation.en.md)
+- [DEOS Framework Overview](../overview/deos-framework.en.md)
+- [Scripts Layer](../usage/scripts-layer.en.md)

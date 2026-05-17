@@ -90,9 +90,3 @@ Long-range route analytics or chart history remain separate materialized concern
 - [Token-Driven Automation](token-driven-automation.en.md)
 - [Staking Pools](staking-pools.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/axial-router.architecture.en.md`
-- `docs/tmc.architecture.en.md`
-- `docs/tmctol.specification.en.md`

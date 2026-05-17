@@ -1,16 +1,23 @@
+/*
+Domain: Layout store
+Owns: Workspace frame state, tile tree mutations, persistence integration, and lane/sidebar UI state.
+Excludes: Widget internals, domain data stores, adapter transport, and UI Kit implementation.
+Zone: Layout state slice; may depend on layout helpers and system persistence only.
+*/
+import { readStoredJson, writeStoredJson } from '$lib/system/persistence';
+
 import {
-  buildLayoutFromSpec,
   CANONICAL_DEFAULT_FRAME_STATE,
   CANONICAL_DEFAULT_LAYOUT_SPEC,
   LEGACY_SHIPPED_DEFAULT_LAYOUT_SPEC,
+  buildSplitLayoutFromSpec,
   matchesLayoutSpec,
-} from "./default-layout";
-import { genTileId, recalcNextTileId, resetTileIdSequence } from "./tree-ids";
+} from './default-layout';
 import {
   normalizeFrameState,
   normalizeLegacyLayout,
-} from "./legacy-normalization";
-import { readStoredJson, writeStoredJson } from "$lib/shared/persistence";
+} from './legacy-normalization';
+import { genTileId, recalcNextTileId, resetTileIdSequence } from './tree-ids';
 import {
   addTabToLeaf,
   collapseEmpty,
@@ -22,8 +29,8 @@ import {
   splitLeafWithExistingLeaf,
   splitLeafWithTab,
   updateSplitRatio,
-} from "./tree-ops";
-import { countLeaves, findLeaf, isValidTree } from "./tree-utils";
+} from './tree-ops';
+import { countLeaves, findLeaf, isValidTree } from './tree-utils';
 import type {
   DragLeafState,
   DragTabState,
@@ -33,14 +40,25 @@ import type {
   TileNode,
   TileSplit,
   WorkspaceFrameState,
-} from "./types";
-import { MAX_TILE_LEAF_COUNT } from "./types";
+} from './types';
+import { MAX_TILE_LEAF_COUNT } from './types';
 
-const TILE_LAYOUT_STORAGE_KEY = "deos-tile-layout";
-const WORKSPACE_FRAME_STORAGE_KEY = "deos-workspace-frame";
+const TILE_LAYOUT_STORAGE_KEY = 'deos-tile-layout';
+const WORKSPACE_FRAME_STORAGE_KEY = 'deos-workspace-frame';
 
 function createDefaultLayout(): TileSplit {
-  return buildLayoutFromSpec(CANONICAL_DEFAULT_LAYOUT_SPEC, genTileId) as TileSplit;
+  return buildSplitLayoutFromSpec(CANONICAL_DEFAULT_LAYOUT_SPEC, genTileId);
+}
+
+function hasTileNodeTypeCandidate(
+  value: unknown,
+): value is { type: 'leaf' | 'split' } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    (value.type === 'leaf' || value.type === 'split')
+  );
 }
 
 function createDefaultFrameState(): WorkspaceFrameState {
@@ -62,14 +80,8 @@ class LayoutStore {
   }
 
   private load() {
-    const parsed = readStoredJson<unknown>(TILE_LAYOUT_STORAGE_KEY);
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      "type" in parsed &&
-      ((parsed as Record<string, unknown>).type === "leaf" ||
-        (parsed as Record<string, unknown>).type === "split")
-    ) {
+    const parsed = readStoredJson(TILE_LAYOUT_STORAGE_KEY);
+    if (hasTileNodeTypeCandidate(parsed)) {
       const normalized = normalizeLegacyLayout(parsed, genTileId);
       if (normalized && isValidTree(normalized)) {
         if (matchesLayoutSpec(normalized, LEGACY_SHIPPED_DEFAULT_LAYOUT_SPEC)) {
@@ -82,7 +94,7 @@ class LayoutStore {
         }
       }
     }
-    const parsedFrame = readStoredJson<unknown>(WORKSPACE_FRAME_STORAGE_KEY);
+    const parsedFrame = readStoredJson(WORKSPACE_FRAME_STORAGE_KEY);
     const normalizedFrame = normalizeFrameState(parsedFrame);
     if (normalizedFrame) {
       this.frame = normalizedFrame;

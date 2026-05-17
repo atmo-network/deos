@@ -65,8 +65,3 @@ DEOS строится как полноценный современный runti
 - [Идентичность активов](asset-identity.ru.md)
 - [Стратегия случайности](randomness-strategy.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
-
-## Источники
-
-- `docs/polkadot-sdk-2603.insights.en.md`
-- `docs/core.architecture.en.md`

@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Эталонный клиент
-summary: Веб-клиент DEOS — это on-chain-first эталонный интерфейс для живых протокольных сценариев. Его архитектура разделяет экономические виджеты и layout-инфраструктуру, централизует execution feedback и честно показывает происхождение данных.
+summary: Веб-клиент DEOS — on-chain-first эталонный интерфейс для живых протокольных сценариев. Он разделяет product widgets и layout, централизует UI-примитивы, проверяет владение через Domain DAG и показывает происхождение данных.
 locale: ru
 canonical_page_id: reference-client
 translation_of: reference-client.en.md
@@ -12,6 +12,7 @@ available_locales:
 sources:
   - ../../docs/web-client.architecture.en.md
   - ../../web-client/README.md
+  - ../../web-client/src/lib/ui/README.md
   - ../../docs/read-model.contract.en.md
 status: active
 audience: newcomer
@@ -19,65 +20,56 @@ tags:
   - overview
   - web-client
   - product
+  - ui-kit
+  - domain-dag
 related:
   - Первые шаги
   - Разделение read-model
   - FAQ для новичков
   - Базовые термины
-last_compiled: 2026-04-16
-confidence: 0.9
+last_compiled: 2026-05-17
+confidence: 0.93
 ---
 
 # Эталонный клиент
 
 ## Кратко
 
-Локальный веб-клиент в репозитории — это браузерный эталонный клиент DEOS. Он описывается как `on-chain-first`, то есть его главные живые продуктовые сценарии должны опираться на ограниченные канонические runtime-поверхности, а не тихо зависеть от off-chain реконструкции.
+Локальный веб-клиент в репозитории — браузерный эталонный клиент DEOS. Он `on-chain-first`: главные живые продуктовые сценарии должны опираться на ограниченные канонические runtime-поверхности, а не тихо зависеть от off-chain реконструкции.
 
-Клиент все еще находится на ранней стадии, но его архитектура уже довольно четко определяет truth surfaces, границы виджетов и словарь layout.
+Модель владения явная: widgets выражают product actions, layout владеет pane/lane mechanics, UI Kit владеет reusable presentation primitives, system владеет browser/session wiring, а adapters остаются transport boundaries.
 
-## Что здесь означает `on-chain-first`
+## Контракт продукта и layout
 
-Клиент читает живое состояние протокола через адаптеры, опирающиеся на chain. Сегодня это включает балансы, route preview, governance-представления, состояние автоматизации и графики, собранные в пределах текущей сессии.
+Текущие продуктовые поверхности включают balances, route previews, governance views, automation status, staking state, session-bounded charting и wiki reading.
 
-Документация прямо говорит, что большие архивы и долгосрочная аналитика по-прежнему должны жить в indexed или materialized провайдерах. Интерфейс не должен выдавать такие поверхности за прямую chain truth.
+Клиент отделяет экономические функции от инфраструктуры размещения:
 
-## Виджеты и layout
+- Widgets — видимые product surfaces вроде swap, wallet, governance, charts, staking, automation и wiki;
+- Layout — pane, tile, split, tab, footer, header, sidebar и reserved-lane machinery;
+- Reserved edge lanes — developer-configured shell zones, а не экономические панели, которые пользователь свободно переставляет.
 
-Одно из главных правил клиента — не смешивать экономические функции с инфраструктурой размещения.
+Widgets должны адаптироваться к ширине и высоте pane, а не предполагать только desktop stack.
 
-- `Виджеты` — это продуктовые поверхности вроде swap, wallet, governance, charts и automation
-- `Layout` — это механика панелей, плиток, сплитов, вкладок и зарезервированных зон, которая эти виджеты раскладывает
+## Владение и feedback
 
-Это различие важно, потому что архитектура не хочет, чтобы механика панелей выглядела как будто она сама является экономической функцией.
+Клиент использует [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md), чтобы повторяемые controls и структурные границы жили в owner layers. Widgets должны выражать product intent, а не пересобирать primitive controls и не лезть в adapter internals.
 
-## Зарезервированные краевые зоны
+Execution feedback централизован: `LogWidget` — главная transaction/progress surface, а action widgets остаются сфокусированы на запуске действий. Это тот же anti-duplication rule, что и для UI primitives и provenance badges.
 
-Header, footer и sidebar рассматриваются как зарезервированные краевые зоны вокруг центрального рабочего пространства, а не как обычные вкладки.
+## Границы данных и wiki
 
-Это позволяет держать shell-контролы, выбор аккаунта, настройки и компактные статусные поверхности отдельно от модели взаимодействия, которая используется для главных экономических виджетов.
+Клиент должен честно маркировать и protocol provenance, и browser realization. Session-built views не должны притворяться retained archive truth. Длинная аналитика и архивы принадлежат indexed или materialized providers, а не прямой chain truth.
 
-## Централизованная обратная связь об исполнении
+Каноническая модель данных описана в [Разделении read-model](../concepts/read-model-split.ru.md).
 
-Клиент также старается не размазывать статус транзакций по всему интерфейсу. Главная поверхность execution feedback — это `LogWidget`, а action-виджеты остаются сфокусированными на запуске действий.
-
-Это тот же антидублирующий принцип, который документация применяет к общим UI-компонентам и provenance-бейджам.
-
-## Честность read-model в UI
-
-Клиент следует общепроектному read-model split и добавляет вторую, браузерную ось реализации. Поэтому можно показать не только является ли поверхность canonical-chain или materialized, но и как именно браузер получает эти данные: напрямую, из session cache, из session-derived состояния или от провайдера.
-
-Смысл в честности: представление, собранное в рамках текущей сессии, не должно притворяться полной архивной истиной.
+Веб-клиент рендерит generated wiki как trusted repo-local markdown и использует скомпилированные metadata для навигации, алиасов, graph links, state и provenance. Граница доверия и правила развития wiki описаны в [Generated Wiki](../concepts/generated-wiki.ru.md).
 
 ## Связанные страницы
 
 - [Первые шаги](../getting-started/first-steps.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)
+- [Generated Wiki](../concepts/generated-wiki.ru.md)
+- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
-
-## Источники
-
-- `docs/web-client.architecture.en.md`
-- `web-client/README.md`
-- `docs/read-model.contract.en.md`

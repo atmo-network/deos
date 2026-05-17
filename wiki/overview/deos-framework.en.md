@@ -41,9 +41,9 @@ confidence: 0.95
 
 ## Summary
 
-DEOS stands for `Deterministic Economic Operating System`. It is the framework and reference stack in this repository, not the finished downstream product.
+DEOS stands for `Deterministic Economic Operating System`. It is a forkable runtime framework for programmable economies, not the finished downstream product.
 
-The framework exists to host bounded economic mechanisms such as minting curves, treasury-owned liquidity, deterministic actors, staking, governance, and client-facing read models. In this repository, the current flagship configuration of that framework is the TMCTOL standard.
+The one-line model: DEOS connects token issuance, protocol-owned liquidity, routing, staking, governance, and automated actors into a deterministic institutional machine. In this repository, the current flagship configuration of that framework is the TMCTOL standard.
 
 ## What DEOS Means
 
@@ -90,6 +90,7 @@ In the current line, that model appears through:
 ## Related
 
 - [First Steps](../getting-started/first-steps.en.md)
+- [Forking DEOS](../usage/forking-deos.en.md)
 - [AAA System](aaa-system.en.md)
 - [AA-Actor](aa-actor.en.md)
 - [Axial Router](axial-router.en.md)
@@ -103,9 +104,3 @@ In the current line, that model appears through:
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Reference Client](reference-client.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `README.md`
-- `docs/README.md`
-- `docs/core.architecture.en.md`

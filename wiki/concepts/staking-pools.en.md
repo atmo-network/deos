@@ -111,9 +111,3 @@ For non-native assets, same-asset reward settlement can still auto-compound into
 - [Routing and Minting Loop](routing-and-minting-loop.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
-
-## Sources
-
-- `docs/staking.specification.en.md`
-- `docs/staking.architecture.en.md`
-- `docs/governance.specification.en.md`

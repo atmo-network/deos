@@ -1,3 +1,9 @@
+/*
+Domain: Governance provider contract
+Owns: Governance blockchain-provider interface and unavailable-provider fallback behavior.
+Excludes: Concrete PAPI/RPC implementation, mock fixture data, store lifecycle, and UI rendering.
+Zone: Adapter contract boundary for governance; imported by governance store and provider implementations.
+*/
 import type {
   GovernanceAccountId,
   GovernanceAccountPowerView,
@@ -29,11 +35,11 @@ import type {
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
-} from "$lib/governance";
+} from '$lib/governance';
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   buildWriteSurfaceAvailability,
-} from "$lib/governance";
+} from '$lib/governance';
 
 export type GovernanceBlockchainProvider = GovernanceAdapter;
 
@@ -54,8 +60,8 @@ function unavailableWriteSurface(
 
 function unconfiguredProviderState(message: string): GovernanceProviderState {
   return {
-    status: "unconfigured",
-    label: "Blockchain provider (unconfigured)",
+    status: 'unconfigured',
+    label: 'Blockchain provider (unconfigured)',
     endpoint: null,
     chainName: null,
     nodeName: null,
@@ -71,7 +77,7 @@ export class GovernanceUnavailableBlockchainProvider implements GovernanceBlockc
   private state: GovernanceProviderState;
 
   constructor(
-    private readonly unavailableReason = "No blockchain governance provider configured yet",
+    private readonly unavailableReason = 'No blockchain governance provider configured yet',
   ) {
     this.state = unconfiguredProviderState(unavailableReason);
   }

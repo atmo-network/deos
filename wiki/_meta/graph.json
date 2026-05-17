@@ -150,6 +150,18 @@
       }
     },
     {
+      "id": "reading-paths",
+      "title": {
+        "en": "Reading Paths",
+        "ru": "Маршруты чтения"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/reading-paths.en.md",
+        "ru": "getting-started/reading-paths.ru.md"
+      }
+    },
+    {
       "id": "tmctol-standard",
       "title": {
         "en": "TMCTOL Standard",
@@ -222,6 +234,42 @@
       }
     },
     {
+      "id": "ui-kit-and-domain-dag",
+      "title": {
+        "en": "UI Kit and Domain DAG",
+        "ru": "UI Kit и Domain DAG"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/ui-kit-and-domain-dag.en.md",
+        "ru": "concepts/ui-kit-and-domain-dag.ru.md"
+      }
+    },
+    {
+      "id": "generated-wiki",
+      "title": {
+        "en": "Generated Wiki",
+        "ru": "Generated Wiki"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/generated-wiki.en.md",
+        "ru": "concepts/generated-wiki.ru.md"
+      }
+    },
+    {
+      "id": "domain-map",
+      "title": {
+        "en": "Domain Map",
+        "ru": "Карта доменов"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/domain-map.en.md",
+        "ru": "concepts/domain-map.ru.md"
+      }
+    },
+    {
       "id": "physics-vs-politics",
       "title": {
         "en": "Physics-First vs Politics-First",
@@ -246,6 +294,18 @@
       }
     },
     {
+      "id": "status",
+      "title": {
+        "en": "Development Status",
+        "ru": "Статус разработки"
+      },
+      "page_type": "status",
+      "path": {
+        "en": "development/status.en.md",
+        "ru": "development/status.ru.md"
+      }
+    },
+    {
       "id": "core-terms",
       "title": {
         "en": "Core Terms",
@@ -255,6 +315,330 @@
       "path": {
         "en": "glossary/core-terms.en.md",
         "ru": "glossary/core-terms.ru.md"
+      }
+    },
+    {
+      "id": "end-to-end-flows",
+      "title": {
+        "en": "End-to-End Flows",
+        "ru": "Сквозные сценарии"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/end-to-end-flows.en.md",
+        "ru": "concepts/end-to-end-flows.ru.md"
+      }
+    },
+    {
+      "id": "architecture-diagrams",
+      "title": {
+        "en": "Architecture Diagrams",
+        "ru": "Архитектурные схемы"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/architecture-diagrams.en.md",
+        "ru": "concepts/architecture-diagrams.ru.md"
+      }
+    },
+    {
+      "id": "token-surfaces",
+      "title": {
+        "en": "Token Surfaces",
+        "ru": "Токеновые поверхности"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/token-surfaces.en.md",
+        "ru": "concepts/token-surfaces.ru.md"
+      }
+    },
+    {
+      "id": "economic-thresholds",
+      "title": {
+        "en": "Economic Thresholds",
+        "ru": "Экономические пороги"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/economic-thresholds.en.md",
+        "ru": "concepts/economic-thresholds.ru.md"
+      }
+    },
+    {
+      "id": "forking-deos",
+      "title": {
+        "en": "Forking DEOS",
+        "ru": "Форк DEOS"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/forking-deos.en.md",
+        "ru": "usage/forking-deos.ru.md"
+      }
+    },
+    {
+      "id": "validation-troubleshooting",
+      "title": {
+        "en": "Validation Troubleshooting",
+        "ru": "Troubleshooting validation"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/validation-troubleshooting.en.md",
+        "ru": "usage/validation-troubleshooting.ru.md"
+      }
+    },
+    {
+      "id": "agent-coordination",
+      "title": {
+        "en": "Agent Coordination",
+        "ru": "Координация агентов"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/agent-coordination.en.md",
+        "ru": "usage/agent-coordination.ru.md"
+      }
+    },
+    {
+      "id": "parachain-context",
+      "title": {
+        "en": "Parachain Context",
+        "ru": "Parachain context"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/parachain-context.en.md",
+        "ru": "concepts/parachain-context.ru.md"
+      }
+    },
+    {
+      "id": "tol-bucket-scenarios",
+      "title": {
+        "en": "TOL Bucket Scenarios",
+        "ru": "Сценарии TOL buckets"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/tol-bucket-scenarios.en.md",
+        "ru": "concepts/tol-bucket-scenarios.ru.md"
+      }
+    },
+    {
+      "id": "wiki-graph-metadata",
+      "title": {
+        "en": "Wiki Graph Metadata",
+        "ru": "Metadata wiki-графа"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/wiki-graph-metadata.en.md",
+        "ru": "usage/wiki-graph-metadata.ru.md"
+      }
+    },
+    {
+      "id": "invariant-map",
+      "title": {
+        "en": "Invariant Map",
+        "ru": "Карта инвариантов"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/invariant-map.en.md",
+        "ru": "concepts/invariant-map.ru.md"
+      }
+    },
+    {
+      "id": "threat-model",
+      "title": {
+        "en": "Threat Model",
+        "ru": "Threat Model"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/threat-model.en.md",
+        "ru": "concepts/threat-model.ru.md"
+      }
+    },
+    {
+      "id": "what-deos-is-not",
+      "title": {
+        "en": "What DEOS Is Not",
+        "ru": "Чем DEOS не является"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/what-deos-is-not.en.md",
+        "ru": "concepts/what-deos-is-not.ru.md"
+      }
+    },
+    {
+      "id": "economic-claim-levels",
+      "title": {
+        "en": "Economic Claim Levels",
+        "ru": "Уровни экономических утверждений"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/economic-claim-levels.en.md",
+        "ru": "concepts/economic-claim-levels.ru.md"
+      }
+    },
+    {
+      "id": "minimal-fork-profile",
+      "title": {
+        "en": "Minimal Fork Profile",
+        "ru": "Минимальный профиль форка"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/minimal-fork-profile.en.md",
+        "ru": "usage/minimal-fork-profile.ru.md"
+      }
+    },
+    {
+      "id": "repository-structure",
+      "title": {
+        "en": "Repository Structure",
+        "ru": "Структура репозитория"
+      },
+      "page_type": "implementation",
+      "path": {
+        "en": "implementation/repository-structure.en.md",
+        "ru": "implementation/repository-structure.ru.md"
+      }
+    },
+    {
+      "id": "tech-stack",
+      "title": {
+        "en": "Tech Stack",
+        "ru": "Технологический стек"
+      },
+      "page_type": "implementation",
+      "path": {
+        "en": "implementation/tech-stack.en.md",
+        "ru": "implementation/tech-stack.ru.md"
+      }
+    },
+    {
+      "id": "tmctol-formulas",
+      "title": {
+        "en": "TMCTOL Formulas",
+        "ru": "Формулы TMCTOL"
+      },
+      "page_type": "math",
+      "path": {
+        "en": "math/tmctol-formulas.en.md",
+        "ru": "math/tmctol-formulas.ru.md"
+      }
+    },
+    {
+      "id": "scripts-layer",
+      "title": {
+        "en": "Scripts Layer",
+        "ru": "Слой скриптов"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/scripts-layer.en.md",
+        "ru": "usage/scripts-layer.ru.md"
+      }
+    },
+    {
+      "id": "three-layer-validation",
+      "title": {
+        "en": "Three-Layer Validation",
+        "ru": "Трехуровневая валидация"
+      },
+      "page_type": "development",
+      "path": {
+        "en": "development/three-layer-validation.en.md",
+        "ru": "development/three-layer-validation.ru.md"
+      }
+    },
+    {
+      "id": "contributing",
+      "title": {
+        "en": "Contributing Guidelines",
+        "ru": "Руководство контрибьютора"
+      },
+      "page_type": "community",
+      "path": {
+        "en": "community/contributing.en.md",
+        "ru": "community/contributing.ru.md"
+      }
+    },
+    {
+      "id": "deos-in-60-seconds",
+      "title": {
+        "en": "DEOS in 60 Seconds",
+        "ru": "DEOS за 60 секунд"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/deos-in-60-seconds.en.md",
+        "ru": "getting-started/deos-in-60-seconds.ru.md"
+      }
+    },
+    {
+      "id": "who-deos-is-for",
+      "title": {
+        "en": "Who DEOS Is For",
+        "ru": "Для кого DEOS"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/who-deos-is-for.en.md",
+        "ru": "getting-started/who-deos-is-for.ru.md"
+      }
+    },
+    {
+      "id": "partner-pitch",
+      "title": {
+        "en": "Partner Pitch",
+        "ru": "Partner Pitch"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/partner-pitch.en.md",
+        "ru": "getting-started/partner-pitch.ru.md"
+      }
+    },
+    {
+      "id": "deos-vs-dao-treasury",
+      "title": {
+        "en": "DEOS vs DAO Treasury",
+        "ru": "DEOS vs DAO Treasury"
+      },
+      "page_type": "comparison",
+      "path": {
+        "en": "comparisons/deos-vs-dao-treasury.en.md",
+        "ru": "comparisons/deos-vs-dao-treasury.ru.md"
+      }
+    },
+    {
+      "id": "executive-summary",
+      "title": {
+        "en": "Executive Summary",
+        "ru": "Executive Summary"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/executive-summary.en.md",
+        "ru": "getting-started/executive-summary.ru.md"
+      }
+    },
+    {
+      "id": "partner-evaluation-route",
+      "title": {
+        "en": "Partner Evaluation Route",
+        "ru": "Маршрут оценки для партнера"
+      },
+      "page_type": "usage",
+      "path": {
+        "en": "usage/partner-evaluation-route.en.md",
+        "ru": "usage/partner-evaluation-route.ru.md"
       }
     }
   ],
@@ -600,6 +984,86 @@
       "type": "implements-read-model-honesty"
     },
     {
+      "from": "reference-client",
+      "to": "ui-kit-and-domain-dag",
+      "type": "uses-frontend-ownership-discipline"
+    },
+    {
+      "from": "ui-kit-and-domain-dag",
+      "to": "reference-client",
+      "type": "frontend-architecture-detail"
+    },
+    {
+      "from": "generated-wiki",
+      "to": "reference-client",
+      "type": "rendered-by-client"
+    },
+    {
+      "from": "generated-wiki",
+      "to": "first-steps",
+      "type": "onboarding-entry"
+    },
+    {
+      "from": "generated-wiki",
+      "to": "domain-map",
+      "type": "defines-wiki-knowledge-graph"
+    },
+    {
+      "from": "domain-map",
+      "to": "deos-framework",
+      "type": "maps-framework-domain"
+    },
+    {
+      "from": "domain-map",
+      "to": "tmctol-standard",
+      "type": "maps-economic-domain"
+    },
+    {
+      "from": "domain-map",
+      "to": "aaa-system",
+      "type": "maps-actor-domain"
+    },
+    {
+      "from": "domain-map",
+      "to": "governance-overview",
+      "type": "maps-governance-domain"
+    },
+    {
+      "from": "domain-map",
+      "to": "reference-client",
+      "type": "maps-client-domain"
+    },
+    {
+      "from": "reading-paths",
+      "to": "first-steps",
+      "type": "expands-onboarding"
+    },
+    {
+      "from": "reading-paths",
+      "to": "generated-wiki",
+      "type": "explains-navigation-layer"
+    },
+    {
+      "from": "reading-paths",
+      "to": "status",
+      "type": "status-and-release-route"
+    },
+    {
+      "from": "status",
+      "to": "reference-client",
+      "type": "current-product-surface"
+    },
+    {
+      "from": "status",
+      "to": "generated-wiki",
+      "type": "current-documentation-surface"
+    },
+    {
+      "from": "status",
+      "to": "reading-paths",
+      "type": "onboarding-context"
+    },
+    {
       "from": "physics-vs-politics",
       "to": "governance-domains",
       "type": "explains-protection-bias"
@@ -610,9 +1074,19 @@
       "type": "orientation"
     },
     {
+      "from": "newcomer-faq",
+      "to": "status",
+      "type": "release-status-boundary"
+    },
+    {
       "from": "read-model-split",
       "to": "core-terms",
       "type": "defines-vocabulary"
+    },
+    {
+      "from": "status",
+      "to": "core-terms",
+      "type": "defines-status-vocabulary"
     },
     {
       "from": "governance-domains",
@@ -623,6 +1097,771 @@
       "from": "governance-domains",
       "to": "core-terms",
       "type": "defines-vocabulary"
+    },
+    {
+      "from": "domain-map",
+      "to": "end-to-end-flows",
+      "type": "guides"
+    },
+    {
+      "from": "end-to-end-flows",
+      "to": "routing-and-minting-loop",
+      "type": "walks-through"
+    },
+    {
+      "from": "end-to-end-flows",
+      "to": "aaa-system",
+      "type": "walks-through"
+    },
+    {
+      "from": "end-to-end-flows",
+      "to": "aa-actor",
+      "type": "walks-through"
+    },
+    {
+      "from": "end-to-end-flows",
+      "to": "tmctol-standard",
+      "type": "grounds"
+    },
+    {
+      "from": "end-to-end-flows",
+      "to": "staking-pools",
+      "type": "walks-through"
+    },
+    {
+      "from": "end-to-end-flows",
+      "to": "read-model-split",
+      "type": "uses"
+    },
+    {
+      "from": "reading-paths",
+      "to": "end-to-end-flows",
+      "type": "recommends"
+    },
+    {
+      "from": "newcomer-faq",
+      "to": "end-to-end-flows",
+      "type": "answers-with"
+    },
+    {
+      "from": "domain-map",
+      "to": "architecture-diagrams",
+      "type": "visualizes"
+    },
+    {
+      "from": "architecture-diagrams",
+      "to": "end-to-end-flows",
+      "type": "supports"
+    },
+    {
+      "from": "architecture-diagrams",
+      "to": "routing-and-minting-loop",
+      "type": "visualizes"
+    },
+    {
+      "from": "architecture-diagrams",
+      "to": "aaa-system",
+      "type": "visualizes"
+    },
+    {
+      "from": "architecture-diagrams",
+      "to": "read-model-split",
+      "type": "visualizes"
+    },
+    {
+      "from": "architecture-diagrams",
+      "to": "governance-domains",
+      "type": "visualizes"
+    },
+    {
+      "from": "reading-paths",
+      "to": "architecture-diagrams",
+      "type": "recommends"
+    },
+    {
+      "from": "newcomer-faq",
+      "to": "architecture-diagrams",
+      "type": "answers-with"
+    },
+    {
+      "from": "domain-map",
+      "to": "token-surfaces",
+      "type": "guides"
+    },
+    {
+      "from": "token-surfaces",
+      "to": "tmctol-standard",
+      "type": "maps"
+    },
+    {
+      "from": "token-surfaces",
+      "to": "staking-pools",
+      "type": "maps"
+    },
+    {
+      "from": "token-surfaces",
+      "to": "governance-domains",
+      "type": "maps"
+    },
+    {
+      "from": "token-surfaces",
+      "to": "token-minting-curve",
+      "type": "uses"
+    },
+    {
+      "from": "token-surfaces",
+      "to": "read-model-split",
+      "type": "uses"
+    },
+    {
+      "from": "newcomer-faq",
+      "to": "token-surfaces",
+      "type": "answers-with"
+    },
+    {
+      "from": "reading-paths",
+      "to": "token-surfaces",
+      "type": "recommends"
+    },
+    {
+      "from": "domain-map",
+      "to": "economic-thresholds",
+      "type": "guides"
+    },
+    {
+      "from": "economic-thresholds",
+      "to": "tmctol-standard",
+      "type": "explains"
+    },
+    {
+      "from": "economic-thresholds",
+      "to": "tmctol-formulas",
+      "type": "uses"
+    },
+    {
+      "from": "economic-thresholds",
+      "to": "token-minting-curve",
+      "type": "uses"
+    },
+    {
+      "from": "economic-thresholds",
+      "to": "routing-and-minting-loop",
+      "type": "relates"
+    },
+    {
+      "from": "economic-thresholds",
+      "to": "token-surfaces",
+      "type": "relates"
+    },
+    {
+      "from": "physics-vs-politics",
+      "to": "economic-thresholds",
+      "type": "references"
+    },
+    {
+      "from": "reading-paths",
+      "to": "economic-thresholds",
+      "type": "recommends"
+    },
+    {
+      "from": "deos-framework",
+      "to": "forking-deos",
+      "type": "frames"
+    },
+    {
+      "from": "forking-deos",
+      "to": "repository-structure",
+      "type": "uses"
+    },
+    {
+      "from": "forking-deos",
+      "to": "tech-stack",
+      "type": "uses"
+    },
+    {
+      "from": "forking-deos",
+      "to": "token-surfaces",
+      "type": "customizes"
+    },
+    {
+      "from": "forking-deos",
+      "to": "three-layer-validation",
+      "type": "requires"
+    },
+    {
+      "from": "reading-paths",
+      "to": "forking-deos",
+      "type": "recommends"
+    },
+    {
+      "from": "contributing",
+      "to": "forking-deos",
+      "type": "relates"
+    },
+    {
+      "from": "three-layer-validation",
+      "to": "validation-troubleshooting",
+      "type": "extends"
+    },
+    {
+      "from": "validation-troubleshooting",
+      "to": "scripts-layer",
+      "type": "uses"
+    },
+    {
+      "from": "validation-troubleshooting",
+      "to": "tech-stack",
+      "type": "uses"
+    },
+    {
+      "from": "validation-troubleshooting",
+      "to": "status",
+      "type": "uses"
+    },
+    {
+      "from": "reading-paths",
+      "to": "validation-troubleshooting",
+      "type": "recommends"
+    },
+    {
+      "from": "forking-deos",
+      "to": "validation-troubleshooting",
+      "type": "uses"
+    },
+    {
+      "from": "agent-coordination",
+      "to": "generated-wiki",
+      "type": "uses"
+    },
+    {
+      "from": "agent-coordination",
+      "to": "validation-troubleshooting",
+      "type": "uses"
+    },
+    {
+      "from": "agent-coordination",
+      "to": "three-layer-validation",
+      "type": "uses"
+    },
+    {
+      "from": "agent-coordination",
+      "to": "contributing",
+      "type": "supports"
+    },
+    {
+      "from": "scripts-layer",
+      "to": "agent-coordination",
+      "type": "relates"
+    },
+    {
+      "from": "reading-paths",
+      "to": "agent-coordination",
+      "type": "recommends"
+    },
+    {
+      "from": "parachain-context",
+      "to": "deos-framework",
+      "type": "frames"
+    },
+    {
+      "from": "parachain-context",
+      "to": "runtime-patterns",
+      "type": "uses"
+    },
+    {
+      "from": "parachain-context",
+      "to": "asset-identity",
+      "type": "uses"
+    },
+    {
+      "from": "parachain-context",
+      "to": "tech-stack",
+      "type": "uses"
+    },
+    {
+      "from": "parachain-context",
+      "to": "randomness-strategy",
+      "type": "uses"
+    },
+    {
+      "from": "forking-deos",
+      "to": "parachain-context",
+      "type": "requires"
+    },
+    {
+      "from": "reading-paths",
+      "to": "parachain-context",
+      "type": "recommends"
+    },
+    {
+      "from": "tol-bucket-scenarios",
+      "to": "tmctol-standard",
+      "type": "explains"
+    },
+    {
+      "from": "tol-bucket-scenarios",
+      "to": "end-to-end-flows",
+      "type": "extends"
+    },
+    {
+      "from": "tol-bucket-scenarios",
+      "to": "architecture-diagrams",
+      "type": "uses"
+    },
+    {
+      "from": "tol-bucket-scenarios",
+      "to": "aaa-system",
+      "type": "uses"
+    },
+    {
+      "from": "tol-bucket-scenarios",
+      "to": "token-driven-automation",
+      "type": "uses"
+    },
+    {
+      "from": "domain-map",
+      "to": "tol-bucket-scenarios",
+      "type": "guides"
+    },
+    {
+      "from": "reading-paths",
+      "to": "tol-bucket-scenarios",
+      "type": "recommends"
+    },
+    {
+      "from": "wiki-graph-metadata",
+      "to": "generated-wiki",
+      "type": "explains"
+    },
+    {
+      "from": "wiki-graph-metadata",
+      "to": "agent-coordination",
+      "type": "supports"
+    },
+    {
+      "from": "wiki-graph-metadata",
+      "to": "reference-client",
+      "type": "supports"
+    },
+    {
+      "from": "wiki-graph-metadata",
+      "to": "validation-troubleshooting",
+      "type": "supports"
+    },
+    {
+      "from": "generated-wiki",
+      "to": "wiki-graph-metadata",
+      "type": "uses"
+    },
+    {
+      "from": "reading-paths",
+      "to": "wiki-graph-metadata",
+      "type": "recommends"
+    },
+    {
+      "from": "invariant-map",
+      "to": "threat-model",
+      "type": "supports"
+    },
+    {
+      "from": "invariant-map",
+      "to": "economic-claim-levels",
+      "type": "uses"
+    },
+    {
+      "from": "invariant-map",
+      "to": "three-layer-validation",
+      "type": "uses"
+    },
+    {
+      "from": "invariant-map",
+      "to": "tmctol-standard",
+      "type": "uses"
+    },
+    {
+      "from": "threat-model",
+      "to": "invariant-map",
+      "type": "uses"
+    },
+    {
+      "from": "threat-model",
+      "to": "what-deos-is-not",
+      "type": "clarifies"
+    },
+    {
+      "from": "threat-model",
+      "to": "governance-domains",
+      "type": "uses"
+    },
+    {
+      "from": "threat-model",
+      "to": "read-model-split",
+      "type": "uses"
+    },
+    {
+      "from": "what-deos-is-not",
+      "to": "deos-framework",
+      "type": "clarifies"
+    },
+    {
+      "from": "what-deos-is-not",
+      "to": "threat-model",
+      "type": "relates"
+    },
+    {
+      "from": "what-deos-is-not",
+      "to": "parachain-context",
+      "type": "relates"
+    },
+    {
+      "from": "minimal-fork-profile",
+      "to": "forking-deos",
+      "type": "extends"
+    },
+    {
+      "from": "minimal-fork-profile",
+      "to": "what-deos-is-not",
+      "type": "uses"
+    },
+    {
+      "from": "minimal-fork-profile",
+      "to": "invariant-map",
+      "type": "uses"
+    },
+    {
+      "from": "minimal-fork-profile",
+      "to": "parachain-context",
+      "type": "uses"
+    },
+    {
+      "from": "economic-claim-levels",
+      "to": "economic-thresholds",
+      "type": "clarifies"
+    },
+    {
+      "from": "economic-claim-levels",
+      "to": "invariant-map",
+      "type": "supports"
+    },
+    {
+      "from": "economic-claim-levels",
+      "to": "threat-model",
+      "type": "supports"
+    },
+    {
+      "from": "economic-claim-levels",
+      "to": "three-layer-validation",
+      "type": "uses"
+    },
+    {
+      "from": "reading-paths",
+      "to": "invariant-map",
+      "type": "recommends"
+    },
+    {
+      "from": "reading-paths",
+      "to": "threat-model",
+      "type": "recommends"
+    },
+    {
+      "from": "reading-paths",
+      "to": "what-deos-is-not",
+      "type": "recommends"
+    },
+    {
+      "from": "reading-paths",
+      "to": "minimal-fork-profile",
+      "type": "recommends"
+    },
+    {
+      "from": "reading-paths",
+      "to": "economic-claim-levels",
+      "type": "recommends"
+    },
+    {
+      "from": "repository-structure",
+      "to": "tech-stack",
+      "type": "relates"
+    },
+    {
+      "from": "repository-structure",
+      "to": "scripts-layer",
+      "type": "uses"
+    },
+    {
+      "from": "repository-structure",
+      "to": "agent-coordination",
+      "type": "uses"
+    },
+    {
+      "from": "tech-stack",
+      "to": "repository-structure",
+      "type": "relates"
+    },
+    {
+      "from": "tech-stack",
+      "to": "parachain-context",
+      "type": "uses"
+    },
+    {
+      "from": "tech-stack",
+      "to": "validation-troubleshooting",
+      "type": "supports"
+    },
+    {
+      "from": "tmctol-formulas",
+      "to": "tmctol-standard",
+      "type": "explains"
+    },
+    {
+      "from": "tmctol-formulas",
+      "to": "economic-thresholds",
+      "type": "supports"
+    },
+    {
+      "from": "tmctol-formulas",
+      "to": "economic-claim-levels",
+      "type": "supports"
+    },
+    {
+      "from": "scripts-layer",
+      "to": "three-layer-validation",
+      "type": "supports"
+    },
+    {
+      "from": "scripts-layer",
+      "to": "validation-troubleshooting",
+      "type": "supports"
+    },
+    {
+      "from": "three-layer-validation",
+      "to": "invariant-map",
+      "type": "supports"
+    },
+    {
+      "from": "three-layer-validation",
+      "to": "economic-claim-levels",
+      "type": "supports"
+    },
+    {
+      "from": "contributing",
+      "to": "agent-coordination",
+      "type": "uses"
+    },
+    {
+      "from": "contributing",
+      "to": "repository-structure",
+      "type": "uses"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "deos-framework",
+      "type": "introduces"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "what-deos-is-not",
+      "type": "clarifies"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "tmctol-standard",
+      "type": "introduces"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "domain-map",
+      "type": "routes"
+    },
+    {
+      "from": "index",
+      "to": "deos-in-60-seconds",
+      "type": "starts"
+    },
+    {
+      "from": "first-steps",
+      "to": "deos-in-60-seconds",
+      "type": "starts"
+    },
+    {
+      "from": "reading-paths",
+      "to": "deos-in-60-seconds",
+      "type": "recommends"
+    },
+    {
+      "from": "reading-paths",
+      "to": "reference-client",
+      "type": "recommends"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "reading-paths",
+      "type": "routes"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "who-deos-is-for",
+      "type": "routes"
+    },
+    {
+      "from": "who-deos-is-for",
+      "to": "what-deos-is-not",
+      "type": "clarifies"
+    },
+    {
+      "from": "who-deos-is-for",
+      "to": "minimal-fork-profile",
+      "type": "routes"
+    },
+    {
+      "from": "who-deos-is-for",
+      "to": "forking-deos",
+      "type": "routes"
+    },
+    {
+      "from": "reading-paths",
+      "to": "who-deos-is-for",
+      "type": "recommends"
+    },
+    {
+      "from": "index",
+      "to": "who-deos-is-for",
+      "type": "starts"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "partner-pitch",
+      "type": "routes"
+    },
+    {
+      "from": "who-deos-is-for",
+      "to": "partner-pitch",
+      "type": "routes"
+    },
+    {
+      "from": "partner-pitch",
+      "to": "minimal-fork-profile",
+      "type": "routes"
+    },
+    {
+      "from": "partner-pitch",
+      "to": "what-deos-is-not",
+      "type": "clarifies"
+    },
+    {
+      "from": "partner-pitch",
+      "to": "tmctol-standard",
+      "type": "explains"
+    },
+    {
+      "from": "reading-paths",
+      "to": "partner-pitch",
+      "type": "recommends"
+    },
+    {
+      "from": "index",
+      "to": "partner-pitch",
+      "type": "starts"
+    },
+    {
+      "from": "partner-pitch",
+      "to": "deos-vs-dao-treasury",
+      "type": "explains"
+    },
+    {
+      "from": "deos-vs-dao-treasury",
+      "to": "physics-vs-politics",
+      "type": "extends"
+    },
+    {
+      "from": "deos-vs-dao-treasury",
+      "to": "governance-overview",
+      "type": "explains"
+    },
+    {
+      "from": "deos-vs-dao-treasury",
+      "to": "economic-claim-levels",
+      "type": "qualifies"
+    },
+    {
+      "from": "deos-vs-dao-treasury",
+      "to": "what-deos-is-not",
+      "type": "clarifies"
+    },
+    {
+      "from": "reading-paths",
+      "to": "deos-vs-dao-treasury",
+      "type": "recommends"
+    },
+    {
+      "from": "deos-in-60-seconds",
+      "to": "executive-summary",
+      "type": "routes"
+    },
+    {
+      "from": "partner-pitch",
+      "to": "executive-summary",
+      "type": "expands"
+    },
+    {
+      "from": "executive-summary",
+      "to": "deos-vs-dao-treasury",
+      "type": "explains"
+    },
+    {
+      "from": "executive-summary",
+      "to": "minimal-fork-profile",
+      "type": "routes"
+    },
+    {
+      "from": "executive-summary",
+      "to": "status",
+      "type": "summarizes"
+    },
+    {
+      "from": "reading-paths",
+      "to": "executive-summary",
+      "type": "recommends"
+    },
+    {
+      "from": "index",
+      "to": "executive-summary",
+      "type": "starts"
+    },
+    {
+      "from": "executive-summary",
+      "to": "partner-evaluation-route",
+      "type": "routes"
+    },
+    {
+      "from": "partner-pitch",
+      "to": "partner-evaluation-route",
+      "type": "routes"
+    },
+    {
+      "from": "partner-evaluation-route",
+      "to": "minimal-fork-profile",
+      "type": "routes"
+    },
+    {
+      "from": "partner-evaluation-route",
+      "to": "forking-deos",
+      "type": "routes"
+    },
+    {
+      "from": "partner-evaluation-route",
+      "to": "domain-map",
+      "type": "routes"
+    },
+    {
+      "from": "reading-paths",
+      "to": "partner-evaluation-route",
+      "type": "recommends"
+    },
+    {
+      "from": "index",
+      "to": "partner-evaluation-route",
+      "type": "starts"
     }
   ]
 }

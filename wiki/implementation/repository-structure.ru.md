@@ -47,7 +47,7 @@ confidence: 0.95
 
 ### `/web-client/`
 
-Эталонный браузерный клиент на SvelteKit. Он показывает on-chain-first продуктовые поверхности и старается честно различать канонические данные и materialized views.
+Эталонный браузерный клиент на SvelteKit. Он показывает on-chain-first продуктовые поверхности и старается честно различать канонические данные и materialized-представления.
 
 ### `/scripts/`
 
@@ -76,8 +76,7 @@ confidence: 0.95
 
 - [Технологический стек](tech-stack.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-
-## Источники
-
-- `AGENTS.md`
-- `README.md`
+- [Паттерны runtime](../overview/runtime-patterns.ru.md)
+- [Эталонный клиент](../overview/reference-client.ru.md)
+- [Слой скриптов](../usage/scripts-layer.ru.md)
+- [Координация агентов](../usage/agent-coordination.ru.md)

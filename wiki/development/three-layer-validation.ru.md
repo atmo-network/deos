@@ -73,7 +73,7 @@ confidence: 0.95
 
 - [Структура репозитория](../implementation/repository-structure.ru.md)
 - [Технологический стек](../implementation/tech-stack.ru.md)
-
-## Источники
-
-- `AGENTS.md`
+- [Troubleshooting validation](../usage/validation-troubleshooting.ru.md)
+- [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+- [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
+- [Статус разработки](status.ru.md)

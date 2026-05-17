@@ -72,3 +72,12 @@ Day-to-day work usually flows through these directories in a specific order:
 4. Automate in `/scripts/`
 
 When dealing with core economic logic, the path shifts to validate math in `/simulator/` first.
+
+## Related
+
+- [Tech Stack](tech-stack.en.md)
+- [DEOS Framework Overview](../overview/deos-framework.en.md)
+- [Runtime Patterns](../overview/runtime-patterns.en.md)
+- [Reference Client](../overview/reference-client.en.md)
+- [Scripts Layer](../usage/scripts-layer.en.md)
+- [Agent Coordination](../usage/agent-coordination.en.md)

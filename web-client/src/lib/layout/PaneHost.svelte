@@ -1,18 +1,24 @@
+<!--
+Domain: Center pane host
+Owns: Tile leaf/split rendering, tab strip coordination, drop overlays, and pane recursion.
+Excludes: Widget business logic, layout store mutation policy, and reserved edge-lane rendering.
+Zone: Layout rendering component; consumes layout store and pane helpers only.
+-->
 <script lang="ts">
-  import { layoutStore } from "$lib/layout/index.svelte";
+  import PaneDropOverlay from '$lib/layout/PaneDropOverlay.svelte';
+  import PaneTopChrome from '$lib/layout/PaneTopChrome.svelte';
+  import PaneWidgetHost from '$lib/layout/PaneWidgetHost.svelte';
+  import { layoutStore } from '$lib/layout/index.svelte';
   import {
     buildPreviewTabs,
     computeTabInsertIndex,
     detectDropEdge,
     edgeProjectionPayloadLabel,
     edgeProjectionShellClass,
-  } from "$lib/layout/pane-dnd";
-  import PaneDropOverlay from "$lib/layout/PaneDropOverlay.svelte";
-  import PaneTopChrome from "$lib/layout/PaneTopChrome.svelte";
-  import PaneWidgetHost from "$lib/layout/PaneWidgetHost.svelte";
-  import { createTabFlipController } from "$lib/layout/tab-flip";
-  import type { DropEdge, PanelId, TileLeaf } from "$lib/layout/types";
-  import { PANEL_LABELS } from "$lib/layout/types";
+  } from '$lib/layout/pane-dnd';
+  import { createTabFlipController } from '$lib/layout/tab-flip';
+  import type { DropEdge, PanelId, TileLeaf } from '$lib/layout/types';
+  import { PANEL_LABELS } from '$lib/layout/types';
 
   type Props = {
     leaf: TileLeaf;
@@ -26,9 +32,9 @@
   let hoveredEdge = $state<DropEdge | null>(null);
   let paneMergeHovered = $state(false);
   let tabInsertIndex = $state<number | null>(null);
-  let tabBarEl = $state<HTMLDivElement>(null!);
-  let paneGripEl = $state<HTMLDivElement>(null!);
-  let containerEl: HTMLDivElement;
+  let tabBarEl = $state<HTMLDivElement | null>(null);
+  let paneGripEl = $state<HTMLButtonElement | null>(null);
+  let containerEl = $state<HTMLDivElement | null>(null);
 
   const dragTab = $derived(layoutStore.dragTab);
   const dragLeaf = $derived(layoutStore.dragLeaf);
@@ -81,8 +87,8 @@
     if (!event.dataTransfer) {
       return;
     }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", tabId);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', tabId);
     requestAnimationFrame(() => layoutStore.startDrag(tabId, leaf.id));
   }
 
@@ -90,8 +96,8 @@
     if (!event.dataTransfer) {
       return;
     }
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("application/x-deos-pane", leaf.id);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('application/x-deos-pane', leaf.id);
     requestAnimationFrame(() => layoutStore.startPaneDrag(leaf.id));
   }
 
@@ -106,16 +112,16 @@
     }
     paneMergeHovered = false;
     const edge = detectDropEdge(event, {
-      containerEl,
-      tabBarEl,
-      paneGripEl,
+      containerEl: containerEl ?? undefined,
+      tabBarEl: tabBarEl ?? undefined,
+      paneGripEl: paneGripEl ?? undefined,
       zoneSize: ZONE_SIZE,
     });
     hoveredEdge = edge;
     if (edge) {
       event.preventDefault();
       if (event.dataTransfer) {
-        event.dataTransfer.dropEffect = "move";
+        event.dataTransfer.dropEffect = 'move';
       }
     }
   }
@@ -126,9 +132,9 @@
 
   function onOverlayDrop(event: DragEvent) {
     const edge = detectDropEdge(event, {
-      containerEl,
-      tabBarEl,
-      paneGripEl,
+      containerEl: containerEl ?? undefined,
+      tabBarEl: tabBarEl ?? undefined,
+      paneGripEl: paneGripEl ?? undefined,
       zoneSize: ZONE_SIZE,
     });
     clearLocalDragPreview();
@@ -148,7 +154,7 @@
     hoveredEdge = null;
     paneMergeHovered = true;
     if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "move";
+      event.dataTransfer.dropEffect = 'move';
     }
   }
 
@@ -178,9 +184,13 @@
     paneMergeHovered = false;
     hoveredEdge = null;
     if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "move";
+      event.dataTransfer.dropEffect = 'move';
     }
-    tabInsertIndex = computeTabInsertIndex(event, tabBarEl, leaf.tabs.length);
+    tabInsertIndex = computeTabInsertIndex(
+      event,
+      tabBarEl ?? undefined,
+      leaf.tabs.length,
+    );
   }
 
   function onTabBarDragLeave(event: DragEvent) {
@@ -200,7 +210,7 @@
     const { tabId, sourceLeafId } = dragTab;
     const index =
       tabInsertIndex ??
-      computeTabInsertIndex(event, tabBarEl, leaf.tabs.length);
+      computeTabInsertIndex(event, tabBarEl ?? undefined, leaf.tabs.length);
     clearLocalDragPreview();
     if (sourceLeafId === leaf.id) {
       layoutStore.reorderTab(leaf.id, tabId, index);

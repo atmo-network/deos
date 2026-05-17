@@ -1,39 +1,57 @@
+/*
+Domain: Legacy layout normalization
+Owns: Migration/normalization from older persisted workspace layouts into the current frame state contract.
+Excludes: New default layout specification, live layout mutation, and persistence IO.
+Zone: Layout migration helper; depends only on layout contracts.
+*/
 import {
   ALL_PANELS,
   type PanelId,
   type TileNode,
   type WorkspaceFrameState,
-} from "./types";
+} from './types';
+
+type UnknownRecord = { [key: string]: unknown };
+
+const ALL_PANEL_IDS = new Set<string>(ALL_PANELS);
+
+function isUnknownRecord(value: unknown): value is UnknownRecord {
+  return typeof value === 'object' && value !== null;
+}
+
+function isPanelId(panelId: string): panelId is PanelId {
+  return ALL_PANEL_IDS.has(panelId);
+}
 
 function normalizeLegacyPanelId(panelId: string): PanelId | null {
-  if (panelId === "info" || panelId === "status") {
-    return "statistics";
+  if (panelId === 'info' || panelId === 'status') {
+    return 'statistics';
   }
-  if (panelId === "actors") {
-    return "automation";
+  if (panelId === 'actors') {
+    return 'automation';
   }
-  if (panelId === "activity") {
-    return "log";
+  if (panelId === 'activity') {
+    return 'log';
   }
-  return ALL_PANELS.includes(panelId as PanelId) ? (panelId as PanelId) : null;
+  return isPanelId(panelId) ? panelId : null;
 }
 
 export function normalizeLegacyLayout(
   node: unknown,
   genId: () => string,
 ): TileNode | null {
-  if (!node || typeof node !== "object") {
+  if (!isUnknownRecord(node)) {
     return null;
   }
-  const candidate = node as Record<string, unknown>;
-  if (candidate.type === "leaf") {
-    const id = typeof candidate.id === "string" ? candidate.id : genId();
+  const candidate = node;
+  if (candidate.type === 'leaf') {
+    const id = typeof candidate.id === 'string' ? candidate.id : genId();
     const tabs = Array.isArray(candidate.tabs)
       ? Array.from(
           new Set(
             candidate.tabs
               .map((panel) =>
-                typeof panel === "string"
+                typeof panel === 'string'
                   ? normalizeLegacyPanelId(panel)
                   : null,
               )
@@ -42,20 +60,20 @@ export function normalizeLegacyLayout(
         )
       : [];
     const activeTab =
-      typeof candidate.activeTab === "string"
+      typeof candidate.activeTab === 'string'
         ? normalizeLegacyPanelId(candidate.activeTab)
         : null;
     if (tabs.length === 0) {
       return null;
     }
     return {
-      type: "leaf",
+      type: 'leaf',
       id,
       tabs,
       activeTab: activeTab && tabs.includes(activeTab) ? activeTab : tabs[0],
     };
   }
-  if (candidate.type === "split") {
+  if (candidate.type === 'split') {
     const children = Array.isArray(candidate.children)
       ? candidate.children
       : null;
@@ -68,10 +86,10 @@ export function normalizeLegacyLayout(
       return null;
     }
     return {
-      type: "split",
-      id: typeof candidate.id === "string" ? candidate.id : genId(),
-      direction: candidate.direction === "vertical" ? "vertical" : "horizontal",
-      ratio: typeof candidate.ratio === "number" ? candidate.ratio : 0.5,
+      type: 'split',
+      id: typeof candidate.id === 'string' ? candidate.id : genId(),
+      direction: candidate.direction === 'vertical' ? 'vertical' : 'horizontal',
+      ratio: typeof candidate.ratio === 'number' ? candidate.ratio : 0.5,
       children: [left, right],
     };
   }
@@ -81,23 +99,23 @@ export function normalizeLegacyLayout(
 export function normalizeFrameState(
   candidate: unknown,
 ): WorkspaceFrameState | null {
-  if (!candidate || typeof candidate !== "object") {
+  if (!isUnknownRecord(candidate)) {
     return null;
   }
-  const value = candidate as Record<string, unknown>;
+  const value = candidate;
   const sidebar = value.sidebar;
-  if (!sidebar || typeof sidebar !== "object") {
+  if (!isUnknownRecord(sidebar)) {
     return null;
   }
-  const sidebarValue = sidebar as Record<string, unknown>;
+  const sidebarValue = sidebar;
   const edge =
-    sidebarValue.edge === "left"
-      ? "left"
-      : sidebarValue.edge === "right"
-        ? "right"
+    sidebarValue.edge === 'left'
+      ? 'left'
+      : sidebarValue.edge === 'right'
+        ? 'right'
         : null;
   const open =
-    typeof sidebarValue.open === "boolean" ? sidebarValue.open : null;
+    typeof sidebarValue.open === 'boolean' ? sidebarValue.open : null;
   if (edge === null || open === null) {
     return null;
   }

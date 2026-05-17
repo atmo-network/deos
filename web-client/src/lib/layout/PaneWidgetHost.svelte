@@ -1,10 +1,15 @@
+<!--
+Domain: Pane widget host
+Owns: Lazy widget component loading, widget overflow detection, and pane-local chrome state.
+Excludes: Widget implementation, layout tree mutation, and adapter/domain state.
+Zone: Layout rendering component; bridges layout panel ids to widget loader output.
+-->
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount } from 'svelte';
 
-  import { loadWidgetComponent } from "$lib/layout/widget-loader";
-  import type { PanelId } from "$lib/layout/types";
-
-  type WidgetComponent = any;
+  import type { PanelId } from '$lib/layout/types';
+  import { loadWidgetComponent } from '$lib/layout/widget-loader';
+  import type { WidgetComponent } from '$lib/layout/widget-loader';
 
   type Props = {
     panelId: PanelId;
@@ -32,7 +37,7 @@
     } catch (error) {
       if (panelId === activePanelId) {
         loadError =
-          error instanceof Error ? error.message : "Widget load failed";
+          error instanceof Error ? error.message : 'Widget load failed';
       }
     } finally {
       if (panelId === activePanelId) {
@@ -54,7 +59,7 @@
   }
 
   function queueVerticalOverflowCheck() {
-    if (typeof window === "undefined") {
+    if (typeof window === 'undefined') {
       return;
     }
     if (overflowCheckFrame !== 0) {
@@ -109,8 +114,8 @@
   <div
     bind:this={scrollHostEl}
     class={[
-      "@container grid h-full min-h-0 overflow-y-scroll overflow-x-hidden overscroll-contain rounded-xl border pl-1.5",
-      hasVerticalOverflow ? "border-(--mono-border)" : "border-transparent",
+      '@container grid h-full min-h-0 overflow-y-scroll overflow-x-hidden overscroll-contain rounded-xl border pl-1.5',
+      hasVerticalOverflow ? 'border-(--mono-border)' : 'border-transparent',
     ]}
     style:grid-template-rows="minmax(0, 1fr)"
   >

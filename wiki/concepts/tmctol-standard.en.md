@@ -103,8 +103,3 @@ DEOS provides that wider operating layer. TMCTOL is the current standard; DEOS i
 - [Governance Domains](governance-domains.en.md)
 - [Staking Pools](staking-pools.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/tmctol.specification.en.md`
-- `README.md`

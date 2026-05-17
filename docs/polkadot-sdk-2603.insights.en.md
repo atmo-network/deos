@@ -594,8 +594,8 @@ Use this guide as the authoritative reference for all code generation tasks targ
 
 `on_initialize` runs every block with guaranteed weight. `on_idle` runs only when spare weight exists. Choose based on actor requirements:
 
-- `on_initialize` scan + `on_idle` execute: use when actors need guaranteed state awareness every block; example: Zap Manager scanning balances before later execution
-- `on_idle` only: use when delayed processing is acceptable and no guaranteed scan is needed; example: Burning Manager checking and processing balances in one call
+- `on_initialize` scan + `on_idle` execute: use when actors need guaranteed state awareness every block; example: liquidity-provisioning actors scanning balances before later execution
+- `on_idle` only: use when delayed processing is acceptable and no guaranteed scan is needed; example: Burn Actor checking and processing balances in one call
 
 `Key insight`: `on_initialize` is expensive (runs every block even when idle). Only use it when guaranteed-per-block scanning is essential (e.g., cooldown timers that must be checked before user transactions execute). For pure "process when possible" actors, `on_idle` alone is simpler and wastes zero weight on empty blocks.
 

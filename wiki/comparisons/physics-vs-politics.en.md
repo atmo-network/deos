@@ -76,7 +76,7 @@ That is why DEOS governance keeps explicit protection tracks and a fail-closed b
 
 Beyond software architecture, the DEOS manifesto hints at a broader template for organizational coordination. By structurally preventing reserve extraction and moving survival-critical rules from subjective politics to objective physics, the framework offers a model where economic security relies on mathematical guarantees rather than social trust.
 
-If this standard scales, it provides a "Foundation in a Box" for sovereign communities to build institutions that cannot be destroyed by poor day-to-day management. It reduces the transactional cost of trust to near zero through an autonomous emission policy (TMC), immutable treasury-owned liquidity management (TOL), and the simultaneous execution of diverse capital strategies (storing hard pool backing, deploying decentralized capital, and routing funding streams to domains like development or network-effect stimulation). 
+If this standard scales, it provides a "Foundation in a Box" for sovereign communities to build institutions that cannot be destroyed by poor day-to-day management. It reduces the transactional cost of trust to near zero through an autonomous emission policy (TMC), immutable treasury-owned liquidity management (TOL), and the simultaneous execution of diverse capital strategies (storing hard pool backing, deploying decentralized capital, and routing funding streams to domains like development or network-effect stimulation).
 
 When these mechanisms interact, they generate powerful emergent properties—such as volatility stabilization (Gravity Well) and structural floor protection (Elasticity Inversion)—that a manually managed treasury could never reliably replicate. Together with deterministic cybernetic execution (AAA), these properties shift economic stability from a political negotiation to a law of protocol thermodynamics.
 
@@ -86,9 +86,3 @@ When these mechanisms interact, they generate powerful emergent properties—suc
 - [Governance Domains](../concepts/governance-domains.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/manifesto.en.md`
-- `docs/governance.specification.en.md`
-- `docs/tmctol.specification.en.md`

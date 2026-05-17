@@ -17,16 +17,16 @@
 
 In the current DEOS reference runtime, fifteen System actors are provisioned at genesis. This shipped topology currently instantiates the TMCTOL standard:
 
-- `aaa_id = 0`: Burning Manager execution plan
+- `aaa_id = 0`: Burn Actor execution-plan family
 - `aaa_id = 1`: Fee Sink System AAA for unified fee collection and Phase 1 staking/LP redistribution
-- `aaa_id = 2`: Zap Manager skeleton execution plan
+- `aaa_id = 2`: Liquidity Actor dormant execution-plan family
 - `aaa_id = 3..6`: TOL bucket actors (A/B/C/D), initialized as timer + noop
 - `aaa_id = 7..9`: Treasury B/C/D actors, initialized as timer + noop
-- `aaa_id = 10`: BLDR Splitter execution plan
-- `aaa_id = 11`: BLDR Zap Manager skeleton execution plan
+- `aaa_id = 10`: BLDR Splitter execution-plan family
+- `aaa_id = 11`: BLDR Liquidity Actor dormant execution-plan family
 - `aaa_id = 12`: BLDR Bucket A actor, initialized as timer + noop
 - `aaa_id = 13`: BLDR Treasury actor, initialized as timer + noop
-- `aaa_id = 14`: Native Staking LP Farmer actor, initialized as timer + noop until the canonical `NTVE/stNTVE` pool is activated
+- `aaa_id = 14`: Native staking LP provisioning actor, initialized as timer + noop until the canonical `NTVE/stNTVE` pool is activated
 
 The pallet itself is generic and runtime-agnostic. Chain-specific behavior is injected through `AssetOps`, `DexOps`, weight/fee conversion, bounds, and genesis actor specs.
 
@@ -38,13 +38,13 @@ This catalog is the full current runtime System AAA catalog, including the Fee S
 - aaa_id: `—`; pallet-aaa` (pallet account)
   - Hex: `0x6d6f646c61616163746f72300000000000000000000000000000000000000000`
   - SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
-- aaa_id: `0`; Burning Manager
+- aaa_id: `0`; Burn Actor
   - Hex: `0xeba61f8494ba498cb84ce3b771bc3c193dbd82f9a999153a55c383349f6e512e`
   - SS58: `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv`
 - aaa_id: `1`; Fee Sink
   - Hex: `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084`
   - SS58: `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh`
-- aaa_id: `2`; Zap Manager
+- aaa_id: `2`; Liquidity Actor
   - Hex: `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab`
   - SS58: `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C`
 - aaa_id: `3`; TOL Bucket A (Anchor)
@@ -71,7 +71,7 @@ This catalog is the full current runtime System AAA catalog, including the Fee S
 - aaa_id: `10`; BLDR Splitter
   - Hex: `0x8a420d09aa8842c9075deefab7791be5e9f9471bc68baa8c926128cfc29b6962`
   - SS58: `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N`
-- aaa_id: `11`; BLDR Zap Manager
+- aaa_id: `11`; BLDR Liquidity Actor
   - Hex: `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221`
   - SS58: `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17`
 - aaa_id: `12`; BLDR Bucket A (Anchor)
@@ -80,7 +80,7 @@ This catalog is the full current runtime System AAA catalog, including the Fee S
 - aaa_id: `13`; BLDR Treasury
   - Hex: `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45`
   - SS58: `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG`
-- aaa_id: `14`; Native Staking LP Farmer
+- aaa_id: `14`; Native staking LP provisioning actor
   - Hex: `0xbb27f4956462189d16c7f9e207222ce9691308c6a55bb0141f139ebe071394d2`
   - SS58: `5GJ6gSae5dZhxJm6EuD82gaxiLkvokMeLFMNmtuSz8htoidu`
 
@@ -115,23 +115,23 @@ AAA orchestrates actions against these pallets through adapter traits.
 
 `TmctolGenesisSystemAaas` currently provisions fifteen System actors:
 
-| Lane     | Actor                    | aaa_id | Genesis plan summary                   |
-| :------- | :----------------------- | -----: | :------------------------------------- |
-| Core     | Burning Manager          |      0 | `build_burn_execution_plan([], dust)`  |
-| Core     | Fee Sink                 |      1 | Phase 1 50/50 staking + LP donation    |
-| Core     | Zap Manager              |      2 | `Noop` skeleton until pool activation  |
-| TOL      | Bucket A (Anchor)        |      3 | Immutable `[Noop]`                     |
-| TOL      | Bucket B (Building)      |      4 | `Noop`                                 |
-| TOL      | Bucket C (Capital)       |      5 | `Noop`                                 |
-| TOL      | Bucket D (Dormant)       |      6 | `Noop`                                 |
-| Treasury | Treasury B               |      7 | `Noop`                                 |
-| Treasury | Treasury C               |      8 | `Noop`                                 |
-| Treasury | Treasury D               |      9 | `Noop`                                 |
-| BLDR     | BLDR Splitter            |     10 | `build_bldr_splitter_execution_plan`   |
-| BLDR     | BLDR Zap Manager         |     11 | `Noop` until NTVE-BLDR pool activation |
-| BLDR     | BLDR Bucket A            |     12 | Immutable `[Noop]`                     |
-| BLDR     | BLDR Treasury            |     13 | `Noop`                                 |
-| Staking  | Native Staking LP Farmer |     14 | `Noop` until `NTVE/stNTVE` activation  |
+| Lane     | Actor                                | aaa_id | Genesis plan summary                   |
+| :------- | :----------------------------------- | -----: | :------------------------------------- |
+| Core     | Burn Actor                           |      0 | `build_burn_execution_plan([], dust)`  |
+| Core     | Fee Sink                             |      1 | Phase 1 50/50 staking + LP donation    |
+| Core     | Liquidity Actor                      |      2 | `Noop` until pool activation           |
+| TOL      | Bucket A (Anchor)                    |      3 | Immutable `[Noop]`                     |
+| TOL      | Bucket B (Building)                  |      4 | `Noop`                                 |
+| TOL      | Bucket C (Capital)                   |      5 | `Noop`                                 |
+| TOL      | Bucket D (Dormant)                   |      6 | `Noop`                                 |
+| Treasury | Treasury B                           |      7 | `Noop`                                 |
+| Treasury | Treasury C                           |      8 | `Noop`                                 |
+| Treasury | Treasury D                           |      9 | `Noop`                                 |
+| BLDR     | BLDR Splitter                        |     10 | `build_bldr_splitter_execution_plan`   |
+| BLDR     | BLDR Liquidity Actor                 |     11 | `Noop` until NTVE-BLDR pool activation |
+| BLDR     | BLDR Bucket A                        |     12 | Immutable `[Noop]`                     |
+| BLDR     | BLDR Treasury                        |     13 | `Noop`                                 |
+| Staking  | Native staking LP provisioning actor |     14 | `Noop` until `NTVE/stNTVE` activation  |
 
 All timer schedules use `SYSTEM_AAA_COOLDOWN_BLOCKS`; all actors are `AaaType::System` and perpetual (`schedule_window = None`). TOL Bucket A (`aaa_id=3`) and BLDR Bucket A (`aaa_id=12`) are `Mutability::Immutable`; the remaining genesis System AAA are Mutable.
 These `aaa_id` values remain the stable recovery addresses for Mutable System AAA: closing preserves balances on the same sovereign account, and governance regains control only through `reopen_system_aaa` on that exact `aaa_id`. System Immutable actors cannot be closed or reopened through runtime extrinsics.
@@ -140,13 +140,13 @@ These `aaa_id` values remain the stable recovery addresses for Mutable System AA
 
 The runtime keeps System AAA topology declarative. Governance evolves concrete execution plans through builder functions in `runtime/src/configs/aaa_config.rs`:
 
-- `build_burn_execution_plan` / Burning Manager: foreign balances → Native swap → burn; extend after foreign asset registration
-- `build_zap_execution_plan` / Zap Manager: add LP, foreign→native swap, split LP to buckets; activate after pool creation
+- `build_burn_execution_plan` / Burn Actor: foreign balances → Native swap → burn; extend after foreign asset registration
+- `build_zap_execution_plan` / Liquidity Actor: add LP, foreign→native swap, split LP to buckets; activate after pool creation
 - `build_bucket_unwind_execution_plan` / Buckets B/C/D: remove LP percentage, send reclaimed assets to treasury; activate after pool + treasury readiness
-- `build_bldr_splitter_execution_plan` / BLDR Splitter: send NTVE collateral to BLDR ZM and split BLDR 50/50 to ZM/Treasury; active at genesis
-- `build_bldr_zm_execution_plan` / BLDR Zap Manager: add NTVE/BLDR liquidity and transfer LP to BLDR Bucket A; activate after pool creation
+- `build_bldr_splitter_execution_plan` / BLDR Splitter: send NTVE collateral to the BLDR liquidity actor and split BLDR 50/50 to liquidity/treasury lanes; active at genesis
+- `build_bldr_zm_execution_plan` / BLDR Liquidity Actor: add NTVE/BLDR liquidity and transfer LP to BLDR Bucket A; activate after pool creation
 - `build_treasury_b_buyback_execution_plan` / Treasury B: swap NTVE percentage into target and burn acquired balance; optional policy lane
-- `build_native_staking_lp_farming_execution_plan` / Native Staking LP Farmer: donate balanced `NTVE/stNTVE` without minting LP; activate after native pool + AMM creation
+- `build_native_staking_lp_farming_execution_plan` / Native staking LP provisioning actor: donate balanced `NTVE/stNTVE` without minting LP; activate after native pool + AMM creation
 
 This split keeps AAA generic: the pallet owns bounded scheduling/execution, while the current DEOS reference runtime wires the TMCTOL standard's economic composition into concrete System actors.
 
@@ -155,10 +155,10 @@ This split keeps AAA generic: the pallet owns bounded scheduling/execution, whil
 Current runtime operations reduce to four repeatable flows:
 
 1. `Foreign asset + TOL lane`
-   Register foreign asset -> create Native/foreign pool -> update Burning Manager -> update Zap Manager -> optionally activate Bucket B/C/D unwind plans.
+   Register foreign asset -> create Native/foreign pool -> update Burn Actor -> update Liquidity Actor -> optionally activate Bucket B/C/D unwind plans.
 2. `BLDR lane`
-   Keep BLDR Splitter live at genesis -> create NTVE-BLDR pool -> activate BLDR ZM -> optionally activate Treasury B buyback/burn policy.
-3. `Native staking LP farming lane`
+   Keep BLDR Splitter live at genesis -> create NTVE-BLDR pool -> activate BLDR Liquidity Actor -> optionally activate Treasury B buyback/burn policy.
+3. `Native staking LP provisioning lane`
    Register native staking -> initialize `stNTVE` -> create and seed the `NTVE/stNTVE` AMM -> call `activate_native_staking_lp_farming`, which refuses activation until the receipt asset, staking pool, actor, and non-empty AMM are all live.
 4. `Emergency controls`
    Pause single actors with `pause_aaa` when policy needs surgical intervention; use `set_global_circuit_breaker(true)` when cycle execution as a whole must stop while bookkeeping stays alive.
@@ -308,7 +308,7 @@ The temporal wakeup layer is a scheduler responsibility, not just a storage map:
 
 ### Starvation Safeguard
 
-Current implementation now follows the polished `0.1.0` starvation automaton: `IdleStarvationBlocks` increments only when the breaker is inactive and bounded housekeeping leaves zero remaining `on_idle` execution budget, resets as soon as positive post-housekeeping budget exists, and emits `IdleStarvationDetected` exactly once on threshold crossing.
+Current implementation follows the shipped starvation automaton: `IdleStarvationBlocks` increments only when the breaker is inactive and bounded housekeeping leaves zero remaining `on_idle` execution budget, resets as soon as positive post-housekeeping budget exists, and emits `IdleStarvationDetected` exactly once on threshold crossing.
 
 Recovery is governance-operated (circuit breaker or parameter adjustment); no emergency cycle execution occurs in `on_initialize`.
 
@@ -359,8 +359,8 @@ Ingress matrix (current runtime):
 - `fund_aaa`: `AssetOps::transfer` ingress; source is funder account; weight paid by caller
 - AAA task `Transfer`: `TmctolAssetOps::transfer` ingress; source is transfer sender; weight paid by actor
 - AAA task `Mint`: `TmctolAssetOps::mint` ingress; source is `None`; weight paid by actor
-- TMC distribution to Zap: submit-first `TolZapAdapter`, scanner fallback; direct path keeps sender; TMC call pays primary weight
-- Router fee routing to Burning Manager: submit-first `FeeManagerImpl`, scanner fallback; direct path keeps fee payer; swap pays primary weight
+- TMC distribution to liquidity actors: submit-first mint-output adapter, scanner fallback; direct path keeps sender; TMC call pays primary weight
+- Router fee routing to Burn Actor: submit-first `FeeManagerImpl`, scanner fallback; direct path keeps fee payer; swap pays primary weight
 - Generic `pallet-assets` transfer/mint: scanner fallback; `Transferred` source is `from`, `Issued/Deposited` source is `None`; originating extrinsic pays
 - XCM reserve/local mint ingress: submit-first `AaaAwareAssetTransactor` plus scanner fallback; source is convertible origin or `None`; XCM path/trader pays
 
@@ -698,7 +698,6 @@ Local runtime-invariant dry-run wrapper: `./scripts/try-runtime-local.sh --prepa
 
 ---
 
-- `Version`: 0.1.0 (Implementation mirror for [Specification](./aaa.specification.en.md))
+Implementation mirror for [Specification](./aaa.specification.en.md).
+
 - `Last Updated`: March 2026
-- `Author`: LLB Lab
-- `License`: MIT

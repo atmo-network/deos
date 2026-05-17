@@ -1,7 +1,7 @@
 ---
 page_type: glossary
 title: Базовые термины
-summary: Компактный глоссарий по главным терминам DEOS и TMCTOL. Открывайте эту страницу первой, если сокращения, словарь runtime, governance-термины или различие между фреймворком и стандартом пока кажутся неочевидными.
+summary: Компактный глоссарий по главным терминам DEOS и TMCTOL. Открывайте эту страницу первой, если сокращения, runtime-словарь, governance-термины, frontend-архитектура, роли wiki или статусные поверхности пока кажутся неочевидными.
 locale: ru
 canonical_page_id: core-terms
 translation_of: core-terms.en.md
@@ -12,12 +12,16 @@ available_locales:
 sources:
   - ../../README.md
   - ../../docs/README.md
+  - ../../BACKLOG.md
+  - ../../CHANGELOG.md
   - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
   - ../../docs/aaa.specification.en.md
   - ../../docs/governance.specification.en.md
   - ../../docs/governance.architecture.en.md
   - ../../docs/read-model.contract.en.md
+  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/README.md
 status: active
 audience: newcomer
 tags:
@@ -30,16 +34,20 @@ related:
   - Обзор Governance
   - Домены Governance
   - Разделение read-model
+  - UI Kit и Domain DAG
+  - Generated Wiki
+  - Маршруты чтения
+  - Статус разработки
   - FAQ для новичков
-last_compiled: 2026-04-20
-confidence: 0.95
+last_compiled: 2026-05-17
+confidence: 0.96
 ---
 
 # Базовые термины
 
 ## Кратко
 
-Этот глоссарий держит самые важные термины проекта в одном месте. Он особенно полезен потому, что репозиторий строго различает идентичность фреймворка, идентичность стандарта, словарь runtime-исполнения, governance-словарь и терминологию read-model.
+Этот глоссарий — справочная поверхность, а не второй слой объяснений. Каждый термин остается коротким и ведет к связанным страницам за полным контекстом.
 
 ## Термины
 
@@ -57,7 +65,7 @@ confidence: 0.95
 
 ### TOL
 
-`Treasury-Owned Liquidity`. Политический слой, который направляет результат минтинга в ликвидность под контролем протокола и сегментирует ее по bucket-направлениям.
+`Treasury-Owned Liquidity`. Ликвидность под контролем протокола, разделенная на домены buckets.
 
 ### AAA
 
@@ -69,7 +77,7 @@ confidence: 0.95
 
 ### Axial Router
 
-Паллет маршрутизации, который сравнивает ограниченные пути исполнения, выбирает лучший маршрут и направляет торговую комиссию в протокольный поток.
+Ограниченный механизм выбора маршрута для протокольных сделок и потока комиссий.
 
 ### Balance Ingress
 
@@ -77,27 +85,27 @@ confidence: 0.95
 
 ### Governance Domain
 
-Одна типизированная governance-cell внутри более широкой governance-системы. Она связывает управляемый subject, power surfaces, допустимые payload-family, cadence и execution authority.
+Одна типизированная governance-ячейка, связывающая subject, power surface, семейство payload, cadence и полномочия исполнения.
 
 ### Primary Track
 
-Линия, которая отвечает на судьбу самого proposal-а. В зависимости от домена и payload-family она может быть бинарной (`Aye / Nay`) или invoice-формы (`Amplify / Approve / Reduce / Nay`).
+Линия решения по proposal: binary или invoice-shaped в зависимости от домена и payload.
 
 ### Protection Track
 
-Конституционный трек `Veto / Pass`, который может блокировать или процедурно ускорять protected governance-flow. Это отдельная линия, а не скрытый псевдоним обычного `Nay`.
+Конституционный трек `Veto / Pass`, отдельный от обычного approval по proposal.
 
 ### Proposal Payload Kind
 
-Типизированное описание того, какое governance-действие proposal вообще пытается авторизовать: стратегическое Root-действие, тактическую treasury-трату, тактическое parameter-изменение, same-domain intent или тактический сигнал в стратегический слой.
+Типизированная категория действия, которое governance proposal пытается авторизовать.
 
 ### Execution Authority
 
-Уровень authority, до которого успешный governance-payload реально может дойти при enactment. В DEOS тактические домены не наследуют стратегическую или Root-эквивалентную власть автоматически.
+Уровень полномочий, до которого успешный governance payload может дойти при enactment.
 
 ### GovXP
 
-Ограниченный сигнал governance-участия, который governance-подсистема экспортирует для будущей reward- и reputation-логики. На текущей линии он остается counters-first, а не live vote-power multiplier.
+Ограниченный сигнал участия в governance для логики наград или репутации.
 
 ### Canonical Projection
 
@@ -123,6 +131,46 @@ confidence: 0.95
 
 Передаваемые staking-receipts, которые представляют долевое владение в пулах стейкинга.
 
+### UI Kit
+
+Локальный набор визуальных примитивов интерфейса.
+
+### Domain DAG
+
+Дисциплина владения в веб-клиенте и validator для направления импортов, headers и drift границ.
+
+### Widget
+
+Браузерная продуктовая поверхность: swap, wallet, staking, governance, chart, automation, log, account, settings, status или чтение wiki.
+
+### Layout
+
+Подсистема веб-клиента, которая размещает panes, tabs, reserved lanes, header, footer и sidebar, не становясь продуктовым доменом.
+
+### Generated Wiki
+
+Самодостаточный слой объяснений `/wiki` для введения, навигации, чтения метаданных и frontend-рендеринга.
+
+### Reading Path
+
+Маршрут wiki для конкретной роли или задачи: экономика, runtime, governance, клиент, статус или инструменты.
+
+### Architecture Document
+
+Не привязанное к релизу зеркало реализации для поставленной подсистемы.
+
+### `BACKLOG.md`
+
+Канонический файл открытой работы для закрываемых поставок, явных gates и ограниченных epics.
+
+### `CHANGELOG.md`
+
+Канонический файл завершенных поставок и истории релизов.
+
+### Development Status
+
+Wiki-карта текущего состояния для базовых доменов, активного фокуса, открытых границ и работы за gates.
+
 ## Связанные страницы
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
@@ -131,15 +179,8 @@ confidence: 0.95
 - [Обзор Governance](../overview/governance-overview.ru.md)
 - [Домены Governance](../concepts/governance-domains.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)
+- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
+- [Generated Wiki](../concepts/generated-wiki.ru.md)
+- [Маршруты чтения](../getting-started/reading-paths.ru.md)
+- [Статус разработки](../development/status.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)
-
-## Источники
-
-- `README.md`
-- `docs/README.md`
-- `docs/tmctol.specification.en.md`
-- `docs/core.architecture.en.md`
-- `docs/aaa.specification.en.md`
-- `docs/governance.specification.en.md`
-- `docs/governance.architecture.en.md`
-- `docs/read-model.contract.en.md`

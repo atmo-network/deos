@@ -78,8 +78,3 @@ Historical mint analytics and long-range dashboards belong to indexed or materia
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [TMCTOL Formulas](../math/tmctol-formulas.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-
-## Sources
-
-- `docs/tmc.architecture.en.md`
-- `docs/tmctol.specification.en.md`

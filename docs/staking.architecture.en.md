@@ -57,7 +57,7 @@ graph TD
     User[User] -->|stake_native(amount)| NativePool[NTVE share-vault]
     NativePool -->|mint liquid receipt| StNTVE[stNTVE]
     User -->|add liquidity| Amm[Zero-fee NTVE/stNTVE AMM]
-    AAA[System AAA LP farmer] -->|DonateLiquidity NTVE/stNTVE| Amm
+    AAA[System AAA LP provisioning actor] -->|DonateLiquidity NTVE/stNTVE| Amm
     Amm -->|mint LP to user| Lp[NTVE/stNTVE LP]
     User -->|lock_native_lp_for_collator| CollatorLock[Collator LP lock custody]
     CollatorLock -->|conservative native value| Session[Collator session ranking]
@@ -474,7 +474,7 @@ Outside the local-dev preset, the canonical pool should be launched through an e
 3. Create the canonical `AssetKind::Local(NTVE) / AssetKind::Local(stNTVE)` pool through the runtime/governance-approved pool-creation path.
 4. Seed balanced initial liquidity from a designated bootstrap account; this mints the initial LP supply to that account and makes read-model valuation non-empty.
 5. Run readiness checks before enabling dependent flows: `native_staking_liquidity_pool()` returns a pool, both reserves are non-zero, LP total issuance is non-zero, and `RuntimeNativeStakingLpAssetValidator` accepts the LP id. Operators can use `scripts/bootstrap-native-staking-local.sh check` as the local read-only readiness probe for this phase.
-6. Activate the Native Staking LP Farmer System AAA only after the readiness checks pass; activation remains guarded by `activate_native_staking_lp_farming` so donation execution cannot start against a missing or empty pool.
+6. Activate the native staking LP provisioning System AAA only after the readiness checks pass; activation remains guarded by `activate_native_staking_lp_farming` so donation execution cannot start against a missing or empty pool.
 7. If any step after pool creation fails, leave the actor inactive and treat remediation as an operator/governance action; do not silently fall back to liquid `stNTVE` balances or transfer-event-derived backing.
 
 ### Governance locks block vote-power withdrawal

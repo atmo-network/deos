@@ -1,16 +1,43 @@
+<!--
+Domain: Chart widget
+Owns: Market price/liquidity visualization, SVG chart rendering, and chart-local resize lifecycle.
+Excludes: Market data ownership, materialized history provider contracts, and layout state.
+Zone: Presentation widget; consumes market store/read-model provenance and UI Kit containers.
+-->
 <script lang="ts">
-  import * as d3 from "d3";
-  import { onDestroy, onMount } from "svelte";
+  import * as d3 from 'd3';
+  import { onDestroy, onMount } from 'svelte';
 
-  import { marketStore } from "$lib/market/index.svelte";
-  import { fmtPrice } from "$lib/shared/format";
-  import { Card, ReadModelBadge } from "$lib/shared/ui";
+  import { marketStore } from '$lib/market/index.svelte';
+  import type { PricePoint } from '$lib/market/types';
+  import { Button, Card } from '$lib/ui';
+  import { fmtPrice } from '$lib/ui/format';
 
   let containerEl: HTMLDivElement;
   let svgEl: SVGSVGElement;
   let resizeObserver: ResizeObserver | null = null;
   let hidden = $state(new Set<string>());
   let viewport = $state({ width: 0, height: 0 });
+
+  type ChartSeriesPoint = {
+    label: string;
+    value: number | null;
+    color: string;
+  };
+
+  type PresentChartSeriesPoint = ChartSeriesPoint & { value: number };
+
+  type RouterPricePoint = PricePoint & { priceRouter: number };
+
+  function hasVisibleValue(
+    item: ChartSeriesPoint,
+  ): item is PresentChartSeriesPoint {
+    return item.value != null && item.value > 0 && !hidden.has(item.label);
+  }
+
+  function hasRouterPrice(point: PricePoint): point is RouterPricePoint {
+    return point.priceRouter != null && point.priceRouter > 0;
+  }
 
   function toggleSeries(label: string) {
     const next = new Set(hidden);
@@ -24,15 +51,15 @@
   const COMPACT_MARGIN = { top: 2, right: 8, bottom: 18, left: 24 };
 
   const LEGEND_ITEMS = [
-    { label: "TMC", color: "#a6e22e" },
-    { label: "Router", color: "#fd971f" },
-    { label: "XYK", color: "#ae81ff" },
+    { label: 'TMC', color: '#a6e22e' },
+    { label: 'Router', color: '#fd971f' },
+    { label: 'XYK', color: '#ae81ff' },
   ];
 
   const COLORS = {
-    xyk: "#8c63f4",
-    tmc: "#8abf0f",
-    router: "#f5861f",
+    xyk: '#8c63f4',
+    tmc: '#8abf0f',
+    router: '#f5861f',
   };
 
   const chartData = $derived.by(() => {
@@ -46,25 +73,31 @@
     });
   });
   const latestPoint = $derived.by(() => chartData.at(-1) ?? null);
-  const historyProvenance = $derived(marketStore.historyView?.provenance ?? null);
-  const stackedFooterRail = $derived(viewport.width > 0 && viewport.width < 560);
+  const historyProvenance = $derived(
+    marketStore.historyView?.provenance ?? null,
+  );
+  const stackedFooterRail = $derived(
+    viewport.width > 0 && viewport.width < 560,
+  );
   const latestSeries = $derived.by(() => {
     if (!latestPoint) {
       return [];
     }
     return [
-      { label: "TMC", value: latestPoint.priceEffTMC, color: COLORS.tmc },
-      { label: "Router", value: latestPoint.priceRouter, color: COLORS.router },
-      { label: "XYK", value: latestPoint.priceXYK, color: COLORS.xyk },
-    ].filter((item) => item.value != null && item.value > 0 && !hidden.has(item.label));
+      { label: 'TMC', value: latestPoint.priceEffTMC, color: COLORS.tmc },
+      { label: 'Router', value: latestPoint.priceRouter, color: COLORS.router },
+      { label: 'XYK', value: latestPoint.priceXYK, color: COLORS.xyk },
+    ].filter(hasVisibleValue);
   });
 
-  function xValue(d: (typeof chartData)[number]) {
+  function xValue(d: PricePoint) {
     return d.blockNumber ?? d.step;
   }
 
-  function xTitle(d: (typeof chartData)[number]) {
-    return d.blockNumber !== null ? `Block ${d.blockNumber}` : `Sample ${d.step}`;
+  function xTitle(d: PricePoint) {
+    return d.blockNumber !== null
+      ? `Block ${d.blockNumber}`
+      : `Sample ${d.step}`;
   }
 
   function render() {
@@ -78,17 +111,17 @@
     const tickFontSize = compact ? 8 : 9;
     const tickCount = compact ? 4 : 5;
     const xTicks = compact ? 4 : Math.min(chartData.length, 6);
-    const svg = d3.select(svgEl).attr("width", width).attr("height", height);
-    svg.selectAll("*").remove();
+    const svg = d3.select(svgEl).attr('width', width).attr('height', height);
+    svg.selectAll('*').remove();
     if (chartData.length === 0) {
       svg
-        .append("text")
-        .attr("x", width / 2)
-        .attr("y", height / 2)
-        .attr("text-anchor", "middle")
-        .attr("fill", "var(--mono-muted)")
-        .attr("font-size", compact ? "11px" : "12px")
-        .text("Awaiting data...");
+        .append('text')
+        .attr('x', width / 2)
+        .attr('y', height / 2)
+        .attr('text-anchor', 'middle')
+        .attr('fill', 'var(--mono-muted)')
+        .attr('font-size', compact ? '11px' : '12px')
+        .text('Awaiting data...');
       return;
     }
 
@@ -96,77 +129,98 @@
     const h = height - margin.top - margin.bottom;
     if (w <= 0 || h <= 0) return;
 
-    const g = svg.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
-    const xExtent = d3.extent(chartData, (d) => xValue(d)) as [number, number];
-    const xScale = d3.scaleLinear().domain(xExtent).range([0, w]);
+    const g = svg
+      .append('g')
+      .attr('transform', `translate(${margin.left},${margin.top})`);
+    const xExtent = d3.extent(chartData, (d) => xValue(d));
+    if (xExtent[0] === undefined || xExtent[1] === undefined) {
+      return;
+    }
+    const xScale = d3
+      .scaleLinear()
+      .domain([xExtent[0], xExtent[1]])
+      .range([0, w]);
     const allPrices = chartData.flatMap((d) =>
       [d.priceXYK, d.priceEffTMC, d.priceRouter].filter(
-        (value): value is number => value != null && value > 0 && !Number.isNaN(value),
+        (value): value is number =>
+          value != null && value > 0 && !Number.isNaN(value),
       ),
     );
     const yMax = d3.max(allPrices) ?? 1;
-    const yScale = d3.scaleLinear().domain([0, yMax * 1.05]).range([h, 0]);
+    const yScale = d3
+      .scaleLinear()
+      .domain([0, yMax * 1.05])
+      .range([h, 0]);
     const gridLines = yScale.ticks(tickCount);
 
-    g.append("g")
-      .selectAll("line")
+    g.append('g')
+      .selectAll('line')
       .data(gridLines)
-      .join("line")
-      .attr("x1", 0)
-      .attr("x2", w)
-      .attr("y1", (d) => yScale(d))
-      .attr("y2", (d) => yScale(d))
-      .attr("stroke", "#d9dcc7")
-      .attr("stroke-opacity", 0.5);
+      .join('line')
+      .attr('x1', 0)
+      .attr('x2', w)
+      .attr('y1', (d) => yScale(d))
+      .attr('y2', (d) => yScale(d))
+      .attr('stroke', '#d9dcc7')
+      .attr('stroke-opacity', 0.5);
 
-    function priceLine(accessor: (d: (typeof chartData)[0]) => number | null) {
+    function priceLine(accessor: (d: PricePoint) => number | null) {
       return d3
-        .line<(typeof chartData)[0]>()
+        .line<PricePoint>()
         .defined((d) => {
           const value = accessor(d);
           return value != null && value > 0 && !Number.isNaN(value);
         })
         .x((d) => xScale(xValue(d)))
-        .y((d) => yScale(accessor(d)!))
+        .y((d) => yScale(accessor(d) ?? 0))
         .curve(d3.curveMonotoneX);
     }
 
-    if (!hidden.has("XYK")) {
-      g.append("path")
+    if (!hidden.has('XYK')) {
+      g.append('path')
         .datum(chartData)
-        .attr("d", priceLine((d) => (d.priceXYK > 0 ? d.priceXYK : null)))
-        .attr("fill", "none")
-        .attr("stroke", COLORS.xyk)
-        .attr("stroke-width", 1.5);
+        .attr(
+          'd',
+          priceLine((d) => (d.priceXYK > 0 ? d.priceXYK : null)),
+        )
+        .attr('fill', 'none')
+        .attr('stroke', COLORS.xyk)
+        .attr('stroke-width', 1.5);
     }
 
-    if (!hidden.has("TMC")) {
-      g.append("path")
+    if (!hidden.has('TMC')) {
+      g.append('path')
         .datum(chartData)
-        .attr("d", priceLine((d) => d.priceEffTMC))
-        .attr("fill", "none")
-        .attr("stroke", COLORS.tmc)
-        .attr("stroke-width", 1.5);
+        .attr(
+          'd',
+          priceLine((d) => d.priceEffTMC),
+        )
+        .attr('fill', 'none')
+        .attr('stroke', COLORS.tmc)
+        .attr('stroke-width', 1.5);
     }
 
-    if (!hidden.has("Router")) {
-      g.append("path")
+    if (!hidden.has('Router')) {
+      g.append('path')
         .datum(chartData)
-        .attr("d", priceLine((d) => d.priceRouter))
-        .attr("fill", "none")
-        .attr("stroke", COLORS.router)
-        .attr("stroke-width", 2);
+        .attr(
+          'd',
+          priceLine((d) => d.priceRouter),
+        )
+        .attr('fill', 'none')
+        .attr('stroke', COLORS.router)
+        .attr('stroke-width', 2);
 
-      g.selectAll(".router-dot")
-        .data(chartData.filter((d) => d.priceRouter != null && d.priceRouter > 0))
-        .join("circle")
-        .attr("cx", (d) => xScale(xValue(d)))
-        .attr("cy", (d) => yScale(d.priceRouter!))
-        .attr("r", compact ? 1.25 : 1.5)
-        .attr("fill", COLORS.router);
+      g.selectAll('.router-dot')
+        .data(chartData.filter(hasRouterPrice))
+        .join('circle')
+        .attr('cx', (d) => xScale(xValue(d)))
+        .attr('cy', (d) => yScale(d.priceRouter))
+        .attr('r', compact ? 1.25 : 1.5)
+        .attr('fill', COLORS.router);
     }
 
-    g.append("g")
+    g.append('g')
       .call(
         d3
           .axisLeft(yScale)
@@ -174,13 +228,16 @@
           .tickSize(0)
           .tickFormat((value) => (+value).toFixed(compact ? 1 : 2)),
       )
-      .call((axis) => axis.select(".domain").remove())
+      .call((axis) => axis.select('.domain').remove())
       .call((axis) =>
-        axis.selectAll(".tick text").attr("fill", "#6f7260").attr("font-size", tickFontSize),
+        axis
+          .selectAll('.tick text')
+          .attr('fill', '#6f7260')
+          .attr('font-size', tickFontSize),
       );
 
-    g.append("g")
-      .attr("transform", `translate(0,${h})`)
+    g.append('g')
+      .attr('transform', `translate(0,${h})`)
       .call(
         d3
           .axisBottom(xScale)
@@ -188,28 +245,36 @@
           .tickSize(0)
           .tickFormat((value) => `#${Math.round(+value)}`),
       )
-      .call((axis) => axis.select(".domain").remove())
+      .call((axis) => axis.select('.domain').remove())
       .call((axis) =>
-        axis.selectAll(".tick text").attr("fill", "#6f7260").attr("font-size", tickFontSize).attr("dy", compact ? 6 : 8),
+        axis
+          .selectAll('.tick text')
+          .attr('fill', '#6f7260')
+          .attr('font-size', tickFontSize)
+          .attr('dy', compact ? 6 : 8),
       );
 
-    const tooltipEl = containerEl.querySelector(".d3-tooltip") as HTMLElement;
+    const tooltipCandidate = containerEl.querySelector('.d3-tooltip');
+    const tooltipEl =
+      tooltipCandidate instanceof HTMLElement ? tooltipCandidate : null;
     const crosshair = g
-      .append("line")
-      .attr("y1", 0)
-      .attr("y2", h)
-      .attr("stroke", "#6f7260")
-      .attr("stroke-dasharray", "2,2")
-      .attr("opacity", 0);
+      .append('line')
+      .attr('y1', 0)
+      .attr('y2', h)
+      .attr('stroke', '#6f7260')
+      .attr('stroke-dasharray', '2,2')
+      .attr('opacity', 0);
 
-    const bisect = d3.bisector<(typeof chartData)[0], number>((d) => xValue(d)).center;
+    const bisect = d3.bisector<(typeof chartData)[0], number>((d) =>
+      xValue(d),
+    ).center;
 
-    g.append("rect")
-      .attr("width", w)
-      .attr("height", h)
-      .attr("fill", "none")
-      .attr("pointer-events", "all")
-      .on("mousemove", (event: MouseEvent) => {
+    g.append('rect')
+      .attr('width', w)
+      .attr('height', h)
+      .attr('fill', 'none')
+      .attr('pointer-events', 'all')
+      .on('mousemove', (event: MouseEvent) => {
         const [mx, my] = d3.pointer(event);
         const step = xScale.invert(mx);
         const idx = bisect(chartData, step);
@@ -217,23 +282,28 @@
         if (!d) return;
 
         const x = xScale(xValue(d));
-        crosshair.attr("x1", x).attr("x2", x).attr("opacity", 1);
+        crosshair.attr('x1', x).attr('x2', x).attr('opacity', 1);
 
-        const tmc = { label: "TMC", value: d.priceEffTMC, color: COLORS.tmc };
-        const xyk = { label: "XYK", value: d.priceXYK, color: COLORS.xyk };
-        const router = { label: "Router", value: d.priceRouter, color: COLORS.router };
+        const tmc = { label: 'TMC', value: d.priceEffTMC, color: COLORS.tmc };
+        const xyk = { label: 'XYK', value: d.priceXYK, color: COLORS.xyk };
+        const router = {
+          label: 'Router',
+          value: d.priceRouter,
+          color: COLORS.router,
+        };
         const ceiling = (tmc.value ?? 0) >= (xyk.value ?? 0) ? tmc : xyk;
         const floor = ceiling === tmc ? xyk : tmc;
-        const items = [ceiling, router, floor].filter(
-          (item) => item.value != null && !hidden.has(item.label),
-        );
+        const items = [ceiling, router, floor].filter(hasVisibleValue);
 
         if (tooltipEl) {
-          tooltipEl.style.opacity = "1";
+          tooltipEl.style.opacity = '1';
           const tooltipX = margin.left + x + 12;
           const clampX = Math.min(tooltipX, width - (compact ? 136 : 160));
           const tooltipY = margin.top + my;
-          const clampY = Math.min(Math.max(tooltipY, 4), height - (compact ? 82 : 100));
+          const clampY = Math.min(
+            Math.max(tooltipY, 4),
+            height - (compact ? 82 : 100),
+          );
           tooltipEl.style.left = `${clampX}px`;
           tooltipEl.style.top = `${clampY}px`;
           tooltipEl.innerHTML =
@@ -244,15 +314,15 @@
                   `<div class="flex items-center gap-1.5">` +
                   `<span style="background:${item.color}" class="w-1.5 h-1.5 rounded-full inline-block shrink-0"></span>` +
                   `<span class="text-(--mono-muted)">${item.label}</span>` +
-                  `<span class="text-(--mono-text) ml-auto tabnum">$${fmtPrice(item.value!)}</span>` +
+                  `<span class="text-(--mono-text) ml-auto tabnum">${fmtPrice(item.value)}</span>` +
                   `</div>`,
               )
-              .join("");
+              .join('');
         }
       })
-      .on("mouseleave", () => {
-        crosshair.attr("opacity", 0);
-        if (tooltipEl) tooltipEl.style.opacity = "0";
+      .on('mouseleave', () => {
+        crosshair.attr('opacity', 0);
+        if (tooltipEl) tooltipEl.style.opacity = '0';
       });
   }
 
@@ -275,46 +345,61 @@
 <Card class="h-full min-h-full w-full flex flex-col overflow-hidden">
   <div bind:this={containerEl} class="relative flex-1 min-h-0 overflow-hidden">
     <svg bind:this={svgEl} class="block h-full w-full"></svg>
-    <div class="d3-tooltip pointer-events-none absolute z-10 min-w-30 rounded-lg border border-(--mono-border) bg-white/95 px-2.5 py-2 text-[11px] opacity-0 shadow-sm transition-opacity backdrop-blur-sm"></div>
+    <div
+      class="d3-tooltip pointer-events-none absolute z-10 min-w-30 rounded-lg border border-(--mono-border) bg-white/95 px-2.5 py-2 text-[11px] opacity-0 shadow-sm transition-opacity backdrop-blur-sm"
+    ></div>
   </div>
 
   <div class="shrink-0 px-2.5 py-2">
-    <div class={[
-      "grid gap-2",
-      stackedFooterRail || latestSeries.length === 0
-        ? "grid-cols-1"
-        : "grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center",
-    ]}>
+    <div
+      class={[
+        'grid gap-2',
+        stackedFooterRail || latestSeries.length === 0
+          ? 'grid-cols-1'
+          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center',
+      ]}
+    >
       {#if latestSeries.length > 0}
         <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
           {#each latestSeries as item (item.label)}
-            <span class="inline-flex items-center gap-1 rounded-full border border-(--mono-border) bg-(--mono-bg) px-2 py-0.5">
-              <span class="inline-block h-1.5 w-1.5 rounded-full" style:background={item.color}></span>
+            <span
+              class="inline-flex items-center gap-1 rounded-full border border-(--mono-border) bg-(--mono-bg) px-2 py-0.5"
+            >
+              <span
+                class="inline-block h-1.5 w-1.5 rounded-full"
+                style:background={item.color}
+              ></span>
               <span class="text-(--mono-muted)">{item.label}</span>
-              <span class="tabnum text-(--mono-text)">${fmtPrice(item.value!)}</span>
+              <span class="tabnum text-(--mono-text)"
+                >${fmtPrice(item.value)}</span
+              >
             </span>
           {/each}
         </div>
       {/if}
 
-      <div class={[
-        "flex flex-wrap items-center justify-center gap-1.5",
-      ]}>
+      <div class={['flex flex-wrap items-center justify-center gap-1.5']}>
         {#each LEGEND_ITEMS as item}
-          <button
-            type="button"
+          <Button
+            size="sm"
+            variant="ghost"
             aria-pressed={!hidden.has(item.label)}
             onclick={() => toggleSeries(item.label)}
             class={[
-              "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] transition-colors cursor-pointer",
+              'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] cursor-pointer',
               hidden.has(item.label)
-                ? "text-(--mono-muted) opacity-60"
-                : "text-(--mono-text)",
+                ? 'text-(--mono-muted) opacity-60'
+                : 'text-(--mono-text)',
             ]}
           >
-            <span class="inline-block h-2 w-2 rounded-full" style:background={item.color}></span>
-            <span class={hidden.has(item.label) ? "line-through" : ""}>{item.label}</span>
-          </button>
+            <span
+              class="inline-block h-2 w-2 rounded-full"
+              style:background={item.color}
+            ></span>
+            <span class={hidden.has(item.label) ? 'line-through' : ''}
+              >{item.label}</span
+            >
+          </Button>
         {/each}
       </div>
     </div>

@@ -1,4 +1,10 @@
-import { hexToU8a, u8aToHex } from "@polkadot/util";
+/*
+Domain: Governance advisory payloads
+Owns: Advisory payload draft validation, byte encoding/decoding, and payload hash helpers.
+Excludes: Proposal submission, store lifecycle, treasury payload encoding, and UI rendering.
+Zone: Governance payload helper; pure encoding/validation boundary for advisory proposals.
+*/
+import { hexToU8a, u8aToHex } from '@polkadot/util';
 
 const advisoryPayloadTextEncoder = new TextEncoder();
 
@@ -27,6 +33,18 @@ export type GovernanceAdvisoryPayloadDraftState = {
   docCidByteLength: number;
   referencedPayloadHashValid: boolean;
   encoding: GovernanceAdvisoryPayloadEncoding | null;
+};
+
+type ParsedTextBytes = {
+  valid: boolean;
+  bytes: Uint8Array | null;
+  byteLength: number;
+};
+
+type ParsedReferencedPayloadHash = {
+  valid: boolean;
+  bytes: Uint8Array | null;
+  normalized: string | null;
 };
 
 function compactLengthBytes(length: number) {
@@ -67,10 +85,10 @@ function encodeScaleOption(innerBytes: Uint8Array | null) {
     : concatBytes([Uint8Array.of(1), innerBytes]);
 }
 
-function parseRequiredSummary(value: string) {
+function parseRequiredSummary(value: string): ParsedTextBytes {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    return { valid: false, bytes: null as Uint8Array | null, byteLength: 0 };
+    return { valid: false, bytes: null, byteLength: 0 };
   }
   const bytes = advisoryPayloadTextEncoder.encode(trimmed);
   return {
@@ -80,10 +98,10 @@ function parseRequiredSummary(value: string) {
   };
 }
 
-function parseOptionalDocCid(value: string) {
+function parseOptionalDocCid(value: string): ParsedTextBytes {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    return { valid: true, bytes: null as Uint8Array | null, byteLength: 0 };
+    return { valid: true, bytes: null, byteLength: 0 };
   }
   const bytes = advisoryPayloadTextEncoder.encode(trimmed);
   return {
@@ -93,20 +111,22 @@ function parseOptionalDocCid(value: string) {
   };
 }
 
-function parseOptionalReferencedPayloadHash(value: string) {
+function parseOptionalReferencedPayloadHash(
+  value: string,
+): ParsedReferencedPayloadHash {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
     return {
       valid: true,
-      bytes: null as Uint8Array | null,
-      normalized: null as string | null,
+      bytes: null,
+      normalized: null,
     };
   }
   if (!/^0x[0-9a-fA-F]{64}$/.test(trimmed)) {
     return {
       valid: false,
-      bytes: null as Uint8Array | null,
-      normalized: null as string | null,
+      bytes: null,
+      normalized: null,
     };
   }
   const normalized = trimmed.toLowerCase();
@@ -125,7 +145,7 @@ export async function hashGovernanceAdvisoryPayloadBytes(
   payloadBytes: Uint8Array,
 ): Promise<string> {
   if (advisoryPayloadHasherPromise == null) {
-    advisoryPayloadHasherPromise = import("@polkadot/util-crypto").then(
+    advisoryPayloadHasherPromise = import('@polkadot/util-crypto').then(
       ({ blake2AsHex }) =>
         (bytes: Uint8Array) =>
           blake2AsHex(bytes, 256),

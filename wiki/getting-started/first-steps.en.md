@@ -1,7 +1,7 @@
 ---
 page_type: getting-started
 title: First Steps
-summary: Start with the docs hub, understand the framework-versus-standard split, then choose the right working surface for your task. Use the simulator for tokenomics, the runtime workspace for implementation, the web client for product flows, and scripts for bounded local operations.
+summary: A short self-contained entry route for understanding DEOS, choosing a domain, and running the right validation surface.
 locale: en
 canonical_page_id: first-steps
 translation_status: source
@@ -19,12 +19,16 @@ tags:
   - onboarding
   - workflow
 related:
+  - DEOS in 60 Seconds
+  - Executive Summary
+  - Partner Evaluation Route
+  - Domain Map
   - DEOS Framework Overview
   - TMCTOL Standard
   - Read-Model Split
   - Reference Client
   - Newcomer FAQ
-last_compiled: 2026-04-16
+last_compiled: 2026-05-17
 confidence: 0.93
 ---
 
@@ -32,68 +36,68 @@ confidence: 0.93
 
 ## Summary
 
-If you are new to the repository, start with the conceptual layer before touching code. The docs explain what the system is supposed to do. The runtime, client, and scripts are implementations of that contract.
+If you are new to DEOS, start with the hook before the domain graph. DEOS is a forkable runtime framework where token issuance, protocol-owned liquidity, routing, staking, governance, and automated actors become a deterministic institutional machine.
 
-A simple first pass is: understand DEOS, understand TMCTOL, then move into the specific subsystem you need.
+The project is not just a runtime, not just a web client, and not just a tokenomic formula. It is a framework where economic physics, autonomous actors, governance, staking, client read models, and validation tools reinforce each other.
 
-## Recommended Reading Order
+A good first pass is: understand the meme, decide whether you are evaluating DEOS as a partner or as a builder, then choose the domain you are actually changing.
 
-1. Read [`docs/README.md`](../../docs/README.md)
-2. Read the [DEOS Framework Overview](../overview/deos-framework.en.md)
-3. Read the [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-4. Read the [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-5. Read the [Read-Model Split](../concepts/read-model-split.en.md)
-6. Then open the exact subsystem spec or architecture note you need
+## First route
 
-## Pick the Right Surface
+1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
+2. [Executive Summary](executive-summary.en.md)
+3. [Who DEOS Is For](who-deos-is-for.en.md)
+4. [DEOS Framework Overview](../overview/deos-framework.en.md)
+5. [Domain Map](../concepts/domain-map.en.md)
+6. [Core Terms](../glossary/core-terms.en.md)
+7. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+8. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
+9. [Read-Model Split](../concepts/read-model-split.en.md)
 
-### When to use `/docs`
+This path gives you the project vocabulary before you encounter pallet names, runtime files, or product-specific UI terms.
 
-Use `/docs` first when you need definitions, rationale, architecture maps, and the intended contract of a subsystem.
+If you are evaluating DEOS as a partner, use [Partner Evaluation Route](../usage/partner-evaluation-route.en.md) instead of reading the whole graph in order.
 
-### When to use `/simulator`
+## Pick the right domain
 
-Use `/simulator` when tokenomics, formulas, thresholds, or invariants are changing or being rechecked.
+### Economic physics
 
-### When to use `/template`
+Use [TMCTOL Standard](../concepts/tmctol-standard.en.md), [TMCTOL Formulas](../math/tmctol-formulas.en.md), and [Token Minting Curve](../overview/token-minting-curve.en.md) when formulas, floors, ceilings, minting, burning, or compression claims are involved.
 
-Use `/template` when you are implementing or validating runtime behavior, pallets, integrations, tests, or benchmarks.
+### Runtime and actors
 
-### When to use `/web-client`
+Use [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor.en.md), [Runtime Patterns](../overview/runtime-patterns.en.md), and [Asset Identity](../overview/asset-identity.en.md) when implementation behavior, scheduler flows, assets, or integrations are involved.
 
-Use `/web-client` when you are working on the browser-facing reference product and how it presents chain truth to users.
+### Governance and protection
 
-### When to use `/scripts`
+Use [Governance Overview](../overview/governance-overview.en.md), [Governance Domains](../concepts/governance-domains.en.md), and [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md) when authority, payloads, protection tracks, or upgrade paths are involved.
 
-Use `/scripts` for bounded local setup, probes, operator checks, and repository automation.
+### Client and wiki
 
-## Core Mental Model
+Use [Reference Client](../overview/reference-client.en.md), [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md), and [Generated Wiki](../concepts/generated-wiki.en.md) when browser UX, read-model honesty, layout, UI primitives, or wiki rendering are involved.
 
-Three ideas explain most of the repository:
+### Local operations
 
-- DEOS is the framework
-- TMCTOL is the current economic standard running on top of that framework
-- User-facing data must be classified as either canonical on-chain truth or a materialized view
+Use [Scripts Layer](../usage/scripts-layer.en.md), [Three-Layer Validation](../development/three-layer-validation.en.md), and [Development Status](../development/status.en.md) when you need setup, checks, release gates, or current open boundaries.
 
-## Validation Mindset
+## Validation mindset
 
 Use the smallest meaningful validation layer first:
 
-- Math changes -> simulator
-- Runtime changes -> targeted cargo validation
-- Client changes -> targeted web-client checks
-- Docs and wiki changes -> terminology, link, and navigation sanity
+- Math changes -> simulator checks;
+- Runtime changes -> targeted cargo validation;
+- Client changes -> web-client validation;
+- Wiki changes -> trusted wiki validation and link sanity;
+- Cross-domain changes -> the full while-true completion gate.
 
 ## Related
 
+- [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
+- [Executive Summary](executive-summary.en.md)
+- [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
+- [Domain Map](../concepts/domain-map.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
 - [Reference Client](../overview/reference-client.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
-
-## Sources
-
-- `README.md`
-- `docs/README.md`
-- `docs/read-model.contract.en.md`

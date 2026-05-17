@@ -1,14 +1,20 @@
-import type { DragTabState, DropEdge, PanelId } from "./types";
+/*
+Domain: Pane drag/drop projection
+Owns: Tab preview lists, drop-edge detection, insertion-index math, and projection labels/classes.
+Excludes: Pointer event lifecycle, store mutation, widget rendering, and tile tree mutation.
+Zone: Layout interaction helper; depends only on layout contracts.
+*/
+import type { DragTabState, DropEdge, PanelId } from './types';
 
 export type PreviewTabItem =
   | {
       key: string;
-      kind: "tab";
+      kind: 'tab';
       tabId: PanelId;
     }
   | {
       key: string;
-      kind: "projection";
+      kind: 'projection';
       tabId: PanelId;
     };
 
@@ -24,7 +30,7 @@ export function buildPreviewTabs(
       : tabs;
   const items = baseTabs.map<PreviewTabItem>((tabId) => ({
     key: `tab-${tabId}`,
-    kind: "tab",
+    kind: 'tab',
     tabId,
   }));
   if (!activeDrag || insertIndex === null) {
@@ -33,7 +39,7 @@ export function buildPreviewTabs(
   const projectionIndex = Math.max(0, Math.min(insertIndex, items.length));
   items.splice(projectionIndex, 0, {
     key: `projection-${leafId}-${activeDrag.tabId}`,
-    kind: "projection",
+    kind: 'projection',
     tabId: activeDrag.tabId,
   });
   return items;
@@ -44,7 +50,7 @@ export function detectDropEdge(
   options: {
     containerEl: HTMLDivElement | undefined;
     tabBarEl: HTMLDivElement | undefined;
-    paneGripEl: HTMLDivElement | undefined;
+    paneGripEl: HTMLElement | undefined;
     zoneSize: number;
   },
 ): DropEdge | null {
@@ -71,22 +77,22 @@ export function detectDropEdge(
     return null;
   }
   if (nearBottom) {
-    return "bottom";
+    return 'bottom';
   }
   if (nearLeft) {
-    return "left";
+    return 'left';
   }
-  return "right";
+  return 'right';
 }
 
 export function edgeProjectionShellClass(edge: DropEdge): string {
-  if (edge === "right") {
-    return "pointer-events-none absolute top-2 right-2 bottom-2 w-[46%]";
+  if (edge === 'right') {
+    return 'pointer-events-none absolute top-2 right-2 bottom-2 w-[46%]';
   }
-  if (edge === "bottom") {
-    return "pointer-events-none absolute right-2 bottom-2 left-2 h-[44%]";
+  if (edge === 'bottom') {
+    return 'pointer-events-none absolute right-2 bottom-2 left-2 h-[44%]';
   }
-  return "pointer-events-none absolute top-2 bottom-2 left-2 w-[46%]";
+  return 'pointer-events-none absolute top-2 bottom-2 left-2 w-[46%]';
 }
 
 export function edgeProjectionPayloadLabel(
@@ -107,7 +113,7 @@ export function computeTabInsertIndex(
   if (!tabBarEl) {
     return fallbackLength;
   }
-  const buttons = tabBarEl.querySelectorAll<HTMLElement>("[data-tab-id]");
+  const buttons = tabBarEl.querySelectorAll<HTMLElement>('[data-tab-id]');
   for (let index = 0; index < buttons.length; index += 1) {
     const rect = buttons[index].getBoundingClientRect();
     if (event.clientX < rect.left + rect.width / 2) {

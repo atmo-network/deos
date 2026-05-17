@@ -1,7 +1,7 @@
 ---
 page_type: glossary
 title: Core Terms
-summary: A compact glossary for the most important DEOS and TMCTOL terms. Use this page first when project vocabulary, abbreviations, or framework-versus-standard naming feels ambiguous.
+summary: A compact glossary for the most important DEOS and TMCTOL terms. Use this page first when project vocabulary, abbreviations, framework-versus-standard naming, frontend architecture terms, wiki roles, or status surfaces feel ambiguous.
 locale: en
 canonical_page_id: core-terms
 translation_status: source
@@ -11,12 +11,16 @@ available_locales:
 sources:
   - ../../README.md
   - ../../docs/README.md
+  - ../../BACKLOG.md
+  - ../../CHANGELOG.md
   - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
   - ../../docs/aaa.specification.en.md
   - ../../docs/governance.specification.en.md
   - ../../docs/governance.architecture.en.md
   - ../../docs/read-model.contract.en.md
+  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/README.md
 status: active
 audience: newcomer
 tags:
@@ -29,16 +33,20 @@ related:
   - Governance Overview
   - Governance Domains
   - Read-Model Split
+  - UI Kit and Domain DAG
+  - Generated Wiki
+  - Reading Paths
+  - Development Status
   - Newcomer FAQ
-last_compiled: 2026-04-20
-confidence: 0.95
+last_compiled: 2026-05-17
+confidence: 0.96
 ---
 
 # Core Terms
 
 ## Summary
 
-This glossary keeps the most important project terms in one place. It is especially useful because the repository draws a hard line between framework identity, standard identity, runtime execution vocabulary, governance vocabulary, and read-model terminology.
+This glossary is a lookup surface, not a second explanation layer. Each term stays short and points outward through related pages for full context.
 
 ## Terms
 
@@ -56,7 +64,7 @@ This glossary keeps the most important project terms in one place. It is especia
 
 ### TOL
 
-`Treasury-Owned Liquidity`. The policy layer that routes mint output into protocol-controlled liquidity and segments that liquidity into buckets.
+`Treasury-Owned Liquidity`. Protocol-controlled liquidity segmented into bucket domains.
 
 ### AAA
 
@@ -68,7 +76,7 @@ One concrete bounded runtime instance inside the broader AAA system.
 
 ### Axial Router
 
-The routing pallet that compares bounded execution paths, chooses the better route, and captures its trading fee for the protocol flow.
+The bounded route-selection mechanism for protocol trades and fee flow.
 
 ### Balance Ingress
 
@@ -76,27 +84,27 @@ The token-driven trigger where assets arriving in the system can drive the next 
 
 ### Governance Domain
 
-One typed governance cell inside the larger governance system. It binds together the governed subject, power surfaces, valid payload families, cadence, and execution authority.
+One typed governance cell binding subject, power surface, payload family, cadence, and execution authority.
 
 ### Primary Track
 
-The lane that answers the proposal itself. Depending on the domain and payload family, it may be binary (`Aye / Nay`) or invoice-shaped (`Amplify / Approve / Reduce / Nay`).
+The proposal-decision lane, either binary or invoice-shaped depending on domain and payload.
 
 ### Protection Track
 
-The constitutional `Veto / Pass` lane that can block or procedurally accelerate protected governance flows. It is separate from the primary track rather than a hidden alias of ordinary `Nay`.
+The constitutional `Veto / Pass` lane, separate from ordinary proposal approval.
 
 ### Proposal Payload Kind
 
-The typed description of what kind of governance action a proposal wants to authorize, such as strategic Root action, tactical treasury spend, tactical parameter change, same-domain intent, or tactical signal toward the strategic layer.
+The typed category of action a governance proposal wants to authorize.
 
 ### Execution Authority
 
-The authority level that a successful governance payload may actually reach when enacted. In DEOS, tactical domains do not automatically inherit strategic or Root-equivalent power.
+The authority level a successful governance payload may reach when enacted.
 
 ### GovXP
 
-The bounded governance-participation signal exported by the governance subsystem for later reward and reputation logic. On the current line it is counters-first rather than a live vote-power multiplier.
+A bounded governance-participation signal for reward or reputation logic.
 
 ### Canonical Projection
 
@@ -122,6 +130,46 @@ The flagship tactical governance and builder-coordination token on the current l
 
 Transferable staking receipts representing share-based ownership in staking pools.
 
+### UI Kit
+
+The repository-local frontend presentation kit for reusable UI primitives.
+
+### Domain DAG
+
+The web-client ownership discipline and validator for import direction, headers, and boundary drift.
+
+### Widget
+
+A browser-facing product surface such as swap, wallet, staking, governance, chart, automation, log, account, settings, status, or wiki reading.
+
+### Layout
+
+The web-client subsystem that arranges panes, tabs, reserved lanes, header, footer, and sidebar without becoming a product domain.
+
+### Generated Wiki
+
+The self-contained `/wiki` interpretation layer for onboarding, navigation, metadata consumption, and frontend rendering.
+
+### Reading Path
+
+A role-based wiki route for a specific task, such as economics, runtime, governance, client, status, or tooling work.
+
+### Architecture Document
+
+A release-agnostic implementation mirror for a shipped subsystem.
+
+### `BACKLOG.md`
+
+The canonical open-work file for closable deliverables, explicit gates, and bounded epics.
+
+### `CHANGELOG.md`
+
+The canonical completed-delivery and release-history file.
+
+### Development Status
+
+The wiki current-state map for baseline domains, active focus, open boundaries, and gated work.
+
 ## Related
 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
@@ -130,15 +178,8 @@ Transferable staking receipts representing share-based ownership in staking pool
 - [Governance Overview](../overview/governance-overview.en.md)
 - [Governance Domains](../concepts/governance-domains.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
+- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
+- [Generated Wiki](../concepts/generated-wiki.en.md)
+- [Reading Paths](../getting-started/reading-paths.en.md)
+- [Development Status](../development/status.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
-
-## Sources
-
-- `README.md`
-- `docs/README.md`
-- `docs/tmctol.specification.en.md`
-- `docs/core.architecture.en.md`
-- `docs/aaa.specification.en.md`
-- `docs/governance.specification.en.md`
-- `docs/governance.architecture.en.md`
-- `docs/read-model.contract.en.md`

@@ -67,8 +67,3 @@ These runtime patterns are infrastructure, but they support the whole economic l
 - [Asset Identity](asset-identity.en.md)
 - [Randomness Strategy](randomness-strategy.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/polkadot-sdk-2603.insights.en.md`
-- `docs/core.architecture.en.md`

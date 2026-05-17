@@ -1,0 +1,58 @@
+---
+page_type: concept
+title: Economic Claim Levels
+summary: A ladder for classifying DEOS/TMCTOL economic claims across formulas, simulations, runtime enforcement, governance dependency, and market assumptions.
+locale: en
+canonical_page_id: economic-claim-levels
+translation_status: source
+available_locales:
+  - en
+  - ru
+sources:
+  - ../../AGENTS.md
+  - ../../docs/tmctol.specification.en.md
+  - ../../simulator/README.md
+status: active
+audience: newcomer
+tags:
+  - concept
+  - economics
+  - validation
+  - claims
+related:
+  - Economic Thresholds
+  - Invariant Map
+  - Threat Model
+  - Three-Layer Validation
+last_compiled: 2026-05-17
+confidence: 0.86
+---
+
+# Economic Claim Levels
+
+## Summary
+
+DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, and market behavior in one sentence. This ladder names the level of support behind a claim.
+
+## Levels
+
+| Level   | Meaning              | Example                              |
+| ------- | -------------------- | ------------------------------------ |
+| Level 0 | Formula-defined      | TMC price follows the curve equation |
+| Level 1 | Simulator-supported  | Threshold holds in vectors           |
+| Level 2 | Runtime-enforced     | Tests pin the transition             |
+| Level 3 | Governance-dependent | True inside bounded policy           |
+| Level 4 | Market assumption    | Depends on users/liquidity/demand    |
+
+## Reading Rule
+
+A stronger-looking phrase is not a stronger claim. If a statement depends on market behavior, call it Level 4 even if the underlying formula is Level 0.
+
+Example: floor mechanics can be formula-defined and simulator-supported, but user demand, arbitrage timing, or liquidity-provider behavior may still be Level 4 assumptions.
+
+## Related
+
+- [Economic Thresholds](economic-thresholds.en.md)
+- [Invariant Map](invariant-map.en.md)
+- [Threat Model](threat-model.en.md)
+- [Three-Layer Validation](../development/three-layer-validation.en.md)

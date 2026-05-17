@@ -104,8 +104,3 @@ DEOS дает этот более широкий операционный сло
 - [Домены Governance](governance-domains.ru.md)
 - [Пулы стейкинга](staking-pools.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
-
-## Источники
-
-- `docs/tmctol.specification.en.md`
-- `README.md`

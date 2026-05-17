@@ -60,6 +60,8 @@ The docs reject two failure modes:
 
 If a user-facing screen depends on materialized data, that dependency should be explicit. The product should not present it as if it were indistinguishable from bounded protocol truth.
 
+In the browser, DEOS also tracks a second realization axis: whether a value is read directly, cached for the session, derived inside the session, or provided by an external materialized service. That browser axis does not replace the canonical/materialized split; it explains how the client currently realizes the datum.
+
 ## Why This Matters for New Work
 
 When adding a new query surface, the first question is not only “what data does the UI want?” A better question is:
@@ -76,8 +78,3 @@ That decision protects both protocol integrity and product honesty.
 - [Governance Domains](governance-domains.en.md)
 - [Reference Client](../overview/reference-client.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/read-model.contract.en.md`
-- `docs/core.architecture.en.md`

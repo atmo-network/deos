@@ -32,14 +32,14 @@ graph TD
         Integral --> Mint[Mint ΔS Tokens]
 
         Mint -->|1/3 Tokens| UserAccount[User Account]
-        Mint -->|2/3 Tokens| ZapMgr[Zap Manager Account]
+        Mint -->|2/3 Tokens| LiquidityActor[Liquidity Actor Account]
 
-        Router -->|Foreign Payment| ZapMgr
+        Router -->|Foreign Payment| LiquidityActor
     end
 
-    ZapMgr -->|add_liquidity| Pool[TOL/Foreign AMM Pool]
+    LiquidityActor -->|add_liquidity| Pool[TOL/Foreign AMM Pool]
 
-    BM[Burning Manager] -->|Burns| NativeSupply[Native Total Issuance]
+    BurnActor[Burn Actor] -->|Burns| NativeSupply[Native Total Issuance]
     NativeSupply -.->|Reads Live| TMC
 
     style TMC fill:#4a90e2
@@ -79,16 +79,16 @@ graph TD
 - Transfer collateral to the resolved sink account
 - Mint total `ΔS` tokens inside one transactional flow
 - Transfer 1/3 to user (`UserAllocationRatio` = 1/3)
-- Transfer 2/3 to Zap Manager / splitter sink account
+- Transfer 2/3 to the resolved liquidity actor / splitter sink account
 - If either mint leg fails, the collateral transfer rolls back too
 - Emit `ZapAllocationDistributed` event only after the whole distribution succeeds
 
 `6. Post-Mint Integration`
 
-- Foreign payment is transferred to `ZapManagerAccount`
-- 2/3 minted native share is minted to `ZapManagerAccount`
-- Zap Manager hook cycle processes balances, adds liquidity, and transfers LP to a token-resolved TOL ingress account
-- Router/BurningManager handle fee capture and burn flow on swap paths
+- Foreign payment is transferred to the resolved liquidity actor account
+- 2/3 minted native share is minted to the resolved liquidity actor account
+- Liquidity actor execution processes balances, adds liquidity, and transfers LP to a token-resolved TOL ingress account
+- Router and Burn Actor handle fee capture and burn flow on swap paths
 
 ## Mathematical Foundation
 
@@ -170,7 +170,7 @@ Current implementation does not maintain a dedicated `MintingPaused` storage fla
 | `UserAllocationRatio` | Perbill   | Fraction to user (default: 1/3 = 333_333_333 Perbill)                       |
 | `PalletId`            | PalletId  | Derives the TMC pallet account for pallet-owned operations                  |
 | `TreasuryAccount`     | AccountId | Compatibility/config hook; currently mapped to the TOL pallet account       |
-| `ZapManagerAccount`   | AccountId | Active recipient of mint-side protocol allocation (2/3 minted native share) |
+| `ZapManagerAccount`   | AccountId | Compatibility hook for the active liquidity-actor recipient |
 
 ### 4. Extrinsics (Governance-Controlled)
 
@@ -249,14 +249,14 @@ The Router orchestrates minting by:
 
 1. Receiving user intent and routing to TMC mint path when economically preferred
 2. Calling TMC minting flow (`mint_with_distribution`)
-3. Preserving normal router fee semantics on swap routes, while mint-side distribution is handled by TMC/ZapManager accounts
+3. Preserving normal router fee semantics on swap routes, while mint-side distribution is handled by TMC and resolved liquidity-actor accounts
 4. User receiving 1/3 of minted native allocation directly
 
-Fee architecture note: transaction fee capture and burn semantics are enforced by Axial Router + Burning Manager, not by TMC treasury logic.
+Fee architecture note: transaction fee capture and burn semantics are enforced by Axial Router + Burn Actor, not by TMC treasury logic.
 
-### Connection to Zap Manager (Liquidity Provisioning)
+### Connection to Liquidity-Provisioning Actors
 
-TMC distributes mint-side protocol allocation to `ZapManagerAccount`. Zap Manager then:
+TMC distributes mint-side protocol allocation to the resolved liquidity actor account. Liquidity actors then:
 
 - Accumulates native tokens from TMC
 - Receives foreign tokens from mint flow
@@ -264,14 +264,14 @@ TMC distributes mint-side protocol allocation to `ZapManagerAccount`. Zap Manage
 - Transfers minted LP to token-resolved TOL ingress accounts for protocol liquidity accounting
 - Maintains liquidity depth for both directions (mint and secondary-market operations)
 
-### Connection to Burning Manager (Bidirectional Compression)
+### Connection to Burn Actor (Bidirectional Compression)
 
-BM doesn't call TMC directly, but their interaction is critical:
+The Burn Actor does not call TMC directly, but their interaction is critical:
 
-- BM burns native tokens → `Currency::total_issuance()` decreases
+- Burn Actor burns native tokens → `Currency::total_issuance()` decreases
 - TMC reads `effective_supply = total_issuance - initial_issuance`
 - Lower supply → lower spot price → ceiling compresses
-- This can create `bidirectional pressure` when burn liveness and TOL accounting preconditions hold: BM lowers live-supply pressure while TOL supports counted reserves
+- This can create `bidirectional pressure` when burn liveness and TOL accounting preconditions hold: Burn Actor lowers live-supply pressure while TOL supports counted reserves
 
 ### Connection to TOL (Price Floor)
 
@@ -280,7 +280,7 @@ While TMC provides the ceiling, TOL provides floor support:
 - TOL contributes qualifying reserves under the TMCTOL floor metric
 - TMC sells at curve-determined maximum price
 - The spread between them is the `minting profit margin`
-- As BM burns tokens under liveness assumptions, the ceiling can compress toward qualifying floor support
+- As the Burn Actor burns tokens under liveness assumptions, the ceiling can compress toward qualifying floor support
 
 ## Events
 
@@ -303,14 +303,14 @@ While TMC provides the ceiling, TOL provides floor support:
 
 - `Mechanism`: Extrinsic-driven (user initiates via Router).
 - `Math Engine`: Integral-based quadratic solver with U256 overflow protection.
-- `Distribution`: 1/3 user, 2/3 Zap Manager (configurable via `UserAllocationRatio`).
+- `Distribution`: 1/3 user, 2/3 resolved liquidity actor / splitter sink account (configurable via `UserAllocationRatio`).
 - `Governance`: Curve parameters are configured at launch-time creation and remain immutable on the current line; forks may intentionally widen that surface, but that is outside the default TMCTOL contract.
-- `Compression`: Bidirectional with BM (burns reduce ceiling dynamically).
-- `Domain Glue`: `create_curve` executes runtime hook that bootstraps TOL domain routing and enables Zap processing for the token.
+- `Compression`: Bidirectional with Burn Actor (burns reduce ceiling dynamically).
+- `Domain Glue`: `create_curve` executes runtime hook that bootstraps TOL domain routing and enables liquidity-actor processing for the token.
 
 ### Planned Evolution (Post-Release)
 
 - Extend lifecycle glue beyond curve creation into broader token lifecycle checkpoints.
-- Expand per-domain policy surfaces for richer TMC/Zap/TOL coordination templates.
+- Expand per-domain policy surfaces for richer TMC/liquidity-actor/TOL coordination templates.
 - Canonical `$BLDR` target profile: approximately `1/3` buyer, `1/3` liquidity path, `1/3` treasury.
 - For `$BLDR`, planned L2 Bucket `B` buyer context burns the buyer tranche immediately (route-agnostic: TMC or XYK), reducing effective supply ceiling.

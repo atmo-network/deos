@@ -76,8 +76,3 @@ Long-range analytics and historical route dashboards still belong to materialize
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Asset Identity](asset-identity.en.md)
-
-## Sources
-
-- `docs/axial-router.architecture.en.md`
-- `docs/core.architecture.en.md`

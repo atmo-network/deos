@@ -1,9 +1,15 @@
+/*
+Domain: Governance payload review state
+Owns: Proposal payload review derivation, preimage-cost status, and note-preimage draft feedback.
+Excludes: Payload byte encoding ownership, adapter RPC internals, and visual card markup.
+Zone: Governance UI-state helper; bridges governance store state into review components.
+*/
 import type {
   GovernancePayloadHashPreimageStatus,
   GovernancePayloadPreimageNoteCost,
-} from "$lib/governance";
-import { governanceStore } from "$lib/governance/index.svelte";
-import { hashGovernanceAdvisoryPayloadBytes } from "$lib/governance/advisory-payload";
+} from '$lib/governance';
+import { hashGovernanceAdvisoryPayloadBytes } from '$lib/governance/advisory-payload';
+import { governanceStore } from '$lib/governance/index.svelte';
 
 export type PayloadReviewState = {
   payloadHash: string | null;
@@ -60,7 +66,7 @@ export function createPayloadReview(
     if (
       currentHash == null ||
       bytes == null ||
-      governanceStore.state.providerState.status !== "connected"
+      governanceStore.state.providerState.status !== 'connected'
     ) {
       payloadHashPreimageStatus = null;
       payloadHashPreimageStatusLoading = false;

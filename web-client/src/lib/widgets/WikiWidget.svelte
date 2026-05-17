@@ -1,12 +1,19 @@
+<!--
+Domain: Wiki widget
+Owns: In-app wiki navigation, trusted markdown rendering presentation, search/filter UI, and wiki metadata browsing.
+Excludes: Wiki content generation, trust validation scripts, layout ownership, and generic markdown sanitization.
+Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki helpers.
+-->
 <script lang="ts">
-  import aliases from "../../../../wiki/_meta/aliases.json";
-  import graph from "../../../../wiki/_meta/graph.json";
-  import navigation from "../../../../wiki/_meta/navigation.json";
-  import wikiStateJson from "../../../../wiki/_meta/state.json";
-  import { onMount } from "svelte";
+  import { onMount } from 'svelte';
 
-  import { Card, TextField } from "$lib/shared/ui";
-  import { loadTrustedWikiPage, type TrustedWikiPage } from "$lib/wiki/trusted";
+  import { Button, Card, TextField } from '$lib/ui';
+  import { type TrustedWikiPage, loadTrustedWikiPage } from '$lib/wiki/trusted';
+
+  import aliases from '../../../../wiki/_meta/aliases.json';
+  import graph from '../../../../wiki/_meta/graph.json';
+  import navigation from '../../../../wiki/_meta/navigation.json';
+  import wikiStateJson from '../../../../wiki/_meta/state.json';
 
   type LocalizedValue = Record<string, string>;
 
@@ -103,17 +110,17 @@
     aliases: string[];
   };
 
-  const wikiAliases = aliases as WikiAliasManifest;
-  const wikiGraph = graph as WikiGraphManifest;
-  const wikiNavigation = navigation as WikiNavigationManifest;
-  const wikiState = wikiStateJson as WikiStateManifest;
+  const wikiAliases: WikiAliasManifest = aliases;
+  const wikiGraph: WikiGraphManifest = graph;
+  const wikiNavigation: WikiNavigationManifest = navigation;
+  const wikiState: WikiStateManifest = wikiStateJson;
   const featuredPageIds = new Set(wikiNavigation.entrypoints);
   const availableLocales = wikiNavigation.available_locales;
 
   let rootEl = $state<HTMLDivElement | null>(null);
   let viewport = $state({ width: 0, height: 0 });
   let currentLocale = $state(wikiNavigation.default_locale);
-  let searchQuery = $state("");
+  let searchQuery = $state('');
   let hoveredWikiPath = $state<string | null>(null);
   let selectedPageId = $state<string | null>(null);
   let selectedPage = $state<TrustedWikiPage | null>(null);
@@ -139,7 +146,7 @@
     if (availableLocales.includes(candidate)) {
       return candidate;
     }
-    const baseLocale = candidate.split("-")[0];
+    const baseLocale = candidate.split('-')[0];
     if (availableLocales.includes(baseLocale)) {
       return baseLocale;
     }
@@ -151,7 +158,7 @@
       value[currentLocale] ??
       value[wikiNavigation.default_locale] ??
       Object.values(value)[0] ??
-      ""
+      ''
     );
   }
 
@@ -160,7 +167,7 @@
   }
 
   function formatRelationLabel(value: string) {
-    return value.replace(/-/g, " ");
+    return value.replace(/-/g, ' ');
   }
 
   function formatConfidence(value: number) {
@@ -201,7 +208,7 @@
     if (!(target instanceof HTMLElement)) {
       return null;
     }
-    const anchor = target.closest("a");
+    const anchor = target.closest('a');
     return anchor instanceof HTMLAnchorElement ? anchor : null;
   }
 
@@ -246,23 +253,23 @@
   }
 
   function bindRenderedContentInteractions(node: HTMLDivElement) {
-    node.addEventListener("click", handleRenderedContentClick);
-    node.addEventListener("mouseover", handleRenderedContentMouseover);
-    node.addEventListener("focusin", handleRenderedContentFocusin);
-    node.addEventListener("mouseleave", clearHoveredWikiPreview);
-    node.addEventListener("focusout", clearHoveredWikiPreview);
+    node.addEventListener('click', handleRenderedContentClick);
+    node.addEventListener('mouseover', handleRenderedContentMouseover);
+    node.addEventListener('focusin', handleRenderedContentFocusin);
+    node.addEventListener('mouseleave', clearHoveredWikiPreview);
+    node.addEventListener('focusout', clearHoveredWikiPreview);
     return {
       destroy() {
-        node.removeEventListener("click", handleRenderedContentClick);
-        node.removeEventListener("mouseover", handleRenderedContentMouseover);
-        node.removeEventListener("focusin", handleRenderedContentFocusin);
-        node.removeEventListener("mouseleave", clearHoveredWikiPreview);
-        node.removeEventListener("focusout", clearHoveredWikiPreview);
+        node.removeEventListener('click', handleRenderedContentClick);
+        node.removeEventListener('mouseover', handleRenderedContentMouseover);
+        node.removeEventListener('focusin', handleRenderedContentFocusin);
+        node.removeEventListener('mouseleave', clearHoveredWikiPreview);
+        node.removeEventListener('focusout', clearHoveredWikiPreview);
       },
     };
   }
 
-  const sections = $derived<ResolvedWikiNavigationSection[]>(
+  const sections: ResolvedWikiNavigationSection[] = $derived(
     wikiNavigation.sections.map((section) => ({
       id: section.id,
       title: pickLocalized(section.title),
@@ -277,7 +284,7 @@
   );
 
   const allItems = $derived(sections.flatMap((section) => section.items));
-  const aliasTermsById = $derived.by<Map<string, string[]>>(() => {
+  const aliasTermsById: Map<string, string[]> = $derived.by(() => {
     const termsById = new Map<string, string[]>();
     const locales = [currentLocale, wikiAliases.default_locale].filter(
       (locale, index, array) => array.indexOf(locale) === index,
@@ -295,7 +302,7 @@
     return termsById;
   });
   const normalizedSearchQuery = $derived(normalizeSearchText(searchQuery));
-  const aliasMatchesById = $derived.by<Map<string, string[]>>(() => {
+  const aliasMatchesById: Map<string, string[]> = $derived.by(() => {
     if (!normalizedSearchQuery) {
       return new Map<string, string[]>();
     }
@@ -351,7 +358,7 @@
   const selectedPageSources = $derived(
     selectedPageState ? localizedSources(selectedPageState.sources) : [],
   );
-  const relatedItems = $derived.by<RelatedWikiItem[]>(() => {
+  const relatedItems: RelatedWikiItem[] = $derived.by(() => {
     if (!selectedPageId) {
       return [];
     }
@@ -380,7 +387,7 @@
           title: item.title,
           path: item.path,
           summary: item.summary,
-          relation: [...labels].join(" · "),
+          relation: [...labels].join(' · '),
         };
       })
       .filter((item): item is RelatedWikiItem => item !== null)
@@ -392,68 +399,68 @@
   const showReaderOnly = $derived(!dualPane && selectedItem !== null);
 
   const widgetText = $derived(
-    currentLocale === "ru"
+    currentLocale === 'ru'
       ? {
-          title: "Wiki",
+          title: 'Wiki',
           subtitle:
-            "Сгенерированная wiki-навигация и рендер trusted repo-local markdown",
-          pages: "Страниц",
-          search: "Фильтр wiki",
-          searchPlaceholder: "Искать по title, summary или path",
+            'Сгенерированная wiki-навигация и рендер trusted repo-local markdown',
+          pages: 'Страниц',
+          search: 'Фильтр wiki',
+          searchPlaceholder: 'Искать по title, summary или path',
           searchHelper:
-            "Поиск идет только по сгенерированным navigation + aliases manifest, а не по архивному full-text индексу.",
-          noMatchesTitle: "Совпадений не найдено",
+            'Поиск идет только по сгенерированным navigation + aliases manifest, а не по архивному full-text индексу.',
+          noMatchesTitle: 'Совпадений не найдено',
           noMatchesBody:
-            "Измените запрос или очистите фильтр, чтобы снова увидеть разделы wiki.",
-          linkPreview: "Связанная страница",
-          relatedPages: "Связанные страницы",
-          provenance: "Собранная provenance",
-          status: "Статус",
-          confidence: "Уверенность",
-          generatedAt: "Собрано",
-          sources: "Источники",
-          aliasMatch: "Alias",
-          clearSearch: "Очистить",
-          copyPath: "Копировать путь",
-          back: "Назад к навигации",
-          loading: "Загрузка wiki-страницы...",
-          emptyTitle: "Выберите страницу",
+            'Измените запрос или очистите фильтр, чтобы снова увидеть разделы wiki.',
+          linkPreview: 'Связанная страница',
+          relatedPages: 'Связанные страницы',
+          provenance: 'Собранная provenance',
+          status: 'Статус',
+          confidence: 'Уверенность',
+          generatedAt: 'Собрано',
+          sources: 'Источники',
+          aliasMatch: 'Alias',
+          clearSearch: 'Очистить',
+          copyPath: 'Копировать путь',
+          back: 'Назад к навигации',
+          loading: 'Загрузка wiki-страницы...',
+          emptyTitle: 'Выберите страницу',
           emptyBody:
-            "Откройте любую wiki-страницу из навигации, чтобы увидеть её содержимое прямо в клиенте.",
-          loadError: "Не удалось загрузить wiki-страницу",
+            'Откройте любую wiki-страницу из навигации, чтобы увидеть её содержимое прямо в клиенте.',
+          loadError: 'Не удалось загрузить wiki-страницу',
           trustedHint:
-            "Repo-local trusted markdown rendered in-browser via marked",
+            'Repo-local trusted markdown rendered in-browser via marked',
         }
       : {
-          title: "Wiki",
+          title: 'Wiki',
           subtitle:
-            "Generated wiki navigation and trusted repo-local markdown rendering",
-          pages: "Pages",
-          search: "Wiki filter",
-          searchPlaceholder: "Search title, summary, or path",
+            'Generated wiki navigation and trusted repo-local markdown rendering',
+          pages: 'Pages',
+          search: 'Wiki filter',
+          searchPlaceholder: 'Search title, summary, or path',
           searchHelper:
-            "This search only scans the generated navigation + aliases manifests, not a full-text archive index.",
-          noMatchesTitle: "No matches",
+            'This search only scans the generated navigation + aliases manifests, not a full-text archive index.',
+          noMatchesTitle: 'No matches',
           noMatchesBody:
-            "Adjust the query or clear the filter to restore the full wiki navigation graph.",
-          linkPreview: "Linked page",
-          relatedPages: "Related pages",
-          provenance: "Compiled provenance",
-          status: "Status",
-          confidence: "Confidence",
-          generatedAt: "Generated",
-          sources: "Sources",
-          aliasMatch: "Alias",
-          clearSearch: "Clear",
-          copyPath: "Copy path",
-          back: "Back to navigation",
-          loading: "Loading wiki page...",
-          emptyTitle: "Choose a page",
+            'Adjust the query or clear the filter to restore the full wiki navigation graph.',
+          linkPreview: 'Linked page',
+          relatedPages: 'Related pages',
+          provenance: 'Compiled provenance',
+          status: 'Status',
+          confidence: 'Confidence',
+          generatedAt: 'Generated',
+          sources: 'Sources',
+          aliasMatch: 'Alias',
+          clearSearch: 'Clear',
+          copyPath: 'Copy path',
+          back: 'Back to navigation',
+          loading: 'Loading wiki page...',
+          emptyTitle: 'Choose a page',
           emptyBody:
-            "Open any wiki page from the navigation list to render its content directly in the client.",
-          loadError: "Failed to load wiki page",
+            'Open any wiki page from the navigation list to render its content directly in the client.',
+          loadError: 'Failed to load wiki page',
           trustedHint:
-            "Repo-local trusted markdown rendered in-browser via marked",
+            'Repo-local trusted markdown rendered in-browser via marked',
         },
   );
 
@@ -503,8 +510,8 @@
   <div bind:this={rootEl} class="h-full flex flex-col min-h-0">
     <div
       class={[
-        "min-h-0 flex-1 p-3",
-        dualPane ? "grid gap-3 grid-cols-[15rem_minmax(0,1fr)]" : "grid gap-3",
+        'min-h-0 flex-1 p-3',
+        dualPane ? 'grid gap-3 grid-cols-[15rem_minmax(0,1fr)]' : 'grid gap-3',
       ]}
     >
       {#if dualPane || !showReaderOnly}
@@ -525,12 +532,14 @@
                 {widgetText.pages}</span
               >
               {#if searchQuery}
-                <button
-                  class="rounded-lg border border-(--mono-border) px-2 py-1 text-[10px] text-(--mono-text) hover:border-(--mono-purple)"
-                  onclick={() => (searchQuery = "")}
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  class="rounded-lg px-2 py-1 text-[10px]"
+                  onclick={() => (searchQuery = '')}
                 >
                   {widgetText.clearSearch}
-                </button>
+                </Button>
               {/if}
             </div>
           </section>
@@ -553,12 +562,14 @@
                 </div>
                 <div class="grid gap-0.5 text-xs">
                   {#each section.items as item}
-                    <button
+                    <Button
+                      size="sm"
+                      variant="ghost"
                       class={[
-                        "text-left px-2 py-1.5 rounded-md hover:bg-(--mono-bg) transition-colors flex items-center justify-between gap-2",
+                        'text-left px-2 py-1.5 rounded-md hover:bg-(--mono-bg) flex items-center justify-between gap-2',
                         item.id === selectedPageId
-                          ? "bg-(--mono-bg) font-medium text-(--mono-purple)"
-                          : "text-(--mono-text) hover:text-(--mono-purple)",
+                          ? 'bg-(--mono-bg) font-medium text-(--mono-purple)'
+                          : 'text-(--mono-text) hover:text-(--mono-purple)',
                       ]}
                       onclick={() => openPage(item.id)}
                     >
@@ -592,7 +603,7 @@
                           ★
                         </span>
                       {/if}
-                    </button>
+                    </Button>
                   {/each}
                 </div>
               </section>
@@ -608,12 +619,14 @@
             <div class="flex items-start justify-between gap-3">
               <div class="grid gap-1 min-w-0">
                 {#if !dualPane && selectedItem}
-                  <button
-                    class="justify-self-start rounded-lg border border-(--mono-border) px-2 py-1 text-[10px] text-(--mono-text) hover:border-(--mono-purple)"
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    class="justify-self-start rounded-lg px-2 py-1 text-[10px]"
                     onclick={closePage}
                   >
                     {widgetText.back}
-                  </button>
+                  </Button>
                 {/if}
                 <div class="font-medium text-(--mono-text)">
                   {selectedItem?.title ?? widgetText.emptyTitle}
@@ -623,12 +636,14 @@
                 </div>
               </div>
               {#if selectedItem}
-                <button
-                  class="shrink-0 rounded-lg border border-(--mono-border) px-2 py-1 text-[10px] text-(--mono-text) hover:border-(--mono-purple)"
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  class="shrink-0 rounded-lg px-2 py-1 text-[10px]"
                   onclick={() => copyPath(repoWikiPath(selectedItem.path))}
                 >
                   {widgetText.copyPath}
-                </button>
+                </Button>
               {/if}
             </div>
             {#if selectedItem}
@@ -646,8 +661,8 @@
             {#if hoveredWikiItem}
               <div
                 class={[
-                  "rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3 text-xs text-(--mono-text)",
-                  !dualPane && "order-last",
+                  'rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3 text-xs text-(--mono-text)',
+                  !dualPane && 'order-last',
                 ]}
               >
                 <div
@@ -669,8 +684,8 @@
             {#if relatedItems.length > 0}
               <div
                 class={[
-                  "rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3 grid gap-2 text-xs text-(--mono-text)",
-                  !dualPane && "order-last",
+                  'rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3 grid gap-2 text-xs text-(--mono-text)',
+                  !dualPane && 'order-last',
                 ]}
               >
                 <div
@@ -680,8 +695,10 @@
                 </div>
                 <div class="grid gap-1.5">
                   {#each relatedItems as item}
-                    <button
-                      class="rounded-lg border border-(--mono-border) bg-white px-3 py-2 text-left hover:border-(--mono-purple)"
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      class="grid rounded-lg bg-white px-3 py-2 text-left hover:border-(--mono-purple)"
                       onclick={() => openPage(item.id)}
                     >
                       <div class="flex items-start justify-between gap-2">
@@ -701,7 +718,7 @@
                       >
                         {item.summary}
                       </div>
-                    </button>
+                    </Button>
                   {/each}
                 </div>
               </div>
@@ -709,8 +726,8 @@
             {#if selectedPageState}
               <div
                 class={[
-                  "rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3 grid gap-2 text-xs text-(--mono-text)",
-                  !dualPane && "order-last",
+                  'rounded-xl border border-(--mono-border) bg-(--mono-bg) p-3 grid gap-2 text-xs text-(--mono-text)',
+                  !dualPane && 'order-last',
                 ]}
               >
                 <div
@@ -763,12 +780,14 @@
                     </div>
                     <div class="grid gap-1">
                       {#each selectedPageSources as sourcePath}
-                        <button
-                          class="rounded-lg border border-(--mono-border) bg-white px-3 py-2 text-left text-[10px] text-(--mono-muted) hover:border-(--mono-purple)"
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          class="rounded-lg bg-white px-3 py-2 text-left text-[10px] text-(--mono-muted) hover:border-(--mono-purple)"
                           onclick={() => copyPath(sourcePath)}
                         >
                           {sourcePath}
-                        </button>
+                        </Button>
                       {/each}
                     </div>
                   </div>

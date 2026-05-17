@@ -10,22 +10,22 @@
 
 > Current baseline assumptions:
 >
-> - local `pallet-vrf` commit/reveal is retired
-> - native `$NTVE`-weighted collator security remains only across the trusted team-operated invulnerable set for the current line
-> - same-block randomness is not required
-> - until relay randomness exists, deterministic previous-block-hash sampling plus the trusted collator set is accepted
-> - the preferred future randomness path is relay-beacon replacement only if upstream ships a parachain-consumable per-block protocol beacon
-> - permissionless collators stay deferred until that relay-beacon path exists
+> - Local `pallet-vrf` commit/reveal is retired
+> - Native `$NTVE`-weighted collator security remains only across the trusted team-operated invulnerable set for the current line
+> - Same-block randomness is not required
+> - Until relay randomness exists, deterministic previous-block-hash sampling plus the trusted collator set is accepted
+> - The preferred future randomness path is relay-beacon replacement only if upstream ships a parachain-consumable per-block protocol beacon
+> - Permissionless collators stay deferred until that relay-beacon path exists
 
 > Current shipped baseline includes:
 >
-> - multi-asset share-vault staking with `stXXX` receipts
-> - native `$NTVE -> stNTVE` liquid staking plus locked `NTVE/stNTVE` LP nomination
+> - Multi-asset share-vault staking with `stXXX` receipts
+> - Native `$NTVE -> stNTVE` liquid staking plus locked `NTVE/stNTVE` LP nomination
 > - AAA staking automation through portable `Stake`, `Unstake`, and `DonateLiquidity` tasks
-> - bounded governance reward-memory and proposal lifecycle
-> - domain-scoped `primary + protection` governance for the current launch policy
-> - reserve-aware Zap slippage frozen to execution-plan build time for the current launch line
-> - same-asset auto-compound reward settlement
+> - Bounded governance reward-memory and proposal lifecycle
+> - Domain-scoped `primary + protection` governance for the current launch policy
+> - Reserve-aware liquidity-actor slippage frozen to execution-plan build time for the current launch line
+> - Same-asset auto-compound reward settlement
 > - Polkadot SDK `2603` / node `1.22.2` runtime line
 
 ## Open Product / Client Work
@@ -34,12 +34,12 @@
 
 - [~] `Extend the Wallet widget beyond the bounded tracked-asset contract:` any expansion to a full portfolio UX remains blocked until a materialized/indexed asset-discovery surface exists beyond live chain storage
 
-### Web-client UI architecture simplification
+### Web-client product stabilization
 
-- [ ] `Continue evolving the reserved edge-lane layout model:` define the first concrete left/right lane growth slice if product pressure creates another reserved lane, then extend `RESERVED_LANE_SPECS` without reintroducing user-reorderable edge-lane state
-- [ ] `Continue organic customization passes across the web-client:` run only focused highest-pain responsive passes instead of reopening broad layout-polish umbrellas
-- [ ] `Continue decomposing oversized web-client slices:` if another frontend store or widget regrows into a hotspot, extract one named sub-slice with explicit ownership
-- [ ] `Watch governance state for the next real separation boundary as proposal composition or archive work grows`
+- [ ] `Next named UI/UX hotspot slice:` before changing more client UI, identify one concrete widget/layout interaction problem with visible exit criteria, then close that slice in the same pass.
+- [ ] `Reserved edge-lane growth slice:` only if product pressure creates another reserved left/right lane, define the concrete lane role and extend `RESERVED_LANE_SPECS` without reintroducing user-reorderable edge-lane state.
+- [ ] `Governance state separation slice:` only if proposal composition or archive work grows enough to create a named ownership conflict, split the state boundary at that concrete seam.
+- [ ] `Materialized provider boundary slice:` only when a second indexed/archive provider family exists, decide whether `adapters/materialized-history/` should become a first-class `materialized/` or `providers/` slice.
 
 ## Collator Economics & Fee Routing
 
@@ -61,7 +61,7 @@
 - [ ] `Only after a genuinely delegated/domain-owned parameter surface exists, add the next L2ParameterChange path beyond the Axial Router pair`
 - [ ] `Only when a new payload family or failure-state slice ships, broaden per-kind execution observability beyond the current bounded detail/events`
 - [ ] `Only when runtime-signed submission authority expands beyond advisory plus tactical treasury invoices, add the next browser composition surface`
-- [ ] `Only when a materialized/indexed governance backend is selected, replace the archive-boundary placeholder with live archive search and ballot timelines`
+- [ ] `Only when a materialized/indexed governance backend is selected, connect the reserved archive boundary to live archive search and ballot timelines`
 
 ### Native staking LP donation route policy
 

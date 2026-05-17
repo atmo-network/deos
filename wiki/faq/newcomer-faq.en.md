@@ -1,7 +1,7 @@
 ---
 page_type: faq
 title: Newcomer FAQ
-summary: A compact FAQ for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, staking, data surfaces, and the reference client. Use this page when you need quick orientation before diving into the full docs.
+summary: A compact self-contained FAQ for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, staking, data surfaces, wiki domains, and the reference client.
 locale: en
 canonical_page_id: newcomer-faq
 translation_status: source
@@ -17,84 +17,74 @@ sources:
   - ../../docs/staking.specification.en.md
   - ../../docs/read-model.contract.en.md
   - ../../docs/web-client.architecture.en.md
+  - ../../web-client/README.md
 status: active
 audience: newcomer
 tags:
   - faq
   - onboarding
 related:
+  - Domain Map
   - DEOS Framework Overview
   - First Steps
+  - Reading Paths
   - AAA System
   - Physics-First vs Politics-First
+  - UI Kit and Domain DAG
+  - Generated Wiki
   - Core Terms
-last_compiled: 2026-04-16
-confidence: 0.92
+last_compiled: 2026-05-17
+confidence: 0.93
 ---
 
 # Newcomer FAQ
 
 ## Summary
 
-This page answers the questions that usually show up first when someone lands in the repository: what DEOS is, how TMCTOL fits into it, what governance still controls, how AAA works at a high level, and how honest the reference client is supposed to be.
+This page answers the questions that usually appear first: what DEOS is, how TMCTOL fits into it, what governance controls, how AAA and staking work at a high level, how the wiki is organized, and how honest the reference client must be.
 
-For exact contracts, always return to `/docs`.
+Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [Reading Paths](../getting-started/reading-paths.en.md) when you have a specific task.
 
-## Is DEOS the token or the standard?
+## Identity and Starting Point
 
-No. `DEOS` is the framework and reference stack. `TMCTOL` is the current flagship tokenomic standard running on top of that framework.
+**Is DEOS the token or the standard?** No. `DEOS` is the framework and reference stack. `TMCTOL` is the current flagship tokenomic standard running on top of it.
 
-## Why are there both `/docs` and `/wiki`?
+**Why is the wiki organized by domains?** Because DEOS is easier to understand as interacting domains than as a pallet list: economic physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, and future gates.
 
-`/docs` is the authoritative source. It carries the normative contracts, specifications, and architecture notes.
+**Where should I start?** If you only want the shortest route, read [DEOS Framework Overview](../overview/deos-framework.en.md), [Core Terms](../glossary/core-terms.en.md), and [TMCTOL Standard](../concepts/tmctol-standard.en.md). If you are about to change something, use [Reading Paths](../getting-started/reading-paths.en.md).
 
-`/wiki` is the smaller navigation and onboarding layer. It is meant to help humans and agents find the right concept quickly, then return to `/docs` when full detail is needed.
+## Economics, Governance, and Actors
 
-## Why does TMCTOL avoid redemption?
+**Why does TMCTOL avoid redemption?** Because the current standard treats minting as one-way protocol physics instead of a reserve exit door. See [TMCTOL Standard](../concepts/tmctol-standard.en.md) and [Token Minting Curve](../overview/token-minting-curve.en.md).
 
-The current standard uses a unidirectional minting curve. The docs describe that as a way to avoid reserve extraction through the curve path and to preserve clearer downside boundaries.
+**Does governance disappear?** No. Governance stays, but its role is narrowed: it steers direction, tactical domains, and bounded upgrade paths instead of manually controlling survival physics. See [Governance Overview](../overview/governance-overview.en.md) and [Governance Domains](../concepts/governance-domains.en.md).
 
-## Does governance disappear in DEOS?
+**What does deterministic mean?** Protocol-managed reactions are explicit and repeatable for the same chain state. It does not mean markets become predictable.
 
-No. Governance stays, but the project tries to narrow its role. Governance should steer direction, tactical domains, and bounded upgrade paths instead of acting as day-to-day control over the protocol's survival physics.
+**What is AAA versus an AA-Actor?** `AAA` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, execution plans, actor accounts, and task execution. An `AA-Actor` is one concrete runtime instance inside that system. See [AAA System](../overview/aaa-system.en.md) and [AA-Actor](../overview/aa-actor.en.md).
 
-## What does `deterministic` mean here?
+**How does staking work?** Staking is a multi-asset share-vault domain. [Staking Pools](../concepts/staking-pools.en.md) explains native `stNTVE`, LP nomination, and reward snapshots.
 
-It means protocol-managed economic reactions should be explicit and repeatable for the same on-chain state, typed payloads, and token flows. It does not mean the market becomes perfectly predictable.
+## Data, Client, and Wiki Boundaries
 
-## What is the difference between AAA and an AA-Actor?
+**Why on-chain vs materialized data?** Product honesty depends on knowing which data is canonical chain truth and which data is indexed or derived. See [Read-Model Split](../concepts/read-model-split.en.md).
 
-`AAA` is the whole Account Abstraction Actors system: the pallet, scheduler, lifecycle rules, and execution environment.
+**Is the web client the source of truth?** No. The web client is a reference product surface that must label data provenance honestly. See [Reference Client](../overview/reference-client.en.md).
 
-An `AA-Actor` is one concrete runtime instance inside that system.
+**Where do release versions and status notes belong?** Release history belongs in the changelog, open work belongs in the backlog, and newcomer-facing current state belongs in [Development Status](../development/status.en.md). Architecture and wiki pages should explain implementation truth and boundaries.
 
-## How does staking work at a high level?
+**What are UI Kit and Domain DAG?** They are client-side anti-duplication and ownership disciplines. See [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md).
 
-Staking is modeled as a multi-asset share vault. Each asset has its own pool, and users own shares or receipt-backed ownership instead of receiving constant fan-out reward writes.
-
-## Why does the project talk so much about on-chain vs materialized data?
-
-Because DEOS explicitly separates bounded canonical runtime truth from archive, search, analytics, and other indexed views. The goal is to avoid pretending that off-chain infrastructure is the same thing as the canonical protocol contract.
-
-## Is the web client the source of truth?
-
-No. `/docs` and the runtime contract remain authoritative. The web client is a reference product surface that is supposed to expose chain truth honestly and label materialized or ambiguous data clearly.
+**Why can the web client render wiki markdown directly?** Wiki markdown is trusted repo-local content guarded by repository validation, not arbitrary user input. See [Generated Wiki](../concepts/generated-wiki.en.md).
 
 ## Related
 
+- [Domain Map](../concepts/domain-map.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [First Steps](../getting-started/first-steps.en.md)
+- [Reading Paths](../getting-started/reading-paths.en.md)
 - [AAA System](../overview/aaa-system.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
+- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
+- [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `README.md`
-- `docs/README.md`
-- `docs/manifesto.en.md`
-- `docs/aaa.specification.en.md`
-- `docs/governance.specification.en.md`
-- `docs/staking.specification.en.md`
-- `docs/read-model.contract.en.md`
-- `docs/web-client.architecture.en.md`

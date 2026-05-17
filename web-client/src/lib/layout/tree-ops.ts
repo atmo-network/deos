@@ -1,4 +1,10 @@
-import type { DropEdge, PanelId, TileLeaf, TileNode } from "./types";
+/*
+Domain: Layout tree operations
+Owns: Pure tile-tree mutations for tabs, splits, collapse, extraction, merge, and drop insertion.
+Excludes: Store persistence, DOM drag events, widget loading, and visual rendering.
+Zone: Layout algorithm helper; depends only on layout contracts.
+*/
+import type { DropEdge, PanelId, TileLeaf, TileNode } from './types';
 
 function cloneLeaf(leaf: TileLeaf): TileLeaf {
   return {
@@ -12,7 +18,7 @@ export function removeTabFromLeaf(
   leafId: string,
   tabId: PanelId,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId) {
       return node;
     }
@@ -39,22 +45,22 @@ export function splitLeafWithTab(
   edge: DropEdge,
   genId: () => string,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId) {
       return node;
     }
     const newLeaf: TileLeaf = {
-      type: "leaf",
+      type: 'leaf',
       id: genId(),
       tabs: [tabId],
       activeTab: tabId,
     };
     const direction =
-      edge === "left" || edge === "right" ? "horizontal" : "vertical";
-    const first = edge === "left" ? newLeaf : node;
-    const second = edge === "left" ? node : newLeaf;
+      edge === 'left' || edge === 'right' ? 'horizontal' : 'vertical';
+    const first = edge === 'left' ? newLeaf : node;
+    const second = edge === 'left' ? node : newLeaf;
     return {
-      type: "split",
+      type: 'split',
       id: genId(),
       direction,
       ratio: 0.5,
@@ -76,7 +82,7 @@ export function addTabToLeaf(
   tabId: PanelId,
   index?: number,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId) {
       return node;
     }
@@ -98,15 +104,15 @@ export function addTabToLeaf(
 }
 
 export function collapseEmpty(node: TileNode): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     return node;
   }
   const left = collapseEmpty(node.children[0]);
   const right = collapseEmpty(node.children[1]);
-  if (left.type === "leaf" && left.tabs.length === 0) {
+  if (left.type === 'leaf' && left.tabs.length === 0) {
     return right;
   }
-  if (right.type === "leaf" && right.tabs.length === 0) {
+  if (right.type === 'leaf' && right.tabs.length === 0) {
     return left;
   }
   return { ...node, children: [left, right] };
@@ -116,7 +122,7 @@ export function extractLeaf(
   node: TileNode,
   leafId: string,
 ): { leaf: TileLeaf | null; node: TileNode | null } {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     return node.id === leafId
       ? { leaf: cloneLeaf(node), node: null }
       : { leaf: null, node };
@@ -157,17 +163,17 @@ export function splitLeafWithExistingLeaf(
   edge: DropEdge,
   genId: () => string,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId) {
       return node;
     }
     const liftedLeaf = cloneLeaf(incomingLeaf);
     const direction =
-      edge === "left" || edge === "right" ? "horizontal" : "vertical";
-    const first = edge === "left" ? liftedLeaf : node;
-    const second = edge === "left" ? node : liftedLeaf;
+      edge === 'left' || edge === 'right' ? 'horizontal' : 'vertical';
+    const first = edge === 'left' ? liftedLeaf : node;
+    const second = edge === 'left' ? node : liftedLeaf;
     return {
-      type: "split",
+      type: 'split',
       id: genId(),
       direction,
       ratio: 0.5,
@@ -200,7 +206,7 @@ export function mergeLeafIntoLeaf(
   leafId: string,
   incomingLeaf: TileLeaf,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId) {
       return node;
     }
@@ -224,7 +230,7 @@ export function updateSplitRatio(
   splitId: string,
   ratio: number,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     return node;
   }
   if (node.id === splitId) {
@@ -244,7 +250,7 @@ export function setActiveInLeaf(
   leafId: string,
   tabId: PanelId,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId || !node.tabs.includes(tabId)) {
       return node;
     }
@@ -265,7 +271,7 @@ export function reorderTabInLeaf(
   tabId: PanelId,
   newIndex: number,
 ): TileNode {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     if (node.id !== leafId) {
       return node;
     }

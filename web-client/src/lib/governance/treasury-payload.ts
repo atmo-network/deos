@@ -1,5 +1,11 @@
-import { u8aToHex } from "@polkadot/util";
-import { decodeAddress } from "@polkadot/util-crypto";
+/*
+Domain: Governance treasury payloads
+Owns: Treasury payload draft validation, address/amount parsing, and runtime call-byte encoding helpers.
+Excludes: Proposal submission, store lifecycle, advisory payload encoding, and UI rendering.
+Zone: Governance payload helper; pure encoding/validation boundary for treasury proposals.
+*/
+import { u8aToHex } from '@polkadot/util';
+import { decodeAddress } from '@polkadot/util-crypto';
 
 const U128_MAX = (1n << 128n) - 1n;
 
@@ -16,7 +22,7 @@ export type GovernanceTreasuryPayloadEncoding = {
   beneficiary: string;
   payoutAssetId: number;
   baseAmount: bigint;
-  fundingSource: "BldrTreasury";
+  fundingSource: 'BldrTreasury';
 };
 
 export type GovernanceTreasuryPayloadDraftState = {
@@ -24,6 +30,22 @@ export type GovernanceTreasuryPayloadDraftState = {
   payoutAssetValid: boolean;
   baseAmountValid: boolean;
   encoding: GovernanceTreasuryPayloadEncoding | null;
+};
+
+type ParsedBeneficiary = {
+  valid: boolean;
+  bytes: Uint8Array | null;
+  normalized: string;
+};
+
+type ParsedPayoutAsset = {
+  valid: boolean;
+  parsed: number | null;
+};
+
+type ParsedBaseAmount = {
+  valid: boolean;
+  parsed: bigint | null;
 };
 
 function concatBytes(parts: Uint8Array[]) {
@@ -57,17 +79,17 @@ function encodeU128(value: bigint) {
   return bytes;
 }
 
-function parseBeneficiary(value: string) {
+function parseBeneficiary(value: string): ParsedBeneficiary {
   const trimmed = value.trim();
   if (trimmed.length === 0) {
-    return { valid: false, bytes: null as Uint8Array | null, normalized: "" };
+    return { valid: false, bytes: null, normalized: '' };
   }
   try {
     const bytes = decodeAddress(trimmed);
     if (bytes.length !== 32) {
       return {
         valid: false,
-        bytes: null as Uint8Array | null,
+        bytes: null,
         normalized: trimmed,
       };
     }
@@ -75,32 +97,32 @@ function parseBeneficiary(value: string) {
   } catch {
     return {
       valid: false,
-      bytes: null as Uint8Array | null,
+      bytes: null,
       normalized: trimmed,
     };
   }
 }
 
-function parsePayoutAsset(value: string) {
+function parsePayoutAsset(value: string): ParsedPayoutAsset {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) {
-    return { valid: false, parsed: null as number | null };
+    return { valid: false, parsed: null };
   }
   const parsed = Number.parseInt(trimmed, 10);
   if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 0xffff_ffff) {
-    return { valid: false, parsed: null as number | null };
+    return { valid: false, parsed: null };
   }
   return { valid: true, parsed };
 }
 
-function parseBaseAmount(value: string) {
+function parseBaseAmount(value: string): ParsedBaseAmount {
   const trimmed = value.trim();
   if (!/^\d+$/.test(trimmed)) {
-    return { valid: false, parsed: null as bigint | null };
+    return { valid: false, parsed: null };
   }
   const parsed = BigInt(trimmed);
   if (parsed <= 0n || parsed > U128_MAX) {
-    return { valid: false, parsed: null as bigint | null };
+    return { valid: false, parsed: null };
   }
   return { valid: true, parsed };
 }
@@ -143,7 +165,7 @@ export function deriveGovernanceTreasuryPayloadDraftState(
       beneficiary: beneficiary.normalized,
       payoutAssetId: payoutAsset.parsed,
       baseAmount: baseAmount.parsed,
-      fundingSource: "BldrTreasury",
+      fundingSource: 'BldrTreasury',
     },
   };
 }

@@ -1,14 +1,20 @@
+<!--
+Domain: Log widget
+Owns: Account activity log presentation, live-event feed controls, and log clear/refresh affordances.
+Excludes: Log store ownership, wallet account policy, adapter event subscription internals, and layout state.
+Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitives.
+-->
 <script lang="ts">
-  import { RefreshCw, Trash2 } from "@lucide/svelte";
-  import { onMount } from "svelte";
+  import { RefreshCw, Trash2 } from '@lucide/svelte';
+  import { onMount } from 'svelte';
 
-  import { logStore } from "$lib/log/index.svelte";
-  import { systemStore } from "$lib/system/index.svelte";
-  import { walletStore } from "$lib/wallet/index.svelte";
-  import type { LogEntry } from "$lib/shared/types";
-  import { Badge, Card, IconButton, ReadModelBadge } from "$lib/shared/ui";
+  import { logStore } from '$lib/log/index.svelte';
+  import type { LogEntry } from '$lib/log/types';
+  import { systemStore } from '$lib/system/index.svelte';
+  import { Badge, Button, Card, IconButton, ReadModelBadge } from '$lib/ui';
+  import { walletStore } from '$lib/wallet/index.svelte';
 
-  type LogMode = "account" | "network";
+  type LogMode = 'account' | 'network';
   type BlockRow = {
     id: string;
     blockNumber: number | null;
@@ -17,14 +23,14 @@
   };
 
   const LOG_COLORS: Record<string, string> = {
-    info: "text-(--mono-muted)",
-    buy: "text-(--mono-green)",
-    sell: "text-(--mono-pink)",
-    error: "text-(--mono-orange)",
+    info: 'text-(--mono-muted)',
+    buy: 'text-(--mono-green)',
+    sell: 'text-(--mono-pink)',
+    error: 'text-(--mono-orange)',
   };
   const COMPACT_HEIGHT_THRESHOLD = 240;
 
-  let mode = $state<LogMode>("account");
+  let mode = $state<LogMode>('account');
   let rootEl = $state<HTMLDivElement | null>(null);
   let viewport = $state({ width: 0, height: 0 });
   let compact = $state(false);
@@ -44,16 +50,16 @@
     logStore.networkLogView?.provenance ?? null,
   );
   const visibleEntries = $derived(
-    mode === "account" ? accountEntries : networkEntries,
+    mode === 'account' ? accountEntries : networkEntries,
   );
   const entryCount = $derived(visibleEntries.length);
-  const blockRows = $derived.by<BlockRow[]>(() => {
+  const blockRows: BlockRow[] = $derived.by(() => {
     const rows: BlockRow[] = [];
     const rowByKey = new Map<string, BlockRow>();
     for (const entry of visibleEntries) {
       const blockNumber = entry.blockNumber;
       const step = entry.step;
-      const key = `${blockNumber ?? "step"}-${blockNumber ?? step}`;
+      const key = `${blockNumber ?? 'step'}-${blockNumber ?? step}`;
       const existing = rowByKey.get(key);
       if (existing) {
         existing.entries.push(entry);
@@ -72,7 +78,7 @@
   });
   const tickerItems = $derived.by(() => {
     const items: string[] = [];
-    if (mode === "account" && txProgress.kind !== "idle") {
+    if (mode === 'account' && txProgress.kind !== 'idle') {
       items.push(formatTransactionTicker(txProgress));
     }
     for (const entry of visibleEntries.slice(0, 16)) {
@@ -83,18 +89,18 @@
   const tickerLoop = $derived(
     tickerItems.length > 1 ? [...tickerItems, ...tickerItems] : tickerItems,
   );
-  const hasReceipt = $derived(mode === "account" && txProgress.kind !== "idle");
+  const hasReceipt = $derived(mode === 'account' && txProgress.kind !== 'idle');
   const receiptBlock = $derived(
-    "blockNumber" in txProgress ? (txProgress.blockNumber ?? null) : null,
+    'blockNumber' in txProgress ? (txProgress.blockNumber ?? null) : null,
   );
   const receiptEvents = $derived(
-    "eventsCount" in txProgress ? (txProgress.eventsCount ?? null) : null,
+    'eventsCount' in txProgress ? (txProgress.eventsCount ?? null) : null,
   );
   const receiptError = $derived(
-    "dispatchError" in txProgress ? (txProgress.dispatchError ?? null) : null,
+    'dispatchError' in txProgress ? (txProgress.dispatchError ?? null) : null,
   );
   const receiptHighlights = $derived(
-    "highlights" in txProgress && txProgress.highlights
+    'highlights' in txProgress && txProgress.highlights
       ? txProgress.highlights.slice(0, 3)
       : [],
   );
@@ -129,13 +135,13 @@
 
   function formatTransactionTicker(progress: typeof txProgress): string {
     const actionLabel =
-      "actionLabel" in progress
-        ? (progress.actionLabel ?? "Transaction")
-        : "Transaction";
+      'actionLabel' in progress
+        ? (progress.actionLabel ?? 'Transaction')
+        : 'Transaction';
     const block =
-      "blockNumber" in progress && progress.blockNumber !== undefined
+      'blockNumber' in progress && progress.blockNumber !== undefined
         ? ` · ${blockLabel(progress.blockNumber ?? null, -1)}`
-        : "";
+        : '';
     return `${actionLabel} · ${progress.kind}${block} · ${progress.message}`;
   }
 
@@ -156,42 +162,46 @@
       <div class="flex max-w-full flex-wrap items-center justify-end gap-2">
         <div
           class={[
-            "flex items-center gap-1 rounded-xl border border-(--mono-border) bg-(--mono-bg) p-0.5 text-[10px]",
-            densePane && "w-full justify-between",
+            'flex items-center gap-1 rounded-xl border border-(--mono-border) bg-(--mono-bg) p-0.5 text-[10px]',
+            densePane && 'w-full justify-between',
           ]}
         >
-          <button
-            onclick={() => (mode = "account")}
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={() => (mode = 'account')}
             class={[
-              "rounded-lg px-2 py-1 transition-colors",
-              mode === "account"
-                ? "bg-white text-(--mono-text)"
-                : "text-(--mono-muted)",
+              'rounded-lg px-2 py-1 text-[10px]',
+              mode === 'account'
+                ? 'bg-white text-(--mono-text)'
+                : 'text-(--mono-muted)',
             ]}
           >
             Account
-          </button>
-          <button
-            onclick={() => (mode = "network")}
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onclick={() => (mode = 'network')}
             class={[
-              "rounded-lg px-2 py-1 transition-colors",
-              mode === "network"
-                ? "bg-white text-(--mono-text)"
-                : "text-(--mono-muted)",
+              'rounded-lg px-2 py-1 text-[10px]',
+              mode === 'network'
+                ? 'bg-white text-(--mono-text)'
+                : 'text-(--mono-muted)',
             ]}
           >
             Network
-          </button>
+          </Button>
         </div>
         <span
           class="text-[10px] bg-(--mono-border) text-white px-1.5 py-0.5 rounded-full tabnum"
         >
           {entryCount}
         </span>
-        {#if mode === "network"}
+        {#if mode === 'network'}
           <ReadModelBadge provenance={networkProvenance} />
         {/if}
-        {#if mode === "account"}
+        {#if mode === 'account'}
           <IconButton
             onclick={() => logStore.clear()}
             label="Clear current account log"
@@ -230,9 +240,9 @@
           <div
             class="flex h-full items-center rounded-xl border bg-(--mono-bg) px-3 text-[11px] text-(--mono-muted)"
           >
-            {mode === "account"
-              ? "No account activity yet"
-              : "No finalized network events captured in this session yet"}
+            {mode === 'account'
+              ? 'No account activity yet'
+              : 'No finalized network events captured in this session yet'}
           </div>
         {/if}
       </div>
@@ -243,29 +253,29 @@
         {#if hasReceipt}
           <div
             class={[
-              "grid gap-3 rounded-xl border bg-(--mono-bg) font-mono",
+              'grid gap-3 rounded-xl border bg-(--mono-bg) font-mono',
               narrowPane
-                ? "px-2.5 py-2"
-                : "grid-cols-[72px_minmax(0,1fr)] px-3 py-2",
+                ? 'px-2.5 py-2'
+                : 'grid-cols-[72px_minmax(0,1fr)] px-3 py-2',
             ]}
           >
             <div
               class={[
-                "text-[10px] uppercase tracking-wider text-(--mono-muted)",
+                'text-[10px] uppercase tracking-wider text-(--mono-muted)',
                 narrowPane
-                  ? "flex items-center justify-between gap-2"
-                  : "flex flex-col gap-1",
+                  ? 'flex items-center justify-between gap-2'
+                  : 'flex flex-col gap-1',
               ]}
             >
               <span>Latest</span>
               <span class="tabnum text-(--mono-text)"
-                >{receiptBlock !== null ? `#${receiptBlock}` : "Live"}</span
+                >{receiptBlock !== null ? `#${receiptBlock}` : 'Live'}</span
               >
             </div>
             <div class="grid gap-2">
               <div class="flex flex-wrap items-center gap-2">
                 <Badge variant="info">{txProgress.kind}</Badge>
-                {#if "actionLabel" in txProgress && txProgress.actionLabel}
+                {#if 'actionLabel' in txProgress && txProgress.actionLabel}
                   <span class="text-(--mono-text)"
                     >{txProgress.actionLabel}</span
                   >
@@ -294,18 +304,18 @@
         {#each blockRows as row (row.id)}
           <div
             class={[
-              "grid gap-3 rounded-xl border bg-(--mono-bg) font-mono",
+              'grid gap-3 rounded-xl border bg-(--mono-bg) font-mono',
               narrowPane
-                ? "px-2.5 py-2"
-                : "grid-cols-[72px_minmax(0,1fr)] px-3 py-2",
+                ? 'px-2.5 py-2'
+                : 'grid-cols-[72px_minmax(0,1fr)] px-3 py-2',
             ]}
           >
             <div
               class={[
-                "text-[10px] uppercase tracking-wider text-(--mono-muted)",
+                'text-[10px] uppercase tracking-wider text-(--mono-muted)',
                 narrowPane
-                  ? "flex items-center justify-between gap-2"
-                  : "flex flex-col gap-1",
+                  ? 'flex items-center justify-between gap-2'
+                  : 'flex flex-col gap-1',
               ]}
             >
               <span>Block</span>
@@ -317,15 +327,15 @@
               {#each row.entries as entry (entry.id)}
                 <div
                   class={[
-                    "grid gap-0.5",
+                    'grid gap-0.5',
                     narrowPane
-                      ? "grid-cols-1"
-                      : "sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3",
+                      ? 'grid-cols-1'
+                      : 'sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3',
                   ]}
                 >
                   <div
                     class={[
-                      "text-[10px] uppercase tracking-wider",
+                      'text-[10px] uppercase tracking-wider',
                       LOG_COLORS[entry.type] || LOG_COLORS.info,
                     ]}
                   >
@@ -338,9 +348,9 @@
           </div>
         {:else}
           <div class="py-2 text-(--mono-muted)">
-            {mode === "account"
-              ? "No account activity yet"
-              : "No finalized network events captured in this session yet"}
+            {mode === 'account'
+              ? 'No account activity yet'
+              : 'No finalized network events captured in this session yet'}
           </div>
         {/each}
       </div>

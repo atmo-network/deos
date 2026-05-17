@@ -58,3 +58,12 @@ This layer verifies that the individual pallets and components coordinate correc
 - **Targeted Scope:** Run the smallest meaningful validation set for the touched surface first.
 - **Escalation:** If a diff crosses layer boundaries (e.g., changes an economic formula), escalate to the full Three-Layer validation.
 - **Simulator Mandatory:** Routine support biases toward `/docs`, `/template`, and `/web-client`, but `/simulator` becomes mandatory the moment tokenomics or invariant math moves.
+
+## Related
+
+- [Repository Structure](../implementation/repository-structure.en.md)
+- [Tech Stack](../implementation/tech-stack.en.md)
+- [Validation Troubleshooting](../usage/validation-troubleshooting.en.md)
+- [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+- [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
+- [Development Status](status.en.md)

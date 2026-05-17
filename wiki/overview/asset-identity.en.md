@@ -66,8 +66,3 @@ The asset registry is therefore an identity layer that enables economic composit
 - [Staking Pools](../concepts/staking-pools.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
-
-## Sources
-
-- `docs/asset-registry.architecture.en.md`
-- `docs/core.architecture.en.md`

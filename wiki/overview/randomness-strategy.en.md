@@ -70,8 +70,3 @@ Randomness simplification narrows the launch contract:
 - [Governance Overview](governance-overview.en.md)
 - [AA-Actor](aa-actor.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
-
-## Sources
-
-- `docs/randomness.strategy.en.md`
-- `docs/manifesto.en.md`

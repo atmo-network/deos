@@ -1,10 +1,17 @@
+<!--
+Domain: Sidebar reserved lane
+Owns: Sidebar shell, configured sidebar widget loading, close affordance, and mobile-aware panel framing.
+Excludes: Sidebar widget internals, account/settings store ownership, and center-pane layout.
+Zone: Layout edge-lane component; composes configured lane widgets and UI Kit controls.
+-->
 <script lang="ts">
-  import { X } from "@lucide/svelte";
+  import { X } from '@lucide/svelte';
+  import type { Component } from 'svelte';
 
-  import { IconButton } from "$lib/shared/ui";
-  import { reservedLaneWidgetsFor } from "$lib/layout/types";
+  import { reservedLaneWidgetsFor } from '$lib/layout/types';
+  import { IconButton } from '$lib/ui';
 
-  type WidgetComponent = any;
+  type WidgetComponent = Component;
 
   type Props = {
     id?: string;
@@ -16,17 +23,17 @@
   let accountWidgetComponent = $state<WidgetComponent | null>(null);
   let settingsWidgetComponent = $state<WidgetComponent | null>(null);
 
-  const widgetIds = $derived(reservedLaneWidgetsFor("sidebar", mobile));
+  const widgetIds = $derived(reservedLaneWidgetsFor('sidebar', mobile));
   const AccountWidget = $derived(accountWidgetComponent);
   const SettingsWidget = $derived(settingsWidgetComponent);
 
   async function ensureSidebarWidgetsLoaded(): Promise<void> {
-    if (widgetIds.includes("account-menu") && !accountWidgetComponent) {
-      const module = await import("$lib/widgets/AccountWidget.svelte");
+    if (widgetIds.includes('account-menu') && !accountWidgetComponent) {
+      const module = await import('$lib/widgets/AccountWidget.svelte');
       accountWidgetComponent = module.default;
     }
-    if (widgetIds.includes("settings") && !settingsWidgetComponent) {
-      const module = await import("$lib/widgets/SettingsWidget.svelte");
+    if (widgetIds.includes('settings') && !settingsWidgetComponent) {
+      const module = await import('$lib/widgets/SettingsWidget.svelte');
       settingsWidgetComponent = module.default;
     }
   }
@@ -52,12 +59,12 @@
   <div
     class="grid flex-1 min-h-0 content-start gap-3 overflow-y-auto pr-1 overscroll-contain"
   >
-    {#if widgetIds.includes("account-menu")}
+    {#if widgetIds.includes('account-menu')}
       {#if AccountWidget}
         <AccountWidget />
       {/if}
     {/if}
-    {#if widgetIds.includes("settings")}
+    {#if widgetIds.includes('settings')}
       {#if SettingsWidget}
         <SettingsWidget />
       {/if}

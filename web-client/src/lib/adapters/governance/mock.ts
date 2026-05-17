@@ -1,4 +1,10 @@
-import { blake2AsHex } from "@polkadot/util-crypto";
+/*
+Domain: Governance mock adapter
+Owns: In-memory governance fixtures, deterministic proposal/vote/preimage behavior, and mock write responses.
+Excludes: Runtime RPC transport, governance store lifecycle, and UI presentation.
+Zone: Materialized/test adapter implementation for governance provider contract.
+*/
+import { blake2AsHex } from '@polkadot/util-crypto';
 
 import type {
   GovernanceAccountId,
@@ -31,17 +37,17 @@ import type {
   GovernanceVoteKind,
   GovernanceVotePowerProfile,
   GovernanceWriteSurfaceAvailability,
-} from "$lib/governance";
+} from '$lib/governance';
 import {
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   buildWriteSurfaceAvailability,
-} from "$lib/governance";
+} from '$lib/governance';
 
 type OrdinaryVoteKind = Extract<
   GovernanceVoteKind,
-  "aye" | "nay" | "amplify" | "approve" | "reduce"
+  'aye' | 'nay' | 'amplify' | 'approve' | 'reduce'
 >;
-type VetoVoteKind = Extract<GovernanceVoteKind, "veto" | "pass">;
+type VetoVoteKind = Extract<GovernanceVoteKind, 'veto' | 'pass'>;
 type MockProposal = {
   submittedEpoch: number;
   maturityEpoch: number;
@@ -89,13 +95,13 @@ const ACCOUNT_WEIGHT_OVERRIDES: Record<
 };
 const DEFAULT_PROFILES: Record<GovernanceVoteKind, GovernanceVotePowerProfile> =
   {
-    aye: "DecliningDirectStake",
-    nay: "DecliningDirectStake",
-    amplify: "DecliningDirectStake",
-    approve: "DecliningDirectStake",
-    reduce: "DecliningDirectStake",
-    veto: "DecliningVetoAsset",
-    pass: "DecliningVetoAsset",
+    aye: 'DecliningDirectStake',
+    nay: 'DecliningDirectStake',
+    amplify: 'DecliningDirectStake',
+    approve: 'DecliningDirectStake',
+    reduce: 'DecliningDirectStake',
+    veto: 'DecliningVetoAsset',
+    pass: 'DecliningVetoAsset',
   };
 
 function createMockProposal(input: {
@@ -130,13 +136,13 @@ function seededDomainState(): MockDomainState {
       310: createMockProposal({
         submittedEpoch: 42,
         maturityEpoch: 48,
-        proposerAccountId: "alice",
+        proposerAccountId: 'alice',
         metadata: {
-          cadenceMode: "Ordinary",
-          payloadKind: "L2TreasurySpend",
-          payloadHash: "0x" + "11".repeat(32),
+          cadenceMode: 'Ordinary',
+          payloadKind: 'L2TreasurySpend',
+          payloadHash: '0x' + '11'.repeat(32),
         },
-        executionAuthority: "DomainTreasury",
+        executionAuthority: 'DomainTreasury',
         payloadAvailability: {
           havePreimage: true,
           preimageRequested: false,
@@ -163,13 +169,13 @@ function seededDomainState(): MockDomainState {
       311: createMockProposal({
         submittedEpoch: 38,
         maturityEpoch: 40,
-        proposerAccountId: "bob",
+        proposerAccountId: 'bob',
         metadata: {
-          cadenceMode: "Fast",
-          payloadKind: "L2SignalToL1",
-          payloadHash: "0x" + "22".repeat(32),
+          cadenceMode: 'Fast',
+          payloadKind: 'L2SignalToL1',
+          payloadHash: '0x' + '22'.repeat(32),
         },
-        executionAuthority: "NonExecutable",
+        executionAuthority: 'NonExecutable',
         payloadAvailability: {
           havePreimage: false,
           preimageRequested: false,
@@ -198,24 +204,24 @@ function seededDomainState(): MockDomainState {
       {
         itemId: 309,
         outcome: {
-          kind: "ExecutionFailed",
+          kind: 'ExecutionFailed',
           approvedEpoch: 41,
           failedEpoch: 41,
           winnerCount: 2,
         },
         executionDetail: {
-          kind: "ExecutionFailed",
-          payloadKind: "L1RootAction",
-          authority: "Root",
+          kind: 'ExecutionFailed',
+          payloadKind: 'L1RootAction',
+          authority: 'Root',
           failedEpoch: 41,
-          reason: "UnsupportedCall",
+          reason: 'UnsupportedCall',
         },
         metadata: {
-          cadenceMode: "Fast",
-          payloadKind: "L1RootAction",
-          payloadHash: "0x" + "33".repeat(32),
+          cadenceMode: 'Fast',
+          payloadKind: 'L1RootAction',
+          payloadHash: '0x' + '33'.repeat(32),
         },
-        executionAuthority: "Root",
+        executionAuthority: 'Root',
         payloadAvailability: {
           havePreimage: true,
           preimageRequested: false,
@@ -225,53 +231,53 @@ function seededDomainState(): MockDomainState {
       {
         itemId: 308,
         outcome: {
-          kind: "Enacted",
+          kind: 'Enacted',
           approvedEpoch: 40,
           executedEpoch: 40,
           winnerCount: 2,
         },
         executionDetail: {
-          kind: "Executed",
-          payloadKind: "L2TreasurySpend",
-          authority: "DomainTreasury",
+          kind: 'Executed',
+          payloadKind: 'L2TreasurySpend',
+          authority: 'DomainTreasury',
           executedEpoch: 40,
           detail: {
-            kind: "TreasurySpendExecuted",
-            fundingSource: "bldr-treasury",
-            beneficiary: "alice",
+            kind: 'TreasurySpendExecuted',
+            fundingSource: 'bldr-treasury',
+            beneficiary: 'alice',
             payoutAsset: 1000,
             baseAmount: 25000000000000n,
-            scalar: "Approve",
+            scalar: 'Approve',
             finalAmount: 25000000000000n,
-            settlementKind: "InvoiceScalarTransfer",
+            settlementKind: 'InvoiceScalarTransfer',
           },
         },
         metadata: {
-          cadenceMode: "Ordinary",
-          payloadKind: "L2TreasurySpend",
-          payloadHash: "0x" + "44".repeat(32),
+          cadenceMode: 'Ordinary',
+          payloadKind: 'L2TreasurySpend',
+          payloadHash: '0x' + '44'.repeat(32),
         },
-        executionAuthority: "DomainTreasury",
+        executionAuthority: 'DomainTreasury',
         payloadAvailability: {
           havePreimage: true,
           preimageRequested: false,
         },
-        winningPrimaryOption: "Approve",
+        winningPrimaryOption: 'Approve',
       },
       {
         itemId: 307,
         outcome: {
-          kind: "VetoCancelled",
+          kind: 'VetoCancelled',
           epoch: 39,
           vetoWeight: 6_000n,
         },
         executionDetail: null,
         metadata: {
-          cadenceMode: "Ordinary",
-          payloadKind: "L2SignalToL1",
-          payloadHash: "0x" + "55".repeat(32),
+          cadenceMode: 'Ordinary',
+          payloadKind: 'L2SignalToL1',
+          payloadHash: '0x' + '55'.repeat(32),
         },
-        executionAuthority: "NonExecutable",
+        executionAuthority: 'NonExecutable',
         payloadAvailability: {
           havePreimage: false,
           preimageRequested: false,
@@ -360,7 +366,7 @@ function ratioString(numerator: bigint, denominator: bigint): string {
   const scale = 10n ** 18n;
   const scaled = (numerator * scale) / denominator;
   const whole = scaled / scale;
-  const fraction = (scaled % scale).toString().padStart(18, "0");
+  const fraction = (scaled % scale).toString().padStart(18, '0');
   return `${whole}.${fraction}`;
 }
 
@@ -401,7 +407,7 @@ function voteWeight(
   voteKind: GovernanceVoteKind,
 ): bigint {
   const weights = accountWeights(accountId);
-  return voteKind === "aye" || voteKind === "nay"
+  return voteKind === 'aye' || voteKind === 'nay'
     ? weights.ordinary
     : weights.veto;
 }
@@ -421,14 +427,14 @@ function proposalTimingForProposal(
   proposal: MockProposal,
 ): GovernanceProposalTiming {
   const ordinaryPrimaryOpenEpoch =
-    proposal.metadata.cadenceMode === "Fast"
+    proposal.metadata.cadenceMode === 'Fast'
       ? proposal.submittedEpoch
       : proposal.submittedEpoch + DEFAULT_LEAD_IN_PERIOD;
   const ordinaryPrimaryCloseEpoch = proposal.maturityEpoch;
   const urgentPrimaryOpenEpoch =
-    proposal.metadata.cadenceMode === "Fast" ? proposal.submittedEpoch : null;
+    proposal.metadata.cadenceMode === 'Fast' ? proposal.submittedEpoch : null;
   const urgentPrimaryCloseEpoch =
-    proposal.metadata.cadenceMode === "Fast" ? proposal.maturityEpoch : null;
+    proposal.metadata.cadenceMode === 'Fast' ? proposal.maturityEpoch : null;
   return {
     submittedEpoch: proposal.submittedEpoch,
     protectionOpenEpoch: proposal.submittedEpoch,
@@ -449,20 +455,20 @@ function proposalSubmissionAuthority(
   domainId: GovernanceDomainId,
   payloadKind: GovernanceProposalPayloadKind,
 ): GovernanceProposalSubmissionAuthority {
-  if (payloadKind === "Intent") {
-    return "Signed";
+  if (payloadKind === 'Intent') {
+    return 'Signed';
   }
-  if (domainId === 1000 && payloadKind === "L2SignalToL1") {
-    return "Signed";
+  if (domainId === 1000 && payloadKind === 'L2SignalToL1') {
+    return 'Signed';
   }
-  return "AdminOnly";
+  return 'AdminOnly';
 }
 
 function proposalOpeningFee(
   domainId: GovernanceDomainId,
   payloadKind: GovernanceProposalPayloadKind,
 ): GovernanceProposalOpeningFee | null {
-  return proposalSubmissionAuthority(domainId, payloadKind) === "Signed"
+  return proposalSubmissionAuthority(domainId, payloadKind) === 'Signed'
     ? 10n
     : null;
 }
@@ -471,10 +477,10 @@ function proposalPrimaryTrackFamily(
   domainId: GovernanceDomainId,
   proposal: MockProposal,
 ): GovernanceProposalPrimaryTrackFamily {
-  if (domainId === 43 && proposal.metadata.payloadKind === "L2TreasurySpend") {
-    return "Invoice";
+  if (domainId === 43 && proposal.metadata.payloadKind === 'L2TreasurySpend') {
+    return 'Invoice';
   }
-  return "Binary";
+  return 'Binary';
 }
 
 function invoiceLeadingPositiveOption(proposal: MockProposal): {
@@ -484,21 +490,21 @@ function invoiceLeadingPositiveOption(proposal: MockProposal): {
   let option: GovernancePrimaryTrackOption | null = null;
   let weight = 0n;
   if (proposal.tally.amplifyWeight > 0n) {
-    option = "Amplify";
+    option = 'Amplify';
     weight = proposal.tally.amplifyWeight;
   }
   if (
     proposal.tally.approveWeight > 0n &&
     proposal.tally.approveWeight >= weight
   ) {
-    option = "Approve";
+    option = 'Approve';
     weight = proposal.tally.approveWeight;
   }
   if (
     proposal.tally.reduceWeight > 0n &&
     proposal.tally.reduceWeight >= weight
   ) {
-    option = "Reduce";
+    option = 'Reduce';
     weight = proposal.tally.reduceWeight;
   }
   return { option, weight };
@@ -509,9 +515,9 @@ function proposalPrimaryTrackTally(
   proposal: MockProposal,
 ): GovernanceProposalPrimaryTrackTally {
   const family = proposalPrimaryTrackFamily(domainId, proposal);
-  if (family === "Binary") {
+  if (family === 'Binary') {
     return {
-      kind: "Binary",
+      kind: 'Binary',
       ayeVoters: proposal.tally.ayeVoters,
       nayVoters: proposal.tally.nayVoters,
       ayeWeight: proposal.tally.ayeWeight,
@@ -519,15 +525,15 @@ function proposalPrimaryTrackTally(
       turnoutWeight: proposal.tally.turnoutWeight,
       leadingOption:
         proposal.tally.ayeWeight > proposal.tally.nayWeight
-          ? "Aye"
+          ? 'Aye'
           : proposal.tally.nayWeight > proposal.tally.ayeWeight
-            ? "Nay"
+            ? 'Nay'
             : null,
     };
   }
   const leader = invoiceLeadingPositiveOption(proposal);
   return {
-    kind: "Invoice",
+    kind: 'Invoice',
     amplifyVoters: proposal.tally.amplifyVoters,
     approveVoters: proposal.tally.approveVoters,
     reduceVoters: proposal.tally.reduceVoters,
@@ -550,7 +556,7 @@ function proposalUrgentEligibility(
   domainId: GovernanceDomainId,
   proposal: MockProposal,
 ): boolean {
-  return domainId === 42 && proposal.metadata.payloadKind === "L1RootAction";
+  return domainId === 42 && proposal.metadata.payloadKind === 'L1RootAction';
 }
 
 function resolutionForProposal(
@@ -565,15 +571,15 @@ function resolutionForProposal(
     proposal.tally.vetoWeight > proposal.tally.passWeight
   ) {
     return {
-      kind: "VetoPassing",
+      kind: 'VetoPassing',
       vetoWeight: proposal.tally.vetoWeight,
       passWeight: proposal.tally.passWeight,
-      mode: "ImmediateThreshold",
+      mode: 'ImmediateThreshold',
     };
   }
   if (enforceVotingWindow && domain.currentEpoch < proposal.maturityEpoch) {
     return {
-      kind: "VotingWindowOpen",
+      kind: 'VotingWindowOpen',
       currentEpoch: domain.currentEpoch,
       maturityEpoch: proposal.maturityEpoch,
     };
@@ -584,82 +590,82 @@ function resolutionForProposal(
     proposal.tally.vetoTurnoutWeight > 0n
   ) {
     return {
-      kind: "VetoPassing",
+      kind: 'VetoPassing',
       vetoWeight: proposal.tally.vetoWeight,
       passWeight: proposal.tally.passWeight,
-      mode: "TrackOutcome",
+      mode: 'TrackOutcome',
     };
   }
   if (proposal.tally.turnoutWeight === 0n) {
     return {
-      kind: "Rejected",
-      reason: "NoVotes",
+      kind: 'Rejected',
+      reason: 'NoVotes',
     };
   }
-  if (family === "Invoice") {
+  if (family === 'Invoice') {
     const positiveWeight =
       proposal.tally.amplifyWeight +
       proposal.tally.approveWeight +
       proposal.tally.reduceWeight;
     if (positiveWeight === proposal.tally.nayWeight) {
       return {
-        kind: "Rejected",
-        reason: "VoteTie",
+        kind: 'Rejected',
+        reason: 'VoteTie',
       };
     }
     if (proposal.tally.turnoutWeight < ORDINARY_MINIMUM_TURNOUT) {
       return {
-        kind: "Rejected",
-        reason: "TurnoutBelowMinimum",
+        kind: 'Rejected',
+        reason: 'TurnoutBelowMinimum',
       };
     }
     if (positiveWeight <= proposal.tally.nayWeight) {
       return {
-        kind: "Rejected",
-        reason: "ApprovalThresholdNotMet",
+        kind: 'Rejected',
+        reason: 'ApprovalThresholdNotMet',
       };
     }
     if (positiveWeight * 100n < proposal.tally.turnoutWeight * 60n) {
       return {
-        kind: "Rejected",
-        reason: "ApprovalThresholdNotMet",
+        kind: 'Rejected',
+        reason: 'ApprovalThresholdNotMet',
       };
     }
     switch (invoiceLeadingPositiveOption(proposal).option) {
-      case "Amplify":
-        return { kind: "PassingAmplify" };
-      case "Approve":
-        return { kind: "PassingApprove" };
-      case "Reduce":
-        return { kind: "PassingReduce" };
+      case 'Amplify':
+        return { kind: 'PassingAmplify' };
+      case 'Approve':
+        return { kind: 'PassingApprove' };
+      case 'Reduce':
+        return { kind: 'PassingReduce' };
       default:
         return {
-          kind: "Rejected",
-          reason: "ApprovalThresholdNotMet",
+          kind: 'Rejected',
+          reason: 'ApprovalThresholdNotMet',
         };
     }
   }
   if (proposal.tally.ayeWeight === proposal.tally.nayWeight) {
     return {
-      kind: "Rejected",
-      reason: "VoteTie",
+      kind: 'Rejected',
+      reason: 'VoteTie',
     };
   }
   if (proposal.tally.turnoutWeight < ORDINARY_MINIMUM_TURNOUT) {
     return {
-      kind: "Rejected",
-      reason: "TurnoutBelowMinimum",
+      kind: 'Rejected',
+      reason: 'TurnoutBelowMinimum',
     };
   }
   if (proposal.tally.ayeWeight * 100n >= proposal.tally.turnoutWeight * 60n) {
-    return { kind: "PassingAye" };
+    return { kind: 'PassingAye' };
   }
   if (proposal.tally.nayWeight * 100n >= proposal.tally.turnoutWeight * 60n) {
-    return { kind: "PassingNay" };
+    return { kind: 'PassingNay' };
   }
   return {
-    kind: "Rejected",
-    reason: "ApprovalThresholdNotMet",
+    kind: 'Rejected',
+    reason: 'ApprovalThresholdNotMet',
   };
 }
 
@@ -669,42 +675,42 @@ function decrementVote(
   weight: bigint,
 ) {
   switch (voteKind) {
-    case "aye":
+    case 'aye':
       tally.ayeVoters = Math.max(0, tally.ayeVoters - 1);
       tally.ayeWeight =
         tally.ayeWeight > weight ? tally.ayeWeight - weight : 0n;
       tally.turnoutWeight =
         tally.turnoutWeight > weight ? tally.turnoutWeight - weight : 0n;
       return;
-    case "nay":
+    case 'nay':
       tally.nayVoters = Math.max(0, tally.nayVoters - 1);
       tally.nayWeight =
         tally.nayWeight > weight ? tally.nayWeight - weight : 0n;
       tally.turnoutWeight =
         tally.turnoutWeight > weight ? tally.turnoutWeight - weight : 0n;
       return;
-    case "amplify":
+    case 'amplify':
       tally.amplifyVoters = Math.max(0, tally.amplifyVoters - 1);
       tally.amplifyWeight =
         tally.amplifyWeight > weight ? tally.amplifyWeight - weight : 0n;
       tally.turnoutWeight =
         tally.turnoutWeight > weight ? tally.turnoutWeight - weight : 0n;
       return;
-    case "approve":
+    case 'approve':
       tally.approveVoters = Math.max(0, tally.approveVoters - 1);
       tally.approveWeight =
         tally.approveWeight > weight ? tally.approveWeight - weight : 0n;
       tally.turnoutWeight =
         tally.turnoutWeight > weight ? tally.turnoutWeight - weight : 0n;
       return;
-    case "reduce":
+    case 'reduce':
       tally.reduceVoters = Math.max(0, tally.reduceVoters - 1);
       tally.reduceWeight =
         tally.reduceWeight > weight ? tally.reduceWeight - weight : 0n;
       tally.turnoutWeight =
         tally.turnoutWeight > weight ? tally.turnoutWeight - weight : 0n;
       return;
-    case "veto":
+    case 'veto':
       tally.vetoVoters = Math.max(0, tally.vetoVoters - 1);
       tally.vetoWeight =
         tally.vetoWeight > weight ? tally.vetoWeight - weight : 0n;
@@ -713,7 +719,7 @@ function decrementVote(
           ? tally.vetoTurnoutWeight - weight
           : 0n;
       return;
-    case "pass":
+    case 'pass':
       tally.passVoters = Math.max(0, tally.passVoters - 1);
       tally.passWeight =
         tally.passWeight > weight ? tally.passWeight - weight : 0n;
@@ -730,37 +736,37 @@ function incrementVote(
   weight: bigint,
 ) {
   switch (voteKind) {
-    case "aye":
+    case 'aye':
       tally.ayeVoters += 1;
       tally.ayeWeight += weight;
       tally.turnoutWeight += weight;
       return;
-    case "nay":
+    case 'nay':
       tally.nayVoters += 1;
       tally.nayWeight += weight;
       tally.turnoutWeight += weight;
       return;
-    case "amplify":
+    case 'amplify':
       tally.amplifyVoters += 1;
       tally.amplifyWeight += weight;
       tally.turnoutWeight += weight;
       return;
-    case "approve":
+    case 'approve':
       tally.approveVoters += 1;
       tally.approveWeight += weight;
       tally.turnoutWeight += weight;
       return;
-    case "reduce":
+    case 'reduce':
       tally.reduceVoters += 1;
       tally.reduceWeight += weight;
       tally.turnoutWeight += weight;
       return;
-    case "veto":
+    case 'veto':
       tally.vetoVoters += 1;
       tally.vetoWeight += weight;
       tally.vetoTurnoutWeight += weight;
       return;
-    case "pass":
+    case 'pass':
       tally.passVoters += 1;
       tally.passWeight += weight;
       tally.vetoTurnoutWeight += weight;
@@ -772,33 +778,33 @@ function winningAccounts(
   resolution: GovernanceProposalResolutionState,
 ): GovernanceAccountId[] {
   switch (resolution.kind) {
-    case "PassingAye":
+    case 'PassingAye':
       return Object.entries(proposal.ordinaryVotes)
-        .filter(([, voteKind]) => voteKind === "aye")
+        .filter(([, voteKind]) => voteKind === 'aye')
         .map(([accountId]) => accountId);
-    case "PassingAmplify":
+    case 'PassingAmplify':
       return Object.entries(proposal.ordinaryVotes)
-        .filter(([, voteKind]) => voteKind === "amplify")
+        .filter(([, voteKind]) => voteKind === 'amplify')
         .map(([accountId]) => accountId);
-    case "PassingApprove":
+    case 'PassingApprove':
       return Object.entries(proposal.ordinaryVotes)
-        .filter(([, voteKind]) => voteKind === "approve")
+        .filter(([, voteKind]) => voteKind === 'approve')
         .map(([accountId]) => accountId);
-    case "PassingReduce":
+    case 'PassingReduce':
       return Object.entries(proposal.ordinaryVotes)
-        .filter(([, voteKind]) => voteKind === "reduce")
+        .filter(([, voteKind]) => voteKind === 'reduce')
         .map(([accountId]) => accountId);
-    case "PassingNay":
+    case 'PassingNay':
       return Object.entries(proposal.ordinaryVotes)
-        .filter(([, voteKind]) => voteKind === "nay")
+        .filter(([, voteKind]) => voteKind === 'nay')
         .map(([accountId]) => accountId);
-    case "VetoPassing":
+    case 'VetoPassing':
       return Object.entries(proposal.vetoVotes)
-        .filter(([, voteKind]) => voteKind === "veto")
+        .filter(([, voteKind]) => voteKind === 'veto')
         .map(([accountId]) => accountId);
-    case "Confirming":
-    case "Rejected":
-    case "VotingWindowOpen":
+    case 'Confirming':
+    case 'Rejected':
+    case 'VotingWindowOpen':
       return [];
   }
 }
@@ -820,16 +826,16 @@ function winningPrimaryOptionForResolution(
   resolution: GovernanceProposalResolutionState,
 ): GovernancePrimaryTrackOption | null {
   switch (resolution.kind) {
-    case "PassingAye":
-      return "Aye";
-    case "PassingAmplify":
-      return "Amplify";
-    case "PassingApprove":
-      return "Approve";
-    case "PassingReduce":
-      return "Reduce";
-    case "PassingNay":
-      return "Nay";
+    case 'PassingAye':
+      return 'Aye';
+    case 'PassingAmplify':
+      return 'Amplify';
+    case 'PassingApprove':
+      return 'Approve';
+    case 'PassingReduce':
+      return 'Reduce';
+    case 'PassingNay':
+      return 'Nay';
     default:
       return null;
   }
@@ -842,7 +848,7 @@ function finalizeProposal(
   winningPrimaryOption: GovernancePrimaryTrackOption | null = null,
 ) {
   const proposal = domain.activeProposals[itemId];
-  if (proposal && (outcome.kind === "Resolved" || outcome.kind === "Enacted")) {
+  if (proposal && (outcome.kind === 'Resolved' || outcome.kind === 'Enacted')) {
     ensureCounters(
       domain,
       proposal.proposerAccountId,
@@ -874,9 +880,9 @@ function adminRejectedOutcome(
   epoch: number,
 ): GovernanceFinalizedProposalOutcome {
   return {
-    kind: "Rejected",
+    kind: 'Rejected',
     epoch,
-    reason: "AdminRejected",
+    reason: 'AdminRejected',
   };
 }
 
@@ -886,95 +892,95 @@ function settlementOutcome(
   resolution: GovernanceProposalResolutionState,
 ): GovernanceFinalizedProposalOutcome {
   switch (resolution.kind) {
-    case "PassingAye":
+    case 'PassingAye':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: domain.currentEpoch,
         winnerCount: proposal.tally.ayeVoters,
       };
-    case "PassingAmplify":
+    case 'PassingAmplify':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: domain.currentEpoch,
         winnerCount: proposal.tally.amplifyVoters,
       };
-    case "PassingApprove":
+    case 'PassingApprove':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: domain.currentEpoch,
         winnerCount: proposal.tally.approveVoters,
       };
-    case "PassingReduce":
+    case 'PassingReduce':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: domain.currentEpoch,
         winnerCount: proposal.tally.reduceVoters,
       };
-    case "PassingNay":
+    case 'PassingNay':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: domain.currentEpoch,
         winnerCount: proposal.tally.nayVoters,
       };
-    case "Confirming":
+    case 'Confirming':
       return {
-        kind: "Resolved",
+        kind: 'Resolved',
         epoch: domain.currentEpoch,
         winnerCount: proposal.tally.ayeVoters,
       };
-    case "Rejected":
+    case 'Rejected':
       return {
-        kind: "Rejected",
+        kind: 'Rejected',
         epoch: domain.currentEpoch,
         reason: resolution.reason,
       };
-    case "VetoPassing":
+    case 'VetoPassing':
       return {
-        kind: "VetoCancelled",
+        kind: 'VetoCancelled',
         epoch: domain.currentEpoch,
         vetoWeight: proposal.tally.vetoWeight,
       };
-    case "VotingWindowOpen":
-      throw new Error("Voting window is still open");
+    case 'VotingWindowOpen':
+      throw new Error('Voting window is still open');
   }
 }
 
 function availableWriteSurface(): GovernanceWriteSurfaceAvailability {
   return buildWriteSurfaceAvailability({
     castVote: {
-      providerStatus: "available",
-      reason: "Stateful mock provider allows interactive vote previews",
+      providerStatus: 'available',
+      reason: 'Stateful mock provider allows interactive vote previews',
     },
     submitProposal: {
-      providerStatus: "available",
+      providerStatus: 'available',
       reason:
-        "Stateful mock provider allows interactive signed public submission previews",
+        'Stateful mock provider allows interactive signed public submission previews',
     },
     noteProposalPreimage: {
-      providerStatus: "available",
+      providerStatus: 'available',
       reason:
-        "Stateful mock provider allows interactive preimage-note previews",
+        'Stateful mock provider allows interactive preimage-note previews',
     },
     resolveProposal: {
-      providerStatus: "available",
-      reason: "Stateful mock provider allows manual resolution previews",
+      providerStatus: 'available',
+      reason: 'Stateful mock provider allows manual resolution previews',
     },
     rejectProposal: {
-      providerStatus: "available",
-      reason: "Stateful mock provider allows admin rejection previews",
+      providerStatus: 'available',
+      reason: 'Stateful mock provider allows admin rejection previews',
     },
     resolveProposalFromVotes: {
-      providerStatus: "available",
-      reason: "Stateful mock provider allows maturity-time resolution previews",
+      providerStatus: 'available',
+      reason: 'Stateful mock provider allows maturity-time resolution previews',
     },
     forceResolveProposalFromVotes: {
-      providerStatus: "available",
-      reason: "Stateful mock provider allows early-finalization previews",
+      providerStatus: 'available',
+      reason: 'Stateful mock provider allows early-finalization previews',
     },
     requeueProposalForAutoFinalization: {
-      providerStatus: "available",
+      providerStatus: 'available',
       reason:
-        "Stateful mock provider allows auto-finalization recovery previews",
+        'Stateful mock provider allows auto-finalization recovery previews',
     },
   });
 }
@@ -985,16 +991,16 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
   ]);
   private readonly notedPreimageHashes = new Map<string, number>();
   private readonly state: GovernanceProviderState = {
-    status: "mock",
-    label: "Mock governance provider",
+    status: 'mock',
+    label: 'Mock governance provider',
     endpoint: null,
-    chainName: "Mock DEOS preview",
-    nodeName: "In-memory adapter",
-    nodeVersion: "preview",
+    chainName: 'Mock DEOS preview',
+    nodeName: 'In-memory adapter',
+    nodeVersion: 'preview',
     genesisHash: null,
     finalizedBlockHash: null,
     finalizedBlockNumber: null,
-    message: "Local interactive governance preview",
+    message: 'Local interactive governance preview',
   };
 
   private domain(domainId: GovernanceDomainId): MockDomainState {
@@ -1051,7 +1057,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     const proposal = domain.activeProposals[itemId];
     if (proposal) {
       return {
-        kind: "Active",
+        kind: 'Active',
         resolution: resolutionForProposal(domainId, domain, proposal, true),
       };
     }
@@ -1062,7 +1068,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       return null;
     }
     return {
-      kind: "Finalized",
+      kind: 'Finalized',
       outcome: finalizedProposal.outcome,
     };
   }
@@ -1165,10 +1171,10 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     return proposalPrimaryTrackFamily(domainId, {
       submittedEpoch: 0,
       maturityEpoch: 0,
-      proposerAccountId: "mock",
+      proposerAccountId: 'mock',
       metadata: retainedProposal.metadata,
       executionAuthority:
-        retainedProposal.executionAuthority ?? "NonExecutable",
+        retainedProposal.executionAuthority ?? 'NonExecutable',
       payloadAvailability: retainedProposal.payloadAvailability ?? {
         havePreimage: false,
         preimageRequested: false,
@@ -1224,10 +1230,10 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     return proposalUrgentEligibility(domainId, {
       submittedEpoch: 0,
       maturityEpoch: 0,
-      proposerAccountId: "mock",
+      proposerAccountId: 'mock',
       metadata: retainedProposal.metadata,
       executionAuthority:
-        retainedProposal.executionAuthority ?? "NonExecutable",
+        retainedProposal.executionAuthority ?? 'NonExecutable',
       payloadAvailability: retainedProposal.payloadAvailability ?? {
         havePreimage: false,
         preimageRequested: false,
@@ -1284,11 +1290,21 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     }
     return {
       governanceLockUntil: null,
-      ordinaryPowerProfile: proposal.profiles.aye ?? proposal.profiles.approve ?? "DecliningDirectStake",
-      protectionPowerProfile: proposal.profiles.veto ?? "DecliningVetoAsset",
-      currentOrdinaryWeight: BigInt(voteWeight(accountId, proposalPrimaryTrackFamily(domainId, proposal) === "Invoice" ? "approve" : "aye")),
-      currentProtectionWeight: BigInt(voteWeight(accountId, "veto")),
-      currentProtectionRawPower: BigInt(voteWeight(accountId, "veto")),
+      ordinaryPowerProfile:
+        proposal.profiles.aye ??
+        proposal.profiles.approve ??
+        'DecliningDirectStake',
+      protectionPowerProfile: proposal.profiles.veto ?? 'DecliningVetoAsset',
+      currentOrdinaryWeight: BigInt(
+        voteWeight(
+          accountId,
+          proposalPrimaryTrackFamily(domainId, proposal) === 'Invoice'
+            ? 'approve'
+            : 'aye',
+        ),
+      ),
+      currentProtectionWeight: BigInt(voteWeight(accountId, 'veto')),
+      currentProtectionRawPower: BigInt(voteWeight(accountId, 'veto')),
       frozenOrdinaryBallot: null,
       frozenProtectionBallot: null,
     };
@@ -1362,16 +1378,16 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       ensureCounters(domain, input.accountId).totalParticipations += 1n;
     }
     if (
-      input.voteKind === "aye" ||
-      input.voteKind === "nay" ||
-      input.voteKind === "amplify" ||
-      input.voteKind === "approve" ||
-      input.voteKind === "reduce"
+      input.voteKind === 'aye' ||
+      input.voteKind === 'nay' ||
+      input.voteKind === 'amplify' ||
+      input.voteKind === 'approve' ||
+      input.voteKind === 'reduce'
     ) {
       const existingVote = proposal.ordinaryVotes[input.accountId];
       if (existingVote) {
         throw new Error(
-          "Mock preview keeps one immutable ordinary vote per account/proposal",
+          'Mock preview keeps one immutable ordinary vote per account/proposal',
         );
       }
       proposal.ordinaryVotes[input.accountId] = input.voteKind;
@@ -1379,12 +1395,12 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     } else {
       if (protectionTrackIsClosed(domain, proposal)) {
         throw new Error(
-          "Protection track is closed because the mock protection window has ended",
+          'Protection track is closed because the mock protection window has ended',
         );
       }
       const existingVote = proposal.vetoVotes[input.accountId];
       if (existingVote === input.voteKind) {
-        throw new Error("Duplicate veto-track vote in mock preview");
+        throw new Error('Duplicate veto-track vote in mock preview');
       }
       if (existingVote) {
         decrementVote(
@@ -1403,8 +1419,8 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       true,
     );
     if (
-      resolution.kind === "VetoPassing" &&
-      resolution.mode === "ImmediateThreshold"
+      resolution.kind === 'VetoPassing' &&
+      resolution.mode === 'ImmediateThreshold'
     ) {
       applyWinningParticipation(domain, proposal, resolution);
       finalizeProposal(
@@ -1427,7 +1443,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
     const domain = this.domain(input.domainId);
     if (
       proposalSubmissionAuthority(input.domainId, input.payloadKind) !==
-      "Signed"
+      'Signed'
     ) {
       throw new Error(
         `${input.payloadKind} is not publicly submittable in mock governance for domain ${input.domainId}`,
@@ -1449,9 +1465,9 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
         payloadHash: input.payloadHash,
       },
       executionAuthority:
-        input.payloadKind === "Intent" || input.payloadKind === "L2SignalToL1"
-          ? "NonExecutable"
-          : "DomainParameters",
+        input.payloadKind === 'Intent' || input.payloadKind === 'L2SignalToL1'
+          ? 'NonExecutable'
+          : 'DomainParameters',
       payloadAvailability: {
         havePreimage: this.notedPreimageHashes.has(input.payloadHash),
         preimageRequested: false,
@@ -1517,7 +1533,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       throw new Error(`Mock proposal #${input.itemId} is not active`);
     }
     finalizeProposal(domain, input.itemId, {
-      kind: "Resolved",
+      kind: 'Resolved',
       epoch: domain.currentEpoch,
       winnerCount: Math.max(input.winners.length, 1),
     });
@@ -1553,7 +1569,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       proposal,
       true,
     );
-    if (resolution.kind === "VotingWindowOpen") {
+    if (resolution.kind === 'VotingWindowOpen') {
       throw new Error(
         `Proposal #${input.itemId} is still inside its voting window`,
       );
@@ -1582,7 +1598,7 @@ export class GovernanceMockAdapter implements GovernanceAdapter {
       proposal,
       false,
     );
-    if (resolution.kind === "VotingWindowOpen") {
+    if (resolution.kind === 'VotingWindowOpen') {
       throw new Error(`Unable to force-resolve proposal #${input.itemId}`);
     }
     applyWinningParticipation(domain, proposal, resolution);

@@ -1,30 +1,36 @@
+<!--
+Domain: Status widget
+Owns: Compact footer status presentation for chain connection and active account readiness.
+Excludes: System connection lifecycle, wallet store ownership, and footer lane layout.
+Zone: Presentation widget; consumes system/wallet state and read-model provenance badges.
+-->
 <script lang="ts">
-  import { fromClientBoundedProjection } from "$lib/shared/read-model";
-  import { ReadModelBadge } from "$lib/shared/ui";
-  import { systemStore } from "$lib/system/index.svelte";
-  import { walletStore } from "$lib/wallet/index.svelte";
+  import { fromClientBoundedProjection } from '$lib/read-model';
+  import { systemStore } from '$lib/system/index.svelte';
+  import { ReadModelBadge } from '$lib/ui';
+  import { walletStore } from '$lib/wallet/index.svelte';
 
   const footerProvenance = fromClientBoundedProjection(
     true,
-    "statusWidget.footerStrip <- system connection state + finalized snapshot + selected account session",
+    'statusWidget.footerStrip <- system connection state + finalized snapshot + selected account session',
   ).provenance;
 
   const footerItems = $derived.by(() => [
     {
-      label: "Connection",
-      value: systemStore.connectionState?.status ?? "unconfigured",
+      label: 'Connection',
+      value: systemStore.connectionState?.status ?? 'unconfigured',
     },
     {
-      label: "Signer",
+      label: 'Signer',
       value: walletStore.state.signerStatus,
     },
     {
-      label: "Account",
+      label: 'Account',
       value: walletStore.state.selectedLabel,
     },
     {
-      label: "Finalized block",
-      value: systemStore.snapshot?.blockNumber?.toString() ?? "—",
+      label: 'Finalized block',
+      value: systemStore.snapshot?.blockNumber?.toString() ?? '—',
     },
   ]);
 </script>

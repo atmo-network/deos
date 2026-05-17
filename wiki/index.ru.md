@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Вики DEOS
-summary: Компактная и понятная карта фреймворка DEOS и стандарта TMCTOL. Эта wiki сжимает нормативные docs в более удобный навигационный слой с явными источниками и ясными точками входа.
+summary: Самодостаточная карта знаний фреймворка DEOS и стандарта TMCTOL, организованная как плотный wiki-граф, а не список ссылок на docs.
 locale: ru
 canonical_page_id: index
 translation_of: index.en.md
@@ -19,13 +19,14 @@ tags:
   - onboarding
   - deos
 related:
+  - Карта доменов
   - Обзор фреймворка DEOS
   - Первые шаги
   - Система AAA
   - Обзор Governance
   - Базовые термины
   - FAQ для новичков
-last_compiled: 2026-04-16
+last_compiled: 2026-05-17
 confidence: 0.95
 ---
 
@@ -33,91 +34,92 @@ confidence: 0.95
 
 ## Кратко
 
-Эта вики — сгенерированный слой навигации и онбординга для репозитория. `/docs` остаются авторитетным источником контрактов и спецификаций, а `/wiki` помогает быстрее понять структуру проекта и найти нужную тему.
+DEOS — это форкаемый runtime-фреймворк для программируемых экономик: выпуск токена, protocol-owned liquidity, маршрутизация, staking, governance и автоматизированные actors становятся одной детерминированной институциональной машиной. TMCTOL — первый стандарт поверх него: mint-only curve плюс treasury-owned liquidity, сжигание комиссий, bucketed policy и ограниченный governance-контроль.
 
-DEOS — это имя фреймворка. TMCTOL — флагманский токеномический стандарт, который сейчас работает поверх него.
+Мем: DEOS заменяет ручное DAO-управление казначейством детерминированными экономическими контурами.
+
+Эта wiki — самодостаточный продукт знаний для понимания этого фреймворка. Она основана на проектной правде репозитория, но путь чтения должен оставаться внутри wiki: страницы объясняют понятия напрямую и ведут к другим wiki-страницам, а не требуют перехода к исходным документам.
 
 ## Начните здесь
 
-- [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
-- [Первые шаги](getting-started/first-steps.ru.md)
-- [Базовые термины](glossary/core-terms.ru.md)
+- [DEOS за 60 секунд](getting-started/deos-in-60-seconds.ru.md) — внешний крючок перед архитектурным графом
+- [Для кого DEOS](getting-started/who-deos-is-for.ru.md) — карта аудиторий для партнёров, разработчиков и операторов
+- [Partner Pitch](getting-started/partner-pitch.ru.md) — внешняя страница о том, почему это важно для партнёрских команд
+- [Executive Summary](getting-started/executive-summary.ru.md) — одностраничное резюме для читателей из экосистемы и инвесторов
+- [Маршрут оценки для партнёра](usage/partner-evaluation-route.ru.md) — путь из пяти страниц для оценки форка и принятия
+- [Карта доменов](concepts/domain-map.ru.md) — главная карта доменов знаний
+- [Сквозные сценарии](concepts/end-to-end-flows.ru.md) — конкретные проходы через маршрутизацию, actors, корзины, staking и проверку
+- [Архитектурные схемы](concepts/architecture-diagrams.ru.md) — компактные текстовые карты связей подсистем
+- [Обзор фреймворка DEOS](overview/deos-framework.ru.md) — что такое фреймворк
+- [Первые шаги](getting-started/first-steps.ru.md) — короткий маршрут новичка
+- [Маршруты чтения](getting-started/reading-paths.ru.md) — маршруты по wiki для разных задач
+- [Базовые термины](glossary/core-terms.ru.md) — словарь для всего графа
 
-## Ключевые концепции
+## Доменные хабы
 
-- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md)
+- [Стандарт TMCTOL](concepts/tmctol-standard.ru.md) — экономический стандарт и законы токена
+- [Сценарии TOL buckets](concepts/tol-bucket-scenarios.ru.md) — конкретные пробуждения корзин A/B/C/D и каналы treasury
+- [Токеновые поверхности](concepts/token-surfaces.ru.md) — роли Native, VETO, BLDR, расписок и LP
+- [Система AAA](overview/aaa-system.ru.md) — автономные protocol actors
+- [Axial Router](overview/axial-router.ru.md) — маршруты, комиссии и решения о протокольной ликвидности
+- [Обзор Governance](overview/governance-overview.ru.md) — полномочия по доменам и защита
+- [Пулы стейкинга](concepts/staking-pools.ru.md) — расписки staking, номинирование LP и вознаграждения
+- [Эталонный клиент](overview/reference-client.ru.md) — on-chain-first браузерный продукт и wiki reader
+
+## Экономика и runtime-понятия
+
 - [Токен-управляемая автоматизация](concepts/token-driven-automation.ru.md)
-- [Разделение read-model](concepts/read-model-split.ru.md)
-- [Домены Governance](concepts/governance-domains.ru.md)
-
-## Runtime и продукт
-
-- [Система AAA](overview/aaa-system.ru.md)
-- [AA-Актор](overview/aa-actor.ru.md)
-- [Axial Router](overview/axial-router.ru.md)
-- [Token Minting Curve](overview/token-minting-curve.ru.md)
-- [Обзор Governance](overview/governance-overview.ru.md)
-- [Идентичность активов](overview/asset-identity.ru.md)
-- [Стратегия случайности](overview/randomness-strategy.ru.md)
-- [Паттерны runtime](overview/runtime-patterns.ru.md)
 - [Контур маршрутизации и минтинга](concepts/routing-and-minting-loop.ru.md)
-- [Пулы стейкинга](concepts/staking-pools.ru.md)
-- [Эталонный клиент](overview/reference-client.ru.md)
-
-## Философия и ориентация
-
-- [Physics-first против politics-first](comparisons/physics-vs-politics.ru.md)
-- [FAQ для новичков](faq/newcomer-faq.ru.md)
-
-## Техническая реализация
-
-- [Структура репозитория](implementation/repository-structure.ru.md)
-- [Технологический стек](implementation/tech-stack.ru.md)
-
-## Математические модели
-
+- [Token Minting Curve](overview/token-minting-curve.ru.md)
 - [Формулы TMCTOL](math/tmctol-formulas.ru.md)
+- [Экономические пороги](concepts/economic-thresholds.ru.md)
+- [Уровни экономических утверждений](concepts/economic-claim-levels.ru.md)
+- [Карта инвариантов](concepts/invariant-map.ru.md)
+- [Threat Model](concepts/threat-model.ru.md)
+- [Чем DEOS не является](concepts/what-deos-is-not.ru.md)
+- [Идентичность активов](overview/asset-identity.ru.md)
+- [Паттерны runtime](overview/runtime-patterns.ru.md)
+- [Контекст parachain](concepts/parachain-context.ru.md)
+- [Стратегия случайности](overview/randomness-strategy.ru.md)
 
-## Разработка и использование
+## Governance, модели чтения и форма клиента
+
+- [Домены Governance](concepts/governance-domains.ru.md)
+- [DEOS vs DAO Treasury](comparisons/deos-vs-dao-treasury.ru.md)
+- [Physics-first против politics-first](comparisons/physics-vs-politics.ru.md)
+- [Разделение read-model](concepts/read-model-split.ru.md)
+- [UI Kit и Domain DAG](concepts/ui-kit-and-domain-dag.ru.md)
+- [Generated Wiki](concepts/generated-wiki.ru.md)
+- [Metadata wiki-графа](usage/wiki-graph-metadata.ru.md)
+
+## Процессы и статус
 
 - [Статус разработки](development/status.ru.md)
 - [Трехуровневая валидация](development/three-layer-validation.ru.md)
 - [Слой скриптов](usage/scripts-layer.ru.md)
+- [Troubleshooting проверки](usage/validation-troubleshooting.ru.md)
+- [Координация агентов](usage/agent-coordination.ru.md)
+- [Форк DEOS](usage/forking-deos.ru.md)
+- [Минимальный профиль форка](usage/minimal-fork-profile.ru.md)
+- [Структура репозитория](implementation/repository-structure.ru.md)
+- [Технологический стек](implementation/tech-stack.ru.md)
 - [Руководство контрибьютора](community/contributing.ru.md)
+- [FAQ для новичков](faq/newcomer-faq.ru.md)
 
-## Нормативные источники
+## Как читать эту wiki
 
-- [`docs/README.md`](../docs/README.md)
-- [`docs/manifesto.en.md`](../docs/manifesto.en.md)
-- [`docs/tmctol.specification.en.md`](../docs/tmctol.specification.en.md)
-- [`docs/core.architecture.en.md`](../docs/core.architecture.en.md)
-- [`docs/tmc.architecture.en.md`](../docs/tmc.architecture.en.md)
-- [`docs/axial-router.architecture.en.md`](../docs/axial-router.architecture.en.md)
-- [`docs/aaa.specification.en.md`](../docs/aaa.specification.en.md)
-- [`docs/staking.specification.en.md`](../docs/staking.specification.en.md)
-- [`docs/governance.specification.en.md`](../docs/governance.specification.en.md)
-- [`docs/read-model.contract.en.md`](../docs/read-model.contract.en.md)
-- [`docs/web-client.architecture.en.md`](../docs/web-client.architecture.en.md)
-- [`docs/asset-registry.architecture.en.md`](../docs/asset-registry.architecture.en.md)
-- [`docs/randomness.strategy.en.md`](../docs/randomness.strategy.en.md)
-- [`docs/polkadot-sdk-2603.insights.en.md`](../docs/polkadot-sdk-2603.insights.en.md)
-
-## Навигационные заметки
-
-- Начинайте со страниц обзора и глоссария, если только знакомитесь с проектом
-- Переходите к концептуальным страницам, когда нужна экономическая или архитектурная модель
-- Возвращайтесь к `/docs`, когда требуется полный нормативный контракт
+- Сначала идите по wiki-ссылкам. Wiki должна быть понятна без выхода из wiki.
+- Используйте [Карту доменов](concepts/domain-map.ru.md), когда страница кажется слишком локальной.
+- Используйте [Базовые термины](glossary/core-terms.ru.md), когда словарь становится плотным.
+- Используйте [Статус разработки](development/status.ru.md), чтобы отделять поставленную основу от будущей внешне-зависимой работы.
+- Считайте метаданные страницы источниками, а не обязательным маршрутом чтения.
 
 ## Связанные страницы
 
+- [Карта доменов](concepts/domain-map.ru.md)
 - [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
 - [Первые шаги](getting-started/first-steps.ru.md)
 - [Система AAA](overview/aaa-system.ru.md)
 - [Обзор Governance](overview/governance-overview.ru.md)
 - [Базовые термины](glossary/core-terms.ru.md)
 - [FAQ для новичков](faq/newcomer-faq.ru.md)
-
-## Источники
-
-- `docs/README.md`
-- `README.md`

@@ -1,30 +1,41 @@
+<!--
+Domain: Workspace frame
+Owns: Top-level responsive layout shell, reserved edge lanes, sidebar placement, and center tile host composition.
+Excludes: Widget internals, domain store behavior, and transport/provider wiring.
+Zone: Layout composition root under web-client; may import layout primitives and special lane widgets.
+-->
 <script lang="ts">
-  import { cubicOut } from "svelte/easing";
-  import { onMount } from "svelte";
-  import { fly } from "svelte/transition";
+  import { onMount } from 'svelte';
+  import type { Component } from 'svelte';
+  import { cubicOut } from 'svelte/easing';
+  import { fly } from 'svelte/transition';
 
-  import type { TileNode } from "$lib/layout/types";
+  import type { TileNode } from '$lib/layout/types';
 
-  import AppFooter from "./AppFooter.svelte";
-  import AppHeader from "./AppHeader.svelte";
-  import { layoutStore } from "./index.svelte";
-  import SidebarPanelSkeleton from "./SidebarPanelSkeleton.svelte";
-  import TileContainer from "./TileContainer.svelte";
-  import { MOBILE_LAYOUT_BREAKPOINT } from "./types";
+  import AppFooter from './AppFooter.svelte';
+  import AppHeader from './AppHeader.svelte';
+  import SidebarPanelSkeleton from './SidebarPanelSkeleton.svelte';
+  import TileContainer from './TileContainer.svelte';
+  import { layoutStore } from './index.svelte';
+  import { MOBILE_LAYOUT_BREAKPOINT } from './types';
 
-  type SidebarPanelComponent = any;
+  type SidebarPanelComponent = Component<{
+    id?: string;
+    mobile: boolean;
+    onclose: () => void;
+  }>;
 
   type Props = {
     root: TileNode;
   };
 
-  const SIDEBAR_PANEL_ID = "deos-sidebar-panel";
+  const SIDEBAR_PANEL_ID = 'deos-sidebar-panel';
   const SIDEBAR_STACK_BREAKPOINT = 900;
-  const SIDEBAR_WIDTH = "22rem";
+  const SIDEBAR_WIDTH = '22rem';
   const SIDEBAR_TRANSITION_MS = 180;
   const SIDEBAR_DESKTOP_OFFSET = 24;
   const SIDEBAR_STACK_OFFSET = 16;
-  const DESKTOP_SIDEBAR_GAP = "0.75rem";
+  const DESKTOP_SIDEBAR_GAP = '0.75rem';
 
   let { root }: Props = $props();
   let frameEl = $state<HTMLDivElement | null>(null);
@@ -61,15 +72,15 @@
     if (sidebarPanelComponent !== null) {
       return;
     }
-    const module = await import("./SidebarPanel.svelte");
+    const module = await import('./SidebarPanel.svelte');
     sidebarPanelComponent = module.default;
   }
 
-  function sidebarFly(edge: "left" | "right", stacked: boolean) {
+  function sidebarFly(edge: 'left' | 'right', stacked: boolean) {
     const offset = stacked ? SIDEBAR_STACK_OFFSET : SIDEBAR_DESKTOP_OFFSET;
     return {
-      x: stacked ? 0 : edge === "left" ? -offset : offset,
-      y: stacked ? (edge === "left" ? -offset : offset) : 0,
+      x: stacked ? 0 : edge === 'left' ? -offset : offset,
+      y: stacked ? (edge === 'left' ? -offset : offset) : 0,
       duration: SIDEBAR_TRANSITION_MS,
       opacity: 0,
       easing: cubicOut,
@@ -77,11 +88,11 @@
   }
 
   function desktopSidebarWidth(): string {
-    return sidebarOpen ? SIDEBAR_WIDTH : "0rem";
+    return sidebarOpen ? SIDEBAR_WIDTH : '0rem';
   }
 
   function desktopSidebarGap(): string {
-    return sidebarOpen ? DESKTOP_SIDEBAR_GAP : "0rem";
+    return sidebarOpen ? DESKTOP_SIDEBAR_GAP : '0rem';
   }
 
   onMount(() => {
@@ -106,13 +117,19 @@
   bind:this={frameEl}
   class="h-screen flex flex-col overflow-hidden bg-transparent"
 >
-  <AppHeader sidebarEdge={sidebarEdge} sidebarId={SIDEBAR_PANEL_ID} {mobile} {sidebarOpen} onToggleSidebar={toggleSidebar} />
+  <AppHeader
+    {sidebarEdge}
+    sidebarId={SIDEBAR_PANEL_ID}
+    {mobile}
+    {sidebarOpen}
+    onToggleSidebar={toggleSidebar}
+  />
 
   {#if stackSidebar}
-    {#if sidebarOpen && sidebarEdge === "left"}
+    {#if sidebarOpen && sidebarEdge === 'left'}
       <section
         class="shrink-0 overflow-hidden px-3 pt-3"
-        transition:fly={sidebarFly("left", true)}
+        transition:fly={sidebarFly('left', true)}
       >
         {#if SidebarPanel}
           <SidebarPanel id={SIDEBAR_PANEL_ID} {mobile} onclose={closeSidebar} />
@@ -126,10 +143,10 @@
         <TileContainer node={root} root />
       </div>
     </main>
-    {#if sidebarOpen && sidebarEdge === "right"}
+    {#if sidebarOpen && sidebarEdge === 'right'}
       <section
         class="shrink-0 overflow-hidden px-3 pb-3"
-        transition:fly={sidebarFly("right", true)}
+        transition:fly={sidebarFly('right', true)}
       >
         {#if SidebarPanel}
           <SidebarPanel id={SIDEBAR_PANEL_ID} {mobile} onclose={closeSidebar} />
@@ -145,7 +162,7 @@
         style:gap={desktopSidebarGap()}
         style:transition-duration={`${SIDEBAR_TRANSITION_MS}ms`}
       >
-        {#if sidebarEdge === "left"}
+        {#if sidebarEdge === 'left'}
           <div
             class="relative shrink-0 min-w-0 min-h-0 overflow-hidden transition-[width] ease-out"
             style:width={desktopSidebarWidth()}
@@ -159,7 +176,11 @@
               inert={!sidebarOpen}
             >
               {#if SidebarPanel}
-                <SidebarPanel id={SIDEBAR_PANEL_ID} {mobile} onclose={closeSidebar} />
+                <SidebarPanel
+                  id={SIDEBAR_PANEL_ID}
+                  {mobile}
+                  onclose={closeSidebar}
+                />
               {:else}
                 <SidebarPanelSkeleton />
               {/if}
@@ -171,7 +192,7 @@
           <TileContainer node={root} root />
         </div>
 
-        {#if sidebarEdge === "right"}
+        {#if sidebarEdge === 'right'}
           <div
             class="relative shrink-0 min-w-0 min-h-0 overflow-hidden transition-[width] ease-out"
             style:width={desktopSidebarWidth()}
@@ -185,7 +206,11 @@
               inert={!sidebarOpen}
             >
               {#if SidebarPanel}
-                <SidebarPanel id={SIDEBAR_PANEL_ID} {mobile} onclose={closeSidebar} />
+                <SidebarPanel
+                  id={SIDEBAR_PANEL_ID}
+                  {mobile}
+                  onclose={closeSidebar}
+                />
               {:else}
                 <SidebarPanelSkeleton />
               {/if}

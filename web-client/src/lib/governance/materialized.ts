@@ -1,8 +1,14 @@
+/*
+Domain: Governance materialized views
+Owns: Demo/materialized governance proposal, vote, domain, and metric snapshots for non-chain-backed UX.
+Excludes: Authoritative runtime query logic, mutable store lifecycle, and adapter transport.
+Zone: Governance materialized-provider helper; marks non-canonical data for UI/reference flows.
+*/
 import type {
   GovernanceDomainId,
   GovernanceItemId,
   GovernanceVoteKind,
-} from "./types";
+} from './types';
 
 export type GovernanceMaterializedArchiveEntry = {
   itemId: GovernanceItemId;
@@ -16,7 +22,7 @@ export type GovernanceMaterializedBallotTimelineEntry = {
   atEpoch: number;
   accountId: string;
   voteKind: GovernanceVoteKind;
-  track: "ordinary" | "veto";
+  track: 'ordinary' | 'veto';
   weight: bigint;
   note: string;
 };
@@ -41,34 +47,34 @@ const ARCHIVE_BY_DOMAIN: Record<
   1000: [
     {
       itemId: 311,
-      title: "Treasury buffer risk response",
+      title: 'Treasury buffer risk response',
       summary:
-        "Protected referendum with live veto pressure and split ordinary turnout",
+        'Protected referendum with live veto pressure and split ordinary turnout',
       finalizedAtEpoch: 42,
-      outcomeLabel: "Active / veto pressure",
+      outcomeLabel: 'Active / veto pressure',
     },
     {
       itemId: 309,
-      title: "Router fee retune",
+      title: 'Router fee retune',
       summary:
-        "Proposal failed approval threshold after bounded voting window closed",
+        'Proposal failed approval threshold after bounded voting window closed',
       finalizedAtEpoch: 41,
-      outcomeLabel: "Rejected",
+      outcomeLabel: 'Rejected',
     },
     {
       itemId: 308,
-      title: "Reward memory parameter tune",
-      summary: "Resolved with manual winner set before expiry horizon",
+      title: 'Reward memory parameter tune',
+      summary: 'Resolved with manual winner set before expiry horizon',
       finalizedAtEpoch: 40,
-      outcomeLabel: "Resolved",
+      outcomeLabel: 'Resolved',
     },
     {
       itemId: 307,
-      title: "Emergency protected veto test",
+      title: 'Emergency protected veto test',
       summary:
-        "Finalized through veto cancellation path after protected-track intervention",
+        'Finalized through veto cancellation path after protected-track intervention',
       finalizedAtEpoch: 39,
-      outcomeLabel: "Veto cancelled",
+      outcomeLabel: 'Veto cancelled',
     },
   ],
 };
@@ -81,71 +87,71 @@ const BALLOT_TIMELINES: Record<
     310: [
       {
         atEpoch: 42,
-        accountId: "alice",
-        voteKind: "aye",
-        track: "ordinary",
+        accountId: 'alice',
+        voteKind: 'aye',
+        track: 'ordinary',
         weight: 2100n,
-        note: "Early ordinary vote captured under stronger declining-power multiplier",
+        note: 'Early ordinary vote captured under stronger declining-power multiplier',
       },
       {
         atEpoch: 43,
-        accountId: "bob",
-        voteKind: "pass",
-        track: "veto",
+        accountId: 'bob',
+        voteKind: 'pass',
+        track: 'veto',
         weight: 700n,
-        note: "Protected-track participant explicitly allowed ordinary track to decide",
+        note: 'Protected-track participant explicitly allowed ordinary track to decide',
       },
       {
         atEpoch: 44,
-        accountId: "charlie",
-        voteKind: "veto",
-        track: "veto",
+        accountId: 'charlie',
+        voteKind: 'veto',
+        track: 'veto',
         weight: 800n,
-        note: "Later veto-track intervention repriced at weaker ballot-time weight",
+        note: 'Later veto-track intervention repriced at weaker ballot-time weight',
       },
     ],
     311: [
       {
         atEpoch: 38,
-        accountId: "alice",
-        voteKind: "aye",
-        track: "ordinary",
+        accountId: 'alice',
+        voteKind: 'aye',
+        track: 'ordinary',
         weight: 2100n,
-        note: "Ordinary approval started strong",
+        note: 'Ordinary approval started strong',
       },
       {
         atEpoch: 39,
-        accountId: "dave",
-        voteKind: "veto",
-        track: "veto",
+        accountId: 'dave',
+        voteKind: 'veto',
+        track: 'veto',
         weight: 650n,
-        note: "Veto-track pressure entered before maturity",
+        note: 'Veto-track pressure entered before maturity',
       },
       {
         atEpoch: 40,
-        accountId: "bob",
-        voteKind: "pass",
-        track: "veto",
+        accountId: 'bob',
+        voteKind: 'pass',
+        track: 'veto',
         weight: 700n,
-        note: "Protected-track pass attempted to unblock ordinary result",
+        note: 'Protected-track pass attempted to unblock ordinary result',
       },
     ],
     309: [
       {
         atEpoch: 40,
-        accountId: "alice",
-        voteKind: "aye",
-        track: "ordinary",
+        accountId: 'alice',
+        voteKind: 'aye',
+        track: 'ordinary',
         weight: 1600n,
-        note: "Later ordinary ballot after most of the voting window elapsed",
+        note: 'Later ordinary ballot after most of the voting window elapsed',
       },
       {
         atEpoch: 41,
-        accountId: "bob",
-        voteKind: "nay",
-        track: "ordinary",
+        accountId: 'bob',
+        voteKind: 'nay',
+        track: 'ordinary',
         weight: 1200n,
-        note: "Counterweight prevented approval threshold from clearing",
+        note: 'Counterweight prevented approval threshold from clearing',
       },
     ],
   },
@@ -153,11 +159,11 @@ const BALLOT_TIMELINES: Record<
 
 export class GovernanceMockMaterializedProvider implements GovernanceMaterializedProvider {
   label(): string {
-    return "Mock materialized governance view";
+    return 'Mock materialized governance view';
   }
 
   message(): string | null {
-    return "Mock archive/timeline data for contract-preview UX";
+    return 'Mock archive/timeline data for contract-preview UX';
   }
 
   async searchProposals(
@@ -187,11 +193,11 @@ export class GovernanceMockMaterializedProvider implements GovernanceMaterialize
 
 export class GovernanceUnavailableMaterializedProvider implements GovernanceMaterializedProvider {
   constructor(
-    private readonly unavailableReason = "No indexed governance backend configured for archive search or ballot timelines",
+    private readonly unavailableReason = 'No indexed governance backend configured for archive search or ballot timelines',
   ) {}
 
   label(): string {
-    return "Materialized governance backend unavailable";
+    return 'Materialized governance backend unavailable';
   }
 
   message(): string | null {

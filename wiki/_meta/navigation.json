@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-04-25",
+  "generated_at": "2026-05-17",
   "audience": "newcomer",
   "default_locale": "en",
   "available_locales": [
@@ -20,6 +20,70 @@
         "ru": "Начните здесь"
       },
       "items": [
+        {
+          "id": "deos-in-60-seconds",
+          "title": {
+            "en": "DEOS in 60 Seconds",
+            "ru": "DEOS за 60 секунд"
+          },
+          "path": {
+            "en": "getting-started/deos-in-60-seconds.en.md",
+            "ru": "getting-started/deos-in-60-seconds.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "The external-facing hook before the full architecture graph.",
+            "ru": "Внешний крючок перед полным architecture graph."
+          }
+        },
+        {
+          "id": "who-deos-is-for",
+          "title": {
+            "en": "Who DEOS Is For",
+            "ru": "Для кого DEOS"
+          },
+          "path": {
+            "en": "getting-started/who-deos-is-for.en.md",
+            "ru": "getting-started/who-deos-is-for.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "Audience map for ecosystem founders, Substrate builders, tokenomics designers, protocol operators, and client/indexer builders.",
+            "ru": "Карта аудиторий для основателей экосистем, Substrate builders, дизайнеров токеномики, операторов протокола и client/indexer builders."
+          }
+        },
+        {
+          "id": "partner-pitch",
+          "title": {
+            "en": "Partner Pitch",
+            "ru": "Partner Pitch"
+          },
+          "path": {
+            "en": "getting-started/partner-pitch.en.md",
+            "ru": "getting-started/partner-pitch.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "External-facing pitch for partner teams evaluating DEOS as a forkable foundation for deterministic protocol economies.",
+            "ru": "Внешний pitch для партнерских команд, которые оценивают DEOS как форкаемый фундамент для детерминированных протокольных экономик."
+          }
+        },
+        {
+          "id": "executive-summary",
+          "title": {
+            "en": "Executive Summary",
+            "ru": "Executive Summary"
+          },
+          "path": {
+            "en": "getting-started/executive-summary.en.md",
+            "ru": "getting-started/executive-summary.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "One-page external summary of what DEOS is, why it matters, what is shipped, what is not shipped, and how adoption starts.",
+            "ru": "Одностраничное внешнее резюме: что такое DEOS, почему это важно, что уже поставлено, что не поставлено и как начинается adoption."
+          }
+        },
         {
           "id": "deos-framework",
           "title": {
@@ -64,8 +128,24 @@
           },
           "page_type": "glossary",
           "summary": {
-            "en": "A compact glossary for the main DEOS and TMCTOL terms, including framework, runtime, governance, and read-model vocabulary.",
-            "ru": "Компактный глоссарий по главным терминам DEOS и TMCTOL, включая словарь фреймворка, runtime, governance и read-model."
+            "en": "A compact glossary for the main DEOS and TMCTOL terms, including framework, runtime, governance, read-model, frontend ownership, wiki vocabulary, and release/status document roles.",
+            "ru": "Компактный глоссарий по главным терминам DEOS и TMCTOL, включая framework, runtime, governance, read-model, frontend ownership, wiki vocabulary и роли release/status documents."
+          }
+        },
+        {
+          "id": "reading-paths",
+          "title": {
+            "en": "Reading Paths",
+            "ru": "Маршруты чтения"
+          },
+          "path": {
+            "en": "getting-started/reading-paths.en.md",
+            "ru": "getting-started/reading-paths.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "Role-based reading paths for newcomers, economics work, runtime changes, governance work, web-client changes, and local tooling.",
+            "ru": "Role-based reading paths для новичков, economics work, runtime changes, governance work, web-client changes и local tooling."
           }
         },
         {
@@ -80,8 +160,8 @@
           },
           "page_type": "faq",
           "summary": {
-            "en": "Quick orientation for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, and the reference client.",
-            "ru": "Быстрая ориентация по главным вопросам новичков о DEOS, TMCTOL, AAA, governance и эталонном клиенте."
+            "en": "Quick orientation for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, docs/wiki navigation, UI Kit, Domain DAG, and the reference client.",
+            "ru": "Быстрая ориентация по главным вопросам новичков о DEOS, TMCTOL, AAA, governance, docs/wiki navigation, UI Kit, Domain DAG и эталонном клиенте."
           }
         }
       ]
@@ -155,6 +235,214 @@
           "summary": {
             "en": "One typed governance cell inside DEOS Governance: it binds together the governed subject, power surfaces, valid payload families, cadence, and execution authority.",
             "ru": "Одна типизированная governance-cell внутри DEOS Governance: она связывает управляемый subject, power surfaces, допустимые payload-family, cadence и execution authority."
+          }
+        },
+        {
+          "id": "ui-kit-and-domain-dag",
+          "title": {
+            "en": "UI Kit and Domain DAG",
+            "ru": "UI Kit и Domain DAG"
+          },
+          "path": {
+            "en": "concepts/ui-kit-and-domain-dag.en.md",
+            "ru": "concepts/ui-kit-and-domain-dag.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How the web client centralizes reusable presentation primitives and validates ownership boundaries across widgets, domains, layout, adapters, and system wiring.",
+            "ru": "Как web-client централизует reusable presentation primitives и проверяет ownership boundaries между widgets, domains, layout, adapters и system wiring."
+          }
+        },
+        {
+          "id": "generated-wiki",
+          "title": {
+            "en": "Generated Wiki",
+            "ru": "Generated Wiki"
+          },
+          "path": {
+            "en": "concepts/generated-wiki.en.md",
+            "ru": "concepts/generated-wiki.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How `/wiki` works as a self-contained domain graph with localized pages, metadata manifests, and a trusted rendering boundary.",
+            "ru": "Как `/wiki` работает как self-contained domain graph с localized pages, metadata manifests и trusted rendering boundary."
+          }
+        },
+        {
+          "id": "domain-map",
+          "title": {
+            "en": "Domain Map",
+            "ru": "Карта доменов"
+          },
+          "path": {
+            "en": "concepts/domain-map.en.md",
+            "ru": "concepts/domain-map.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "A self-contained map of the major DEOS knowledge domains and how they link together inside the wiki.",
+            "ru": "Самодостаточная карта основных knowledge-доменов DEOS и связей между ними внутри wiki."
+          }
+        },
+        {
+          "id": "end-to-end-flows",
+          "title": {
+            "en": "End-to-End Flows",
+            "ru": "Сквозные сценарии"
+          },
+          "path": {
+            "en": "concepts/end-to-end-flows.en.md",
+            "ru": "concepts/end-to-end-flows.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Concrete walkthroughs that connect user actions, runtime routing, AAA actor wakeups, buckets, read-model surfaces, and validation choices.",
+            "ru": "Конкретные сценарии, связывающие пользовательские действия, runtime routing, пробуждение AAA акторов, buckets, read-model surfaces и validation."
+          }
+        },
+        {
+          "id": "architecture-diagrams",
+          "title": {
+            "en": "Architecture Diagrams",
+            "ru": "Архитектурные схемы"
+          },
+          "path": {
+            "en": "concepts/architecture-diagrams.en.md",
+            "ru": "concepts/architecture-diagrams.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Compact text diagrams for subsystem relationships, routing, AAA actor graphs, governance/staking, and read-model boundaries.",
+            "ru": "Компактные текстовые схемы связей подсистем, routing, AAA actor graphs, governance/staking и read-model boundaries."
+          }
+        },
+        {
+          "id": "token-surfaces",
+          "title": {
+            "en": "Token Surfaces",
+            "ru": "Токеновые поверхности"
+          },
+          "path": {
+            "en": "concepts/token-surfaces.en.md",
+            "ru": "concepts/token-surfaces.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "A compact map of Native, VETO, BLDR, stNTVE, LP tokens, and their economic/governance/staking/read-model roles.",
+            "ru": "Краткая карта Native, VETO, BLDR, stNTVE, LP tokens и их ролей в economics/governance/staking/read-model."
+          }
+        },
+        {
+          "id": "economic-thresholds",
+          "title": {
+            "en": "Economic Thresholds",
+            "ru": "Экономические пороги"
+          },
+          "path": {
+            "en": "concepts/economic-thresholds.en.md",
+            "ru": "concepts/economic-thresholds.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Gravity Well, Elasticity Inversion, compression metrics, and floor/ceiling threshold discipline.",
+            "ru": "Gravity Well, Elasticity Inversion, compression metrics и дисциплина floor/ceiling thresholds."
+          }
+        },
+        {
+          "id": "parachain-context",
+          "title": {
+            "en": "Parachain Context",
+            "ru": "Parachain context"
+          },
+          "path": {
+            "en": "concepts/parachain-context.en.md",
+            "ru": "concepts/parachain-context.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How DEOS relates to Polkadot, parachains, XCM, collators, Omni Node, and upstream relay-chain dependencies.",
+            "ru": "Как DEOS связан с Polkadot, parachains, XCM, collators, Omni Node и upstream relay-chain dependencies."
+          }
+        },
+        {
+          "id": "tol-bucket-scenarios",
+          "title": {
+            "en": "TOL Bucket Scenarios",
+            "ru": "Сценарии TOL buckets"
+          },
+          "path": {
+            "en": "concepts/tol-bucket-scenarios.en.md",
+            "ru": "concepts/tol-bucket-scenarios.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Concrete A/B/C/D bucket behavior, unwind paths, paired treasury lanes, and actor wakeups.",
+            "ru": "Конкретное поведение A/B/C/D buckets, unwind paths, paired treasury lanes и actor wakeups."
+          }
+        },
+        {
+          "id": "invariant-map",
+          "title": {
+            "en": "Invariant Map",
+            "ru": "Карта инвариантов"
+          },
+          "path": {
+            "en": "concepts/invariant-map.en.md",
+            "ru": "concepts/invariant-map.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Core invariants mapped to owner, validation, governance mutability, and failure mode.",
+            "ru": "Ключевые инварианты с owner, validation, governance-mutability и failure mode."
+          }
+        },
+        {
+          "id": "threat-model",
+          "title": {
+            "en": "Threat Model",
+            "ru": "Threat Model"
+          },
+          "path": {
+            "en": "concepts/threat-model.en.md",
+            "ru": "concepts/threat-model.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Central risk map for governance drains, router bypass, bucket misuse, indexer confusion, collator trust, actor liveness, and provenance lies.",
+            "ru": "Центральная карта рисков для governance drain, router bypass, bucket misuse, indexer confusion, collator trust, actor liveness и provenance lies."
+          }
+        },
+        {
+          "id": "what-deos-is-not",
+          "title": {
+            "en": "What DEOS Is Not",
+            "ru": "Чем DEOS не является"
+          },
+          "path": {
+            "en": "concepts/what-deos-is-not.en.md",
+            "ru": "concepts/what-deos-is-not.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "Negative-space boundaries for DAO, stable-asset, smart-contract, oracle, indexer, randomness, and product misconceptions.",
+            "ru": "Отрицательные границы против DAO, stable-asset, smart-contract, oracle, indexer, randomness и product misconceptions."
+          }
+        },
+        {
+          "id": "economic-claim-levels",
+          "title": {
+            "en": "Economic Claim Levels",
+            "ru": "Уровни экономических утверждений"
+          },
+          "path": {
+            "en": "concepts/economic-claim-levels.en.md",
+            "ru": "concepts/economic-claim-levels.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "A ladder separating formula-defined, simulator-supported, runtime-enforced, governance-dependent, and market-assumption claims.",
+            "ru": "Лестница claim levels для formulas, simulator, runtime enforcement, governance dependency и market assumptions."
           }
         }
       ]
@@ -338,8 +626,8 @@
           },
           "page_type": "overview",
           "summary": {
-            "en": "The on-chain-first browser client and its discipline around widgets, layout, execution feedback, and data provenance.",
-            "ru": "On-chain-first браузерный клиент и его дисциплина в отношении виджетов, layout, execution feedback и происхождения данных."
+            "en": "The on-chain-first browser client and its discipline around widgets, layout, UI Kit primitives, Domain DAG ownership, execution feedback, wiki rendering, and data provenance.",
+            "ru": "On-chain-first браузерный клиент и его дисциплина вокруг widgets, layout, UI Kit primitives, Domain DAG ownership, execution feedback, wiki rendering и происхождения данных."
           }
         }
       ]
@@ -418,6 +706,22 @@
       },
       "items": [
         {
+          "id": "partner-evaluation-route",
+          "title": {
+            "en": "Partner Evaluation Route",
+            "ru": "Маршрут оценки для партнера"
+          },
+          "path": {
+            "en": "usage/partner-evaluation-route.en.md",
+            "ru": "usage/partner-evaluation-route.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "Five-page route for partner teams deciding whether to fork DEOS.",
+            "ru": "Маршрут из пяти страниц для партнерских команд, которые решают, стоит ли форкать DEOS."
+          }
+        },
+        {
           "id": "scripts-layer",
           "title": {
             "en": "Scripts Layer",
@@ -431,6 +735,86 @@
           "summary": {
             "en": "Operator and developer automation, including local bootstrap, metadata export, authorized-upgrade checks, and native staking bootstrap call preparation.",
             "ru": "Автоматизация для разработчиков и операторов: local bootstrap, metadata export, authorized-upgrade checks и подготовка native staking bootstrap call data."
+          }
+        },
+        {
+          "id": "forking-deos",
+          "title": {
+            "en": "Forking DEOS",
+            "ru": "Форк DEOS"
+          },
+          "path": {
+            "en": "usage/forking-deos.en.md",
+            "ru": "usage/forking-deos.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "What downstream teams change, preserve, validate, and contribute back when turning DEOS into a concrete ecosystem.",
+            "ru": "Что downstream-команды меняют, сохраняют, проверяют и возвращают upstream при превращении DEOS в concrete ecosystem."
+          }
+        },
+        {
+          "id": "validation-troubleshooting",
+          "title": {
+            "en": "Validation Troubleshooting",
+            "ru": "Troubleshooting validation"
+          },
+          "path": {
+            "en": "usage/validation-troubleshooting.en.md",
+            "ru": "usage/validation-troubleshooting.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "How to triage wiki, context, Domain DAG, web-client, simulator, Rust, and script validation failures.",
+            "ru": "Как triage wiki, context, Domain DAG, web-client, simulator, Rust и script validation failures."
+          }
+        },
+        {
+          "id": "agent-coordination",
+          "title": {
+            "en": "Agent Coordination",
+            "ru": "Координация агентов"
+          },
+          "path": {
+            "en": "usage/agent-coordination.en.md",
+            "ru": "usage/agent-coordination.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "How repo-local skills, ABC context files, wiki sync, validation gates, and while-true execution keep work aligned.",
+            "ru": "Как repo-local skills, ABC context files, wiki sync, validation gates и while-true execution держат работу aligned."
+          }
+        },
+        {
+          "id": "wiki-graph-metadata",
+          "title": {
+            "en": "Wiki Graph Metadata",
+            "ru": "Metadata wiki-графа"
+          },
+          "path": {
+            "en": "usage/wiki-graph-metadata.en.md",
+            "ru": "usage/wiki-graph-metadata.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "How to read navigation, state, graph, aliases, and locale metadata for the generated wiki.",
+            "ru": "Как читать navigation, state, graph, aliases и locale metadata generated wiki."
+          }
+        },
+        {
+          "id": "minimal-fork-profile",
+          "title": {
+            "en": "Minimal Fork Profile",
+            "ru": "Минимальный профиль форка"
+          },
+          "path": {
+            "en": "usage/minimal-fork-profile.en.md",
+            "ru": "usage/minimal-fork-profile.ru.md"
+          },
+          "page_type": "usage",
+          "summary": {
+            "en": "Minimum choices a downstream fork must make before DEOS becomes a concrete ecosystem.",
+            "ru": "Минимальные решения downstream fork перед превращением DEOS в concrete ecosystem."
           }
         }
       ]
@@ -470,8 +854,8 @@
           },
           "page_type": "status",
           "summary": {
-            "en": "Current implementation status after the native staking migration baseline closed, with governance v1 and product crystallization as the active focus.",
-            "ru": "Текущий статус после закрытия native staking migration baseline, с активным фокусом на governance v1 и product crystallization."
+            "en": "Current implementation status with shipped framework, reference-client, wiki, and backlog boundaries summarized for newcomers without turning wiki into release notes.",
+            "ru": "Текущий статус, где для новичков кратко сведены shipped framework, reference-client, wiki и backlog boundaries без превращения wiki в release notes."
           }
         }
       ]
@@ -522,6 +906,31 @@
           "summary": {
             "en": "How to contribute to the DEOS framework, understand the philosophy, and navigate validation gates.",
             "ru": "Как вносить вклад в DEOS, понимать философию проекта и проходить нужные этапы валидации."
+          }
+        }
+      ]
+    },
+    {
+      "id": "comparisons",
+      "title": {
+        "en": "Comparisons",
+        "ru": "Сравнения"
+      },
+      "items": [
+        {
+          "id": "deos-vs-dao-treasury",
+          "title": {
+            "en": "DEOS vs DAO Treasury",
+            "ru": "DEOS vs DAO Treasury"
+          },
+          "path": {
+            "en": "comparisons/deos-vs-dao-treasury.en.md",
+            "ru": "comparisons/deos-vs-dao-treasury.ru.md"
+          },
+          "page_type": "comparison",
+          "summary": {
+            "en": "Why DEOS treats treasury behavior as deterministic circuits instead of recurring discretionary DAO operations.",
+            "ru": "Почему DEOS рассматривает treasury behavior как детерминированные контуры, а не повторяющиеся discretionary DAO operations."
           }
         }
       ]

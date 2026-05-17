@@ -1,0 +1,180 @@
+{
+  "sourceRoots": ["src/lib", "src/routes", "scripts"],
+  "entrypoints": ["src/routes/+page.svelte", "src/lib/index.ts"],
+  "importAliases": {
+    "$lib/*": "src/lib/*"
+  },
+  "requireHeaders": true,
+  "allowedSharedBuckets": [
+    "src/lib/adapters/contract.ts",
+    "src/lib/automation/types.ts",
+    "src/lib/governance/constants.ts",
+    "src/lib/governance/types.ts",
+    "src/lib/layout/types.ts",
+    "src/lib/log/types.ts",
+    "src/lib/market/types.ts",
+    "src/lib/portfolio/types.ts",
+    "src/lib/staking/types.ts",
+    "src/lib/system/types.ts"
+  ],
+  "surfaceRules": [
+    {
+      "name": "oversized widget surface",
+      "files": ["src/lib/widgets/*.svelte"],
+      "metric": "lines",
+      "max": 1200,
+      "severity": "warn",
+      "message": "Oversized widget surface; consider extracting owned subcomponents or state projections",
+      "passMessage": "Widget files stay below the calibrated size-pressure threshold"
+    },
+    {
+      "name": "broad widget callback/local-function surface",
+      "files": ["src/lib/widgets/*.svelte"],
+      "pattern": "\\b(export let|\\$props\\(|on[A-Z][A-Za-z0-9_]*\\s*=|createEventDispatcher|function\\s+[A-Za-z0-9_]+|const\\s+[A-Za-z0-9_]+\\s*=\\s*\\([^)]*\\)\\s*=>)",
+      "max": 100,
+      "severity": "warn",
+      "message": "Broad widget interface/function surface; consider grouping handlers or extracting local subcomponents",
+      "passMessage": "Widget callback/function surfaces stay below calibrated pressure threshold"
+    }
+  ],
+  "forbiddenEdges": [
+    {
+      "from": "src/lib/automation/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/governance/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/log/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/market/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/portfolio/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/staking/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/system/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/wallet/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/wiki/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/adapters/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/automation/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/governance/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/layout/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/log/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/market/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/portfolio/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/staking/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/system/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/wallet/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/wiki/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/adapters/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Transport adapters must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/widgets/**",
+      "to": "src/lib/adapters/blockchain/**",
+      "severity": "error",
+      "message": "Widgets must use stores/contracts rather than concrete blockchain adapter internals"
+    }
+  ]
+}

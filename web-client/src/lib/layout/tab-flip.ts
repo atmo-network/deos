@@ -1,10 +1,21 @@
-import { flip } from "svelte/animate";
-import { elasticOut } from "svelte/easing";
+/*
+Domain: Tab animation helper
+Owns: Custom tab-strip flip animation timing and fallback transform behavior.
+Excludes: Tab ordering, drag/drop policy, and visual tab markup.
+Zone: Layout animation helper; depends on Svelte animation/easing primitives only.
+*/
+import { flip } from 'svelte/animate';
+import { elasticOut } from 'svelte/easing';
 
-type FlipAnimation = {
+export type FlipAnimation = {
   from: DOMRect;
   to: DOMRect;
 };
+
+export type TabFlipAnimate = (
+  node: Element,
+  animation: FlipAnimation,
+) => ReturnType<typeof flip>;
 
 type FlipControllerOptions = {
   flipDurationMs: number;
@@ -41,7 +52,10 @@ export function createTabFlipController(options: FlipControllerOptions) {
     });
   }
 
-  function observe(tabBarEl: HTMLDivElement, containerEl: HTMLDivElement): () => void {
+  function observe(
+    tabBarEl: HTMLDivElement,
+    containerEl: HTMLDivElement,
+  ): () => void {
     const resizeObserver = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect;

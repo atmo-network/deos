@@ -1,10 +1,10 @@
 # DEOS: Deterministic Economic Operating System
 
-> A forkable parachain framework for launching sovereign token economies with protocol-owned liquidity and deterministic automation.
+> A forkable runtime framework where token issuance, protocol-owned liquidity, routing, staking, governance, and automated actors form deterministic economic circuits.
 
-DEOS replaces unbounded political governance and vulnerable redemption models with explicit economic physics. By encoding liquidity accumulation and token distribution directly into the protocol, it turns unbounded downside narratives into calculable, condition-dependent risk surfaces.
+DEOS replaces discretionary DAO treasury management and vulnerable redemption narratives with explicit economic physics. By encoding liquidity accumulation, token distribution, routing, and bounded governance directly into the protocol, it turns vague downside stories into calculable, condition-dependent risk surfaces.
 
-DEOS is intentionally the foundation layer, not a finished product. It provides the execution substrate for partner teams to fork, customize, and launch their own dApps and living ecosystems.
+DEOS is intentionally the foundation layer, not a finished product. It provides the execution substrate for partner teams to fork, customize, and launch their own dApps and living ecosystems. TMCTOL is the first standard running on top of it: a mint-only curve plus treasury-owned liquidity, fee burn, bucketed policy, and bounded governance control.
 
 **Why the name DEOS**:
 
@@ -12,7 +12,7 @@ DEOS is intentionally the foundation layer, not a finished product. It provides 
 - `Economic`: The managed domain is capital formation and allocation—not arbitrary general-purpose application logic.
 - `Operating System`: The runtime kernel, AAA scheduler, routing, and governance act as domain-specific operating services for forked token economies.
 
-_TMCTOL (Token Minting Curve with Treasury-Owned Liquidity) is the flagship economic standard currently running on top of DEOS._
+_For the wiki-native external entry point, start with [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md). Partner teams can then follow the [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md)._
 
 ---
 
@@ -56,7 +56,7 @@ The `pallet-aaa` (Account Abstraction Actors) scheduler is DEOS's deterministic 
 - [`/web-client`](./web-client/) — The SvelteKit browser reference UI and transaction flows.
 - [`/scripts`](./scripts/) — Operator and developer automation.
 - [`/simulator`](./simulator/) — The mathematical proving ground for validating core tokenomics.
-- [`/wiki`](./wiki/index.en.md) — Generated documentation optimized for frontend and newcomer onboarding.
+- [`/wiki`](./wiki/index.en.md) — Generated documentation optimized for frontend and newcomer onboarding; start with [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) or the [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md).
 
 ---
 
@@ -91,7 +91,7 @@ _(Note: When altering tokenomics or invariants, validate the math via `node ./si
 
 **Entrypoints**
 
-- [Complete Docs Index](./docs/README.md) · [Generated Wiki](./wiki/index.en.md) · [Agent Protocols](./AGENTS.md)
+- [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) · [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md) · [Generated Wiki](./wiki/index.en.md) · [Complete Docs Index](./docs/README.md) · [Agent Protocols](./AGENTS.md)
 - [Backlog](./BACKLOG.md) · [Changelog](./CHANGELOG.md)
 
 **Specifications**

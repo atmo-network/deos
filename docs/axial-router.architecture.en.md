@@ -30,7 +30,7 @@ graph TD
     subgraph "Atomic Execution Block"
 
     Router -->|2. Route Selection| Decision{Efficiency Score}
-    Router -->|3. One-Hop Fee| BurnMgr[Burning Manager Account]
+    Router -->|3. One-Hop Fee| BurnActor[Burn Actor Account]
     Router -->|4. Pre-Swap Snapshot| Oracle[EMA Oracle]
     Oracle -.->|Update EmaPrices| OracleStorage[(EmaPrices Storage)]
 
@@ -50,16 +50,16 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 1. `Extrinsic Validation`: `amount_in >= MinSwapForeign`, `block <= deadline`.
 2. `Core Validation`: `from != to`, `amount_in > 0`.
-3. `Fee Calculation`: Zero for fee-exempt system accounts (BM, ZM, Router); `Perbill`-based for users.
+3. `Fee Calculation`: Zero for fee-exempt system accounts (Burn Actor, liquidity actors, Router); `Perbill`-based for users.
 4. `Gross-Debit Preflight`: Users must be able to pay the full `amount_in` under the selected preservation policy before any state-mutating swap path begins.
 5. `Route Selection`: `find_optimal_route()` evaluates all candidates, selects by highest `efficiency_score()`.
 6. `Price Protection`: Validate quote against EMA oracle and slippage bounds.
-7. `Fee Collection`: One-hop transfer from user to Burning Manager via `FeeAdapter::route_fee()`, inside the same transactional flow as the swap.
+7. `Fee Collection`: One-hop transfer from user to the Burn Actor via `FeeAdapter::route_fee()`, inside the same transactional flow as the swap.
 8. `Pre-Swap Oracle Update`: Snapshot pool reserves and update EMA prices _before_ trade execution.
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
 10. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`.
 
-`Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets (BM, ZM) for system-level swaps with automatic fee exemption and keep-alive awareness.
+`Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets or System AAA adapters for burn/liquidity actor swaps with automatic fee exemption and keep-alive awareness.
 
 `Authoritative View Surface`: `quote_exact_input(who, from, to, amount_in)` — FRAME view function returning a typed `RouterQuote { amount_in, router_fee, amount_after_fee, amount_out, mechanism, path, price_impact, total_fees }`. This surface mirrors caller-aware router fee handling plus canonical `find_optimal_route()` selection without mutating oracle state, giving clients a bounded on-chain route preview instead of forcing browser-side TMC-vs-XYK reconstruction.
 
@@ -89,9 +89,9 @@ Price impact is calculated against EMA oracle prices for direct routes, or again
 | :-------------- | :--------------------------------------------------------------- |
 | `Default Fee`   | `0.5%` (`Perbill::from_parts(5_000_000)`)                        |
 | `Math`          | `Perbill::mul_floor(amount_in)` — overflow-safe                  |
-| `Routing`       | One-hop: `User → Burning Manager` (no intermediate buffer)       |
+| `Routing`       | One-hop: `User → Burn Actor` (no intermediate buffer)            |
 | `Governance`    | Updatable via `update_router_fee` within `MaxRouterFee`          |
-| `Self-Taxation` | Router, BM, and ZM accounts are fee-exempt via `is_fee_exempt()` |
+| `Self-Taxation` | Router and System AAA actor accounts are fee-exempt via `is_fee_exempt()` |
 
 The `FeeRoutingAdapter` trait provides the transfer interface:
 
@@ -159,7 +159,7 @@ pub trait FeeRoutingAdapter<AccountId, Balance> {
 }
 ```
 
-Runtime `FeeManagerImpl` performs direct `Currency::transfer` (Native) or `Assets::transfer` with `Preservation::Protect` (Local/Foreign) to the Burning Manager account.
+Runtime `FeeManagerImpl` performs direct `Currency::transfer` (Native) or `Assets::transfer` with `Preservation::Protect` (Local/Foreign) to the Burn Actor account.
 
 ## EMA Oracle Architecture
 
@@ -241,7 +241,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 | Event               | Fields                                 | Trigger                       |
 | :------------------ | :------------------------------------- | :---------------------------- |
 | `SwapExecuted`      | `who, from, to, amount_in, amount_out` | Successful swap               |
-| `FeeCollected`      | `asset, amount, source, collector`     | Fee routed to Burning Manager |
+| `FeeCollected`      | `asset, amount, source, collector`     | Fee routed to Burn Actor |
 | `TrackedAssetAdded` | `asset`                                | Governance adds tracked asset |
 | `RouterFeeUpdated`  | `old_fee, new_fee`                     | Governance updates fee        |
 
@@ -255,7 +255,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 | `AmountTooLow`             | `amount_in < MinSwapForeign`                  |
 | `SlippageExceeded`         | `amount_out < min_amount_out`                 |
 | `DeadlinePassed`           | `current_block > deadline`                    |
-| `FeeRoutingFailed`         | Fee transfer to Burning Manager failed        |
+| `FeeRoutingFailed`         | Fee transfer to Burn Actor failed             |
 | `PriceDeviationExceeded`   | Spot price deviates from EMA beyond threshold |
 | `MaxTrackedAssetsExceeded` | `TrackedAssets` at capacity (64)              |
 | `RouterFeeTooHigh`         | New router fee exceeds `MaxRouterFee`         |
@@ -340,7 +340,7 @@ The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementatio
 | `AssetConversionAdapter` | `AssetConversionApi` | Wraps `pallet_asset_conversion` with Balance-Delta Verification |
 | `TmcPalletAdapter<T>`    | `TmcInterface`       | Direct delegation to `pallet_tmc`                               |
 | `PriceOracleImpl<T>`     | `PriceOracle`        | Time-weighted EMA using `EmaPrices` + `EmaLastUpdate` storage   |
-| `FeeManagerImpl<T>`      | `FeeRoutingAdapter`  | Direct transfer to Burning Manager (`Preservation::Protect`)    |
+| `FeeManagerImpl<T>`      | `FeeRoutingAdapter`  | Direct transfer to Burn Actor (`Preservation::Protect`)         |
 
 ## Test Coverage
 
@@ -379,7 +379,4 @@ Axial Router is the central nervous system of the TMCTOL economic model. By stri
 
 ---
 
-- `Version`: 0.1.0
 - `Last Updated`: February 2026
-- `Author`: LLB Lab
-- `License`: MIT

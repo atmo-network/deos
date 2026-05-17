@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: AA-Актор
-summary: AAA в DEOS — это система Account Abstraction Actors, а AA-Актор — один конкретный ограниченный экземпляр внутри нее. Акторы позволяют выражать повторяющиеся протокольные процессы как типизированные и планируемые execution plans, а не разносить одну и ту же логику по множеству специальных паллетов.
+summary: AAA в DEOS — это система Account Abstraction Actors, а AA-Актор — один конкретный ограниченный экземпляр внутри нее. Акторы выражают повторяющиеся протокольные процессы как типизированные и планируемые execution plans вместо bespoke pallet logic.
 locale: ru
 canonical_page_id: aa-actor
 translation_of: aa-actor.en.md
@@ -25,7 +25,7 @@ related:
   - Контур маршрутизации и минтинга
   - Обзор Governance
   - Базовые термины
-last_compiled: 2026-04-16
+last_compiled: 2026-05-17
 confidence: 0.93
 ---
 
@@ -33,124 +33,56 @@ confidence: 0.93
 
 ## Кратко
 
-`AAA` означает `Account Abstraction Actors`, то есть систему и паллет. `AA-Актор` — это один ограниченный экземпляр исполнения внутри этой системы.
+`AAA` — система Account Abstraction Actors. `AA-Актор` — один ограниченный экземпляр исполнения внутри этой системы.
 
-Если вам нужен взгляд на весь системный уровень, начните со страницы [Система AAA](aaa-system.ru.md). Эта страница объясняет, что такое один актор и зачем DEOS использует именно такую абстракцию.
+Для системного уровня используйте [Систему AAA](aaa-system.ru.md). Эта страница объясняет абстракцию одного актора.
 
-## Что такое актор
+## Контракт актора
 
-Актор — это настроенный runtime-экземпляр со своим sovereign account, расписанием, execution plan, правилами жизненного цикла и поведением при сбоях.
+Удобная ментальная модель:
 
-Удобная ментальная модель такая: `один sovereign account + одна trigger-поверхность + один ограниченный план`.
+```text
+один sovereign account + одна trigger surface + один ограниченный plan
+```
 
-Вместо того чтобы размазывать повторяющуюся экономическую логику по множеству специальных паллетов, DEOS может выразить ограниченный workflow как актора с типизированными шагами и явными правилами исполнения.
+У актора есть свой account, schedule или trigger, execution plan, правила жизненного цикла и поведение при сбоях. Вместо того чтобы разносить повторяющуюся экономическую логику по специальным pallet-ам, DEOS может выразить ограниченный рабочий процесс как типизированные шаги актора под явными runtime limits.
 
-## Для чего используются акторы
+Стабильный контракт подчеркивает:
 
-В текущей эталонной линии акторы используются для таких процессов, как:
+- Детерминированное поведение для одного состояния и block context;
+- Ограниченный объем работы;
+- Stateless execution plans вместо mutable workflow memory;
+- Предсказуемые исходы при сбоях;
+- Уничтожение на месте без автоматического refund fan-out.
 
-- Обеспечение ликвидности
-- Потоки сжигания и buyback
-- Казначейская split-маршрутизация
-- Удержание или unwinding bucket-позиций
-- Пользовательские ограниченные цепочки задач
+Акторы — runtime-инфраструктура, а не свободный scripting.
 
-Большая часть протокольного исполнения в текущей линии реализована как System-акторы.
-
-## Стабильный контракт
-
-Спецификация делает центральными несколько гарантий:
-
-- Детерминированное поведение для одного и того же состояния и контекста блока
-- Ограниченный объем работы в рамках явных лимитов
-- Stateless execution plans вместо изменяемой памяти между шагами
-- Предсказуемые исходы при сбоях
-- Уничтожение на месте без автоматического refund fan-out
-
-Эти гарантии важны, потому что акторы должны быть безопасной runtime-инфраструктурой, а не просто удобным скриптингом.
-
-## Типы акторов
+## Классы и применение
 
 Спецификация различает два широких класса:
 
-- `User AAA`, который подчиняется пользовательской модели комиссий и правилам owner-slot
-- `System AAA`, который создается через governance, остается изменяемым и используется для автоматизации протокола
+- `User AAA`: пользовательская модель комиссий и owner-slot rules;
+- `System AAA`: governance-created actors для автоматизации протокола.
 
-Это разделение сохраняет движок переиспользуемым, но при этом позволяет runtime поставлять собственные семейства детерминированных акторов.
+В текущей эталонной линии акторы поддерживают liquidity provisioning, burning/buyback flows, treasury split routing, bucket hold/unwind behavior и пользовательские ограниченные task pipelines. Большая часть protocol-owned исполнения реализована как System actors.
 
-## Триггеры и расписание
+## Triggers и формы plan
 
-Акторы могут запускаться по расписанию, вручную или по событиям поступления баланса на адрес. Это часть более широкой token-driven модели: переходы состояния должны реагировать на ограниченные условия исполнения, а не опираться только на специальные административные вызовы.
+Акторы могут запускаться по schedule, manual trigger или balance-ingress address event. Balance ingress — ключевая token-driven форма: актив, пришедший на аккаунт актора, может быть одновременно wake-up message.
 
-## Упрощенные примеры конфигурации
+Типовые формы plan:
 
-Примеры ниже написаны в виде концептуального pseudo-config. Это не точный синтаксис extrinsic-вызовов, а наглядный способ посмотреть на одного актора изнутри.
+- Timer-driven burning: swap собранных fees в Native, затем burn;
+- Balance-triggered liquidity: реакция на foreign collateral arrival, swap части актива, затем add liquidity;
+- Graph node: получить LP token от другого актора, unwind его и split outputs в treasury accounts.
 
-При этом примеры специально изолируют только форму trigger-а и execution plan. Реальный актор все равно живет внутри полного AAA-контракта: детерминированного scheduler, cooldown-ограничений, fee admission, lifecycle-правил и bounded execution.
+Во всех случаях актор остается внутри полного AAA-контракта: deterministic scheduling, cooldowns, fee admission, lifecycle rules и bounded execution.
 
-### 1. Таймерный актор сжигания
+## Зачем акторы нужны
 
-```yaml
-actor: Burn collected fees
-kind: System
-trigger:
-  type: Timer
-  every_blocks: 10
-execution_plan:
-  - task: SwapExactIn
-    asset_in: ForeignFeeAsset
-    asset_out: Native
-    amount: AllBalance
-  - task: Burn
-    asset: Native
-    amount: AllBalance
-```
+Акторы превращают экономическую координацию в явное runtime-поведение. Они связывают minting, routing, buckets, treasury actions и governance-owned operations, не заставляя каждый повторяющийся flow становиться custom pallet code.
 
-Такой актор просыпается каждые `10` блоков, конвертирует накопленный fee-актив в нативный актив и затем сжигает результат.
-
-### 2. Актор, который реагирует на пополнение баланса
-
-```yaml
-actor: React to foreign collateral arrival
-kind: System
-trigger:
-  type: OnAddressEvent
-  asset_filter: [ForeignAsset]
-execution_plan:
-  - task: SwapExactIn
-    asset_in: ForeignAsset
-    asset_out: Native
-    amount: PercentageOfCurrent(50%)
-  - task: AddLiquidity
-    asset_a: Native
-    asset_b: ForeignAsset
-```
-
-Здесь актор вообще ничего не делает, пока на его аккаунт не придет `ForeignAsset`. Поступивший актив — это не только ценность на балансе, но и сигнал пробуждения, который говорит актору: пора реагировать.
-
-### 3. Один актор как узел графа
-
-```yaml
-actor: Treasury lane B
-kind: System
-trigger:
-  type: OnAddressEvent
-  asset_filter: [LPToken]
-execution_plan:
-  - task: RemoveLiquidity
-    asset: LPToken
-    amount: AllBalance
-  - task: SplitTransfer
-    outputs:
-      - Native -> TreasuryB
-      - ForeignAsset -> TreasuryB
-```
-
-Этот актор может долго ничего не делать, пока другой актор не пришлет ему `LPToken`. В терминах графа это означает, что выход одного актора становится trigger-message для другого. Именно так из небольших ограниченных акторов складывается более крупное поведение протокола.
-
-## Почему акторы важны для DEOS
-
-Через акторов DEOS превращает экономическую координацию в явное runtime-поведение. Они связывают эмиссию, маршрутизацию, bucket-механику, казначейские действия и downstream-операции под управлением governance, не заставляя каждый повторяющийся процесс становиться отдельным pallet-костылем.
+Они также делают возможными actor graphs: выход баланса одного актора может стать trigger message для другого. Более крупное поведение протокола собирается из малых ограниченных частей и остается видимым как typed automation.
 
 ## Связанные страницы
 
@@ -159,9 +91,3 @@ execution_plan:
 - [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
 - [Обзор Governance](governance-overview.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
-
-## Источники
-
-- `docs/aaa.specification.en.md`
-- `docs/aaa.architecture.en.md`
-- `docs/core.architecture.en.md`

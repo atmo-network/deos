@@ -1,5 +1,11 @@
+<!--
+Domain: Governance action review UI
+Owns: Reusable review-card presentation for governance submit/note-preimage actions.
+Excludes: Proposal draft state, payload encoding, and adapter/write execution.
+Zone: Governance component; may compose UI Kit primitives and receive action callbacks from store/UI state.
+-->
 <script lang="ts">
-  import { Button, DetailRow, Notice } from "$lib/shared/ui";
+  import { Button, DetailRow, Notice } from '$lib/ui';
 
   type Props = {
     title: string;

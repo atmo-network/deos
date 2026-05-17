@@ -115,7 +115,6 @@ burn_rate = f_router × V_trade
 
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 - [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
-
-## Источники
-
-- `docs/tmctol.specification.en.md`
+- [Token Minting Curve](../overview/token-minting-curve.ru.md)
+- [Axial Router](../overview/axial-router.ru.md)
+- [Трехуровневая валидация](../development/three-layer-validation.ru.md)

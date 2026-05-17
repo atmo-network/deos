@@ -103,4 +103,4 @@ Implementation-specific documents describing how the current runtime realizes th
   Canonical map of atomic scripts, named orchestrators, and local admin utilities.
 
 - [Web Client Architecture](./web-client.architecture.en.md)
-  UI vocabulary, widget-vs-layout boundary, DRY/KISS presentation rules, and the current client refactor direction.
+  Client implementation contract: product role, read-model honesty, widget-vs-layout vocabulary, UI Kit, Domain DAG, adapter boundaries, generated-wiki rendering, and validation.

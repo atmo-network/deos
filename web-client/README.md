@@ -1,53 +1,116 @@
 # DEOS Web Client
 
-Repository-local SvelteKit workspace for the browser-facing DEOS reference client and visualization flows for the current TMCTOL standard.
+Repository-local SvelteKit workspace for the browser-facing DEOS reference client and generated-wiki reader.
 
-In the repository's current support topology, `/web-client` is the client surface that sits downstream of the docs/control-plane and runtime-kernel layers; it is not the canonical contract owner for protocol truth.
+The web client is **not** the protocol source of truth. It is the reference product surface that presents bounded chain state, signed actions, generated documentation, and execution feedback for the current DEOS/TMCTOL framework line.
 
-For UI vocabulary, subsystem boundaries, and current product/layout refactor rules, see [`../docs/web-client.architecture.en.md`](../docs/web-client.architecture.en.md).
+For the full architecture contract, read [`../docs/web-client.architecture.en.md`](../docs/web-client.architecture.en.md).
 
-## Current Status
+## Current Product Shape
 
-The current web client is now `on-chain-first`.
+The client is an on-chain-first reference UI.
 
-- `src/lib/adapters/simulator/` is no longer part of the live web-client path, and the frontend's shared types are now owned locally instead of re-exported from the simulator tree
-- `src/lib/adapters/blockchain/` owns the reference-chain PAPI session/bootstrap layer plus the live system adapter used by the DEX widgets
-- Wallet auth now has a dedicated client-side session layer with Zombienet-oriented Alice/Bob/Charlie/Dave presets, custom-address entry, injected-wallet account discovery, persisted account selection, and in-browser dev signing for those well-known local identities; the account-selection/auth surface now lives in `AccountWidget` inside the sidebar lane rather than inside `WalletWidget`, and those built-in dev signers are strictly for local Zombienet-style testing, not product-grade wallet custody
-- The blockchain path now reads live wallet balances, XYK reserve state, TMC state, governance storage, finalized-head diagnostics, and collateral asset metadata from the chain over `polkadot-api` PAPI v2-style websocket connections, and changing the PAPI endpoint in settings now rebinds both the governance path and the live system adapter through one shared endpoint state instead of only updating one half of the client
-- `SwapWidget` previews are now chain-backed, and live swap submission uses the real `AxialRouter.swap` path through either an injected signer or the built-in local dev signer, with selected-wallet identity and slippage tolerance kept local while signed/broadcasted/best/finalized receipt feedback flows through the dual-mode `LogWidget`; the widget now also uses Bits-UI dropdown selectors for choosing the active input/output asset pair and progressive in-file snippets with typed view-model arguments instead of one giant flat template or a spray of tiny helper files. It still blocks submission until a live quote resolves, enforces bounded slippage input, and shows minimum-receive output before signing while morphing into a denser compact trade form when the pane gets tight instead of clinging to its roomier desktop split
-- The former oversized `system` slice was progressively decomposed: account/network/receipt feedback now lives in `src/lib/log/`, swap direction plus quote/history/execution state now lives in `src/lib/market/`, balances plus bounded asset projection plus transfer/deposit bridging now live in `src/lib/portfolio/`, and `src/lib/system/` now keeps chain snapshot/connection/refresh ownership plus only one local bootstrap-side foreign-balance seed constant instead of dragging obsolete simulator-era config ghosts or exported config wrappers along with it
-- `GovernanceWidget` is the live compact governance surface inside the main workspace, and tight panes collapse proposal internals into a denser vote-ready card instead of assuming a roomier desktop arrangement
-- `StatisticsWidget` is now the pane-hosted system-metrics surface, pairing protocol snapshot cards with recent system traces/gauges/sparklines while the compact footer-hosted `StatusWidget` keeps chain/session/account state persistently visible; the native staking read/write surface is now split into `StakingWidget`, which owns the bounded native staking runtime views for `stNTVE` exchange rate, canonical `NTVE/stNTVE` reserves, selected-account locked LP, collator LP, conservative native-equivalent value, per-operator pending unlock detail, governance custody pending unlock detail, and collapsible action sections for signed nomination reward actions, signed collator LP lifecycle actions, and signed governance-only NativeVotePower custody actions for `NTVE`, `stNTVE`, and standalone canonical `NTVE/stNTVE` LP with signer gating and shared transaction-log progress; tight panes now also collapse the snapshot/liquidity/staking grids, let the route-mix detail cards stack before they become cramped mini-columns, and keep the lower route/liquidity split stacked instead of assuming one roomy desktop matrix, the footer strip itself now stays as a true minimal-height full-width lane with horizontal overflow instead of expanding into a tall card/grid surface, `StatusWidget` provides only the inline status content while `AppFooter` owns the full-width outer frame styling, and that footer no longer boots the governance store just to show connection state because it now reads the live system adapter connection state directly
-- The workspace layout now exposes dedicated `Statistics`, `Wallet`, `Log`, `Automation`, and `Wiki` widgets as first-class tabs/panes while the compact `StatusWidget` lives in the reserved footer lane; the canonical default desktop/tablet arrangement is now fixed as `Swap | Wallet` over `Log | Statistics` in the left column and `Chart | Automation | Governance | Wiki` in the right column, while the same center tile tree collapses into a vertical widget ribbon only on mobile-width viewports (below the Tailwind `sm` breakpoint), so the current startup contract intentionally stays on-chain-first/eager instead of hiding the live system snapshot behind a later widget interaction, and the remaining shared PAPI / metadata bootstrap weight is therefore treated as an accepted cost of that current product contract rather than as hidden lazy-loading debt
-- `AutomationWidget` now also adapts more honestly to tight panes: actor cards collapse into denser summary blocks instead of assuming the same roomy detail stack across all sizes, dense panes now let the actor header stack before the status badge starts fighting the label/role for width, the header actor-count badge also shortens in compact panes, and the widget now reads actor health through the live system adapter instead of owning a second direct chain connection
-- `WikiWidget` now uses the shared panel chrome, consumes the generated `../wiki/_meta/navigation.json` manifest instead of hardcoded repo-doc shortcuts, renders trusted repo-local wiki markdown directly in-browser through `marked`, and keeps the trust boundary honest by pairing that renderer with the repo-level `../.agents/skills/wiki-sync/scripts/validate-wiki-trust.sh` contract instead of runtime sanitization; it now also adds a bounded client-side filter over the generated navigation plus aliases manifests so newcomers can match wiki title/summary/path and canonical term aliases quickly without pretending the current surface is a full-text archive search, search results now also expose alias-match hints so that metadata contract is legible instead of hidden, trusted internal wiki links now surface generated-summary hover previews so nearby concepts can be inspected without losing reading context, the selected page now also exposes graph-derived related-page navigation with relation labels from `../wiki/_meta/graph.json`, the reader now surfaces compact compiled provenance (`status`, `confidence`, generation time, source-doc copy targets) from `../wiki/_meta/state.json`, and non-dual reader mode now keeps the markdown body ahead of those secondary context cards so the page content remains first when panes get tight, while still exposing deterministic featured-page marking plus explicit repo-local `wiki/...` paths so the browser-facing knowledge surface reflects the wiki graph's current section/page ordering more honestly
-- `LogWidget` now also adapts more honestly in narrow panes: receipt rows and block groups collapse into stacked mobile-style cards instead of preserving one desktop timeline shape outside ticker mode
-- `WalletWidget` is now the early live wallet control surface for the account selected in the sidebar account widget: it focuses on balances, a bounded tracked-asset view for the current wallet, receive address, and native plus bounded tracked-asset transfers, while account selection/auth lives in `AccountWidget` inside the sidebar lane and receipt/finalization feedback now flows through the dual-mode `LogWidget`; the wallet surface also compresses account summary and asset-selection chrome more honestly in tight panes instead of assuming a roomy desktop form, keeps max-fill inputs cleaner, and rejects obviously invalid recipient addresses before signing
-- `AccountWidget` now adapts more honestly inside narrow sidebar lanes too: the selected address shortens with full-detail fallback when the lane gets dense, preset and injected-account lists switch to denser multi-column grids earlier once width supports them, and the custom-account handoff row stops wasting vertical space in wider sidebars while still collapsing back to a full-width action in tight lanes
-- `SettingsWidget` now adapts more honestly inside narrow sidebar lanes too: the endpoint field stays full-width as the main control, the smaller `Domain ID` / `Sidebar edge` controls share one row once the lane is wide enough, and the apply action stops wasting vertical space in wider sidebars while still collapsing back to a full-width button in tight lanes
-- Governance reads now cover active proposal discovery, active proposal metadata/submission-authority/public-opening-fee/execution-authority/payload-availability semantics, active proposal primary-track family, active proposal primary-track tally/leader semantics, active proposal timing, active proposal urgent eligibility, retained finalized outcomes, retained finalized proposal metadata/submission-authority/public-opening-fee/execution-authority/payload-availability semantics, retained winning-primary-option identity, per-item retained execution detail, proposal status/tally, selected-account governance power/lock/frozen-ballot facts, vote-power profiles, reward coefficient, and GovXP counters through canonical governance runtime views, while the widget surfaces active cadence/family/payload/submission-authority/public-opening-fee/authority/payload-record semantics, explicit primary-track-family identity, explicit primary-lane leader/positive-total semantics, selected-account lock horizon plus live/frozen vote-power facts, exact live execution-path summaries, payload hashes on active plus retained cards, the live tactical `L2TreasurySpend = scalar invoice transfer` settlement slice, bounded protection/primary/pending-enactment timing, explicit urgent-path eligibility, family-aware `Amplify / Approve / Reduce / Nay / Veto / Pass` voting where runtime policy reports `Invoice`, and current `cast_vote` provider readiness before the user clicks, now also exposes both `(a)` a visible signed-advisory submit flow for the live public advisory kinds and `(b)` the smallest browser-side signed tactical treasury invoice composition slice for public `L2TreasurySpend`, uses distinct signed write-surface readiness for submit vs optional preimage noting, now surfaces selected payload family, advisory-only execution authority, exact non-dispatch execution-path wording, and explicit advisory scope (`same-domain` vs `upward to L1`) in the advisory form so the difference between `Intent` and `L2SignalToL1` is visible before submission, now also gives payload-kind-specific purpose guidance plus dynamic summary placeholders/button labels for those two advisory kinds, now surfaces live summary/doc-CID byte budgets, explicit referenced-payload identity, and a one-click suggested item-id fill inside that advisory form, and now also gives the tactical treasury submit path explicit beneficiary / payout-asset-id / base-amount inputs plus derived payload-hash/preimage review before signing, queries the canonical runtime `payload_hash_preimage_status(payload_hash)` surface before the user clicks the optional note path, quotes the canonical runtime `payload_preimage_note_cost(payload_len)` surface for that optional path, and now also stays honest if runtime-signed submission authority broadens ahead of browser composition by filtering any still-unsupported signed kinds out of the active submit forms and telling the user which ones are on-chain-visible but not yet browser-composable, surfaces when a governance-authorized runtime upgrade is still pending authorized code relay through the canonical `authorized_runtime_upgrade()` view, now also says explicitly that the matching `apply_authorized_upgrade { code }` relay may be submitted by any origin after governance authorization even though the browser does not expose that live write path, now surfaces the authorized runtime-upgrade code hash and version-check state directly in that pending notice, names the exact operator tooling path (`authorized-upgrade-local.sh check -> authorized-upgrade-local.sh apply --submit`), now also tells the user on active and retained runtime-upgrade cards that unanimous raw `$VETO` `Pass` bypasses the separate primary ballot and immediately authorizes the strategic upgrade path, and also tells the user that the later relay remains ministerial rather than a second governance decision, and also preserves those same bounded semantics across recent finalized items while retention lasts, including whether an item was still admin-gated or publicly submittable on the current line, what the public opening fee would have been when applicable, whether it executed, failed during execution, finalized advisory-only, or never executed because rejection/protection stopped it; the current launch line now reports `Invoice` for tactical `L2TreasurySpend` in the canonical `$BLDR` domain and `Binary` elsewhere, retained winning primary option is now also surfaced explicitly during bounded finalized retention, retained treasury execution receipts now surface scalar plus final-payout truth instead of generic direct-transfer wording, retained runtime-upgrade authorization receipts now also include the concrete authorized code hash instead of only generic wording, and retained runtime-upgrade cards now point to the same operator tooling path as the active warning state, the recent-finalized panel also says explicitly that it is bounded retained on-chain history rather than archive truth, advisory hash-only items are rendered honestly as `Hash only` rather than as generic missing execution readiness, governance write failures now surface through durable visible widget/log feedback instead of disappearing into console-only noise or getting wiped by the next refresh, and governance refresh failures now clear stale proposal/runtime-view panels instead of leaving outdated canonical-chain data on screen. For non-destructive operator preparation outside the browser, `/scripts/authorized-upgrade-local.sh check` now verifies a local WASM blob against the chain's pending authorized runtime-upgrade hash through the canonical governance view without submitting any live upgrade call
-- Startup bootstrap now waits for the first system refresh before it emits the initial connected/error log entry, so the session log reflects actual chain state and block context instead of a fire-and-forget startup guess
-- Browser-side admin governance submission and explicit materialized/indexed providers are still not implemented yet; the governance viewer store no longer keeps dormant archive/timeline state or dead provider-mirror fields until a real materialized governance surface exists in the product contract
-- Built-in dev signing now exists only for the canonical local Zombienet identities (`Alice/Bob/Charlie/Dave`) and should be treated as an unsafe local-dev affordance, not a general browser wallet model
-- The unified `WorkspaceFrame` now owns the reserved header/footer lanes plus the first shipped sidebar lane; `AccountChip` in the header now serves as the sole sidebar toggle surface, `SidebarPanel` currently hosts both `AccountWidget` and `SettingsWidget`, wide layouts keep that lane beside the center tile tree, and narrow/mobile layouts stack it linearly without flattening the center ribbon model itself
-- DEX route/output preview now consumes the authoritative `AxialRouter.quote_exact_input` view through refreshed committed PAPI metadata/descriptors; the remaining `TMC · XYK` row is now explicitly presented as best-effort browser diagnostics rather than protocol truth
-- `ChartWidget` now builds its price series from the live finalized session feed, lets the chart canvas elastically consume the remaining widget height without relying on an internal scroll host, and keeps its series toggle handles in a bottom control rail opposite the pane-stack tabs instead of crowding the top of the card; longer-range or retained historical chart UX still needs an explicit indexed/materialized provider instead of opportunistic RPC backfill
+It provides:
 
-## Product Read-Model Rule
+- live wallet/account selection for local dev signers and injected wallets;
+- chain-backed wallet balances, bounded tracked-asset transfers, and receive-address surfaces;
+- Axial Router swap quotes and signed swap submission;
+- staking views/actions for the current native `stNTVE` / `NTVE-stNTVE` launch-line model;
+- governance proposal viewing, voting, advisory submission, tactical treasury invoice submission, preimage review, and runtime-upgrade relay guidance;
+- automation and system-status views from the live adapter snapshot;
+- chart/session history and route diagnostics with explicit provenance limits;
+- centralized transaction, receipt, finalization, and live-network feedback through `LogWidget`;
+- generated wiki browsing from `../wiki` with metadata-backed navigation, aliases, graph links, page state, source provenance, and trusted markdown rendering.
 
-This workspace follows the project-wide read-model contract:
+The client should read as one coherent reference product, not as a sequence of intermediate refactors. Release targeting belongs in `../CHANGELOG.md` and status/roadmap surfaces, while this README describes the current workspace contract.
 
-- Use **bounded canonical on-chain projections** for live balances, positions, statuses, and other chain-native user flows
-- Use **indexed / materialized views** for archive, search, dashboards, and other heavy historical surfaces
+## Truth and Read-Model Rule
 
-For the web client specifically, that means:
+The client follows the repository-wide read-model contract:
 
-- Simulator outputs remain useful for exploration and modeling outside the web client, but they are not authoritative chain state
-- The live web-client quote / swap-preview path is now a bounded canonical on-chain contract driven by runtime views plus chain storage, not a simulator reconstruction
-- The live governance proposal/reward/GovXP path now also consumes bounded canonical governance runtime views for status, tally, track-power profile, recent-finalized summaries, reward coefficient, and GovXP counters instead of reconstructing those surfaces in the browser
-- If a future screen depends on indexers/materializers, that dependency should be explicit in the product contract
-- If a future screen is meant to be canonical live UX, the required bounded on-chain query surface should be made explicit instead of being hidden behind ad-hoc client reconstruction
-- The client now also keeps explicit provenance metadata for ambiguous surfaces by separating read-model `contractClass` (`canonical-chain` vs `materialized`) from client `realization` (`direct`, `session-cache`, `session-derived`, `provider`) so live quotes, session-built bounded views, and future materialized screens do not masquerade as each other or as archive/indexed truth
+- **canonical-chain** surfaces are bounded runtime/query/storage projections suitable for live user flows;
+- **materialized** surfaces are indexed/archive/search/analytics views and must be labeled as such;
+- browser realization is separate from truth class: a view may be `direct`, `session-cache`, `session-derived`, or `provider` backed.
+
+Do not make archive/search/dashboard behavior look like canonical chain truth. If a future feature needs an indexer, model that dependency explicitly.
+
+## Architecture Boundaries
+
+### Domain slices
+
+- `src/lib/market/` — swap direction, quotes, execution orchestration, live price/session history.
+- `src/lib/portfolio/` — balances, bounded asset projection, transfer/deposit bridging.
+- `src/lib/staking/` — staking-facing contracts and UI types.
+- `src/lib/governance/` — governance store, labels, payload helpers, review helpers, and UI-facing projections.
+- `src/lib/automation/` — automation-facing contracts and UI types.
+- `src/lib/log/` — account log, live network feed, transaction progress, and receipts.
+- `src/lib/wallet/` — wallet session state, signer discovery, address validation, local dev signer routing.
+- `src/lib/system/` — chain snapshot, refresh ownership, endpoint/session wiring, adapter runtime context, browser persistence.
+- `src/lib/wiki/` — trusted repo-local wiki markdown loading/rendering helpers.
+
+Reusable domain contracts live with their owning slices. Do not recreate a generic `shared/` bucket.
+
+### Adapters
+
+- `src/lib/adapters/contract.ts` is the live aggregate UI adapter contract plus named capability interfaces.
+- `src/lib/adapters/blockchain/` is the concrete PAPI-backed chain adapter implementation behind a stable facade.
+- `src/lib/adapters/governance/` owns typed governance read/write providers.
+- `src/lib/adapters/materialized-history/` is the explicit boundary reserved for future materialized governance/archive history providers.
+
+Concrete adapters receive shell/session facts through `system/adapter-context.ts`; they should not import wallet stores or endpoint state directly.
+
+### Layout and widgets
+
+- `src/lib/layout/` owns the workspace frame, center tile tree, pane hosts, tabs, split handles, header, footer, sidebar, reserved lane specs, and mobile linearization.
+- `src/lib/widgets/` owns user-facing product surfaces such as Swap, Wallet, Staking, Governance, Chart, Statistics, Automation, Log, Wiki, Account, Settings, Status, and AccountChip.
+- Reserved edge lanes are developer-configured shell zones, not user-reorderable economic panes.
+- Widgets should adapt to pane width/height and keep the main action readable before exposing secondary diagnostics.
+
+### UI Kit
+
+`src/lib/ui/` is the local UI Kit. Its local contract is documented in [`src/lib/ui/README.md`](src/lib/ui/README.md). It owns reusable presentation primitives and safe interaction defaults:
+
+- `Button`, `IconButton`, `SelectableTile`
+- `Card`, `SectionCard`, `StatCard`, `DetailRow`, `Notice`, `Badge`
+- `TextField`, `NumberInput`, `TextArea`, `SelectField`
+- `PopoverPanel`, `SidePanelDialog`, `ReadModelBadge`, `Sparkline`
+- `class.ts` and `format.ts`
+
+UI Kit primitives stay foundation-only and must not import product domains. Repeated raw controls should graduate into UI Kit instead of being rebuilt inside widgets.
+
+### Domain DAG
+
+`domain-dag.json` is the client-local architecture gate. It checks:
+
+- local import cycles;
+- missing ownership headers;
+- forbidden reach-through edges;
+- generic shared-bucket drift;
+- widget-to-concrete-adapter imports;
+- UI-kit-to-domain imports;
+- calibrated widget size/callback surface pressure.
+
+Surface-pressure warnings are triage signals, not folder-theater mandates.
+
+## Generated Wiki Boundary
+
+`WikiWidget` renders repo-local generated wiki markdown from `../wiki`.
+
+The wiki is trusted reviewed repository content, not arbitrary user input. Safety belongs to repository validation through:
+
+```sh
+npm run validate:wiki
+```
+
+That guard rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed wiki frontmatter before content is rendered in the browser.
+
+The widget consumes:
+
+- `../wiki/_meta/navigation.json`
+- `../wiki/_meta/aliases.json`
+- `../wiki/_meta/graph.json`
+- `../wiki/_meta/state.json`
+- `../wiki/_meta/locales.json`
 
 ## Local Development
 
@@ -58,14 +121,54 @@ npm install
 npm run dev
 ```
 
-`npm install` now runs `papi generate` automatically from the committed `.papi/metadata/deos.scale` snapshot, so the local typed descriptors are regenerated before the app starts. When runtime query/view surfaces change, prefer `../scripts/export-papi-metadata.sh` to refresh the committed metadata snapshot and regenerate descriptors from the local runtime instead of creating temporary export tests by hand. For local native-staking demos, regenerate the chain spec with the current runtime presets and run `../scripts/07-seed-web-client-state.sh`; it now creates/funds the local `NTVE/stNTVE` pool after genesis provides local NTVE and `stNTVE`.
+`npm install` runs `papi generate` from the committed `.papi/metadata/deos.scale` snapshot. When runtime query/view surfaces change, refresh metadata with:
 
-If the local parachain was started from the current development/local chain spec, the foreign asset, router tracked-asset set, and native curve should already exist in genesis. Use `../scripts/07-seed-web-client-state.sh` after the network is up to top up Alice's foreign balance when needed and to create/seed the native-foreign pool if liquidity is still missing. That script remains intentionally local-dev-only.
+```sh
+../scripts/export-papi-metadata.sh
+```
+
+For local native-staking demos, regenerate the chain spec with current runtime presets, start the local network, then run:
+
+```sh
+../scripts/07-seed-web-client-state.sh
+```
+
+That script is local-dev-only.
 
 Optional browser-open mode:
 
 ```sh
 npm run dev -- --open
+```
+
+## Validation
+
+Use the smallest meaningful validation first. For full client validation, run:
+
+```sh
+npm run validate
+```
+
+That command runs Prettier, Svelte checks, and the production build. For architecture-boundary changes, also run the Domain DAG gate:
+
+```sh
+npm run validate:dag
+```
+
+`validate:dag` resolves the validator through `DOMAIN_DAG_VALIDATOR`, `SKILL_DIR`, or the current user's default pi skill path. It preserves the default web-client root when forwarding extra validator args, and the Domain DAG config includes `scripts/` so these package launchers stay under the same source-boundary/header gate. Run `npm run validate:dag -- --help` for launcher options.
+
+For wiki-rendering/content changes, also run:
+
+```sh
+npm run validate:wiki
+```
+
+`validate:wiki` resolves the validator through `WIKI_TRUST_VALIDATOR` or the repo-local wiki-sync skill path. It preserves the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
+
+To run every configured client-adjacent gate:
+
+```sh
+npm run validate:all
 ```
 
 ## Production Build
@@ -74,54 +177,3 @@ npm run dev -- --open
 npm run build
 npm run preview
 ```
-
-## UI/UX Architecture Postulates
-
-The current client stage should optimize for clarity and subsystem boundaries.
-
-- `Widgets = economic-functional units`
-  - `StatusWidget`, `StatisticsWidget`, `SwapWidget`, `WalletWidget`, `ChartWidget`, `LogWidget`, `AutomationWidget`, and `GovernanceWidget` are widgets because they expose one user-facing functional surface
-- `Dynamic tiling / tabbing / resizing = layout subsystem`
-  - `TileContainer`, `PaneHost`, and `SplitHandle` are layout infrastructure, not widgets
-  - for tabbed center panes, `PaneHost` owns the outer overflow/scroll container while widgets render adaptive content inside it
-- `Reserved edge lanes = special layout wrappers`
-  - `AppHeader`, `AppFooter`, and `SidebarPanel` are not tabbed pane infrastructure; they are reserved edge lanes around the center tile tree and own persistent framing such as titlebar/menu behavior, auth/account selection, sidebar visibility, global settings/reset actions, and the compact footer-hosted status strip
-  - `AccountWidget` and `SettingsWidget` are special widgets placed inside reserved lanes; they live under `src/lib/widgets/` because they are composed like other widgets even though they control shell state rather than a center pane
-  - `AccountChip` in `src/lib/widgets/` is the sole interactive lane control that opens/closes the sidebar from the header lane; it no longer has a non-toggle mode
-  - users do not rearrange reserved-lane widgets; lane widget sets come from developer-owned layout specs and may intentionally differ between desktop and mobile
-- `DRY`
-  - repeated transaction preview / receipt surfaces across multiple widgets are a smell; the dual-mode `LogWidget` is now the canonical receipt/history surface
-- `KISS`
-  - do not stuff widgets with diagnostics just because the data exists; advanced detail must support the main action instead of drowning it
-- `Shared UI-kit first`
-  - repeated local section/stat/notice/row patterns should be extracted into `src/lib/shared/ui/` instead of being hand-rebuilt inside each widget
-- `2D widget structure`
-  - the visual language already uses thick framed modules, so widgets should prefer internal `grid`-based 2D composition over long flat vertical dumps whenever the content allows it
-- `Organic customization`
-  - widgets and layout infrastructure must adapt to arbitrary pane sizes; resizing stacks, dragging tabs, or narrowing the viewport should let the UI flow into new forms instead of preserving one rigid composition at all costs
-  - structural breakpoint switches should be width-first by default so resizing a pane by width does not create height-feedback flicker between two layouts
-  - on mobile-width viewports the same workspace tree should degrade into a vertical ribbon/feed of widgets rather than fighting for desktop-style splits; tablet/desktop should preserve the custom split-tree workspace
-
-## Relevant Workspace Paths
-
-- `src/lib/adapters/blockchain/` — shared DEOS reference-chain blockchain/PAPI session layer plus the live chain-backed system adapter surface used by the DEX widgets
-- `src/lib/adapters/governance/` — blockchain communication layer for governance: PAPI provider, unavailable-provider fallback, mock adapter, and RPC barrel; domain types and UI state live in `src/lib/governance/` instead of here so the adapter layer stays strictly transport-oriented
-- `src/lib/governance/` — governance domain slice: types, constants, materialized provider contracts, the governance store (`index.svelte.ts`), payload helpers (`advisory-payload.ts`, `treasury-payload.ts`), session helpers, and shared governance UI building blocks (`payload-review.svelte.ts`, `GovernanceActionReviewCard.svelte`, `GovernanceProposalSemanticsRows.svelte`)
-- `src/lib/layout/` — the unified workspace-frame subsystem: `WorkspaceFrame`, reserved edge lanes (`AppHeader`, `AppFooter`, `SidebarPanel`), `RESERVED_LANE_SPECS`, the center tile tree, pane hosting, split handles, layout composition, and the named default layout spec that still linearizes only the center tree into a ribbon/feed on mobile-width viewports while the edge lanes respond to their own container width; the center tree is explicitly capped to a `4 x 4` capacity (`16` leaves), `PaneHost` owns outer overflow for tabbed center panes, and `SidebarPanel` owns both the outer frame and inner overflow host for sidebar widgets
-- `src/lib/widgets/` — economic-functional widgets plus special lane-hosted widgets such as `AccountChip` in the header lane and `AccountWidget` / `SettingsWidget` in the sidebar lane, all selected by developer-owned lane specs rather than by user reordering
-- `src/lib/shared/ui/` — repository-local UI-kit layer (`Badge`, `Button`, `Card`, `SectionCard`, `StatCard`, `DetailRow`, `Notice`, `SelectableTile`, `TextField`, `IconButton`, `SidePanelDialog`, `PopoverPanel`, `ReadModelBadge`) used to stop widget-local micro-UI duplication and gradually wrap Bits-UI 2 primitives behind project-local components; shared headers/cards now also wrap and degrade more gracefully in tight panes instead of assuming desktop-only width, and ambiguous data-source labels now converge on one reusable provenance badge instead of widget-local pills
-- `src/lib/shared/read-model.ts` — client-side provenance vocabulary that preserves the project-wide two-class read-model contract while separately tagging how a surface is realized in the browser (`direct`, `session-cache`, `session-derived`, `provider`)
-- `../wiki/_meta/navigation.json` — generated wiki-navigation manifest now consumed by `WikiWidget` as the first frontend-facing wiki section/page contract instead of hardcoded shortcut rows
-- `../wiki/_meta/{aliases,graph,state}.json` — generated wiki metadata manifests now consumed by `WikiWidget` for alias-aware matching plus visible alias-hit hints, related-page graph navigation, and compact compiled provenance
-- `src/lib/wiki/trusted.ts` — trusted repo-local wiki markdown loader/renderer built on `marked` for browser-side wiki page rendering in the SPA client
-- `../.agents/skills/wiki-sync/scripts/validate-wiki-trust.sh` — repo-level guardrail for the trusted wiki renderer; rejects raw HTML blocks, dangerous URL schemes, and inline DOM event handlers in `../wiki/**/*.md`
-- `src/lib/log/` — canonical execution-feedback state backing `LogWidget`: account log, live network feed, and shared tx-progress / receipt state
-- `src/lib/market/` — swap direction, quote helpers, swap execution orchestration, and live price/history state used by `SwapWidget`, `ChartWidget`, and market-aware status surfaces
-- `src/lib/portfolio/` — user balances, bounded asset projection, and transfer/deposit bridging used by wallet/account/product surfaces
-- `src/lib/system/` — live chain snapshot and refresh ownership for the chain-backed frontend
-- `src/lib/wallet/` — wallet session state, persisted account selection, Zombienet dev-account presets, injected-wallet discovery, signer-readiness classification, and local-dev signer routing
-- `src/lib/adapters/governance/` — typed governance read/write adapter contract plus current mock provider, materialized mock provider, PAPI-backed blockchain provider, and blockchain adapter boundary
-- `.papi/` — committed DEOS runtime metadata snapshot plus generated-descriptor package scaffold for PAPI codegen
-- `src/lib/governance/` — governance viewer store and UI-facing projection state
-- `src/lib/adapters/types.ts` — shared async adapter contract for the live UI layer
-- `src/routes/+page.svelte` — on-chain workspace entrypoint that mounts the unified `WorkspaceFrame`

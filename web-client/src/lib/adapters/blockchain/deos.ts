@@ -1,20 +1,21 @@
+/*
+Domain: DEOS blockchain transport
+Owns: PAPI client creation, descriptor binding, chain connection state, and low-level runtime helpers.
+Excludes: Facade orchestration, domain stores, widget presentation, and governance-specific provider policy.
+Zone: Blockchain adapter internals; consumed by focused adapter capability modules only.
+*/
+import { deos } from '@polkadot-api/descriptors';
 import {
   type HexString,
   type PolkadotClient,
   type TypedApi,
-} from "polkadot-api";
-import {
-  createWsClient,
-  WsEvent,
-  type StatusChange,
-} from "polkadot-api/ws";
+} from 'polkadot-api';
+import { type StatusChange, WsEvent, createWsClient } from 'polkadot-api/ws';
 
-import { deos } from "@polkadot-api/descriptors";
-
-export const DEFAULT_DEOS_WS_ENDPOINT = "ws://127.0.0.1:9988";
+export const DEFAULT_DEOS_WS_ENDPOINT = 'ws://127.0.0.1:9988';
 
 export type DeosChainConnectionState = {
-  status: "connected" | "unconfigured" | "error";
+  status: 'connected' | 'unconfigured' | 'error';
   label: string;
   endpoint: string | null;
   chainName: string | null;
@@ -44,10 +45,10 @@ export type DeosFinalizedBlock = {
 };
 
 function buildConnectionState(
-  status: DeosChainConnectionState["status"],
+  status: DeosChainConnectionState['status'],
   message: string,
   endpoint: string | null,
-  label = "DEOS blockchain provider",
+  label = 'DEOS blockchain provider',
 ): DeosChainConnectionState {
   return {
     status,
@@ -66,13 +67,13 @@ function buildConnectionState(
 export function normalizeBlockchainEndpoint(endpoint: string): string {
   const trimmed = endpoint.trim();
   if (trimmed.length === 0) {
-    return "";
+    return '';
   }
-  if (trimmed.startsWith("http://")) {
-    return `ws://${trimmed.slice("http://".length)}`;
+  if (trimmed.startsWith('http://')) {
+    return `ws://${trimmed.slice('http://'.length)}`;
   }
-  if (trimmed.startsWith("https://")) {
-    return `wss://${trimmed.slice("https://".length)}`;
+  if (trimmed.startsWith('https://')) {
+    return `wss://${trimmed.slice('https://'.length)}`;
   }
   if (/^[a-z]+:\/\//i.test(trimmed)) {
     return trimmed;
@@ -90,9 +91,9 @@ function describeWsStatus(status: StatusChange | null): string | null {
     case WsEvent.CONNECTED:
       return `Connected websocket ${status.uri}`;
     case WsEvent.ERROR:
-      return "WebSocket transport reported an error";
+      return 'WebSocket transport reported an error';
     case WsEvent.CLOSE:
-      return "WebSocket transport closed";
+      return 'WebSocket transport closed';
   }
 }
 
@@ -100,8 +101,8 @@ export class DeosPapiConnection {
   private client: DeosClient | null = null;
   private currentEndpoint: string | null = null;
   private state: DeosChainConnectionState = buildConnectionState(
-    "unconfigured",
-    "PAPI connection not checked yet",
+    'unconfigured',
+    'PAPI connection not checked yet',
     DEFAULT_DEOS_WS_ENDPOINT,
   );
   private typedApi: DeosTypedApi | null = null;
@@ -113,8 +114,8 @@ export class DeosPapiConnection {
 
   constructor(private readonly endpoint: string = DEFAULT_DEOS_WS_ENDPOINT) {
     this.state = buildConnectionState(
-      "unconfigured",
-      "PAPI connection not checked yet",
+      'unconfigured',
+      'PAPI connection not checked yet',
       normalizeBlockchainEndpoint(endpoint),
     );
   }
@@ -134,22 +135,27 @@ export class DeosPapiConnection {
   }
 
   private subscribeFinalizedBlockStream(client: DeosClient): void {
-    if (this.finalizedBlockListeners.size === 0 || this.finalizedBlockSubscription !== null) {
+    if (
+      this.finalizedBlockListeners.size === 0 ||
+      this.finalizedBlockSubscription !== null
+    ) {
       return;
     }
-    this.finalizedBlockSubscription = client.finalizedBlock$.subscribe((block) => {
-      this.wsStatus = client.getStatus();
-      if (this.state.status === "connected") {
-        this.state = {
-          ...this.state,
-          finalizedBlockHash: block.hash,
-          finalizedBlockNumber: block.number,
-        };
-      }
-      for (const listener of this.finalizedBlockListeners) {
-        listener(block);
-      }
-    });
+    this.finalizedBlockSubscription = client.finalizedBlock$.subscribe(
+      (block) => {
+        this.wsStatus = client.getStatus();
+        if (this.state.status === 'connected') {
+          this.state = {
+            ...this.state,
+            finalizedBlockHash: block.hash,
+            finalizedBlockNumber: block.number,
+          };
+        }
+        for (const listener of this.finalizedBlockListeners) {
+          listener(block);
+        }
+      },
+    );
   }
 
   private ensureClient(endpoint: string): {
@@ -187,7 +193,9 @@ export class DeosPapiConnection {
     this.subscribeFinalizedBlockStream(client);
   }
 
-  subscribeToFinalizedBlocks(onBlock: (block: DeosFinalizedBlock) => void): () => void {
+  subscribeToFinalizedBlocks(
+    onBlock: (block: DeosFinalizedBlock) => void,
+  ): () => void {
     this.finalizedBlockListeners.add(onBlock);
     const normalizedEndpoint = normalizeBlockchainEndpoint(this.endpoint);
     if (normalizedEndpoint.length > 0) {
@@ -214,18 +222,18 @@ export class DeosPapiConnection {
     if (normalizedEndpoint.length === 0) {
       this.resetClient();
       this.state = buildConnectionState(
-        "unconfigured",
-        "No PAPI websocket endpoint configured",
+        'unconfigured',
+        'No PAPI websocket endpoint configured',
         null,
       );
-      throw new Error("No PAPI websocket endpoint configured");
+      throw new Error('No PAPI websocket endpoint configured');
     }
     const connection = this.ensureClient(normalizedEndpoint);
-    if (this.state.status !== "connected") {
+    if (this.state.status !== 'connected') {
       await this.syncConnectionState();
     }
-    if (this.state.status !== "connected") {
-      throw new Error(this.state.message ?? "PAPI provider unavailable");
+    if (this.state.status !== 'connected') {
+      throw new Error(this.state.message ?? 'PAPI provider unavailable');
     }
     return connection;
   }
@@ -235,8 +243,8 @@ export class DeosPapiConnection {
     if (normalizedEndpoint.length === 0) {
       this.resetClient();
       this.state = buildConnectionState(
-        "unconfigured",
-        "No PAPI websocket endpoint configured",
+        'unconfigured',
+        'No PAPI websocket endpoint configured',
         null,
       );
       return;
@@ -246,12 +254,12 @@ export class DeosPapiConnection {
       const [chainSpecData, nodeName, nodeVersion, finalizedBlock] =
         await Promise.all([
           client.getChainSpecData(),
-          client._request<string>("system_name", []),
-          client._request<string>("system_version", []),
+          client._request<string>('system_name', []),
+          client._request<string>('system_version', []),
           client.getFinalizedBlock(),
         ]);
       this.state = {
-        status: "connected",
+        status: 'connected',
         label: `${chainSpecData.name} via PAPI`,
         endpoint: normalizedEndpoint,
         chainName: chainSpecData.name,
@@ -260,25 +268,25 @@ export class DeosPapiConnection {
         genesisHash: chainSpecData.genesisHash,
         finalizedBlockHash: finalizedBlock.hash,
         finalizedBlockNumber: finalizedBlock.number,
-        message: "PAPI connected",
+        message: 'PAPI connected',
       };
     } catch (error) {
       this.state = {
         ...buildConnectionState(
-          "error",
+          'error',
           error instanceof Error
             ? error.message
-            : "Unknown PAPI connection error",
+            : 'Unknown PAPI connection error',
           normalizedEndpoint,
         ),
         message: [
           error instanceof Error
             ? error.message
-            : "Unknown PAPI connection error",
+            : 'Unknown PAPI connection error',
           describeWsStatus(this.wsStatus),
         ]
           .filter(Boolean)
-          .join(" · "),
+          .join(' · '),
       };
     }
   }

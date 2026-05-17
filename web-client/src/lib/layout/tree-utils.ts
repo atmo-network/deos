@@ -1,27 +1,33 @@
+/*
+Domain: Layout tree queries
+Owns: Pure tile-tree inspection utilities for panel placement, active leaves, and capacity checks.
+Excludes: Tree mutation, persistence, DOM rendering, and widget implementation.
+Zone: Layout algorithm helper; depends only on layout contracts.
+*/
 import {
   ALL_PANELS,
   MAX_TILE_LEAF_COUNT,
   type PanelId,
   type TileLeaf,
   type TileNode,
-} from "./types";
+} from './types';
 
 export function findLeaf(node: TileNode, id: string): TileLeaf | null {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     return node.id === id ? node : null;
   }
   return findLeaf(node.children[0], id) || findLeaf(node.children[1], id);
 }
 
 export function countLeaves(node: TileNode): number {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     return 1;
   }
   return countLeaves(node.children[0]) + countLeaves(node.children[1]);
 }
 
 function collectPanels(node: TileNode, out: Set<PanelId>) {
-  if (node.type === "leaf") {
+  if (node.type === 'leaf') {
     for (const tab of node.tabs) {
       out.add(tab);
     }

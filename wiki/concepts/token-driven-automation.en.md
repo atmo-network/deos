@@ -85,9 +85,3 @@ In the current reference line, TMCTOL uses AAA actors to execute its runtime-sid
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [Read-Model Split](read-model-split.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/core.architecture.en.md`
-- `docs/aaa.specification.en.md`
-- `README.md`

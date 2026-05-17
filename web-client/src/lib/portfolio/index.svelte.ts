@@ -1,16 +1,22 @@
-import type { Adapter } from "$lib/adapters/types";
-import {
-  fromClientBoundedProjection,
-  type ReadModelValue,
-} from "$lib/shared/read-model";
+/*
+Domain: Portfolio store
+Owns: Account asset balances, asset presentation metadata, and bounded portfolio refresh state.
+Excludes: Wallet signer custody, market quote logic, adapter transport implementation, and widget presentation.
+Zone: Portfolio state slice; consumes adapter contract and read-model provenance.
+*/
+import type { Adapter } from '$lib/adapters/contract';
 import type {
   AssetBalanceProjection,
   AssetPresentation,
-  SystemSnapshot,
   TransferAssetKey,
-} from "$lib/shared/types";
+} from '$lib/portfolio/types';
+import {
+  type ReadModelValue,
+  fromClientBoundedProjection,
+} from '$lib/read-model';
+import type { SystemSnapshot } from '$lib/system/types';
 
-export type { TransferAssetKey } from "$lib/shared/types";
+export type { TransferAssetKey } from '$lib/portfolio/types';
 
 export type KnownClientAssetKey = TransferAssetKey;
 export type KnownClientAsset = {
@@ -19,7 +25,7 @@ export type KnownClientAsset = {
   presentation: AssetPresentation;
   symbol: string;
   balance: bigint;
-  kind: AssetPresentation["kind"];
+  kind: AssetPresentation['kind'];
   assetId: number | null;
   isCanonical: boolean;
   isPrimaryRouteAsset: boolean;
@@ -35,7 +41,7 @@ type PortfolioBridge = {
 function fallbackAsset(
   key: TransferAssetKey,
   symbol: string,
-  kind: AssetPresentation["kind"],
+  kind: AssetPresentation['kind'],
   isCanonical: boolean,
   isPrimaryRouteAsset: boolean,
 ): KnownClientAsset {
@@ -62,18 +68,16 @@ function fallbackAsset(
 function knownAssetKey(
   projection: AssetBalanceProjection,
 ): KnownClientAssetKey {
-  if (projection.presentation.kind === "Native") {
-    return "native";
+  if (projection.presentation.kind === 'Native') {
+    return 'native';
   }
   if (projection.isPrimaryRouteAsset) {
-    return "foreign";
+    return 'foreign';
   }
   return `asset:${projection.presentation.assetId ?? 0}`;
 }
 
-function mapKnownAsset(
-  projection: AssetBalanceProjection,
-): KnownClientAsset {
+function mapKnownAsset(projection: AssetBalanceProjection): KnownClientAsset {
   const key = knownAssetKey(projection);
   return {
     key,
@@ -115,8 +119,11 @@ class PortfolioStore {
 
   setKnownAssetBalances(balances: AssetBalanceProjection[]) {
     this.knownAssetBalances = balances;
-    const native = balances.find((asset) => asset.presentation.kind === "Native")?.balance ?? 0n;
-    const primaryRoute = balances.find((asset) => asset.isPrimaryRouteAsset)?.balance ?? 0n;
+    const native =
+      balances.find((asset) => asset.presentation.kind === 'Native')?.balance ??
+      0n;
+    const primaryRoute =
+      balances.find((asset) => asset.isPrimaryRouteAsset)?.balance ?? 0n;
     this.userBalance = {
       native,
       foreign: primaryRoute,
@@ -138,8 +145,8 @@ class PortfolioStore {
     const snapshot = this.snapshot();
     if (!snapshot) {
       return [
-        fallbackAsset("native", "NTVE", "Native", true, false),
-        fallbackAsset("foreign", "FOREIGN", "Foreign", false, true),
+        fallbackAsset('native', 'NTVE', 'Native', true, false),
+        fallbackAsset('foreign', 'FOREIGN', 'Foreign', false, true),
       ];
     }
     return [
@@ -159,8 +166,8 @@ class PortfolioStore {
   get knownAssetsView(): ReadModelValue<KnownClientAsset[]> {
     return fromClientBoundedProjection(
       this.knownAssets,
-      "portfolioStore.knownAssets <- bounded wallet balances + snapshot asset presentations",
-      "live",
+      'portfolioStore.knownAssets <- bounded wallet balances + snapshot asset presentations',
+      'live',
       {
         asOfBlock: this.snapshot()?.blockNumber ?? undefined,
       },
@@ -172,13 +179,16 @@ class PortfolioStore {
   }
 
   findAsset(key: TransferAssetKey): KnownClientAsset {
-    return this.transferAssets.find((asset) => asset.transferKey === key) ?? this.knownAssets[0];
+    return (
+      this.transferAssets.find((asset) => asset.transferKey === key) ??
+      this.knownAssets[0]
+    );
   }
 
   async depositForeign(amount: bigint) {
     const adapter = this.adapter();
     if (!adapter || !this.bridge) {
-      throw new Error("Portfolio bridge not initialized");
+      throw new Error('Portfolio bridge not initialized');
     }
     await adapter.depositForeign(amount);
     if (adapter.getKnownAssetBalances) {
@@ -195,10 +205,12 @@ class PortfolioStore {
   ) {
     const adapter = this.adapter();
     if (!adapter || !this.bridge) {
-      throw new Error("Portfolio bridge not initialized");
+      throw new Error('Portfolio bridge not initialized');
     }
     if (!adapter.transferAsset) {
-      throw new Error("Live transfer surface not available in the current adapter");
+      throw new Error(
+        'Live transfer surface not available in the current adapter',
+      );
     }
     await adapter.transferAsset(asset, recipient, amount);
     await this.bridge.refreshSystem();

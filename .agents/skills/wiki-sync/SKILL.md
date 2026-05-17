@@ -74,13 +74,12 @@ The agent using this skill MUST:
 3. Create or update only the necessary pages in `/wiki`
 4. Preserve provenance for nontrivial claims
 5. Maintain compact locale-scoped index entrypoints such as `index.en.md` and `index.<locale>.md`
-6. Maintain locale-scoped mutation histories such as `log.en.md` and `log.<locale>.md`
-7. Detect contradictions, stale pages, weak pages, duplicate concepts, broken links, and navigation drift
-8. Support full rebuild when explicitly requested
-9. Keep the wiki legible to both humans and agents
-10. Keep the wiki structurally suitable for a frontend knowledge section
-11. Avoid epistemic drift between `/docs` and `/wiki`
-12. Improve newcomer onboarding quality as the docs evolve
+6. Detect contradictions, stale pages, weak pages, duplicate concepts, broken links, and navigation drift
+7. Support full rebuild when explicitly requested
+8. Keep the wiki legible to both humans and agents
+9. Keep the wiki structurally suitable for a frontend knowledge section
+10. Avoid epistemic drift between `/docs` and `/wiki`
+11. Improve newcomer onboarding quality as the docs evolve
 
 ## Non-Goals
 
@@ -155,8 +154,6 @@ The skill MAY create the following files or directories under `/wiki`:
 ```text
 /wiki/index.en.md
 /wiki/index.<locale>.md
-/wiki/log.en.md
-/wiki/log.<locale>.md
 /wiki/_meta/
 /wiki/_meta/navigation.json
 /wiki/_meta/state.json
@@ -174,8 +171,6 @@ A preferred layout is:
 ```text
 /wiki/index.en.md
 /wiki/index.<locale>.md
-/wiki/log.en.md
-/wiki/log.<locale>.md
 /wiki/overview/
 /wiki/getting-started/
 /wiki/concepts/
@@ -213,19 +208,13 @@ Each `index.<locale>.md` MUST:
 
 The agent SHOULD treat the default-locale `index.<locale>.md` as the primary navigation surface for compatibility-sensitive consumers, while still keeping locale mirrors aligned.
 
-### `log.<locale>.md`
+### Delivery History
 
-The wiki MUST contain locale-scoped mutation logs such as `log.en.md` and any requested mirrored locales like `log.ru.md`.
+The wiki MUST NOT maintain separate mutation log files by default.
 
-Each log entry SHOULD include:
+Completed wiki delivery work belongs in the project-level delivery history, normally `CHANGELOG.md`, unless a repository explicitly introduces a different canonical history surface.
 
-- Date or timestamp if available
-- Action type
-- Affected pages
-- Source docs involved
-- Brief reason for the change
-
-The default-locale log is mandatory. Mirrored locale logs MAY preserve operational wording from the default locale when exact translation would risk changing meaning, but they MUST keep filename parity and traceability.
+The wiki may preserve freshness, confidence, provenance, and graph state through `_meta/*.json`, but those metadata artifacts are not a second changelog.
 
 ### Locale Mirroring Contract
 
@@ -587,8 +576,8 @@ Compilation MAY include:
 - Updating summaries
 - Updating tags and related links
 - Updating localized index entrypoints such as `index.en.md` / `index.<locale>.md`
-- Updating localized log entrypoints such as `log.en.md` / `log.<locale>.md`
 - Updating metadata stores such as `navigation.json`, `state.json`, `graph.json`, `aliases.json`, or `locales.json`, including localized field objects inside those shared manifests
+- Recording completed wiki delivery work in the project-level delivery history when repository state materially changes
 
 The agent SHOULD prefer minimal sufficient edits over gratuitous rewrites.
 
@@ -654,7 +643,7 @@ The agent SHOULD choose or accept full rebuild when:
 - Frontend navigation quality has degraded substantially
 - Overview/glossary structure has become incoherent
 
-During full rebuild, the agent MUST still preserve historical traceability when practical, especially through `log.<locale>.md` or metadata artifacts.
+During full rebuild, the agent MUST still preserve historical traceability when practical through source provenance, page state metadata, graph metadata, and the project-level delivery history.
 
 ## Deletion and Deprecation Handling
 
@@ -787,7 +776,7 @@ Merge duplicates, compress pages, improve graph coherence, update confidence and
 
 ### "repair wiki"
 
-Fix broken links, stale references, missing index/log entries, alias drift, missing summaries, weak taxonomy placement, and basic provenance gaps.
+Fix broken links, stale references, missing index entries, alias drift, missing summaries, weak taxonomy placement, and basic provenance gaps.
 
 ### "regenerate page X"
 
@@ -860,25 +849,13 @@ If metadata storage exists, the agent SHOULD store something equivalent to:
 - Page -> related pages
 - Page -> newcomer relevance or audience level
 
-## Logging Rules
+## Delivery-History Rules
 
-The agent MUST append meaningful changes to the relevant `wiki/log.<locale>.md`, and MUST always keep the default-locale log updated.
+The agent MUST NOT create or update `wiki/log.<locale>.md` files unless the repository explicitly reintroduces wiki-local logs.
 
-A log entry SHOULD include:
+For this repository, meaningful completed wiki work belongs in `CHANGELOG.md`, while open wiki work belongs in `BACKLOG.md` only when it remains a concrete unfinished deliverable.
 
-- Timestamp or date if available
-- Operation kind
-- Impacted pages
-- Source docs
-- Concise rationale
-
-Example:
-
-```md
-- 2026-04-15: Updated `Execution Pipeline` and `Scheduler Semantics` from changes in `docs/runtime/scheduler.md`; marked `Legacy Scheduler Notes` as superseded; refreshed onboarding links from `Runtime Overview`.
-```
-
-The log SHOULD remain compact and operational.
+A delivery-history entry SHOULD include impacted areas and concise rationale without duplicating metadata already stored in `/wiki/_meta`.
 
 ## Failure Behavior
 
@@ -928,7 +905,7 @@ Unless repository conventions explicitly say otherwise, the agent MUST default t
 - Summaries concise
 - Glossary encouraged
 - Index compact
-- Log append-only
+- No wiki-local mutation logs by default
 - No `/docs` mutations
 - No silent deletion of meaningful history
 - No insider-only writing style for general wiki pages
@@ -942,7 +919,7 @@ On each sync, the agent SHOULD attempt to ensure:
 3. Pages updated or created
 4. Stale or superseded pages marked
 5. `index.<locale>.md` refreshed for the affected locales
-6. `log.<locale>.md` appended for the affected locales
+6. Project-level delivery history updated when repository state materially changes
 7. Broken links checked
 8. Duplicate concepts checked
 9. Provenance preserved
@@ -989,7 +966,7 @@ This skill MAY evolve in maturity.
 ### v0
 
 - Create/update summary pages
-- Maintain index and log
+- Maintain index and metadata
 
 ### v1
 

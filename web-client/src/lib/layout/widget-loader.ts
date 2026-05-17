@@ -1,20 +1,28 @@
-import type { PanelId } from "./types";
+/*
+Domain: Widget loader
+Owns: Dynamic imports that map layout panel ids to widget components.
+Excludes: Widget implementation, layout tree state, and adapter/domain store ownership.
+Zone: Layout composition helper; this is the controlled boundary from layout to widgets.
+*/
+import type { Component } from 'svelte';
 
-type WidgetComponent = any;
+import type { PanelId } from './types';
+
+export type WidgetComponent = Component;
 
 type WidgetModule = {
   default: WidgetComponent;
 };
 
 const WIDGET_LOADERS: Record<PanelId, () => Promise<WidgetModule>> = {
-  swap: () => import("$lib/widgets/SwapWidget.svelte"),
-  chart: () => import("$lib/widgets/ChartWidget.svelte"),
-  statistics: () => import("$lib/widgets/StatisticsWidget.svelte"),
-  log: () => import("$lib/widgets/LogWidget.svelte"),
-  governance: () => import("$lib/widgets/GovernanceWidget.svelte"),
-  wallet: () => import("$lib/widgets/WalletWidget.svelte"),
-  automation: () => import("$lib/widgets/AutomationWidget.svelte"),
-  wiki: () => import("$lib/widgets/WikiWidget.svelte"),
+  swap: () => import('$lib/widgets/SwapWidget.svelte'),
+  chart: () => import('$lib/widgets/ChartWidget.svelte'),
+  statistics: () => import('$lib/widgets/StatisticsWidget.svelte'),
+  log: () => import('$lib/widgets/LogWidget.svelte'),
+  governance: () => import('$lib/widgets/GovernanceWidget.svelte'),
+  wallet: () => import('$lib/widgets/WalletWidget.svelte'),
+  automation: () => import('$lib/widgets/AutomationWidget.svelte'),
+  wiki: () => import('$lib/widgets/WikiWidget.svelte'),
 };
 
 const widgetCache = new Map<PanelId, WidgetComponent>();

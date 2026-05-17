@@ -1,7 +1,7 @@
 {
   "name": "web-client",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -10,31 +10,40 @@
     "prepare": "svelte-kit sync || echo ''",
     "papi:generate": "papi generate",
     "postinstall": "npm run papi:generate",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "validate": "npm run format:check && npm run check && npm run build",
+    "validate:dag": "node scripts/validate-domain-dag.mjs",
+    "validate:wiki": "node scripts/validate-wiki-trust.mjs",
+    "validate:all": "npm run validate && npm run validate:dag && npm run validate:wiki",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
   },
   "devDependencies": {
-    "@lucide/svelte": "^1.8.0",
+    "@lucide/svelte": "^1.16.0",
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.57.1",
-    "@sveltejs/vite-plugin-svelte": "^7.0.0",
-    "@tailwindcss/vite": "^4.2.2",
+    "@sveltejs/kit": "^2.60.1",
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "@tailwindcss/vite": "^4.3.0",
+    "@trivago/prettier-plugin-sort-imports": "^6.0.2",
     "@types/d3": "^7.4.3",
-    "@types/node": "^25.6.0",
-    "svelte": "^5.55.4",
-    "svelte-check": "^4.4.6",
-    "tailwindcss": "^4.2.2",
+    "@types/node": "^25.8.0",
+    "prettier": "^3.8.3",
+    "prettier-plugin-svelte": "^3.5.2",
+    "svelte": "^5.55.7",
+    "svelte-check": "^4.4.8",
+    "tailwindcss": "^4.3.0",
     "typescript": "^6.0.3",
-    "vite": "^8.0.8"
+    "vite": "^8.0.13"
   },
   "dependencies": {
     "@polkadot-api/descriptors": "file:.papi/descriptors",
     "@polkadot/keyring": "^14.0.3",
     "@polkadot/util": "^14.0.3",
     "@polkadot/util-crypto": "^14.0.3",
-    "bits-ui": "^2.18.0",
+    "bits-ui": "^2.18.1",
     "d3": "^7.9.0",
-    "marked": "^18.0.1",
-    "polkadot-api": "2.0.2"
+    "marked": "^18.0.3",
+    "polkadot-api": "^2.1.3"
   }
 }

@@ -1,7 +1,7 @@
 ---
 page_type: status
 title: Статус разработки
-summary: Текущий статус реализации, контекст дорожной карты и главные активные направления работы во фреймворке DEOS. Текущая baseline-линия закрыла native staking/liquidity/governance migration и теперь смещена к завершению governance v1, полировке web-client и future-gated расширениям только при наличии policy или upstream необходимости.
+summary: Текущий статус реализации, дорожная карта и активная работа во фреймворке DEOS без превращения wiki в заметки к релизу.
 locale: ru
 canonical_page_id: status
 translation_of: status.en.md
@@ -12,6 +12,8 @@ available_locales:
 sources:
   - ../../BACKLOG.md
   - ../../CHANGELOG.md
+  - ../../web-client/README.md
+  - ../../docs/web-client.architecture.en.md
 status: active
 audience: newcomer
 tags:
@@ -20,8 +22,9 @@ tags:
   - roadmap
 related:
   - Трехуровневая валидация
-  - Руководство контрибьютора
-last_compiled: 2026-04-25
+  - Reference Client
+  - Generated Wiki
+last_compiled: 2026-05-17
 confidence: 0.96
 ---
 
@@ -29,54 +32,48 @@ confidence: 0.96
 
 ## Кратко
 
-DEOS находится в активной фазе стабилизации framework. Эталонная baseline-линия уже поставляет TMCTOL loop, AAA, multi-asset staking, bounded governance, runtime benchmark discipline, local/operator scripts и SvelteKit reference client.
+DEOS находится в режиме стабилизации фреймворка. Runtime, эталонный клиент, скрипты, документация и wiki сейчас приводятся к форме единого эталонного продукта, а не цепочки видимых промежуточных переделок.
 
-Текущий акцент — кристаллизация: сделать shipped contract проще для эксплуатации и понимания, завершить узкую governance v1 rollout surface и держать future extensions gated реальным product pressure или upstream readiness.
+Эта страница — карта текущего состояния. Это не история релизов и не полный backlog.
 
-## Что уже есть в базовой линии
+## Устойчивые области базовой линии
 
-Локальная сеть и reference client сейчас включают:
+Текущую базовую линию фреймворка лучше понимать по доменам:
 
-- **Core TMCTOL Loop**: однонаправленный minting, treasury-owned liquidity routing, fee burning и bounded economic invariants
-- **AAA substrate**: детерминированные actors для burning, liquidity provisioning, bucket/treasury logic и native-staking LP donation, с portable generic staking tasks
-- **Staking**: multi-asset share-vault staking с `stXXX` receipts, native `$NTVE -> stNTVE` liquid staking, locked `NTVE/stNTVE` LP nomination, native governance custody и native nomination reward settlement
-- **Governance foundation**: domain-scoped primary/protection tracks, public cadence, typed payload kinds, invoice voting, runtime-upgrade authorization, bounded execution details и governance reward-memory
-- **Web Client**: on-chain-first wallet, swap, staking, governance, wiki и execution-feedback surfaces на SvelteKit
-- **Operator tooling**: runtime metadata export, benchmark/weight generation, local bootstrap, authorized-upgrade helpers и native staking bootstrap readiness/call-preparation helpers
+- **Экономическая физика**: минтинг в TMCTOL, маршрутизация, treasury-owned liquidity, сжигание комиссий и ограниченные инварианты образуют главный экономический контур.
+- **Автономные акторы**: AAA дает детерминированное исполнение акторов для сжигания, обеспечения ликвидности, казначейских и bucket-потоков, а также автоматизации вокруг стейкинга.
+- **Стейкинг и governance**: стейкинг использует multi-asset share-vault механику, а governance — ограниченные доменные треки, типизированные payload и защитные поверхности.
+- **Эталонный клиент**: SvelteKit-клиент показывает on-chain-first кошелек, swap, стейкинг, governance, wiki, графики/статус, автоматизацию и обратную связь по исполнению.
+- **Инструменты и валидация**: скрипты, бенчмарки, экспорт метаданных, проверки доверенной wiki, клиентская проверка и контекстные gates поддерживают локальную разработку и готовность к релизу.
 
-## Недавно стабилизировано
+Используйте [Карту доменов](../concepts/domain-map.ru.md), когда нужна концептуальная топология, а не снимок статуса.
 
-Native staking/liquidity/governance migration baseline закрыта в текущей линии. Shipped contract теперь трактует `stNTVE` как liquid receipt, переносит collator security на locked `NTVE/stNTVE` LP, держит native reward settlement на native-specific paths и включает plan-only operator tooling для bootstrap canonical pool.
+## Активный фокус
 
-AAA staking также сужен обратно до portable contract: в AAA остаются generic `Stake { asset, amount }` и `Unstake { asset, shares }`, а DEOS-native staking routing и nomination policy живут в runtime adapters плюс staking/governance pallet-ах.
+Текущая работа в основном про консолидацию:
 
-## Активный фокус: Governance v1
+- Держать wiki-страницы самодостаточными и связанными по доменам;
+- Держать эталонный клиент вокруг ясных владельцев и проверочных gates;
+- Выражать открытую работу как закрываемые срезы с критериями завершения;
+- Держать детали релиза вне объясняющих страниц, если страница явно не является поверхностью статуса или истории.
 
-Ближайший roadmap сосредоточен на завершении самой маленькой честной **Governance v1** rollout surface:
+## Открытые границы
 
-- Держать execution authority привязанной к явным domains, cadence modes и payload kinds
-- Добавлять только действительно delegated/domain-owned `L2ParameterChange` surfaces сверх текущей пары Axial Router
-- Улучшать execution-side observability только когда появляются новые payload families или failure states
-- Продолжать web-client governance UX только там, где proposal semantics или execution state требуют более ясной product composition
+Главные незавершенные области намеренно закрыты внешними условиями:
 
-## Future-gated работа
+- Расширение кошелька ждет materialized/indexed поверхность обнаружения активов;
+- Архивный поиск и длинная история ждут materialized provider contract;
+- Permissionless collators и advanced randomness ждут upstream relay-beacon path;
+- Дальнейший рост client/UI ждет named hotspot, а не широкую полировку без конкретного очага;
+- Маршрутизация block-reward ждет конкретный источник награды и контракт суммы.
 
-Часть работы намеренно не входит в текущую launch baseline:
+## Куда смотреть дальше
 
-- **LP Donation Acquisition**: Native Staking LP Farmer уже поддерживает deterministic `$NTVE` acquisition в balanced `NTVE/stNTVE` donation. Swap/mixed-route acquisition остается future-gated, пока AAA policy не потребует route comparison, slippage bounds и fallback behavior.
-- **Randomness / Relay Beacon**: Permissionless collators и advanced randomness отложены до появления настоящего parachain-consumable per-block protocol beacon upstream. Текущая линия использует trusted invulnerable collators и deterministic previous-block-hash fallback там, где это нужно.
-- **Materialized Archive UX**: Browser не должен растягивать bounded on-chain retention в archive/search features. Это задача будущего materialized provider contract.
-
-## Где смотреть актуальный план
-
-За живым состоянием проекта лучше всего следить через root-файлы [`BACKLOG.md`](../../BACKLOG.md) и [`CHANGELOG.md`](../../CHANGELOG.md).
+Для активных задач используйте корневой backlog. Для истории завершенных поставок — корневой changelog. Для выбора проверки изменения используйте [Трехуровневую валидацию](three-layer-validation.ru.md).
 
 ## Связанные страницы
 
+- [Карта доменов](../concepts/domain-map.ru.md)
 - [Трехуровневая валидация](three-layer-validation.ru.md)
-- [Руководство контрибьютора](../community/contributing.ru.md)
-
-## Источники
-
-- `BACKLOG.md`
-- `CHANGELOG.md`
+- [Reference Client](../overview/reference-client.ru.md)
+- [Generated Wiki](../concepts/generated-wiki.ru.md)

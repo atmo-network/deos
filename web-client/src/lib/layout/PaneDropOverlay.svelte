@@ -1,5 +1,13 @@
+<!--
+Domain: Pane drop overlay
+Owns: Visual drop-target overlay for tab/pane drag interactions.
+Excludes: Drop decision logic, tree mutation, and drag event lifecycle.
+Zone: Layout rendering component; receives derived drag/drop state from PaneHost.
+-->
 <script lang="ts">
-  import type { DropEdge } from "./types";
+  import { Button } from '$lib/ui';
+
+  import type { DropEdge } from './types';
 
   type Props = {
     canDropEdge: boolean;
@@ -47,11 +55,12 @@
 {/if}
 
 {#if isDragging && canDropEdge}
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div
-    role="none"
-    class="absolute right-0 bottom-0 left-0 z-40"
-    style:top={`${overlayTop}px`}
+  <Button
+    variant="ghost"
+    size="sm"
+    aria-label="Workspace drop target"
+    class="absolute right-0 bottom-0 left-0 z-40 rounded-none bg-transparent p-0 text-left hover:bg-transparent"
+    style={`top:${overlayTop}px`}
     ondragover={onOverlayDragOver}
     ondragleave={onOverlayDragLeave}
     ondrop={onOverlayDrop}
@@ -86,5 +95,5 @@
         </div>
       </div>
     {/if}
-  </div>
+  </Button>
 {/if}

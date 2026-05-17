@@ -1,18 +1,17 @@
-import type { Adapter } from "$lib/adapters/types";
-import {
-  fromSessionDerivedChain,
-  type ReadModelValue,
-} from "$lib/shared/read-model";
-import { walletStore } from "$lib/wallet/index.svelte";
-import type {
-  LogEntry,
-  LogType,
-  TransactionProgress,
-} from "$lib/shared/types";
+/*
+Domain: Execution log store
+Owns: Account-scoped activity log entries, live network events, and tx feedback summaries.
+Excludes: Wallet signer custody, adapter transport implementation, and widget rendering.
+Zone: Log state slice; may subscribe to adapter events and wallet account changes.
+*/
+import type { Adapter } from '$lib/adapters/contract';
+import type { LogEntry, LogType, TransactionProgress } from '$lib/log/types';
+import { type ReadModelValue, fromSessionDerivedChain } from '$lib/read-model';
+import { walletStore } from '$lib/wallet/index.svelte';
 
 const IDLE_PROGRESS: TransactionProgress = {
-  kind: "idle",
-  message: "No transaction submitted yet",
+  kind: 'idle',
+  message: 'No transaction submitted yet',
 };
 
 class LogStore {
@@ -64,9 +63,9 @@ class LogStore {
       this.networkLog = nextNetworkLog;
       this.networkLogView = fromSessionDerivedChain(
         nextNetworkLog,
-        "finalized-events",
-        "System.Events",
-        "session",
+        'finalized-events',
+        'System.Events',
+        'session',
         {
           asOfBlock: nextNetworkLog[0]?.blockNumber ?? undefined,
         },
@@ -78,7 +77,7 @@ class LogStore {
 
   add(
     message: string,
-    type: LogType = "info",
+    type: LogType = 'info',
     context?: {
       blockNumber?: number | null;
       step?: number;
@@ -91,7 +90,8 @@ class LogStore {
       blockNumber: context?.blockNumber ?? null,
       message,
       type,
-      accountId: context?.accountId ?? (walletStore.state.selectedAddress || null),
+      accountId:
+        context?.accountId ?? (walletStore.state.selectedAddress || null),
     };
     this.log = [entry, ...this.log.slice(0, 199)];
   }

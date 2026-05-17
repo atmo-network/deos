@@ -869,7 +869,4 @@ That is exactly the role this pallet is supposed to play inside TMCTOL's two-pal
 
 ---
 
-- `Version`: 0.1.0
 - `Last Updated`: April 2026
-- `Author`: LLB Lab
-- `License`: MIT

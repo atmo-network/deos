@@ -9,7 +9,7 @@
 
 The Asset Registry is the `Foreign Asset Gateway` that bridges XCM locations into the runtime's native asset system. It maintains a persistent bidirectional mapping between XCM `Location` identifiers and deterministic `AssetId` values, creating a stable digital twin for every registered foreign asset.
 
-It implements a `Hybrid Registry Pattern`: deterministic ID generation via BLAKE2 hashing at registration time, combined with persistent bidirectional storage for XCM location-key resilience and O(1) inverse lookup. Once registered, foreign assets become first-class citizens in `pallet-assets`, enabling seamless integration with the Router, Burning Manager, and Zap Manager.
+It implements a `Hybrid Registry Pattern`: deterministic ID generation via BLAKE2 hashing at registration time, combined with persistent bidirectional storage for XCM location-key resilience and O(1) inverse lookup. Once registered, foreign assets become first-class citizens in `pallet-assets`, enabling seamless integration with the Router, Burn Actor, and liquidity-provisioning actors.
 
 ## Architecture Overview
 
@@ -34,8 +34,8 @@ Token lifecycle orchestration remains documented in `core.architecture.en.md` an
 Current coupling status in runtime:
 
 - registration/link extrinsics can trigger deterministic TOL domain bootstrap via runtime hook
-- TMC `create_curve` then confirms/updates token-domain coupling and enables Zap processing for that token
-- result: for activated tokens, Asset Registry identity is effectively connected to TMC + Zap + TOL flow without a dedicated orchestration pallet
+- TMC `create_curve` then confirms/updates token-domain coupling and enables liquidity-provisioning actor processing for that token
+- result: for activated tokens, Asset Registry identity is effectively connected to TMC + liquidity provisioning + TOL flow without a dedicated orchestration pallet
 
 ### System Architecture
 
@@ -57,8 +57,8 @@ graph TD
     end
 
     Runtime -->|Available to| Router[Axial Router]
-    Runtime -->|Available to| BM[Burning Manager]
-    Runtime -->|Available to| ZM[Zap Manager]
+    Runtime -->|Available to| BurnActor[Burn Actor]
+    Runtime -->|Available to| LiquidityActor[Liquidity Actor]
 ```
 
 ## Core Logic: The Hybrid Registry Pattern
@@ -278,19 +278,19 @@ Router accepts foreign assets in swap paths if:
 
 Example: `swap(USDC_Foreign, Native)` where `USDC_Foreign = 0xF123_4567` (registered).
 
-### Connection to Burning Manager (Fee Compression)
+### Connection to Burn Actor (Fee Compression)
 
-BM processes foreign assets via:
+The Burn Actor processes foreign assets via:
 
 1. Check if asset is in `BurnableAssets` registry
 2. If `asset.is_foreign()` → swap to Native
 3. Burn Native in Phase 2
 
-Foreign assets must be registered before BM can process them.
+Foreign assets must be registered before the Burn Actor can process them.
 
-### Connection to Zap Manager (Foreign LP Pairs)
+### Connection to Liquidity-Provisioning Actors (Foreign LP Pairs)
 
-ZM can create liquidity pools with foreign assets:
+Liquidity-provisioning actors can create liquidity pools with foreign assets:
 
 - Example: `Native <-> USDC_Foreign` pool
 - Both assets must exist in `pallet-assets`
@@ -336,5 +336,5 @@ migrate_location_key(
 - `Strategy`: Hybrid (deterministic generation + persistent storage).
 - `Security`: Bitmask validation + RegistryOrigin + collision checks.
 - `Migration Path`: `migrate_location_key` for XCM upgrades.
-- `Integration`: Full support in Router, BM, ZM via `pallet-assets`.
+- `Integration`: Full support in Router, Burn Actor, and liquidity-provisioning actors via `pallet-assets`.
 - `Domain Bootstrap Hook`: Runtime can auto-bootstrap token domain mapping (e.g., TOL domain create/bind) on registration.

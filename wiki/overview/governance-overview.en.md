@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Governance Overview
-summary: A newcomer-facing map of DEOS Governance as a whole that explains why it exists, how strategy and tactics stay separated, which moving parts matter most, and where to go next for deeper concepts.
+summary: A newcomer-facing map of DEOS Governance as a bounded constitutional layer that separates protocol physics, strategic protection, tactical coordination, and live read-model truth.
 locale: en
 canonical_page_id: governance-overview
 translation_status: source
@@ -23,7 +23,7 @@ related:
   - Physics-First vs Politics-First
   - Staking Pools
   - Core Terms
-last_compiled: 2026-04-20
+last_compiled: 2026-05-17
 confidence: 0.94
 ---
 
@@ -31,112 +31,54 @@ confidence: 0.94
 
 ## Summary
 
-DEOS Governance is the framework's bounded governance layer. Its job is not to replace the protocol's economic kernel with politics-by-default, but to govern the strategic, tactical, and social surfaces that remain after the framework mechanizes what it can.
+DEOS Governance is the framework's bounded constitutional layer. It does not replace protocol physics with politics-by-default; it governs the strategic, tactical, and social surfaces that remain after the economic kernel mechanizes what it can.
 
-This page is the wide-angle map of that subsystem. It explains what governance is for, how the current reference line is shaped, and which deeper pages to read next.
+The whole subsystem is easiest to read through three separations:
 
-## Why Governance Exists Here At All
+- Strategy is not tactics;
+- Approval is not protection;
+- Live on-chain governance truth is not archive history.
 
-The DEOS worldview is not “everything should be decided by token voting.” It is closer to this:
+## Current Shape
 
-- Protocol physics should be mechanized where possible
-- Strategic protection should stay explicit
-- Tactical and treasury choices still need bounded human coordination
-- The governance surface should stay queryable and constitutionally legible
+The current reference line uses explicit governance domains instead of one undifferentiated referendum pool. Each domain keeps its authority, payload families, cadence, and protection surface visible.
 
-That is why DEOS Governance looks more like a constitutional layer above a deterministic kernel than a generic voting portal.
+At overview level, the shape is:
 
-## The Big Structural Idea
+- Strategic governance protects protocol and network-level subjects;
+- Tactical governance handles narrower domain-local spending and coordination;
+- A primary decision lane decides the proposal itself;
+- A protection lane decides whether the proposal should be blocked or allowed through;
+- Proposal payloads are typed rather than hidden inside opaque bytes;
+- Live governance UX reads bounded runtime views, while archive search and long timelines belong to indexed or materialized layers.
 
-The governance model keeps three large distinctions in view:
+This is why DEOS Governance looks more like a constitutional layer above a deterministic kernel than a generic voting portal.
 
-- `Strategy` is not the same as `tactics`
-- `Approval` is not the same as `protection`
-- `Live on-chain governance truth` is not the same as `archive history`
+## Public Lifecycle
 
-Those three separations explain most of the system's shape.
+From a newcomer perspective, a proposal should be read as a typed lifecycle, not as a single yes/no event:
 
-## What the Current Line Looks Like
+1. submission opens the item and its protection window;
+2. ordinary primary voting starts after the configured lead-in;
+3. approval can still wait through enactment delay;
+4. execution can fail and that failure is visible state;
+5. recent finalized outcomes remain on-chain only for bounded live observability.
 
-At a high level, the current reference line has:
+The intent is honest live state, not an unbounded social archive inside runtime storage.
 
-- Explicit governance domains instead of one undifferentiated referendum pool
-- A dual-track model: primary decision lane plus protection lane
-- Typed payload kinds instead of opaque “proposal blobs”
-- A public ordinary cadence with `3 day` lead-in, `7 day` voting windows, and `3 day` enactment delay
-- Bounded on-chain query surfaces for live governance UX
+## Relationship to Staking
 
-You do not need every detail at once to understand the intent. The important point is that DEOS Governance tries to keep power surfaces explicit and limited.
+Governance can feed bounded participation-quality signals into staking rewards, but governance and staking remain separate subsystems. The connection means governance quality is economically relevant; it does not mean the staking pallet owns governance history or that governance stores infinite reward memory.
 
-## Strategic Versus Tactical Governance
+## Reading the Governance Cluster
 
-The current reference line keeps a strong split between strategic and tactical decisions.
+Use the governance wiki cluster in this order:
 
-In practice, that means:
-
-- Strategic governance protects protocol and network-level subjects
-- Tactical governance handles narrower domain-local spending and coordination
-- Tactical domains do not automatically inherit strategic authority
-
-This is one of the main reasons DEOS Governance exists in its current form: it tries to avoid collapsing every serious decision into one flat voting market.
-
-## Why There Are Two Tracks
-
-DEOS Governance is dual-track by design:
-
-- The `primary track` answers the proposal itself
-- The `protection track` answers whether the proposal should be constitutionally blocked or procedurally allowed through
-
-This is a whole-system property, not just a detail of one proposal family. It is one of the strongest differences between DEOS Governance and simpler “Aye / Nay for everything” models.
-
-If you want the deeper explanation of how that protection layer is bound to concrete governance cells, read [Governance Domains](../concepts/governance-domains.en.md).
-
-## What Governance Can Talk About
-
-The current governance vocabulary stays intentionally small. Proposals are described through explicit payload kinds such as:
-
-- Strategic Root-equivalent action
-- Tactical treasury spending
-- Tactical parameter change
-- Advisory same-domain intent
-- Tactical signal toward the strategic layer
-
-The exact meaning of those payload kinds matters, but the overview-level point is simpler: governance action is typed on purpose. DEOS does not want proposal meaning to hide inside social convention or opaque bytes.
-
-## How the Public Lifecycle Feels
-
-From a newcomer perspective, the important lifecycle facts are:
-
-- Protection opens immediately when a proposal is submitted
-- Ordinary primary voting does not start immediately
-- Successful approval may still wait in enactment delay
-- Execution failure is a real state, not something hidden behind “approved”
-- Recent finalized outcomes stay visible on-chain only for a bounded time
-
-That means DEOS Governance is designed to show honest live state, not just a raw pile of past events.
-
-## Governance and the Read Model
-
-The runtime exports bounded governance views for live product use. That includes proposal state, timing, tally interpretation, execution authority, payload availability, and recent finalized outcomes.
-
-This is deliberate. DEOS wants canonical live governance UX to be queryable on-chain, while long-range archive/search/timeline surfaces remain the job of indexed or materialized layers.
-
-## Governance and Staking
-
-Governance also feeds a bounded participation-quality signal into staking rewards.
-
-The overview-level point is not that governance and staking are the same subsystem. It is that DEOS treats governance quality as economically relevant, while still refusing to keep unbounded social history in runtime storage.
-
-## How To Read The Governance Wiki Cluster
-
-Use the pages in this order:
-
-1. `Governance Overview` — what the subsystem is for
-2. [Governance Domains](../concepts/governance-domains.en.md) — how one governance cell is typed
-3. `Core Terms` — for recurring vocabulary
-4. `Physics-First vs Politics-First` — for the philosophical frame
-
-The overview is the map. The concept pages are the closer inspections of particular building blocks.
+1. `Governance Overview` — why the subsystem exists;
+2. [Governance Domains](../concepts/governance-domains.en.md) — how one governance cell is typed;
+3. [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md) — why protocol physics stays protected;
+4. [Staking Pools](../concepts/staking-pools.en.md) — where governance-conditioned reward signals meet staking;
+5. [Core Terms](../glossary/core-terms.en.md) — recurring vocabulary.
 
 ## Related
 
@@ -144,9 +86,3 @@ The overview is the map. The concept pages are the closer inspections of particu
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
 - [Staking Pools](../concepts/staking-pools.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/governance.specification.en.md`
-- `docs/governance.architecture.en.md`
-- `docs/manifesto.en.md`

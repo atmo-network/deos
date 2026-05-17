@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Governance Domains
-summary: A governance domain is one typed governance cell inside the larger governance system. It binds together the governed subject, primary and protection power surfaces, valid payload families, cadence, and execution authority.
+summary: A governance domain is one typed governance cell inside the larger governance system. It binds the governed subject, voting and protection surfaces, valid payload families, cadence, and execution authority.
 locale: en
 canonical_page_id: governance-domains
 translation_status: source
@@ -26,7 +26,7 @@ related:
   - Read-Model Split
   - Physics-First vs Politics-First
   - Core Terms
-last_compiled: 2026-04-20
+last_compiled: 2026-05-17
 confidence: 0.93
 ---
 
@@ -34,169 +34,68 @@ confidence: 0.93
 
 ## Summary
 
-A governance domain is one concrete governance cell inside the wider DEOS Governance system. It is the unit that tells the runtime and the user what is being governed, whose power counts there, which protection surface can intervene, which proposal families make sense, and what kind of execution authority the resulting decision may reach.
+A governance domain is one typed governance cell inside DEOS Governance. It tells the runtime and the user what is governed, whose voting power counts, which protection surface can intervene, which proposal families are valid, and how far successful execution may reach.
 
-So while [Governance Overview](../overview/governance-overview.en.md) explains the whole subsystem, this page explains one of its key building blocks.
+[Governance Overview](../overview/governance-overview.en.md) explains the whole subsystem. This page explains the unit that keeps that subsystem from collapsing into one flat voting market.
 
-## What A Domain Binds Together
+## Domain Contract
 
-A governance domain is not just “a namespace for proposals.” In DEOS it binds together:
+A domain binds six things together:
 
-- The governed subject
-- The primary voting surface
-- The protection voting surface
-- The valid payload kinds
-- The cadence rules that apply there
-- The execution authority that successful proposals may actually reach
+- Governed subject;
+- Primary voting surface;
+- Protection voting surface;
+- Valid payload kinds;
+- Cadence rules;
+- Maximum execution authority.
 
-That is what makes a domain useful: it turns governance power from a vague social idea into a typed, inspectable contract.
+That contract turns governance from a vague social process into typed policy. It also keeps the four governance axes concrete: `GovernanceDomain`, `CadenceMode`, `ProposalPayloadKind`, and `ProtectionTrack`.
 
-## The Four Axes Around A Domain
+Two domains can therefore differ by who votes, who protects, which payloads are valid, whether the primary track is `Binary` or `Invoice`, whether signed public submission is open, whether fees or urgent handling apply, and which authority the payload can actually reach.
 
-The governance model stays compact by combining four explicit axes:
+## Current Reference Shape
 
-- `GovernanceDomain`
-- `CadenceMode`
-- `ProposalPayloadKind`
-- `ProtectionTrack`
+The current line makes two domain pairs especially visible:
 
-A domain is where those axes become concrete. It is the place where “strategy versus tactics,” “binary versus invoice voting,” and “advisory versus executable action” stop being abstract ideas and become actual runtime policy.
+- `Native + $VETO` for protocol and network strategy;
+- `$BLDR + Native` for the flagship tactical domain.
 
-## The Current Canonical Domain Pairs
+Strategic proposals are protected by `$VETO`. The flagship tactical domain is protected by native staking weight. Those pairings are not symbolic: they define voting power, protection power, and legitimate execution reach.
 
-The current reference line keeps two domain pairs especially visible:
+The ordinary public cadence is currently shared:
 
-- `Native + $VETO` for protocol and network strategy
-- `$BLDR + Native` for the flagship tactical domain
+- `3 day` lead-in;
+- `7 day` protection window;
+- `7 day` primary voting window;
+- `3 day` enactment delay.
 
-This means:
+The signed public path remains intentionally bounded: `Intent` across domains, tactical `$BLDR` `L2SignalToL1`, and tactical `$BLDR` `L2TreasurySpend`.
 
-- Strategic proposals are protected by `$VETO`
-- The flagship tactical domain is protected by native staking weight
+## Tracks, Payloads, and Authority
 
-Those are not just symbolic pairings. They define who can vote, who can protect, and what kind of authority a successful proposal may legitimately exercise.
+Primary track shape is domain-owned. Some domains use a binary `Aye / Nay` family. The canonical tactical `$BLDR` treasury domain uses an invoice-shaped family: `Amplify`, `Approve`, `Reduce`, `Nay`. Tactical spending may need a payout scalar, not only yes/no approval.
 
-## What Can Differ Between Domains
+Protection is also domain-shaped. A domain decides which protection surface is eligible, which veto thresholds matter, whether `Pass` can accelerate urgent handling, and how final protection gating is interpreted.
 
-Two domains may differ on all of these:
+Execution authority is constrained by the domain. `L1RootAction` is strategic and Root-equivalent. `L2TreasurySpend` is domain-local treasury execution. `L2ParameterChange` must stay inside genuinely delegated domain-owned surfaces. `Intent` and `L2SignalToL1` stay advisory by contract.
 
-- Which asset or stake surface supplies primary voting weight
-- Which surface supplies protection voting weight
-- Which payload kinds are meaningful there
-- Whether the primary track is `Binary` or `Invoice`
-- Whether the combination is publicly submittable or admin-only
-- Whether an opening fee exists for that public path
-- Whether urgent handling is allowed
-- Which execution authority the payload can reach if approved
+Some tempting surfaces remain outside tactical-domain ownership: TMC launch physics, staking admin onboarding/recovery, AAA global controls, and asset-registry registration or migration. A tactical domain must use an explicit handoff such as `L2SignalToL1` instead of pretending it already owns those areas.
 
-This is the core reason domains exist. DEOS does not want one governance token and one voting rule to pretend they honestly govern every layer of the system.
+## Live Read Model
 
-## Primary Track Family Is Domain-Shaped
+Domains also shape governance read-model output. Domain-aware runtime views expose bounded live truth such as proposal status, timing, tally interpretation, execution authority, submission authority, opening-fee truth, payload availability, and recent finalized detail.
 
-Domains help determine the family of the primary track.
+That makes domains visible both in the constitutional model and in the product surface.
 
-### Binary family
+## Mental Model
 
-In a binary family, the primary lane is the familiar:
+Read a governance domain through five questions:
 
-- `Aye`
-- `Nay`
-
-### Invoice family
-
-In the canonical tactical `$BLDR` treasury domain, the primary lane is invoice-shaped:
-
-- `Amplify`
-- `Approve`
-- `Reduce`
-- `Nay`
-
-That family exists because tactical spending is not always a yes-or-no question. Sometimes governance needs to choose the payout scalar, not just approve or reject a transfer.
-
-## Protection Is Also Domain-Shaped
-
-The protection lane is not one universal veto rule applied the same way everywhere. A domain determines:
-
-- Which protection surface is eligible
-- Which raw-veto thresholds matter
-- Whether a protection-track `Pass` can procedurally accelerate urgent handling
-- How final protection gating should be interpreted at resolution time
-
-This is why a domain is a constitutional cell, not merely a proposal folder.
-
-## Public Cadence Lives On Top Of Domains
-
-On the shipped ordinary public line, domains currently inherit the same broad public rhythm:
-
-- `3 day` lead-in
-- `7 day` ordinary protection window
-- `7 day` ordinary primary window
-- `3 day` enactment delay
-
-But domains still matter inside that shared rhythm, because the meaning of votes, the protection source, and the allowed payload families can still differ.
-
-## Current Public Submission Scope By Domain Family
-
-The current runtime keeps signed public submission intentionally bounded.
-
-Today the public path covers:
-
-- `Intent` across domains
-- Tactical `$BLDR` `L2SignalToL1`
-- Tactical `$BLDR` `L2TreasurySpend`
-
-That means domain policy does not only decide who votes. It also decides which proposal families are actually opened to signed public ingress on the current line.
-
-## Execution Authority Is Not The Same Everywhere
-
-A domain does not magically grant Root power. It constrains where a successful payload may execute.
-
-On the current line that means:
-
-- `L1RootAction` is strategic and Root-equivalent
-- `L2TreasurySpend` is domain-local treasury execution
-- `L2ParameterChange` must stay inside genuinely delegated domain-owned surfaces
-- `Intent` and `L2SignalToL1` remain advisory by contract
-
-This is one of the most important practical uses of domains: they keep tactical and strategic authority from silently collapsing into each other.
-
-## Why Some Tempting Surfaces Stay Out Of Domain Control
-
-The docs are explicit that some system surfaces are still not honest tactical-domain parameters. On the current line, examples include:
-
-- TMC launch physics
-- Staking admin onboarding or recovery paths
-- AAA global controls
-- Asset-registry registration or migration
-
-If a tactical domain wants to affect one of those system-owned areas, it must use an explicit handoff such as `L2SignalToL1` rather than pretending the domain already owns that authority.
-
-## Domains And The Live Read Model
-
-Domains also shape the governance read model. Domain-aware runtime views expose bounded live truth such as:
-
-- Proposal status
-- Proposal timing
-- Tally interpretation
-- Execution authority
-- Submission authority
-- Opening-fee truth
-- Payload availability
-- Recent finalized detail
-
-That makes domains visible not only in the constitution, but also in the live product surface.
-
-## Simple Mental Model
-
-If you want the shortest useful mental model, read a governance domain like this:
-
-- “Whose problem is this?”
-- “Whose votes count here?”
-- “Who can constitutionally block it?”
-- “What kind of payload is valid here?”
-- “How far can successful execution actually reach?”
-
-That is the conceptual work a domain does inside DEOS Governance.
+1. Whose problem is this?
+2. Whose votes count here?
+3. Who can constitutionally block it?
+4. What payload is valid here?
+5. How far can successful execution reach?
 
 ## Related
 
@@ -207,9 +106,3 @@ That is the conceptual work a domain does inside DEOS Governance.
 - [Read-Model Split](read-model-split.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
-
-## Sources
-
-- `docs/governance.specification.en.md`
-- `docs/governance.architecture.en.md`
-- `docs/staking.specification.en.md`

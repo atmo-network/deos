@@ -65,3 +65,16 @@ The DEOS Reference Client is built to be lightweight, reactive, and strictly on-
 
 - **Scripts**: Standard Bash (`.sh`) for operational workflows
 - **AI Coordination**: Local markdown-based prompts and Bash-based execution skills (`.agents/skills/`)
+
+## How to Use This Page
+
+Use this page as the implementation stack map after you know which domain you are changing. It tells you which technology boundary you are entering before you choose validation depth or edit a repository surface.
+
+## Related
+
+- [Repository Structure](repository-structure.en.md)
+- [Runtime Patterns](../overview/runtime-patterns.en.md)
+- [Three-Layer Validation](../development/three-layer-validation.en.md)
+- [Reference Client](../overview/reference-client.en.md)
+- [Scripts Layer](../usage/scripts-layer.en.md)
+- [Agent Coordination](../usage/agent-coordination.en.md)

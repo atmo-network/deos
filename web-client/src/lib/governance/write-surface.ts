@@ -1,23 +1,36 @@
-import { GOVERNANCE_RUNTIME_WRITE_SURFACE } from "./constants";
+/*
+Domain: Governance write surface
+Owns: Capability lookup helpers for runtime governance write availability.
+Excludes: Transaction submission, adapter RPC implementation, and proposal draft state.
+Zone: Governance helper; derives UI/write affordances from governance constants and contracts.
+*/
+import { GOVERNANCE_RUNTIME_WRITE_SURFACE } from './constants';
 import type {
   GovernanceWriteCapability,
+  GovernanceWriteOperation,
   GovernanceWriteSurfaceAvailability,
-} from "./types";
+} from './types';
+
+const GOVERNANCE_WRITE_OPERATIONS: GovernanceWriteOperation[] = [
+  'castVote',
+  'submitProposal',
+  'noteProposalPreimage',
+  'resolveProposal',
+  'rejectProposal',
+  'resolveProposalFromVotes',
+  'forceResolveProposalFromVotes',
+  'requeueProposalForAutoFinalization',
+];
 
 export function buildWriteSurfaceAvailability(
   overrides: Partial<
-    Record<
-      keyof GovernanceWriteSurfaceAvailability,
-      Partial<GovernanceWriteCapability>
-    >
+    Record<GovernanceWriteOperation, Partial<GovernanceWriteCapability>>
   >,
 ): GovernanceWriteSurfaceAvailability {
-  const result = {
+  const result: GovernanceWriteSurfaceAvailability = {
     ...GOVERNANCE_RUNTIME_WRITE_SURFACE,
-  } as GovernanceWriteSurfaceAvailability;
-  for (const key of Object.keys(overrides) as Array<
-    keyof GovernanceWriteSurfaceAvailability
-  >) {
+  };
+  for (const key of GOVERNANCE_WRITE_OPERATIONS) {
     const value = overrides[key];
     if (!value) {
       continue;

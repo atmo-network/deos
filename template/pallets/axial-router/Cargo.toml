@@ -1,6 +1,6 @@
 [package]
 name = "pallet-axial-router"
-version = "0.4.0"
+version = "0.5.0"
 description = "Minimalist multi-token routing system optimized for TMC ecosystems"
 authors.workspace = true
 homepage.workspace = true

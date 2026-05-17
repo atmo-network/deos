@@ -20,7 +20,7 @@ The entire network follows a single, immutable coordination rule:
 
 1. `Origin-Agnostic`: Actors do not validate _who_ sent the tokens. They only validate _what_ arrived. This makes the system permissionless and interoperable by default.
 2. `Stateless Execution`: The system minimizes on-chain storage. Intermediate buffers are removed; flows are direct (One-Hop).
-3. `Graceful Degradation`: The system is "economically omnivorous." Erroneous transfers (e.g., a user sending funds directly to the Burning Manager sovereign) are not lost errors—they are processed as valid economic contributions (e.g., burnt or added to liquidity).
+3. `Graceful Degradation`: The system is "economically omnivorous." Erroneous transfers (e.g., a user sending funds directly to the Burn Actor sovereign) are not lost errors—they are processed as valid economic contributions (e.g., burnt or added to liquidity).
 4. `Reactive Resilience`: The system applies backpressure (cooldown-based retry) instead of failing catastrophically. If conditions are unsafe (e.g., slippage exceeded), actors skip the step and retry on next trigger cycle.
 5. `Explicit Read-Model Split`: DEOS separates bounded authoritative on-chain values/projections that clients can consume directly from externally indexed materializations used for archive/search/analytics. Canonical product flows should rely on raw on-chain state when a bounded projection is the real protocol contract; unbounded history and heavy dashboard aggregation should remain off-chain instead of being smuggled into consensus state. The project-wide subsystem matrix and design checklist live in [`read-model.contract.en.md`](./read-model.contract.en.md).
 
@@ -34,8 +34,8 @@ All actors are System instances managed by `pallet-aaa`. The Axial Router and TM
 
 | Actor                   | aaa_id | Plan summary                         | Trigger                      |
 | ----------------------- | ------ | ------------------------------------ | ---------------------------- |
-| Burning Manager         | 0      | foreign → native swaps, then burn    | `Timer { every_blocks: 10 }` |
-| Zap Manager             | 2      | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }`  |
+| Burn Actor              | 0      | foreign → native swaps, then burn    | `Timer { every_blocks: 10 }` |
+| Liquidity Actor         | 2      | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }`  |
 | TOL Bucket A (Anchor)   | 3      | `Noop`; permanent LP accumulation    | `Timer` (Noop)               |
 | TOL Bucket B (Building) | 4      | LP unwind to Treasury B              | `Timer` (future)             |
 | TOL Bucket C (Capital)  | 5      | LP unwind to Treasury C              | `Timer` (future)             |
@@ -46,12 +46,12 @@ All actors are System instances managed by `pallet-aaa`. The Axial Router and TM
 
 #### L2 Actors (BLDR Protocol Token Domain)
 
-| Actor         | aaa_id | Execution Plan                                                | Trigger                     |
-| ------------- | ------ | ------------------------------------------------------------- | --------------------------- |
-| BLDR Splitter | 10     | `Transfer(NTVE→ZM) + SplitTransfer(BLDR, 50%→ZM+50%→Trs.)`    | `Timer { every_blocks: 1 }` |
-| BLDR ZM       | 11     | `AddLiquidity(NTVE,BLDR) → SplitTransfer(LP → BLDR Bucket A)` | `Timer { every_blocks: 1 }` |
-| BLDR Bucket A | 12     | `Noop` — permanent BLDR LP accumulation                       | `Timer` (Noop)              |
-| BLDR Treasury | 13     | `Noop` — BLDR ecosystem fund                                  | `Timer` (Noop)              |
+| Actor                | aaa_id | Execution Plan                         | Trigger                     |
+| -------------------- | ------ | -------------------------------------- | --------------------------- |
+| BLDR Splitter        | 10     | Route NTVE + split BLDR 50/50          | `Timer { every_blocks: 1 }` |
+| BLDR Liquidity Actor | 11     | Add NTVE/BLDR LP → BLDR Bucket A       | `Timer { every_blocks: 1 }` |
+| BLDR Bucket A        | 12     | `Noop` — permanent BLDR LP accumulation | `Timer` (Noop)              |
+| BLDR Treasury        | 13     | `Noop` — BLDR ecosystem fund           | `Timer` (Noop)              |
 
 See [`aaa.architecture.en.md`](./aaa.architecture.en.md#current-tmctol-system-aaa-topology-on-deos) for the integrated System AAA topology, execution-plan families, and governance activation flows.
 
@@ -115,12 +115,12 @@ _The algorithmic issuer._
 - `Multi-Curve Architecture`: Each curve is identified by its `minted_asset` (formerly `native_asset`). The system supports multiple concurrent curves:
   - L1: `minted_asset = Native`, `foreign_asset = Foreign` (e.g., USDC)
   - L2: `minted_asset = Local(BLDR_ASSET_ID)`, `foreign_asset = Native`
-- `MintOutputResolver`: Single-method trait mapping `minted_asset → output_account`. TMC sends both the user's portion directly and routes the zap share (collateral + minted tokens) to a single sink address. The sink is responsible for downstream fan-out.
-  - Native → ZapManager sovereign (L1 liquidity provisioning)
+- `MintOutputResolver`: Single-method trait mapping `minted_asset → output_account`. TMC sends both the user's portion directly and routes the liquidity share (collateral + minted tokens) to a single sink address. The sink is responsible for downstream fan-out.
+  - Native → Liquidity Actor sovereign (L1 liquidity provisioning)
   - BLDR → BLDR Splitter sovereign (L2 distribution)
 - `Role`: Sets the "Hard Ceiling" on price. If market price > curve price, the Router automatically routes trades through TMC, creating arbitrage that feeds the protocol.
 
-#### 🔥 Burning Manager (System AAA #0 — The Sink)
+#### 🔥 Burn Actor (System AAA #0 — The Sink)
 
 _The deflationary engine._
 
@@ -136,12 +136,12 @@ _The launch economics fan-out hub._
 - `Collection Rule`: Unified 20% collator / 80% Fee Sink split applied to transaction fees, AAA fees, and future block rewards once the block reward source is defined. When the author cannot be resolved, 100% goes to Fee Sink.
 - `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — every block, timer-driven `every_blocks = 1`:
   1. 50% → staking-pool ingress holding account as native balance, later burned and minted into the local native-staking asset after AAA #14 donation execution
-  2. 50% → Native Staking LP Farmer AAA #14 as native balance, immediately burned and bridged into the local native-staking asset for donation execution
+  2. 50% → native staking LP provisioning actor AAA #14 as native balance, immediately burned and bridged into the local native-staking asset for donation execution
 - `Release Gate`: the Phase 1 staking-yield and LP-donation bridge is wired; block reward source/amount design remains the separate future gate.
 - `Phase 2 (future)`: 1∶1∶4 redistribution into staking pool, liquidity pool, and claimable LP-nomination rewards weighted by GovXP.
 - `Resilience`: Phase 1 SplitTransfer legs are unwrapped synchronously, with ED preservation for the Fee Sink sovereign account.
 
-#### ⚡ Zap Manager (System AAA #2 — The Transformer)
+#### ⚡ Liquidity Actor (System AAA #2 — The Transformer)
 
 _The liquidity compositor._
 
@@ -151,7 +151,7 @@ _The liquidity compositor._
   2. `SwapExactIn(foreign→native)` — patriotic accumulation of surplus foreign with reserve-aware slippage derived from current native pool depth
   3. `SplitTransfer(LP → TOL buckets)` — 50/16.67/16.67/16.66% to bucket AAA sovereign accounts
 - `Launch Policy`: The current runtime freezes this reserve-aware slippage at execution-plan build time rather than recomputing it live on every cycle; richer live per-cycle recomputation remains a future opt-in refinement, not launch debt.
-- `Genesis`: Noop skeleton. Real execution plan installed after pools exist.
+- `Genesis`: Noop dormant plan. Real execution plan installed after pools exist.
 
 #### 🏛️ TOL Buckets (System AAA #3..#6 — The Floor)
 
@@ -180,12 +180,12 @@ _The deflationary flywheel for protocol tokens._
 
 _The fan-out actor for BLDR TMC output._
 
-- `Function`: Receives both NTVE collateral and BLDR zap share from TMC MintOutputResolver. Distributes to BLDR ZM and BLDR Treasury.
+- `Function`: Receives both NTVE collateral and BLDR liquidity share from TMC MintOutputResolver. Distributes to the BLDR Liquidity Actor and BLDR Treasury.
 - `Execution Plan` (2 steps):
-  1. `Transfer(NTVE, AllBalance → BLDR ZM)` — collateral for liquidity provisioning
-  2. `SplitTransfer(BLDR, AllBalance, 50% → BLDR ZM, 50% → BLDR Treasury)` — token distribution
+  1. `Transfer(NTVE, AllBalance → BLDR Liquidity Actor)` — collateral for liquidity provisioning
+  2. `SplitTransfer(BLDR, AllBalance, 50% → BLDR Liquidity Actor, 50% → BLDR Treasury)` — token distribution
 
-#### ⚡ BLDR Zap Manager (System AAA #11 — L2 Liquidity)
+#### ⚡ BLDR Liquidity Actor (System AAA #11 — L2 Liquidity)
 
 _The BLDR-domain liquidity provisioner._
 
@@ -202,8 +202,8 @@ Token onboarding follows a governance-gated process:
 
 1. `Asset Registration`: Register foreign asset in `pallet-asset-registry` (`Location → AssetId`).
 2. `Pool Creation`: Create AMM pool via `pallet-asset-conversion`.
-3. `BM Execution-Plan Extension`: Call `update_execution_plan` on AAA #0 to add `SwapExactIn(foreign→native)` step.
-4. `ZM Execution-Plan Activation`: Call `update_execution_plan` on AAA #2 with `build_zap_execution_plan(foreign, lp_asset, dust)`.
+3. `Burn Actor Execution-Plan Extension`: Call `update_execution_plan` on AAA #0 to add `SwapExactIn(foreign→native)` step.
+4. `Liquidity Actor Execution-Plan Activation`: Call `update_execution_plan` on AAA #2 with `build_zap_execution_plan(foreign, lp_asset, dust)`.
 5. `TMC Curve Activation` (optional): Create emission curve for the token.
 
 **Protocol token onboarding (L2 — BLDR pattern):**
@@ -211,7 +211,7 @@ Token onboarding follows a governance-gated process:
 1. `Asset Creation`: Create protocol token in `pallet-assets`.
 2. `TMC Curve Creation`: `create_curve(BLDR, Native, initial_price, slope)`.
 3. `Pool Creation`: Create NTVE-BLDR AMM pool + seed initial liquidity.
-4. `Execution-Plan Activation`: Activate BLDR Splitter and BLDR ZM execution plans via governance.
+4. `Execution-Plan Activation`: Activate BLDR Splitter and BLDR Liquidity Actor execution plans via governance.
 
 Each step is independently reversible and governance-gated. No implicit cross-pallet coupling — each execution-plan update is explicit and auditable.
 
@@ -325,7 +325,7 @@ pub fn swap(from: AssetKind, to: AssetKind, ...) -> DispatchResult {
 All deterministic economic logic is expressed as composable execution plans:
 
 ```rust
-// Burning Manager execution plan: swap all foreign → native, then burn
+// Burn Actor execution plan: swap all foreign → native, then burn
 vec![
     Step { conditions: [BalanceAbove(foreign, dust)],
            task: SwapExactIn { foreign → Native, AllBalance, 5% slippage },
@@ -338,10 +338,10 @@ vec![
 // BLDR Splitter execution plan: forward NTVE, split BLDR
 vec![
     Step { conditions: [BalanceAbove(Native, dust)],
-           task: Transfer { Native, AllBalance → BLDR ZM },
+           task: Transfer { Native, AllBalance → BLDR Liquidity Actor },
            on_error: ContinueNextStep },
     Step { conditions: [BalanceAbove(BLDR, dust)],
-           task: SplitTransfer { BLDR, AllBalance, 50%→ZM + 50%→Treasury },
+           task: SplitTransfer { BLDR, AllBalance, 50%→Liquidity + 50%→Treasury },
            on_error: AbortCycle },
 ]
 
@@ -401,7 +401,7 @@ The interaction of actors creates a conditionally bounded economy:
 
 - `Ceiling`: Enforced by TMC. Multiple curves such as Native and BLDR each define independent ceilings.
 - `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. L1 support flows through AAA #3..#6; L2 BLDR support flows through AAA #12.
-- `Compression`: BM burns reduce live supply and ZM LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy Zap/liquidity accounting.
+- `Compression`: Burn Actor execution reduces live supply and liquidity-actor LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy liquidity accounting.
 
 ### 7.2 Deflationary Velocity
 
@@ -416,8 +416,8 @@ The BLDR economy creates a self-reinforcing loop:
 
 ```
 User buys BLDR (via Router TMC)
-  → NTVE collateral → BLDR Splitter → BLDR ZM → LP → BLDR Bucket A (floor ↑)
-  → BLDR zap share → 50% to ZM (more LP), 50% to Treasury (ecosystem fund)
+  → NTVE collateral → BLDR Splitter → BLDR Liquidity Actor → LP → BLDR Bucket A (floor ↑)
+  → BLDR liquidity share → 50% to Liquidity Actor (more LP), 50% to Treasury (ecosystem fund)
   → Bucket B unwind → Treasury B → buyback BLDR on XYK → burn (supply ↓)
 ```
 
@@ -441,11 +441,11 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 
 | Former Pallet                     | Replacement                         | LOC Saved |
 | --------------------------------- | ----------------------------------- | --------- |
-| `pallet-burning-manager`          | System AAA #0 (BM execution plan)   | ~1100     |
-| `pallet-zap-manager`              | System AAA #2 (ZM execution plan)   | ~2200     |
+| `pallet-burning-manager`          | System AAA #0 (Burn Actor plan)     | ~1100     |
+| `pallet-zap-manager`              | System AAA #2 (Liquidity Actor plan) | ~2200    |
 | `pallet-treasury-owned-liquidity` | System AAA #3..#6 (4 bucket actors) | ~3100     |
 
-Additional cleanup: `TolZapInterface` trait and `TolZapAdapter` removed from TMC (~150 LOC), superseded by `MintOutputResolver` + AAA execution-plan-driven routing.
+Additional cleanup: the former TMC-to-liquidity adapter traits were removed from TMC (~150 LOC), superseded by `MintOutputResolver` + AAA execution-plan-driven routing.
 
 ## 9. Conclusion
 
@@ -455,12 +455,11 @@ By expressing all deterministic economic flows as declarative execution plans on
 
 1. `Maximum Security`: Immune to Flash Loans and Dust Attacks. Slippage protection in every swap.
 2. `Composable Automation`: bounded AAA `Task` primitives compose into any economic flow. New actors require zero code changes.
-3. `Multi-Token Economy`: L1 (Native) and L2 (BLDR) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, ZM, and TOL buckets.
+3. `Multi-Token Economy`: L1 (Native) and L2 (BLDR) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
 4. `Optimal Performance`: AAA scheduler uses budget-capped `on_idle` with bounded `on_initialize` bookkeeping only. No block bloat.
 5. `Total Autonomy`: The economy runs itself — burning fees, provisioning liquidity, buying back protocol tokens, and managing treasury buckets every block cycle.
 6. `Radical Simplicity`: 4 pallets replace 7. Net −6000 LOC. Every deleted line is a line that can't have bugs.
 
 ---
 
-- `Version`: 0.1.0
 - `Last Updated`: March 2026

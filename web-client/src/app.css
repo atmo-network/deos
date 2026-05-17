@@ -1,11 +1,11 @@
-@import "tailwindcss";
-@import "./random-360.css";
+@import 'tailwindcss';
+@import './random-360.css';
 
 :root {
   animation: random-360 12s infinite;
   --mono-bg: #f5f6ee;
   --mono-surface: #ffffff;
-  --mono-border: hsl(var(--r) 0% 17%);
+  --mono-border: hsl(var(--r) 0% 0%);
   --mono-text: #2e2f2a;
   --mono-muted: #6f7260;
   --mono-green: #8abf0f;
@@ -86,17 +86,6 @@ select {
   transition: all 120ms ease;
 }
 
-button:focus-visible,
-input:focus-visible,
-select:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--mono-purple) 70%, white 30%);
-  outline-offset: 2px;
-}
-
-input[type="number"] {
-  -moz-appearance: textfield;
-}
-
 input::-webkit-outer-spin-button,
 input::-webkit-inner-spin-button {
   -webkit-appearance: none;
@@ -104,6 +93,15 @@ input::-webkit-inner-spin-button {
 
 .tabnum {
   font-variant-numeric: tabular-nums;
+}
+
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
 }
 
 @keyframes fadeSlideIn {

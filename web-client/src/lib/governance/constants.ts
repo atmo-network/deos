@@ -1,79 +1,85 @@
+/*
+Domain: Governance constants
+Owns: Default governance endpoint, domain ids, payload-kind constants, labels, and runtime surface descriptors.
+Excludes: Mutable session selection, adapter connection lifecycle, and proposal state.
+Zone: Governance foundation helper; exports stable constants for stores, adapters, and UI.
+*/
 import type {
   GovernanceQuerySurfaceAvailability,
   GovernanceWriteSurfaceAvailability,
-} from "./types";
+} from './types';
 
-export const DEFAULT_GOVERNANCE_WS_ENDPOINT = "ws://127.0.0.1:9988";
+export const DEFAULT_GOVERNANCE_WS_ENDPOINT = 'ws://127.0.0.1:9988';
 export const DEFAULT_GOVERNANCE_RPC_ENDPOINT = DEFAULT_GOVERNANCE_WS_ENDPOINT;
 
 export const GOVERNANCE_QUERY_SURFACE_AVAILABILITY: GovernanceQuerySurfaceAvailability =
   {
-    activeProposalDiscovery: "onchain",
-    recentFinalizedDiscovery: "onchain",
-    proposalStatus: "onchain",
-    proposalMetadata: "onchain",
-    proposalExecutionAuthority: "onchain",
-    authorizedRuntimeUpgrade: "onchain",
-    proposalSubmissionAuthority: "onchain",
-    proposalOpeningFee: "onchain",
-    proposalPayloadAvailability: "onchain",
-    payloadHashPreimageStatus: "onchain",
-    payloadPreimageNoteCost: "onchain",
-    proposalPrimaryTrackFamily: "onchain",
-    proposalPrimaryTrackTally: "onchain",
-    proposalWinningPrimaryOption: "onchain",
-    proposalTiming: "onchain",
-    proposalUrgentEligibility: "onchain",
-    proposalTally: "onchain",
-    accountGovernancePower: "onchain",
-    votePowerProfiles: "onchain",
-    rewardCoefficient: "onchain",
-    govxpCounters: "onchain",
-    proposalExecutionDetail: "onchain",
-    ballotTimelines: "materialized",
-    archiveSearch: "materialized",
+    activeProposalDiscovery: 'onchain',
+    recentFinalizedDiscovery: 'onchain',
+    proposalStatus: 'onchain',
+    proposalMetadata: 'onchain',
+    proposalExecutionAuthority: 'onchain',
+    authorizedRuntimeUpgrade: 'onchain',
+    proposalSubmissionAuthority: 'onchain',
+    proposalOpeningFee: 'onchain',
+    proposalPayloadAvailability: 'onchain',
+    payloadHashPreimageStatus: 'onchain',
+    payloadPreimageNoteCost: 'onchain',
+    proposalPrimaryTrackFamily: 'onchain',
+    proposalPrimaryTrackTally: 'onchain',
+    proposalWinningPrimaryOption: 'onchain',
+    proposalTiming: 'onchain',
+    proposalUrgentEligibility: 'onchain',
+    proposalTally: 'onchain',
+    accountGovernancePower: 'onchain',
+    votePowerProfiles: 'onchain',
+    rewardCoefficient: 'onchain',
+    govxpCounters: 'onchain',
+    proposalExecutionDetail: 'onchain',
+    ballotTimelines: 'materialized',
+    archiveSearch: 'materialized',
   };
 
 export const GOVERNANCE_RUNTIME_WRITE_SURFACE: GovernanceWriteSurfaceAvailability =
   {
     castVote: {
-      runtimeAccess: "signed",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'signed',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     submitProposal: {
-      runtimeAccess: "signed",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'signed',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     noteProposalPreimage: {
-      runtimeAccess: "signed",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'signed',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     resolveProposal: {
-      runtimeAccess: "admin",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'admin',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     rejectProposal: {
-      runtimeAccess: "admin",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'admin',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     resolveProposalFromVotes: {
-      runtimeAccess: "admin",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'admin',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     forceResolveProposalFromVotes: {
-      runtimeAccess: "admin",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'admin',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
     requeueProposalForAutoFinalization: {
-      runtimeAccess: "admin",
-      providerStatus: "unavailable",
-      reason: "Provider support not declared yet",
+      runtimeAccess: 'admin',
+      providerStatus: 'unavailable',
+      reason: 'Provider support not declared yet',
     },
   };

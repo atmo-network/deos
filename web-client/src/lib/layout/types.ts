@@ -1,45 +1,59 @@
-export type PanelId = "swap" | "chart" | "statistics" | "log" | "governance" | "wallet" | "automation" | "wiki";
+/*
+Domain: Layout contracts
+Owns: Workspace panel ids, tile tree types, lane topology types, and persisted frame state shapes.
+Excludes: Store mutation, DOM rendering, widget implementations, and adapter/domain state.
+Zone: Layout public contract; safe for layout, system, and widget composition to import.
+*/
+export type PanelId =
+  | 'swap'
+  | 'chart'
+  | 'statistics'
+  | 'log'
+  | 'governance'
+  | 'wallet'
+  | 'automation'
+  | 'wiki';
 
 export const ALL_PANELS: PanelId[] = [
-  "swap",
-  "chart",
-  "statistics",
-  "log",
-  "governance",
-  "wallet",
-  "automation",
-  "wiki",
+  'swap',
+  'chart',
+  'statistics',
+  'log',
+  'governance',
+  'wallet',
+  'automation',
+  'wiki',
 ];
 
 export const PANEL_LABELS: Record<PanelId, string> = {
-  swap: "Swap",
-  chart: "Chart",
-  statistics: "Statistics",
-  log: "Log",
-  governance: "Governance",
-  wallet: "Wallet",
-  automation: "Automation",
-  wiki: "Wiki",
+  swap: 'Swap',
+  chart: 'Chart',
+  statistics: 'Statistics',
+  log: 'Log',
+  governance: 'Governance',
+  wallet: 'Wallet',
+  automation: 'Automation',
+  wiki: 'Wiki',
 };
 
 export type TileLeaf = {
-  type: "leaf";
+  type: 'leaf';
   id: string;
   tabs: PanelId[];
   activeTab: PanelId;
 };
 
 export type TileSplit = {
-  type: "split";
+  type: 'split';
   id: string;
-  direction: "horizontal" | "vertical";
+  direction: 'horizontal' | 'vertical';
   ratio: number;
   children: [TileNode, TileNode];
 };
 
 export type TileNode = TileLeaf | TileSplit;
 
-export type DropEdge = "right" | "bottom" | "left";
+export type DropEdge = 'right' | 'bottom' | 'left';
 
 export type DragTabState = {
   tabId: PanelId;
@@ -55,12 +69,16 @@ export const MAX_TILE_GRID_COLUMNS = 4;
 export const MAX_TILE_GRID_ROWS = 4;
 export const MAX_TILE_LEAF_COUNT = MAX_TILE_GRID_COLUMNS * MAX_TILE_GRID_ROWS;
 
-export type ReservedLaneId = "header" | "footer" | "sidebar";
-export type ReservedLaneWidgetId = "account-chip" | "account-menu" | "settings" | "status";
-export type SidebarLaneEdge = "left" | "right";
+export type ReservedLaneId = 'header' | 'footer' | 'sidebar';
+export type ReservedLaneWidgetId =
+  | 'account-chip'
+  | 'account-menu'
+  | 'settings'
+  | 'status';
+export type SidebarLaneEdge = 'left' | 'right';
 export type ReservedLaneSpec = {
   id: ReservedLaneId;
-  edge: "top" | "bottom" | SidebarLaneEdge;
+  edge: 'top' | 'bottom' | SidebarLaneEdge;
   linear: true;
   tabbed: false;
   userMutable: false;
@@ -77,31 +95,31 @@ export type WorkspaceFrameState = {
 
 export const RESERVED_LANE_SPECS: Record<ReservedLaneId, ReservedLaneSpec> = {
   header: {
-    id: "header",
-    edge: "top",
+    id: 'header',
+    edge: 'top',
     linear: true,
     tabbed: false,
     userMutable: false,
-    widgets: ["account-chip"],
-    mobileWidgets: ["account-chip"],
+    widgets: ['account-chip'],
+    mobileWidgets: ['account-chip'],
   },
   footer: {
-    id: "footer",
-    edge: "bottom",
+    id: 'footer',
+    edge: 'bottom',
     linear: true,
     tabbed: false,
     userMutable: false,
-    widgets: ["status"],
-    mobileWidgets: ["status"],
+    widgets: ['status'],
+    mobileWidgets: ['status'],
   },
   sidebar: {
-    id: "sidebar",
-    edge: "right",
+    id: 'sidebar',
+    edge: 'right',
     linear: true,
     tabbed: false,
     userMutable: false,
-    widgets: ["account-menu", "settings"],
-    mobileWidgets: ["account-menu", "settings"],
+    widgets: ['account-menu', 'settings'],
+    mobileWidgets: ['account-menu', 'settings'],
   },
 };
 

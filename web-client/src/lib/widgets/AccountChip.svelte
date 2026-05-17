@@ -1,12 +1,19 @@
+<!--
+Domain: Account chip widget
+Owns: Compact active-account carousel, balance summary, and reserved header-lane account affordance.
+Excludes: Wallet account selection policy, portfolio refresh logic, and layout lane ownership.
+Zone: Presentation widget; consumes wallet/portfolio state and UI Kit formatting helpers.
+-->
 <script lang="ts">
-  import { ChevronLeft, ChevronRight } from "@lucide/svelte";
+  import { ChevronLeft, ChevronRight } from '@lucide/svelte';
 
-  import { portfolioStore } from "$lib/portfolio/index.svelte";
-  import { walletStore } from "$lib/wallet/index.svelte";
-  import { fmt, toFloat } from "$lib/shared/format";
+  import { portfolioStore } from '$lib/portfolio/index.svelte';
+  import { Button } from '$lib/ui';
+  import { fmt, toFloat } from '$lib/ui/format';
+  import { walletStore } from '$lib/wallet/index.svelte';
 
   type Props = {
-    edge: "left" | "right";
+    edge: 'left' | 'right';
     open: boolean;
     controlsId: string;
     onToggle: () => void;
@@ -20,8 +27,8 @@
   const foreignBalance = $derived(
     fmt(toFloat(portfolioStore.userBalance.foreign)),
   );
-  const nativeAsset = $derived(portfolioStore.findAsset("native"));
-  const foreignAsset = $derived(portfolioStore.findAsset("foreign"));
+  const nativeAsset = $derived(portfolioStore.findAsset('native'));
+  const foreignAsset = $derived(portfolioStore.findAsset('foreign'));
   const nativeSymbol = $derived(nativeAsset.symbol);
   const foreignSymbol = $derived(foreignAsset.symbol);
   const foreignCanonical = $derived(foreignAsset.isCanonical);
@@ -30,13 +37,13 @@
   const toggleLabel = $derived(
     open ? `Close ${edge} sidebar` : `Open ${edge} sidebar`,
   );
-  const pointsLeft = $derived(edge === "left" ? !open : open);
+  const pointsLeft = $derived(edge === 'left' ? !open : open);
 </script>
 
-<button
-  type="button"
+<Button
+  variant="secondary"
   onclick={onToggle}
-  class="flex min-w-0 items-center gap-3 rounded-xl border border-(--mono-border) bg-white px-2 py-1.5 text-xs tabnum shadow-sm transition-colors hover:border-(--mono-cyan)"
+  class="flex min-w-0 items-center gap-3 rounded-xl border-(--mono-border) bg-white px-2 py-1.5 text-xs tabnum shadow-sm hover:border-(--mono-cyan)"
   aria-expanded={open}
   aria-controls={controlsId}
   aria-label={toggleLabel}
@@ -62,4 +69,4 @@
   {:else}
     <ChevronRight size={14} class="shrink-0 text-(--mono-muted)" />
   {/if}
-</button>
+</Button>

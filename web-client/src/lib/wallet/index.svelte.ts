@@ -1,17 +1,23 @@
+/*
+Domain: Wallet store
+Owns: Selected account, signer discovery, local dev signer presets, and wallet availability/session state.
+Excludes: Adapter transport lifecycle, portfolio balances, tx execution policy, and widget rendering.
+Zone: Wallet state slice; owns signer-facing browser/session behavior.
+*/
+import { readStoredString, writeStoredString } from '$lib/system/persistence';
 import {
   DEFAULT_DEOS_DAPP_NAME,
   TMCTOL_DEV_SIGNER_PRESETS,
+  type TmctolInjectedSignerAccount,
+  type TmctolInjectedSignerAvailability,
   discoverInjectedSignerAccounts,
   hasBuiltInDevSigner,
   injectedSignerAvailability,
   isValidTmctolAddress,
-  type TmctolInjectedSignerAccount,
-  type TmctolInjectedSignerAvailability,
-} from "$lib/adapters/blockchain/signer";
-import { readStoredString, writeStoredString } from "$lib/shared/persistence";
+} from '$lib/wallet/signer';
 
-export type WalletAccountSource = "dev" | "injected" | "custom";
-export type WalletSignerStatus = "available" | "readonly" | "unavailable";
+export type WalletAccountSource = 'dev' | 'injected' | 'custom';
+export type WalletSignerStatus = 'available' | 'readonly' | 'unavailable';
 export type WalletAccountOption = {
   address: string;
   label: string;
@@ -21,6 +27,8 @@ export type WalletAccountOption = {
   note: string | null;
   suri: string | null;
 };
+export { isValidTmctolAddress };
+
 export type WalletState = {
   selectedAddress: string;
   selectedLabel: string;
@@ -41,7 +49,7 @@ function buildDevAccount(
   return {
     address: spec.address,
     label: spec.label,
-    source: "dev",
+    source: 'dev',
     extensionName: null,
     name: spec.label,
     note: `Zombienet preset ${spec.suri}`,
@@ -65,7 +73,7 @@ function injectedAccountLabel(account: TmctolInjectedSignerAccount): string {
 
 const DEV_ACCOUNTS = TMCTOL_DEV_SIGNER_PRESETS.map(buildDevAccount);
 const DEFAULT_DEV_ACCOUNT = DEV_ACCOUNTS[0];
-const WALLET_STORAGE_KEY = "deos.wallet.selected-address";
+const WALLET_STORAGE_KEY = 'deos.wallet.selected-address';
 
 class WalletStore {
   state: WalletState = $state({
@@ -73,7 +81,7 @@ class WalletStore {
     selectedLabel: DEFAULT_DEV_ACCOUNT.label,
     selectedSource: DEFAULT_DEV_ACCOUNT.source,
     accountInput: DEFAULT_DEV_ACCOUNT.address,
-    signerStatus: "available",
+    signerStatus: 'available',
     signerMessage: `In-browser dev signer enabled for ${DEFAULT_DEV_ACCOUNT.suri}. Use this only for local Zombienet-style testing.`,
     availability: injectedSignerAvailability(),
     injectedAccounts: [],
@@ -83,7 +91,7 @@ class WalletStore {
   });
 
   async init(): Promise<void> {
-    const persistedAddress = readStoredString(WALLET_STORAGE_KEY)?.trim() ?? "";
+    const persistedAddress = readStoredString(WALLET_STORAGE_KEY)?.trim() ?? '';
     if (persistedAddress.length > 0) {
       this.setSelectedAddress(persistedAddress);
     }
@@ -105,7 +113,7 @@ class WalletStore {
       this.state.injectedAccounts = accounts.map((account) => ({
         address: account.address,
         label: injectedAccountLabel(account),
-        source: "injected",
+        source: 'injected',
         extensionName: account.extensionName,
         name: account.name,
         note: `Injected by ${account.extensionName}`,
@@ -117,7 +125,7 @@ class WalletStore {
       this.state.lastError =
         error instanceof Error
           ? error.message
-          : "Unknown wallet discovery error";
+          : 'Unknown wallet discovery error';
     } finally {
       this.state.loadingInjectedAccounts = false;
       this.updateSignerSupport();
@@ -139,9 +147,9 @@ class WalletStore {
       return;
     }
     const alias = normalized.toLowerCase();
-    if (alias === "david") {
+    if (alias === 'david') {
       const dave = this.state.devAccounts.find(
-        (account) => account.label === "Dave",
+        (account) => account.label === 'Dave',
       );
       if (dave) {
         this.selectAccount(dave);
@@ -170,7 +178,7 @@ class WalletStore {
     this.selectAccount({
       address: normalized,
       label: shortenAddress(normalized),
-      source: "custom",
+      source: 'custom',
       extensionName: null,
       name: null,
       note: null,
@@ -230,16 +238,16 @@ class WalletStore {
   private updateSignerSupport(): void {
     const selectedAddress = this.state.selectedAddress.trim();
     if (selectedAddress.length === 0) {
-      this.state.signerStatus = "unavailable";
+      this.state.signerStatus = 'unavailable';
       this.state.signerMessage =
-        "Select or paste an account before sending transactions";
+        'Select or paste an account before sending transactions';
       return;
     }
     const matchedInjected = this.state.injectedAccounts.find(
       (account) => account.address === selectedAddress,
     );
     if (matchedInjected) {
-      this.state.signerStatus = "available";
+      this.state.signerStatus = 'available';
       this.state.signerMessage = `Injected signer ready via ${matchedInjected.extensionName}`;
       return;
     }
@@ -247,31 +255,31 @@ class WalletStore {
       (account) => account.address === selectedAddress,
     );
     if (matchedDev) {
-      this.state.signerStatus = "available";
+      this.state.signerStatus = 'available';
       this.state.signerMessage = `In-browser dev signer enabled for ${matchedDev.suri}. Use this only for local Zombienet-style testing.`;
       return;
     }
-    if (this.state.selectedSource === "custom") {
-      this.state.signerStatus = "readonly";
+    if (this.state.selectedSource === 'custom') {
+      this.state.signerStatus = 'readonly';
       this.state.signerMessage =
-        this.state.availability.status === "available"
-          ? "Custom address loaded in watch-only mode. Connect an injected signer for the same address to submit transactions."
+        this.state.availability.status === 'available'
+          ? 'Custom address loaded in watch-only mode. Connect an injected signer for the same address to submit transactions.'
           : `Custom address loaded in watch-only mode. ${this.state.availability.message}`;
       return;
     }
-    if (this.state.availability.status === "no-extension") {
-      this.state.signerStatus = "unavailable";
-      this.state.signerMessage = "No injected wallet extension detected";
+    if (this.state.availability.status === 'no-extension') {
+      this.state.signerStatus = 'unavailable';
+      this.state.signerMessage = 'No injected wallet extension detected';
       return;
     }
-    if (this.state.availability.status === "browser-unsupported") {
-      this.state.signerStatus = "unavailable";
+    if (this.state.availability.status === 'browser-unsupported') {
+      this.state.signerStatus = 'unavailable';
       this.state.signerMessage = this.state.availability.message;
       return;
     }
-    this.state.signerStatus = "unavailable";
+    this.state.signerStatus = 'unavailable';
     this.state.signerMessage =
-      "Selected address is not present in the connected injected wallet accounts";
+      'Selected address is not present in the connected injected wallet accounts';
   }
 
   get selectedAddress(): string {

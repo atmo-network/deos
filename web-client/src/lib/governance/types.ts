@@ -1,4 +1,10 @@
-import type { ReadModelValue } from "$lib/shared/read-model";
+/*
+Domain: Governance contracts
+Owns: Governance domain, proposal, vote, payload, capability, preimage, and materialized read-model shapes.
+Excludes: Store lifecycle, adapter RPC implementation, widget rendering, and payload encoding helpers.
+Zone: Governance public contract; safe for adapters, stores, and governance UI to import.
+*/
+import type { ReadModelValue } from '$lib/read-model';
 
 export type GovernanceDomainId = number;
 export type GovernanceItemId = number;
@@ -7,102 +13,102 @@ export type GovernanceAccountId = string;
 export type GovernanceWeight = bigint;
 export type GovernanceRewardCoefficient = string;
 export type GovernanceVoteKind =
-  | "aye"
-  | "nay"
-  | "amplify"
-  | "approve"
-  | "reduce"
-  | "veto"
-  | "pass";
-export type GovernanceProposalCadenceMode = "Ordinary" | "Fast";
-export type GovernanceProposalPrimaryTrackFamily = "Binary" | "Invoice";
+  | 'aye'
+  | 'nay'
+  | 'amplify'
+  | 'approve'
+  | 'reduce'
+  | 'veto'
+  | 'pass';
+export type GovernanceProposalCadenceMode = 'Ordinary' | 'Fast';
+export type GovernanceProposalPrimaryTrackFamily = 'Binary' | 'Invoice';
 export type GovernancePrimaryTrackOption =
-  | "Aye"
-  | "Nay"
-  | "Amplify"
-  | "Approve"
-  | "Reduce";
+  | 'Aye'
+  | 'Nay'
+  | 'Amplify'
+  | 'Approve'
+  | 'Reduce';
 export type GovernanceVotePowerProfile =
-  | "DecliningDirectStake"
-  | "DecliningVetoAsset"
-  | "DecliningNativeStake"
-  | "FlatUrgentDirectStake";
-export type GovernanceQuerySurfaceKind = "onchain" | "materialized";
+  | 'DecliningDirectStake'
+  | 'DecliningVetoAsset'
+  | 'DecliningNativeStake'
+  | 'FlatUrgentDirectStake';
+export type GovernanceQuerySurfaceKind = 'onchain' | 'materialized';
 export type GovernanceProposalRejectionReason =
-  | "AdminRejected"
-  | "NoVotes"
-  | "VoteTie"
-  | "TurnoutBelowMinimum"
-  | "ApprovalThresholdNotMet";
+  | 'AdminRejected'
+  | 'NoVotes'
+  | 'VoteTie'
+  | 'TurnoutBelowMinimum'
+  | 'ApprovalThresholdNotMet';
 export type GovernanceVetoCancellationMode =
-  | "ImmediateThreshold"
-  | "TrackOutcome";
+  | 'ImmediateThreshold'
+  | 'TrackOutcome';
 export type GovernanceProposalResolutionState =
   | {
-      kind: "VotingWindowOpen";
+      kind: 'VotingWindowOpen';
       currentEpoch: GovernanceEpoch;
       maturityEpoch: GovernanceEpoch;
     }
   | {
-      kind: "VetoPassing";
+      kind: 'VetoPassing';
       vetoWeight: GovernanceWeight;
       passWeight: GovernanceWeight;
       mode: GovernanceVetoCancellationMode;
     }
-  | { kind: "PassingAye" }
-  | { kind: "PassingAmplify" }
-  | { kind: "PassingApprove" }
-  | { kind: "PassingReduce" }
-  | { kind: "PassingNay" }
+  | { kind: 'PassingAye' }
+  | { kind: 'PassingAmplify' }
+  | { kind: 'PassingApprove' }
+  | { kind: 'PassingReduce' }
+  | { kind: 'PassingNay' }
   | {
-      kind: "Confirming";
+      kind: 'Confirming';
       confirmStartedEpoch: GovernanceEpoch;
       confirmEndEpoch: GovernanceEpoch;
     }
   | {
-      kind: "Rejected";
+      kind: 'Rejected';
       reason: GovernanceProposalRejectionReason;
     };
 export type GovernanceFinalizedProposalOutcome =
   | {
-      kind: "Resolved";
+      kind: 'Resolved';
       epoch: GovernanceEpoch;
       winnerCount: number;
     }
   | {
-      kind: "Rejected";
+      kind: 'Rejected';
       epoch: GovernanceEpoch;
       reason: GovernanceProposalRejectionReason;
     }
   | {
-      kind: "VetoCancelled";
+      kind: 'VetoCancelled';
       epoch: GovernanceEpoch;
       vetoWeight: GovernanceWeight;
     }
   | {
-      kind: "Enacted";
+      kind: 'Enacted';
       approvedEpoch: GovernanceEpoch;
       executedEpoch: GovernanceEpoch;
       winnerCount: number;
     }
   | {
-      kind: "ExecutionFailed";
+      kind: 'ExecutionFailed';
       approvedEpoch: GovernanceEpoch;
       failedEpoch: GovernanceEpoch;
       winnerCount: number;
     }
   | {
-      kind: "AdvisoryFinalized";
+      kind: 'AdvisoryFinalized';
       approvedEpoch: GovernanceEpoch;
       finalizedEpoch: GovernanceEpoch;
       winnerCount: number;
     };
 export type GovernanceProposalPayloadKind =
-  | "L1RootAction"
-  | "L2TreasurySpend"
-  | "L2ParameterChange"
-  | "Intent"
-  | "L2SignalToL1";
+  | 'L1RootAction'
+  | 'L2TreasurySpend'
+  | 'L2ParameterChange'
+  | 'Intent'
+  | 'L2SignalToL1';
 export type GovernanceProposalMetadata = {
   cadenceMode: GovernanceProposalCadenceMode;
   payloadKind: GovernanceProposalPayloadKind;
@@ -130,50 +136,50 @@ export type GovernanceProposalTiming = {
   pendingEnactmentEpoch: GovernanceEpoch | null;
 };
 export type GovernanceProposalExecutionAuthority =
-  | "Root"
-  | "DomainTreasury"
-  | "DomainParameters"
-  | "NonExecutable";
+  | 'Root'
+  | 'DomainTreasury'
+  | 'DomainParameters'
+  | 'NonExecutable';
 export type GovernanceAuthorizedRuntimeUpgrade = {
   codeHash: string;
   checkVersion: boolean;
 };
-export type GovernanceProposalSubmissionAuthority = "Signed" | "AdminOnly";
+export type GovernanceProposalSubmissionAuthority = 'Signed' | 'AdminOnly';
 export type GovernanceProposalOpeningFee = bigint;
 export type GovernancePayloadPreimageNoteCost = bigint;
 export type GovernanceProposalExecutionFailureReason =
-  | "MissingPreimage"
-  | "InvalidPreimage"
-  | "UnsupportedDomain"
-  | "UnsupportedCall"
-  | "UnsupportedTarget"
-  | "UnsupportedPayloadKind"
-  | "MissingWinningPrimaryOption"
-  | "DispatchFailed";
+  | 'MissingPreimage'
+  | 'InvalidPreimage'
+  | 'UnsupportedDomain'
+  | 'UnsupportedCall'
+  | 'UnsupportedTarget'
+  | 'UnsupportedPayloadKind'
+  | 'MissingWinningPrimaryOption'
+  | 'DispatchFailed';
 export type GovernanceProposalParameterChangeSurface =
-  | "RouterFee"
-  | "TrackedAsset";
+  | 'RouterFee'
+  | 'TrackedAsset';
 export type GovernanceProposalTreasurySpendSettlementKind =
-  | "DirectTransfer"
-  | "InvoiceScalarTransfer";
+  | 'DirectTransfer'
+  | 'InvoiceScalarTransfer';
 export type GovernanceProposalTreasurySpendScalar =
-  | "Amplify"
-  | "Approve"
-  | "Reduce";
+  | 'Amplify'
+  | 'Approve'
+  | 'Reduce';
 export type GovernanceProposalExecutionSuccessDetail =
   | {
-      kind: "Generic";
+      kind: 'Generic';
     }
   | {
-      kind: "RuntimeUpgradeAuthorized";
+      kind: 'RuntimeUpgradeAuthorized';
       codeHash: string;
     }
   | {
-      kind: "ParameterChangeExecuted";
+      kind: 'ParameterChangeExecuted';
       surface: GovernanceProposalParameterChangeSurface;
     }
   | {
-      kind: "TreasurySpendExecuted";
+      kind: 'TreasurySpendExecuted';
       fundingSource: GovernanceAccountId;
       beneficiary: GovernanceAccountId;
       payoutAsset: GovernanceDomainId;
@@ -184,36 +190,36 @@ export type GovernanceProposalExecutionSuccessDetail =
     };
 export type GovernanceProposalExecutionDetail =
   | {
-      kind: "Executed";
+      kind: 'Executed';
       payloadKind: GovernanceProposalPayloadKind;
       authority: GovernanceProposalExecutionAuthority;
       executedEpoch: GovernanceEpoch;
       detail: GovernanceProposalExecutionSuccessDetail;
     }
   | {
-      kind: "ExecutionFailed";
+      kind: 'ExecutionFailed';
       payloadKind: GovernanceProposalPayloadKind;
       authority: GovernanceProposalExecutionAuthority;
       failedEpoch: GovernanceEpoch;
       reason: GovernanceProposalExecutionFailureReason;
     }
   | {
-      kind: "AdvisoryFinalized";
+      kind: 'AdvisoryFinalized';
       payloadKind: GovernanceProposalPayloadKind;
       finalizedEpoch: GovernanceEpoch;
     };
 export type GovernanceProposalStatus =
   | {
-      kind: "Active";
+      kind: 'Active';
       resolution: GovernanceProposalResolutionState;
     }
   | {
-      kind: "PendingEnactment";
+      kind: 'PendingEnactment';
       outcome: GovernanceFinalizedProposalOutcome;
       enactmentEpoch: GovernanceEpoch;
     }
   | {
-      kind: "Finalized";
+      kind: 'Finalized';
       outcome: GovernanceFinalizedProposalOutcome;
     };
 export type GovernanceFrozenBallot = {
@@ -252,7 +258,7 @@ export type GovernanceProposalVoteTally = {
 };
 export type GovernanceProposalPrimaryTrackTally =
   | {
-      kind: "Binary";
+      kind: 'Binary';
       ayeVoters: number;
       nayVoters: number;
       ayeWeight: GovernanceWeight;
@@ -261,7 +267,7 @@ export type GovernanceProposalPrimaryTrackTally =
       leadingOption: GovernancePrimaryTrackOption | null;
     }
   | {
-      kind: "Invoice";
+      kind: 'Invoice';
       amplifyVoters: number;
       approveVoters: number;
       reduceVoters: number;
@@ -314,21 +320,21 @@ export type GovernanceQuerySurfaceAvailability = {
   archiveSearch: GovernanceQuerySurfaceKind;
 };
 export type GovernanceWriteOperation =
-  | "castVote"
-  | "submitProposal"
-  | "noteProposalPreimage"
-  | "resolveProposal"
-  | "rejectProposal"
-  | "resolveProposalFromVotes"
-  | "forceResolveProposalFromVotes"
-  | "requeueProposalForAutoFinalization";
-export type GovernanceWriteAccessKind = "signed" | "admin";
-export type GovernanceWriteProviderStatus = "available" | "unavailable";
+  | 'castVote'
+  | 'submitProposal'
+  | 'noteProposalPreimage'
+  | 'resolveProposal'
+  | 'rejectProposal'
+  | 'resolveProposalFromVotes'
+  | 'forceResolveProposalFromVotes'
+  | 'requeueProposalForAutoFinalization';
+export type GovernanceWriteAccessKind = 'signed' | 'admin';
+export type GovernanceWriteProviderStatus = 'available' | 'unavailable';
 export type GovernanceProviderStatus =
-  | "mock"
-  | "connected"
-  | "unconfigured"
-  | "error";
+  | 'mock'
+  | 'connected'
+  | 'unconfigured'
+  | 'error';
 export type GovernanceProviderState = {
   status: GovernanceProviderStatus;
   label: string;

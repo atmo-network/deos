@@ -1,5 +1,11 @@
+<!--
+Domain: Governance semantics UI
+Owns: Proposal cadence, payload-kind, domain, and track semantics row presentation.
+Excludes: Proposal fetching, write execution, payload encoding, and generic detail-row primitives.
+Zone: Governance component; receives already-derived labels/details from governance views.
+-->
 <script lang="ts">
-  import { DetailRow } from "$lib/shared/ui";
+  import { DetailRow } from '$lib/ui';
 
   type Props = {
     cadenceLabel: string;
