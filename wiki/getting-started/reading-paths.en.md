@@ -23,6 +23,7 @@ tags:
   - reading-path
   - documentation
 related:
+  - Start Here
   - Domain Map
   - First Steps
   - Generated Wiki
@@ -39,23 +40,24 @@ confidence: 0.91
 
 DEOS has several linked domains: framework identity, economic physics, autonomous actors, routing, governance, staking, read models, client, tooling, and future gates. You do not need to read everything in one pass.
 
-Use the path that matches your task. Each path stays inside the wiki and ends with the concepts you need to understand before touching code, runtime parameters, or release notes.
+If you only need the shortest entry, use [Start Here](start-here.en.md) first. Use this page when you need a broader role-based reading route after choosing the right onboarding path.
 
 ## If you are completely new
 
-1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-2. [Who DEOS Is For](who-deos-is-for.en.md)
-3. [Partner Pitch](partner-pitch.en.md)
-4. [Executive Summary](executive-summary.en.md)
-5. [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
-6. [DEOS Framework Overview](../overview/deos-framework.en.md)
-7. [Domain Map](../concepts/domain-map.en.md)
-8. [Architecture Diagrams](../concepts/architecture-diagrams.en.md)
-9. [Core Terms](../glossary/core-terms.en.md)
-10. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
-11. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-12. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-13. [Newcomer FAQ](../faq/newcomer-faq.en.md)
+1. [Start Here](start-here.en.md)
+2. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
+3. [Who DEOS Is For](who-deos-is-for.en.md)
+4. [Partner Pitch](partner-pitch.en.md)
+5. [Executive Summary](executive-summary.en.md)
+6. [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
+7. [DEOS Framework Overview](../overview/deos-framework.en.md)
+8. [Domain Map](../concepts/domain-map.en.md)
+9. [Architecture Diagrams](../concepts/architecture-diagrams.en.md)
+10. [Core Terms](../glossary/core-terms.en.md)
+11. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
+12. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+13. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
+14. [Newcomer FAQ](../faq/newcomer-faq.en.md)
 
 This path gives you project vocabulary before pallet names, runtime details, or implementation-specific terms appear.
 
@@ -154,6 +156,7 @@ Tooling and fork work should stay bounded, explicit, and honest about prerequisi
 
 ## Related
 
+- [Start Here](start-here.en.md)
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Who DEOS Is For](who-deos-is-for.en.md)
 - [Partner Pitch](partner-pitch.en.md)

@@ -41,18 +41,22 @@ This wiki is a self-contained knowledge product for understanding that framework
 
 ## Start here
 
+- [Start Here](getting-started/start-here.en.md) — choose one route: understand DEOS in 10 minutes, run it locally, or fork and change the economy safely
 - [DEOS in 60 Seconds](getting-started/deos-in-60-seconds.en.md) — the external-facing hook before the architecture graph
+- [Partner Evaluation Route](usage/partner-evaluation-route.en.md) — five-page fork/adoption evaluation path
+- [First Steps](getting-started/first-steps.en.md) — a broader newcomer route after the onboarding spine
+- [Reading Paths](getting-started/reading-paths.en.md) — task-oriented routes through the wiki
+- [Domain Map](concepts/domain-map.en.md) — the main map of knowledge domains
+- [Core Terms](glossary/core-terms.en.md) — vocabulary for the whole graph
+
+## Evaluation shortcuts
+
 - [Who DEOS Is For](getting-started/who-deos-is-for.en.md) — audience map for partners, builders, and operators
 - [Partner Pitch](getting-started/partner-pitch.en.md) — external-facing why-it-matters page for partner teams
 - [Executive Summary](getting-started/executive-summary.en.md) — one-page summary for ecosystem and investor readers
-- [Partner Evaluation Route](usage/partner-evaluation-route.en.md) — five-page fork/adoption evaluation path
-- [Domain Map](concepts/domain-map.en.md) — the main map of knowledge domains
 - [End-to-End Flows](concepts/end-to-end-flows.en.md) — concrete walkthroughs across routing, actors, buckets, staking, and validation
 - [Architecture Diagrams](concepts/architecture-diagrams.en.md) — compact text maps for subsystem relationships
 - [DEOS Framework Overview](overview/deos-framework.en.md) — what the framework is
-- [First Steps](getting-started/first-steps.en.md) — a short newcomer route
-- [Reading Paths](getting-started/reading-paths.en.md) — task-oriented routes through the wiki
-- [Core Terms](glossary/core-terms.en.md) — vocabulary for the whole graph
 
 ## Domain hubs
 

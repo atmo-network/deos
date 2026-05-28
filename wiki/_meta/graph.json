@@ -1,9 +1,6 @@
 {
   "default_locale": "en",
-  "available_locales": [
-    "en",
-    "ru"
-  ],
+  "available_locales": ["en", "ru"],
   "nodes": [
     {
       "id": "index",
@@ -135,6 +132,18 @@
       "path": {
         "en": "overview/reference-client.en.md",
         "ru": "overview/reference-client.ru.md"
+      }
+    },
+    {
+      "id": "start-here",
+      "title": {
+        "en": "Start Here",
+        "ru": "Начните здесь"
+      },
+      "page_type": "getting-started",
+      "path": {
+        "en": "getting-started/start-here.en.md",
+        "ru": "getting-started/start-here.ru.md"
       }
     },
     {
@@ -643,6 +652,11 @@
     }
   ],
   "edges": [
+    {
+      "from": "index",
+      "to": "start-here",
+      "type": "entrypoint"
+    },
     {
       "from": "index",
       "to": "deos-framework",
@@ -1675,13 +1689,63 @@
     },
     {
       "from": "index",
+      "to": "start-here",
+      "type": "starts"
+    },
+    {
+      "from": "start-here",
       "to": "deos-in-60-seconds",
+      "type": "route-understand"
+    },
+    {
+      "from": "start-here",
+      "to": "partner-evaluation-route",
+      "type": "route-understand"
+    },
+    {
+      "from": "start-here",
+      "to": "scripts-layer",
+      "type": "route-local-run"
+    },
+    {
+      "from": "start-here",
+      "to": "validation-troubleshooting",
+      "type": "route-local-run"
+    },
+    {
+      "from": "start-here",
+      "to": "minimal-fork-profile",
+      "type": "route-fork"
+    },
+    {
+      "from": "start-here",
+      "to": "forking-deos",
+      "type": "route-fork"
+    },
+    {
+      "from": "start-here",
+      "to": "three-layer-validation",
+      "type": "route-fork"
+    },
+    {
+      "from": "index",
+      "to": "deos-in-60-seconds",
+      "type": "starts"
+    },
+    {
+      "from": "first-steps",
+      "to": "start-here",
       "type": "starts"
     },
     {
       "from": "first-steps",
       "to": "deos-in-60-seconds",
       "type": "starts"
+    },
+    {
+      "from": "reading-paths",
+      "to": "start-here",
+      "type": "recommends"
     },
     {
       "from": "reading-paths",

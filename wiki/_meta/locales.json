@@ -1,10 +1,7 @@
 {
-  "generated_at": "2026-05-17",
+  "generated_at": "2026-05-28",
   "default_locale": "en",
-  "supported_locales": [
-    "en",
-    "ru"
-  ],
+  "supported_locales": ["en", "ru"],
   "entrypoints": {
     "index": {
       "en": "index.en.md",
@@ -61,6 +58,10 @@
     "reference-client": {
       "en": "overview/reference-client.en.md",
       "ru": "overview/reference-client.ru.md"
+    },
+    "start-here": {
+      "en": "getting-started/start-here.en.md",
+      "ru": "getting-started/start-here.ru.md"
     },
     "first-steps": {
       "en": "getting-started/first-steps.en.md",

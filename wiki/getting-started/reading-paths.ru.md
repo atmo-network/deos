@@ -24,6 +24,7 @@ tags:
   - reading-path
   - documentation
 related:
+  - Начните здесь
   - Карта доменов
   - Первые шаги
   - Generated Wiki
@@ -40,23 +41,24 @@ confidence: 0.91
 
 У DEOS есть несколько связанных доменов: идентичность фреймворка, экономическая физика, автономные акторы, маршрутизация, governance, стейкинг, модели чтения, клиент, инструменты и будущие внешние условия. Не нужно читать все за один проход.
 
-Выберите маршрут под свою задачу. Каждый маршрут остается внутри wiki и заканчивается понятиями, которые нужно понять перед изменением кода, runtime-параметров или заметок к релизу.
+Если нужен самый короткий вход, сначала используйте [Начните здесь](start-here.ru.md). Эта страница нужна после выбора onboarding-пути, когда требуется более широкий role-based маршрут чтения.
 
 ## Если вы совсем новичок
 
-1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-2. [Для кого DEOS](who-deos-is-for.ru.md)
-3. [Partner Pitch](partner-pitch.ru.md)
-4. [Executive Summary](executive-summary.ru.md)
-5. [Маршрут оценки для партнера](../usage/partner-evaluation-route.ru.md)
-6. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-7. [Карта доменов](../concepts/domain-map.ru.md)
-8. [Архитектурные схемы](../concepts/architecture-diagrams.ru.md)
-9. [Базовые термины](../glossary/core-terms.ru.md)
-10. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
-11. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-12. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-13. [FAQ для новичков](../faq/newcomer-faq.ru.md)
+1. [Начните здесь](start-here.ru.md)
+2. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
+3. [Для кого DEOS](who-deos-is-for.ru.md)
+4. [Partner Pitch](partner-pitch.ru.md)
+5. [Executive Summary](executive-summary.ru.md)
+6. [Маршрут оценки для партнера](../usage/partner-evaluation-route.ru.md)
+7. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
+8. [Карта доменов](../concepts/domain-map.ru.md)
+9. [Архитектурные схемы](../concepts/architecture-diagrams.ru.md)
+10. [Базовые термины](../glossary/core-terms.ru.md)
+11. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
+12. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+13. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
+14. [FAQ для новичков](../faq/newcomer-faq.ru.md)
 
 Этот маршрут дает словарь проекта до того, как появятся имена pallet-ов, детали runtime или термины конкретной реализации.
 
@@ -155,6 +157,7 @@ confidence: 0.91
 
 ## Связанные страницы
 
+- [Начните здесь](start-here.ru.md)
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
 - [Для кого DEOS](who-deos-is-for.ru.md)
 - [Partner Pitch](partner-pitch.ru.md)

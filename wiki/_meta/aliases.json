@@ -1,9 +1,6 @@
 {
   "default_locale": "en",
-  "available_locales": [
-    "en",
-    "ru"
-  ],
+  "available_locales": ["en", "ru"],
   "aliases": {
     "en": {
       "DEOS": "deos-framework",
@@ -37,9 +34,14 @@
       "Domain DAG": "ui-kit-and-domain-dag",
       "Domain DAG ownership": "ui-kit-and-domain-dag",
       "Frontend ownership": "ui-kit-and-domain-dag",
+      "Start Here": "start-here",
+      "Onboarding spine": "start-here",
+      "Newcomer onboarding": "start-here",
+      "Run locally": "start-here",
+      "Fork and change economy": "start-here",
       "Reading Paths": "reading-paths",
       "Reading path": "reading-paths",
-      "Where to start": "reading-paths",
+      "Where to start": "start-here",
       "Development Status": "status",
       "Project Status": "status",
       "Release Status": "status",
@@ -197,9 +199,14 @@
       "Domain DAG": "ui-kit-and-domain-dag",
       "Domain DAG ownership": "ui-kit-and-domain-dag",
       "Frontend ownership": "ui-kit-and-domain-dag",
+      "Начните здесь": "start-here",
+      "Onboarding spine": "start-here",
+      "Маршрут новичка": "start-here",
+      "Поднять локально": "start-here",
+      "Форкнуть и изменить экономику": "start-here",
       "Маршруты чтения": "reading-paths",
       "Reading Paths": "reading-paths",
-      "С чего начать": "reading-paths",
+      "С чего начать": "start-here",
       "Статус разработки": "status",
       "Статус проекта": "status",
       "Статус релиза": "status",

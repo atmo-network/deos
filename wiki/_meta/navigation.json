@@ -1,12 +1,10 @@
 {
-  "generated_at": "2026-05-17",
+  "generated_at": "2026-05-28",
   "audience": "newcomer",
   "default_locale": "en",
-  "available_locales": [
-    "en",
-    "ru"
-  ],
+  "available_locales": ["en", "ru"],
   "entrypoints": [
+    "start-here",
     "deos-framework",
     "first-steps",
     "core-terms",
@@ -20,6 +18,22 @@
         "ru": "Начните здесь"
       },
       "items": [
+        {
+          "id": "start-here",
+          "title": {
+            "en": "Start Here",
+            "ru": "Начните здесь"
+          },
+          "path": {
+            "en": "getting-started/start-here.en.md",
+            "ru": "getting-started/start-here.ru.md"
+          },
+          "page_type": "getting-started",
+          "summary": {
+            "en": "Choose one route: understand DEOS in 10 minutes, run it locally, or fork and change the economy safely.",
+            "ru": "Выберите один путь: понять DEOS за 10 минут, поднять локально или безопасно форкнуть и изменить экономику."
+          }
+        },
         {
           "id": "deos-in-60-seconds",
           "title": {

@@ -19,6 +19,7 @@ tags:
   - onboarding
   - workflow
 related:
+  - Start Here
   - DEOS in 60 Seconds
   - Executive Summary
   - Partner Evaluation Route
@@ -40,10 +41,11 @@ If you are new to DEOS, start with the hook before the domain graph. DEOS is a f
 
 The project is not just a runtime, not just a web client, and not just a tokenomic formula. It is a framework where economic physics, autonomous actors, governance, staking, client read models, and validation tools reinforce each other.
 
-A good first pass is: understand the meme, decide whether you are evaluating DEOS as a partner or as a builder, then choose the domain you are actually changing.
+A good first pass is: use [Start Here](start-here.en.md) to choose the 10-minute understanding path, the local-run path, or the fork-and-change-economy path. Then use this page when you need the broader domain map.
 
 ## First route
 
+0. [Start Here](start-here.en.md)
 1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 2. [Executive Summary](executive-summary.en.md)
 3. [Who DEOS Is For](who-deos-is-for.en.md)
@@ -92,6 +94,7 @@ Use the smallest meaningful validation layer first:
 
 ## Related
 
+- [Start Here](start-here.en.md)
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Executive Summary](executive-summary.en.md)
 - [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
