@@ -4,6 +4,16 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.5.3: Stable2603-3 Operator Hotfix
+
+- `[Operations]` Local Polkadot SDK binary defaults now target `polkadot-stable2603-3` / node `v1.22.3`, including benchmark helper guidance. Impact: local operators pick up the latest stable2603 patch fixes when downloading Omni Node tooling.
+- `[Docs]` SDK tracking context now records stable2603-3 as the current stable patch line over the same 2603.0.0 crate baseline, with no compatible DEOS lockfile delta found for direct SDK dependencies. Impact: maintainers can distinguish local binary/tool updates from runtime API or umbrella-crate migrations.
+
+## 0.5.2: Partner Pitch Entry Surface
+
+- `[Onboarding]` The root README and Start Here route now point partner evaluators to the dedicated Partner Pitch before deeper architecture reading. Impact: external teams get a short adoption-facing why-it-matters page before entering the full wiki graph.
+- `[Wiki]` The Partner Pitch now includes a safe-change boundary that separates downstream product customization from protocol-review changes. Impact: partner teams can distinguish first fork moves from changes that affect economic or governance guarantees.
+
 ## 0.5.1: Onboarding And Changelog Hotfix
 
 - `[Onboarding]` DEOS now has a primary Start Here route in English and Russian that lets newcomers choose between understanding the project in 10 minutes, running it locally, or forking and changing the economy safely. Impact: external readers no longer need to enter through the full wiki graph or maintainer-oriented `AGENTS.md` context before finding the right path.

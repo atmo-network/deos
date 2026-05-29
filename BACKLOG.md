@@ -26,7 +26,7 @@
 > - Domain-scoped `primary + protection` governance for the current launch policy
 > - Reserve-aware liquidity-actor slippage frozen to execution-plan build time for the current launch line
 > - Same-asset auto-compound reward settlement
-> - Polkadot SDK `2603` / node `1.22.2` runtime line
+> - Polkadot SDK `2603` / node `1.22.3` runtime line
 
 ## Open Product / Client Work
 

@@ -12,12 +12,13 @@ DEOS is intentionally the foundation layer, not a finished product. It provides 
 - `Economic`: The managed domain is capital formation and allocation—not arbitrary general-purpose application logic.
 - `Operating System`: The runtime kernel, AAA scheduler, routing, and governance act as domain-specific operating services for forked token economies.
 
-_For the wiki-native external entry point, start with [Start Here](./wiki/getting-started/start-here.en.md), then choose the 10-minute understanding path, the local-run path, or the fork-and-change-economy path._
+_For the wiki-native external entry point, start with the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md) if you are evaluating adoption, or [Start Here](./wiki/getting-started/start-here.en.md) to choose the 10-minute understanding path, the local-run path, or the fork-and-change-economy path._
 
 ---
 
 ## Choose Your Path
 
+- **I am evaluating DEOS as a partner** — start with the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md), then use the [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md).
 - **I want to understand DEOS in 10 minutes** — follow [Start Here: Understand DEOS](./wiki/getting-started/start-here.en.md#path-a-understand-deos-in-10-minutes).
 - **I want to run it locally** — follow [Start Here: Run DEOS locally](./wiki/getting-started/start-here.en.md#path-b-run-deos-locally-in-30-minutes).
 - **I want to fork and change the economy** — follow [Start Here: Fork and change the economy safely](./wiki/getting-started/start-here.en.md#path-c-fork-and-change-the-economy-safely).
@@ -101,7 +102,7 @@ _(Note: When altering tokenomics or invariants, validate the math via `node ./si
 
 **Entrypoints**
 
-- [Start Here](./wiki/getting-started/start-here.en.md) · [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) · [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md) · [Generated Wiki](./wiki/index.en.md) · [Complete Docs Index](./docs/README.md) · [Agent Protocols](./AGENTS.md)
+- [Partner Pitch](./wiki/getting-started/partner-pitch.en.md) · [Start Here](./wiki/getting-started/start-here.en.md) · [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) · [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md) · [Generated Wiki](./wiki/index.en.md) · [Complete Docs Index](./docs/README.md) · [Agent Protocols](./AGENTS.md)
 - [Backlog](./BACKLOG.md) · [Changelog](./CHANGELOG.md)
 
 **Specifications**

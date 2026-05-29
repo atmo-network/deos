@@ -47,13 +47,16 @@ You do not need to read `AGENTS.md` to evaluate or fork DEOS. Treat `AGENTS.md` 
 
 Use this path if you are an ecosystem reader, partner, investor, or curious builder trying to decide whether DEOS is worth deeper evaluation.
 
+If you are evaluating a partnership or fork, start with [Partner Pitch](partner-pitch.en.md) first. It answers why DEOS matters before the deeper architecture route.
+
 Read:
 
-1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-2. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
-3. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.en.md)
-4. [TMCTOL Standard](../concepts/tmctol-standard.en.md), starting with the summary and core mechanics
-5. [Economic Claim Levels](../concepts/economic-claim-levels.en.md) if you need to distinguish mechanism claims from market promises
+1. [Partner Pitch](partner-pitch.en.md), if you need the external adoption case
+2. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
+3. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
+4. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.en.md)
+5. [TMCTOL Standard](../concepts/tmctol-standard.en.md), starting with the summary and core mechanics
+6. [Economic Claim Levels](../concepts/economic-claim-levels.en.md) if you need to distinguish mechanism claims from market promises
 
 Done when you can answer:
 

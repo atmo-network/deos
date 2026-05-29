@@ -1,6 +1,6 @@
 ---
 page_type: getting-started
-title: Partner Pitch
+title: Питч для партнера
 summary: Короткая внешняя презентация для партнерских команд, которые оценивают DEOS как форкаемый фундамент для детерминированных протокольных экономик.
 locale: ru
 canonical_page_id: partner-pitch
@@ -30,7 +30,7 @@ last_compiled: 2026-05-17
 confidence: 0.85
 ---
 
-# Partner Pitch
+# Питч для партнера
 
 ## В одно предложение
 
@@ -53,6 +53,25 @@ DEOS меняет исходную точку. Он переносит ядро 
 - Reference client, который разделяет прямую on-chain truth и materialized views
 - Operator scripts и validation gates для локальных сетей, docs, wiki и runtime work
 - Architecture и specification docs, где видно, что является контрактом, реализацией или roadmap
+
+## Что можно безопасно менять
+
+Партнерская ценность появляется, когда downstream product layer меняется без ослабления протокольного основания.
+
+Хорошие первые изменения:
+
+- Product narrative, thesis экосистемы и roadmap dApps
+- Launch parameters после проверки в simulator
+- Тексты клиента, onboarding и visual identity
+- План governance handoff и runbooks операторов
+- Materialized/indexed views для dashboards, search и analytics
+
+Изменения, которым нужен protocol review:
+
+- Curve physics, bucket accounting, reserve semantics или guarantee wording
+- Полномочия governance protection track
+- Границы runtime read-model
+- Collator/security assumptions и reward routing
 
 ## Почему это важно
 

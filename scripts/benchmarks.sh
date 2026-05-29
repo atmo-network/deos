@@ -107,7 +107,7 @@ check_prerequisites() {
 
     if ! command -v frame-omni-bencher &>/dev/null; then
         log_warning "frame-omni-bencher not found. Install with:"
-        echo "  cargo install --locked frame-omni-bencher --tag polkadot-v1.22.2"
+        echo "  cargo install --locked frame-omni-bencher --tag polkadot-v1.22.3"
         echo ""
         log_info "Falling back to 'cargo test --features runtime-benchmarks' mode"
         BENCHER_MODE="cargo"

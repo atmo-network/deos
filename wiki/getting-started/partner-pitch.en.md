@@ -53,6 +53,25 @@ A partner fork does not start from a blank chain template. It starts from a refe
 - Operator scripts and validation gates for local networks, docs, wiki, and runtime work
 - Architecture and specification docs that explain what is contract, implementation, or roadmap
 
+## What you can change safely
+
+Partner value comes from changing the downstream product layer without weakening the protocol substrate.
+
+Good first changes:
+
+- Product narrative, ecosystem thesis, and dApp roadmap
+- Launch parameters after simulator validation
+- Client copy, onboarding, and visual identity
+- Governance handoff plan and operator runbooks
+- Materialized/indexed views for dashboards, search, and analytics
+
+Changes that need protocol review:
+
+- Curve physics, bucket accounting, reserve semantics, or guarantee wording
+- Governance protection-track authority
+- Runtime read-model boundaries
+- Collator/security assumptions and reward routing
+
 ## Why it matters
 
 The pitch is not “price goes up.”

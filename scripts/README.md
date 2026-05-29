@@ -12,7 +12,7 @@ This directory is intentionally split into two classes:
 ## Atomic Scripts
 
 - [01-download-binaries.sh](./01-download-binaries.sh)
-  Download local Polkadot SDK binaries into `./bin`. The current default release tag is `polkadot-stable2603-2` (node v1.22.2).
+  Download local Polkadot SDK binaries into `./bin`. The current default release tag is `polkadot-stable2603-3` (node v1.22.3).
 
 - [02-install-tools.sh](./02-install-tools.sh)
   Install local cargo-based tooling (`zombienet`, `chain-spec-builder`, `try-runtime`).

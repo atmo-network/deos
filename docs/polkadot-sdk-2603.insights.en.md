@@ -1,7 +1,7 @@
 # Polkadot SDK: Comprehensive Architecture Patterns and Best Practices [SDK 2603]
 
 > `Status`: Active Standard (April 2026)
-> `Version`: Polkadot SDK 2603.0.0 crate baseline + stable2603-2 patch lockfile (node v1.22.2)
+> `Version`: Polkadot SDK 2603.0.0 crate baseline + stable2603-3 operator patch line (node v1.22.3)
 > `Rust`: 1.88.0+ runtime build baseline, 1.93.0 stable toolchain tested upstream
 
 ## Overview
@@ -38,9 +38,9 @@ The 2603 line is not a conceptual reset, but it does tighten several concrete co
 - `Session key ownership`: session-key generation/runtime API now carries an owner payload and proof-of-possession surface, matching the newer `author_rotateKeysWithOwner` flow
 - `XCM transactor signatures`: `TransactAsset` deposit hooks now accept `AssetsInHolding`, and some internal transfer hooks now return plain `Asset` instead of holding sets
 - `XCM executor config`: older `AssetClaims` wiring is gone from the executor config surface
-- `Client/operator line`: the current stable patch release is `polkadot-stable2603-2` (node v1.22.2), while the underlying Rust umbrella crate remains on the 2603.0.0 baseline
+- `Client/operator line`: the current stable patch release is `polkadot-stable2603-3` (node v1.22.3), while the underlying Rust umbrella crate remains on the 2603.0.0 baseline
 
-For DEOS specifically, the most relevant 2603 deltas are `system_version = 3`, the session-keys runtime API change, and the XCM transactor/executor signature updates. For stable2603-2, the relevant migration is a patch-level lockfile and local binary/tool tag update; no DEOS runtime API shape change is required.
+For DEOS specifically, the most relevant 2603 deltas are `system_version = 3`, the session-keys runtime API change, and the XCM transactor/executor signature updates. For stable2603-3, the relevant migration is a local binary/tool tag update plus checking whether upstream crate patch versions moved; the current direct SDK dependency dry-run found no compatible lockfile delta and no DEOS runtime API shape change is required.
 
 ---
 

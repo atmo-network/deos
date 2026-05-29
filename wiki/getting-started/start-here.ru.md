@@ -48,13 +48,16 @@ confidence: 0.9
 
 Используйте этот путь, если вы читатель из экосистемы, партнер, инвестор или curious builder и хотите решить, стоит ли глубже оценивать DEOS.
 
+Если вы оцениваете партнерство или форк, сначала откройте [Partner Pitch](partner-pitch.ru.md). Он объясняет, почему DEOS важен, до более глубокого архитектурного маршрута.
+
 Прочитайте:
 
-1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-2. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
-3. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.ru.md)
-4. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), начиная с краткого описания и базовой механики
-5. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md), если нужно отличить claims о механизме от рыночных обещаний
+1. [Partner Pitch](partner-pitch.ru.md), если нужен внешний adoption case
+2. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
+3. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
+4. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.ru.md)
+5. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), начиная с краткого описания и базовой механики
+6. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md), если нужно отличить claims о механизме от рыночных обещаний
 
 Путь завершен, когда вы можете ответить:
 
