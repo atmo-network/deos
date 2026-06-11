@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
+
+usage() {
+    cat <<'EOF'
+Usage: audit-script-entrypoints.sh [OPTIONS]
+
+Checks repository shell/Node entrypoints for syntax validity and --help availability.
+Also enforces that project-specific audit leaves live in the alignment skill,
+not in the root operator scripts directory.
+
+Options:
+  -h, --help        Show this help message
+
+Scope:
+  root scripts/*.sh except _common.sh
+  web-client/scripts/*.mjs
+  .agents/skills/*/scripts/*.sh except _common.sh
+EOF
+}
+
+parse_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                log_error "Unknown argument: $1"
+                usage
+                exit 1
+                ;;
+        esac
+        shift
+    done
+}
+
+check_prerequisites() {
+    phase_banner "Step 1: Prerequisites"
+    require_directory "$ROOT_SCRIPT_DIR" "Root scripts directory"
+    require_directory "$SCRIPT_DIR" "Alignment skill scripts directory"
+    require_commands bash find sort basename node
+    log_success "Prerequisites checked"
+}
+
+audit_shell_entrypoints() {
+    local script
+    while IFS= read -r script; do
+        if [[ "$(basename "$script")" == "_common.sh" ]]; then
+            continue
+        fi
+
+        log_info "Checking ${script#$PROJECT_ROOT/}"
+        if ! bash -n "$script"; then
+            log_error "Syntax check failed: $script"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+
+        if ! bash "$script" --help >/dev/null; then
+            log_error "--help failed: $script"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        fi
+    done < <(
+        {
+            find "$ROOT_SCRIPT_DIR" -maxdepth 1 -type f -name '*.sh'
+            if [[ -d "$PROJECT_ROOT/.agents/skills" ]]; then
+                find "$PROJECT_ROOT/.agents/skills" -path '*/scripts/*.sh' -type f
+            fi
+        } | sort -u
+    )
+}
+
+audit_node_entrypoints() {
+    local script
+    if [[ ! -d "$PROJECT_ROOT/web-client/scripts" ]]; then
+        return
+    fi
+    while IFS= read -r script; do
+        log_info "Checking ${script#$PROJECT_ROOT/}"
+        if ! node --check "$script" >/dev/null; then
+            log_error "Syntax check failed: $script"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+
+        if ! node "$script" --help >/dev/null; then
+            log_error "--help failed: $script"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        fi
+    done < <(find "$PROJECT_ROOT/web-client/scripts" -maxdepth 1 -type f -name '*.mjs' | sort)
+}
+
+audit_audit_leaf_ownership() {
+    local root_audit_scripts
+    root_audit_scripts="$(find "$ROOT_SCRIPT_DIR" -maxdepth 1 -type f -name 'audit-*.sh' | sort || true)"
+    if [[ -n "$root_audit_scripts" ]]; then
+        log_error "Project-specific audit leaves must live in .agents/skills/alignment/scripts, not root scripts/"
+        echo "$root_audit_scripts"
+        AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+    fi
+}
+
+audit_entrypoints() {
+    phase_banner "Step 2: Script entrypoints"
+
+    AUDIT_FAILURES=0
+    audit_shell_entrypoints
+    audit_node_entrypoints
+    audit_audit_leaf_ownership
+
+    if [[ "$AUDIT_FAILURES" -gt 0 ]]; then
+        log_error "Script entrypoint audit failed with $AUDIT_FAILURES failure(s)"
+        exit 1
+    fi
+
+    log_success "All script entrypoints passed"
+}
+
+main() {
+    parse_args "$@"
+    phase_banner "DEOS script entrypoint audit"
+    check_prerequisites
+    audit_entrypoints
+}
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

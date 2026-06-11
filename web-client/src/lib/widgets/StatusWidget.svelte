@@ -36,17 +36,19 @@ Zone: Presentation widget; consumes system/wallet state and read-model provenanc
 </script>
 
 <div
-  class="flex min-w-max items-center gap-1.5 text-[10px] leading-none whitespace-nowrap"
+  class="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-1.5 text-[10px] leading-none"
 >
   <ReadModelBadge provenance={footerProvenance} tone="subtle" />
   {#each footerItems as item}
     <div
       class="inline-flex items-center gap-1.5 rounded-full border border-(--mono-border) bg-white/90 px-2 py-0.75"
     >
-      <div class="text-[9px] uppercase tracking-wider text-(--mono-muted)">
+      <div
+        class="shrink-0 text-[9px] uppercase tracking-wider text-(--mono-muted)"
+      >
         {item.label}
       </div>
-      <div class="max-w-28 truncate text-[11px] font-medium text-(--mono-text)">
+      <div class="max-w-24 truncate text-[11px] font-medium text-(--mono-text)">
         {item.value}
       </div>
     </div>

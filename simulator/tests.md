@@ -6,7 +6,7 @@ Comprehensive test suite detalization synchronized with `/simulator/tests.js`
 
 ## Test Structure Overview
 
-- Total Tests: 65
+- Total Tests: 66
 - Purpose: Formal verification of TMCTOL mathematical guarantees, component behavior, and emergent properties
 - Methodology: Mathematical Foundations → Core Components → Integration Flows → System Properties → Economic Security
 - Architecture Symmetry: Tests mirror TMCTOL system architecture for progressive comprehension
@@ -217,11 +217,11 @@ Multi-component workflows and system-level behavior validation.
 - Necessity: Establishes production deployment guidelines
 - Validates: Conservative/moderate/aggressive configs all safe
 
-### 5.5 Formula Performance Analysis
+### 5.5 Formula Batch Execution Smoke
 
-- Nature: Benchmarks quadratic formula execution time
-- Necessity: Ensures on-chain feasibility (gas costs)
-- Validates: Sub-millisecond performance at scale
+- Nature: Repeats quadratic formula execution across a fixed batch
+- Necessity: Keeps the correctness suite deterministic while still exercising the hot formula path at scale
+- Validates: Batched formula execution produces positive output without mutating state
 
 ---
 
@@ -382,8 +382,8 @@ Tests for system behaviors that emerge from component interactions and intellige
 
 - Nature: Tests mathematical lock-in of large holder tokens during convergence
 - Necessity: Confirms price impact creates natural exit difficulty
-- Validates: Large holder tokens (e.g., 10%+ of supply) become mathematically difficult to exit when floor approaches ceiling
-- Failure Criteria: Large holders can exit significant positions without severe price impact during convergence
+- Validates: Large holder tokens (e.g., 10%+ of supply) become mathematically difficult to exit when floor approaches ceiling; TOL liquidity must be present, the convergence gap must exist, and burn-time compression must tighten that gap rather than silently skipping the scenario
+- Failure Criteria: Large holders can exit significant positions without severe price impact during convergence; the fixture produces no floor liquidity; burn-time compression fails to reduce the arithmetic gap
 
 ### 10.4 Mint-Swap Feedback Loop Analysis
 
@@ -488,7 +488,14 @@ Validation of adaptive system behaviors, intelligent routing decisions, and econ
 - Validates: 1 part staking pool, 1 part liquidity pool, 4 parts claimable LP nomination.
 - Failure Criteria: Wrong ratio or non-conserved Fee Sink amount.
 
-### 12.7 Economic Incentive Alignment
+### 12.7 Two-Phase Reward Routing - Remainder Conservation
+
+- Nature: Tests reward-routing splits with dust-sized, non-divisible amounts.
+- Necessity: Prevents integer division from leaking or inventing value when fees are smaller than clean ratio units.
+- Validates: Outer 20/80 collection, Phase 1, and Phase 2 all conserve total input with remainders assigned to existing destinations.
+- Failure Criteria: Any split loses value, creates value, or routes remainder outside the configured destination set.
+
+### 12.8 Economic Incentive Alignment
 
 - Nature: Tests that system rewards beneficial behaviors and penalizes harmful ones.
 - Necessity: Validates economic incentives align with system stability and long-term holding.
@@ -546,7 +553,7 @@ node ./simulator/tests.js
 
 - Expected Output: Minimal statistics, error codes only for failures
 - Tolerance: ~0.01% for emergent behaviors (multi-step calculations)
-- Coverage: 65 tests validating 13 system layers
+- Coverage: 66 tests validating 13 system layers
 - Documentation Standard: Each test includes Nature/Necessity/Validates/Failure Criteria
 
 ---
@@ -573,7 +580,7 @@ node ./simulator/tests.js
 - Multi-User Testing: 2 tests for chaos and concurrency
 - Emergent Properties: 6 tests for system behavior analysis
 - Economic Security: 4 tests for attack resistance and capital efficiency (continuous deployment vs idle vaults)
-- Adaptive System Behaviors: 7 tests for intelligent system responses and two-phase reward routing
+- Adaptive System Behaviors: 8 tests for intelligent system responses and two-phase reward routing
 - Reporting & Conformance Metrics: 5 tests for floor reporting, burn liveness, Zap accounting, and ledger conservation
 - Philosophy: Tests prove specifications; specifications guide implementation; implementation validates mathematics.
 
@@ -594,7 +601,7 @@ node ./simulator/tests.js
 * `9.1-9.2`: Multi-User & Chaos Testing
 * `10.1-10.6`: Emergent Properties & System Intelligence
 * `11.1-11.4`: Economic Security & Attack Resistance
-* `12.1-12.7`: Adaptive System Behaviors
+* `12.1-12.8`: Adaptive System Behaviors
 * `13.1-13.5`: Reporting & Conformance Metrics
 
 - Use these codes in error messages for quick reference to this documentation.

@@ -27,6 +27,8 @@ UI Kit is the DEOS web-client UI kit. It owns reusable presentation primitives a
 
 `TextField`, `NumberInput`, `TextArea`, and `SelectField` own repeated label/control wiring. `RichSelect` owns compact rich-option select presentation for dropdowns that need badges or secondary detail text. Use `NumberInput` for numeric browser input semantics, while domain parsing and validation stay in the owning slice.
 
+Numeric domain inputs must validate complete literals before conversion instead of relying on JavaScript prefix/coercion behavior. Token-denominated fields should use `parseTokenInputAmount` / `formatTokenInputAmount` from `format.ts`; other numeric domains should use the complete-literal helpers in `../format/numeric.ts` rather than open-coding local regex/`Number` parsing.
+
 ## Button semantics
 
 `Button`, `IconButton`, and `SelectableTile` default to non-submit behavior. Use `type="submit"` only at a real form boundary.

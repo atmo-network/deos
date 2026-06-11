@@ -17,8 +17,9 @@ export function resetTileIdSequence(): void {
 }
 
 export function recalcNextTileId(node: TileNode): void {
-  const num = Number.parseInt(node.id.replace('t', ''), 10);
-  if (!Number.isNaN(num) && num >= nextId) {
+  const match = /^t(\d+)$/.exec(node.id);
+  const num = match ? Number(match[1]) : null;
+  if (num !== null && Number.isSafeInteger(num) && num >= nextId) {
     nextId = num + 1;
   }
   if (node.type === 'split') {

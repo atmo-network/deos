@@ -7,10 +7,12 @@ Zone: Presentation widget; consumes system/layout/governance helpers and UI Kit 
 <script lang="ts">
   import { onMount } from 'svelte';
 
+  import { parseUnsignedDecimalNumber } from '$lib/format/numeric';
   import { getGovernanceDomainId } from '$lib/governance/session';
+  import { isValidGovernanceDomainId } from '$lib/governance/session';
   import { layoutStore } from '$lib/layout/index.svelte';
   import { getBlockchainEndpoint } from '$lib/system/endpoint';
-  import { Button, NumberInput, SelectField, TextField } from '$lib/ui';
+  import { Button, Notice, NumberInput, SelectField, TextField } from '$lib/ui';
 
   type SidebarEdgeValue = 'left' | 'right';
 
@@ -26,6 +28,10 @@ Zone: Presentation widget; consumes system/layout/governance helpers and UI Kit 
   let sidebarEdge = $state<SidebarEdgeValue>(layoutStore.frame.sidebar.edge);
 
   const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
+  const parsedDomainId = $derived.by(() => {
+    const parsed = parseUnsignedDecimalNumber(String(domainId));
+    return parsed !== null && isValidGovernanceDomainId(parsed) ? parsed : null;
+  });
 
   function syncViewport() {
     if (!rootEl) {
@@ -45,12 +51,15 @@ Zone: Presentation widget; consumes system/layout/governance helpers and UI Kit 
   }
 
   async function apply() {
+    if (parsedDomainId === null) {
+      return;
+    }
     const [{ governanceStore }, { systemStore }] = await Promise.all([
       import('$lib/governance/index.svelte'),
       import('$lib/system/index.svelte'),
     ]);
     await governanceStore.setEndpoint(endpoint.trim());
-    governanceStore.setDomainId(Number(domainId));
+    governanceStore.setDomainId(parsedDomainId);
     layoutStore.setSidebarEdge(sidebarEdge);
     await Promise.all([governanceStore.refresh(), systemStore.refresh()]);
   }
@@ -95,10 +104,16 @@ Zone: Presentation widget; consumes system/layout/governance helpers and UI Kit 
         {/each}
       </SelectField>
     </div>
+    {#if parsedDomainId === null}
+      <Notice variant="warn">
+        Domain ID must be a non-negative whole number.
+      </Notice>
+    {/if}
     <Button
       variant="primary"
       class={compactPane ? 'w-full' : 'justify-self-end min-w-36'}
       onclick={apply}
+      disabled={parsedDomainId === null}
     >
       Apply Changes
     </Button>

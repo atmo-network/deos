@@ -7,6 +7,11 @@ Zone: Governance payload helper; pure encoding/validation boundary for treasury 
 import { u8aToHex } from '@polkadot/util';
 import { decodeAddress } from '@polkadot/util-crypto';
 
+import {
+  parseUnsignedDecimalBigInt,
+  parseUnsignedDecimalNumber,
+} from '$lib/format/numeric';
+
 const U128_MAX = (1n << 128n) - 1n;
 
 export type GovernanceTreasuryPayloadDraft = {
@@ -104,27 +109,17 @@ function parseBeneficiary(value: string): ParsedBeneficiary {
 }
 
 function parsePayoutAsset(value: string): ParsedPayoutAsset {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return { valid: false, parsed: null };
-  }
-  const parsed = Number.parseInt(trimmed, 10);
-  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 0xffff_ffff) {
-    return { valid: false, parsed: null };
-  }
-  return { valid: true, parsed };
+  const parsed = parseUnsignedDecimalNumber(value, { max: 0xffff_ffff });
+  return parsed === null
+    ? { valid: false, parsed: null }
+    : { valid: true, parsed };
 }
 
 function parseBaseAmount(value: string): ParsedBaseAmount {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) {
-    return { valid: false, parsed: null };
-  }
-  const parsed = BigInt(trimmed);
-  if (parsed <= 0n || parsed > U128_MAX) {
-    return { valid: false, parsed: null };
-  }
-  return { valid: true, parsed };
+  const parsed = parseUnsignedDecimalBigInt(value, { min: 1n, max: U128_MAX });
+  return parsed === null
+    ? { valid: false, parsed: null }
+    : { valid: true, parsed };
 }
 
 export function deriveGovernanceTreasuryPayloadDraftState(

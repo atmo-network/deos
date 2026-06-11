@@ -205,16 +205,36 @@ import { u8aToHex } from "@polkadot/util";
 import { createWsClient } from "polkadot-api/ws";
 import { deos } from "@polkadot-api/descriptors";
 
+function envUnsignedLiteral(name) {
+    const value = process.env[name];
+    if (!/^\d+$/.test(value ?? "")) {
+        throw new Error(`${name} must be an unsigned integer literal`);
+    }
+    return value;
+}
+
+function parseEnvU32(name) {
+    const parsed = Number(envUnsignedLiteral(name));
+    if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 0xffffffff) {
+        throw new Error(`${name} must fit in u32`);
+    }
+    return parsed;
+}
+
+function parseEnvBigUint(name) {
+    return BigInt(envUnsignedLiteral(name));
+}
+
 const mode = process.env.MODE;
 const wsUri = process.env.WS_URI;
-const nativeAssetId = Number(process.env.NATIVE_STAKING_ASSET_ID);
-const aaaId = BigInt(process.env.NATIVE_STAKING_LP_FARMER_AAA_ID);
+const nativeAssetId = parseEnvU32("NATIVE_STAKING_ASSET_ID");
+const aaaId = parseEnvBigUint("NATIVE_STAKING_LP_FARMER_AAA_ID");
 const operatorAddress = process.env.OPERATOR_ADDRESS;
-const stakeAmount = BigInt(process.env.STAKE_AMOUNT);
-const liquidityNative = BigInt(process.env.LIQUIDITY_NATIVE);
-const liquidityStaked = BigInt(process.env.LIQUIDITY_STAKED);
-const minNative = BigInt(process.env.MIN_NATIVE);
-const minStaked = BigInt(process.env.MIN_STAKED);
+const stakeAmount = parseEnvBigUint("STAKE_AMOUNT");
+const liquidityNative = parseEnvBigUint("LIQUIDITY_NATIVE");
+const liquidityStaked = parseEnvBigUint("LIQUIDITY_STAKED");
+const minNative = parseEnvBigUint("MIN_NATIVE");
+const minStaked = parseEnvBigUint("MIN_STAKED");
 const jsonOutput = process.env.JSON_OUTPUT === "1";
 const stakedNativeAssetId = 0x50000000 | nativeAssetId;
 const client = createWsClient(wsUri);

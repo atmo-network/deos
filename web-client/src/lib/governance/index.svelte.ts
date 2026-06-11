@@ -18,6 +18,7 @@ import type {
 } from '$lib/governance';
 import {
   getGovernanceDomainId,
+  isValidGovernanceDomainId,
   setGovernanceDomainId,
 } from '$lib/governance/session';
 import { logStore } from '$lib/log/index.svelte';
@@ -33,7 +34,7 @@ import type {
   GovernancePublicSubmissionOption,
   GovernanceRetainedFinalizedProposal,
   GovernanceViewerState,
-} from './types';
+} from './view-types';
 
 const DEFAULT_ACCOUNT_ID = walletStore.selectedAddress;
 const DEFAULT_BLOCKCHAIN_PROVIDER = new GovernanceUnavailableBlockchainProvider(
@@ -436,6 +437,9 @@ class GovernanceStore {
   }
 
   setDomainId(domainId: number) {
+    if (!isValidGovernanceDomainId(domainId)) {
+      return;
+    }
     this.state.domainId = domainId;
     setGovernanceDomainId(domainId);
     this.clearWriteError();

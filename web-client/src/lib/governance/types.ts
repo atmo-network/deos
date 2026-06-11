@@ -4,8 +4,6 @@ Owns: Governance domain, proposal, vote, payload, capability, preimage, and mate
 Excludes: Store lifecycle, adapter RPC implementation, widget rendering, and payload encoding helpers.
 Zone: Governance public contract; safe for adapters, stores, and governance UI to import.
 */
-import type { ReadModelValue } from '$lib/read-model';
-
 export type GovernanceDomainId = number;
 export type GovernanceItemId = number;
 export type GovernanceEpoch = number;
@@ -495,65 +493,3 @@ export type GovernanceProposalWriteAdapter = {
 export type GovernanceAdapter = GovernanceReadAdapter &
   GovernanceVoteWriteAdapter &
   GovernanceProposalWriteAdapter;
-
-// --- UI domain types (previously in governance/types.ts) ---
-
-export type GovernanceProposalDescriptor = {
-  metadata: GovernanceProposalMetadata | null;
-  executionAuthority: GovernanceProposalExecutionAuthority | null;
-  submissionAuthority: GovernanceProposalSubmissionAuthority | null;
-  openingFee: GovernanceProposalOpeningFee | null;
-  payloadAvailability: GovernanceProposalPayloadAvailability | null;
-  primaryTrackFamily: GovernanceProposalPrimaryTrackFamily | null;
-  urgentEligibility: boolean | null;
-};
-
-export type GovernancePanelProposal = GovernanceProposalDescriptor & {
-  itemId: number;
-  status: GovernanceProposalStatus | null;
-  timing: GovernanceProposalTiming | null;
-  primaryTrackTally: GovernanceProposalPrimaryTrackTally | null;
-  tally: GovernanceProposalVoteTally | null;
-  accountPowerView: GovernanceAccountPowerView | null;
-  votePowerProfiles: Partial<
-    Record<GovernanceVoteKind, GovernanceVotePowerProfile>
-  >;
-};
-
-export type GovernanceRetainedFinalizedProposal =
-  GovernanceRecentFinalizedProposal &
-    GovernanceProposalDescriptor & {
-      winningPrimaryOption: GovernancePrimaryTrackOption | null;
-    };
-
-export type GovernancePublicSubmissionOption = {
-  payloadKind: GovernanceProposalPayloadKind;
-  openingFee: GovernanceProposalOpeningFee | null;
-};
-
-export type GovernanceViewerState = {
-  providerState: GovernanceProviderState;
-  endpoint: string;
-  domainId: number;
-  accountId: GovernanceAccountId;
-  activeProposalIds: number[];
-  activeProposals: GovernancePanelProposal[];
-  submissionOptions: GovernancePublicSubmissionOption[];
-  authorizedRuntimeUpgrade: GovernanceAuthorizedRuntimeUpgrade | null;
-  recentFinalizedProposals: GovernanceRetainedFinalizedProposal[];
-  recentFinalizedProposalsView: ReadModelValue<
-    GovernanceRetainedFinalizedProposal[]
-  > | null;
-  rewardCoefficient: string | null;
-  govxpCounters: {
-    rollingWinningParticipation: number;
-    totalParticipations: bigint;
-    totalWinningParticipations: bigint;
-    totalAuthoredProposals: bigint;
-    totalSuccessfulAuthoredProposals: bigint;
-  };
-  loading: boolean;
-  error: string | null;
-  writeError: string | null;
-  writeSurfaceAvailability: GovernanceWriteSurfaceAvailability;
-};

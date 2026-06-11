@@ -46,7 +46,8 @@ Do not make archive/search/dashboard behavior look like canonical chain truth. I
 - `src/lib/log/` — account log, live network feed, transaction progress, and receipts.
 - `src/lib/wallet/` — wallet session state, signer discovery, address validation, local dev signer routing.
 - `src/lib/system/` — chain snapshot, refresh ownership, endpoint/session wiring, adapter runtime context, browser persistence.
-- `src/lib/wiki/` — trusted repo-local wiki markdown loading/rendering helpers.
+- `src/lib/wiki/` — trusted repo-local wiki markdown loading/rendering helpers and generated metadata manifest contracts.
+- `src/lib/format/` — dependency-light formatting/parsing helpers such as complete-literal numeric parsers shared by domain slices.
 
 Reusable domain contracts live with their owning slices. Do not recreate a generic `shared/` bucket.
 
@@ -76,7 +77,7 @@ Concrete adapters receive shell/session facts through `system/adapter-context.ts
 - `PopoverPanel`, `SidePanelDialog`, `ReadModelBadge`, `Sparkline`
 - `class.ts` and `format.ts`
 
-UI Kit primitives stay foundation-only and must not import product domains. Repeated raw controls should graduate into UI Kit instead of being rebuilt inside widgets.
+UI Kit primitives stay foundation-only and must not import product domains. Repeated raw controls should graduate into UI Kit instead of being rebuilt inside widgets. Numeric domain inputs should validate complete literals before conversion; token amount controls use the shared strict token parser/formatter in `src/lib/ui/format.ts`, while non-token numeric domains use complete-literal helpers from `src/lib/format/numeric.ts`.
 
 ### Domain DAG
 
@@ -149,7 +150,13 @@ Use the smallest meaningful validation first. For full client validation, run:
 npm run validate
 ```
 
-That command runs Prettier, Svelte checks, and the production build. For architecture-boundary changes, also run the Domain DAG gate:
+That command runs Prettier, Svelte checks, and the production build. For architecture-boundary and wiki trust checks, the repo fast audit stack already includes the Domain DAG and trusted wiki markdown gates:
+
+```sh
+../scripts/validate-local.sh --audit-only
+```
+
+From inside this workspace, the same boundary gate is available directly:
 
 ```sh
 npm run validate:dag

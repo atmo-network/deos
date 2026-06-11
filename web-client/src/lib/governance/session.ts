@@ -10,6 +10,14 @@ export function getGovernanceDomainId(): number {
   return governanceDomainId;
 }
 
-export function setGovernanceDomainId(domainId: number): void {
+export function isValidGovernanceDomainId(domainId: number): boolean {
+  return Number.isSafeInteger(domainId) && domainId >= 0;
+}
+
+export function setGovernanceDomainId(domainId: number): boolean {
+  if (!isValidGovernanceDomainId(domainId)) {
+    return false;
+  }
   governanceDomainId = domainId;
+  return true;
 }

@@ -139,13 +139,13 @@ node simulator/tests.js
 
 Карта безопасного первого изменения:
 
-| Что вы хотите изменить | Где начать | Что потом трогать | Минимальная проверка |
+| Изменение | Где начать | Что потом трогать | Минимальная проверка |
 | --- | --- | --- | --- |
-| Initial price или slope TMC | `simulator/` и [Формулы TMCTOL](../math/tmctol-formulas.ru.md) | Runtime primitives/config только после устойчивой математики | `node simulator/tests.js`, затем targeted TMC runtime tests |
-| TOL bucket split или reserve semantics | [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md) и `simulator/` | AAA topology, runtime config, docs | Simulator tests плюс runtime integration tests |
-| Router fee policy | [Axial Router](../overview/axial-router.ru.md) | Router config и governance bounds | Router tests плюс затронутые economics claims |
-| Governance domains или payloads | [Обзор Governance](../overview/governance-overview.ru.md) | Governance pallet/runtime config и client composition | Governance tests плюс client validation, если видно пользователю |
-| UI copy, labels или onboarding | `web-client/` и `wiki/` | Без runtime-изменений, если data contracts не меняются | `npm --prefix web-client run validate`, плюс wiki trust, если менялась wiki |
+| TMC price/slope | Simulator + formulas | Runtime config после математики | Simulator, затем TMC tests |
+| TOL split/reserves | TMCTOL spec + simulator | AAA topology, runtime config, docs | Simulator + runtime tests |
+| Router fee policy | Axial Router | Router config, governance bounds | Router tests + claims |
+| Governance domains/payloads | Governance overview | Gov pallet/config, client | Governance + client checks |
+| UI copy/onboarding | `web-client/` + `wiki/` | Runtime только при смене data contract | Client validate + wiki trust |
 
 Не меняйте легкомысленно:
 
@@ -164,13 +164,13 @@ node simulator/tests.js
 | Путь или изменение | Минимальная проверка |
 | --- | --- |
 | Только понимание | Команды не нужны |
-| Wiki или onboarding text | `npm --prefix web-client run validate:wiki` |
+| Wiki/onboarding text | `npm --prefix web-client run validate:wiki` |
 | Поведение web client | `npm --prefix web-client run validate` |
-| Ownership boundaries web client | `npm --prefix web-client run validate:dag` |
-| Tokenomics или formula change | `node simulator/tests.js` |
-| TMC runtime change | `cargo test --manifest-path template/Cargo.toml -p pallet-tmc --locked` |
-| Broad runtime change | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
-| Междоменное изменение экономики, runtime и клиента | Simulator, targeted cargo tests, client validation, затем repository completion gate |
+| Boundaries web client | `npm --prefix web-client run validate:dag` |
+| Tokenomics/formulas | `node simulator/tests.js` |
+| TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-tmc --locked` |
+| Broad runtime | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
+| Междоменный change | Simulator, cargo tests, client validation, completion gate |
 
 ## Связанные страницы
 

@@ -102,7 +102,33 @@ Examples:
 ./.agents/skills/alignment/scripts/auditor.sh --all
 ```
 
-## Phase 3: The While-True Gatekeeper
+## Phase 3: Project Validation Immune System
+
+Fast local audit leaves live in this skill because they encode project-specific coordination memory rather than generic operator automation. Treat this as a hard layering rule: when DEOS needs validation for a new recurring drift class, evolve this skill and wire orchestrators to call it instead of expanding `/scripts` with project-audit knowledge. `/scripts` is for operator workflows; this skill is the project validation immune system.
+
+Prefer the root orchestrator for routine use:
+
+```bash
+./scripts/validate-local.sh --audit-only
+./scripts/validate-local.sh --audit-only --dependency-audit
+```
+
+Direct leaves are available when a task needs a narrow gate:
+
+```bash
+./.agents/skills/alignment/scripts/audit-script-entrypoints.sh
+./.agents/skills/alignment/scripts/audit-template-readiness.sh
+./.agents/skills/alignment/scripts/audit-numeric-parsing.sh
+./.agents/skills/alignment/scripts/audit-simulator-determinism.sh
+./.agents/skills/alignment/scripts/audit-simulator-consistency.sh
+./.agents/skills/alignment/scripts/audit-code-suppressions.sh
+./.agents/skills/alignment/scripts/audit-backlog-open-work.sh
+./.agents/skills/alignment/scripts/audit-dependency-posture.sh
+```
+
+These checks protect lessons discovered during proactive hardening: entrypoint contracts, validation-leaf ownership, launch-readiness smells, complete-literal numeric boundaries, deterministic simulator correctness, simulator suite/documentation mirror consistency, broad-suppression discipline, backlog-as-open-work shape without command inventories, and non-regressive dependency posture.
+
+## Phase 4: The While-True Gatekeeper
 
 If you are operating autonomously, you must pass the gate before the next loop iteration:
 

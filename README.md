@@ -73,7 +73,7 @@ The `pallet-aaa` (Account Abstraction Actors) scheduler is DEOS's deterministic 
 
 ## 4. Getting Started
 
-DEOS provides a unified local bootstrap script that automates the network environment: downloading the Polkadot SDK binaries (including the Omni Node), building the reference runtime, generating the chain spec, and spinning up a local Zombienet test network.
+DEOS provides a unified local bootstrap script that automates the network environment: downloading the Polkadot SDK binaries (including the Omni Node), building the reference runtime, generating the chain spec, and spinning up a local Zombienet test network. Extra live demo state can be topped up separately after the network is running.
 
 **Prerequisites**: [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/).
 
@@ -81,8 +81,11 @@ Open **Terminal 1** for the network:
 
 ```bash
 # Bootstrap the local network
-# (Downloads binaries, builds runtime, starts Omni Node via Zombienet, and seeds state)
+# (Downloads binaries, builds runtime, and starts Omni Node via Zombienet)
 ./scripts/bootstrap-local-network.sh
+
+# Optional: in another terminal, top up live web-client demo state
+./scripts/07-seed-web-client-state.sh
 ```
 
 Open **Terminal 2** for the web client:
@@ -98,7 +101,19 @@ _(Note: When altering tokenomics or invariants, validate the math via `node ./si
 
 ---
 
-## 5. Documentation Index
+## 5. Validation
+
+Use the smallest meaningful gate for the touched surface. For fast repository-local hygiene before heavier builds or E2E work, run:
+
+```bash
+./scripts/validate-local.sh --audit-only
+```
+
+That fast stack checks script entrypoints, template readiness, numeric parsing, simulator determinism and suite-mirror consistency, broad suppressions, backlog shape, web-client Domain DAG boundaries, and trusted wiki markdown. Add `--dependency-audit` when you intentionally want network-backed npm posture checks.
+
+---
+
+## 6. Documentation Index
 
 **Entrypoints**
 

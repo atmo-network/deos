@@ -87,16 +87,36 @@ import { Keyring } from '@polkadot/keyring';
 import { cryptoWaitReady } from '@polkadot/util-crypto';
 import { getPolkadotSigner } from '@polkadot-api/signer';
 
+function envUnsignedLiteral(name) {
+  const value = process.env[name];
+  if (!/^\d+$/.test(value ?? '')) {
+    throw new Error(`${name} must be an unsigned integer literal`);
+  }
+  return value;
+}
+
+function parseEnvU32(name) {
+  const parsed = Number(envUnsignedLiteral(name));
+  if (!Number.isSafeInteger(parsed) || parsed < 0 || parsed > 0xffffffff) {
+    throw new Error(`${name} must fit in u32`);
+  }
+  return parsed;
+}
+
+function parseEnvBigUint(name) {
+  return BigInt(envUnsignedLiteral(name));
+}
+
 const WS = process.env.WS_ENDPOINT;
-const FOREIGN_ID = Number(process.env.FOREIGN_ID);
-const INITIAL_PRICE = BigInt(process.env.INITIAL_PRICE);
-const SLOPE = BigInt(process.env.SLOPE);
-const MINT_AMOUNT = BigInt(process.env.MINT_AMOUNT);
-const LIQUIDITY_NATIVE = BigInt(process.env.LIQUIDITY_NATIVE);
-const LIQUIDITY_FOREIGN = BigInt(process.env.LIQUIDITY_FOREIGN);
-const NATIVE_STAKING_ASSET_ID = Number(process.env.NATIVE_STAKING_ASSET_ID);
-const NATIVE_STAKE_AMOUNT = BigInt(process.env.NATIVE_STAKE_AMOUNT);
-const NATIVE_STAKING_LIQUIDITY = BigInt(process.env.NATIVE_STAKING_LIQUIDITY);
+const FOREIGN_ID = parseEnvU32('FOREIGN_ID');
+const INITIAL_PRICE = parseEnvBigUint('INITIAL_PRICE');
+const SLOPE = parseEnvBigUint('SLOPE');
+const MINT_AMOUNT = parseEnvBigUint('MINT_AMOUNT');
+const LIQUIDITY_NATIVE = parseEnvBigUint('LIQUIDITY_NATIVE');
+const LIQUIDITY_FOREIGN = parseEnvBigUint('LIQUIDITY_FOREIGN');
+const NATIVE_STAKING_ASSET_ID = parseEnvU32('NATIVE_STAKING_ASSET_ID');
+const NATIVE_STAKE_AMOUNT = parseEnvBigUint('NATIVE_STAKE_AMOUNT');
+const NATIVE_STAKING_LIQUIDITY = parseEnvBigUint('NATIVE_STAKING_LIQUIDITY');
 const STAKED_ASSET_TYPE = 0x50000000;
 const STAKED_NATIVE_ASSET_ID = STAKED_ASSET_TYPE | NATIVE_STAKING_ASSET_ID;
 

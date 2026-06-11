@@ -7,13 +7,13 @@ Zone: Wallet state slice; owns signer-facing browser/session behavior.
 import { readStoredString, writeStoredString } from '$lib/system/persistence';
 import {
   DEFAULT_DEOS_DAPP_NAME,
-  TMCTOL_DEV_SIGNER_PRESETS,
-  type TmctolInjectedSignerAccount,
-  type TmctolInjectedSignerAvailability,
+  DEOS_DEV_SIGNER_PRESETS,
+  type DeosInjectedSignerAccount,
+  type DeosInjectedSignerAvailability,
   discoverInjectedSignerAccounts,
   hasBuiltInDevSigner,
   injectedSignerAvailability,
-  isValidTmctolAddress,
+  isValidDeosAddress,
 } from '$lib/wallet/signer';
 
 export type WalletAccountSource = 'dev' | 'injected' | 'custom';
@@ -27,7 +27,7 @@ export type WalletAccountOption = {
   note: string | null;
   suri: string | null;
 };
-export { isValidTmctolAddress };
+export { isValidDeosAddress };
 
 export type WalletState = {
   selectedAddress: string;
@@ -36,7 +36,7 @@ export type WalletState = {
   accountInput: string;
   signerStatus: WalletSignerStatus;
   signerMessage: string;
-  availability: TmctolInjectedSignerAvailability;
+  availability: DeosInjectedSignerAvailability;
   injectedAccounts: WalletAccountOption[];
   devAccounts: WalletAccountOption[];
   loadingInjectedAccounts: boolean;
@@ -44,7 +44,7 @@ export type WalletState = {
 };
 
 function buildDevAccount(
-  spec: (typeof TMCTOL_DEV_SIGNER_PRESETS)[number],
+  spec: (typeof DEOS_DEV_SIGNER_PRESETS)[number],
 ): WalletAccountOption {
   return {
     address: spec.address,
@@ -64,14 +64,14 @@ function shortenAddress(address: string): string {
   return `${address.slice(0, 6)}…${address.slice(-6)}`;
 }
 
-function injectedAccountLabel(account: TmctolInjectedSignerAccount): string {
+function injectedAccountLabel(account: DeosInjectedSignerAccount): string {
   if (account.name && account.name.trim().length > 0) {
     return account.name.trim();
   }
   return `${account.extensionName} · ${shortenAddress(account.address)}`;
 }
 
-const DEV_ACCOUNTS = TMCTOL_DEV_SIGNER_PRESETS.map(buildDevAccount);
+const DEV_ACCOUNTS = DEOS_DEV_SIGNER_PRESETS.map(buildDevAccount);
 const DEFAULT_DEV_ACCOUNT = DEV_ACCOUNTS[0];
 const WALLET_STORAGE_KEY = 'deos.wallet.selected-address';
 
@@ -136,7 +136,7 @@ class WalletStore {
     const normalized = input.trim();
     return (
       normalized.length > 0 &&
-      (hasBuiltInDevSigner(normalized) || isValidTmctolAddress(normalized))
+      (hasBuiltInDevSigner(normalized) || isValidDeosAddress(normalized))
     );
   }
 

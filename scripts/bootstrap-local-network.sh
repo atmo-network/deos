@@ -8,6 +8,7 @@ SKIP_TOOLS="${SKIP_TOOLS:-0}"
 SKIP_BUILD="${SKIP_BUILD:-0}"
 SKIP_CHAINSPEC="${SKIP_CHAINSPEC:-0}"
 CHAIN_TYPE="${CHAIN_TYPE:-Development}"
+WEB_CLIENT_PORT="${WEB_CLIENT_PORT:-5173}"
 
 usage() {
     cat <<'EOF'
@@ -28,6 +29,7 @@ Environment:
   SKIP_BUILD=0|1
   SKIP_CHAINSPEC=0|1
   CHAIN_TYPE=Development|Local|Live
+  WEB_CLIENT_PORT=<port>  Web-client dev server port to display (default: 5173)
 EOF
 }
 
@@ -72,7 +74,7 @@ display_endpoints() {
     echo "    Relay: https://polkadot.js.org/apps/?rpc=ws://localhost:9944"
     echo "    Para:  https://polkadot.js.org/apps/?rpc=ws://localhost:9988"
     echo ""
-    echo "  Web client: http://127.0.0.1:$WEB_CLIENT_PORT"
+    echo "  Web client (start separately): http://127.0.0.1:$WEB_CLIENT_PORT"
 }
 
 run_bootstrap_steps() {

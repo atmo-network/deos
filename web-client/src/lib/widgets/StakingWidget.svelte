@@ -7,6 +7,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 <script lang="ts">
   import type { Snippet } from 'svelte';
 
+  import { parseUnsignedDecimalNumber } from '$lib/format/numeric';
   import { portfolioStore } from '$lib/portfolio/index.svelte';
   import { fromClientBoundedProjection } from '$lib/read-model';
   import type {
@@ -23,7 +24,12 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     StatCard,
     TextField,
   } from '$lib/ui';
-  import { fmt, toFloat } from '$lib/ui/format';
+  import {
+    fmt,
+    formatTokenInputAmount,
+    parseTokenInputAmount,
+    toFloat,
+  } from '$lib/ui/format';
   import { walletStore } from '$lib/wallet/index.svelte';
 
   type Props = {
@@ -69,33 +75,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   }
 
   function parseRewardEpoch(): number | null {
-    const trimmed = rewardEpochInput.trim();
-    if (!/^\d+$/.test(trimmed)) {
-      return null;
-    }
-    const epoch = Number(trimmed);
-    return Number.isSafeInteger(epoch) ? epoch : null;
-  }
-
-  function parseTokenAmount(value: string): bigint | null {
-    const trimmed = value.trim();
-    const match = /^(\d+)(?:\.(\d{0,12}))?$/.exec(trimmed);
-    if (!match) {
-      return null;
-    }
-    const whole = BigInt(match[1]);
-    const fraction = BigInt((match[2] ?? '').padEnd(12, '0'));
-    const amount = whole * 1_000_000_000_000n + fraction;
-    return amount > 0n ? amount : null;
-  }
-
-  function formatTokenInput(value: bigint): string {
-    const whole = value / 1_000_000_000_000n;
-    const fraction = (value % 1_000_000_000_000n)
-      .toString()
-      .padStart(12, '0')
-      .replace(/0+$/u, '');
-    return fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
+    return parseUnsignedDecimalNumber(rewardEpochInput);
   }
 
   const snap = $derived(systemStore.snapshot);
@@ -183,9 +163,9 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     ];
   });
   const rewardEpoch = $derived(parseRewardEpoch());
-  const lpAmount = $derived(parseTokenAmount(lpAmountInput));
+  const lpAmount = $derived(parseTokenInputAmount(lpAmountInput));
   const governanceCustodyAmount = $derived(
-    parseTokenAmount(governanceCustodyAmountInput),
+    parseTokenInputAmount(governanceCustodyAmountInput),
   );
   const selectedGovernanceAssetId = $derived.by(() => {
     const pool = snap?.nativeStaking.pool;
@@ -321,7 +301,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   }
 
   function useMaxLpAmount() {
-    lpAmountInput = formatTokenInput(nativeWalletBalances.lp);
+    lpAmountInput = formatTokenInputAmount(nativeWalletBalances.lp);
   }
 
   function useMaxGovernanceCustodyAmount() {
@@ -329,7 +309,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       governanceCustodyAssetKind === 'native'
         ? nativeWalletBalances.native
         : nativeWalletBalances.staked;
-    governanceCustodyAmountInput = formatTokenInput(balance);
+    governanceCustodyAmountInput = formatTokenInputAmount(balance);
   }
 
   async function claimNominationReward() {

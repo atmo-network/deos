@@ -15,6 +15,8 @@ Checks:
   - runtime production configs do not carry unclassified WeightInfo = ()
   - template workspace docs do not present native binding as live staking truth
   - runtime asset-conversion integration test module/file spelling is canonical
+  - framework artifact names do not regress to pre-DEOS tmctol runtime/pallet names
+  - browser wallet helper aliases do not regress to TMCTOL-branded framework names
 
 Options:
   --warn    Print findings but exit successfully
@@ -52,7 +54,7 @@ record_finding() {
 
 check_prerequisites() {
     require_directory "$TEMPLATE_DIR" "template workspace"
-    require_commands rg
+    require_commands rg wc tr
 }
 
 check_xcm_weights() {
@@ -94,6 +96,30 @@ check_asset_conversion_name() {
     fi
 }
 
+check_legacy_framework_artifact_names() {
+    local legacy_prefix='tmctol'
+    local pallet_prefix="pallet-${legacy_prefix}"
+    local pattern="${legacy_prefix}-runtime|${legacy_prefix}_runtime|${pallet_prefix}"
+    local matches
+    matches="$(rg -n "$pattern" "$PROJECT_ROOT/scripts" "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client/src" || true)"
+    if [[ -n "$matches" ]]; then
+        record_finding "legacy pre-DEOS framework artifact names detected"
+        echo "$matches"
+    fi
+}
+
+check_legacy_wallet_helper_aliases() {
+    local old_standard='Tmctol'
+    local old_constant='TMCTOL'
+    local pattern="${old_standard}(InjectedSigner|DevSigner|Signer)|${old_constant}_DEV_SIGNER|isValid${old_standard}Address"
+    local matches
+    matches="$(rg -n "$pattern" "$PROJECT_ROOT/web-client/src" || true)"
+    if [[ -n "$matches" ]]; then
+        record_finding "legacy TMCTOL-branded wallet helper aliases detected"
+        echo "$matches"
+    fi
+}
+
 main() {
     parse_args "$@"
     phase_banner "Template readiness audit"
@@ -103,6 +129,8 @@ main() {
     check_placeholder_weights
     check_staking_aliases
     check_asset_conversion_name
+    check_legacy_framework_artifact_names
+    check_legacy_wallet_helper_aliases
     if [[ ${#FINDINGS[@]} -eq 0 ]]; then
         log_success "Template readiness audit passed"
         return 0

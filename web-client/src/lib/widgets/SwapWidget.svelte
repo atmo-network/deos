@@ -8,6 +8,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   import { ArrowUpDown } from '@lucide/svelte';
   import { onMount } from 'svelte';
 
+  import { parseUnsignedDecimalFloat } from '$lib/format/numeric';
   import { logStore } from '$lib/log/index.svelte';
   import { marketStore } from '$lib/market/index.svelte';
   import type { Quote } from '$lib/market/types';
@@ -30,7 +31,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     fmtInputAmount,
     fmtOut,
     fmtPrice,
-    toBigInt,
+    parseTokenInputAmount,
     toFloat,
   } from '$lib/ui/format';
   import { walletStore } from '$lib/wallet/index.svelte';
@@ -95,7 +96,6 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     warnings: string[];
   };
   type ParsedInputState = {
-    raw: number;
     amount: bigint | null;
   };
 
@@ -203,15 +203,8 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   }
 
   function parseInputState(value: string) {
-    const raw = Number.parseFloat(value);
-    if (!Number.isFinite(raw) || raw <= 0) {
-      return { raw: 0, amount: null };
-    }
-    try {
-      return { raw, amount: toBigInt(raw) };
-    } catch {
-      return { raw, amount: null };
-    }
+    const amount = parseTokenInputAmount(value);
+    return { amount };
   }
 
   function assetOptionsValue() {
@@ -242,8 +235,8 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   }
 
   function slippageStateValue() {
-    const raw = Number.parseFloat(slippagePercent);
-    if (!Number.isFinite(raw)) {
+    const raw = parseUnsignedDecimalFloat(slippagePercent);
+    if (raw === null) {
       return {
         valid: false,
         percent: null,
@@ -303,7 +296,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
         disabled: true,
       };
     }
-    if (parsedInput.raw <= 0 || !parsedInput.amount) {
+    if (!parsedInput.amount) {
       return { text: 'Enter an amount', disabled: true };
     }
     if (!slippageState.valid) {
@@ -445,7 +438,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
         `No spendable ${inputSymbol} balance is currently available for swap input`,
       );
     }
-    if (!slippageState.valid && parsedInput.raw > 0) {
+    if (!slippageState.valid && parsedInput.amount !== null) {
       items.push(slippageState.reason ?? 'Enter a valid slippage cap');
     }
     if (
@@ -620,7 +613,6 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
 
   async function executeSwap() {
     if (
-      parsedInput.raw <= 0 ||
       !parsedInput.amount ||
       buttonState.disabled ||
       !slippageState.valid ||
@@ -678,7 +670,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
           slippageState.bps,
         );
         logStore.add(
-          `Bought ${formatSwapAssetAmount(result.native_out, nativeSymbol())} for ${fmt(parsedInput.raw)} ${foreignSymbol()} via ${result.route}`,
+          `Bought ${formatSwapAssetAmount(result.native_out, nativeSymbol())} for ${fmt(toFloat(parsedInput.amount))} ${foreignSymbol()} via ${result.route}`,
           'buy',
           {
             blockNumber: systemStore.snapshot?.blockNumber ?? null,
@@ -691,7 +683,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
           slippageState.bps,
         );
         logStore.add(
-          `Sold ${fmt(parsedInput.raw)} ${nativeSymbol()} for ${formatSwapAssetAmount(result.foreign_out, foreignSymbol())} via ${result.route}`,
+          `Sold ${fmt(toFloat(parsedInput.amount))} ${nativeSymbol()} for ${formatSwapAssetAmount(result.foreign_out, foreignSymbol())} via ${result.route}`,
           'sell',
           {
             blockNumber: systemStore.snapshot?.blockNumber ?? null,

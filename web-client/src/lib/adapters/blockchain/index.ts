@@ -60,14 +60,14 @@ export {
   discoverInjectedSignerAccounts,
   hasBuiltInDevSigner,
   injectedSignerAvailability,
-  isValidTmctolAddress,
+  isValidDeosAddress,
   injectedSignerExtensionNames,
-  type TmctolDevSignerPreset,
-  type TmctolInjectedSignerAccount,
-  type TmctolInjectedSignerAvailability,
-  type TmctolInjectedSignerMatch,
-  type TmctolSignerMatch,
-  TMCTOL_DEV_SIGNER_PRESETS,
+  type DeosDevSignerPreset,
+  type DeosInjectedSignerAccount,
+  type DeosInjectedSignerAvailability,
+  type DeosInjectedSignerMatch,
+  type DeosSignerMatch,
+  DEOS_DEV_SIGNER_PRESETS,
 } from '$lib/wallet/signer';
 
 function triggerRecord(value: unknown): Record<string, unknown> | null {
@@ -619,6 +619,18 @@ export class BlockchainAdapter implements Adapter {
     );
   }
 
+  transferAssetId(asset: TransferAssetKey): number {
+    const match = /^asset:(\d+)$/.exec(asset);
+    if (!match) {
+      throw new Error('Selected asset is not transferable');
+    }
+    const assetId = Number(match[1]);
+    if (!Number.isSafeInteger(assetId) || assetId < 0 || assetId > 0xffffffff) {
+      throw new Error('Selected asset id is outside the local u32 range');
+    }
+    return assetId;
+  }
+
   async transferAsset(
     asset: TransferAssetKey,
     recipient: string,
@@ -652,7 +664,7 @@ export class BlockchainAdapter implements Adapter {
                     return resolvedForeignAsset.value;
                   },
                 )
-              : Promise.resolve(Number(asset.slice('asset:'.length)));
+              : Promise.resolve(this.transferAssetId(asset));
           return {
             subscribe: (observer) => {
               let nestedSubscription: { unsubscribe(): void } | null = null;

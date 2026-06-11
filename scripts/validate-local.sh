@@ -3,6 +3,16 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+RUN_SCRIPT_AUDIT="${RUN_SCRIPT_AUDIT:-1}"
+RUN_TEMPLATE_AUDIT="${RUN_TEMPLATE_AUDIT:-1}"
+RUN_NUMERIC_AUDIT="${RUN_NUMERIC_AUDIT:-1}"
+RUN_SIMULATOR_DETERMINISM_AUDIT="${RUN_SIMULATOR_DETERMINISM_AUDIT:-1}"
+RUN_SIMULATOR_CONSISTENCY_AUDIT="${RUN_SIMULATOR_CONSISTENCY_AUDIT:-1}"
+RUN_CODE_SUPPRESSION_AUDIT="${RUN_CODE_SUPPRESSION_AUDIT:-1}"
+RUN_BACKLOG_AUDIT="${RUN_BACKLOG_AUDIT:-1}"
+RUN_DOMAIN_DAG_AUDIT="${RUN_DOMAIN_DAG_AUDIT:-1}"
+RUN_WIKI_TRUST_AUDIT="${RUN_WIKI_TRUST_AUDIT:-1}"
+RUN_DEPENDENCY_AUDIT="${RUN_DEPENDENCY_AUDIT:-0}"
 RUN_CI="${RUN_CI:-1}"
 RUN_BUILD="${RUN_BUILD:-1}"
 RUN_E2E="${RUN_E2E:-0}"
@@ -12,6 +22,7 @@ RPC_READY_TIMEOUT_SEC="${RPC_READY_TIMEOUT_SEC:-240}"
 ZOMBIENET_LOG="${ZOMBIENET_LOG:-/tmp/deos-zombienet.log}"
 
 ZOMBIENET_PID=""
+ALIGNMENT_SCRIPT_DIR="$PROJECT_ROOT/.agents/skills/alignment/scripts"
 
 usage() {
     cat <<'EOF2'
@@ -20,12 +31,24 @@ Usage: validate-local.sh [OPTIONS]
 DEOS local validation orchestrator
 
 Options:
-  --all            Run CI + runtime build + E2E
+  --all            Run script audit + template audit + numeric audit + simulator determinism/consistency audits + code suppression audit + backlog audit + domain DAG audit + wiki trust audit + CI + runtime build + E2E
+  --audit-only     Run only fast script/template/numeric/simulator-determinism/simulator-consistency/code-suppression/backlog/domain-DAG/wiki-trust audits
+  --dependency-audit  Add report-only dependency posture audit (uses npm registry/audit network calls)
   --ci-only        Run only CI validation
   --build-only     Run only runtime build validation
   --e2e-only       Run only E2E validation
   --with-e2e       Add E2E validation to current plan
   --prepare-e2e    Run 01..04 setup before E2E (implies --with-e2e)
+  --no-script-audit    Disable script entrypoint audit
+  --no-template-audit  Disable template readiness audit
+  --no-numeric-audit   Disable numeric parsing audit
+  --no-simulator-determinism-audit  Disable simulator determinism audit
+  --no-simulator-consistency-audit   Disable simulator tests.js/tests.md mirror audit
+  --no-code-suppression-audit  Disable code suppression audit
+  --no-backlog-audit  Disable backlog open-work audit
+  --no-domain-dag-audit  Disable web-client domain DAG audit
+  --no-wiki-trust-audit  Disable trusted wiki markdown audit
+  --no-dependency-audit  Disable dependency posture audit
   --no-ci          Disable CI validation
   --no-build       Disable runtime build validation
   --no-e2e         Disable E2E validation
@@ -33,6 +56,16 @@ Options:
   -h, --help       Show this help message
 
 Environment flags:
+  RUN_SCRIPT_AUDIT=0|1
+  RUN_TEMPLATE_AUDIT=0|1
+  RUN_NUMERIC_AUDIT=0|1
+  RUN_SIMULATOR_DETERMINISM_AUDIT=0|1
+  RUN_SIMULATOR_CONSISTENCY_AUDIT=0|1
+  RUN_CODE_SUPPRESSION_AUDIT=0|1
+  RUN_BACKLOG_AUDIT=0|1
+  RUN_DOMAIN_DAG_AUDIT=0|1
+  RUN_WIKI_TRUST_AUDIT=0|1
+  RUN_DEPENDENCY_AUDIT=0|1
   RUN_CI=0|1
   RUN_BUILD=0|1
   RUN_E2E=0|1
@@ -47,24 +80,82 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --all)
+                RUN_SCRIPT_AUDIT=1
+                RUN_TEMPLATE_AUDIT=1
+                RUN_NUMERIC_AUDIT=1
+                RUN_SIMULATOR_DETERMINISM_AUDIT=1
+                RUN_SIMULATOR_CONSISTENCY_AUDIT=1
+                RUN_CODE_SUPPRESSION_AUDIT=1
+                RUN_BACKLOG_AUDIT=1
+                RUN_DOMAIN_DAG_AUDIT=1
+                RUN_WIKI_TRUST_AUDIT=1
+                RUN_DEPENDENCY_AUDIT=1
                 RUN_CI=1
                 RUN_BUILD=1
                 RUN_E2E=1
                 ;;
+            --audit-only)
+                RUN_SCRIPT_AUDIT=1
+                RUN_TEMPLATE_AUDIT=1
+                RUN_NUMERIC_AUDIT=1
+                RUN_SIMULATOR_DETERMINISM_AUDIT=1
+                RUN_SIMULATOR_CONSISTENCY_AUDIT=1
+                RUN_CODE_SUPPRESSION_AUDIT=1
+                RUN_BACKLOG_AUDIT=1
+                RUN_DOMAIN_DAG_AUDIT=1
+                RUN_WIKI_TRUST_AUDIT=1
+                RUN_DEPENDENCY_AUDIT=0
+                RUN_CI=0
+                RUN_BUILD=0
+                RUN_E2E=0
+                ;;
             --ci-only)
+                RUN_SCRIPT_AUDIT=0
+                RUN_TEMPLATE_AUDIT=0
+                RUN_NUMERIC_AUDIT=0
+                RUN_SIMULATOR_DETERMINISM_AUDIT=0
+                RUN_SIMULATOR_CONSISTENCY_AUDIT=0
+                RUN_CODE_SUPPRESSION_AUDIT=0
+                RUN_BACKLOG_AUDIT=0
+                RUN_DOMAIN_DAG_AUDIT=0
+                RUN_WIKI_TRUST_AUDIT=0
+                RUN_DEPENDENCY_AUDIT=0
                 RUN_CI=1
                 RUN_BUILD=0
                 RUN_E2E=0
                 ;;
             --build-only)
+                RUN_SCRIPT_AUDIT=0
+                RUN_TEMPLATE_AUDIT=0
+                RUN_NUMERIC_AUDIT=0
+                RUN_SIMULATOR_DETERMINISM_AUDIT=0
+                RUN_SIMULATOR_CONSISTENCY_AUDIT=0
+                RUN_CODE_SUPPRESSION_AUDIT=0
+                RUN_BACKLOG_AUDIT=0
+                RUN_DOMAIN_DAG_AUDIT=0
+                RUN_WIKI_TRUST_AUDIT=0
+                RUN_DEPENDENCY_AUDIT=0
                 RUN_CI=0
                 RUN_BUILD=1
                 RUN_E2E=0
                 ;;
             --e2e-only)
+                RUN_SCRIPT_AUDIT=0
+                RUN_TEMPLATE_AUDIT=0
+                RUN_NUMERIC_AUDIT=0
+                RUN_SIMULATOR_DETERMINISM_AUDIT=0
+                RUN_SIMULATOR_CONSISTENCY_AUDIT=0
+                RUN_CODE_SUPPRESSION_AUDIT=0
+                RUN_BACKLOG_AUDIT=0
+                RUN_DOMAIN_DAG_AUDIT=0
+                RUN_WIKI_TRUST_AUDIT=0
+                RUN_DEPENDENCY_AUDIT=0
                 RUN_CI=0
                 RUN_BUILD=0
                 RUN_E2E=1
+                ;;
+            --dependency-audit)
+                RUN_DEPENDENCY_AUDIT=1
                 ;;
             --with-e2e)
                 RUN_E2E=1
@@ -72,6 +163,36 @@ parse_args() {
             --prepare-e2e)
                 RUN_E2E=1
                 PREPARE_E2E=1
+                ;;
+            --no-script-audit)
+                RUN_SCRIPT_AUDIT=0
+                ;;
+            --no-template-audit)
+                RUN_TEMPLATE_AUDIT=0
+                ;;
+            --no-numeric-audit)
+                RUN_NUMERIC_AUDIT=0
+                ;;
+            --no-simulator-determinism-audit)
+                RUN_SIMULATOR_DETERMINISM_AUDIT=0
+                ;;
+            --no-simulator-consistency-audit)
+                RUN_SIMULATOR_CONSISTENCY_AUDIT=0
+                ;;
+            --no-code-suppression-audit)
+                RUN_CODE_SUPPRESSION_AUDIT=0
+                ;;
+            --no-backlog-audit)
+                RUN_BACKLOG_AUDIT=0
+                ;;
+            --no-domain-dag-audit)
+                RUN_DOMAIN_DAG_AUDIT=0
+                ;;
+            --no-wiki-trust-audit)
+                RUN_WIKI_TRUST_AUDIT=0
+                ;;
+            --no-dependency-audit)
+                RUN_DEPENDENCY_AUDIT=0
                 ;;
             --no-ci)
                 RUN_CI=0
@@ -101,15 +222,65 @@ parse_args() {
 
 check_plan() {
     phase_banner "Step 1: Validation plan"
-    if (( RUN_CI == 0 && RUN_BUILD == 0 && RUN_E2E == 0 )); then
+    if (( RUN_SCRIPT_AUDIT == 0 && RUN_TEMPLATE_AUDIT == 0 && RUN_NUMERIC_AUDIT == 0 && RUN_SIMULATOR_DETERMINISM_AUDIT == 0 && RUN_SIMULATOR_CONSISTENCY_AUDIT == 0 && RUN_CODE_SUPPRESSION_AUDIT == 0 && RUN_BACKLOG_AUDIT == 0 && RUN_DOMAIN_DAG_AUDIT == 0 && RUN_WIKI_TRUST_AUDIT == 0 && RUN_DEPENDENCY_AUDIT == 0 && RUN_CI == 0 && RUN_BUILD == 0 && RUN_E2E == 0 )); then
         log_error "Nothing to run. Enable at least one validation stage"
         exit 1
     fi
+    log_info "Plan: script_audit=$RUN_SCRIPT_AUDIT template_audit=$RUN_TEMPLATE_AUDIT numeric_audit=$RUN_NUMERIC_AUDIT simulator_determinism_audit=$RUN_SIMULATOR_DETERMINISM_AUDIT simulator_consistency_audit=$RUN_SIMULATOR_CONSISTENCY_AUDIT code_suppression_audit=$RUN_CODE_SUPPRESSION_AUDIT backlog_audit=$RUN_BACKLOG_AUDIT domain_dag_audit=$RUN_DOMAIN_DAG_AUDIT wiki_trust_audit=$RUN_WIKI_TRUST_AUDIT dependency_audit=$RUN_DEPENDENCY_AUDIT"
     log_info "Plan: ci=$RUN_CI build=$RUN_BUILD e2e=$RUN_E2E prepare_e2e=$PREPARE_E2E"
+}
+
+run_alignment_script_step() {
+    local label="$1"
+    local script_name="$2"
+    shift 2
+
+    local script_path="$ALIGNMENT_SCRIPT_DIR/$script_name"
+    if [[ ! -x "$script_path" ]]; then
+        log_error "Alignment skill script not found or not executable: $script_name"
+        exit 1
+    fi
+    log_info "Running: $label (.agents/skills/alignment/scripts/$script_name)"
+    local start_time
+    start_time=$(date +%s)
+    "$script_path" "$@"
+    local end_time
+    end_time=$(date +%s)
+    log_success "$label completed in $((end_time - start_time))s"
 }
 
 run_requested_stages() {
     phase_banner "Step 2: Local validation stages"
+    if (( RUN_SCRIPT_AUDIT == 1 )); then
+        run_alignment_script_step "Script entrypoint audit" "audit-script-entrypoints.sh"
+    fi
+    if (( RUN_TEMPLATE_AUDIT == 1 )); then
+        run_alignment_script_step "Template readiness audit" "audit-template-readiness.sh"
+    fi
+    if (( RUN_NUMERIC_AUDIT == 1 )); then
+        run_alignment_script_step "Numeric parsing audit" "audit-numeric-parsing.sh"
+    fi
+    if (( RUN_SIMULATOR_DETERMINISM_AUDIT == 1 )); then
+        run_alignment_script_step "Simulator determinism audit" "audit-simulator-determinism.sh"
+    fi
+    if (( RUN_SIMULATOR_CONSISTENCY_AUDIT == 1 )); then
+        run_alignment_script_step "Simulator suite mirror audit" "audit-simulator-consistency.sh"
+    fi
+    if (( RUN_CODE_SUPPRESSION_AUDIT == 1 )); then
+        run_alignment_script_step "Code suppression audit" "audit-code-suppressions.sh"
+    fi
+    if (( RUN_BACKLOG_AUDIT == 1 )); then
+        run_alignment_script_step "Backlog open-work audit" "audit-backlog-open-work.sh"
+    fi
+    if (( RUN_DOMAIN_DAG_AUDIT == 1 )); then
+        run_shell_step "Web-client domain DAG audit" "" "cd '$PROJECT_ROOT/web-client' && npm run validate:dag"
+    fi
+    if (( RUN_WIKI_TRUST_AUDIT == 1 )); then
+        run_shell_step "Trusted wiki markdown audit" "" "cd '$PROJECT_ROOT/web-client' && npm run validate:wiki"
+    fi
+    if (( RUN_DEPENDENCY_AUDIT == 1 )); then
+        run_alignment_script_step "Dependency posture audit" "audit-dependency-posture.sh"
+    fi
     if (( RUN_CI == 1 )); then
         run_script_step "CI local workflow" "ci-local.sh"
     fi

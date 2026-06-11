@@ -4,6 +4,7 @@ Owns: Chain event labels, messages, dispatch-error text, transaction highlights,
 Excludes: Log store ownership, network polling, transaction watch lifecycle, and widget rendering.
 Zone: Transport formatting helper; may depend on log contracts but not stores or UI components.
 */
+import { PRECISION } from '$lib/economics';
 import type { LogEntry } from '$lib/log/types';
 
 type ChainEventValue = {
@@ -56,7 +57,7 @@ function formatUnknownAsset(value: unknown): string {
 }
 
 export function formatAmount(value: bigint): string {
-  return (Number(value) / 1e12).toLocaleString(undefined, {
+  return (Number(value) / Number(PRECISION)).toLocaleString(undefined, {
     maximumFractionDigits: 6,
   });
 }

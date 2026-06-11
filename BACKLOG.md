@@ -33,9 +33,6 @@
 ### Onboarding spine
 
 - [~] `Create the 80/20 newcomer onboarding spine`: promote one Start Here route above the cognitive-infrastructure graph so external readers can choose between understanding DEOS, running it locally, or forking/changing the economy safely without reading the full maintainer/agent context first
-  - [x] `Start Here wiki route`: add a three-path onboarding page with done conditions and minimum validation by path
-  - [x] `Root README CTA`: make the three onboarding paths visible before the detailed project mechanics
-  - [x] `Wiki index CTA`: move the onboarding spine above the broader wiki graph
   - [ ] `Fork-change follow-up`: after first external use, tighten the change-intent table with any missing fork surfaces discovered by partner feedback
   - [ ] `Local-run follow-up`: after the next clean-room local setup, verify the 30-minute path against a fresh machine and record any prerequisite gaps
 
@@ -45,7 +42,6 @@
 
 ### Web-client product stabilization
 
-- [ ] `Next named UI/UX hotspot slice`: before changing more client UI, identify one concrete widget/layout interaction problem with visible exit criteria, then close that slice in the same pass.
 - [ ] `Reserved edge-lane growth slice`: only if product pressure creates another reserved left/right lane, define the concrete lane role and extend `RESERVED_LANE_SPECS` without reintroducing user-reorderable edge-lane state.
 - [ ] `Governance state separation slice`: only if proposal composition or archive work grows enough to create a named ownership conflict, split the state boundary at that concrete seam.
 - [ ] `Materialized provider boundary slice`: only when a second indexed/archive provider family exists, decide whether `adapters/materialized-history/` should become a first-class `materialized/` or `providers/` slice.
@@ -89,14 +85,12 @@
 
 ### External dependency watch
 
-> The simplified randomness/security roadmap depends on upstream delivery rather than local cryptographic ambition.
+> The simplified randomness/security roadmap and dependency posture depend on upstream delivery rather than local surgery.
 
+- [ ] `Low-severity npm audit follow-up`: monitor the current npm audit report for SvelteKit/cookie and bits-ui/runed advisories; do not apply suggested semver-major/downgrade fixes unless upstream publishes a compatible non-regressive path.
+- [ ] `Formatter peer compatibility watch`: no active formatter problem exists; keep `prettier-plugin-svelte` on the current 3.x line while `@trivago/prettier-plugin-sort-imports 6.0.2` declares optional peer compatibility with `prettier-plugin-svelte 3.x`, and revisit only when the sort-imports peer range supports 4.x or the formatter stack is intentionally changed.
+- [ ] `Template cargo update blocker`: `cargo update --manifest-path template/Cargo.toml --dry-run` currently fails because SDK `polkadot-sdk v2603.0.0 -> sc-service -> sc-network -> litep2p v0.13.3 -> multihash v0.17.0` requires yanked `core2 v0.4.0`; revisit only through an upstream-compatible Polkadot SDK/litep2p path rather than local dependency surgery.
 - [ ] `Track Safrole/Sassafras release readiness and parachain-consumable randomness availability in paritytech/polkadot-sdk`
 - [ ] `Treat the current Polkadot/JAM post-quantum roadmap as a directional beacon-over-VRF signal, not as proof of a shipped parachain-consumable API`
 - [ ] `Watch the current upstream signals only in the live polkadot-sdk monorepo`: Sassafras (`#41`, `#1336`, `#7669`) and BLS stabilization (`#10327`, `#11149`)
 - [ ] `Only if the relay-beacon path stalls or proves unusable, reassess whether any local threshold runtime work should survive as fallback research`
-
-## Operator-local validation entrypoints
-
-- `./scripts/aaa-release-gate.sh`: AAA scheduler release gate
-- `./scripts/try-runtime-local.sh --prepare`: local try-runtime dry-run wrapper

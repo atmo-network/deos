@@ -72,7 +72,7 @@ The browser realization axis is separate:
 - `session-derived`;
 - `provider`.
 
-A session-built chart or retained UI panel must not masquerade as archive truth. A future archive/search/dashboard surface must declare its materialized provider boundary explicitly.
+A session-built chart or retained UI panel must not masquerade as archive truth. A future archive/search/dashboard surface must declare its materialized provider boundary explicitly. `ReadModelValue.fetchedAt` is only a browser observation timestamp for cache/session freshness; canonical chain time or finality must come from bounded chain facts such as `asOfBlock` / `asOfHash` when those facts matter.
 
 ## 4. Domain Ownership
 
@@ -90,7 +90,7 @@ Primary slices:
 - `system/` — chain snapshot, endpoint/session wiring, adapter runtime context, persistence.
 - `wiki/` — trusted wiki loader/renderer helpers.
 
-Broad foundation contracts may remain at root only when they are intentionally cross-cutting, such as `read-model.ts` and `economics.ts`.
+Broad foundation contracts may remain at root only when they are intentionally cross-cutting, such as `read-model.ts` and `economics.ts`. Shared low-level numeric literal parsing lives under `format/` so domain slices can validate complete literals without depending on UI Kit presentation helpers.
 
 ## 5. Adapter Boundary
 
@@ -124,6 +124,7 @@ Rules:
 - Buttons default to non-submit behavior unless a real form boundary opts into submit.
 - UI Kit class merging accepts Svelte-style string/array/object class values through one helper.
 - Form primitives own label/control wiring and hydration-safe generated ids.
+- Numeric domain inputs validate complete literals before conversion; token amount fields use the shared strict parser/formatter in `format.ts` rather than JavaScript prefix/coercion parsing.
 
 ## 7. Domain DAG Gate
 
@@ -185,7 +186,13 @@ cd web-client
 npm run validate
 ```
 
-That script runs formatting, Svelte checks, and the production build. For source-boundary changes, run the Domain DAG gate from the client workspace:
+That script runs formatting, Svelte checks, and the production build. For source-boundary and wiki trust checks, the repo fast audit stack already includes the Domain DAG and trusted wiki markdown gates:
+
+```sh
+../scripts/validate-local.sh --audit-only
+```
+
+From inside the client workspace, the same boundary gate is available directly:
 
 ```sh
 npm run validate:dag

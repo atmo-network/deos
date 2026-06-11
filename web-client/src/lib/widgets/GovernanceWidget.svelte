@@ -7,6 +7,7 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
 <script lang="ts">
   import { onMount } from 'svelte';
 
+  import { parseUnsignedDecimalNumber } from '$lib/format/numeric';
   import type {
     GovernanceMaterializedArchiveEntry,
     GovernanceProposalPayloadKind,
@@ -177,16 +178,15 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
       : `${authorization.codeHash} · no version check`;
   }
 
+  function parsePositiveItemIdInput(value: string, fallback: number) {
+    if (value.trim().length === 0) {
+      return fallback;
+    }
+    return parseUnsignedDecimalNumber(value, { min: 1 });
+  }
+
   function parsedSubmitItemId() {
-    const trimmed = submitItemIdInput.trim();
-    if (trimmed.length === 0) {
-      return suggestedSubmitItemId;
-    }
-    if (!/^\d+$/.test(trimmed)) {
-      return null;
-    }
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+    return parsePositiveItemIdInput(submitItemIdInput, suggestedSubmitItemId);
   }
 
   function applyReferencedPayloadSuggestion(payloadHash: string) {
@@ -422,15 +422,10 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
   }
 
   function parsedTreasurySubmitItemId() {
-    const trimmed = treasurySubmitItemIdInput.trim();
-    if (trimmed.length === 0) {
-      return suggestedSubmitItemId;
-    }
-    if (!/^\d+$/.test(trimmed)) {
-      return null;
-    }
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+    return parsePositiveItemIdInput(
+      treasurySubmitItemIdInput,
+      suggestedSubmitItemId,
+    );
   }
 
   function treasurySubmitReviewStatusLabel() {

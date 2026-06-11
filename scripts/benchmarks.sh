@@ -137,7 +137,6 @@ check_only() {
 resolve_runtime_wasm_path() {
     local candidates=(
         "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
-        "$TEMPLATE_DIR/target/release/wbuild/tmctol-runtime/tmctol_runtime.compact.compressed.wasm"
     )
 
     for candidate in "${candidates[@]}"; do

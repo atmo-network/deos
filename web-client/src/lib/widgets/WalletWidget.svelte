@@ -27,8 +27,13 @@ Zone: Presentation widget; consumes wallet/portfolio/market/system/log stores an
     StatCard,
     TextField,
   } from '$lib/ui';
-  import { fmt, fmtInputAmount, toBigInt, toFloat } from '$lib/ui/format';
-  import { isValidTmctolAddress, walletStore } from '$lib/wallet/index.svelte';
+  import {
+    fmt,
+    fmtInputAmount,
+    parseTokenInputAmount,
+    toFloat,
+  } from '$lib/ui/format';
+  import { isValidDeosAddress, walletStore } from '$lib/wallet/index.svelte';
 
   const NATIVE_TRANSFER_FEE_HEADROOM = 100_000_000_000n;
 
@@ -167,17 +172,8 @@ Zone: Presentation widget; consumes wallet/portfolio/market/system/log stores an
   );
   const sendingCurrentDraft = $derived(sendPendingDraftKey === sendDraftKey);
   const parsedSendAmount = $derived.by(() => {
-    const rawAmount = Number.parseFloat(sendAmount);
-    if (!Number.isFinite(rawAmount) || rawAmount <= 0) {
-      return {
-        rawAmount: null,
-        amount: null,
-      };
-    }
-    return {
-      rawAmount,
-      amount: toBigInt(rawAmount),
-    };
+    const amount = parseTokenInputAmount(sendAmount);
+    return { amount };
   });
 
   $effect(() => {
@@ -221,7 +217,7 @@ Zone: Presentation widget; consumes wallet/portfolio/market/system/log stores an
     if (recipient.length === 0) {
       return { disabled: true, text: 'Enter recipient' };
     }
-    if (!isValidTmctolAddress(recipient)) {
+    if (!isValidDeosAddress(recipient)) {
       return { disabled: true, text: 'Enter valid recipient' };
     }
     if (parsedSendAmount.amount == null) {
@@ -270,7 +266,7 @@ Zone: Presentation widget; consumes wallet/portfolio/market/system/log stores an
             : 'Open the sidebar and connect an injected wallet or local dev signer before sending funds',
       };
     }
-    if (recipient.length > 0 && !isValidTmctolAddress(recipient)) {
+    if (recipient.length > 0 && !isValidDeosAddress(recipient)) {
       return {
         variant: 'warn',
         message:
@@ -322,14 +318,10 @@ Zone: Presentation widget; consumes wallet/portfolio/market/system/log stores an
     sendError = null;
     sendErrorDraftKey = null;
     try {
-      if (
-        parsedSendAmount.amount == null ||
-        parsedSendAmount.rawAmount == null
-      ) {
+      if (parsedSendAmount.amount == null) {
         throw new Error('Transfer amount must be greater than zero');
       }
       const submittedAmount = parsedSendAmount.amount;
-      const submittedRawAmount = parsedSendAmount.rawAmount;
       const submittedSymbol = selectedTransferAsset.symbol;
       if (submittedAmount > sendBalance) {
         throw new Error(
@@ -347,7 +339,7 @@ Zone: Presentation widget; consumes wallet/portfolio/market/system/log stores an
         submittedAmount,
       );
       logStore.add(
-        `TRANSFER ${fmt(submittedRawAmount)} ${submittedSymbol} → ${shortAddress(submittedRecipient)}`,
+        `TRANSFER ${fmt(toFloat(submittedAmount))} ${submittedSymbol} → ${shortAddress(submittedRecipient)}`,
         'info',
       );
       if (sendDraftKey === submittedDraftKey) {

@@ -58,7 +58,7 @@ run_primary_checks() {
 
     run_shell_step "Clippy (Linting)" \
         "30" \
-        "cargo clippy --all-targets --all-features --locked --workspace --quiet"
+        "cargo clippy --all-targets --all-features --locked --workspace --quiet -- -D warnings"
 
     run_shell_step "Tests" \
         "15" \

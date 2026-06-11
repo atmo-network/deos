@@ -5,6 +5,7 @@ Excludes: Governance store singleton, widgets, adapter providers, and payload re
 Zone: Governance public API; import through this barrel when consumers need broad governance contracts.
 */
 export * from './types';
+export * from './view-types';
 export * from './constants';
 export * from './write-surface';
 export * from './materialized';

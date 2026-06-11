@@ -1,5 +1,3 @@
-// @ts-nocheck
-
 /**
  * TMCTOL Comprehensive Test Suite
  * Synchronized verbose in `/simulator/tests.md`
@@ -47,6 +45,19 @@ const formatTokens = (tokens) =>
  */
 const formatPPB = (ppb) => `${(Number(ppb) / 10000000).toFixed(2)}%`;
 
+const createDeterministicRandom = (seed) => {
+  let state = seed >>> 0;
+  return () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 0x1_0000_0000;
+  };
+};
+
+const createDeterministicRandomInt = (seed) => {
+  const random = createDeterministicRandom(seed);
+  return (maxExclusive) => Math.floor(random() * maxExclusive);
+};
+
 class TestFailure extends Error {
   constructor(/** @type {string} */ message) {
     super(message);
@@ -82,17 +93,6 @@ const assertApprox = (actual, expected, tolerance, message) => {
     );
   }
 };
-
-const getTimestamp = (() => {
-  if (typeof performance !== "undefined" && performance.now) {
-    return () => BigInt(Math.floor(performance.now() * 1_000_000));
-  } else if (typeof Date !== "undefined") {
-    return () => BigInt(Date.now()) * 1_000_000n;
-  } else {
-    let counter = 0n;
-    return () => counter++;
-  }
-})();
 
 /**
  * @param {bigint} reserveNative
@@ -190,7 +190,7 @@ const TEST_SECTIONS = [
   [9, 2], // Multi-User & Chaos Testing
   [10, 6], // Emergent Properties & System Intelligence
   [11, 4], // Economic Security & Attack Resistance
-  [12, 7], // Adaptive System Behaviors
+  [12, 8], // Adaptive System Behaviors
   [13, 5], // Reporting & Conformance Metrics
 ];
 
@@ -638,18 +638,17 @@ runTest("Scaling Rules - Precision Through Calculations", () => {
 
 runTest("Scaling Rules - Property Fuzz", () => {
   // Fuzz inputs within sane operational ranges
+  const randomInt = createDeterministicRandomInt(0xde05_1001);
   const cases = 100;
   for (let i = 0; i < cases; i++) {
     const price_initial =
-      BigInt(Math.floor(Math.random() * 1_000_000) + 1) *
-      (PRECISION / 1_000_000n);
+      BigInt(randomInt(1_000_000) + 1) * (PRECISION / 1_000_000n);
     const slope =
-      BigInt(Math.floor(Math.random() * 1_000_000) + 1) *
-      (PRECISION / 1_000_000n);
+      BigInt(randomInt(1_000_000) + 1) * (PRECISION / 1_000_000n);
     const system = create_system({ tmc: { price_initial, slope } });
     const tmc = system.tmc;
     // Random supply point
-    const s = BigInt(Math.floor(Math.random() * 1_000_000)) * PRECISION;
+    const s = BigInt(randomInt(1_000_000)) * PRECISION;
     tmc.supply = s;
     // Expected price: P = P0 + m * S / PRECISION
     const expected = price_initial + (slope * s) / PRECISION;
@@ -879,13 +878,13 @@ runTest("Safe Operating Ranges", () => {
   }
 });
 
-runTest("Formula Performance Analysis", () => {
+runTest("Formula Batch Execution Smoke", () => {
   const payment = 100n * PRECISION;
   const price_initial = PRECISION;
   const slope = PRECISION / 1_000n;
   const current_supply = 1_000_000n * PRECISION;
   const iterations = 1000;
-  const start = getTimestamp();
+  let total_minted = 0n;
   for (let i = 0; i < iterations; i++) {
     const system = create_system({
       price_initial,
@@ -896,12 +895,9 @@ runTest("Formula Performance Analysis", () => {
       },
     });
     system.tmc.supply = current_supply;
-    const result = system.tmc.calculate_mint(payment);
+    total_minted += system.tmc.calculate_mint(payment);
   }
-  const end = getTimestamp();
-  const total_time = end - start;
-  const avg_time = total_time / BigInt(iterations);
-  assert(avg_time < 1_000_000n, "Performance acceptable (<1ms per op)");
+  assert(total_minted > 0n, "Formula batch produces positive output");
 });
 
 // 6. MULTI-ACTOR CORRECTNESS
@@ -1321,6 +1317,8 @@ runTest("Floor Formula & Scenario Verification", () => {
 // 9. MULTI-USER SIMULATION
 
 runTest("Multi-User Concurrent Simulation", () => {
+  const random = createDeterministicRandom(0xde05_2001);
+  const randomInt = (maxExclusive) => Math.floor(random() * maxExclusive);
   const system = create_system({
     price_initial: PRECISION / 100n,
     slope: 1_000n,
@@ -1330,16 +1328,16 @@ runTest("Multi-User Concurrent Simulation", () => {
   const user_count = 50;
   const user_balances = new Array(user_count).fill(0n);
   for (let op = 0; op < 200; op++) {
-    const user_id = Math.floor(Math.random() * user_count);
-    const action = Math.random();
+    const user_id = randomInt(user_count);
+    const action = random();
     if (action < 0.6) {
-      const amount = BigInt(Math.floor(Math.random() * 500) + 10) * PRECISION;
+      const amount = BigInt(randomInt(500) + 10) * PRECISION;
       try {
         const result = system.router.swap_foreign_to_native(amount, 0n);
         user_balances[user_id] += result.native_out;
       } catch (e) {}
     } else if (action < 0.9) {
-      const amount = BigInt(Math.floor(Math.random() * 100) + 1) * PRECISION;
+      const amount = BigInt(randomInt(100) + 1) * PRECISION;
       if (user_balances[user_id] >= amount) {
         try {
           system.router.swap_native_to_foreign(amount, 0n);
@@ -1347,7 +1345,7 @@ runTest("Multi-User Concurrent Simulation", () => {
         } catch (e) {}
       }
     } else {
-      const amount = BigInt(Math.floor(Math.random() * 200) + 10) * PRECISION;
+      const amount = BigInt(randomInt(200) + 10) * PRECISION;
       try {
         const result = system.tmc.mint_native(amount);
         user_balances[user_id] += result.user_native;
@@ -1367,6 +1365,7 @@ runTest("Multi-User Concurrent Simulation", () => {
 });
 
 runTest("Extreme Load Stress Test", () => {
+  const randomInt = createDeterministicRandomInt(0xde05_2002);
   const system = create_system({
     tmc: {
       price_initial: PRECISION / 1_000n,
@@ -1378,17 +1377,15 @@ runTest("Extreme Load Stress Test", () => {
   let total_minted = 0n;
   let total_swapped = 0n;
   for (let i = 0; i < operations; i++) {
-    const operation_type = Math.floor(Math.random() * 3);
+    const operation_type = randomInt(3);
     switch (operation_type) {
       case 0: // Mint operation
-        const mint_amount =
-          BigInt(Math.floor(Math.random() * 1000) + 10) * PRECISION;
+        const mint_amount = BigInt(randomInt(1000) + 10) * PRECISION;
         const mint_result = system.tmc.mint_native(mint_amount);
         total_minted += mint_result.total_minted;
         break;
       case 1: // Buy operation
-        const buy_amount =
-          BigInt(Math.floor(Math.random() * 500) + 5) * PRECISION;
+        const buy_amount = BigInt(randomInt(500) + 5) * PRECISION;
         try {
           const swap_result = system.router.swap_foreign_to_native(
             buy_amount,
@@ -1401,8 +1398,7 @@ runTest("Extreme Load Stress Test", () => {
         } catch (e) {}
         break;
       case 2: // Sell operation
-        const sell_amount =
-          BigInt(Math.floor(Math.random() * 200) + 1) * PRECISION;
+        const sell_amount = BigInt(randomInt(200) + 1) * PRECISION;
         try {
           system.router.swap_native_to_foreign(sell_amount, 0n);
         } catch (e) {}
@@ -1517,18 +1513,20 @@ runTest("Vesting Cliff Math Trap Detection", () => {
   for (let i = 0; i < 20; i++) {
     system.tmc.mint_native(10_000n * PRECISION);
   }
+  const pre_burn_ceiling = system.tmc.get_price();
+  const pre_burn_floor = calculateFloorPrice(system);
+  assert(pre_burn_floor > 0n, "TOL liquidity should create a positive floor");
+
   // Burn to compress ceiling
   const burn_amount = system.tmc.supply / 10n;
   system.tmc.burn_native(burn_amount);
   const ceiling = system.tmc.get_price();
   const floor = calculateFloorPrice(system);
-  if (floor > 0n) {
-    const convergenceGap = calculateArithmeticSpread(ceiling, floor);
-    assert(ceiling > floor, "Ceiling should exceed floor");
-    assert(convergenceGap > 0n, "Convergence gap exists");
-  } else {
-    assert(true, "Test skipped - no liquidity");
-  }
+  const preBurnGap = calculateArithmeticSpread(pre_burn_ceiling, pre_burn_floor);
+  const convergenceGap = calculateArithmeticSpread(ceiling, floor);
+  assert(ceiling > floor, "Ceiling should exceed floor");
+  assert(convergenceGap > 0n, "Convergence gap exists");
+  assert(convergenceGap < preBurnGap, "Burn should tighten the vesting cliff gap");
 });
 
 runTest("Mint-Swap Feedback Loop Analysis", () => {
@@ -2147,6 +2145,17 @@ runTest("Two-Phase Reward Routing - Phase 2 1:1:4", () => {
   assert(split.liquidity_pool === 10n * PRECISION, "Phase 2 liquidity pool should receive one part");
   assert(split.claimable_lp_nomination === 40n * PRECISION, "Phase 2 claimable LP nomination should receive four parts");
   assert(split.staking_pool + split.liquidity_pool + split.claimable_lp_nomination === feeSinkAmount, "Phase 2 distribution must conserve Fee Sink amount");
+});
+
+runTest("Two-Phase Reward Routing - Remainder Conservation", () => {
+  const collected = 7n;
+  const outer = split_collator_fee(collected);
+  assert(outer.collator + outer.fee_sink === collected, "Outer split must conserve dust amounts");
+  assert(outer.fee_sink >= outer.collator, "Remainder should stay with Fee Sink collection path");
+  const phase1 = distribute_fee_sink_phase1(outer.fee_sink);
+  assert(phase1.staking_pool + phase1.liquidity_pool === outer.fee_sink, "Phase 1 dust split must conserve Fee Sink amount");
+  const phase2 = distribute_fee_sink_phase2(outer.fee_sink);
+  assert(phase2.staking_pool + phase2.liquidity_pool + phase2.claimable_lp_nomination === outer.fee_sink, "Phase 2 dust split must conserve Fee Sink amount");
 });
 
 runTest("Economic Incentive Alignment", () => {

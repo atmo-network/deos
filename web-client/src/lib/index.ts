@@ -7,13 +7,19 @@ Zone: Root public API; keep minimal and prefer direct domain imports for impleme
 // Adapters
 export {
   BlockchainAdapter,
+  connectDeosSigner,
+  connectDevSigner,
   connectInjectedSigner,
   DEFAULT_DEOS_DAPP_NAME,
+  DEOS_DEV_SIGNER_PRESETS,
   injectedSignerAvailability,
   injectedSignerExtensionNames,
-  type TmctolInjectedSignerAccount,
-  type TmctolInjectedSignerAvailability,
-  type TmctolInjectedSignerMatch,
+  isValidDeosAddress,
+  type DeosDevSignerPreset,
+  type DeosInjectedSignerAccount,
+  type DeosInjectedSignerAvailability,
+  type DeosInjectedSignerMatch,
+  type DeosSignerMatch,
 } from './adapters/blockchain';
 export {
   DEFAULT_DEOS_WS_ENDPOINT,
@@ -120,6 +126,7 @@ export {
 // Foundation and domain contracts
 export * from './automation/types';
 export * from './economics';
+export * from './format/numeric';
 export * from './log/types';
 export * from './market/types';
 export * from './portfolio/types';

@@ -4,12 +4,38 @@ Owns: Presentation-only numeric conversion and display formatting for UI surface
 Excludes: Protocol arithmetic decisions, persistence, and product state.
 Zone: Foundation UI helper; must remain dependency-light and domain-agnostic.
 */
+import { DECIMALS, PRECISION } from '$lib/economics';
+
+export const TOKEN_DECIMALS = Number(DECIMALS);
+export const TOKEN_BASE_UNITS_PER_TOKEN = PRECISION;
+
+const TOKEN_INPUT_PATTERN = new RegExp(
+  `^(\\d+)(?:\\.(\\d{1,${TOKEN_DECIMALS}}))?$`,
+);
+
 export function toFloat(v: bigint): number {
-  return Number(v) / 1e12;
+  return Number(v) / Number(TOKEN_BASE_UNITS_PER_TOKEN);
 }
 
-export function toBigInt(v: number): bigint {
-  return BigInt(Math.round(v * 1e12));
+export function parseTokenInputAmount(value: string): bigint | null {
+  const trimmed = value.trim();
+  const match = TOKEN_INPUT_PATTERN.exec(trimmed);
+  if (!match) {
+    return null;
+  }
+  const whole = BigInt(match[1]);
+  const fraction = BigInt((match[2] ?? '').padEnd(TOKEN_DECIMALS, '0'));
+  const amount = whole * TOKEN_BASE_UNITS_PER_TOKEN + fraction;
+  return amount > 0n ? amount : null;
+}
+
+export function formatTokenInputAmount(value: bigint): string {
+  const whole = value / TOKEN_BASE_UNITS_PER_TOKEN;
+  const fraction = (value % TOKEN_BASE_UNITS_PER_TOKEN)
+    .toString()
+    .padStart(TOKEN_DECIMALS, '0')
+    .replace(/0+$/u, '');
+  return fraction.length > 0 ? `${whole}.${fraction}` : whole.toString();
 }
 
 export function fmt(n: number): string {

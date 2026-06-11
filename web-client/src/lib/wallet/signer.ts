@@ -13,20 +13,20 @@ import {
 
 export const DEFAULT_DEOS_DAPP_NAME = 'DEOS Web Client';
 
-export type TmctolInjectedSignerAccount = {
+export type DeosInjectedSignerAccount = {
   address: string;
   extensionName: string;
   name: string | null;
   type: string | null;
 };
-export type TmctolDevSignerPreset = {
+export type DeosDevSignerPreset = {
   alias: string;
   label: string;
   suri: string;
   publicKeyHex: string;
   address: string;
 };
-export type TmctolSignerMatch = {
+export type DeosSignerMatch = {
   address: string;
   source: 'injected' | 'dev';
   extensionName: string | null;
@@ -35,11 +35,11 @@ export type TmctolSignerMatch = {
   signer: PolkadotSigner;
   disconnect: () => void;
 };
-export type TmctolInjectedSignerMatch = TmctolSignerMatch & {
+export type DeosInjectedSignerMatch = DeosSignerMatch & {
   source: 'injected';
   extensionName: string;
 };
-export type TmctolInjectedSignerAvailability = {
+export type DeosInjectedSignerAvailability = {
   status: 'browser-unsupported' | 'no-extension' | 'available';
   extensionNames: string[];
   message: string;
@@ -86,21 +86,24 @@ const DEV_SIGNER_SPECS: readonly DevSignerSpec[] = [
 
 function hexToBytes(hex: string): Uint8Array {
   const normalized = hex.startsWith('0x') ? hex.slice(2) : hex;
+  if (normalized.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(normalized)) {
+    throw new Error('Dev signer public key must be complete hex bytes');
+  }
   const bytes = new Uint8Array(normalized.length / 2);
   for (let index = 0; index < bytes.length; index += 1) {
     const offset = index * 2;
-    bytes[index] = Number.parseInt(normalized.slice(offset, offset + 2), 16);
+    bytes[index] = Number(`0x${normalized.slice(offset, offset + 2)}`);
   }
   return bytes;
 }
 
-export const TMCTOL_DEV_SIGNER_PRESETS: TmctolDevSignerPreset[] =
+export const DEOS_DEV_SIGNER_PRESETS: DeosDevSignerPreset[] =
   DEV_SIGNER_SPECS.map((preset) => ({
     ...preset,
     address: accountIdCodec.dec(hexToBytes(preset.publicKeyHex)),
   }));
 
-export function isValidTmctolAddress(address: string): boolean {
+export function isValidDeosAddress(address: string): boolean {
   const normalized = address.trim();
   if (normalized.length === 0) {
     return false;
@@ -117,7 +120,7 @@ export function injectedSignerExtensionNames(): string[] {
   return typeof window === 'undefined' ? [] : getInjectedExtensions();
 }
 
-export function injectedSignerAvailability(): TmctolInjectedSignerAvailability {
+export function injectedSignerAvailability(): DeosInjectedSignerAvailability {
   if (typeof window === 'undefined') {
     return {
       status: 'browser-unsupported',
@@ -142,11 +145,11 @@ export function injectedSignerAvailability(): TmctolInjectedSignerAvailability {
 
 export async function discoverInjectedSignerAccounts(
   dappName: string = DEFAULT_DEOS_DAPP_NAME,
-): Promise<TmctolInjectedSignerAccount[]> {
+): Promise<DeosInjectedSignerAccount[]> {
   if (typeof window === 'undefined') {
     return [];
   }
-  const discovered: TmctolInjectedSignerAccount[] = [];
+  const discovered: DeosInjectedSignerAccount[] = [];
   const seenAddresses = new Set<string>();
   for (const extensionName of injectedSignerExtensionNames()) {
     let extension: InjectedExtension | null = null;
@@ -173,14 +176,14 @@ export async function discoverInjectedSignerAccounts(
   return discovered;
 }
 
-function matchDevPreset(addressOrAlias: string): TmctolDevSignerPreset | null {
+function matchDevPreset(addressOrAlias: string): DeosDevSignerPreset | null {
   const normalized = addressOrAlias.trim();
   if (normalized.length === 0) {
     return null;
   }
   const lowered = normalized.toLowerCase();
   return (
-    TMCTOL_DEV_SIGNER_PRESETS.find((preset) => {
+    DEOS_DEV_SIGNER_PRESETS.find((preset) => {
       return (
         preset.address === normalized ||
         preset.alias === lowered ||
@@ -202,7 +205,7 @@ export function hasBuiltInDevSigner(addressOrAlias: string | null): boolean {
 
 export async function connectDevSigner(
   addressOrAlias: string,
-): Promise<TmctolSignerMatch | null> {
+): Promise<DeosSignerMatch | null> {
   if (typeof window === 'undefined') {
     return null;
   }
@@ -239,7 +242,7 @@ export async function connectDevSigner(
 export async function connectInjectedSigner(
   address: string,
   dappName: string = DEFAULT_DEOS_DAPP_NAME,
-): Promise<TmctolInjectedSignerMatch | null> {
+): Promise<DeosInjectedSignerMatch | null> {
   const normalizedAddress = address.trim();
   if (normalizedAddress.length === 0 || typeof window === 'undefined') {
     return null;
@@ -275,7 +278,7 @@ export async function connectInjectedSigner(
 export async function connectDeosSigner(
   addressOrAlias: string,
   dappName: string = DEFAULT_DEOS_DAPP_NAME,
-): Promise<TmctolSignerMatch | null> {
+): Promise<DeosSignerMatch | null> {
   const injectedSigner = await connectInjectedSigner(addressOrAlias, dappName);
   if (injectedSigner) {
     return injectedSigner;

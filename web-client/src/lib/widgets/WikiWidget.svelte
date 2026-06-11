@@ -8,107 +8,21 @@ Zone: Presentation widget; consumes repo-local wiki metadata and trusted wiki he
   import { onMount } from 'svelte';
 
   import { Button, Card, TextField } from '$lib/ui';
+  import type {
+    LocalizedValue,
+    RelatedWikiItem,
+    ResolvedWikiNavigationSection,
+    WikiAliasManifest,
+    WikiGraphManifest,
+    WikiNavigationManifest,
+    WikiStateManifest,
+  } from '$lib/wiki/metadata-contract';
   import { type TrustedWikiPage, loadTrustedWikiPage } from '$lib/wiki/trusted';
 
   import aliases from '../../../../wiki/_meta/aliases.json';
   import graph from '../../../../wiki/_meta/graph.json';
   import navigation from '../../../../wiki/_meta/navigation.json';
   import wikiStateJson from '../../../../wiki/_meta/state.json';
-
-  type LocalizedValue = Record<string, string>;
-
-  type WikiGraphNode = {
-    id: string;
-    title: LocalizedValue;
-    page_type: string;
-    path: LocalizedValue;
-  };
-
-  type WikiGraphEdge = {
-    from: string;
-    to: string;
-    type: string;
-  };
-
-  type WikiGraphManifest = {
-    default_locale: string;
-    available_locales: string[];
-    nodes: WikiGraphNode[];
-    edges: WikiGraphEdge[];
-  };
-
-  type WikiAliasManifest = {
-    default_locale: string;
-    available_locales: string[];
-    aliases: Record<string, Record<string, string>>;
-  };
-
-  type WikiStatePage = {
-    path: LocalizedValue;
-    page_type: string;
-    title: LocalizedValue;
-    status: string;
-    audience: string;
-    confidence: number;
-    sources: Record<string, string[]>;
-  };
-
-  type WikiStateManifest = {
-    generated_at: string;
-    mode: string;
-    source_root: string;
-    default_locale: string;
-    available_locales: string[];
-    pages: Record<string, WikiStatePage>;
-  };
-
-  type WikiNavigationItem = {
-    id: string;
-    title: LocalizedValue;
-    path: LocalizedValue;
-    page_type: string;
-    summary: LocalizedValue;
-  };
-
-  type WikiNavigationSection = {
-    id: string;
-    title: LocalizedValue;
-    items: WikiNavigationItem[];
-  };
-
-  type WikiNavigationManifest = {
-    default_locale: string;
-    available_locales: string[];
-    entrypoints: string[];
-    sections: WikiNavigationSection[];
-  };
-
-  type ResolvedWikiNavigationItem = {
-    id: string;
-    title: string;
-    path: string;
-    page_type: string;
-    summary: string;
-  };
-
-  type ResolvedWikiNavigationSection = {
-    id: string;
-    title: string;
-    items: ResolvedWikiNavigationItem[];
-  };
-
-  type RelatedWikiItem = {
-    id: string;
-    title: string;
-    path: string;
-    summary: string;
-    relation: string;
-  };
-
-  type WikiSearchAliasMatch = {
-    id: string;
-    aliases: string[];
-  };
 
   const wikiAliases: WikiAliasManifest = aliases;
   const wikiGraph: WikiGraphManifest = graph;
