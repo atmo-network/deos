@@ -4185,6 +4185,306 @@ fn mint_on_unfunded_account_creates_tokens() {
 }
 
 #[test]
+fn stake_task_delegates_to_staking_adapter() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset = TestAsset::Local(7);
+    let execution_plan = execution_plan_with_step(make_step(Task::Stake {
+      asset,
+      amount: AmountResolution::Fixed(120),
+    }));
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset, 200);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset), 80);
+    assert_eq!(staked_balance(actor, asset), 120);
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::StakeExecuted { aaa_id: id, asset: event_asset, amount }
+        if *id == aaa_id && *event_asset == asset && *amount == 120
+    )));
+  });
+}
+
+#[test]
+fn unstake_task_delegates_to_staking_adapter() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset = TestAsset::Local(8);
+    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+      asset,
+      shares: AmountResolution::Fixed(50),
+    }));
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset, 75);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset), 25);
+    assert_eq!(unstaked_shares(actor, asset), 50);
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::UnstakeExecuted { aaa_id: id, asset: event_asset, shares }
+        if *id == aaa_id && *event_asset == asset && *shares == 50
+    )));
+  });
+}
+
+#[test]
+fn stake_adapter_failure_can_continue_next_step() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset = TestAsset::Local(13);
+    let failing_step = StepOf::<Test> {
+      conditions: BoundedVec::default(),
+      task: Task::Stake {
+        asset,
+        amount: AmountResolution::Fixed(40),
+      },
+      on_error: StepErrorPolicy::ContinueNextStep,
+    };
+    let succeeding_step = make_step(Task::Transfer {
+      to: CHARLIE,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(10),
+    });
+    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset, 100);
+    fund_native(aaa_id, 20);
+    set_fail_staking_ops(true);
+    let charlie_before = native_balance(&CHARLIE);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset), 100);
+    assert_eq!(staked_balance(actor, asset), 0);
+    assert_eq!(native_balance(&CHARLIE), charlie_before + 10);
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::StepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 1,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset = TestAsset::Local(14);
+    let failing_step = StepOf::<Test> {
+      conditions: BoundedVec::default(),
+      task: Task::Unstake {
+        asset,
+        shares: AmountResolution::Fixed(40),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    let skipped_step = make_step(Task::Transfer {
+      to: CHARLIE,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(10),
+    });
+    let execution_plan = BoundedVec::try_from(vec![failing_step, skipped_step]).unwrap();
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset, 100);
+    fund_native(aaa_id, 20);
+    set_fail_staking_ops(true);
+    let charlie_before = native_balance(&CHARLIE);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset), 100);
+    assert_eq!(unstaked_shares(actor, asset), 0);
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::StepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 0,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn donate_liquidity_task_delegates_to_liquidity_donation_adapter() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset_a = TestAsset::Local(9);
+    let asset_b = TestAsset::Local(10);
+    let execution_plan = execution_plan_with_step(make_step(Task::DonateLiquidity {
+      asset_a,
+      asset_b,
+      amount: AmountResolution::Fixed(40),
+      max_ratio_error: Perbill::from_percent(1),
+    }));
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset_a, 100);
+    set_asset_balance(&actor, asset_b, 90);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset_a), 60);
+    assert_eq!(asset_balance(&actor, asset_b), 50);
+    assert_eq!(donated_liquidity(actor, asset_a, asset_b), (40, 40));
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::LiquidityDonated {
+        aaa_id: id,
+        asset_a: event_asset_a,
+        asset_b: event_asset_b,
+        amount,
+        amount_a,
+        amount_b,
+      } if *id == aaa_id
+        && *event_asset_a == asset_a
+        && *event_asset_b == asset_b
+        && *amount == 40
+        && *amount_a == 40
+        && *amount_b == 40
+    )));
+  });
+}
+
+#[test]
+fn donate_liquidity_adapter_failure_is_non_partial_and_can_continue() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset_a = TestAsset::Local(11);
+    let asset_b = TestAsset::Local(12);
+    let failing_step = StepOf::<Test> {
+      conditions: BoundedVec::default(),
+      task: Task::DonateLiquidity {
+        asset_a,
+        asset_b,
+        amount: AmountResolution::Fixed(40),
+        max_ratio_error: Perbill::from_percent(1),
+      },
+      on_error: StepErrorPolicy::ContinueNextStep,
+    };
+    let succeeding_step = make_step(Task::Transfer {
+      to: CHARLIE,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(10),
+    });
+    let execution_plan = BoundedVec::try_from(vec![failing_step, succeeding_step]).unwrap();
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset_a, 100);
+    set_asset_balance(&actor, asset_b, 10);
+    fund_native(aaa_id, 20);
+    let charlie_before = native_balance(&CHARLIE);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset_a), 100);
+    assert_eq!(asset_balance(&actor, asset_b), 10);
+    assert_eq!(donated_liquidity(actor, asset_a, asset_b), (0, 0));
+    assert_eq!(native_balance(&CHARLIE), charlie_before + 10);
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::StepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::TransferExecuted { aaa_id: id, to, amount, .. }
+        if *id == aaa_id && *to == CHARLIE && *amount == 10
+    )));
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 1,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset_a = TestAsset::Local(15);
+    let asset_b = TestAsset::Local(16);
+    let failing_step = StepOf::<Test> {
+      conditions: BoundedVec::default(),
+      task: Task::DonateLiquidity {
+        asset_a,
+        asset_b,
+        amount: AmountResolution::Fixed(40),
+        max_ratio_error: Perbill::from_percent(1),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    let skipped_step = make_step(Task::Transfer {
+      to: CHARLIE,
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(10),
+    });
+    let execution_plan = BoundedVec::try_from(vec![failing_step, skipped_step]).unwrap();
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    let actor = sovereign_account(aaa_id);
+    set_asset_balance(&actor, asset_a, 100);
+    set_asset_balance(&actor, asset_b, 100);
+    fund_native(aaa_id, 20);
+    set_fail_liquidity_donation_ops(true);
+    let charlie_before = native_balance(&CHARLIE);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset_a), 100);
+    assert_eq!(asset_balance(&actor, asset_b), 100);
+    assert_eq!(donated_liquidity(actor, asset_a, asset_b), (0, 0));
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::StepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|e| matches!(
+      e,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 0,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
 fn condition_balance_below_skips_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

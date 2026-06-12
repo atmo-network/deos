@@ -4,6 +4,13 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.6.0: AAA Reusable Standard Foundation
+
+- `[AAA]` Added the reusable-standard workstream to the open backlog and covered portable `Stake`, `Unstake`, and `DonateLiquidity` task execution through mock runtime adapters. Impact: AAA staking and liquidity-donation tasks are tested as adapter-owned primitives instead of implicitly relying on the DEOS/TMCTOL runtime topology.
+- `[AAA Spec]` Promoted the `LiquidityDonationOps` adapter contract into the AAA specification, including the boundary between pallet-owned amount resolution/events and runtime-owned pair-ratio, receipt-suppression, reserve-donation, and native-special-case semantics. Impact: downstream runtimes can reason about the minimal surface needed to reuse AAA without adopting the full DEOS framework.
+- `[AAA Tests]` Hardened portable adapter coverage with success paths for `Stake`, `Unstake`, and `DonateLiquidity`, injected failure paths for staking and liquidity-donation adapters, and second-asset liquidity-donation failure coverage for no partial mock mutation, `ContinueNextStep` / `AbortCycle`, and cycle summary accounting. Impact: reusable task coverage now exercises representative adapter success and failure behavior instead of only happy-path delegation.
+- `[Release]` Bumped the `pallet-aaa` crate and lockfile package entry to `0.6.0`. Impact: the reusable AAA foundation release now has a matching Rust artifact marker instead of only a changelog heading.
+
 ## 0.5.4: Proactive Improvement Backlog Anchor
 
 - `[Improvement Loop]` Added, executed, and retired the progressive-improvement lane after moving remaining dependency watches into the externally gated backlog section; removed non-open validation command inventory from `BACKLOG.md` after those entrypoints moved to README/skill documentation; and hardened the backlog audit against command-reference inventory regressions including indented command bullets and validation-entrypoint sections. Impact: autonomous iterations have delivery history here, while `BACKLOG.md` stays focused on future product, runtime, and externally gated work instead of becoming a second changelog or operations reference.

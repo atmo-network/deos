@@ -496,6 +496,9 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
   - generic `Stake { asset, amount }` delegates to the runtime staking adapter for all staking assets
   - the DEOS adapter routes its native staking asset representation to `pallet-staking::stake_native(amount)` and routes other staking assets to `pallet-staking::stake(...)`
   - collator nomination and LP custody remain outside AAA task semantics; they belong to staking/runtime-specific adapter or pallet surfaces, not to the portable AAA execution-plan shape
+- `LiquidityDonationOps = TmctolLiquidityDonationOps`
+  - generic `DonateLiquidity { asset_a, asset_b, amount, max_ratio_error }` delegates pair-ratio, receipt-suppression, reserve-donation, and native-special-case semantics to the runtime adapter
+  - AAA records only the deterministic returned `(amount_a, amount_b)` in the task event, keeping TMCTOL liquidity policy outside the portable execution-plan shape
 
 Additional runtime bindings:
 
