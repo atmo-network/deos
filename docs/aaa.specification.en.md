@@ -253,7 +253,25 @@ trait StakingOps<AccountId, AssetId, Balance> {
 
 AAA MUST NOT encode runtime-specific staking topology such as collator choice, nomination custody, receipt naming, or native liquid-staking mechanics in the task enum. Runtime adapters MAY route `Stake { asset, amount }` for a native-asset `AssetId` into native staking, liquid staking, or another chain-local staking primitive, but those semantics remain adapter policy outside the AAA pallet contract.
 
-### 3.4 Task Weight Contract
+### 3.4 LiquidityDonationOps
+
+```rust
+trait LiquidityDonationOps<AccountId, AssetId, Balance> {
+    fn donate_liquidity(
+        who: &AccountId,
+        asset_a: AssetId,
+        asset_b: AssetId,
+        amount: Balance,
+        max_ratio_error: Perbill,
+    ) -> Result<(Balance, Balance), DispatchError>;
+}
+```
+
+AAA treats liquidity donation as an adapter-owned primitive rather than a DEOS-specific staking or AMM policy. The pallet resolves the declared `amount` against `asset_a`, passes `asset_a`, `asset_b`, `amount`, and `max_ratio_error` to the adapter, and records only the deterministic returned `(amount_a, amount_b)` in the success event. Pair-ratio checks, receipt suppression, reserve donation semantics, and any native-special-case routing remain runtime adapter policy.
+
+Reusable AAA runtimes that do not need this capability MAY bind the no-op adapter, in which case `DonateLiquidity` tasks fail deterministically through ordinary `DispatchError` handling. Runtimes that expose `DonateLiquidity` in user-facing plan builders SHOULD describe the adapter's asset-pair and ratio semantics outside the AAA pallet contract.
+
+### 3.5 Task Weight Contract
 
 Runtime MUST expose deterministic worst-case bounds:
 

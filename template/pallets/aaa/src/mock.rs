@@ -15,7 +15,7 @@ use polkadot_sdk::{
 use alloc::vec;
 use core::cell::RefCell;
 
-use crate::{AssetOps, DexOps, FeeRouter};
+use crate::{AssetOps, DexOps, FeeRouter, LiquidityDonationOps, StakingOps};
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
 pub type AccountId = u64;
@@ -133,11 +133,22 @@ thread_local! {
   static POOL_RESERVES: RefCell<alloc::collections::BTreeMap<(TestAsset, TestAsset), (Balance, Balance)>> =
     RefCell::new(alloc::collections::BTreeMap::new());
 
+  static STAKED: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset), Balance>> =
+    RefCell::new(alloc::collections::BTreeMap::new());
+
+  static UNSTAKED: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset), Balance>> =
+    RefCell::new(alloc::collections::BTreeMap::new());
+
+  static DONATED_LIQUIDITY: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset, TestAsset), (Balance, Balance)>> =
+    RefCell::new(alloc::collections::BTreeMap::new());
+
   static MOCK_ENTROPY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
   static REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS: RefCell<bool> = RefCell::new(false);
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_CLOSE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
+  static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
+  static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
 }
 
 pub fn set_pool_reserves(
@@ -164,11 +175,16 @@ pub fn reset_mock_adapters() {
   BURNED.with(|b| b.borrow_mut().clear());
   MINTED.with(|b| b.borrow_mut().clear());
   POOL_RESERVES.with(|b| b.borrow_mut().clear());
+  STAKED.with(|b| b.borrow_mut().clear());
+  UNSTAKED.with(|b| b.borrow_mut().clear());
+  DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   MOCK_ENTROPY.with(|e| *e.borrow_mut() = None);
   REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow_mut() = false);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+  FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
+  FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = false);
 }
 
 pub struct MockFeeRouter;
@@ -326,6 +342,35 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   }
 }
 
+pub fn staked_balance(who: AccountId, asset: TestAsset) -> Balance {
+  STAKED.with(|s| s.borrow().get(&(who, asset)).copied().unwrap_or(0))
+}
+
+pub fn unstaked_shares(who: AccountId, asset: TestAsset) -> Balance {
+  UNSTAKED.with(|s| s.borrow().get(&(who, asset)).copied().unwrap_or(0))
+}
+
+pub fn donated_liquidity(
+  who: AccountId,
+  asset_a: TestAsset,
+  asset_b: TestAsset,
+) -> (Balance, Balance) {
+  DONATED_LIQUIDITY.with(|d| {
+    d.borrow()
+      .get(&(who, asset_a, asset_b))
+      .copied()
+      .unwrap_or((0, 0))
+  })
+}
+
+pub fn set_fail_staking_ops(value: bool) {
+  FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_fail_liquidity_donation_ops(value: bool) {
+  FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = value);
+}
+
 pub struct MockDexOps;
 
 impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
@@ -431,6 +476,75 @@ impl MockDexOps {
         Ok((rb, ra))
       }
     })
+  }
+}
+
+pub struct MockStakingOps;
+
+impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
+  fn stake(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), DispatchError> {
+    if FAIL_STAKING_OPS.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockStakingOpsFailed"));
+    }
+    MockAssetOps::burn(who, asset, amount)?;
+    STAKED.with(|s| {
+      let mut map = s.borrow_mut();
+      let current = map.get(&(*who, asset)).copied().unwrap_or(0);
+      map.insert((*who, asset), current.saturating_add(amount));
+    });
+    Ok(())
+  }
+
+  fn unstake(who: &AccountId, asset: TestAsset, shares: Balance) -> Result<(), DispatchError> {
+    if FAIL_STAKING_OPS.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockStakingOpsFailed"));
+    }
+    MockAssetOps::burn(who, asset, shares)?;
+    UNSTAKED.with(|s| {
+      let mut map = s.borrow_mut();
+      let current = map.get(&(*who, asset)).copied().unwrap_or(0);
+      map.insert((*who, asset), current.saturating_add(shares));
+    });
+    Ok(())
+  }
+}
+
+pub struct MockLiquidityDonationOps;
+
+impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonationOps {
+  fn donate_liquidity(
+    who: &AccountId,
+    asset_a: TestAsset,
+    asset_b: TestAsset,
+    amount: Balance,
+    _max_ratio_error: Perbill,
+  ) -> Result<(Balance, Balance), DispatchError> {
+    if FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockLiquidityDonationOpsFailed"));
+    }
+    if MockAssetOps::balance(who, asset_a) < amount || MockAssetOps::balance(who, asset_b) < amount
+    {
+      return Err(DispatchError::Token(
+        polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
+      ));
+    }
+    MockAssetOps::burn(who, asset_a, amount)?;
+    MockAssetOps::burn(who, asset_b, amount)?;
+    DONATED_LIQUIDITY.with(|d| {
+      let mut map = d.borrow_mut();
+      let (current_a, current_b) = map
+        .get(&(*who, asset_a, asset_b))
+        .copied()
+        .unwrap_or((0, 0));
+      map.insert(
+        (*who, asset_a, asset_b),
+        (
+          current_a.saturating_add(amount),
+          current_b.saturating_add(amount),
+        ),
+      );
+    });
+    Ok((amount, amount))
   }
 }
 
@@ -554,8 +668,8 @@ impl pallet_aaa::Config for Test {
   type NativeAssetId = NativeAsset;
   type AssetOps = MockAssetOps;
   type DexOps = MockDexOps;
-  type StakingOps = ();
-  type LiquidityDonationOps = ();
+  type StakingOps = MockStakingOps;
+  type LiquidityDonationOps = MockLiquidityDonationOps;
   type MinWindowLength = frame::traits::ConstU64<100>;
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;

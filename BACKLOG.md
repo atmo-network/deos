@@ -28,6 +28,14 @@
 > - Same-asset auto-compound reward settlement
 > - Polkadot SDK `2603` / node `1.22.3` runtime line
 
+## Open Framework / Standardization Work
+
+### AAA reusable standard hardening
+
+- [~] `Shape AAA as a reusable runtime standard`: keep portable actor/task/scheduler semantics independent from DEOS/TMCTOL-specific actor topology while the implementation still lives inside this monorepo and runtime template.
+  - [ ] `External-runtime embedding guide`: document the minimal adapter/configuration surface another runtime must implement to reuse `pallet-aaa` without adopting the full DEOS framework.
+  - [ ] `Reference-plan boundary`: separate reusable example execution plans from TMCTOL-specific System AAA topology examples in docs and UI helpers.
+
 ## Open Product / Client Work
 
 ### Onboarding spine

@@ -12,12 +12,12 @@ The 2603 upgrade did not require pallet-local semantic changes here; the relevan
 The current kernel/runtime slice provides:
 
 - User and system AAA creation with deterministic sovereign accounts
-- Bounded execution plans over adapter-driven tasks (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `StakeNative`, `Unstake`, etc.)
+- Bounded execution plans over adapter-driven tasks (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, etc.)
 - Double-buffer scheduler state (`CurrentQueue`, `NextQueue`) plus time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with starvation observability
 - Fee admission, lifecycle controls, pause/resume, and best-effort close-time execution plans
-- Runtime-configured adapters for assets, DEX, staking, fee conversion, ingress, and entropy
+- Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, and entropy
 - Genesis provisioning of System actors through runtime configuration
 
 ## Key rule
@@ -44,7 +44,7 @@ Readiness and execution must stay deterministic and bounded:
 The pallet must stay generic.
 Concrete chain policy belongs in runtime configuration, including:
 
-- `AssetOps`, `DexOps`, and `StakingOps`
+- `AssetOps`, `DexOps`, `StakingOps`, and `LiquidityDonationOps`
 - Entropy policy and secure/insecure fallback posture
 - Fee conversion and task weight classes
 - Ingress hooks and genesis System AAA topology
