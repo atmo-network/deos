@@ -148,7 +148,7 @@ The runtime keeps System AAA topology declarative. Governance evolves concrete e
 - `build_treasury_b_buyback_execution_plan` / Treasury B: swap NTVE percentage into target and burn acquired balance; optional policy lane
 - `build_native_staking_lp_farming_execution_plan` / Native staking LP provisioning actor: donate balanced `NTVE/stNTVE` without minting LP; activate after native pool + AMM creation
 
-This split keeps AAA generic: the pallet owns bounded scheduling/execution, while the current DEOS reference runtime wires the TMCTOL standard's economic composition into concrete System actors.
+This split keeps AAA generic: the pallet owns bounded scheduling/execution, while the current DEOS reference runtime wires the TMCTOL standard's economic composition into concrete System actors. Reusable execution-plan examples should be read as task-language patterns; the actor catalog above is TMCTOL-specific topology, not a required shape for downstream `pallet-aaa` adopters.
 
 ### Governance activation flows
 
@@ -242,6 +242,8 @@ Resolution outcomes are deterministic:
 - `FundingUnavailable`
 
 `FundingUnavailable` is a deterministic non-terminal skip outcome for both actor classes; it covers missing/zero tracked snapshots and tracked-balance overspend, while untracked assets remain `SnapshotUnavailable`.
+
+Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier steps in the same execution plan remain committed.
 
 ---
 

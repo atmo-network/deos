@@ -7,9 +7,9 @@ usage() {
     cat <<'EOF'
 Usage: audit-script-entrypoints.sh [OPTIONS]
 
-Checks repository shell/Node entrypoints for syntax validity and --help availability.
-Also enforces that project-specific audit leaves live in the alignment skill,
-not in the root operator scripts directory.
+Checks repository shell/Node entrypoints for syntax validity, --help availability,
+and compact skill metadata shape. Also enforces that project-specific audit leaves
+live in the alignment skill, not in the root operator scripts directory.
 
 Options:
   -h, --help        Show this help message
@@ -18,6 +18,7 @@ Scope:
   root scripts/*.sh except _common.sh
   web-client/scripts/*.mjs
   .agents/skills/*/scripts/*.sh except _common.sh
+  .agents/skills/*/SKILL.md frontmatter description lines
 EOF
 }
 
@@ -42,7 +43,7 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$ROOT_SCRIPT_DIR" "Root scripts directory"
     require_directory "$SCRIPT_DIR" "Alignment skill scripts directory"
-    require_commands bash find sort basename node
+    require_commands bash find sort basename node awk
     log_success "Prerequisites checked"
 }
 
@@ -104,6 +105,32 @@ audit_audit_leaf_ownership() {
     fi
 }
 
+audit_skill_metadata_descriptions() {
+    local skill_file
+    local matches=""
+    if [[ ! -d "$PROJECT_ROOT/.agents/skills" ]]; then
+        return
+    fi
+    while IFS= read -r skill_file; do
+        local file_matches
+        file_matches="$(awk -v file="$skill_file" '
+            NR == 1 && $0 == "---" { in_frontmatter = 1; next }
+            in_frontmatter && $0 == "---" { exit }
+            in_frontmatter && /^description:[^:]*:/ {
+                print file ":" NR ":" $0
+            }
+        ' "$skill_file")"
+        if [[ -n "$file_matches" ]]; then
+            matches+="$file_matches"$'\n'
+        fi
+    done < <(find "$PROJECT_ROOT/.agents/skills" -name SKILL.md -type f | sort)
+    if [[ -n "$matches" ]]; then
+        log_error "Skill description metadata must not contain extra value-side colons"
+        printf '%s' "$matches"
+        AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+    fi
+}
+
 audit_entrypoints() {
     phase_banner "Step 2: Script entrypoints"
 
@@ -111,6 +138,7 @@ audit_entrypoints() {
     audit_shell_entrypoints
     audit_node_entrypoints
     audit_audit_leaf_ownership
+    audit_skill_metadata_descriptions
 
     if [[ "$AUDIT_FAILURES" -gt 0 ]]; then
         log_error "Script entrypoint audit failed with $AUDIT_FAILURES failure(s)"

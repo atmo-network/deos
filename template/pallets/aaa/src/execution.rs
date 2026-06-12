@@ -1010,167 +1010,174 @@ impl<T: Config> Pallet<T> {
     aaa_id: AaaId,
     actor: &T::AccountId,
   ) -> DispatchResult {
-    match task {
-      PreparedTask::Transfer { to, asset, amount } => {
-        T::AssetOps::transfer(actor, &to, asset, amount)?;
-        Self::deposit_event(Event::TransferExecuted {
-          aaa_id,
-          to,
-          asset,
-          amount,
-        });
-      }
-      PreparedTask::SplitTransfer { asset, total, legs } => {
-        let actor_balance = T::AssetOps::balance(actor, asset);
-        ensure!(actor_balance >= total, Error::<T>::InsufficientBalance);
-        let mut effective_distributed = T::Balance::zero();
-        let mut normalized_transfers: alloc::vec::Vec<(T::AccountId, T::Balance)> =
-          alloc::vec::Vec::with_capacity(legs.len());
-        for leg in legs.iter() {
-          let leg_amount = leg.share.mul_floor(total);
-          if leg_amount.is_zero() {
-            continue;
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> DispatchResult {
+        match task {
+          PreparedTask::Transfer { to, asset, amount } => {
+            T::AssetOps::transfer(actor, &to, asset, amount)?;
+            Self::deposit_event(Event::TransferExecuted {
+              aaa_id,
+              to,
+              asset,
+              amount,
+            });
           }
-          if !T::AssetOps::can_deposit(&leg.to, asset, leg_amount) {
-            continue;
-          }
-          effective_distributed = effective_distributed.saturating_add(leg_amount);
-          normalized_transfers.push((leg.to.clone(), leg_amount));
-        }
-        let retained = total.saturating_sub(effective_distributed);
-        let transfer_result = polkadot_sdk::frame_support::storage::with_transaction(|| {
-          for (to, leg_amount) in normalized_transfers.iter() {
-            if let Err(err) = T::AssetOps::transfer(actor, to, asset, *leg_amount) {
-              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(err));
+          PreparedTask::SplitTransfer { asset, total, legs } => {
+            let actor_balance = T::AssetOps::balance(actor, asset);
+            ensure!(actor_balance >= total, Error::<T>::InsufficientBalance);
+            let mut effective_distributed = T::Balance::zero();
+            let mut normalized_transfers: alloc::vec::Vec<(T::AccountId, T::Balance)> =
+              alloc::vec::Vec::with_capacity(legs.len());
+            for leg in legs.iter() {
+              let leg_amount = leg.share.mul_floor(total);
+              if leg_amount.is_zero() {
+                continue;
+              }
+              if !T::AssetOps::can_deposit(&leg.to, asset, leg_amount) {
+                continue;
+              }
+              effective_distributed = effective_distributed.saturating_add(leg_amount);
+              normalized_transfers.push((leg.to.clone(), leg_amount));
             }
+            let retained = total.saturating_sub(effective_distributed);
+            for (to, leg_amount) in normalized_transfers.iter() {
+              T::AssetOps::transfer(actor, to, asset, *leg_amount)?;
+            }
+            Self::deposit_event(Event::SplitTransferExecuted {
+              aaa_id,
+              asset,
+              total,
+              distributed: effective_distributed,
+              retained,
+              legs: legs.len() as u32,
+              effective_legs: normalized_transfers.len() as u32,
+            });
           }
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-        });
-        transfer_result?;
-        Self::deposit_event(Event::SplitTransferExecuted {
-          aaa_id,
-          asset,
-          total,
-          distributed: effective_distributed,
-          retained,
-          legs: legs.len() as u32,
-          effective_legs: normalized_transfers.len() as u32,
-        });
+          PreparedTask::Burn { asset, amount } => {
+            T::AssetOps::burn(actor, asset, amount)?;
+            Self::deposit_event(Event::BurnExecuted {
+              aaa_id,
+              asset,
+              amount,
+            });
+          }
+          PreparedTask::Mint { asset, amount } => {
+            T::AssetOps::mint(actor, asset, amount)?;
+            Self::deposit_event(Event::MintExecuted {
+              aaa_id,
+              asset,
+              amount,
+            });
+          }
+          PreparedTask::SwapExactIn {
+            asset_in,
+            asset_out,
+            amount_in,
+            slippage_tolerance,
+          } => {
+            let amount_out =
+              T::DexOps::swap_exact_in(actor, asset_in, asset_out, amount_in, slippage_tolerance)?;
+            Self::deposit_event(Event::SwapExecuted {
+              aaa_id,
+              asset_in,
+              asset_out,
+              amount_in,
+              amount_out,
+            });
+          }
+          PreparedTask::SwapExactOut {
+            asset_in,
+            asset_out,
+            amount_out,
+            slippage_tolerance,
+          } => {
+            let amount_in = T::DexOps::swap_exact_out(
+              actor,
+              asset_in,
+              asset_out,
+              amount_out,
+              slippage_tolerance,
+            )?;
+            Self::deposit_event(Event::SwapExecuted {
+              aaa_id,
+              asset_in,
+              asset_out,
+              amount_in,
+              amount_out,
+            });
+          }
+          PreparedTask::AddLiquidity {
+            asset_a,
+            asset_b,
+            amount_a,
+            amount_b,
+          } => {
+            let (used_a, used_b, lp_minted) =
+              T::DexOps::add_liquidity(actor, asset_a, asset_b, amount_a, amount_b)?;
+            let _ = (used_a, used_b);
+            Self::deposit_event(Event::LiquidityAdded {
+              aaa_id,
+              asset_a,
+              asset_b,
+              lp_minted,
+            });
+          }
+          PreparedTask::RemoveLiquidity { lp_asset, amount } => {
+            let (out_a, out_b) = T::DexOps::remove_liquidity(actor, lp_asset, amount)?;
+            Self::deposit_event(Event::LiquidityRemoved {
+              aaa_id,
+              lp_asset,
+              amount_a: out_a,
+              amount_b: out_b,
+            });
+          }
+          PreparedTask::Stake { asset, amount } => {
+            T::StakingOps::stake(actor, asset, amount)?;
+            Self::deposit_event(Event::StakeExecuted {
+              aaa_id,
+              asset,
+              amount,
+            });
+          }
+          PreparedTask::DonateLiquidity {
+            asset_a,
+            asset_b,
+            amount,
+            max_ratio_error,
+          } => {
+            let (amount_a, amount_b) = T::LiquidityDonationOps::donate_liquidity(
+              actor,
+              asset_a,
+              asset_b,
+              amount,
+              max_ratio_error,
+            )?;
+            Self::deposit_event(Event::LiquidityDonated {
+              aaa_id,
+              asset_a,
+              asset_b,
+              amount,
+              amount_a,
+              amount_b,
+            });
+          }
+          PreparedTask::Unstake { asset, shares } => {
+            T::StakingOps::unstake(actor, asset, shares)?;
+            Self::deposit_event(Event::UnstakeExecuted {
+              aaa_id,
+              asset,
+              shares,
+            });
+          }
+          PreparedTask::Noop => {}
+        }
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(err) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(err)),
       }
-      PreparedTask::Burn { asset, amount } => {
-        T::AssetOps::burn(actor, asset, amount)?;
-        Self::deposit_event(Event::BurnExecuted {
-          aaa_id,
-          asset,
-          amount,
-        });
-      }
-      PreparedTask::Mint { asset, amount } => {
-        T::AssetOps::mint(actor, asset, amount)?;
-        Self::deposit_event(Event::MintExecuted {
-          aaa_id,
-          asset,
-          amount,
-        });
-      }
-      PreparedTask::SwapExactIn {
-        asset_in,
-        asset_out,
-        amount_in,
-        slippage_tolerance,
-      } => {
-        let amount_out =
-          T::DexOps::swap_exact_in(actor, asset_in, asset_out, amount_in, slippage_tolerance)?;
-        Self::deposit_event(Event::SwapExecuted {
-          aaa_id,
-          asset_in,
-          asset_out,
-          amount_in,
-          amount_out,
-        });
-      }
-      PreparedTask::SwapExactOut {
-        asset_in,
-        asset_out,
-        amount_out,
-        slippage_tolerance,
-      } => {
-        let amount_in =
-          T::DexOps::swap_exact_out(actor, asset_in, asset_out, amount_out, slippage_tolerance)?;
-        Self::deposit_event(Event::SwapExecuted {
-          aaa_id,
-          asset_in,
-          asset_out,
-          amount_in,
-          amount_out,
-        });
-      }
-      PreparedTask::AddLiquidity {
-        asset_a,
-        asset_b,
-        amount_a,
-        amount_b,
-      } => {
-        let (used_a, used_b, lp_minted) =
-          T::DexOps::add_liquidity(actor, asset_a, asset_b, amount_a, amount_b)?;
-        let _ = (used_a, used_b);
-        Self::deposit_event(Event::LiquidityAdded {
-          aaa_id,
-          asset_a,
-          asset_b,
-          lp_minted,
-        });
-      }
-      PreparedTask::RemoveLiquidity { lp_asset, amount } => {
-        let (out_a, out_b) = T::DexOps::remove_liquidity(actor, lp_asset, amount)?;
-        Self::deposit_event(Event::LiquidityRemoved {
-          aaa_id,
-          lp_asset,
-          amount_a: out_a,
-          amount_b: out_b,
-        });
-      }
-      PreparedTask::Stake { asset, amount } => {
-        T::StakingOps::stake(actor, asset, amount)?;
-        Self::deposit_event(Event::StakeExecuted {
-          aaa_id,
-          asset,
-          amount,
-        });
-      }
-      PreparedTask::DonateLiquidity {
-        asset_a,
-        asset_b,
-        amount,
-        max_ratio_error,
-      } => {
-        let (amount_a, amount_b) = T::LiquidityDonationOps::donate_liquidity(
-          actor,
-          asset_a,
-          asset_b,
-          amount,
-          max_ratio_error,
-        )?;
-        Self::deposit_event(Event::LiquidityDonated {
-          aaa_id,
-          asset_a,
-          asset_b,
-          amount,
-          amount_a,
-          amount_b,
-        });
-      }
-      PreparedTask::Unstake { asset, shares } => {
-        T::StakingOps::unstake(actor, asset, shares)?;
-        Self::deposit_event(Event::UnstakeExecuted {
-          aaa_id,
-          asset,
-          shares,
-        });
-      }
-      PreparedTask::Noop => {}
-    }
-    Ok(())
+    })
   }
 
   fn resolve_for_task(

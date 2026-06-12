@@ -10,6 +10,8 @@ RUN_SIMULATOR_DETERMINISM_AUDIT="${RUN_SIMULATOR_DETERMINISM_AUDIT:-1}"
 RUN_SIMULATOR_CONSISTENCY_AUDIT="${RUN_SIMULATOR_CONSISTENCY_AUDIT:-1}"
 RUN_CODE_SUPPRESSION_AUDIT="${RUN_CODE_SUPPRESSION_AUDIT:-1}"
 RUN_BACKLOG_AUDIT="${RUN_BACKLOG_AUDIT:-1}"
+RUN_RELEASE_LINE_AUDIT="${RUN_RELEASE_LINE_AUDIT:-1}"
+RUN_PORTABILITY_AUDIT="${RUN_PORTABILITY_AUDIT:-1}"
 RUN_DOMAIN_DAG_AUDIT="${RUN_DOMAIN_DAG_AUDIT:-1}"
 RUN_WIKI_TRUST_AUDIT="${RUN_WIKI_TRUST_AUDIT:-1}"
 RUN_DEPENDENCY_AUDIT="${RUN_DEPENDENCY_AUDIT:-0}"
@@ -31,8 +33,8 @@ Usage: validate-local.sh [OPTIONS]
 DEOS local validation orchestrator
 
 Options:
-  --all            Run script audit + template audit + numeric audit + simulator determinism/consistency audits + code suppression audit + backlog audit + domain DAG audit + wiki trust audit + CI + runtime build + E2E
-  --audit-only     Run only fast script/template/numeric/simulator-determinism/simulator-consistency/code-suppression/backlog/domain-DAG/wiki-trust audits
+  --all            Run script audit + template audit + numeric audit + simulator determinism/consistency audits + code suppression audit + backlog/release-line/portability audits + domain DAG audit + wiki trust audit + CI + runtime build + E2E
+  --audit-only     Run only fast script/template/numeric/simulator-determinism/simulator-consistency/code-suppression/backlog/release-line/portability/domain-DAG/wiki-trust audits
   --dependency-audit  Add report-only dependency posture audit (uses npm registry/audit network calls)
   --ci-only        Run only CI validation
   --build-only     Run only runtime build validation
@@ -46,6 +48,8 @@ Options:
   --no-simulator-consistency-audit   Disable simulator tests.js/tests.md mirror audit
   --no-code-suppression-audit  Disable code suppression audit
   --no-backlog-audit  Disable backlog open-work audit
+  --no-release-line-audit  Disable release-line consistency audit
+  --no-portability-audit  Disable repo portability audit
   --no-domain-dag-audit  Disable web-client domain DAG audit
   --no-wiki-trust-audit  Disable trusted wiki markdown audit
   --no-dependency-audit  Disable dependency posture audit
@@ -63,6 +67,8 @@ Environment flags:
   RUN_SIMULATOR_CONSISTENCY_AUDIT=0|1
   RUN_CODE_SUPPRESSION_AUDIT=0|1
   RUN_BACKLOG_AUDIT=0|1
+  RUN_RELEASE_LINE_AUDIT=0|1
+  RUN_PORTABILITY_AUDIT=0|1
   RUN_DOMAIN_DAG_AUDIT=0|1
   RUN_WIKI_TRUST_AUDIT=0|1
   RUN_DEPENDENCY_AUDIT=0|1
@@ -87,6 +93,8 @@ parse_args() {
                 RUN_SIMULATOR_CONSISTENCY_AUDIT=1
                 RUN_CODE_SUPPRESSION_AUDIT=1
                 RUN_BACKLOG_AUDIT=1
+                RUN_RELEASE_LINE_AUDIT=1
+                RUN_PORTABILITY_AUDIT=1
                 RUN_DOMAIN_DAG_AUDIT=1
                 RUN_WIKI_TRUST_AUDIT=1
                 RUN_DEPENDENCY_AUDIT=1
@@ -102,6 +110,8 @@ parse_args() {
                 RUN_SIMULATOR_CONSISTENCY_AUDIT=1
                 RUN_CODE_SUPPRESSION_AUDIT=1
                 RUN_BACKLOG_AUDIT=1
+                RUN_RELEASE_LINE_AUDIT=1
+                RUN_PORTABILITY_AUDIT=1
                 RUN_DOMAIN_DAG_AUDIT=1
                 RUN_WIKI_TRUST_AUDIT=1
                 RUN_DEPENDENCY_AUDIT=0
@@ -117,6 +127,8 @@ parse_args() {
                 RUN_SIMULATOR_CONSISTENCY_AUDIT=0
                 RUN_CODE_SUPPRESSION_AUDIT=0
                 RUN_BACKLOG_AUDIT=0
+                RUN_RELEASE_LINE_AUDIT=0
+                RUN_PORTABILITY_AUDIT=0
                 RUN_DOMAIN_DAG_AUDIT=0
                 RUN_WIKI_TRUST_AUDIT=0
                 RUN_DEPENDENCY_AUDIT=0
@@ -132,6 +144,8 @@ parse_args() {
                 RUN_SIMULATOR_CONSISTENCY_AUDIT=0
                 RUN_CODE_SUPPRESSION_AUDIT=0
                 RUN_BACKLOG_AUDIT=0
+                RUN_RELEASE_LINE_AUDIT=0
+                RUN_PORTABILITY_AUDIT=0
                 RUN_DOMAIN_DAG_AUDIT=0
                 RUN_WIKI_TRUST_AUDIT=0
                 RUN_DEPENDENCY_AUDIT=0
@@ -147,6 +161,8 @@ parse_args() {
                 RUN_SIMULATOR_CONSISTENCY_AUDIT=0
                 RUN_CODE_SUPPRESSION_AUDIT=0
                 RUN_BACKLOG_AUDIT=0
+                RUN_RELEASE_LINE_AUDIT=0
+                RUN_PORTABILITY_AUDIT=0
                 RUN_DOMAIN_DAG_AUDIT=0
                 RUN_WIKI_TRUST_AUDIT=0
                 RUN_DEPENDENCY_AUDIT=0
@@ -185,6 +201,12 @@ parse_args() {
             --no-backlog-audit)
                 RUN_BACKLOG_AUDIT=0
                 ;;
+            --no-release-line-audit)
+                RUN_RELEASE_LINE_AUDIT=0
+                ;;
+            --no-portability-audit)
+                RUN_PORTABILITY_AUDIT=0
+                ;;
             --no-domain-dag-audit)
                 RUN_DOMAIN_DAG_AUDIT=0
                 ;;
@@ -222,11 +244,11 @@ parse_args() {
 
 check_plan() {
     phase_banner "Step 1: Validation plan"
-    if (( RUN_SCRIPT_AUDIT == 0 && RUN_TEMPLATE_AUDIT == 0 && RUN_NUMERIC_AUDIT == 0 && RUN_SIMULATOR_DETERMINISM_AUDIT == 0 && RUN_SIMULATOR_CONSISTENCY_AUDIT == 0 && RUN_CODE_SUPPRESSION_AUDIT == 0 && RUN_BACKLOG_AUDIT == 0 && RUN_DOMAIN_DAG_AUDIT == 0 && RUN_WIKI_TRUST_AUDIT == 0 && RUN_DEPENDENCY_AUDIT == 0 && RUN_CI == 0 && RUN_BUILD == 0 && RUN_E2E == 0 )); then
+    if (( RUN_SCRIPT_AUDIT == 0 && RUN_TEMPLATE_AUDIT == 0 && RUN_NUMERIC_AUDIT == 0 && RUN_SIMULATOR_DETERMINISM_AUDIT == 0 && RUN_SIMULATOR_CONSISTENCY_AUDIT == 0 && RUN_CODE_SUPPRESSION_AUDIT == 0 && RUN_BACKLOG_AUDIT == 0 && RUN_RELEASE_LINE_AUDIT == 0 && RUN_PORTABILITY_AUDIT == 0 && RUN_DOMAIN_DAG_AUDIT == 0 && RUN_WIKI_TRUST_AUDIT == 0 && RUN_DEPENDENCY_AUDIT == 0 && RUN_CI == 0 && RUN_BUILD == 0 && RUN_E2E == 0 )); then
         log_error "Nothing to run. Enable at least one validation stage"
         exit 1
     fi
-    log_info "Plan: script_audit=$RUN_SCRIPT_AUDIT template_audit=$RUN_TEMPLATE_AUDIT numeric_audit=$RUN_NUMERIC_AUDIT simulator_determinism_audit=$RUN_SIMULATOR_DETERMINISM_AUDIT simulator_consistency_audit=$RUN_SIMULATOR_CONSISTENCY_AUDIT code_suppression_audit=$RUN_CODE_SUPPRESSION_AUDIT backlog_audit=$RUN_BACKLOG_AUDIT domain_dag_audit=$RUN_DOMAIN_DAG_AUDIT wiki_trust_audit=$RUN_WIKI_TRUST_AUDIT dependency_audit=$RUN_DEPENDENCY_AUDIT"
+    log_info "Plan: script_audit=$RUN_SCRIPT_AUDIT template_audit=$RUN_TEMPLATE_AUDIT numeric_audit=$RUN_NUMERIC_AUDIT simulator_determinism_audit=$RUN_SIMULATOR_DETERMINISM_AUDIT simulator_consistency_audit=$RUN_SIMULATOR_CONSISTENCY_AUDIT code_suppression_audit=$RUN_CODE_SUPPRESSION_AUDIT backlog_audit=$RUN_BACKLOG_AUDIT release_line_audit=$RUN_RELEASE_LINE_AUDIT portability_audit=$RUN_PORTABILITY_AUDIT domain_dag_audit=$RUN_DOMAIN_DAG_AUDIT wiki_trust_audit=$RUN_WIKI_TRUST_AUDIT dependency_audit=$RUN_DEPENDENCY_AUDIT"
     log_info "Plan: ci=$RUN_CI build=$RUN_BUILD e2e=$RUN_E2E prepare_e2e=$PREPARE_E2E"
 }
 
@@ -271,6 +293,12 @@ run_requested_stages() {
     fi
     if (( RUN_BACKLOG_AUDIT == 1 )); then
         run_alignment_script_step "Backlog open-work audit" "audit-backlog-open-work.sh"
+    fi
+    if (( RUN_RELEASE_LINE_AUDIT == 1 )); then
+        run_alignment_script_step "Release-line audit" "audit-release-line.sh"
+    fi
+    if (( RUN_PORTABILITY_AUDIT == 1 )); then
+        run_alignment_script_step "Repository portability audit" "audit-repo-portability.sh"
     fi
     if (( RUN_DOMAIN_DAG_AUDIT == 1 )); then
         run_shell_step "Web-client domain DAG audit" "" "cd '$PROJECT_ROOT/web-client' && npm run validate:dag"

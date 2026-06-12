@@ -1,11 +1,11 @@
 {"timestamp": "2026-03-24T21:03:08Z", "severity": "FATAL", "rule": "O(N) Iteration Anti-Pattern", "files": "./template/pallets/aaa/src/lib.rs,./template/pallets/aaa/src/scheduler.rs,./template/pallets/governance/src/lib.rs"}
-{"timestamp":"2026-03-24T22:15:06Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
+{"timestamp":"2026-03-24T22:15:06Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/governance/src/lib.rs"}
 {"timestamp":"2026-03-25T22:19:59Z","title":"O(N) Iteration False Positive","summary":"iter() in try_state, on_runtime_upgrade, and BoundedVec is structurally safe. Do not flag as O(N) anti-pattern.","scope":"alignment-auditor","status":"resolved","files":"","tags":"false-positive,try_state,bounded-vec","remedy":"Whitelist try_state, migrations, and BoundedVec iter() calls from O(N) iteration bans.","related":""}
-{"timestamp":"2026-04-07T08:30:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
-{"timestamp":"2026-04-07T15:11:38Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
-{"timestamp":"2026-04-08T00:06:51Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/lib.rs"}
-{"timestamp":"2026-04-22T20:53:54Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/staking/src/lib.rs,/home/llb/Repos/deos/template/runtime/src/configs/mod.rs"}
-{"timestamp":"2026-04-22T23:10:42Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/staking_config.rs"}
-{"timestamp":"2026-04-22T23:12:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/staking_config.rs"}
-{"timestamp":"2026-04-24T20:25:07Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/governance/src/proposal_resolution.rs"}
-{"timestamp":"2026-04-24T21:27:21Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/examples/export_metadata.rs"}
+{"timestamp":"2026-04-07T08:30:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/governance/src/lib.rs"}
+{"timestamp":"2026-04-07T15:11:38Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/governance/src/lib.rs"}
+{"timestamp":"2026-04-08T00:06:51Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/governance/src/lib.rs"}
+{"timestamp":"2026-04-22T20:53:54Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/staking/src/lib.rs,./template/runtime/src/configs/mod.rs"}
+{"timestamp":"2026-04-22T23:10:42Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/runtime/src/configs/staking_config.rs"}
+{"timestamp":"2026-04-22T23:12:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/runtime/src/configs/staking_config.rs"}
+{"timestamp":"2026-04-24T20:25:07Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/governance/src/proposal_resolution.rs"}
+{"timestamp":"2026-04-24T21:27:21Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/runtime/examples/export_metadata.rs"}

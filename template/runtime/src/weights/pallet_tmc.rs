@@ -13,7 +13,7 @@
 // benchmark
 // pallet
 // --runtime
-// /home/llb/Repos/deos/template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
+// <repo>/template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
 // --pallet
 // pallet_tmc
 // --extrinsic
@@ -25,7 +25,7 @@
 // --heap-pages
 // 4096
 // --output
-// /home/llb/Repos/deos/template/runtime/src/weights/pallet_tmc.rs
+// <repo>/template/runtime/src/weights/pallet_tmc.rs
 
 #![cfg_attr(rustfmt, rustfmt_skip)]
 #![allow(unused_parens)]

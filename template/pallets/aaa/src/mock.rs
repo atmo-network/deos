@@ -147,8 +147,11 @@ thread_local! {
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_CLOSE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
+  static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
+  static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
+  static FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN: RefCell<bool> = RefCell::new(false);
 }
 
 pub fn set_pool_reserves(
@@ -183,8 +186,11 @@ pub fn reset_mock_adapters() {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+  FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
+  FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = false);
+  FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow_mut() = false);
 }
 
 pub struct MockFeeRouter;
@@ -363,12 +369,24 @@ pub fn donated_liquidity(
   })
 }
 
+pub fn set_fail_dex_after_input_transfer(value: bool) {
+  FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn set_fail_staking_ops(value: bool) {
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_fail_staking_after_burn(value: bool) {
+  FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn set_fail_liquidity_donation_ops(value: bool) {
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_fail_liquidity_donation_after_first_burn(value: bool) {
+  FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow_mut() = value);
 }
 
 pub struct MockDexOps;
@@ -389,6 +407,9 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       return Err(DispatchError::Other("SlippageExceeded"));
     }
     MockAssetOps::transfer(who, &u64::MAX, asset_in, amount_in)?;
+    if FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockDexAfterInputTransferFailed"));
+    }
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
     Ok(amount_out)
   }
@@ -412,6 +433,9 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       .ok_or(DispatchError::Other("DivisionByZero"))?
       .saturating_add(1);
     MockAssetOps::transfer(who, &u64::MAX, asset_in, amount_in)?;
+    if FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockDexAfterInputTransferFailed"));
+    }
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
     Ok(amount_in)
   }
@@ -487,6 +511,9 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
       return Err(DispatchError::Other("MockStakingOpsFailed"));
     }
     MockAssetOps::burn(who, asset, amount)?;
+    if FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockStakingAfterBurnFailed"));
+    }
     STAKED.with(|s| {
       let mut map = s.borrow_mut();
       let current = map.get(&(*who, asset)).copied().unwrap_or(0);
@@ -500,6 +527,9 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
       return Err(DispatchError::Other("MockStakingOpsFailed"));
     }
     MockAssetOps::burn(who, asset, shares)?;
+    if FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other("MockStakingAfterBurnFailed"));
+    }
     UNSTAKED.with(|s| {
       let mut map = s.borrow_mut();
       let current = map.get(&(*who, asset)).copied().unwrap_or(0);
@@ -529,6 +559,11 @@ impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonati
       ));
     }
     MockAssetOps::burn(who, asset_a, amount)?;
+    if FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow()) {
+      return Err(DispatchError::Other(
+        "MockLiquidityDonationAfterFirstBurnFailed",
+      ));
+    }
     MockAssetOps::burn(who, asset_b, amount)?;
     DONATED_LIQUIDITY.with(|d| {
       let mut map = d.borrow_mut();

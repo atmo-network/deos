@@ -162,7 +162,7 @@ From inside this workspace, the same boundary gate is available directly:
 npm run validate:dag
 ```
 
-`validate:dag` resolves the validator through `DOMAIN_DAG_VALIDATOR`, `SKILL_DIR`, or the current user's default pi skill path. It preserves the default web-client root when forwarding extra validator args, and the Domain DAG config includes `scripts/` so these package launchers stay under the same source-boundary/header gate. Run `npm run validate:dag -- --help` for launcher options.
+`validate:dag` resolves the validator through `DOMAIN_DAG_VALIDATOR`, `SKILL_DIR`, or the repo-local `.agents/skills/domain-dag` copy. It preserves the default web-client root when forwarding extra validator args, and the Domain DAG config includes `scripts/` so these package launchers stay under the same source-boundary/header gate. Run `npm run validate:dag -- --help` for launcher options.
 
 For wiki-rendering/content changes, also run:
 

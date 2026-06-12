@@ -50,6 +50,17 @@ Concrete chain policy belongs in runtime configuration, including:
 - Ingress hooks and genesis System AAA topology
 - Governance/system origins and operational bounds
 
+## External runtime embedding checklist
+
+A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only:
+
+- Implement asset, DEX, staking, liquidity-donation, fee-router, ingress, entropy, benchmarking, and atomicity adapters for local runtime types.
+- Bind governance/system origins, owner-slot limits, queue/wakeup bounds, fee constants, task weight classes, and native asset identity.
+- Decide which tasks are allowed for User vs System actors and keep any chain-specific policy in adapters or genesis actor configuration, not in pallet core.
+- Provide deterministic genesis System AAA definitions only for actor roles the runtime actually wants to ship.
+- Treat example execution plans as reusable task-language patterns; treat the DEOS/TMCTOL System AAA catalog as one runtime's topology, not as the pallet's required deployment shape.
+- Validate adapter failure atomicity with runtime-local tests when adapters perform multi-step mutations.
+
 ## Non-goals of the current slice
 
 The current kernel does not yet include:

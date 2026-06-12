@@ -7,12 +7,16 @@ Zone: Client-local tooling bridge to repo/agent validation infrastructure.
 */
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const writeOut = (message) => process.stdout.write(`${message}\n`);
 const writeErr = (message) => process.stderr.write(`${message}\n`);
 
+const scriptDir = dirname(fileURLToPath(import.meta.url));
+const webClientRoot = resolve(scriptDir, '..');
+const repoRoot = resolve(webClientRoot, '..');
+const defaultSkillDir = join(repoRoot, '.agents/skills/domain-dag');
 const args = process.argv.slice(2);
 const helpRequested = args.some((arg) => arg === '--help' || arg === '-h');
 
@@ -26,7 +30,7 @@ Environment:
   SKILL_DIR             Domain DAG skill directory
 
 Defaults:
-  SKILL_DIR=~/.pi/agent/skills/domain-dag
+  SKILL_DIR=<repo>/.agents/skills/domain-dag
 
 Examples:
   npm run validate:dag
@@ -35,8 +39,7 @@ Examples:
   process.exit(0);
 }
 
-const skillDir =
-  process.env.SKILL_DIR ?? join(homedir(), '.pi/agent/skills/domain-dag');
+const skillDir = process.env.SKILL_DIR ?? defaultSkillDir;
 const validator =
   process.env.DOMAIN_DAG_VALIDATOR ??
   join(skillDir, 'scripts/validate-domain-dag.sh');

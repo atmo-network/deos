@@ -449,9 +449,9 @@ Atomicity:
 
 Task atomicity rules:
 
-1. Single-op tasks satisfy atomicity by delegating to one adapter call.
-2. Multi-op tasks (e.g. `SplitTransfer`) MUST execute within a transactional boundary (runtime storage transactions or adapter-level commit/rollback).
-3. If any sub-operation fails, the task MUST revert all prior sub-operations. Partial task effects MUST NOT persist.
+1. Every executable task MUST run inside a task-scoped transactional boundary owned by AAA or by an adapter with equivalent commit/rollback semantics.
+2. Multi-op tasks (e.g. `SplitTransfer`) MUST execute within that boundary across the full normalized operation set.
+3. If any task or sub-operation fails, the task MUST revert all prior task-local effects. Partial task effects MUST NOT persist, including adapter mutations that fail after an intermediate burn/transfer.
 
 If an early step mutates asset composition and a later step fails, post-mutation balances remain on the sovereign account. When using `ContinueNextStep` after mutating tasks (`SwapExactIn`, `SwapExactOut`, liquidity ops), execution-plan authors and UIs SHOULD guard downstream steps with explicit balance conditions. Execution-plan simulation is off-chain only (RPC dry-run, fork replay).
 

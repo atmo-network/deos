@@ -8264,7 +8264,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",

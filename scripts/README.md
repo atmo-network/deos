@@ -38,7 +38,7 @@ This directory is intentionally split into two classes:
   Run the local bootstrap chain: binaries -> tools -> runtime build -> chain spec -> Zombienet. Start the web client directly from `web-client` with `npm run dev`.
 
 - [validate-local.sh](./validate-local.sh)
-  Run the local script-entrypoint/template-readiness/numeric-parsing/simulator-determinism/simulator-consistency/code-suppression/backlog/domain-DAG/wiki-trust/dependency/CI/build/E2E validation workflow. The fast audit leaves live under the repo-local `alignment` skill and are orchestrated from here. Use `--audit-only` for the fast local audit stack and `--dependency-audit` when network-backed npm posture checks are desired.
+  Run the local script-entrypoint/template-readiness/numeric-parsing/simulator-determinism/simulator-consistency/code-suppression/backlog/release-line/portability/domain-DAG/wiki-trust/dependency/CI/build/E2E validation workflow. The fast audit leaves live under the repo-local `alignment` skill and are orchestrated from here. Use `--audit-only` for the fast local audit stack and `--dependency-audit` when network-backed npm posture checks are desired.
 
 - [aaa-release-gate.sh](./aaa-release-gate.sh)
   Run the heavy AAA scheduler stress gate used by the scheduled stress lane.

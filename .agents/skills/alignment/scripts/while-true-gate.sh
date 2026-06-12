@@ -127,6 +127,10 @@ should_run_wiki_trust() {
     has_changed_path '^wiki/.*\.md$'
 }
 
+should_run_release_line_audit() {
+    has_changed_path '^CHANGELOG\.md$' || has_changed_path '^template/(Cargo\.lock|pallets/aaa/Cargo\.toml)$'
+}
+
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$PROJECT_ROOT/.git" "Git repository"
@@ -146,7 +150,8 @@ plan() {
     log_info "Layer 2: Mathematical truth"
     log_info "Layer 3: Behavioral truth"
     log_info "Layer 4: Wiki trust"
-    log_info "Layer 5: Knowledge sync"
+    log_info "Layer 5: Release-line consistency"
+    log_info "Layer 6: Knowledge sync"
     log_info "Audit scope: $AUDIT_SCOPE"
     log_info "Changed paths: ${#CHANGED_PATHS[@]}"
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
@@ -234,17 +239,29 @@ run_wiki_trust_validation() {
     log_success "Wiki trust validation passed"
 }
 
+run_release_line_validation() {
+    phase_banner "Step 7: Release-line consistency"
+    if ! should_run_release_line_audit; then
+        log_warning "Skipping release-line audit because no release marker files changed"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-release-line.sh"; then
+        log_error "Release-line validation failed"
+        exit 1
+    fi
+}
+
 run_knowledge_sync() {
-    phase_banner "Step 7: Knowledge sync"
+    phase_banner "Step 8: Knowledge sync"
     if [[ "$REQUIRE_CONTEXT_SYNC" != "1" ]]; then
         log_warning "Context sync gate disabled"
         return 0
     fi
-    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/)'; then
+    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/.*/SKILL\.md$)'; then
         log_success "Context files were updated in this pass"
         return 0
     fi
-    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, or docs/ before the next loop"
+    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, docs/, or a touched SKILL.md before the next loop"
     exit 1
 }
 
@@ -257,6 +274,7 @@ main() {
     run_simulator_validation
     run_behavior_validation
     run_wiki_trust_validation
+    run_release_line_validation
     run_knowledge_sync
     phase_banner "Summary"
     log_success "While-true gate passed"
