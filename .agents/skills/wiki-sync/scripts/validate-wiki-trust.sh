@@ -18,8 +18,9 @@ Checks:
   - no extra value-side colons in wiki frontmatter key-value lines
 
 Options:
-  --wiki-dir <path>  Override the wiki directory (default: ./wiki)
-  -h, --help         Show this help message
+  --wiki-dir <path>   Override the wiki directory (default: ./wiki)
+  --wiki-dir=<path>  Override the wiki directory (default: ./wiki)
+  -h, --help          Show this help message
 EOF
 }
 
@@ -34,6 +35,14 @@ parse_args() {
                 fi
                 WIKI_DIR="$2"
                 shift
+                ;;
+            --wiki-dir=*)
+                WIKI_DIR="${1#--wiki-dir=}"
+                if [[ -z "$WIKI_DIR" ]]; then
+                    log_error "Missing value for --wiki-dir"
+                    usage
+                    exit 1
+                fi
                 ;;
             -h|--help)
                 usage

@@ -12,6 +12,7 @@ available_locales:
 sources:
   - ../../docs/aaa.specification.en.md
   - ../../docs/aaa.architecture.en.md
+  - ../../docs/aaa.embedding.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -26,7 +27,7 @@ related:
   - Контур маршрутизации и минтинга
   - Обзор Governance
   - Базовые термины
-last_compiled: 2026-05-17
+last_compiled: 2026-06-13
 confidence: 0.95
 ---
 
@@ -52,6 +53,12 @@ AAA дает runtime один переиспользуемый способ ис
 - Adapter boundaries, чтобы AAA координировал runtime-механику, но не владел DEX, staking или asset logic.
 
 Баланс актора может работать как сообщение-триггер: приход актива на аккаунт актора может разбудить следующий ограниченный execution plan.
+
+## Граница встраивания
+
+Внешний runtime может переиспользовать `pallet-aaa`, не наследуя каталог System actors из DEOS/TMCTOL. Host runtime предоставляет ограниченные adapters для assets, DEX, staking, liquidity donation, fee conversion, ingress, entropy и task weights. AAA владеет scheduling, lifecycle, amount resolution, fee reservation и task orchestration.
+
+Гарантия atomicity действует на уровне task, а не всего execution plan. Если adapter падает после частичной мутации, failed task откатывает свои локальные эффекты и success event; более ранние успешные steps остаются committed. `ContinueNextStep` или `AbortCycle` затем решает, продолжится cycle или остановится.
 
 ## Граница переносимости
 

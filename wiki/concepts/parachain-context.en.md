@@ -11,6 +11,8 @@ available_locales:
 sources:
   - ../../AGENTS.md
   - ../../docs/core.architecture.en.md
+  - ../../docs/asset-registry.architecture.en.md
+  - ../../docs/randomness.strategy.en.md
   - ../../docs/polkadot-sdk-2603.insights.en.md
   - ../../template/README.md
 status: active
@@ -27,8 +29,8 @@ related:
   - Asset Identity
   - Tech Stack
   - Randomness Strategy
-last_compiled: 2026-05-17
-confidence: 0.84
+last_compiled: 2026-06-13
+confidence: 0.86
 ---
 
 # Parachain Context
@@ -65,7 +67,7 @@ This keeps cross-chain asset identity compatible with the local bitmask-based as
 
 The current launch line uses a trusted-collator simplification phase. Native binding targets stay restricted to trusted collators until a production-ready relay/protocol beacon is available for parachain-consumable per-block randomness.
 
-That means local pseudo-random fallbacks can support bounded reference behavior, but they are not a replacement for a future protocol-grade randomness source.
+That means local pseudo-random fallbacks can support bounded reference behavior, but they are not a replacement for a future protocol-grade randomness source. Existing epoch-scale relay randomness does not satisfy this contract; the preferred replacement is a future per-block protocol beacon that parachains can consume with weight-accounted ingress.
 
 ## Costs and Operations
 

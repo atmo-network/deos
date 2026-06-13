@@ -22,7 +22,7 @@ tags:
 related:
   - Economic Thresholds
   - Invariant Map
-  - Threat Model
+  - Invariant and Threat Map
   - Three-Layer Validation
 last_compiled: 2026-05-17
 confidence: 0.86
@@ -54,5 +54,5 @@ Example: floor mechanics can be formula-defined and simulator-supported, but use
 
 - [Economic Thresholds](economic-thresholds.en.md)
 - [Invariant Map](invariant-map.en.md)
-- [Threat Model](threat-model.en.md)
+- [Invariant and Threat Map](invariant-map.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)

@@ -13,6 +13,8 @@ sources:
   - ../../web-client/README.md
   - ../../scripts/README.md
   - ../../.agents/skills/wiki-sync/SKILL.md
+  - ../../.agents/skills/alignment/SKILL.md
+  - ../../scripts/validate-local.sh
 status: active
 audience: developer
 tags:
@@ -25,8 +27,8 @@ related:
   - Scripts Layer
   - Tech Stack
   - Development Status
-last_compiled: 2026-05-17
-confidence: 0.84
+last_compiled: 2026-06-13
+confidence: 0.86
 ---
 
 # Validation Troubleshooting
@@ -39,13 +41,14 @@ The rule is: fix the smallest truthful surface, then rerun the gate that failed.
 
 ## Quick Triage
 
-- **Wiki trust fails:** inspect the reported file/line. Common causes are raw HTML, dangerous links, inline DOM handlers, or extra colons in frontmatter scalar lines.
-- **Context validation fails:** check `AGENTS.md`, `BACKLOG.md`, `CHANGELOG.md`, README links, docs index coverage, and broken markdown links.
-- **Domain DAG fails:** find the import or ownership boundary. Usually the fix is moving code to the owner slice, not adding a generic shared bucket.
-- **Web-client check/build fails:** separate Svelte syntax, TypeScript contracts, generated descriptors, adapter boundaries, and formatting issues.
-- **Simulator fails:** treat it as economic truth feedback. Recheck formulas, thresholds, precision, and invariant assumptions before touching runtime code.
-- **Rust tests or clippy fail:** prefer targeted crate fixes first. Escalate to workspace checks when the diff crosses runtime or pallet boundaries.
-- **Script smoke fails:** run `--help`, check prerequisites, confirm environment variables, and inspect `_common.sh` usage.
+- **Wiki trust fails**: inspect the reported file/line. Common causes are raw HTML, dangerous links, inline DOM handlers, or extra colons in frontmatter scalar lines.
+- **Context validation fails**: check `AGENTS.md`, `BACKLOG.md`, `CHANGELOG.md`, README links, docs index coverage, and broken markdown links.
+- **Domain DAG fails**: find the import or ownership boundary. Usually the fix is moving code to the owner slice, not adding a generic shared bucket.
+- **Web-client check/build fails**: separate Svelte syntax, TypeScript contracts, generated descriptors, adapter boundaries, and formatting issues.
+- **Simulator fails**: treat it as economic truth feedback. Recheck formulas, thresholds, precision, and invariant assumptions before touching runtime code.
+- **Rust tests or clippy fail**: prefer targeted crate fixes first. Escalate to workspace checks when the diff crosses runtime or pallet boundaries.
+- **Script smoke fails**: run `--help`, check prerequisites, confirm environment variables, and inspect `_common.sh` usage.
+- **While-true gate fails**: treat the pass as not done. Fix the failing layer, update backlog/context/changelog if the failure exposed durable drift, then rerun the gate.
 
 ## Recovery Pattern
 
@@ -54,7 +57,8 @@ The rule is: fix the smallest truthful surface, then rerun the gate that failed.
 3. Fix the owner surface, not the symptom consumer.
 4. Rerun the smallest failing command.
 5. Rerun the relevant aggregate gate only after the local failure is gone.
-6. Update wiki, backlog, or changelog if the failure revealed a durable contract gap.
+6. For release/wiki/context work, finish with `./.agents/skills/alignment/scripts/while-true-gate.sh --skip-simulator` unless math/runtime behavior changed.
+7. Update wiki, backlog, or changelog if the failure revealed a durable contract gap.
 
 ## Avoid These Mistakes
 

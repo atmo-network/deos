@@ -54,8 +54,8 @@ confidence: 0.86
 
 Любой compression claim должен назвать две вещи:
 
-1. **Ось:** burn-time или expanding-supply.
-2. **Метрику:** relative spread `C/F` или absolute gap `C - F`.
+1. **Ось**: burn-time или expanding-supply.
+2. **Метрику**: relative spread `C/F` или absolute gap `C - F`.
 
 Где:
 

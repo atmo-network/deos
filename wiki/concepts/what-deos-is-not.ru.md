@@ -21,7 +21,7 @@ tags:
   - boundaries
 related:
   - Обзор фреймворка DEOS
-  - Threat Model
+  - Карта инвариантов и угроз
   - Economic Claim Levels
   - Parachain context
 last_compiled: 2026-05-17
@@ -51,6 +51,6 @@ DEOS проще понимать, когда явно видны его отри
 ## Связанные страницы
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Threat Model](threat-model.ru.md)
+- [Карта инвариантов и угроз](invariant-map.ru.md)
 - [Economic Claim Levels](economic-claim-levels.ru.md)
 - [Parachain context](parachain-context.ru.md)

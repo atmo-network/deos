@@ -11,6 +11,7 @@ available_locales:
 sources:
   - ../../docs/tmctol.specification.en.md
   - ../../docs/aaa.architecture.en.md
+  - ../../docs/aaa.specification.en.md
   - ../../AGENTS.md
 status: active
 audience: newcomer
@@ -26,8 +27,8 @@ related:
   - Architecture Diagrams
   - AAA System
   - Token-Driven Automation
-last_compiled: 2026-05-17
-confidence: 0.84
+last_compiled: 2026-06-13
+confidence: 0.86
 ---
 
 # TOL Bucket Scenarios
@@ -104,7 +105,7 @@ Bucket C -> Treasury C lane
 Bucket D -> Treasury D lane
 ```
 
-A downstream fork may alter policies, but it should preserve the idea that bucket provenance is part of the economic contract, not just accounting decoration.
+A downstream fork may alter policies, but it should preserve the idea that bucket provenance is part of the economic contract, not just accounting decoration. If bucket policy changes wakeup thresholds, treasury lanes, or actor plans, validate the change against TMCTOL math first and then against AAA execution behavior.
 
 ## Related
 

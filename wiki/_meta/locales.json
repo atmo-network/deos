@@ -191,10 +191,6 @@
       "en": "concepts/invariant-map.en.md",
       "ru": "concepts/invariant-map.ru.md"
     },
-    "threat-model": {
-      "en": "concepts/threat-model.en.md",
-      "ru": "concepts/threat-model.ru.md"
-    },
     "what-deos-is-not": {
       "en": "concepts/what-deos-is-not.en.md",
       "ru": "concepts/what-deos-is-not.ru.md"
@@ -203,33 +199,17 @@
       "en": "concepts/economic-claim-levels.en.md",
       "ru": "concepts/economic-claim-levels.ru.md"
     },
-    "minimal-fork-profile": {
-      "en": "usage/minimal-fork-profile.en.md",
-      "ru": "usage/minimal-fork-profile.ru.md"
-    },
     "deos-in-60-seconds": {
       "en": "getting-started/deos-in-60-seconds.en.md",
       "ru": "getting-started/deos-in-60-seconds.ru.md"
-    },
-    "who-deos-is-for": {
-      "en": "getting-started/who-deos-is-for.en.md",
-      "ru": "getting-started/who-deos-is-for.ru.md"
     },
     "partner-pitch": {
       "en": "getting-started/partner-pitch.en.md",
       "ru": "getting-started/partner-pitch.ru.md"
     },
-    "deos-vs-dao-treasury": {
-      "en": "comparisons/deos-vs-dao-treasury.en.md",
-      "ru": "comparisons/deos-vs-dao-treasury.ru.md"
-    },
     "executive-summary": {
       "en": "getting-started/executive-summary.en.md",
       "ru": "getting-started/executive-summary.ru.md"
-    },
-    "partner-evaluation-route": {
-      "en": "usage/partner-evaluation-route.en.md",
-      "ru": "usage/partner-evaluation-route.ru.md"
     }
   },
   "localization_strategy": {

@@ -186,7 +186,7 @@ cd web-client
 npm run validate
 ```
 
-That script runs formatting, Svelte checks, and the production build. For source-boundary and wiki trust checks, the repo fast audit stack already includes the Domain DAG and trusted wiki markdown gates:
+That script runs formatting, Svelte checks, and the production build. For source-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
 
 ```sh
 ../scripts/validate-local.sh --audit-only
@@ -206,7 +206,7 @@ For wiki-rendering/content changes, run:
 npm run validate:wiki
 ```
 
-`validate:wiki` resolves the validator through `WIKI_TRUST_VALIDATOR` or the repo-local wiki-sync skill path. It preserves the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
+`validate:wiki` runs the trusted markdown validator and the consolidation guard. It resolves them through `WIKI_TRUST_VALIDATOR` / `WIKI_CONSOLIDATION_AUDITOR` or the repo-local wiki-sync skill path, preserving the default repo wiki directory when forwarding extra validator args. Run `npm run validate:wiki -- --help` for launcher options.
 
 To run every configured client-adjacent gate:
 

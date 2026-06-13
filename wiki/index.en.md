@@ -43,7 +43,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 
 - [Start Here](getting-started/start-here.en.md) — choose one route: understand DEOS in 10 minutes, run it locally, or fork and change the economy safely
 - [DEOS in 60 Seconds](getting-started/deos-in-60-seconds.en.md) — the external-facing hook before the architecture graph
-- [Partner Evaluation Route](usage/partner-evaluation-route.en.md) — five-page fork/adoption evaluation path
 - [First Steps](getting-started/first-steps.en.md) — a broader newcomer route after the onboarding spine
 - [Reading Paths](getting-started/reading-paths.en.md) — task-oriented routes through the wiki
 - [Domain Map](concepts/domain-map.en.md) — the main map of knowledge domains
@@ -51,7 +50,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 
 ## Evaluation shortcuts
 
-- [Who DEOS Is For](getting-started/who-deos-is-for.en.md) — audience map for partners, builders, and operators
 - [Partner Pitch](getting-started/partner-pitch.en.md) — external-facing why-it-matters page for partner teams
 - [Executive Summary](getting-started/executive-summary.en.md) — one-page summary for ecosystem and investor readers
 - [End-to-End Flows](concepts/end-to-end-flows.en.md) — concrete walkthroughs across routing, actors, buckets, staking, and validation
@@ -78,7 +76,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Economic Thresholds](concepts/economic-thresholds.en.md)
 - [Economic Claim Levels](concepts/economic-claim-levels.en.md)
 - [Invariant Map](concepts/invariant-map.en.md)
-- [Threat Model](concepts/threat-model.en.md)
+- [Invariant and Threat Map](concepts/invariant-map.en.md)
 - [What DEOS Is Not](concepts/what-deos-is-not.en.md)
 - [Asset Identity](overview/asset-identity.en.md)
 - [Runtime Patterns](overview/runtime-patterns.en.md)
@@ -88,7 +86,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 ## Governance, read models, and client shape
 
 - [Governance Domains](concepts/governance-domains.en.md)
-- [DEOS vs DAO Treasury](comparisons/deos-vs-dao-treasury.en.md)
+- [Executive Summary](getting-started/executive-summary.en.md)
 - [Physics-First vs Politics-First](comparisons/physics-vs-politics.en.md)
 - [Read-Model Split](concepts/read-model-split.en.md)
 - [UI Kit and Domain DAG](concepts/ui-kit-and-domain-dag.en.md)
@@ -103,7 +101,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Validation Troubleshooting](usage/validation-troubleshooting.en.md)
 - [Agent Coordination](usage/agent-coordination.en.md)
 - [Forking DEOS](usage/forking-deos.en.md)
-- [Minimal Fork Profile](usage/minimal-fork-profile.en.md)
+- [Forking DEOS](usage/forking-deos.en.md)
 - [Repository Structure](implementation/repository-structure.en.md)
 - [Tech Stack](implementation/tech-stack.en.md)
 - [Contributing Guidelines](community/contributing.en.md)

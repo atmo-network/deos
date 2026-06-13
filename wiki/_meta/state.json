@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-28",
+  "generated_at": "2026-06-13",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -66,11 +66,13 @@
         "en": [
           "../docs/aaa.specification.en.md",
           "../docs/aaa.architecture.en.md",
+          "../docs/aaa.embedding.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
           "../docs/aaa.specification.en.md",
           "../docs/aaa.architecture.en.md",
+          "../docs/aaa.embedding.en.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -855,6 +857,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
+          "../docs/aaa.embedding.en.md",
           "../template/README.md",
           "../web-client/README.md"
         ],
@@ -862,6 +865,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
+          "../docs/aaa.embedding.en.md",
           "../template/README.md",
           "../web-client/README.md"
         ]
@@ -879,19 +883,23 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.84,
+      "confidence": 0.86,
       "sources": {
         "en": [
           "../AGENTS.md",
           "../web-client/README.md",
           "../scripts/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md"
+          "../.agents/skills/wiki-sync/SKILL.md",
+          "../.agents/skills/alignment/SKILL.md",
+          "../scripts/validate-local.sh"
         ],
         "ru": [
           "../AGENTS.md",
           "../web-client/README.md",
           "../scripts/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md"
+          "../.agents/skills/wiki-sync/SKILL.md",
+          "../.agents/skills/alignment/SKILL.md",
+          "../scripts/validate-local.sh"
         ]
       }
     },
@@ -935,17 +943,21 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.84,
+      "confidence": 0.86,
       "sources": {
         "en": [
           "../AGENTS.md",
           "../docs/core.architecture.en.md",
+          "../docs/asset-registry.architecture.en.md",
+          "../docs/randomness.strategy.en.md",
           "../docs/polkadot-sdk-2603.insights.en.md",
           "../template/README.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/core.architecture.en.md",
+          "../docs/asset-registry.architecture.en.md",
+          "../docs/randomness.strategy.en.md",
           "../docs/polkadot-sdk-2603.insights.en.md",
           "../template/README.md"
         ]
@@ -963,16 +975,18 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.84,
+      "confidence": 0.86,
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
           "../docs/aaa.architecture.en.md",
+          "../docs/aaa.specification.en.md",
           "../AGENTS.md"
         ],
         "ru": [
           "../docs/tmctol.specification.en.md",
           "../docs/aaa.architecture.en.md",
+          "../docs/aaa.specification.en.md",
           "../AGENTS.md"
         ]
       }
@@ -1016,54 +1030,28 @@
       },
       "page_type": "concept",
       "title": {
-        "en": "Invariant Map",
-        "ru": "Карта инвариантов"
+        "en": "Invariant and Threat Map",
+        "ru": "Карта инвариантов и угроз"
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.84,
+      "confidence": 0.86,
       "sources": {
         "en": [
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
           "../docs/axial-router.architecture.en.md",
-          "../docs/aaa.specification.en.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../docs/tmctol.specification.en.md",
-          "../docs/core.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/aaa.specification.en.md"
-        ]
-      }
-    },
-    "threat-model": {
-      "path": {
-        "en": "concepts/threat-model.en.md",
-        "ru": "concepts/threat-model.ru.md"
-      },
-      "page_type": "concept",
-      "title": {
-        "en": "Threat Model",
-        "ru": "Threat Model"
-      },
-      "status": "active",
-      "audience": "developer",
-      "confidence": 0.82,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../docs/core.architecture.en.md",
-          "../docs/tmctol.specification.en.md",
+          "../docs/aaa.specification.en.md",
           "../docs/governance.specification.en.md",
           "../docs/web-client.architecture.en.md"
         ],
         "ru": [
           "../AGENTS.md",
-          "../docs/core.architecture.en.md",
           "../docs/tmctol.specification.en.md",
+          "../docs/core.architecture.en.md",
+          "../docs/axial-router.architecture.en.md",
+          "../docs/aaa.specification.en.md",
           "../docs/governance.specification.en.md",
           "../docs/web-client.architecture.en.md"
         ]
@@ -1118,32 +1106,6 @@
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
           "../simulator/README.md"
-        ]
-      }
-    },
-    "minimal-fork-profile": {
-      "path": {
-        "en": "usage/minimal-fork-profile.en.md",
-        "ru": "usage/minimal-fork-profile.ru.md"
-      },
-      "page_type": "usage",
-      "title": {
-        "en": "Minimal Fork Profile",
-        "ru": "Минимальный профиль форка"
-      },
-      "status": "active",
-      "audience": "developer",
-      "confidence": 0.84,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "usage/forking-deos.en.md",
-          "../docs/tmctol.specification.en.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "usage/forking-deos.en.md",
-          "../docs/tmctol.specification.en.md"
         ]
       }
     },
@@ -1323,32 +1285,6 @@
         ]
       }
     },
-    "who-deos-is-for": {
-      "path": {
-        "en": "getting-started/who-deos-is-for.en.md",
-        "ru": "getting-started/who-deos-is-for.ru.md"
-      },
-      "page_type": "getting-started",
-      "title": {
-        "en": "Who DEOS Is For",
-        "ru": "Для кого DEOS"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "confidence": 0.86,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../README.md",
-          "../docs/core.architecture.en.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../README.md",
-          "../docs/core.architecture.en.md"
-        ]
-      }
-    },
     "partner-pitch": {
       "path": {
         "en": "getting-started/partner-pitch.en.md",
@@ -1377,34 +1313,6 @@
         ]
       }
     },
-    "deos-vs-dao-treasury": {
-      "path": {
-        "en": "comparisons/deos-vs-dao-treasury.en.md",
-        "ru": "comparisons/deos-vs-dao-treasury.ru.md"
-      },
-      "page_type": "comparison",
-      "title": {
-        "en": "DEOS vs DAO Treasury",
-        "ru": "DEOS vs DAO Treasury"
-      },
-      "status": "active",
-      "audience": "partner",
-      "confidence": 0.84,
-      "sources": {
-        "en": [
-          "../README.md",
-          "../docs/manifesto.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/tmctol.specification.en.md"
-        ],
-        "ru": [
-          "../README.md",
-          "../docs/manifesto.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/tmctol.specification.en.md"
-        ]
-      }
-    },
     "executive-summary": {
       "path": {
         "en": "getting-started/executive-summary.en.md",
@@ -1417,47 +1325,25 @@
       },
       "status": "active",
       "audience": "partner",
-      "confidence": 0.84,
+      "confidence": 0.86,
       "sources": {
         "en": [
           "../README.md",
           "../AGENTS.md",
           "../BACKLOG.md",
-          "../CHANGELOG.md"
+          "../CHANGELOG.md",
+          "../docs/manifesto.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/tmctol.specification.en.md"
         ],
         "ru": [
           "../README.md",
           "../AGENTS.md",
           "../BACKLOG.md",
-          "../CHANGELOG.md"
-        ]
-      }
-    },
-    "partner-evaluation-route": {
-      "path": {
-        "en": "usage/partner-evaluation-route.en.md",
-        "ru": "usage/partner-evaluation-route.ru.md"
-      },
-      "page_type": "usage",
-      "title": {
-        "en": "Partner Evaluation Route",
-        "ru": "Маршрут оценки для партнера"
-      },
-      "status": "active",
-      "audience": "partner",
-      "confidence": 0.84,
-      "sources": {
-        "en": [
-          "../README.md",
-          "../AGENTS.md",
-          "../BACKLOG.md",
-          "getting-started/executive-summary.en.md"
-        ],
-        "ru": [
-          "../README.md",
-          "../AGENTS.md",
-          "../BACKLOG.md",
-          "getting-started/executive-summary.en.md"
+          "../CHANGELOG.md",
+          "../docs/manifesto.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/tmctol.specification.en.md"
         ]
       }
     }

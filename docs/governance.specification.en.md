@@ -1,9 +1,9 @@
 # DEOS Governance Specification
 
-- **Component:** `pallet-governance` + runtime governance integration
-- **Version:** `0.1.0`
-- **Date:** April 2026
-- **Status:** Target Contract
+- **Component**: `pallet-governance` + runtime governance integration
+- **Version**: `0.1.0`
+- **Date**: April 2026
+- **Status**: Target Contract
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 

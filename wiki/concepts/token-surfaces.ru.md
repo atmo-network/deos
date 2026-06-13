@@ -71,9 +71,9 @@ LP tokens представляют позиции в AMM pools. Некоторы
 
 Текущая wiki специально разделяет три вопроса:
 
-- **Emission math:** [Token Minting Curve](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md).
-- **Governance power:** [Домены Governance](governance-domains.ru.md).
-- **Receipt value:** [Пулы стейкинга](staking-pools.ru.md) и учет liquidity positions.
+- **Emission math**: [Token Minting Curve](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md).
+- **Governance power**: [Домены Governance](governance-domains.ru.md).
+- **Receipt value**: [Пулы стейкинга](staking-pools.ru.md) и учет liquidity positions.
 
 Не выводите полную monetary policy каждого токена только из governance-role. Например, `$BLDR` может быть важен для tactical governance, но wiki не должна притворяться, что downstream demand, launch allocation или ecosystem product-market fit уже решены внутри framework.
 

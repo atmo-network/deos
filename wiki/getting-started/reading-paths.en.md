@@ -46,35 +46,31 @@ If you only need the shortest entry, use [Start Here](start-here.en.md) first. U
 
 1. [Start Here](start-here.en.md)
 2. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-3. [Who DEOS Is For](who-deos-is-for.en.md)
-4. [Partner Pitch](partner-pitch.en.md)
-5. [Executive Summary](executive-summary.en.md)
-6. [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
-7. [DEOS Framework Overview](../overview/deos-framework.en.md)
-8. [Domain Map](../concepts/domain-map.en.md)
-9. [Architecture Diagrams](../concepts/architecture-diagrams.en.md)
-10. [Core Terms](../glossary/core-terms.en.md)
-11. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
-12. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-13. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-14. [Newcomer FAQ](../faq/newcomer-faq.en.md)
+3. [Partner Pitch](partner-pitch.en.md)
+4. [Executive Summary](executive-summary.en.md)
+5. [DEOS Framework Overview](../overview/deos-framework.en.md)
+6. [Domain Map](../concepts/domain-map.en.md)
+7. [Architecture Diagrams](../concepts/architecture-diagrams.en.md)
+8. [Core Terms](../glossary/core-terms.en.md)
+9. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
+10. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+11. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
+12. [Newcomer FAQ](../faq/newcomer-faq.en.md)
 
 This path gives you project vocabulary before pallet names, runtime details, or implementation-specific terms appear.
 
 ## If you are evaluating DEOS externally
 
 1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-2. [Who DEOS Is For](who-deos-is-for.en.md)
-3. [Partner Pitch](partner-pitch.en.md)
-4. [Executive Summary](executive-summary.en.md)
-5. [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
-6. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.en.md)
-7. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
-8. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-9. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
-10. [Threat Model](../concepts/threat-model.en.md)
-11. [Minimal Fork Profile](../usage/minimal-fork-profile.en.md)
-12. [Reference Client](../overview/reference-client.en.md)
+2. [Partner Pitch](partner-pitch.en.md)
+3. [Executive Summary](executive-summary.en.md)
+4. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
+5. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
+6. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+7. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
+8. [Invariant and Threat Map](../concepts/invariant-map.en.md)
+9. [Forking DEOS](../usage/forking-deos.en.md)
+10. [Reference Client](../overview/reference-client.en.md)
 
 This path is for partners, ecosystem readers, and technical evaluators who need the meme, boundaries, risk model, and fork obligations before reading implementation topology.
 
@@ -86,7 +82,7 @@ This path is for partners, ecosystem readers, and technical evaluators who need 
 4. [Economic Thresholds](../concepts/economic-thresholds.en.md)
 5. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
 6. [Invariant Map](../concepts/invariant-map.en.md)
-7. [Threat Model](../concepts/threat-model.en.md)
+7. [Invariant and Threat Map](../concepts/invariant-map.en.md)
 8. [TOL Bucket Scenarios](../concepts/tol-bucket-scenarios.en.md)
 9. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
 10. [Token Minting Curve](../overview/token-minting-curve.en.md)
@@ -149,8 +145,7 @@ Status work should separate shipped baseline, open backlog, completed delivery, 
 6. [Tech Stack](../implementation/tech-stack.en.md)
 7. [Parachain Context](../concepts/parachain-context.en.md)
 8. [Forking DEOS](../usage/forking-deos.en.md)
-9. [Minimal Fork Profile](../usage/minimal-fork-profile.en.md)
-10. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
+9. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
 
 Tooling and fork work should stay bounded, explicit, and honest about prerequisites, preserved framework contracts, and behavior.
 
@@ -158,11 +153,9 @@ Tooling and fork work should stay bounded, explicit, and honest about prerequisi
 
 - [Start Here](start-here.en.md)
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-- [Who DEOS Is For](who-deos-is-for.en.md)
 - [Partner Pitch](partner-pitch.en.md)
 - [Executive Summary](executive-summary.en.md)
-- [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
-- [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.en.md)
+- [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
 - [Domain Map](../concepts/domain-map.en.md)
 - [First Steps](first-steps.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)

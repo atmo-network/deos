@@ -20,7 +20,7 @@ tags:
   - boundaries
 related:
   - DEOS Framework Overview
-  - Threat Model
+  - Invariant and Threat Map
   - Economic Claim Levels
   - Parachain Context
 last_compiled: 2026-05-17
@@ -50,6 +50,6 @@ Negative boundaries prevent overclaiming. They also tell fork teams which respon
 ## Related
 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [Threat Model](threat-model.en.md)
+- [Invariant and Threat Map](invariant-map.en.md)
 - [Economic Claim Levels](economic-claim-levels.en.md)
 - [Parachain Context](parachain-context.en.md)

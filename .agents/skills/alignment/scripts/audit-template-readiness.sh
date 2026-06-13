@@ -17,6 +17,7 @@ Checks:
   - runtime asset-conversion integration test module/file spelling is canonical
   - framework artifact names do not regress to pre-DEOS tmctol runtime/pallet names
   - browser wallet helper aliases do not regress to TMCTOL-branded framework names
+  - AAA embedding guide remains linked from docs and pallet entrypoints
 
 Options:
   --warn    Print findings but exit successfully
@@ -120,6 +121,28 @@ check_legacy_wallet_helper_aliases() {
     fi
 }
 
+check_aaa_embedding_links() {
+    local guide="$PROJECT_ROOT/docs/aaa.embedding.en.md"
+    if [[ ! -f "$guide" ]]; then
+        record_finding "AAA embedding guide is missing"
+        return 0
+    fi
+    local missing=()
+    if ! rg -q 'aaa\.embedding\.en\.md' "$PROJECT_ROOT/docs/README.md"; then
+        missing+=("docs/README.md")
+    fi
+    if ! rg -q 'aaa\.embedding\.en\.md' "$PROJECT_ROOT/README.md"; then
+        missing+=("README.md")
+    fi
+    if ! rg -q 'aaa\.embedding\.en\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
+        missing+=("template/pallets/aaa/README.md")
+    fi
+    if [[ ${#missing[@]} -gt 0 ]]; then
+        record_finding "AAA embedding guide is not linked from required entrypoints"
+        printf '%s\n' "${missing[@]}"
+    fi
+}
+
 main() {
     parse_args "$@"
     phase_banner "Template readiness audit"
@@ -131,6 +154,7 @@ main() {
     check_asset_conversion_name
     check_legacy_framework_artifact_names
     check_legacy_wallet_helper_aliases
+    check_aaa_embedding_links
     if [[ ${#FINDINGS[@]} -eq 0 ]]; then
         log_success "Template readiness audit passed"
         return 0

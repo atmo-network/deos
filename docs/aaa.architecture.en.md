@@ -28,7 +28,7 @@ In the current DEOS reference runtime, fifteen System actors are provisioned at 
 - `aaa_id = 13`: BLDR Treasury actor, initialized as timer + noop
 - `aaa_id = 14`: Native staking LP provisioning actor, initialized as timer + noop until the canonical `NTVE/stNTVE` pool is activated
 
-The pallet itself is generic and runtime-agnostic. Chain-specific behavior is injected through `AssetOps`, `DexOps`, weight/fee conversion, bounds, and genesis actor specs.
+The pallet itself is generic and runtime-agnostic. Chain-specific behavior is injected through `AssetOps`, `DexOps`, weight/fee conversion, bounds, and genesis actor specs. External host-runtime obligations are summarized in the [AAA External Runtime Embedding Guide](./aaa.embedding.en.md).
 
 ### Canonical Address Catalog (Current Runtime, Full System Map)
 
@@ -288,11 +288,11 @@ Scheduler execution is queue-first and deterministic:
 
 It uses two scheduler layers: an active run queue for work that can execute now, and a temporal wakeup layer for work that becomes eligible later. In the current stable line, that temporal layer is concretely represented by block-bucketed `WakeupIndex` bounded by `MaxWakeupBucketSize`; any future tree-backed or other ordered representation would now require an explicit spec/storage migration rather than being treated as a casual invisible swap.
 
-1. **Wakeup drain:** overdue timer actors are drained from `WakeupIndex` (bounded by `MaxWakeupsPerBlock`) and admitted into the active run queue
-2. **Ingress admission:** matched address events are coalesced and may join the active run queue in the same `on_idle` pass
-3. **Run queue:** the active queue starts from `CurrentQueue` plus staged `NextQueue`; actors are executed up to `MaxExecutionsPerBlock` and weight budget
-4. **Carry-over staging:** deferred or leftover work is written back into bounded next-block queue storage (`CurrentQueue`, with `NextQueue` cleared at epoch end)
-5. **Epoch advance:** `QueueEpoch` advances after the carry-over queue is persisted
+1. **Wakeup drain**: overdue timer actors are drained from `WakeupIndex` (bounded by `MaxWakeupsPerBlock`) and admitted into the active run queue
+2. **Ingress admission**: matched address events are coalesced and may join the active run queue in the same `on_idle` pass
+3. **Run queue**: the active queue starts from `CurrentQueue` plus staged `NextQueue`; actors are executed up to `MaxExecutionsPerBlock` and weight budget
+4. **Carry-over staging**: deferred or leftover work is written back into bounded next-block queue storage (`CurrentQueue`, with `NextQueue` cleared at epoch end)
+5. **Epoch advance**: `QueueEpoch` advances after the carry-over queue is persisted
 
 `ActorQueueEpoch` provides deterministic dedup semantics and prevents duplicate queue entries across same-epoch enqueue attempts.
 

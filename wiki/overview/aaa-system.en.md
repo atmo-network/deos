@@ -11,6 +11,7 @@ available_locales:
 sources:
   - ../../docs/aaa.specification.en.md
   - ../../docs/aaa.architecture.en.md
+  - ../../docs/aaa.embedding.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -25,7 +26,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-05-17
+last_compiled: 2026-06-13
 confidence: 0.95
 ---
 
@@ -51,6 +52,12 @@ At system level it provides:
 - Adapter boundaries so AAA orchestrates runtime mechanics without owning DEX, staking, or asset logic.
 
 Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan.
+
+## Embedding Boundary
+
+External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, entropy, and task weights. AAA owns scheduling, lifecycle, amount resolution, fee reservation, and task orchestration.
+
+The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep` or `AbortCycle` then decides whether the cycle proceeds or stops.
 
 ## Portability Boundary
 

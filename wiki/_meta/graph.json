@@ -449,25 +449,13 @@
     {
       "id": "invariant-map",
       "title": {
-        "en": "Invariant Map",
-        "ru": "Карта инвариантов"
+        "en": "Invariant and Threat Map",
+        "ru": "Карта инвариантов и угроз"
       },
       "page_type": "concept",
       "path": {
         "en": "concepts/invariant-map.en.md",
         "ru": "concepts/invariant-map.ru.md"
-      }
-    },
-    {
-      "id": "threat-model",
-      "title": {
-        "en": "Threat Model",
-        "ru": "Threat Model"
-      },
-      "page_type": "concept",
-      "path": {
-        "en": "concepts/threat-model.en.md",
-        "ru": "concepts/threat-model.ru.md"
       }
     },
     {
@@ -492,18 +480,6 @@
       "path": {
         "en": "concepts/economic-claim-levels.en.md",
         "ru": "concepts/economic-claim-levels.ru.md"
-      }
-    },
-    {
-      "id": "minimal-fork-profile",
-      "title": {
-        "en": "Minimal Fork Profile",
-        "ru": "Минимальный профиль форка"
-      },
-      "page_type": "usage",
-      "path": {
-        "en": "usage/minimal-fork-profile.en.md",
-        "ru": "usage/minimal-fork-profile.ru.md"
       }
     },
     {
@@ -591,18 +567,6 @@
       }
     },
     {
-      "id": "who-deos-is-for",
-      "title": {
-        "en": "Who DEOS Is For",
-        "ru": "Для кого DEOS"
-      },
-      "page_type": "getting-started",
-      "path": {
-        "en": "getting-started/who-deos-is-for.en.md",
-        "ru": "getting-started/who-deos-is-for.ru.md"
-      }
-    },
-    {
       "id": "partner-pitch",
       "title": {
         "en": "Partner Pitch",
@@ -615,18 +579,6 @@
       }
     },
     {
-      "id": "deos-vs-dao-treasury",
-      "title": {
-        "en": "DEOS vs DAO Treasury",
-        "ru": "DEOS vs DAO Treasury"
-      },
-      "page_type": "comparison",
-      "path": {
-        "en": "comparisons/deos-vs-dao-treasury.en.md",
-        "ru": "comparisons/deos-vs-dao-treasury.ru.md"
-      }
-    },
-    {
       "id": "executive-summary",
       "title": {
         "en": "Executive Summary",
@@ -636,18 +588,6 @@
       "path": {
         "en": "getting-started/executive-summary.en.md",
         "ru": "getting-started/executive-summary.ru.md"
-      }
-    },
-    {
-      "id": "partner-evaluation-route",
-      "title": {
-        "en": "Partner Evaluation Route",
-        "ru": "Маршрут оценки для партнера"
-      },
-      "page_type": "usage",
-      "path": {
-        "en": "usage/partner-evaluation-route.en.md",
-        "ru": "usage/partner-evaluation-route.ru.md"
       }
     }
   ],
@@ -676,6 +616,26 @@
       "from": "index",
       "to": "core-terms",
       "type": "entrypoint"
+    },
+    {
+      "from": "core-terms",
+      "to": "deos-framework",
+      "type": "defines"
+    },
+    {
+      "from": "core-terms",
+      "to": "tmctol-standard",
+      "type": "defines"
+    },
+    {
+      "from": "core-terms",
+      "to": "governance-overview",
+      "type": "defines"
+    },
+    {
+      "from": "core-terms",
+      "to": "read-model-split",
+      "type": "defines"
     },
     {
       "from": "index",
@@ -1303,6 +1263,11 @@
       "type": "requires"
     },
     {
+      "from": "forking-deos",
+      "to": "aaa-system",
+      "type": "embeds-runtime-kernel"
+    },
+    {
       "from": "reading-paths",
       "to": "forking-deos",
       "type": "recommends"
@@ -1474,11 +1439,6 @@
     },
     {
       "from": "invariant-map",
-      "to": "threat-model",
-      "type": "supports"
-    },
-    {
-      "from": "invariant-map",
       "to": "economic-claim-levels",
       "type": "uses"
     },
@@ -1493,59 +1453,19 @@
       "type": "uses"
     },
     {
-      "from": "threat-model",
-      "to": "invariant-map",
-      "type": "uses"
-    },
-    {
-      "from": "threat-model",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
-    },
-    {
-      "from": "threat-model",
-      "to": "governance-domains",
-      "type": "uses"
-    },
-    {
-      "from": "threat-model",
-      "to": "read-model-split",
-      "type": "uses"
-    },
-    {
       "from": "what-deos-is-not",
       "to": "deos-framework",
       "type": "clarifies"
     },
     {
       "from": "what-deos-is-not",
-      "to": "threat-model",
+      "to": "invariant-map",
       "type": "relates"
     },
     {
       "from": "what-deos-is-not",
       "to": "parachain-context",
       "type": "relates"
-    },
-    {
-      "from": "minimal-fork-profile",
-      "to": "forking-deos",
-      "type": "extends"
-    },
-    {
-      "from": "minimal-fork-profile",
-      "to": "what-deos-is-not",
-      "type": "uses"
-    },
-    {
-      "from": "minimal-fork-profile",
-      "to": "invariant-map",
-      "type": "uses"
-    },
-    {
-      "from": "minimal-fork-profile",
-      "to": "parachain-context",
-      "type": "uses"
     },
     {
       "from": "economic-claim-levels",
@@ -1555,11 +1475,6 @@
     {
       "from": "economic-claim-levels",
       "to": "invariant-map",
-      "type": "supports"
-    },
-    {
-      "from": "economic-claim-levels",
-      "to": "threat-model",
       "type": "supports"
     },
     {
@@ -1574,17 +1489,7 @@
     },
     {
       "from": "reading-paths",
-      "to": "threat-model",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
       "to": "what-deos-is-not",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
-      "to": "minimal-fork-profile",
       "type": "recommends"
     },
     {
@@ -1699,11 +1604,6 @@
     },
     {
       "from": "start-here",
-      "to": "partner-evaluation-route",
-      "type": "route-understand"
-    },
-    {
-      "from": "start-here",
       "to": "scripts-layer",
       "type": "route-local-run"
     },
@@ -1711,11 +1611,6 @@
       "from": "start-here",
       "to": "validation-troubleshooting",
       "type": "route-local-run"
-    },
-    {
-      "from": "start-here",
-      "to": "minimal-fork-profile",
-      "type": "route-fork"
     },
     {
       "from": "start-here",
@@ -1764,47 +1659,7 @@
     },
     {
       "from": "deos-in-60-seconds",
-      "to": "who-deos-is-for",
-      "type": "routes"
-    },
-    {
-      "from": "who-deos-is-for",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
-    },
-    {
-      "from": "who-deos-is-for",
-      "to": "minimal-fork-profile",
-      "type": "routes"
-    },
-    {
-      "from": "who-deos-is-for",
-      "to": "forking-deos",
-      "type": "routes"
-    },
-    {
-      "from": "reading-paths",
-      "to": "who-deos-is-for",
-      "type": "recommends"
-    },
-    {
-      "from": "index",
-      "to": "who-deos-is-for",
-      "type": "starts"
-    },
-    {
-      "from": "deos-in-60-seconds",
       "to": "partner-pitch",
-      "type": "routes"
-    },
-    {
-      "from": "who-deos-is-for",
-      "to": "partner-pitch",
-      "type": "routes"
-    },
-    {
-      "from": "partner-pitch",
-      "to": "minimal-fork-profile",
       "type": "routes"
     },
     {
@@ -1828,36 +1683,6 @@
       "type": "starts"
     },
     {
-      "from": "partner-pitch",
-      "to": "deos-vs-dao-treasury",
-      "type": "explains"
-    },
-    {
-      "from": "deos-vs-dao-treasury",
-      "to": "physics-vs-politics",
-      "type": "extends"
-    },
-    {
-      "from": "deos-vs-dao-treasury",
-      "to": "governance-overview",
-      "type": "explains"
-    },
-    {
-      "from": "deos-vs-dao-treasury",
-      "to": "economic-claim-levels",
-      "type": "qualifies"
-    },
-    {
-      "from": "deos-vs-dao-treasury",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
-    },
-    {
-      "from": "reading-paths",
-      "to": "deos-vs-dao-treasury",
-      "type": "recommends"
-    },
-    {
       "from": "deos-in-60-seconds",
       "to": "executive-summary",
       "type": "routes"
@@ -1869,13 +1694,13 @@
     },
     {
       "from": "executive-summary",
-      "to": "deos-vs-dao-treasury",
-      "type": "explains"
+      "to": "physics-vs-politics",
+      "type": "extends"
     },
     {
       "from": "executive-summary",
-      "to": "minimal-fork-profile",
-      "type": "routes"
+      "to": "economic-claim-levels",
+      "type": "qualifies"
     },
     {
       "from": "executive-summary",
@@ -1890,41 +1715,6 @@
     {
       "from": "index",
       "to": "executive-summary",
-      "type": "starts"
-    },
-    {
-      "from": "executive-summary",
-      "to": "partner-evaluation-route",
-      "type": "routes"
-    },
-    {
-      "from": "partner-pitch",
-      "to": "partner-evaluation-route",
-      "type": "routes"
-    },
-    {
-      "from": "partner-evaluation-route",
-      "to": "minimal-fork-profile",
-      "type": "routes"
-    },
-    {
-      "from": "partner-evaluation-route",
-      "to": "forking-deos",
-      "type": "routes"
-    },
-    {
-      "from": "partner-evaluation-route",
-      "to": "domain-map",
-      "type": "routes"
-    },
-    {
-      "from": "reading-paths",
-      "to": "partner-evaluation-route",
-      "type": "recommends"
-    },
-    {
-      "from": "index",
-      "to": "partner-evaluation-route",
       "type": "starts"
     }
   ]

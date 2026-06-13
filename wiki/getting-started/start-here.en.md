@@ -24,9 +24,8 @@ tags:
   - validation
 related:
   - DEOS in 60 Seconds
-  - Partner Evaluation Route
   - Forking DEOS
-  - Minimal Fork Profile
+  - Forking DEOS
   - Three-Layer Validation
   - Validation Troubleshooting
 last_compiled: 2026-05-28
@@ -54,7 +53,7 @@ Read:
 1. [Partner Pitch](partner-pitch.en.md), if you need the external adoption case
 2. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 3. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
-4. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.en.md)
+4. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
 5. [TMCTOL Standard](../concepts/tmctol-standard.en.md), starting with the summary and core mechanics
 6. [Economic Claim Levels](../concepts/economic-claim-levels.en.md) if you need to distinguish mechanism claims from market promises
 
@@ -64,7 +63,7 @@ Done when you can answer:
 - Why is TMCTOL a standard on top of DEOS rather than the whole framework?
 - Which claims are deterministic protocol behavior, and which claims still depend on market and liveness conditions?
 
-Next if still interested: [Partner Evaluation Route](../usage/partner-evaluation-route.en.md).
+Next if still interested: continue with the evaluation route embedded in [Partner Pitch](partner-pitch.en.md).
 
 ## Path B - Run DEOS locally in 30 minutes
 
@@ -125,7 +124,7 @@ Use this path if you are a partner team or protocol builder asking how to turn D
 
 Start with reading:
 
-1. [Minimal Fork Profile](../usage/minimal-fork-profile.en.md)
+1. [Forking DEOS](../usage/forking-deos.en.md)
 2. [Forking DEOS](../usage/forking-deos.en.md)
 3. [TMCTOL Formulas](../math/tmctol-formulas.en.md)
 4. [Three-Layer Validation](../development/three-layer-validation.en.md)
@@ -174,8 +173,7 @@ Use the smallest meaningful gate first. You do not need every gate for every cha
 ## Related
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-- [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
 - [Forking DEOS](../usage/forking-deos.en.md)
-- [Minimal Fork Profile](../usage/minimal-fork-profile.en.md)
+- [Forking DEOS](../usage/forking-deos.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)
 - [Validation Troubleshooting](../usage/validation-troubleshooting.en.md)

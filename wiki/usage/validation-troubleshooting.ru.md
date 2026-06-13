@@ -14,6 +14,8 @@ sources:
   - ../../web-client/README.md
   - ../../scripts/README.md
   - ../../.agents/skills/wiki-sync/SKILL.md
+  - ../../.agents/skills/alignment/SKILL.md
+  - ../../scripts/validate-local.sh
 status: active
 audience: developer
 tags:
@@ -26,8 +28,8 @@ related:
   - Слой скриптов
   - Технологический стек
   - Статус разработки
-last_compiled: 2026-05-17
-confidence: 0.84
+last_compiled: 2026-06-13
+confidence: 0.86
 ---
 
 # Troubleshooting validation
@@ -40,13 +42,14 @@ confidence: 0.84
 
 ## Быстрая triage
 
-- **Wiki trust падает:** смотрите указанный file/line. Частые причины: raw HTML, dangerous links, inline DOM handlers или лишние двоеточия в scalar-строках frontmatter.
-- **Context validation падает:** проверьте `AGENTS.md`, `BACKLOG.md`, `CHANGELOG.md`, README-ссылки, покрытие docs index и сломанные markdown-ссылки.
-- **Domain DAG падает:** найдите import или ownership boundary. Обычно fix — перенести код в owner slice, а не добавить generic shared bucket.
-- **Web-client check/build падает:** отделите Svelte syntax, TypeScript contracts, generated descriptors, adapter boundaries и formatting issues.
-- **Simulator падает:** это feedback от economic truth. Сначала перепроверьте formulas, thresholds, precision и invariant assumptions.
-- **Rust tests или clippy падают:** начинайте с targeted crate fixes. Поднимайтесь до workspace checks, если diff пересекает runtime или pallet boundaries.
-- **Script smoke падает:** запустите `--help`, проверьте prerequisites, environment variables и использование `_common.sh`.
+- **Wiki trust падает**: смотрите указанный file/line. Частые причины: raw HTML, dangerous links, inline DOM handlers или лишние двоеточия в scalar-строках frontmatter.
+- **Context validation падает**: проверьте `AGENTS.md`, `BACKLOG.md`, `CHANGELOG.md`, README-ссылки, покрытие docs index и сломанные markdown-ссылки.
+- **Domain DAG падает**: найдите import или ownership boundary. Обычно fix — перенести код в owner slice, а не добавить generic shared bucket.
+- **Web-client check/build падает**: отделите Svelte syntax, TypeScript contracts, generated descriptors, adapter boundaries и formatting issues.
+- **Simulator падает**: это feedback от economic truth. Сначала перепроверьте formulas, thresholds, precision и invariant assumptions.
+- **Rust tests или clippy падают**: начинайте с targeted crate fixes. Поднимайтесь до workspace checks, если diff пересекает runtime или pallet boundaries.
+- **Script smoke падает**: запустите `--help`, проверьте prerequisites, environment variables и использование `_common.sh`.
+- **While-true gate падает**: pass не завершен. Исправьте падающий слой, обновите backlog/context/changelog, если failure вскрыл durable drift, затем запустите gate снова.
 
 ## Recovery pattern
 
@@ -55,7 +58,8 @@ confidence: 0.84
 3. Исправьте owner surface, а не место, где только проявился симптом.
 4. Перезапустите smallest failing command.
 5. Запускайте aggregate gate только после исчезновения local failure.
-6. Обновите wiki, backlog или changelog, если failure вскрыл durable contract gap.
+6. Для release/wiki/context work завершайте `./.agents/skills/alignment/scripts/while-true-gate.sh --skip-simulator`, если math/runtime behavior не менялся.
+7. Обновите wiki, backlog или changelog, если failure вскрыл durable contract gap.
 
 ## Чего избегать
 

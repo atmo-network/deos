@@ -42,6 +42,9 @@ The flagship economic standard combining minting curves with automatic liquidity
 - [AAA Specification](./aaa.specification.en.md)
   Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, execution-plan/task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
 
+- [AAA External Runtime Embedding Guide](./aaa.embedding.en.md)
+  Compact host-runtime checklist for reusing `pallet-aaa` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.
+
 - [Staking Specification](./staking.specification.en.md)
   Multi-asset share-vault staking contract: sovereign backing channels, share-based ownership, receipt direction, native-special-case rules, and the dual-inflow reward contract.
 

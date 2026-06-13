@@ -1,0 +1,120 @@
+{
+  "updated_at": "2026-06-13",
+  "mode": "0.6.2 consolidation audit",
+  "goal": "Keep the generated wiki compact by identifying weak leaflets, merge candidates, and third-page consolidation opportunities before new pages multiply.",
+  "guard": {
+    "entrypoint": "cd web-client && npm run validate:wiki",
+    "script": ".agents/skills/wiki-sync/scripts/audit-wiki-consolidation.sh",
+    "hard_failures": [
+      "Missing locale suffix on human-facing wiki markdown",
+      "Missing required page metadata",
+      "Missing source provenance or related-link block on non-index pages",
+      "Missing en/ru locale mirror for a canonical page id",
+      "No navigation item or graph inbound edge for a non-index page"
+    ],
+    "reported_candidates": [
+      "Short pages below the configured body-line threshold",
+      "Low-confidence pages below the configured confidence threshold",
+      "Graph leaves with no outbound edge"
+    ]
+  },
+  "completed_consolidations": [
+    {
+      "page_id": "who-deos-is-for",
+      "removed_paths": {
+        "en": "getting-started/who-deos-is-for.en.md",
+        "ru": "getting-started/who-deos-is-for.ru.md"
+      },
+      "merged_into": {
+        "en": "getting-started/deos-in-60-seconds.en.md",
+        "ru": "getting-started/deos-in-60-seconds.ru.md"
+      },
+      "rationale": "Short audience leaflet overlapped with DEOS in 60 Seconds, Partner Pitch, and Forking DEOS. Its audience bullets now live in the compact 60-second entry page, while aliases route audience queries to the stronger owner page."
+    },
+    {
+      "page_id": "partner-evaluation-route",
+      "removed_paths": {
+        "en": "usage/partner-evaluation-route.en.md",
+        "ru": "usage/partner-evaluation-route.ru.md"
+      },
+      "merged_into": {
+        "en": "getting-started/partner-pitch.en.md",
+        "ru": "getting-started/partner-pitch.ru.md"
+      },
+      "rationale": "Route-only page overlapped with Partner Pitch and Reading Paths. Its five-page evaluation route now lives inside Partner Pitch, while aliases route evaluation queries to that owner page."
+    },
+    {
+      "page_id": "minimal-fork-profile",
+      "removed_paths": {
+        "en": "usage/minimal-fork-profile.en.md",
+        "ru": "usage/minimal-fork-profile.ru.md"
+      },
+      "merged_into": {
+        "en": "usage/forking-deos.en.md",
+        "ru": "usage/forking-deos.ru.md"
+      },
+      "rationale": "Low-confidence graph clustering showed the fork checklist as an adjacent weak page inside the forking neighborhood. Its table now lives in Forking DEOS, while aliases route fork-profile queries to that owner page."
+    },
+    {
+      "page_id": "threat-model",
+      "removed_paths": {
+        "en": "concepts/threat-model.en.md",
+        "ru": "concepts/threat-model.ru.md"
+      },
+      "merged_into": {
+        "en": "concepts/invariant-map.en.md",
+        "ru": "concepts/invariant-map.ru.md"
+      },
+      "rationale": "Low-confidence graph clustering showed Threat Model and Invariant Map as one assurance neighborhood. Threat rows now live in the strengthened Invariant and Threat Map, while risk/threat aliases route to that owner page."
+    },
+    {
+      "page_id": "deos-vs-dao-treasury",
+      "removed_paths": {
+        "en": "comparisons/deos-vs-dao-treasury.en.md",
+        "ru": "comparisons/deos-vs-dao-treasury.ru.md"
+      },
+      "merged_into": {
+        "en": "getting-started/executive-summary.en.md",
+        "ru": "getting-started/executive-summary.ru.md"
+      },
+      "rationale": "Low-confidence graph clustering showed the DAO treasury comparison and Executive Summary as one partner-positioning neighborhood. The comparison now lives inside Executive Summary, while treasury-comparison aliases route to that owner page."
+    }
+  ],
+  "delete_or_merge_candidates": [],
+  "low_confidence_candidates": [],
+  "low_confidence_graph_clusters": [],
+  "compression_candidates": [
+    {
+      "cluster": "assurance map",
+      "pages": [
+        "economic-claim-levels",
+        "invariant-map"
+      ],
+      "pressure": "Assurance pages explain adjacent validation, claim, invariant, and failure-mode concepts.",
+      "candidate_action": "Threat Model has been merged into Invariant Map; next consider whether Economic Claim Levels should stay separate as the claim taxonomy or become a section of the assurance map."
+    },
+    {
+      "cluster": "onboarding start",
+      "pages": [
+        "deos-in-60-seconds",
+        "partner-pitch"
+      ],
+      "pressure": "Multiple first-contact pages still compete for the same newcomer attention span after the first leaflet deletion.",
+      "candidate_action": "Keep DEOS in 60 Seconds as the hook, keep Executive Summary as the partner due-diligence summary with the DAO-treasury contrast embedded, and avoid re-splitting route/comparison leaflets out of owner pages."
+    }
+  ],
+  "strengthened_pages": [
+    {
+      "page_ids": [
+        "parachain-context",
+        "tol-bucket-scenarios",
+        "validation-troubleshooting"
+      ],
+      "rationale": "Remaining low-confidence singletons were retained as useful standalone navigation pages, strengthened with additional provenance, sharper operational caveats, and confidence raised above the consolidation threshold."
+    }
+  ],
+  "deferred": [
+    "Do not delete additional pages without updating navigation, graph, aliases, localized mirrors, and all inbound links in one pass.",
+    "Do not convert useful comparison or matrix pages into prose-only summaries just to reduce page count."
+  ]
+}

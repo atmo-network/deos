@@ -16,7 +16,7 @@ The current kernel/runtime slice provides:
 - Double-buffer scheduler state (`CurrentQueue`, `NextQueue`) plus time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with starvation observability
-- Fee admission, lifecycle controls, pause/resume, and best-effort close-time execution plans
+- Fee admission, lifecycle controls, pause/resume, and admitted close-tail execution plans
 - Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, and entropy
 - Genesis provisioning of System actors through runtime configuration
 
@@ -52,7 +52,9 @@ Concrete chain policy belongs in runtime configuration, including:
 
 ## External runtime embedding checklist
 
-A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only:
+A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The full host-runtime contract lives in [`docs/aaa.embedding.en.md`](../../../docs/aaa.embedding.en.md).
+
+Minimal checklist:
 
 - Implement asset, DEX, staking, liquidity-donation, fee-router, ingress, entropy, benchmarking, and atomicity adapters for local runtime types.
 - Bind governance/system origins, owner-slot limits, queue/wakeup bounds, fee constants, task weight classes, and native asset identity.

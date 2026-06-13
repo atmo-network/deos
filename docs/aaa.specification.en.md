@@ -1,9 +1,10 @@
 # AAA Specification
 
-- **Component:** `pallet-aaa` (Account Abstraction Actors)
-- **Version:** `0.4.0`
-- **Date:** March 2026
-- **Status:** Normative
+- **Component**: `pallet-aaa` (Account Abstraction Actors)
+- **Specification line**: `0.6.2`
+- **Companion pallet crate line**: `0.6.2`
+- **Date**: March 2026
+- **Status**: Normative
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 
@@ -17,18 +18,18 @@ This specification MUST stay at or below **1080 lines** (formatting-preserving c
 
 ## 1. Stability Contract
 
-1. **Determinism:** Identical network state and block context MUST produce identical AAA behavior across all nodes.
-2. **Bounded Work:** Every runtime path (`on_initialize`, `on_idle`, extrinsics) MUST execute in O(1) or O(K) with explicit, finite `Max*` constants.
-3. **Destruction in Place:** On terminal conditions, actor state is removed atomically and balances remain on the sovereign account.
-4. **No-Refund Contract:** The protocol MUST NOT perform automatic asset refund fan-out on close; balance recovery is owner-operated.
-5. **Creation-Cost Internalization:** `create_user_aaa` MUST charge a non-refundable opening fee routed to `FeeSink` to cover long-tail maintenance of abandoned actors.
-6. **Stateless Execution Plans:** Steps are independent and read state at execution time; mutable cross-step state is forbidden. Read-only per-run execution context (e.g., `reserved_fee_remaining`, `TriggerSnapshot`) is allowed.
-7. **Predictable Failure:** Failures MUST resolve into one of: `Deferred`, `StepSkipped`, `StepFailed`, or `AaaClosed`.
-8. **Synchronous Mutations:** Slot-allocation mutations MUST be persisted in the same extrinsic execution to prevent intra-block races.
-9. **Saturating Arithmetic:** Intermediate fee/limit math MUST use saturating semantics. User-visible amount resolution MUST NOT silently overflow or underflow and MUST resolve deterministically (`Skipped` outcome or explicit failure).
-10. **Execution-Context Correctness:** Rules MUST respect FRAME hook semantics (e.g., no reliance on current block hash during execution).
-11. **Deferred-Horizon Cap:** Runtime MUST reject configurations that postpone first eligible execution beyond ten years.
-12. **Spec-Impl Sync:** Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass.
+1. **Determinism**: Identical network state and block context MUST produce identical AAA behavior across all nodes.
+2. **Bounded Work**: Every runtime path (`on_initialize`, `on_idle`, extrinsics) MUST execute in O(1) or O(K) with explicit, finite `Max*` constants.
+3. **Destruction in Place**: On terminal conditions, actor state is removed atomically and balances remain on the sovereign account.
+4. **No-Refund Contract**: The protocol MUST NOT perform automatic asset refund fan-out on close; balance recovery is owner-operated.
+5. **Creation-Cost Internalization**: `create_user_aaa` MUST charge a non-refundable opening fee routed to `FeeSink` to cover long-tail maintenance of abandoned actors.
+6. **Stateless Execution Plans**: Steps are independent and read state at execution time; mutable cross-step state is forbidden. Read-only per-run execution context (e.g., `reserved_fee_remaining`, `TriggerSnapshot`) is allowed.
+7. **Predictable Failure**: Failures MUST resolve into one of: `Deferred`, `StepSkipped`, `StepFailed`, or `AaaClosed`.
+8. **Synchronous Mutations**: Slot-allocation mutations MUST be persisted in the same extrinsic execution to prevent intra-block races.
+9. **Saturating Arithmetic**: Intermediate fee/limit math MUST use saturating semantics. User-visible amount resolution MUST NOT silently overflow or underflow and MUST resolve deterministically (`Skipped` outcome or explicit failure).
+10. **Execution-Context Correctness**: Rules MUST respect FRAME hook semantics (e.g., no reliance on current block hash during execution).
+11. **Deferred-Horizon Cap**: Runtime MUST reject configurations that postpone first eligible execution beyond ten years.
+12. **Spec-Impl Sync**: Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass.
 
 ---
 
@@ -36,9 +37,9 @@ This specification MUST stay at or below **1080 lines** (formatting-preserving c
 
 ### 2.1 Instance
 
-- **Terminology:** An **Execution Plan** is the static bounded list of steps configured on the actor. An **Execution Run (Cycle)** is one admitted execution attempt of the current plan, identified by `(aaa_id, cycle_nonce)`. All external observability and indexer correlation MUST be run-centric. Execution plans, trigger filters, and actor-to-actor asset flows are part of the on-chain behavioral surface of AAA, but they operate inside the scheduler, fee, lifecycle, and safety contract of this runtime; within existing task, adapter, and safety limits, protocol workflow changes SHOULD prefer actor-graph reconfiguration over runtime rewrites.
-- **Native-asset terminology:** `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, and fee reservation. Staking uses the generic `Stake { asset, amount }` task only; any native staking representation is a runtime-defined `AssetId` interpreted by `StakingOps`, not a separate AAA task.
-- **Stable plan shape:** `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty; creation extrinsics that omit it MUST inject the canonical `[Noop]` close plan. Actors that want no close-time side effects keep `[Noop]`; mutable actors MAY replace it through `update_on_close_execution_plan`.
+- **Terminology**: An **Execution Plan** is the static bounded list of steps configured on the actor. An **Execution Run (Cycle)** is one admitted execution attempt of the current plan, identified by `(aaa_id, cycle_nonce)`. All external observability and indexer correlation MUST be run-centric. Execution plans, trigger filters, and actor-to-actor asset flows are part of the on-chain behavioral surface of AAA, but they operate inside the scheduler, fee, lifecycle, and safety contract of this runtime; within existing task, adapter, and safety limits, protocol workflow changes SHOULD prefer actor-graph reconfiguration over runtime rewrites.
+- **Native-asset terminology**: `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, and fee reservation. Staking uses the generic `Stake { asset, amount }` task only; any native staking representation is a runtime-defined `AssetId` interpreted by `StakingOps`, not a separate AAA task.
+- **Stable plan shape**: `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty; creation extrinsics that omit it MUST inject the canonical `[Noop]` close plan. Actors that want no close-time side effects keep `[Noop]`; mutable actors MAY replace it through `update_on_close_execution_plan`.
 
 ```rust
 struct AaaInstance<AccountId, BlockNumber, Balance> {
@@ -76,21 +77,21 @@ struct FundingSnapshot<Balance, BlockNumber> {
 
 ### 2.2 Types and Mutability
 
-- **User AAA:** Subject to evaluation/execution fees and bounded by `MaxOwnerSlots` via user slot allocation.
-- **System AAA:** Governance-created, exempt from User fee model, MAY be Mutable or Immutable, MUST NOT be limited by user slot count, and MUST keep `owner_slot = 0` as a storage/event compatibility sentinel.
+- **User AAA**: Subject to evaluation/execution fees and bounded by `MaxOwnerSlots` via user slot allocation.
+- **System AAA**: Governance-created, exempt from User fee model, MAY be Mutable or Immutable, MUST NOT be limited by user slot count, and MUST keep `owner_slot = 0` as a storage/event compatibility sentinel.
 
 Mutability rules:
 
-- **Mutable:** control origin MAY pause/resume/update schedule/update execution plan/update on-close execution plan/set or increment auto-close target.
-- **Control origin:** signed owner for both actor types; governance origin is additionally valid for System AAA only.
-- **User Immutable:** owner mutation calls MUST fail with `ImmutableAaa`; a runtime MAY expose emergency governance override for User actors only.
-- **System Immutable:** no runtime extrinsic, including governance/root, may mutate, pause/resume, manually trigger, close, or reopen the actor; only runtime upgrade may alter the invariant.
+- **Mutable**: control origin MAY pause/resume/update schedule/update execution plan/update on-close execution plan/set or increment auto-close target.
+- **Control origin**: signed owner for both actor types; governance origin is additionally valid for System AAA only.
+- **User Immutable**: owner mutation calls MUST fail with `ImmutableAaa`; a runtime MAY expose emergency governance override for User actors only.
+- **System Immutable**: no runtime extrinsic, including governance/root, may mutate, pause/resume, manually trigger, close, or reopen the actor; only runtime upgrade may alter the invariant.
 - `fund_aaa` MUST remain available for both mutability classes when the asset is tracked. `manual_trigger` MUST remain available for User AAA and System Mutable AAA unless another lifecycle gate rejects it; System Immutable `manual_trigger` MUST fail with `ImmutableAaa`.
 
 ### 2.3 Sovereign Derivation and Slot Allocation
 
-1. **User AAA:** `seed = Blake2_256( SCALE(AaaPalletId, owner, owner_slot) )`, `sovereign_account = AccountId::decode(TrailingZeroInput(seed))`.
-2. **System AAA:** `seed = Blake2_256( SCALE(AaaPalletId, b"system", aaa_id) )`, `sovereign_account = AccountId::decode(TrailingZeroInput(seed))`. Slotless: MUST NOT consume bits in `OwnerSlotMask`; stored/emitted `owner_slot` MUST remain `0` as a compatibility sentinel and MUST be interpreted together with `aaa_type`.
+1. **User AAA**: `seed = Blake2_256( SCALE(AaaPalletId, owner, owner_slot) )`, `sovereign_account = AccountId::decode(TrailingZeroInput(seed))`.
+2. **System AAA**: `seed = Blake2_256( SCALE(AaaPalletId, b"system", aaa_id) )`, `sovereign_account = AccountId::decode(TrailingZeroInput(seed))`. Slotless: MUST NOT consume bits in `OwnerSlotMask`; stored/emitted `owner_slot` MUST remain `0` as a compatibility sentinel and MUST be interpreted together with `aaa_type`.
 3. User slot bit MUST be cleared on User AAA destruction.
 4. Recreating a User AAA with the same `(owner, owner_slot)` or reopening a closed System AAA with the same `aaa_id` MUST derive the same `sovereign_account`.
 5. Collision check MUST guard only active AAA ownership of the same sovereign account; this case MUST fail with `SovereignAccountCollision`.
@@ -164,9 +165,9 @@ The per-asset snapshot map `funding_snapshots` is the canonical baseline for `Pe
 
 Required behavior:
 
-1. **Execution-Plan Scanning:** On creation, `update_execution_plan(aaa_id, execution_plan)`, or `update_on_close_execution_plan(aaa_id, on_close_execution_plan)`, runtime MUST scan BOTH execution plans (`execution_plan` + `on_close_execution_plan`) and populate `funding_tracked_assets` with every `AssetId` involved in a step that uses `PercentageOfLastFunding`. Any execution-plan update MUST fully recompute tracked assets and prune `funding_snapshots` entries for assets no longer tracked.
-2. **Snapshot Update via `fund_aaa`:** `fund_aaa` is permissionless for any signed caller, transfers `amount > 0` from caller to the actor sovereign account, and MUST update `funding_snapshots[asset]` for BOTH User and System AAA only when `asset` is in `funding_tracked_assets`; untracked assets MUST fail with `SnapshotUnavailable`.
-3. **Snapshot Update via `notify_address_event`:** Every `notify_address_event(aaa_id, asset, amount, source)` with `amount > 0` MUST update `funding_snapshots[asset]`, BUT ONLY if the actor is System AAA AND `asset` is in `funding_tracked_assets`.
+1. **Execution-Plan Scanning**: On creation, `update_execution_plan(aaa_id, execution_plan)`, or `update_on_close_execution_plan(aaa_id, on_close_execution_plan)`, runtime MUST scan BOTH execution plans (`execution_plan` + `on_close_execution_plan`) and populate `funding_tracked_assets` with every `AssetId` involved in a step that uses `PercentageOfLastFunding`. Any execution-plan update MUST fully recompute tracked assets and prune `funding_snapshots` entries for assets no longer tracked.
+2. **Snapshot Update via `fund_aaa`**: `fund_aaa` is permissionless for any signed caller, transfers `amount > 0` from caller to the actor sovereign account, and MUST update `funding_snapshots[asset]` for BOTH User and System AAA only when `asset` is in `funding_tracked_assets`; untracked assets MUST fail with `SnapshotUnavailable`.
+3. **Snapshot Update via `notify_address_event`**: Every `notify_address_event(aaa_id, asset, amount, source)` with `amount > 0` MUST update `funding_snapshots[asset]`, BUT ONLY if the actor is System AAA AND `asset` is in `funding_tracked_assets`.
 4. Snapshot update MUST be independent of funding caller identity after the tracked-asset gate passes.
 5. Funding events that update tracked snapshots MUST remain valid regardless of pause state; they MUST NOT imply automatic pause/resume transitions.
 6. `FundingUnavailable` is a deterministic non-terminal execution outcome for both User and System AAA; it covers missing/zero tracked snapshots and tracked-balance overspend, while untracked assets remain `SnapshotUnavailable` and stale tracked snapshots remain valid until overwritten.
@@ -187,7 +188,7 @@ Required behavior:
 
 ## 3. Adapters
 
-All operations MUST go through typed adapters.
+All operations MUST go through typed adapters. The external host-runtime embedding checklist and adapter failure atomicity matrix are maintained in [AAA External Runtime Embedding Guide](./aaa.embedding.en.md) as the implementation-facing companion to this normative adapter contract.
 
 ### 3.1 AssetOps
 
@@ -203,7 +204,7 @@ trait AssetOps<AccountId, AssetId, Balance> {
 }
 ```
 
-**Balance semantics:** `balance()` MUST return the adapter-visible immediately transferable balance for the asset before any AAA-local reservation is applied. For `FeeNativeAsset` this is runtime policy (typically `free_balance` after adapter-level locks/reserves/holds); for assets without hold semantics it may equal total balance. AAA then derives `spendable_fee_native` by subtracting transient `reserved_fee_remaining` from `FeeNativeAsset` `balance()` only; non-`FeeNativeAsset` balances are passed through unchanged for spendability checks.
+**Balance semantics**: `balance()` MUST return the adapter-visible immediately transferable balance for the asset before any AAA-local reservation is applied. For `FeeNativeAsset` this is runtime policy (typically `free_balance` after adapter-level locks/reserves/holds); for assets without hold semantics it may equal total balance. AAA then derives `spendable_fee_native` by subtracting transient `reserved_fee_remaining` from `FeeNativeAsset` `balance()` only; non-`FeeNativeAsset` balances are passed through unchanged for spendability checks.
 
 `Mint` MUST be rejected for User AAA in both the run plan and close plan. Validation MUST occur at every plan-admission path (`create_*`, `update_execution_plan`, `update_on_close_execution_plan`, and any default close-plan injection); if a User plan contains `Mint`, the call MUST fail with `MintNotAllowedForUserAaa`.
 `can_deposit`/`minimum_balance` are REQUIRED for ED-safe split-transfer normalization (Section 6.2).
@@ -444,8 +445,8 @@ enum StepErrorPolicy {
 
 Atomicity:
 
-- **Task-level:** atomic.
-- **Execution-plan-level:** non-atomic (previous successful steps persist).
+- **Task-level**: atomic.
+- **Execution-plan-level**: non-atomic (previous successful steps persist).
 
 Task atomicity rules:
 
@@ -681,10 +682,10 @@ The AAA runtime is a **deterministic event-driven actor runtime**. Actors are ne
 
 ### 8.1 Architecture: Two-Layer Scheduler
 
-1. **Active Run Queue (`CurrentQueue` + `NextQueue`):** Each `on_idle` pass seeds one bounded execution queue from `CurrentQueue` plus staged `NextQueue`; deferred carry-over is persisted back into queue storage at block end.
-2. **Queue Continuation:** Cadence `every_blocks <= 1` re-admits actors via run-queue continuation (`NextQueue`) instead of timer indexing.
-3. **Temporal Wakeup Layer (`WakeupIndex` + `MinWakeupBlock`):** Governs deferred eligibility and overdue wakeup admission for timer-delayed actors (`every_blocks > 1`) through canonical block-bucketed wakeup storage bounded by `MaxWakeupBucketSize`, plus an actor-keyed live wakeup pointer, with closed/missing actors dropped lazily when their due bucket is drained.
-4. **Dedup Epochs:** `QueueEpoch` increments each block. `ActorQueueEpoch` tracks the last block an actor was queued, preventing multi-enqueue amplification within the same block.
+1. **Active Run Queue (`CurrentQueue` + `NextQueue`)**: Each `on_idle` pass seeds one bounded execution queue from `CurrentQueue` plus staged `NextQueue`; deferred carry-over is persisted back into queue storage at block end.
+2. **Queue Continuation**: Cadence `every_blocks <= 1` re-admits actors via run-queue continuation (`NextQueue`) instead of timer indexing.
+3. **Temporal Wakeup Layer (`WakeupIndex` + `MinWakeupBlock`)**: Governs deferred eligibility and overdue wakeup admission for timer-delayed actors (`every_blocks > 1`) through canonical block-bucketed wakeup storage bounded by `MaxWakeupBucketSize`, plus an actor-keyed live wakeup pointer, with closed/missing actors dropped lazily when their due bucket is drained.
+4. **Dedup Epochs**: `QueueEpoch` increments each block. `ActorQueueEpoch` tracks the last block an actor was queued, preventing multi-enqueue amplification within the same block.
 
 ### 8.2 Execution Flow
 
@@ -845,9 +846,9 @@ Indexer-facing correlation key is `(aaa_id, cycle_nonce)`.
 
 Event ordering:
 
-1. **Regular completion:** `CycleStarted` → step-level events (`StepSkipped` / `StepFailed` / task events) → `CycleSummary`.
-2. **Funding depletion:** `CycleStarted` → `StepSkipped { reason: FundingUnavailable }` → `CycleSummary`.
-3. **Terminal close with admitted close tail:** zero or more close-tail task events / `OnCloseStepFailed` events → `OnCloseExecutionPlanSummary` → `AaaClosed`.
+1. **Regular completion**: `CycleStarted` → step-level events (`StepSkipped` / `StepFailed` / task events) → `CycleSummary`.
+2. **Funding depletion**: `CycleStarted` → `StepSkipped { reason: FundingUnavailable }` → `CycleSummary`.
+3. **Terminal close with admitted close tail**: zero or more close-tail task events / `OnCloseStepFailed` events → `OnCloseExecutionPlanSummary` → `AaaClosed`.
 
 Frontends SHOULD derive per-cycle step-status bitmask from `StepSkipped`/`StepFailed` events. `CycleSummary` is authoritative when present.
 

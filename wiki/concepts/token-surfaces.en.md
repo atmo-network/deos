@@ -70,9 +70,9 @@ LP tokens represent positions in AMM pools. Some LP tokens can become protocol a
 
 The current wiki intentionally separates three questions:
 
-- **Emission math:** owned by [Token Minting Curve](../overview/token-minting-curve.en.md) and [TMCTOL Formulas](../math/tmctol-formulas.en.md).
-- **Governance power:** owned by [Governance Domains](governance-domains.en.md).
-- **Receipt value:** owned by [Staking Pools](staking-pools.en.md) and liquidity-position accounting.
+- **Emission math**: owned by [Token Minting Curve](../overview/token-minting-curve.en.md) and [TMCTOL Formulas](../math/tmctol-formulas.en.md).
+- **Governance power**: owned by [Governance Domains](governance-domains.en.md).
+- **Receipt value**: owned by [Staking Pools](staking-pools.en.md) and liquidity-position accounting.
 
 Do not infer a full monetary policy for every token from governance role alone. For example, `$BLDR` can have tactical governance importance without the wiki pretending that downstream demand, launch allocation, or ecosystem product-market fit is already solved inside the framework.
 

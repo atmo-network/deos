@@ -23,7 +23,7 @@ tags:
 related:
   - Экономические пороги
   - Карта инвариантов
-  - Threat Model
+  - Карта инвариантов и угроз
   - Трехуровневая валидация
 last_compiled: 2026-05-17
 confidence: 0.86
@@ -55,5 +55,5 @@ confidence: 0.86
 
 - [Экономические пороги](economic-thresholds.ru.md)
 - [Карта инвариантов](invariant-map.ru.md)
-- [Threat Model](threat-model.ru.md)
+- [Карта инвариантов и угроз](invariant-map.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)

@@ -55,6 +55,10 @@ Most token projects split economics, governance, liquidity, automation, and clie
 
 That does not make markets predictable. It makes protocol reactions legible, bounded, and forkable.
 
+## Who should care
+
+DEOS is mainly for ecosystem founders, Substrate/Polkadot builders, tokenomics designers, protocol operators, and client/indexer builders who need a forkable foundation layer. It is not a finished retail app, a guaranteed demand engine, or a universal DAO platform.
+
 ## What to read next
 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)

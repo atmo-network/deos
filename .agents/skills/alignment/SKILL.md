@@ -74,7 +74,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover architecture drift, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, dependency posture, and the while-true completion gate.
+Current audit families cover architecture drift, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, and the while-true completion gate.
 
 ### Intensive Evolution Rule
 

@@ -23,7 +23,6 @@ related:
   - Начните здесь
   - DEOS за 60 секунд
   - Executive Summary
-  - Маршрут оценки для партнера
   - Карта доменов
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
@@ -49,7 +48,7 @@ confidence: 0.93
 0. [Начните здесь](start-here.ru.md)
 1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
 2. [Executive Summary](executive-summary.ru.md)
-3. [Для кого DEOS](who-deos-is-for.ru.md)
+3. [Питч для партнера](partner-pitch.ru.md)
 4. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 5. [Карта доменов](../concepts/domain-map.ru.md)
 6. [Базовые термины](../glossary/core-terms.ru.md)
@@ -59,7 +58,7 @@ confidence: 0.93
 
 Этот путь дает словарь проекта до того, как появляются имена pallet-ов, runtime-файлы или продуктовые UI-термины.
 
-Если вы оцениваете DEOS как партнер, используйте [Маршрут оценки для партнера](../usage/partner-evaluation-route.ru.md), а не читайте весь граф подряд.
+Если вы оцениваете DEOS как партнер, используйте маршрут оценки внутри [Partner Pitch](partner-pitch.ru.md), а не читайте весь граф подряд.
 
 ## Выберите правильный домен
 
@@ -98,7 +97,6 @@ confidence: 0.93
 - [Начните здесь](start-here.ru.md)
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
 - [Executive Summary](executive-summary.ru.md)
-- [Маршрут оценки для партнера](../usage/partner-evaluation-route.ru.md)
 - [Карта доменов](../concepts/domain-map.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)

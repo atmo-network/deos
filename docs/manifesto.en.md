@@ -20,9 +20,9 @@ The problem is not people. The problem is architecture where system survival dep
 
 We separate DAO architecture into three layers with distinct responsibilities:
 
-- **L0:** `Physics` — invariants and risk boundaries.
-- **L1:** `Strategy` — growth directions and capital allocation.
-- **L2:** `Tactics` — execution through teams, agents, and DAO loops.
+- **L0**: `Physics` — invariants and risk boundaries.
+- **L1**: `Strategy` — growth directions and capital allocation.
+- **L2**: `Tactics` — execution through teams, agents, and DAO loops.
 
 **Physics protects Strategy from strategic error. Strategy sets direction and funds Tactics from the primary protocol liquidity source defined by Physics. Tactics execute.**
 

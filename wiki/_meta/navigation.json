@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-28",
+  "generated_at": "2026-06-13",
   "audience": "newcomer",
   "default_locale": "en",
   "available_locales": ["en", "ru"],
@@ -48,22 +48,6 @@
           "summary": {
             "en": "The external-facing hook before the full architecture graph.",
             "ru": "Внешний крючок перед полным architecture graph."
-          }
-        },
-        {
-          "id": "who-deos-is-for",
-          "title": {
-            "en": "Who DEOS Is For",
-            "ru": "Для кого DEOS"
-          },
-          "path": {
-            "en": "getting-started/who-deos-is-for.en.md",
-            "ru": "getting-started/who-deos-is-for.ru.md"
-          },
-          "page_type": "getting-started",
-          "summary": {
-            "en": "Audience map for ecosystem founders, Substrate builders, tokenomics designers, protocol operators, and client/indexer builders.",
-            "ru": "Карта аудиторий для основателей экосистем, Substrate builders, дизайнеров токеномики, операторов протокола и client/indexer builders."
           }
         },
         {
@@ -398,8 +382,8 @@
         {
           "id": "invariant-map",
           "title": {
-            "en": "Invariant Map",
-            "ru": "Карта инвариантов"
+            "en": "Invariant and Threat Map",
+            "ru": "Карта инвариантов и угроз"
           },
           "path": {
             "en": "concepts/invariant-map.en.md",
@@ -407,24 +391,8 @@
           },
           "page_type": "concept",
           "summary": {
-            "en": "Core invariants mapped to owner, validation, governance mutability, and failure mode.",
-            "ru": "Ключевые инварианты с owner, validation, governance-mutability и failure mode."
-          }
-        },
-        {
-          "id": "threat-model",
-          "title": {
-            "en": "Threat Model",
-            "ru": "Threat Model"
-          },
-          "path": {
-            "en": "concepts/threat-model.en.md",
-            "ru": "concepts/threat-model.ru.md"
-          },
-          "page_type": "concept",
-          "summary": {
-            "en": "Central risk map for governance drains, router bypass, bucket misuse, indexer confusion, collator trust, actor liveness, and provenance lies.",
-            "ru": "Центральная карта рисков для governance drain, router bypass, bucket misuse, indexer confusion, collator trust, actor liveness и provenance lies."
+            "en": "Core invariants and threats mapped to owner surfaces, validation routes, governance mutability, and failure modes.",
+            "ru": "Ключевые инварианты и угрозы с owner surfaces, validation routes, governance-mutability и failure modes."
           }
         },
         {
@@ -480,8 +448,8 @@
           },
           "page_type": "overview",
           "summary": {
-            "en": "The system-level view of AAA as a bounded actor runtime with portable generic staking tasks and runtime-adapter boundaries for chain-specific staking policy.",
-            "ru": "Системный взгляд на AAA как на bounded actor runtime с portable generic staking tasks и runtime-adapter границами для chain-specific staking policy."
+            "en": "The system-level view of AAA as a bounded actor runtime with host-runtime adapter boundaries, task-scoped atomicity, and portable execution-plan patterns.",
+            "ru": "Системный взгляд на AAA как на bounded actor runtime с границами host-runtime adapters, task-scoped atomicity и portable execution-plan patterns."
           }
         },
         {
@@ -720,22 +688,6 @@
       },
       "items": [
         {
-          "id": "partner-evaluation-route",
-          "title": {
-            "en": "Partner Evaluation Route",
-            "ru": "Маршрут оценки для партнера"
-          },
-          "path": {
-            "en": "usage/partner-evaluation-route.en.md",
-            "ru": "usage/partner-evaluation-route.ru.md"
-          },
-          "page_type": "usage",
-          "summary": {
-            "en": "Five-page route for partner teams deciding whether to fork DEOS.",
-            "ru": "Маршрут из пяти страниц для партнерских команд, которые решают, стоит ли форкать DEOS."
-          }
-        },
-        {
           "id": "scripts-layer",
           "title": {
             "en": "Scripts Layer",
@@ -813,22 +765,6 @@
           "summary": {
             "en": "How to read navigation, state, graph, aliases, and locale metadata for the generated wiki.",
             "ru": "Как читать navigation, state, graph, aliases и locale metadata generated wiki."
-          }
-        },
-        {
-          "id": "minimal-fork-profile",
-          "title": {
-            "en": "Minimal Fork Profile",
-            "ru": "Минимальный профиль форка"
-          },
-          "path": {
-            "en": "usage/minimal-fork-profile.en.md",
-            "ru": "usage/minimal-fork-profile.ru.md"
-          },
-          "page_type": "usage",
-          "summary": {
-            "en": "Minimum choices a downstream fork must make before DEOS becomes a concrete ecosystem.",
-            "ru": "Минимальные решения downstream fork перед превращением DEOS в concrete ecosystem."
           }
         }
       ]
@@ -920,31 +856,6 @@
           "summary": {
             "en": "How to contribute to the DEOS framework, understand the philosophy, and navigate validation gates.",
             "ru": "Как вносить вклад в DEOS, понимать философию проекта и проходить нужные этапы валидации."
-          }
-        }
-      ]
-    },
-    {
-      "id": "comparisons",
-      "title": {
-        "en": "Comparisons",
-        "ru": "Сравнения"
-      },
-      "items": [
-        {
-          "id": "deos-vs-dao-treasury",
-          "title": {
-            "en": "DEOS vs DAO Treasury",
-            "ru": "DEOS vs DAO Treasury"
-          },
-          "path": {
-            "en": "comparisons/deos-vs-dao-treasury.en.md",
-            "ru": "comparisons/deos-vs-dao-treasury.ru.md"
-          },
-          "page_type": "comparison",
-          "summary": {
-            "en": "Why DEOS treats treasury behavior as deterministic circuits instead of recurring discretionary DAO operations.",
-            "ru": "Почему DEOS рассматривает treasury behavior как детерминированные контуры, а не повторяющиеся discretionary DAO operations."
           }
         }
       ]

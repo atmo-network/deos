@@ -25,9 +25,8 @@ tags:
   - validation
 related:
   - DEOS за 60 секунд
-  - Маршрут оценки для партнера
   - Форк DEOS
-  - Минимальный профиль форка
+  - Форк DEOS
   - Трехуровневая валидация
   - Troubleshooting проверки
 last_compiled: 2026-05-28
@@ -55,7 +54,7 @@ confidence: 0.9
 1. [Partner Pitch](partner-pitch.ru.md), если нужен внешний adoption case
 2. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
 3. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
-4. [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.ru.md)
+4. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
 5. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), начиная с краткого описания и базовой механики
 6. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md), если нужно отличить claims о механизме от рыночных обещаний
 
@@ -65,7 +64,7 @@ confidence: 0.9
 - Почему TMCTOL — это стандарт поверх DEOS, а не весь фреймворк?
 - Какие claims являются детерминированным поведением протокола, а какие зависят от рынка и liveness-условий?
 
-Дальше, если интересно: [Маршрут оценки для партнера](../usage/partner-evaluation-route.ru.md).
+Дальше, если интересно, используйте маршрут оценки внутри [Partner Pitch](partner-pitch.ru.md).
 
 ## Путь B - поднять DEOS локально за 30 минут
 
@@ -126,7 +125,7 @@ npm --prefix web-client run dev
 
 Сначала прочитайте:
 
-1. [Минимальный профиль форка](../usage/minimal-fork-profile.ru.md)
+1. [Форк DEOS](../usage/forking-deos.ru.md)
 2. [Форк DEOS](../usage/forking-deos.ru.md)
 3. [Формулы TMCTOL](../math/tmctol-formulas.ru.md)
 4. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
@@ -175,8 +174,7 @@ node simulator/tests.js
 ## Связанные страницы
 
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-- [Маршрут оценки для партнера](../usage/partner-evaluation-route.ru.md)
 - [Форк DEOS](../usage/forking-deos.ru.md)
-- [Минимальный профиль форка](../usage/minimal-fork-profile.ru.md)
+- [Форк DEOS](../usage/forking-deos.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)
 - [Troubleshooting проверки](../usage/validation-troubleshooting.ru.md)

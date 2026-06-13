@@ -53,8 +53,8 @@ This is an expanding-supply threshold, not the same as a burn-time compression c
 
 A compression claim must name two things:
 
-1. **Axis:** burn-time or expanding-supply.
-2. **Metric:** relative spread `C/F` or absolute gap `C - F`.
+1. **Axis**: burn-time or expanding-supply.
+2. **Metric**: relative spread `C/F` or absolute gap `C - F`.
 
 Where:
 

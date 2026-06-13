@@ -1,7 +1,7 @@
 ---
 page_type: getting-started
 title: Executive Summary
-summary: A one-page external summary of what DEOS is, why it matters, why Polkadot/Substrate is the right substrate, what is shipped, what is not shipped, and how adoption starts.
+summary: A one-page external summary of what DEOS is, why it matters, how it differs from discretionary DAO treasury management, why Polkadot/Substrate is the right substrate, what is shipped, what is not shipped, and how adoption starts.
 locale: en
 canonical_page_id: executive-summary
 translation_status: source
@@ -13,6 +13,9 @@ sources:
   - ../../AGENTS.md
   - ../../BACKLOG.md
   - ../../CHANGELOG.md
+  - ../../docs/manifesto.en.md
+  - ../../docs/governance.specification.en.md
+  - ../../docs/tmctol.specification.en.md
 status: active
 audience: partner
 tags:
@@ -23,10 +26,12 @@ tags:
 related:
   - DEOS in 60 Seconds
   - Partner Pitch
-  - DEOS vs DAO Treasury
-  - Minimal Fork Profile
-last_compiled: 2026-05-17
-confidence: 0.84
+  - Forking DEOS
+  - Physics vs Politics
+  - What DEOS Is Not
+  - Economic Claim Levels
+last_compiled: 2026-06-13
+confidence: 0.86
 ---
 
 # Executive Summary
@@ -42,6 +47,19 @@ TMCTOL is the first economic standard running on DEOS. It combines a mint-only t
 Many token economies rely on a future committee to manage liquidity, treasury funds, emissions, incentives, and upgrades well. DEOS narrows that trust surface by moving repeated economic behavior into explicit runtime mechanisms.
 
 The result is not a price promise. It is a clearer contract: this part is protocol-managed, this part is governed, this part is indexed/materialized, and this part remains product and market risk.
+
+## DAO treasury vs deterministic circuits
+
+A conventional DAO treasury is often a political control surface first: voters, delegates, multisigs, committees, or off-chain operators decide when to spend, buy back, support liquidity, compensate contributors, or change incentives.
+
+DEOS treats the core treasury loop as economic infrastructure first. Governance still exists for launch parameters, domain ownership, protected upgrades, treasury policy boundaries, and emergency choices, but it is not expected to manually reproduce the core economic loop every week.
+
+The practical contrast is simple:
+
+- DAO treasury default: “the DAO will manage funds responsibly.”
+- DEOS default: “this mechanism executes under these explicit conditions.”
+
+DEOS is not anti-governance. It is anti-mystery-governance.
 
 ## Why Polkadot/Substrate
 
@@ -65,11 +83,13 @@ DEOS needs a runtime-first environment where economic rules, assets, automation,
 
 ## Adoption path
 
-A partner team starts by reading the external entry pages, choosing a minimal fork profile, validating whether TMCTOL fits its ecosystem, and defining product-specific dApps and user-facing philosophy downstream.
+A partner team starts by reading the external entry pages, reviewing the fork profile inside [Forking DEOS](../usage/forking-deos.en.md), validating whether TMCTOL fits its ecosystem, and defining product-specific dApps and user-facing philosophy downstream.
 
 ## Next pages
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Partner Pitch](partner-pitch.en.md)
-- [DEOS vs DAO Treasury](../comparisons/deos-vs-dao-treasury.en.md)
-- [Minimal Fork Profile](../usage/minimal-fork-profile.en.md)
+- [Forking DEOS](../usage/forking-deos.en.md)
+- [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
+- [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
+- [Economic Claim Levels](../concepts/economic-claim-levels.en.md)

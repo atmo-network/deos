@@ -16,10 +16,10 @@ The agent MUST treat `/docs` as the authoritative source of truth and `/wiki` as
 
 The generated `/wiki` MUST serve two audiences simultaneously:
 
-1. Agents, which need compact, structured, provenance-aware semantic access
+1. Agents, which need compact, structured, provenance-aware semantic access and graph-shaped navigation for query-time reasoning
 2. Human newcomers, which need clear onboarding-oriented explanations, stable navigation, and low-friction discovery of core concepts
 
-The agent MUST optimize wiki output for both machine readability and frontend rendering quality.
+The agent MUST optimize wiki output for both machine readability and frontend rendering quality. Token savings are a useful side effect of a compact semantic projection, not the primary objective; the primary objective is truthful, navigable, provenance-aware project exploration.
 
 ## Core Model
 
@@ -63,7 +63,7 @@ The agent MUST treat wiki synchronization as semantic compilation rather than me
 
 The objective is not to duplicate `/docs`.
 
-The objective is to maintain a compact, truthful, navigable, provenance-aware, cross-linked knowledge surface aligned with `/docs` and suitable for both agent use and newcomer-facing UI rendering.
+The objective is to maintain a compact, truthful, navigable, provenance-aware, cross-linked knowledge surface aligned with `/docs` and suitable for both agent use and newcomer-facing UI rendering. A page is valid only when it improves human onboarding, frontend reference navigation, or agent traversal of the project knowledge graph.
 
 ## Goals
 
@@ -469,7 +469,7 @@ If the repository or workflow supports confidence metadata, the agent SHOULD mai
 
 Confidence SHOULD reflect evidence strength, freshness, specificity, and contradiction pressure.
 
-Confidence MUST NOT be presented as ground truth. It is an internal epistemic signal.
+Confidence MUST NOT be presented as ground truth. It is an internal epistemic signal. Low confidence should be interpreted both page-locally and graph-locally: connected low-confidence pages indicate weak knowledge regions that should be improved, merged into stronger owners, or removed.
 
 Suggested range:
 
@@ -602,6 +602,14 @@ After compile, the agent SHOULD validate the wiki for:
 - Over-deep navigation chains
 - Inconsistent category placement
 - Leaf pages with no discoverable inbound path from the relevant `index.<locale>.md`
+
+Repository-local guard:
+
+```bash
+./.agents/skills/wiki-sync/scripts/audit-wiki-consolidation.sh
+```
+
+This guard fails on missing page role metadata, provenance, related-link blocks, locale mirrors, and navigation/graph reachability. It reports short pages, low-confidence pages, and graph leaves as consolidation candidates instead of blocking useful writing by heuristic.
 
 ### Phase 5: Consolidate
 

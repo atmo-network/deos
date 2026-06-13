@@ -224,19 +224,16 @@ run_behavior_validation() {
 run_wiki_trust_validation() {
     phase_banner "Step 6: Wiki trust"
     if ! should_run_wiki_trust; then
-        log_warning "Skipping wiki trust validation because no wiki markdown files changed"
+        log_warning "Skipping wiki validation because no wiki markdown files changed"
         return 0
     fi
-    local wiki_validator="$PROJECT_ROOT/.agents/skills/wiki-sync/scripts/validate-wiki-trust.sh"
-    if [[ ! -x "$wiki_validator" ]]; then
-        log_warning "Wiki trust validator not found or not executable, skipping"
-        return 0
-    fi
-    if ! "$wiki_validator"; then
-        log_error "Wiki trust validation failed"
+    require_directory "$PROJECT_ROOT/web-client" "Web-client workspace"
+    require_commands npm
+    if ! run_shell_step "web-client wiki validation" "" "cd \"$PROJECT_ROOT/web-client\" && npm run validate:wiki"; then
+        log_error "Wiki validation failed"
         exit 1
     fi
-    log_success "Wiki trust validation passed"
+    log_success "Wiki validation passed"
 }
 
 run_release_line_validation() {

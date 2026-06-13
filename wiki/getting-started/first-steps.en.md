@@ -22,7 +22,6 @@ related:
   - Start Here
   - DEOS in 60 Seconds
   - Executive Summary
-  - Partner Evaluation Route
   - Domain Map
   - DEOS Framework Overview
   - TMCTOL Standard
@@ -48,7 +47,7 @@ A good first pass is: use [Start Here](start-here.en.md) to choose the 10-minute
 0. [Start Here](start-here.en.md)
 1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 2. [Executive Summary](executive-summary.en.md)
-3. [Who DEOS Is For](who-deos-is-for.en.md)
+3. [Partner Pitch](partner-pitch.en.md)
 4. [DEOS Framework Overview](../overview/deos-framework.en.md)
 5. [Domain Map](../concepts/domain-map.en.md)
 6. [Core Terms](../glossary/core-terms.en.md)
@@ -58,7 +57,7 @@ A good first pass is: use [Start Here](start-here.en.md) to choose the 10-minute
 
 This path gives you the project vocabulary before you encounter pallet names, runtime files, or product-specific UI terms.
 
-If you are evaluating DEOS as a partner, use [Partner Evaluation Route](../usage/partner-evaluation-route.en.md) instead of reading the whole graph in order.
+If you are evaluating DEOS as a partner, use the evaluation route inside [Partner Pitch](partner-pitch.en.md) instead of reading the whole graph in order.
 
 ## Pick the right domain
 
@@ -97,7 +96,6 @@ Use the smallest meaningful validation layer first:
 - [Start Here](start-here.en.md)
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Executive Summary](executive-summary.en.md)
-- [Partner Evaluation Route](../usage/partner-evaluation-route.en.md)
 - [Domain Map](../concepts/domain-map.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)

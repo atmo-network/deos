@@ -26,15 +26,10 @@
 > - Domain-scoped `primary + protection` governance for the current launch policy
 > - Reserve-aware liquidity-actor slippage frozen to execution-plan build time for the current launch line
 > - Same-asset auto-compound reward settlement
+> - Unified 20/80 transaction-fee and AAA-fee routing to collator / Fee Sink when an author exists, with 100% to Fee Sink when no author is resolved
 > - Polkadot SDK `2603` / node `1.22.3` runtime line
 
 ## Open Product / Client Work
-
-### Onboarding spine
-
-- [~] `Create the 80/20 newcomer onboarding spine`: promote one Start Here route above the cognitive-infrastructure graph so external readers can choose between understanding DEOS, running it locally, or forking/changing the economy safely without reading the full maintainer/agent context first
-  - [ ] `Fork-change follow-up`: after first external use, tighten the change-intent table with any missing fork surfaces discovered by partner feedback
-  - [ ] `Local-run follow-up`: after the next clean-room local setup, verify the 30-minute path against a fresh machine and record any prerequisite gaps
 
 ### Wallet and portfolio boundary
 
@@ -51,8 +46,7 @@
 > Phase 1 uses trusted, permissioned collators and only pool-level reward flows.
 > Phase 2 introduces permissionless collators, LP nomination, and claimable LP-staking nomination rewards.
 
-- [~] `Implement the unified 20/80 collection rule`: transaction fees and AAA fees already use the split; block reward routing remains gated on the explicit block reward source/amount contract
-  - [ ] `Block reward routing`: define the reward source/amount contract, then route 20% to collator and 80% to Fee Sink
+- [~] `Implement the unified 20/80 collection rule`: transaction fees and AAA fees already use the split; block reward routing remains gated until an explicit block reward issuance/source policy exists
 - [~] `Prepare Phase 2 reward routing without activating it at launch`: keep Phase 2 as a runtime-upgrade boundary, not a launch-time parameter
   - [~] `Claimable LP nomination flow`: activate explicit LP-nomination reward-weight provider only when permissionless collators ship
   - [ ] `LP nomination activation`: expose LP-point nomination to specific collators only when permissionless collator selection is enabled
@@ -67,6 +61,12 @@
 - [ ] `Only when a new payload family or failure-state slice ships, broaden per-kind execution observability beyond the current bounded detail/events`
 - [ ] `Only when runtime-signed submission authority expands beyond advisory plus tactical treasury invoices, add the next browser composition surface`
 - [ ] `Only when a materialized/indexed governance backend is selected, connect the reserved archive boundary to live archive search and ballot timelines`
+
+### Block reward source policy
+
+> Only actionable when the launch economy selects a concrete block subsidy / issuance source instead of assuming one exists.
+
+- [ ] `Only after a concrete block reward source/amount policy exists, route block rewards through the unified 20/80 collection rule`: route 20% to author/collator and 80% to Fee Sink, with explicit tests for unresolved authors and no hidden inflation source.
 
 ### Native staking LP donation route policy
 

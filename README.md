@@ -18,7 +18,7 @@ _For the wiki-native external entry point, start with the [Partner Pitch](./wiki
 
 ## Choose Your Path
 
-- **I am evaluating DEOS as a partner** — start with the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md), then use the [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md).
+- **I am evaluating DEOS as a partner** — start with the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md), which now includes the short evaluation route.
 - **I want to understand DEOS in 10 minutes** — follow [Start Here: Understand DEOS](./wiki/getting-started/start-here.en.md#path-a-understand-deos-in-10-minutes).
 - **I want to run it locally** — follow [Start Here: Run DEOS locally](./wiki/getting-started/start-here.en.md#path-b-run-deos-locally-in-30-minutes).
 - **I want to fork and change the economy** — follow [Start Here: Fork and change the economy safely](./wiki/getting-started/start-here.en.md#path-c-fork-and-change-the-economy-safely).
@@ -67,7 +67,7 @@ The `pallet-aaa` (Account Abstraction Actors) scheduler is DEOS's deterministic 
 - [`/web-client`](./web-client/) — The SvelteKit browser reference UI and transaction flows.
 - [`/scripts`](./scripts/) — Operator and developer automation.
 - [`/simulator`](./simulator/) — The mathematical proving ground for validating core tokenomics.
-- [`/wiki`](./wiki/index.en.md) — Generated documentation optimized for frontend and newcomer onboarding; start with [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) or the [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md).
+- [`/wiki`](./wiki/index.en.md) — Generated documentation optimized for frontend and newcomer onboarding; start with [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) or the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md).
 
 ---
 
@@ -109,7 +109,7 @@ Use the smallest meaningful gate for the touched surface. For fast repository-lo
 ./scripts/validate-local.sh --audit-only
 ```
 
-That fast stack checks script entrypoints, template readiness, numeric parsing, simulator determinism and suite-mirror consistency, broad suppressions, backlog shape, web-client Domain DAG boundaries, and trusted wiki markdown. Add `--dependency-audit` when you intentionally want network-backed npm posture checks.
+That fast stack checks script entrypoints, template readiness, numeric parsing, simulator determinism and suite-mirror consistency, broad suppressions, backlog shape, web-client Domain DAG boundaries, trusted wiki markdown, and wiki consolidation drift. Add `--dependency-audit` when you intentionally want network-backed npm posture checks.
 
 ---
 
@@ -117,7 +117,7 @@ That fast stack checks script entrypoints, template readiness, numeric parsing, 
 
 **Entrypoints**
 
-- [Partner Pitch](./wiki/getting-started/partner-pitch.en.md) · [Start Here](./wiki/getting-started/start-here.en.md) · [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) · [Partner Evaluation Route](./wiki/usage/partner-evaluation-route.en.md) · [Generated Wiki](./wiki/index.en.md) · [Complete Docs Index](./docs/README.md) · [Agent Protocols](./AGENTS.md)
+- [Partner Pitch](./wiki/getting-started/partner-pitch.en.md) · [Start Here](./wiki/getting-started/start-here.en.md) · [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) · [Generated Wiki](./wiki/index.en.md) · [Complete Docs Index](./docs/README.md) · [Agent Protocols](./AGENTS.md)
 - [Backlog](./BACKLOG.md) · [Changelog](./CHANGELOG.md)
 
 **Specifications**
@@ -126,6 +126,7 @@ That fast stack checks script entrypoints, template readiness, numeric parsing, 
 - [TMCTOL Spec](./docs/tmctol.specification.en.md) — Foundation, math, invariants
 - [Governance Spec](./docs/governance.specification.en.md) — Dual-track bounded governance
 - [AAA Spec](./docs/aaa.specification.en.md) — Deterministic actor automation
+- [AAA Embedding Guide](./docs/aaa.embedding.en.md) — Host-runtime checklist for reusing `pallet-aaa` without inheriting DEOS/TMCTOL topology
 
 **Architecture Notes**
 

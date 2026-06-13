@@ -12,6 +12,8 @@ available_locales:
 sources:
   - ../../AGENTS.md
   - ../../docs/core.architecture.en.md
+  - ../../docs/asset-registry.architecture.en.md
+  - ../../docs/randomness.strategy.en.md
   - ../../docs/polkadot-sdk-2603.insights.en.md
   - ../../template/README.md
 status: active
@@ -28,8 +30,8 @@ related:
   - Идентичность активов
   - Технологический стек
   - Стратегия randomness
-last_compiled: 2026-05-17
-confidence: 0.84
+last_compiled: 2026-06-13
+confidence: 0.86
 ---
 
 # Parachain context
@@ -66,7 +68,7 @@ DEOS рассматривает foreign assets как local registered assets п
 
 Текущая launch line использует trusted-collator simplification phase. Native binding targets остаются ограничены trusted collators, пока не появится production-ready relay/protocol beacon для parachain-consumable per-block randomness.
 
-Это значит, что local pseudo-random fallbacks могут поддерживать bounded reference behavior, но не заменяют будущий protocol-grade randomness source.
+Это значит, что local pseudo-random fallbacks могут поддерживать bounded reference behavior, но не заменяют будущий protocol-grade randomness source. Существующая epoch-scale relay randomness не удовлетворяет этому контракту; предпочтительная замена — будущий per-block protocol beacon, который parachains смогут потреблять через weight-accounted ingress.
 
 ## Costs и operations
 
