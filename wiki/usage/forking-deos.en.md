@@ -13,6 +13,7 @@ sources:
   - ../../README.md
   - ../../docs/README.md
   - ../../docs/aaa.embedding.en.md
+  - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md
   - ../../docs/tmctol.specification.en.md
@@ -39,20 +40,28 @@ confidence: 0.86
 
 DEOS is meant to be forked by teams launching concrete ecosystems. A fork should keep the reusable framework contracts clear while replacing the ecosystem-specific product, token, governance, and operator choices.
 
-The rule of thumb: change identity and policy; preserve bounded mechanics and validation discipline.
+The rule of thumb: change identity and policy; preserve bounded mechanics and validation discipline. DEOS provides mechanisms, not a mandatory moral or business configuration for every instance.
 
 ## What Usually Changes
 
 A downstream fork normally defines:
 
 - Chain identity, branding, endpoints, bootnodes, and operator runbooks;
-- Token names, ticker presentation, launch allocation, and product narrative;
-- Concrete governance domains, protection distribution, and bootstrap handoff plan;
-- Ecosystem product surfaces, dApps, portfolio/indexer needs, and materialized providers;
+- Token names, ticker presentation, launch allocation, founder economics, and product narrative;
+- Concrete governance domains, protection distribution, labor culture, invoice norms, and bootstrap handoff plan;
+- Ecosystem product surfaces, dApps, portfolio/indexer needs, demand strategy, and materialized providers;
 - Deployment parameters, collator/operator assumptions, and monitoring setup;
 - Client copy, default endpoints, wallet presets, and user-facing flows.
 
 These are product and ecosystem decisions. They should not silently leak back into DEOS as hardcoded framework assumptions.
+
+## Mechanism vs Policy
+
+DEOS-owned surfaces are reusable mechanisms and safety contracts: primitives, invariants, bounded execution, AAA task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates, and reference patterns.
+
+Instance-owned surfaces are concrete policy: brand, dApps, launch economics, founder allocation or no-founder-allocation choices, contributor culture, invoice etiquette, bucket names/percentages, marketing, and demand strategy.
+
+Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection, and System AAA topologies are mechanisms. A fork may keep, rename, reparameterize, disable, or replace policy choices as long as it preserves the guarantees it claims.
 
 ## What Should Stay Stable
 
@@ -78,7 +87,7 @@ A DEOS fork should not launch by only changing names. Before a downstream team t
 | Foreign collateral set | Which assets can be registered, routed, or used as collateral |
 | TMC curve params | Initial price, slope, supply assumptions, launch immutability policy |
 | TOL distribution | Bucket split, paired treasuries, reserve/lane semantics |
-| Bucket policies | Which bucket wakes which actor, threshold, retry, and treasury lane |
+| Bucket policies | Names, percentages, actor wakeups, thresholds, retries, treasury lanes, and spend priorities |
 | Router fee | Fee bounds, burn/sink routing, governance mutability |
 | Governance domain pairs | Primary/protection tokens, payload kinds, cadence, execution authority |
 | Staking receipt policy | Receipt namespaces, native receipt, LP custody, reward paths |
@@ -95,10 +104,11 @@ If a row is undecided, the fork is still a prototype. If a row is decided but no
 2. Decide which assets and governance surfaces are ecosystem-specific.
 3. Set launch parameters and treat launch physics as immutable unless a stronger constitutional contract says otherwise.
 4. Review System AAA actor roles and remove assumptions that only fit the reference ecosystem.
-5. For AAA reuse, implement host-runtime adapters and keep business policy in adapters or genesis actor configuration, not in `pallet-aaa` core.
-6. Classify every client datum as direct on-chain projection or materialized/indexed view.
-7. Update scripts, metadata export, endpoints, and operator documentation.
-8. Run the smallest meaningful validation first, then escalate when math/runtime/client boundaries cross.
+5. Treat builder invoices and bucket policies as opt-in mechanisms: decide what your instance enables, renames, funds, or disables.
+6. For AAA reuse, implement host-runtime adapters and keep business policy in adapters or genesis actor configuration, not in `pallet-aaa` core.
+7. Classify every client datum as direct on-chain projection or materialized/indexed view.
+8. Update scripts, metadata export, endpoints, and operator documentation.
+9. Run the smallest meaningful validation first, then escalate when math/runtime/client boundaries cross.
 
 ## What Can Flow Back Upstream
 

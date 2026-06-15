@@ -14,6 +14,7 @@ sources:
   - ../../README.md
   - ../../docs/README.md
   - ../../docs/aaa.embedding.en.md
+  - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md
   - ../../docs/tmctol.specification.en.md
@@ -40,20 +41,28 @@ confidence: 0.86
 
 DEOS предназначен для форков командами, которые запускают конкретные экосистемы. Форк должен сохранять ясными reusable framework contracts и заменять то, что относится к конкретной экосистеме: продукт, токены, governance и операторскую политику.
 
-Короткое правило: меняйте identity и policy; сохраняйте bounded mechanics и validation discipline.
+Короткое правило: меняйте identity и policy; сохраняйте bounded mechanics и validation discipline. DEOS дает механизмы, а не обязательную моральную или бизнес-конфигурацию для каждого инстанса.
 
 ## Что обычно меняется
 
 Downstream fork обычно определяет:
 
 - Chain identity, branding, endpoints, bootnodes и operator runbooks;
-- Названия токенов, ticker presentation, launch allocation и продуктовый нарратив;
-- Concrete governance domains, распределение protection-власти и bootstrap handoff plan;
-- Продуктовые поверхности экосистемы, dApps, portfolio/indexer needs и materialized providers;
+- Названия токенов, ticker presentation, launch allocation, founder economics и продуктовый нарратив;
+- Concrete governance domains, распределение protection-власти, labor culture, invoice norms и bootstrap handoff plan;
+- Продуктовые поверхности экосистемы, dApps, portfolio/indexer needs, demand strategy и materialized providers;
 - Deployment parameters, collator/operator assumptions и monitoring setup;
 - Client copy, default endpoints, wallet presets и user-facing flows.
 
 Это продуктовые и экосистемные решения. Они не должны незаметно возвращаться в DEOS как hardcoded framework assumptions.
+
+## Механизм vs политика
+
+DEOS-owned surfaces — это reusable mechanisms и safety contracts: primitives, invariants, bounded execution, AAA task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates и reference patterns.
+
+Instance-owned surfaces — это concrete policy: brand, dApps, launch economics, founder allocation или no-founder-allocation choices, contributor culture, invoice etiquette, bucket names/percentages, marketing и demand strategy.
+
+Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection и System AAA topologies — это механизмы. Fork может сохранить, переименовать, перенастроить, отключить или заменить policy choices, если честно сохраняет те гарантии, на которые претендует.
 
 ## Что должно оставаться стабильным
 
@@ -79,7 +88,7 @@ DEOS fork не должен запускаться простой заменой
 | Foreign collateral set | Какие assets можно register, route или использовать как collateral |
 | TMC curve params | Initial price, slope, supply assumptions, launch immutability policy |
 | TOL distribution | Bucket split, paired treasuries, reserve/lane semantics |
-| Bucket policies | Какой bucket будит какого actor, threshold, retry и treasury lane |
+| Bucket policies | Names, percentages, actor wakeups, thresholds, retries, treasury lanes и spend priorities |
 | Router fee | Границы fee, burn/sink routing, governance mutability |
 | Governance domain pairs | Primary/protection tokens, payload kinds, cadence, execution authority |
 | Staking receipt policy | Receipt namespaces, native receipt, LP custody, reward paths |
@@ -96,10 +105,11 @@ DEOS fork не должен запускаться простой заменой
 2. Решите, какие assets и governance surfaces являются ecosystem-specific.
 3. Задайте launch parameters и считайте launch physics immutable, если только более сильный constitutional contract не говорит иначе.
 4. Проверьте System AAA actor roles и уберите assumptions, подходящие только reference ecosystem.
-5. Для переиспользования AAA реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в core `pallet-aaa`.
-6. Классифицируйте каждый client datum как direct on-chain projection или materialized/indexed view.
-7. Обновите scripts, metadata export, endpoints и operator documentation.
-8. Запускайте минимально достаточную validation, затем поднимайтесь выше, если пересекаются math/runtime/client boundaries.
+5. Считайте builder invoices и bucket policies opt-in механизмами: решите, что ваш инстанс включает, переименовывает, финансирует или отключает.
+6. Для переиспользования AAA реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в core `pallet-aaa`.
+7. Классифицируйте каждый client datum как direct on-chain projection или materialized/indexed view.
+8. Обновите scripts, metadata export, endpoints и operator documentation.
+9. Запускайте минимально достаточную validation, затем поднимайтесь выше, если пересекаются math/runtime/client boundaries.
 
 ## Что можно возвращать upstream
 

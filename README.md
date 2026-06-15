@@ -127,6 +127,7 @@ That fast stack checks script entrypoints, template readiness, numeric parsing, 
 - [Governance Spec](./docs/governance.specification.en.md) — Dual-track bounded governance
 - [AAA Spec](./docs/aaa.specification.en.md) — Deterministic actor automation
 - [AAA Embedding Guide](./docs/aaa.embedding.en.md) — Host-runtime checklist for reusing `pallet-aaa` without inheriting DEOS/TMCTOL topology
+- [Framework / Instance Contract](./docs/framework-instance.contract.en.md) — Mechanism-vs-policy boundary for forks
 
 **Architecture Notes**
 

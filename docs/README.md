@@ -54,6 +54,9 @@ The flagship economic standard combining minting curves with automatic liquidity
 - [Read-Model Contract](./read-model.contract.en.md)
   Project-wide data-surface rule. Defines the split between bounded authoritative on-chain projections and externally indexed/materialized views.
 
+- [Framework / Instance Contract](./framework-instance.contract.en.md)
+  Boundary contract separating reusable DEOS mechanisms and safety surfaces from downstream instance policy, labor culture, bucket topology, launch economics, and product strategy.
+
 ### 4. Architecture & Shipped Implementation Maps
 
 Implementation-specific documents describing how the current runtime realizes the contracts above.

@@ -12,6 +12,7 @@ sources:
   - ../../README.md
   - ../../docs/README.md
   - ../../docs/core.architecture.en.md
+  - ../../docs/framework-instance.contract.en.md
 status: active
 audience: newcomer
 tags:
@@ -62,7 +63,7 @@ The repository separates two layers:
 - `DEOS` = the framework, reference stack, runtime substrate, docs, client, and tooling
 - `TMCTOL` = the current tokenomic standard with a minting curve, treasury-owned liquidity, fee burning, and bucketed policy
 
-That distinction matters because DEOS is meant to be forked by downstream ecosystems that may keep the framework while changing the product thesis or economic configuration.
+That distinction matters because DEOS is meant to be forked by downstream ecosystems that may keep the framework while changing the product thesis or economic configuration. DEOS provides mechanisms and safety contracts; concrete instances choose brand, dApps, launch economics, labor culture, bucket policy, and demand strategy.
 
 ## Main Stack Layers
 

@@ -6,6 +6,10 @@
 
 ## 0.6.2: AAA External Runtime Embedding Contract
 
+- `[Context] Mechanism-vs-policy firewall`: Added the framework/instance boundary contract, durable context rule, and wiki fork/overview sync clarifying that DEOS owns reusable mechanisms, invariants, execution safety, read-model/configuration seams, validation gates, and reference patterns, while downstream instances own brand, dApps, launch policy, founder economics, labor culture, invoice norms, bucket names/percentages, and demand strategy. Impact: contributors and fork authors can evolve builder invoices, bucketed capital flows, governance protection, protocol-owned liquidity, and AAA execution without turning reference-instance policy into mandatory framework law.
+
+## 0.6.2: AAA External Runtime Embedding Contract
+
 - `[AAA] External-runtime embedding guide`: Added a first-class guide that separates AAA-owned kernel semantics from runtime adapters, UI/read-model responsibilities, and the current DEOS/TMCTOL System AAA topology. Impact: downstream runtimes can identify the minimal host obligations needed to reuse `pallet-aaa` without importing one reference economy's actor catalog.
 - `[AAA Atomicity] Task-scoped rollback contract`: Promoted rollback behavior into an explicit adapter failure atomicity matrix covering transfers, swaps, liquidity, staking, liquidity donation, close tails, `ContinueNextStep`, `AbortCycle`, event visibility, and adapter-side multi-step mutation obligations. Impact: the 0.6.1 rollback behavior is now a public embedding contract rather than only test-local knowledge.
 - `[Validation] Embedding-guide reachability`: Extended the template readiness audit so the AAA embedding guide must remain present and linked from the docs hub, root README, and pallet README. Impact: the external-runtime contract is protected from silently detaching from contributor entrypoints.
