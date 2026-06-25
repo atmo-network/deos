@@ -27,6 +27,7 @@
 > - Reserve-aware liquidity-actor slippage frozen to execution-plan build time for the current launch line
 > - Same-asset auto-compound reward settlement
 > - Unified 20/80 transaction-fee and AAA-fee routing to collator / Fee Sink when an author exists, with 100% to Fee Sink when no author is resolved
+> - Economic-claim inventory covers 10 anchored runtime claims with proof-kind, tautology-risk, and falsification-note metadata
 > - Polkadot SDK `2603` / node `1.22.3` runtime line
 
 ## Open Product / Client Work

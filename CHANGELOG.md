@@ -4,6 +4,11 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.6.6: Economic Claim Coverage Expansion
+
+- `[Validation] Economic-claim coverage expansion`: Extended the alignment skill's economic-claim inventory beyond the initial router/TMC/registry/governance set with staking reward-rollover boundedness and AAA active-cap cleanup economics claims, and recorded the 10-claim audited coverage in the shipped backlog baseline. Impact: the semantic drift dataset now covers more of the runtime safety surface created by staking and AAA hardening, not only the 0.6.4 router honesty path, while open backlog stays reserved for remaining conditional/gated work.
+- `[Release] Rust workspace package markers`: Synchronized the template workspace Cargo package versions and lockfile entries to `0.6.6`. Impact: Rust artifacts advertise the current economic-claim coverage release line.
+
 ## 0.6.5: Liquidity Actor Naming Hygiene
 
 - `[Runtime / Pallets] Liquidity-actor account naming`: Renamed the Axial Router fee-exempt account associated type and runtime account provider from `ZapManagerAccount` to `LiquidityActorAccount`, and updated TMC output resolution plus runtime test helpers/test names to use the AAA actor-role abstraction. Impact: framework-facing runtime surfaces no longer expose the legacy Zap Manager name for the active liquidity actor while preserving the existing AAA id / account identity.

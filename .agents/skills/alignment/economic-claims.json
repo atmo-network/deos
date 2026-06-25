@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated_for_release": "0.6.5",
+  "updated_for_release": "0.6.6",
   "scope": "Load-bearing economic and runtime-safety claims in docs/*.architecture.en.md. This inventory is the source dataset for future semantic drift auditing.",
   "claims": [
     {
@@ -117,6 +117,38 @@
       ],
       "falsification_tests": [
         "template/pallets/aaa/src/tests.rs::actor_queue_epoch_deduplicates_same_block_enqueue_attempts"
+      ]
+    },
+    {
+      "id": "staking-reward-rollover-bounded",
+      "doc": "docs/staking.architecture.en.md",
+      "claim": "Staking reward epoch rollover uses a persisted cursor and per-block caps so epoch close remains resumable and bounded.",
+      "status": "shipped invariant",
+      "proof_kind": "invariant",
+      "tautology_risk": "low",
+      "falsification_note": "Removing the pending rollover cursor or processing all buckets in one pass breaks the cross-block rollover resume assertions.",
+      "code_anchors": [
+        "template/pallets/staking/src/lib.rs::PendingRewardEpochRollover",
+        "template/pallets/staking/src/lib.rs::roll_reward_epoch_if_needed"
+      ],
+      "falsification_tests": [
+        "template/pallets/staking/src/tests.rs::reward_epoch_rollover_resumes_across_blocks"
+      ]
+    },
+    {
+      "id": "aaa-active-cap-cleanup-economics",
+      "doc": "docs/aaa.architecture.en.md",
+      "claim": "AAA active-cap cleanup stays bounded and economically cheaper to clean than to spam-fill.",
+      "status": "measured behavior",
+      "proof_kind": "characterization",
+      "tautology_risk": "low",
+      "falsification_note": "Reducing actor creation cost or making sweep cleanup unbounded breaks the runtime cost-ratio regression for zombie spam cleanup.",
+      "code_anchors": [
+        "template/pallets/aaa/src/lib.rs::ActiveActorLimit",
+        "template/pallets/aaa/src/lib.rs::permissionless_sweep_many"
+      ],
+      "falsification_tests": [
+        "template/runtime/src/tests/aaa_integration_tests.rs::zombie_spam_attack_cost_dominates_batch_cleanup_cost"
       ]
     },
     {
