@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Routing and Minting Loop
-summary: The current DEOS reference line pairs the Axial Router with the Token Minting Curve to decide how trades should execute and how new supply enters the system. The router compares market liquidity with protocol liquidity, while TMC provides deterministic mint-side pricing.
+summary: The current DEOS reference line pairs the Axial Router with the Token Minting Curve to decide how trades execute and how new supply enters the system. The router compares recipient output across market liquidity and protocol liquidity, while TMC provides deterministic mint-side pricing.
 locale: en
 canonical_page_id: routing-and-minting-loop
 translation_status: source
@@ -26,8 +26,8 @@ related:
   - Token-Driven Automation
   - Staking Pools
   - Core Terms
-last_compiled: 2026-04-16
-confidence: 0.93
+last_compiled: 2026-06-25
+confidence: 0.95
 ---
 
 # Routing and Minting Loop
@@ -40,7 +40,7 @@ This pairing matters because TMCTOL is not just a curve and not just an AMM. It 
 
 ## Axial Router Role
 
-The Axial Router is described as a protocol-first decision engine rather than a generic DEX aggregator. Its job is to compare available routes and choose the one with the best execution under the runtime's bounded logic.
+The Axial Router is described as a protocol-first decision engine rather than a generic DEX aggregator. Its job is to compare available routes and choose the one that delivers the most output to the swap recipient under the runtime's bounded logic.
 
 The current architecture evaluates a small candidate set, including:
 
@@ -48,7 +48,7 @@ The current architecture evaluates a small candidate set, including:
 - Direct mint routes
 - Native-anchored multi-hop routes
 
-It also updates its EMA oracle before execution so route selection is harder to manipulate inside the same block.
+It also updates its EMA oracle before direct execution paths and verifies exact-input outcomes through recipient balance deltas. This is a shipped mitigation against stale quote trust, not a blanket guarantee that all market manipulation disappears.
 
 ## TMC Role
 
@@ -63,7 +63,7 @@ The router can treat TMC as one candidate execution mechanism alongside XYK pool
 - `Market liquidity` from pools
 - `Protocol liquidity` from mint-side issuance
 
-When the protocol path is better, the router sends execution through TMC. When the market path is better, it uses XYK routing.
+When the protocol path is better by delivered recipient output, the router sends execution through TMC. When the market path is better, it uses XYK routing.
 
 ## Why the Loop Matters for TMCTOL
 

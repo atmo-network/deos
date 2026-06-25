@@ -91,6 +91,7 @@
 
 - [ ] `Low-severity npm audit follow-up`: monitor the current npm audit report for SvelteKit/cookie and bits-ui/runed advisories; do not apply suggested semver-major/downgrade fixes unless upstream publishes a compatible non-regressive path.
 - [ ] `Formatter peer compatibility watch`: no active formatter problem exists; keep `prettier-plugin-svelte` on the current 3.x line while `@trivago/prettier-plugin-sort-imports 6.0.2` declares optional peer compatibility with `prettier-plugin-svelte 3.x`, and revisit only when the sort-imports peer range supports 4.x or the formatter stack is intentionally changed.
+- [ ] `Watch Node type major`: Only if the web-client toolchain intentionally moves to the Node 26 surface or the 25.x line stops receiving compatible updates, evaluate `@types/node` 26.x; otherwise keep the current 25.x type line.
 - [ ] `Template cargo update blocker`: `cargo update --manifest-path template/Cargo.toml --dry-run` currently fails because SDK `polkadot-sdk v2603.0.0 -> sc-service -> sc-network -> litep2p v0.13.3 -> multihash v0.17.0` requires yanked `core2 v0.4.0`; revisit only through an upstream-compatible Polkadot SDK/litep2p path rather than local dependency surgery.
 - [ ] `Track Safrole/Sassafras release readiness and parachain-consumable randomness availability in paritytech/polkadot-sdk`
 - [ ] `Treat the current Polkadot/JAM post-quantum roadmap as a directional beacon-over-VRF signal, not as proof of a shipped parachain-consumable API`

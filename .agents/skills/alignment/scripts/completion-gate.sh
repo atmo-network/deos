@@ -6,6 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 AUDIT_SCOPE="${AUDIT_SCOPE:-changed}"
 RUN_SIMULATOR="${RUN_SIMULATOR:-auto}"
 RUN_CARGO_CHECK="${RUN_CARGO_CHECK:-auto}"
+RUN_RUNTIME_TESTS="${RUN_RUNTIME_TESTS:-auto}"
 REQUIRE_CONTEXT_SYNC="${REQUIRE_CONTEXT_SYNC:-1}"
 LEDGER_DIR="$SKILL_DIR/ledgers"
 HALLUCINATIONS_FILE="$LEDGER_DIR/hallucinations.jsonl"
@@ -15,15 +16,16 @@ declare -a CHANGED_SHELL_PATHS=()
 
 usage() {
     cat <<'EOF'
-Usage: while-true-gate.sh [OPTIONS]
+Usage: completion-gate.sh [OPTIONS]
 
-Diff-aware DEOS completion gate for autonomous loops.
+Diff-aware DEOS completion gate for local delivery slices.
 It validates the smallest meaningful scope for the current pass and blocks the next loop until the touched layer is green.
 
 Options:
   --all-rust               Run architecture audit against the full pallet tree
   --skip-simulator         Do not run simulator validation
   --skip-cargo-check       Do not run cargo check validation
+  --skip-runtime-tests     Do not run runtime unit tests
   --allow-no-context-sync  Warn instead of failing when context files were not updated
   -h, --help               Show this help message
 
@@ -31,6 +33,7 @@ Environment:
   AUDIT_SCOPE=changed|all
   RUN_SIMULATOR=auto|0|1
   RUN_CARGO_CHECK=auto|0|1
+  RUN_RUNTIME_TESTS=auto|0|1
   REQUIRE_CONTEXT_SYNC=0|1
 EOF
 }
@@ -46,6 +49,9 @@ parse_args() {
                 ;;
             --skip-cargo-check)
                 RUN_CARGO_CHECK="0"
+                ;;
+            --skip-runtime-tests)
+                RUN_RUNTIME_TESTS="0"
                 ;;
             --allow-no-context-sync)
                 REQUIRE_CONTEXT_SYNC="0"
@@ -119,6 +125,16 @@ should_run_cargo_check() {
     has_changed_path '^template/.*\.(rs|toml)$' || has_changed_path '^template/Cargo.lock$'
 }
 
+should_run_runtime_tests() {
+    if [[ "$RUN_RUNTIME_TESTS" == "1" ]]; then
+        return 0
+    fi
+    if [[ "$RUN_RUNTIME_TESTS" == "0" ]]; then
+        return 1
+    fi
+    has_changed_path '^template/runtime/src/.*\.rs$'
+}
+
 should_run_shell_syntax_check() {
     [[ ${#CHANGED_SHELL_PATHS[@]} -gt 0 ]]
 }
@@ -128,7 +144,7 @@ should_run_wiki_trust() {
 }
 
 should_run_release_line_audit() {
-    has_changed_path '^CHANGELOG\.md$' || has_changed_path '^template/(Cargo\.lock|pallets/aaa/Cargo\.toml)$'
+    has_changed_path '^CHANGELOG\.md$' || has_changed_path '^template/Cargo\.lock$' || has_changed_path '^template/.*/Cargo\.toml$'
 }
 
 should_run_economic_claim_audit() {
@@ -152,7 +168,7 @@ check_prerequisites() {
 }
 
 plan() {
-    phase_banner "DEOS while-true gate"
+    phase_banner "DEOS completion gate"
     log_info "Layer 0: Architecture audit"
     log_info "Layer 1: Changed shell syntax"
     log_info "Layer 2: Mathematical truth"
@@ -167,6 +183,7 @@ plan() {
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
     log_info "Simulator mode: $RUN_SIMULATOR"
     log_info "Cargo check mode: $RUN_CARGO_CHECK"
+    log_info "Runtime tests mode: $RUN_RUNTIME_TESTS"
     log_info "Require context sync: $REQUIRE_CONTEXT_SYNC"
 }
 
@@ -228,6 +245,14 @@ run_behavior_validation() {
     if ! run_shell_step "cargo check --workspace" "" "cd \"$TEMPLATE_DIR\" && cargo check --workspace"; then
         log_error "Behavioral validation failed"
         exit 1
+    fi
+    if should_run_runtime_tests; then
+        if ! run_shell_step "cargo test -p deos-runtime --lib" "" "cd \"$TEMPLATE_DIR\" && cargo test -p deos-runtime --lib"; then
+            log_error "Runtime behavioral validation failed"
+            exit 1
+        fi
+    else
+        log_warning "Skipping runtime unit tests because no runtime source files changed"
     fi
 }
 
@@ -310,7 +335,7 @@ main() {
     run_backlog_validation
     run_knowledge_sync
     phase_banner "Summary"
-    log_success "While-true gate passed"
+    log_success "Completion gate passed"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

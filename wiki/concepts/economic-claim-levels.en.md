@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Economic Claim Levels
-summary: A ladder for classifying DEOS/TMCTOL economic claims across formulas, simulations, runtime enforcement, governance dependency, and market assumptions.
+summary: A ladder and audit posture for classifying DEOS/TMCTOL economic claims across formulas, simulations, runtime enforcement, governance dependency, and market assumptions.
 locale: en
 canonical_page_id: economic-claim-levels
 translation_status: source
@@ -12,6 +12,7 @@ sources:
   - ../../AGENTS.md
   - ../../docs/tmctol.specification.en.md
   - ../../simulator/README.md
+  - ../../.agents/skills/alignment/economic-claims.json
 status: active
 audience: newcomer
 tags:
@@ -24,15 +25,15 @@ related:
   - Invariant Map
   - Invariant and Threat Map
   - Three-Layer Validation
-last_compiled: 2026-05-17
-confidence: 0.86
+last_compiled: 2026-06-25
+confidence: 0.91
 ---
 
 # Economic Claim Levels
 
 ## Summary
 
-DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, and market behavior in one sentence. This ladder names the level of support behind a claim.
+DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, and market behavior in one sentence. This ladder names the level of support behind a claim, while the alignment audit keeps a small inventory of load-bearing economic claims with explicit proof kinds.
 
 ## Levels
 
@@ -49,6 +50,10 @@ DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, 
 A stronger-looking phrase is not a stronger claim. If a statement depends on market behavior, call it Level 4 even if the underlying formula is Level 0.
 
 Example: floor mechanics can be formula-defined and simulator-supported, but user demand, arbitrage timing, or liquidity-provider behavior may still be Level 4 assumptions.
+
+## Audit Inventory
+
+The repository-local alignment layer also tracks selected economic claims in `economic-claims.json`. Each entry should point to evidence such as formulas, tests, runtime symbols, architecture claims, or guard scripts. The inventory is not a marketing checklist. Its job is to keep strong prose tied to falsifiable support and to make missing proof surfaces visible.
 
 ## Related
 

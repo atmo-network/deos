@@ -74,7 +74,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover architecture drift, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, and the while-true completion gate.
+Current audit families cover architecture drift, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
 
 ### Intensive Evolution Rule
 
@@ -98,20 +98,21 @@ Defaults are diff-aware: changed Rust lines plus full untracked files. Use a pat
 
 If the auditor emits a remedy path, read that referenced document before changing code.
 
-## 5. While-True Gate
+## 5. Completion Gate
 
-Autonomous loops must pass the gate before continuing:
+Local delivery slices should pass the repo-local completion gate before continuing or committing:
 
 ```bash
-./.agents/skills/alignment/scripts/while-true-gate.sh
+./.agents/skills/alignment/scripts/completion-gate.sh
 ```
 
-The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, cargo check, wiki trust, release-line audit, and knowledge sync as applicable.
+The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, cargo check, runtime unit tests for runtime-source changes, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
 
 Useful flags:
 
 ```bash
-./.agents/skills/alignment/scripts/while-true-gate.sh --all-rust
-./.agents/skills/alignment/scripts/while-true-gate.sh --skip-simulator
-./.agents/skills/alignment/scripts/while-true-gate.sh --allow-no-context-sync
+./.agents/skills/alignment/scripts/completion-gate.sh --all-rust
+./.agents/skills/alignment/scripts/completion-gate.sh --skip-simulator
+./.agents/skills/alignment/scripts/completion-gate.sh --skip-runtime-tests
+./.agents/skills/alignment/scripts/completion-gate.sh --allow-no-context-sync
 ```

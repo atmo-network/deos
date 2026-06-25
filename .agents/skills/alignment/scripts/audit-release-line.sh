@@ -7,7 +7,7 @@ usage() {
     cat <<'EOF'
 Usage: audit-release-line.sh [OPTIONS]
 
-Checks release-line consistency across CHANGELOG.md and package metadata.
+Checks release-line consistency across CHANGELOG.md and template package metadata.
 The audit prevents accidental release fragmentation such as adding a new
 changelog heading while package markers still describe the prior active line.
 
@@ -39,8 +39,8 @@ check_prerequisites() {
         log_error "CHANGELOG.md not found"
         exit 1
     fi
-    if [[ ! -f "$TEMPLATE_DIR/pallets/aaa/Cargo.toml" ]]; then
-        log_error "pallet-aaa Cargo.toml not found"
+    if [[ ! -f "$TEMPLATE_DIR/runtime/Cargo.toml" ]]; then
+        log_error "template runtime Cargo.toml not found"
         exit 1
     fi
     if [[ ! -f "$TEMPLATE_DIR/Cargo.lock" ]]; then
@@ -59,17 +59,29 @@ extract_heading_version() {
     sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+):.*/\1/'
 }
 
-extract_cargo_version() {
+extract_cargo_field() {
     local file="$1"
-    awk '
+    local field="$2"
+    awk -v field="$field" '
         $0 == "[package]" { in_package = 1; next }
         /^\[/ && in_package { exit }
-        in_package && /^version = / {
-            gsub(/"/, "", $3)
-            print $3
+        in_package && $1 == field && $2 == "=" {
+            value = $3
+            gsub(/"/, "", value)
+            print value
             exit
         }
     ' "$file"
+}
+
+extract_cargo_version() {
+    local file="$1"
+    extract_cargo_field "$file" "version"
+}
+
+extract_cargo_name() {
+    local file="$1"
+    extract_cargo_field "$file" "name"
 }
 
 extract_lock_package_version() {
@@ -90,6 +102,78 @@ extract_lock_package_version() {
             }
         }
     ' "$TEMPLATE_DIR/Cargo.lock"
+}
+
+check_template_package_version() {
+    local latest_version="$1"
+    local cargo_path="$2"
+    local cargo_file="$TEMPLATE_DIR/$cargo_path"
+    if [[ ! -f "$cargo_file" ]]; then
+        log_error "Template package Cargo.toml not found: $cargo_path"
+        exit 1
+    fi
+    local cargo_name
+    local cargo_version
+    local lock_version
+    cargo_name="$(extract_cargo_name "$cargo_file")"
+    cargo_version="$(extract_cargo_version "$cargo_file")"
+    if [[ -z "$cargo_name" ]]; then
+        log_error "Template package name missing from Cargo.toml: $cargo_path"
+        exit 1
+    fi
+    lock_version="$(extract_lock_package_version "$cargo_name")"
+    if [[ -z "$lock_version" ]]; then
+        log_error "Template package missing from Cargo.lock: $cargo_name"
+        exit 1
+    fi
+    if [[ "$cargo_version" != "$latest_version" ]]; then
+        log_error "Template package version does not match latest changelog release"
+        echo "Package: $cargo_path"
+        echo "CHANGELOG: $latest_version"
+        echo "Cargo.toml: $cargo_version"
+        exit 1
+    fi
+    if [[ "$lock_version" != "$cargo_version" ]]; then
+        log_error "Template package Cargo.lock version does not match Cargo.toml"
+        echo "Package: $cargo_name"
+        echo "Cargo.toml: $cargo_version"
+        echo "Cargo.lock: $lock_version"
+        exit 1
+    fi
+}
+
+list_template_workspace_cargo_paths() {
+    awk '
+        /^members = \[/ { in_members = 1; line = $0 }
+        in_members && $0 !~ /^members = \[/ { line = line " " $0 }
+        in_members && /\]/ {
+            sub(/^[^[]*\[/, "", line)
+            sub(/\].*$/, "", line)
+            count = split(line, members, ",")
+            for (i = 1; i <= count; i++) {
+                gsub(/[ \t"]/, "", members[i])
+                if (members[i] != "") {
+                    print members[i] "/Cargo.toml"
+                }
+            }
+            exit
+        }
+    ' "$TEMPLATE_DIR/Cargo.toml"
+}
+
+check_template_workspace_versions() {
+    local latest_version="$1"
+    local cargo_paths
+    cargo_paths="$(list_template_workspace_cargo_paths)"
+    if [[ -z "$cargo_paths" ]]; then
+        log_error "No template workspace members found in template/Cargo.toml"
+        exit 1
+    fi
+    local cargo_path
+    while IFS= read -r cargo_path; do
+        [[ -z "$cargo_path" ]] && continue
+        check_template_package_version "$latest_version" "$cargo_path"
+    done <<< "$cargo_paths"
 }
 
 version_key() {
@@ -138,24 +222,7 @@ run_audit() {
     fi
     check_changelog_order
 
-    if [[ "$heading" == *AAA* || "$heading" == *aaa* ]]; then
-        local aaa_cargo_version
-        local aaa_lock_version
-        aaa_cargo_version="$(extract_cargo_version "$TEMPLATE_DIR/pallets/aaa/Cargo.toml")"
-        aaa_lock_version="$(extract_lock_package_version "pallet-aaa")"
-        if [[ "$aaa_cargo_version" != "$latest_version" ]]; then
-            log_error "pallet-aaa Cargo.toml version does not match latest AAA changelog release"
-            echo "CHANGELOG: $latest_version"
-            echo "Cargo.toml: $aaa_cargo_version"
-            exit 1
-        fi
-        if [[ "$aaa_lock_version" != "$aaa_cargo_version" ]]; then
-            log_error "pallet-aaa Cargo.lock version does not match Cargo.toml"
-            echo "Cargo.toml: $aaa_cargo_version"
-            echo "Cargo.lock: $aaa_lock_version"
-            exit 1
-        fi
-    fi
+    check_template_workspace_versions "$latest_version"
     log_success "Release-line audit passed"
 }
 

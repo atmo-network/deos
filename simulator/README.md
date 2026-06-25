@@ -1,12 +1,13 @@
 # TMCTOL Simulator
 
-Reference economic simulator for TMCTOL, implemented in JavaScript/BigInt.
+Historical and still-authoritative economic hypothesis simulator for TMCTOL, implemented in JavaScript/BigInt.
 
-This module is the **spec-side executable model** used to:
+This module is the **spec-side mathematical proving ground** used to:
 
-- Validate economic formulas before runtime implementation
+- Test tokenomic hypotheses before they become runtime contracts
+- Validate economic formulas before or alongside runtime implementation
 - Explore parameter behavior (`price_initial`, `slope`, fees, mint shares)
-- Run deterministic regression scenarios (`60` tests)
+- Exercise deterministic regression scenarios (`66` tests)
 
 ---
 
@@ -29,8 +30,8 @@ node ./simulator/tests.js
 
 Expected output ends with:
 
-- `Total: 60`
-- `Passed: 60`
+- `Total: 66`
+- `Passed: 66`
 - `Failed: 0`
 
 ---
@@ -74,17 +75,26 @@ This mirrors the project rule: spec model prioritizes mathematical clarity and p
 
 ---
 
-## Model boundary
+## Role and proof boundary
 
-Simulator provides **mathematical/behavioral truth** for tokenomics.
+The simulator exists to test TMCTOL economic hypotheses and keep the math executable. Treat it as the mathematical reference capsule for the standard, not as a shadow implementation of the DEOS runtime.
 
-It does **not** model:
+It is authoritative for:
 
-- Substrate block weight accounting
-- Origin/permission system from runtime
-- Full pallet storage semantics
+- TMC formula behavior and integral mint calculations
+- TOL accumulation, floor scenarios, and compression-threshold taxonomy
+- Deterministic tokenomic scenarios and conservation checks
+- Parameter exploration before a mechanism is promoted into runtime logic
 
-For runtime behavior and pallet wiring, see implementation docs in `docs/`.
+It is **not** authoritative for:
+
+- Substrate block weight accounting or proof size
+- Origin, permission, dispatch, and pallet storage semantics
+- AAA scheduling, actor lifecycle, or runtime adapter behavior
+- Governance execution, XCM, collator/session logic, or frontend flows
+- Market/MEV guarantees beyond the explicit economic assumptions modeled in the tests
+
+For runtime behavior and pallet wiring, see implementation docs in `docs/` and tests under `template/`.
 
 ---
 

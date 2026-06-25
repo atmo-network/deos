@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Axial Router
-summary: The Axial Router is DEOS's protocol-first routing engine. It compares bounded route candidates across market liquidity and protocol liquidity, updates its oracle before execution, uses the native asset as the main routing anchor, and makes bypass swaps impossible on the canonical protocol path.
+summary: The Axial Router is DEOS's protocol-first routing engine. It compares bounded route candidates by recipient output across market liquidity and protocol liquidity, updates its oracle before direct execution, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
 locale: en
 canonical_page_id: axial-router
 translation_status: source
@@ -24,8 +24,8 @@ related:
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-04-16
-confidence: 0.93
+last_compiled: 2026-06-25
+confidence: 0.95
 ---
 
 # Axial Router
@@ -34,7 +34,7 @@ confidence: 0.93
 
 The Axial Router is the runtime's route-selection engine. Its job is not to be a general-purpose DEX aggregator, but to make a bounded protocol decision about how a swap should execute inside a DEOS-style economy.
 
-In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity, then chooses the best bounded route under the runtime's rules.
+In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity, then chooses the route that delivers the most output to the swap recipient under the runtime's rules.
 
 Just as important, the protocol's canonical swap path goes through the router. Swapping around it is not part of the DEOS contract, because bypassing the router would bypass route selection, fee capture, and the protocol's own economic coordination logic.
 
@@ -44,8 +44,8 @@ The router is deliberately opinionated:
 
 - It uses the native asset as the main routing anchor
 - It compares XYK pool routes with mint-side protocol routes
-- It updates its EMA oracle before execution
-- It verifies outcomes through balance changes rather than trusting pure quote math
+- It updates its EMA oracle before direct execution paths
+- It verifies exact-input outcomes by recipient balance delta rather than by quote math alone
 
 That makes it a coordination layer, not just a convenience helper.
 
@@ -53,7 +53,7 @@ That makes it a coordination layer, not just a convenience helper.
 
 The current implementation evaluates a small candidate set such as direct XYK routes, direct mint routes, and native-anchored multi-hop routes.
 
-It then scores those routes under bounded logic and executes the best one. The point is not to search an unbounded graph. The point is to give the protocol one deterministic and inspectable route-selection mechanism.
+It then ranks those routes by actual recipient output and executes the best one. The point is not to search an unbounded graph. The point is to give the protocol one deterministic and inspectable route-selection mechanism.
 
 That also means the router is not optional glue around swaps. It is the required protocol gate for swap execution on the current line.
 
@@ -65,7 +65,7 @@ That is why the router is a first-class economic actor in the architecture. It i
 
 ## Canonical On-Chain Surface
 
-The router now exposes a typed on-chain quote view for exact-input previews. That gives clients a bounded route preview directly from the chain instead of forcing the browser to reconstruct router logic off-chain.
+The router exposes a typed on-chain quote view for exact-input previews. That gives clients a bounded route preview directly from the chain instead of forcing the browser to reconstruct router logic off-chain. The execution path still verifies the delivered recipient amount, so the quote is a preview rather than the final proof of outcome.
 
 Long-range analytics and historical route dashboards still belong to materialized views, not to canonical runtime state.
 

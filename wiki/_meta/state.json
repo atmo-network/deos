@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-13",
+  "generated_at": "2026-06-25",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -115,7 +115,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.95,
       "sources": {
         "en": [
           "../docs/axial-router.architecture.en.md",
@@ -419,7 +419,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.95,
       "sources": {
         "en": [
           "../docs/axial-router.architecture.en.md",
@@ -1095,17 +1095,19 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.86,
+      "confidence": 0.91,
       "sources": {
         "en": [
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
-          "../simulator/README.md"
+          "../simulator/README.md",
+          "../.agents/skills/alignment/economic-claims.json"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
-          "../simulator/README.md"
+          "../simulator/README.md",
+          "../.agents/skills/alignment/economic-claims.json"
         ]
       }
     },

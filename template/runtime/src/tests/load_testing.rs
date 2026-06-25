@@ -617,7 +617,7 @@ fn test_oracle_manipulation_resistance_rejects_deviated_quote() {
         ALICE,
         System::block_number() + 100,
       ),
-      pallet_axial_router::Error::<Runtime>::NoRouteFound
+      pallet_axial_router::Error::<Runtime>::PriceDeviationExceeded
     );
     // Restore fair EMA and verify swap path becomes available again
     pallet_axial_router::EmaPrices::<Runtime>::insert(

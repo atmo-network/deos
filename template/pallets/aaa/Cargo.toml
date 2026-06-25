@@ -1,6 +1,6 @@
 [package]
 name = "pallet-aaa"
-version = "0.6.7"
+version = "0.6.8"
 description = "Deterministic Account Abstraction Actors pallet"
 authors.workspace = true
 license = "MIT-0"
