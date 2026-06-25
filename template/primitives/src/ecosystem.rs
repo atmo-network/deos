@@ -38,8 +38,8 @@ pub mod aaa_ids {
   ///   SS58: `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh`
   pub const FEE_SINK_AAA_ID: u64 = 1;
 
-  /// Zap Manager System AAA — transforms protocol capital into LP tokens
-  /// Created second active System AAA at genesis (`aaa_id = 2`)
+  /// Liquidity Actor System AAA — transforms protocol capital into LP tokens
+  /// Created second active System AAA at genesis (`aaa_id = 2`; legacy constant name)
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
   ///   hex:  `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab`
@@ -112,8 +112,8 @@ pub mod aaa_ids {
   ///   SS58: `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N`
   pub const BLDR_SPLITTER_AAA_ID: u64 = 10;
 
-  /// BLDR Zap Manager — provisions NTVE-BLDR liquidity
-  /// Created at genesis (`aaa_id = 11`)
+  /// BLDR Liquidity Actor — provisions NTVE-BLDR liquidity
+  /// Created at genesis (`aaa_id = 11`; legacy constant name)
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
   ///   hex:  `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221`
@@ -238,10 +238,10 @@ pub mod params {
   /// TMC user allocation ratio (33.3% of minted tokens).
   ///
   /// When tokens are minted via TMC, 33.3% go directly to the user,
-  /// and 66.6% go to the Zap Manager for liquidity provisioning.
+  /// and 66.6% go to the resolved liquidity actor for provisioning.
   pub const TMC_USER_ALLOCATION: Perbill = Perbill::from_parts(333_333_333);
 
-  /// TMC zap manager allocation ratio (66.6% of minted tokens).
+  /// TMC liquidity-actor allocation ratio (66.6% of minted tokens).
   pub const TMC_ZAP_ALLOCATION: Perbill = Perbill::from_parts(666_666_667);
 
   /// Axial Router fee (0.5%).
@@ -288,7 +288,7 @@ pub mod params {
 
   /// Default cooldown for System actors (10 blocks ≈ 1 minute).
   ///
-  /// Applied to genesis System AAAs (Burning Manager, Zap Manager) to prevent
+  /// Applied to genesis System AAAs (Burning Actor, Liquidity Actor) to prevent
   /// resource exhaustion on repeated cycle failures.
   pub const SYSTEM_AAA_COOLDOWN_BLOCKS: u32 = 10;
 
@@ -298,16 +298,16 @@ pub mod params {
   /// builder chooses a stricter policy.
   pub const SYSTEM_AAA_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(5);
 
-  /// Maximum tolerated slippage for Zap Manager swap steps (3%).
-  /// Zap execution plans derive their concrete `SwapExactIn.slippage_tolerance`
+  /// Maximum tolerated slippage for liquidity-actor swap steps (3%).
+  /// Liquidity-actor execution plans derive their concrete `SwapExactIn.slippage_tolerance`
   /// from the current native reserve depth and clamp it to this upper bound.
   pub const ZAP_MANAGER_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(3);
 
-  /// Minimum tolerated slippage for Zap Manager swap steps (0.25%).
+  /// Minimum tolerated slippage for liquidity-actor swap steps (0.25%).
   /// Deep pools tighten toward this floor instead of keeping the shallow-pool cap.
   pub const ZAP_MANAGER_MIN_SWAP_SLIPPAGE: Perbill = Perbill::from_parts(2_500_000);
 
-  /// Native reserve depth reference for Zap Manager dynamic slippage.
+  /// Native reserve depth reference for liquidity-actor dynamic slippage.
   /// At this native reserve depth, the clamp still allows the configured Zap max;
   /// deeper pools tighten inversely from there.
   pub const ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance = 1_000 * PRECISION;

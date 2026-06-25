@@ -55,7 +55,7 @@ pub fn burning_manager_account() -> AccountId {
   crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID)
 }
 
-pub fn zap_manager_account() -> AccountId {
+pub fn liquidity_actor_account() -> AccountId {
   crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID)
 }
 
@@ -187,7 +187,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
     let system_accounts = vec![
       axial_router_account(),
       burning_manager_account(),
-      zap_manager_account(),
+      liquidity_actor_account(),
       aaa_fee_sink_account(),
       tmc_pallet_account(),
     ];
@@ -203,7 +203,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
       EVE,
       axial_router_account(),
       burning_manager_account(),
-      zap_manager_account(),
+      liquidity_actor_account(),
       tmc_pallet_account(),
     ];
     for &asset_id in &basic_assets {

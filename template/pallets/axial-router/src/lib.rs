@@ -201,9 +201,9 @@ pub mod pallet {
     #[pallet::constant]
     type BurningManagerAccount: Get<Self::AccountId>;
 
-    /// Zap manager account (fee-exempt system actor)
+    /// Liquidity actor account (fee-exempt system actor)
     #[pallet::constant]
-    type ZapManagerAccount: Get<Self::AccountId>;
+    type LiquidityActorAccount: Get<Self::AccountId>;
 
     /// Price oracle for manipulation-resistant pricing
     type PriceOracle: PriceOracle<Balance>;
@@ -624,7 +624,7 @@ pub mod pallet {
     pub fn is_fee_exempt(who: &T::AccountId) -> bool {
       who == &Self::account_id()
         || who == &T::BurningManagerAccount::get()
-        || who == &T::ZapManagerAccount::get()
+        || who == &T::LiquidityActorAccount::get()
     }
 
     /// Get quote for swapping from asset_from to asset_to with amount_in

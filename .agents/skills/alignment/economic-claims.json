@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "updated_for_release": "0.6.5",
+  "scope": "Load-bearing economic and runtime-safety claims in docs/*.architecture.en.md. This inventory is the source dataset for future semantic drift auditing.",
+  "claims": [
+    {
+      "id": "tmc-integral-cost",
+      "doc": "docs/tmc.architecture.en.md",
+      "claim": "Integral-based minting computes the mathematical cost/output for the curve instead of using ad-hoc linear shortcuts.",
+      "status": "shipped mitigation",
+      "proof_kind": "falsification",
+      "tautology_risk": "low",
+      "falsification_note": "Changing zero-slope proportional minting or the quadratic/integral output path breaks fixed expected-output assertions.",
+      "code_anchors": [
+        "template/pallets/tmc/src/lib.rs::Pallet::calculate_total_mint",
+        "template/pallets/tmc/src/lib.rs::Pallet::mint_with_distribution"
+      ],
+      "falsification_tests": [
+        "template/pallets/tmc/src/tests.rs::quadratic_integration_verification",
+        "template/pallets/tmc/src/tests.rs::zero_slope_minting_behavior"
+      ]
+    },
+    {
+      "id": "tmc-overflow-safety",
+      "doc": "docs/tmc.architecture.en.md",
+      "claim": "TMC mint calculations use U256 intermediate arithmetic so large inputs fail safely instead of overflowing silently.",
+      "status": "shipped mitigation",
+      "proof_kind": "falsification",
+      "tautology_risk": "low",
+      "falsification_note": "Replacing checked U256 arithmetic with overflowing u128 math causes large-input tests to panic or return an unsafe non-error result.",
+      "code_anchors": [
+        "template/pallets/tmc/src/lib.rs::Pallet::calculate_total_mint"
+      ],
+      "falsification_tests": [
+        "template/pallets/tmc/src/tests.rs::arithmetic_overflow_protection",
+        "template/pallets/tmc/src/tests.rs::large_number_stress_test"
+      ]
+    },
+    {
+      "id": "router-direct-price-deviation-guard",
+      "doc": "docs/axial-router.architecture.en.md",
+      "claim": "Direct Axial Router routes are bounded by slippage plus EMA price-deviation checks.",
+      "status": "shipped mitigation",
+      "proof_kind": "falsification",
+      "tautology_risk": "low",
+      "falsification_note": "Removing direct-route EMA validation or changing the threshold math lets the over-threshold pool-depth case execute instead of failing with PriceDeviationExceeded.",
+      "code_anchors": [
+        "template/pallets/axial-router/src/lib.rs::Pallet::validate_price_protection",
+        "template/runtime/src/configs/axial_router_config.rs::PriceOracleImpl::validate_price_deviation"
+      ],
+      "falsification_tests": [
+        "template/runtime/src/tests/tmctol_integration_tests.rs::oracle_deviation_rejects_swap_via_dexops",
+        "template/runtime/src/tests/tmctol_integration_tests.rs::axial_router_price_deviation_breakpoint_is_bound_to_pool_depth"
+      ]
+    },
+    {
+      "id": "router-round-trip-cost",
+      "doc": "docs/axial-router.architecture.en.md",
+      "claim": "A same-market buy/sell round trip is net-negative due to router fees plus AMM curvature; this is not a complete MEV/sandwich-resistance guarantee.",
+      "status": "measured behavior",
+      "proof_kind": "characterization",
+      "tautology_risk": "low",
+      "falsification_note": "Removing router fees and/or changing XYK accounting so a buy-sell round trip preserves or increases the trader's starting asset breaks the net-negative assertion.",
+      "code_anchors": [
+        "template/pallets/axial-router/src/lib.rs::Pallet::calculate_router_fee",
+        "template/pallets/axial-router/src/lib.rs::Pallet::execute_swap_for"
+      ],
+      "falsification_tests": [
+        "template/pallets/axial-router/src/tests.rs::round_trip_buy_sell_is_net_negative_test"
+      ]
+    },
+    {
+      "id": "asset-registry-namespace-safety",
+      "doc": "docs/asset-registry.architecture.en.md",
+      "claim": "AssetKind bitmask namespaces keep native, local, foreign, LP, and staking-receipt asset ids distinguishable.",
+      "status": "shipped invariant",
+      "proof_kind": "invariant",
+      "tautology_risk": "low",
+      "falsification_note": "Changing namespace masks or allocation constants so protocol allocations no longer sum cleanly or asset-kind checks collide breaks parameter and allocation assertions.",
+      "code_anchors": [
+        "template/primitives/src/assets.rs::AssetKind",
+        "template/primitives/src/ecosystem.rs::params"
+      ],
+      "falsification_tests": [
+        "template/pallets/axial-router/src/tests.rs::tmctol_parameter_validation",
+        "template/primitives/src/ecosystem.rs::parameter_allocations_sum_to_one_billion"
+      ]
+    },
+    {
+      "id": "asset-registry-location-bijection",
+      "doc": "docs/asset-registry.architecture.en.md",
+      "claim": "The asset registry persists forward and reverse Location <-> AssetId mappings so lookup stays bounded and bijective.",
+      "status": "shipped invariant",
+      "proof_kind": "invariant",
+      "tautology_risk": "low",
+      "falsification_note": "Allowing duplicate locations or duplicate asset ids, or failing to persist reverse mappings, breaks duplicate-registration/linking tests.",
+      "code_anchors": [
+        "template/pallets/asset-registry/src/lib.rs::ForeignAssetMapping",
+        "template/pallets/asset-registry/src/lib.rs::ForeignAssetLocationByAssetId"
+      ],
+      "falsification_tests": [
+        "template/pallets/asset-registry/src/tests.rs::register_duplicate_fails",
+        "template/pallets/asset-registry/src/tests.rs::link_existing_asset_rejects_duplicate_asset_id"
+      ]
+    },
+    {
+      "id": "aaa-queue-dedup",
+      "doc": "docs/aaa.architecture.en.md",
+      "claim": "ActorQueueEpoch prevents duplicate queue entries across same-epoch enqueue attempts.",
+      "status": "shipped invariant",
+      "proof_kind": "invariant",
+      "tautology_risk": "low",
+      "falsification_note": "Removing same-epoch queue dedup causes repeated enqueue attempts for one actor to produce more than one runnable queue entry.",
+      "code_anchors": [
+        "template/pallets/aaa/src/lib.rs::ActorQueueEpoch",
+        "template/pallets/aaa/src/scheduler.rs::enqueue"
+      ],
+      "falsification_tests": [
+        "template/pallets/aaa/src/tests.rs::actor_queue_epoch_deduplicates_same_block_enqueue_attempts"
+      ]
+    },
+    {
+      "id": "governance-resolution-dedup",
+      "doc": "docs/governance.architecture.en.md",
+      "claim": "Governance reward-memory resolution prevents duplicate winning-vote ingestion inside the live reward horizon.",
+      "status": "shipped invariant",
+      "proof_kind": "invariant",
+      "tautology_risk": "low",
+      "falsification_note": "Removing live-horizon resolution memory lets the same item/account resolution be credited twice and breaks duplicate-resolution tests.",
+      "code_anchors": [
+        "template/pallets/governance/src/lib.rs::WinningVoteResolutionWindows",
+        "template/pallets/governance/src/reward_memory.rs::record_winning_vote_for_account"
+      ],
+      "falsification_tests": [
+        "template/pallets/governance/src/tests.rs::vote_cast_rejects_duplicates_and_tied_resolution_rejects_without_rewards",
+        "template/pallets/governance/src/tests.rs::expiry_bucket_deduplicates_same_epoch_account_touches"
+      ]
+    }
+  ]
+}

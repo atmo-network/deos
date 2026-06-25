@@ -170,7 +170,7 @@ Current implementation does not maintain a dedicated `MintingPaused` storage fla
 | `UserAllocationRatio` | Perbill   | Fraction to user (default: 1/3 = 333_333_333 Perbill)                       |
 | `PalletId`            | PalletId  | Derives the TMC pallet account for pallet-owned operations                  |
 | `TreasuryAccount`     | AccountId | Compatibility/config hook; currently mapped to the TOL pallet account       |
-| `ZapManagerAccount`   | AccountId | Compatibility hook for the active liquidity-actor recipient |
+| `LiquidityActorAccount` | AccountId | Active liquidity-actor recipient for non-specialized mint output |
 
 ### 4. Extrinsics (Governance-Controlled)
 

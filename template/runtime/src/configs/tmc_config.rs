@@ -30,11 +30,11 @@ parameter_types! {
   /// Distribution ratio for user allocation (ecosystem constant: 33.3%)
   pub const TmcUserAllocationRatio: Perbill = ecosystem::params::TMC_USER_ALLOCATION;
 
-  /// Distribution ratio for zap manager allocation (ecosystem constant: 66.6%)
+  /// Distribution ratio for liquidity actor allocation (ecosystem constant: 66.6%)
   pub const TmcZapAllocationRatio: Perbill = ecosystem::params::TMC_ZAP_ALLOCATION;
 }
 
-use super::axial_router_config::ZapManagerAccount;
+use super::axial_router_config::LiquidityActorAccount;
 
 pub struct TmctolDomainGlue;
 impl pallet_tmc::DomainGlueHook for TmctolDomainGlue {
@@ -48,8 +48,8 @@ impl pallet_tmc::DomainGlueHook for TmctolDomainGlue {
 
 /// Routes TMC output to a single sink per curve.
 ///
-/// L1 (Native): output → ZapManager (handles liquidity provisioning)
-/// L2 (BLDR):   output → BLDR Splitter (handles NTVE→ZM, BLDR→50/50 ZM+Treasury)
+/// L1 (Native): output → Liquidity Actor (handles liquidity provisioning)
+/// L2 (BLDR):   output → BLDR Splitter (handles NTVE→Liquidity Actor, BLDR→50/50 Liquidity Actor+Treasury)
 pub struct TmctolMintOutput;
 impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
   fn output_account(minted_asset: AssetKind) -> AccountId {
@@ -59,7 +59,7 @@ impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
           ecosystem::aaa_ids::BLDR_SPLITTER_AAA_ID,
         )
       }
-      _ => ZapManagerAccount::get(),
+      _ => LiquidityActorAccount::get(),
     }
   }
 }
@@ -111,7 +111,7 @@ impl pallet_tmc::pallet::Config for Runtime {
   type Precision = TmcPrecision;
   type SlopeParameter = TmcSlopeParameter;
   type DomainGlueHook = TmctolDomainGlue;
-  type TreasuryAccount = ZapManagerAccount;
+  type TreasuryAccount = LiquidityActorAccount;
   type MintOutputResolver = TmctolMintOutput;
   type UserAllocationRatio = TmcUserAllocationRatio;
   type MintDistributionHook = ();

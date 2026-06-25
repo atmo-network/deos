@@ -1,14 +1,14 @@
 //! Integration tests for the TMCTOL economic standard on DEOS runtime.
 //!
 //! The `tmctol_` prefix is intentional: this module tests the TMCTOL standard
-//! (TMC, TOL, Router, Splitter, Zap Manager, Bucket) running on top of the DEOS
+//! (TMC, TOL, Router, Splitter, Liquidity Actor, Bucket) running on top of the DEOS
 //! runtime. Per AGENTS.md Artifact-Name Tail Policy, standard-specific identifiers
 //! remain as conscious legacy names; only framework identifiers were migrated.
 //! Do not rename this file to `deos_integration_tests`.
 
 use super::common::{
   ALICE, ASSET_A, ASSET_B, add_liquidity, burning_manager_account, create_pool, get_pool_lp_asset,
-  new_test_ext, seeded_test_ext, zap_manager_account,
+  liquidity_actor_account, new_test_ext, seeded_test_ext,
 };
 use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_aaa::{AmountResolution, DexOps, Event, ExecutionPlanOf, StepErrorPolicy, Task};
@@ -615,6 +615,52 @@ fn dexops_normal_swap_succeeds() {
 }
 
 #[test]
+fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
+  let reserve = super::common::LIQUIDITY_AMOUNT;
+  let fair_price = primitives::ecosystem::params::PRECISION;
+  // With equal reserves, a direct XYK quote has normalized price R / (R + x).
+  // The 20% guard flips at x > 0.25R. User swaps pay a 0.5% router fee first,
+  // so reserve / 5 stays below the guard and reserve / 3 exceeds it.
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    pallet_axial_router::EmaPrices::<Runtime>::insert(
+      AssetKind::Native,
+      AssetKind::Local(super::common::ASSET_A),
+      fair_price,
+    );
+    assert_ok!(crate::AxialRouter::swap(
+      RuntimeOrigin::signed(ALICE),
+      AssetKind::Native,
+      AssetKind::Local(super::common::ASSET_A),
+      reserve / 5,
+      0,
+      ALICE,
+      100,
+    ));
+  });
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    pallet_axial_router::EmaPrices::<Runtime>::insert(
+      AssetKind::Native,
+      AssetKind::Local(super::common::ASSET_A),
+      fair_price,
+    );
+    assert_noop!(
+      crate::AxialRouter::swap(
+        RuntimeOrigin::signed(ALICE),
+        AssetKind::Native,
+        AssetKind::Local(super::common::ASSET_A),
+        reserve / 3,
+        0,
+        ALICE,
+        100,
+      ),
+      pallet_axial_router::Error::<Runtime>::PriceDeviationExceeded
+    );
+  });
+}
+
+#[test]
 fn oracle_deviation_rejects_swap_via_dexops() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
@@ -736,7 +782,7 @@ fn swap_without_pool_fails_execution_plan() {
   });
 }
 
-// --- Zap Manager ExecutionPlan ---
+// --- Liquidity Actor ExecutionPlan ---
 
 #[test]
 fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
@@ -1178,10 +1224,10 @@ fn bucket_c_unwind_execution_plan_transfers_lp_components_to_treasury_c() {
 // --- BLDR Domain Integration Tests ---
 
 #[test]
-fn native_tmc_mint_routes_collateral_and_tokens_to_default_zap_manager_sink() {
+fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink() {
   seeded_test_ext().execute_with(|| {
     let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
-    let zap_manager = zap_manager_account();
+    let liquidity_actor = liquidity_actor_account();
     assert_ok!(TokenMintingCurve::create_curve(
       RuntimeOrigin::root(),
       AssetKind::Native,
@@ -1191,8 +1237,8 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_zap_manager_sink() {
     ));
     let alice_native_before = Balances::free_balance(&ALICE);
     let alice_foreign_before = crate::Assets::balance(ASSET_A, &ALICE);
-    let zap_native_before = Balances::free_balance(&zap_manager);
-    let zap_foreign_before = crate::Assets::balance(ASSET_A, &zap_manager);
+    let liquidity_actor_native_before = Balances::free_balance(&liquidity_actor);
+    let liquidity_actor_foreign_before = crate::Assets::balance(ASSET_A, &liquidity_actor);
     let minted = TokenMintingCurve::mint_with_distribution(
       &ALICE,
       &ALICE,
@@ -1202,7 +1248,7 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_zap_manager_sink() {
     )
     .expect("native TMC mint must succeed");
     let user_allocation = primitives::ecosystem::params::TMC_USER_ALLOCATION.mul_floor(minted);
-    let zap_allocation = minted.saturating_sub(user_allocation);
+    let liquidity_actor_allocation = minted.saturating_sub(user_allocation);
     assert_eq!(minted, foreign_amount);
     assert_eq!(
       Balances::free_balance(&ALICE),
@@ -1213,21 +1259,21 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_zap_manager_sink() {
       alice_foreign_before - foreign_amount
     );
     assert_eq!(
-      Balances::free_balance(&zap_manager),
-      zap_native_before + zap_allocation
+      Balances::free_balance(&liquidity_actor),
+      liquidity_actor_native_before + liquidity_actor_allocation
     );
     assert_eq!(
-      crate::Assets::balance(ASSET_A, &zap_manager),
-      zap_foreign_before + foreign_amount
+      crate::Assets::balance(ASSET_A, &liquidity_actor),
+      liquidity_actor_foreign_before + foreign_amount
     );
   });
 }
 
 #[test]
-fn native_tmc_mint_rejects_wrong_collateral_without_touching_default_zap_manager_sink() {
+fn native_tmc_mint_rejects_wrong_collateral_without_touching_default_liquidity_actor_sink() {
   seeded_test_ext().execute_with(|| {
     let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
-    let zap_manager = zap_manager_account();
+    let liquidity_actor = liquidity_actor_account();
     assert_ok!(TokenMintingCurve::create_curve(
       RuntimeOrigin::root(),
       AssetKind::Native,
@@ -1237,8 +1283,8 @@ fn native_tmc_mint_rejects_wrong_collateral_without_touching_default_zap_manager
     ));
     let alice_native_before = Balances::free_balance(&ALICE);
     let alice_wrong_foreign_before = crate::Assets::balance(ASSET_B, &ALICE);
-    let zap_native_before = Balances::free_balance(&zap_manager);
-    let zap_wrong_foreign_before = crate::Assets::balance(ASSET_B, &zap_manager);
+    let liquidity_actor_native_before = Balances::free_balance(&liquidity_actor);
+    let liquidity_actor_wrong_foreign_before = crate::Assets::balance(ASSET_B, &liquidity_actor);
     System::reset_events();
     assert_noop!(
       TokenMintingCurve::mint_with_distribution(
@@ -1255,10 +1301,13 @@ fn native_tmc_mint_rejects_wrong_collateral_without_touching_default_zap_manager
       crate::Assets::balance(ASSET_B, &ALICE),
       alice_wrong_foreign_before
     );
-    assert_eq!(Balances::free_balance(&zap_manager), zap_native_before);
     assert_eq!(
-      crate::Assets::balance(ASSET_B, &zap_manager),
-      zap_wrong_foreign_before
+      Balances::free_balance(&liquidity_actor),
+      liquidity_actor_native_before
+    );
+    assert_eq!(
+      crate::Assets::balance(ASSET_B, &liquidity_actor),
+      liquidity_actor_wrong_foreign_before
     );
     assert!(
       System::events()

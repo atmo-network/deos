@@ -54,9 +54,9 @@ impl polkadot_sdk::frame_support::traits::Get<AccountId> for BurningManagerAccou
   }
 }
 
-pub struct ZapManagerAccount;
+pub struct LiquidityActorAccount;
 
-impl polkadot_sdk::frame_support::traits::Get<AccountId> for ZapManagerAccount {
+impl polkadot_sdk::frame_support::traits::Get<AccountId> for LiquidityActorAccount {
   fn get() -> AccountId {
     pallet_aaa::Pallet::<crate::Runtime>::sovereign_account_id_system(
       primitives::ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID,
@@ -627,7 +627,7 @@ impl pallet_axial_router::pallet::Config for Runtime {
   type AssetConversion = AssetConversionAdapter;
   type Assets = pallet_assets::Pallet<Runtime>;
   type BurningManagerAccount = BurningManagerAccount;
-  type ZapManagerAccount = ZapManagerAccount;
+  type LiquidityActorAccount = LiquidityActorAccount;
   type Currency = Balances;
   type DefaultRouterFee = AxialRouterFee;
   type EmaHalfLife = AxialRouterEmaHalfLife;

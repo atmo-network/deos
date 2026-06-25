@@ -99,8 +99,8 @@ impl pallet_assets::Config for Runtime {
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = ();
   // Push architecture via polling: pallet-assets lacks per-transfer callbacks,
-  // only lifecycle (created/destroyed) hooks. Zap Manager uses PendingZaps storage
-  // to decouple scanning (on_initialize) from execution (on_idle).
+  // only lifecycle (created/destroyed) hooks. Liquidity actors use pending-intake
+  // storage to decouple scanning (on_initialize) from execution (on_idle).
   type CallbackHandle = ();
   type CreateOrigin = AssetsCreateOrigin;
   type Currency = Balances;

@@ -131,6 +131,10 @@ should_run_release_line_audit() {
     has_changed_path '^CHANGELOG\.md$' || has_changed_path '^template/(Cargo\.lock|pallets/aaa/Cargo\.toml)$'
 }
 
+should_run_economic_claim_audit() {
+    has_changed_path '^\.agents/skills/alignment/economic-claims\.json$' || has_changed_path '^docs/.*\.architecture\.en\.md$'
+}
+
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$PROJECT_ROOT/.git" "Git repository"
@@ -150,8 +154,9 @@ plan() {
     log_info "Layer 2: Mathematical truth"
     log_info "Layer 3: Behavioral truth"
     log_info "Layer 4: Wiki trust"
-    log_info "Layer 5: Release-line consistency"
-    log_info "Layer 6: Knowledge sync"
+    log_info "Layer 5: Economic claim integrity"
+    log_info "Layer 6: Release-line consistency"
+    log_info "Layer 7: Knowledge sync"
     log_info "Audit scope: $AUDIT_SCOPE"
     log_info "Changed paths: ${#CHANGED_PATHS[@]}"
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
@@ -236,8 +241,20 @@ run_wiki_trust_validation() {
     log_success "Wiki validation passed"
 }
 
+run_economic_claim_validation() {
+    phase_banner "Step 7: Economic claim integrity"
+    if ! should_run_economic_claim_audit; then
+        log_warning "Skipping economic claim audit because no claim inventory or architecture docs changed"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-economic-claims.sh"; then
+        log_error "Economic claim validation failed"
+        exit 1
+    fi
+}
+
 run_release_line_validation() {
-    phase_banner "Step 7: Release-line consistency"
+    phase_banner "Step 8: Release-line consistency"
     if ! should_run_release_line_audit; then
         log_warning "Skipping release-line audit because no release marker files changed"
         return 0
@@ -249,7 +266,7 @@ run_release_line_validation() {
 }
 
 run_knowledge_sync() {
-    phase_banner "Step 8: Knowledge sync"
+    phase_banner "Step 9: Knowledge sync"
     if [[ "$REQUIRE_CONTEXT_SYNC" != "1" ]]; then
         log_warning "Context sync gate disabled"
         return 0
@@ -271,6 +288,7 @@ main() {
     run_simulator_validation
     run_behavior_validation
     run_wiki_trust_validation
+    run_economic_claim_validation
     run_release_line_validation
     run_knowledge_sync
     phase_banner "Summary"

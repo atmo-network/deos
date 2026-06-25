@@ -574,7 +574,7 @@ impl pallet_axial_router::Config for Test {
   type MaxTrackedAssets = ConstU32<64>;
   type FeeAdapter = MockFeeAdapter;
   type BurningManagerAccount = ConstU64<123>;
-  type ZapManagerAccount = ConstU64<888>;
+  type LiquidityActorAccount = ConstU64<888>;
   type PriceOracle = MockPriceOracle;
   type MinSwapForeign = ConstU128<{ primitives::ecosystem::params::MIN_SWAP_FOREIGN }>;
   type WeightInfo = ();
