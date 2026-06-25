@@ -41,6 +41,10 @@
 - [ ] `Governance state separation slice`: only if proposal composition or archive work grows enough to create a named ownership conflict, split the state boundary at that concrete seam.
 - [ ] `Materialized provider boundary slice`: only when a second indexed/archive provider family exists, decide whether `adapters/materialized-history/` should become a first-class `materialized/` or `providers/` slice.
 
+### Runtime and pallet naming hygiene
+
+- [ ] `ZapManagerAccount -> liquidity-actor-account rename`: lift the legacy `ZapManager*` config type, identifier, and test helpers to the AAA actor-role abstraction (AGENTS.md §2 AAA Abstraction Lift; `tmc.architecture.en.md` already flags it as a compatibility hook). One-pass Rename Gate across axial-router `Config`/mock, runtime `configs`/`mod.rs`/`tmc_config.rs`, `tests/common.rs`, the `*_default_zap_manager_sink` test names, and the affected docs.
+
 ## Collator Economics & Fee Routing
 
 > Phase 1 uses trusted, permissioned collators and only pool-level reward flows.
@@ -50,6 +54,30 @@
 - [~] `Prepare Phase 2 reward routing without activating it at launch`: keep Phase 2 as a runtime-upgrade boundary, not a launch-time parameter
   - [~] `Claimable LP nomination flow`: activate explicit LP-nomination reward-weight provider only when permissionless collators ship
   - [ ] `LP nomination activation`: expose LP-point nomination to specific collators only when permissionless collator selection is enabled
+
+## Economic & Runtime Validation
+
+### Launch-readiness adversarial probe
+
+> The EMA oracle sits on the same spot reserves a manipulator moves; the 20% deviation guard and 100-block half-life are unmeasured against adversarial capital.
+
+- [ ] `Quantify the Axial Router price-deviation break point`: add a bounded adversarial suite (simulator and/or pallet tests) producing fixed `capital X -> breaks / does not break the deviation guard` cases as a function of pool depth and mint amount. Output becomes a concrete, measured launch-readiness criterion instead of an opinion about oracle weakness, and gives the broader TMCTOL launch-readiness definition a floor to build on.
+
+## Documentation Integrity & Anti-Rot
+
+> Architecture docs systematically overclaimed economic guarantees (e.g. `eliminates Flash Loan attacks`, a quality-weighted `efficiency_score` that had silently broken) while gates caught only lexical/structural drift, not semantic doc-vs-behavior drift. The durable discipline is captured in AGENTS.md `Economic-Claim Falsifiability`; the slices below build its detection and remediation infrastructure.
+
+### Economic-claim inventory and anchoring
+
+- [ ] `Build the load-bearing economic-claim inventory`: audit every `*.architecture.en.md` for absolute economic guarantees (`eliminates`, `prevents`, `guarantees`, `protects against`, `resists`) and record each with its code anchor (fn, storage, invariant test, constant) plus its falsification test. This is the dataset the drift detector and falsification pass build on; without anchors, claims float free and rot silently (exactly how the broken `efficiency_score` survived: its doc claim had no anchor to flag it when the `/1000` penalty broke the score).
+
+### Anti-tautology proof integrity
+
+- [ ] `Replace proof-theater with falsification tests`: for each anchored economic claim, ensure a real falsification test exists that would fail if the guarantee were violated, not one that passes on any implementation. The retired `sandwich_attack_simulation` (tautological: passed on any feeless router) is the anti-pattern template; the `round_trip_buy_sell_is_net_negative_test` rewrite is the positive template. Exit criterion: no anchored claim survives solely because its test is tautological.
+
+### Semantic drift detector
+
+- [ ] `Evolve the alignment skill with a semantic economic-claim audit leaf`: the project contract routes new drift classes into the repo-local skill layer rather than ad-hoc validation. Add an audit leaf that, against the claim inventory, flags `(a)` economic claims with no code anchor, `(b)` anchored code symbols that changed (rename/signature/delete) since the claim was last verified, and `(c)` doc-cited tests that are tautological. This closes the loop the lexical-only gates left open and turns the AGENTS.md `Economic-Claim Falsifiability` rule from a manual review into an enforced boundary.
 
 ## Conditional / Externally Gated Work
 

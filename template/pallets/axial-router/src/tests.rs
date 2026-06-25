@@ -131,10 +131,11 @@ fn router_intelligence_test() {
       }
       .into(),
     );
-    // Scenario 2: Protocol Liquidity is better (TMC > XYK)
-    // We want TMC ~ 998, XYK ~ 249
-    // TMC Rate for Native token (since that's what gets minted): 1.0 -> 995*P output (after fee)
-    set_tmc_rate(asset_out, 1); // asset_out is Native
+    // Scenario 2: Protocol Liquidity is better (TMC recipient output > XYK)
+    // We want TMC recipient allocation ~497, XYK ~249
+    // TMC Rate for Native token: 2.0 -> 1990*P total emission and 497.5*P
+    // recipient output after the router fee.
+    set_tmc_rate(asset_out, 2); // asset_out is Native
     // XYK: We need a pool that gives < TMC output (995*P)
     // With amount_in = 995*P (after 0.5% fee), reserve_in = 1000*P, reserve_out = 500*P:
     // out = (995*P * 500*P) / (1995*P) ≈ 249.373*P
@@ -150,12 +151,10 @@ fn router_intelligence_test() {
       user,
       u64::MAX
     ));
-    // Verify event: Expect TMC execution
-    // Note: The event reports total minted, but user only receives 25% in this mock
-    // (In production it would be 33.3%). This is a known limitation - the event
-    // reports the total curve output, not the user-specific allocation.
-    // After 0.5% fee deduction: 995*P in, TMC at 1.0 rate gives 995*P total output
-    let expected_tmc_out = 995 * PRECISION;
+    // Verify event: Expect TMC execution. The event reports the amount delivered
+    // to the swap recipient, not the total curve emission that includes the sink
+    // allocation.
+    let expected_tmc_out = 497_500_000_000_000;
     System::assert_last_event(
       crate::Event::SwapExecuted {
         who: user,
@@ -167,6 +166,79 @@ fn router_intelligence_test() {
       }
       .into(),
     );
+  });
+}
+
+#[test]
+fn direct_mint_route_delivers_to_recipient_not_minter() {
+  // CRIT-1 regression: on a DirectMint route the freshly minted user allocation
+  // must be delivered to `recipient`, while collateral leaves the minter and the
+  // zap allocation still lands in the protocol sink.
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let minter = 1u64;
+    let recipient = 999u64;
+    let collateral = AssetKind::Local(2);
+    let minted = AssetKind::Native;
+    // Curve: mint Native using Local(2) as collateral at rate 1.0.
+    set_tmc_curve(minted, collateral, 1);
+    // No XYK pool for Local(2) => DirectMint is the only candidate route.
+    let amount_in = 100 * PRECISION;
+    let router_fee = crate::Pallet::<Test>::calculate_router_fee(amount_in);
+    let amount_after_fee = amount_in - router_fee;
+    let minter_local_before = Assets::balance(2, minter);
+    let minter_native_before = Balances::free_balance(minter);
+    let recipient_native_before = Balances::free_balance(recipient);
+    assert_ok!(AxialRouter::swap(
+      RuntimeOrigin::signed(minter),
+      collateral,
+      minted,
+      amount_in,
+      0,
+      recipient,
+      u64::MAX,
+    ));
+    // Collateral (full gross input) leaves the minter.
+    assert_eq!(Assets::balance(2, minter), minter_local_before - amount_in);
+    // The freshly minted user allocation lands on `recipient` (mock: 25%).
+    assert_eq!(
+      Balances::free_balance(recipient),
+      recipient_native_before + amount_after_fee / 4
+    );
+    // The minter receives none of the freshly minted Native.
+    assert_eq!(Balances::free_balance(minter), minter_native_before);
+  });
+}
+
+#[test]
+fn direct_mint_slippage_uses_recipient_allocation_not_total_emission() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let minter = 1u64;
+    let recipient = 999u64;
+    let collateral = AssetKind::Local(2);
+    let minted = AssetKind::Native;
+    set_tmc_curve(minted, collateral, 1);
+    let amount_in = 100 * PRECISION;
+    let minter_local_before = Assets::balance(2, minter);
+    // Total curve emission is ~99.5 after the router fee, but the recipient only
+    // receives 25% in this mock. This minimum would pass if slippage used total
+    // emission and must fail when it correctly uses recipient output.
+    let impossible_recipient_min = 50 * PRECISION;
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(minter),
+        collateral,
+        minted,
+        amount_in,
+        impossible_recipient_min,
+        recipient,
+        u64::MAX,
+      ),
+      Error::<Test>::SlippageExceeded
+    );
+    assert_eq!(Assets::balance(2, minter), minter_local_before);
+    assert_eq!(Balances::free_balance(recipient), 0);
   });
 }
 
@@ -245,36 +317,36 @@ fn slippage_protection_test() {
 }
 
 #[test]
-fn sandwich_attack_simulation() {
-  // Goal: Verify that router fees make sandwich attacks unprofitable.
-  // Router fee is 0.5% each way, so round-trip costs ~1% of trade volume.
+fn round_trip_buy_sell_is_net_negative_test() {
+  // Goal: Characterize round-trip execution cost. A buy immediately followed by
+  // a sell back through the router must be net-negative for the trader because of
+  // router fees (both legs) plus AMM curvature. This is an execution-cost check,
+  // NOT a sandwich/MEV-resistance guarantee: this launch line has no commit/reveal
+  // or frontrunning-ordering protection, and the EMA deviation guard is a direct-
+  // pair check only. Sandwich resistance on a live market is a separate concern.
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let attacker = 666u64;
-    let victim = 1u64;
+    let trader = 666u64;
     let asset_in = AssetKind::Local(1);
     let asset_out = AssetKind::Native;
-    // Fund attacker
-    let attacker_initial_local = 200 * PRECISION;
-    assert_ok!(Assets::mint_into(1, &attacker, attacker_initial_local));
-    // Record attacker's starting balance
-    let attacker_balance_before = Assets::balance(1, attacker);
-    // Deep liquidity pool
+    let trader_initial = 200 * PRECISION;
+    assert_ok!(Assets::mint_into(1, &trader, trader_initial));
+    let balance_before = Assets::balance(1, trader);
+    // Deep, balanced liquidity pool.
     let pool_reserve = 10_000 * PRECISION;
     set_pool(asset_in, asset_out, pool_reserve, pool_reserve);
-    // 1. Attacker Front-Run (Buy) - 1% of pool
-    let attacker_in = 100 * PRECISION;
+    // 1. Buy Local -> Native.
+    let buy_in = 100 * PRECISION;
     assert_ok!(AxialRouter::swap(
-      RuntimeOrigin::signed(attacker),
+      RuntimeOrigin::signed(trader),
       asset_in,
       asset_out,
-      attacker_in,
+      buy_in,
       0,
-      attacker,
+      trader,
       u64::MAX
     ));
-    // Get attacker bought amount from event
-    let attacker_bought = System::events()
+    let bought = System::events()
       .iter()
       .rev()
       .find_map(|r| {
@@ -284,51 +356,36 @@ fn sandwich_attack_simulation() {
           ..
         }) = &r.event
         {
-          if *who == attacker {
-            Some(*amount_out)
-          } else {
-            None
-          }
+          (*who == trader).then_some(*amount_out)
         } else {
           None
         }
       })
-      .expect("Attacker swap failed");
-    // 2. Victim Buy (Pushes price further) - minimum allowed amount
-    let victim_in = PRECISION;
+      .expect("buy swap must emit SwapExecuted");
+    // 2. Sell Native -> Local immediately, spending everything received.
     assert_ok!(AxialRouter::swap(
-      RuntimeOrigin::signed(victim),
-      asset_in,
-      asset_out,
-      victim_in,
-      0,
-      victim,
-      u64::MAX
-    ));
-    // 3. Attacker Back-Run (Sell)
-    assert_ok!(AxialRouter::swap(
-      RuntimeOrigin::signed(attacker),
+      RuntimeOrigin::signed(trader),
       asset_out,
       asset_in,
-      attacker_bought,
+      bought,
       0,
-      attacker,
+      trader,
       u64::MAX
     ));
-    // Check attacker's final Local asset balance
-    let attacker_balance_after = Assets::balance(1, attacker);
-    let fee_buy = crate::Pallet::<Test>::calculate_router_fee(attacker_in);
-    let fee_sell = crate::Pallet::<Test>::calculate_router_fee(attacker_bought);
-    println!("Attacker balance before: {attacker_balance_before}");
-    println!("Attacker balance after: {attacker_balance_after}");
-    println!("Fees paid (buy leg): {fee_buy}");
-    println!("Fees paid (sell leg, in Native): {fee_sell}");
-    // The attacker's Local token balance should decrease after the round-trip.
-    // Even if they got slightly more Local back from the swap than they put in,
-    // the fees are deducted separately, so net balance should be lower.
+    let balance_after = Assets::balance(1, trader);
+    let loss = balance_before - balance_after;
+    let fee_buy = crate::Pallet::<Test>::calculate_router_fee(buy_in);
+    // Net-negative after a round-trip.
     assert!(
-      attacker_balance_after < attacker_balance_before,
-      "Sandwich attack should be unprofitable. Balance before: {attacker_balance_before}, after: {attacker_balance_after}"
+      balance_after < balance_before,
+      "round-trip must be net-negative. before: {balance_before}, after: {balance_after}"
+    );
+    // The loss is at least the buy-leg router fee (AMM curvature and the sell-leg
+    // fee only add to it), proving the configured fee is a real, non-trivial cost
+    // rather than rounding dust.
+    assert!(
+      loss >= fee_buy,
+      "round-trip loss {loss} must cover the buy-leg fee {fee_buy}"
     );
   });
 }
@@ -536,19 +593,20 @@ fn tmc_interface_test() {
     set_tmc_rate(token_asset, 2); // 1 unit -> 2 Native
     assert!(<Test as crate::Config>::TmcPallet::has_curve(token_asset));
     let receives =
-      <Test as crate::Config>::TmcPallet::calculate_user_receives(token_asset, 100).unwrap();
-    assert_eq!(receives, 200);
+      <Test as crate::Config>::TmcPallet::calculate_recipient_receives(token_asset, 100).unwrap();
+    assert_eq!(receives, 50);
     // Capture initial balances
     let initial_native = Balances::free_balance(user);
     let initial_asset = Assets::balance(1, user);
     let minted = <Test as crate::Config>::TmcPallet::mint_with_distribution(
+      &user,
       &user,
       token_asset,
       foreign_asset,
       100,
     )
     .unwrap();
-    assert_eq!(minted, 200); // Total minted
+    assert_eq!(minted, 50); // Recipient allocation returned to router
     // User should receive their allocation (25% in mock = 50 Native)
     assert_eq!(Balances::free_balance(user), initial_native + 50);
     // User should have 100 less Asset 1

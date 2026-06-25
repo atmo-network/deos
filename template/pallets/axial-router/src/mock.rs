@@ -276,7 +276,7 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
       .map(|(configured_collateral, _)| configured_collateral == foreign_asset)
       .unwrap_or(false)
   }
-  fn calculate_user_receives(
+  fn calculate_recipient_receives(
     token_asset: AssetKind,
     foreign_amount: u128,
   ) -> Result<u128, DispatchError> {
@@ -284,11 +284,13 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
       .with(|r| r.borrow().get(&token_asset).cloned())
       .ok_or(DispatchError::Other("No TMC Curve"))?;
 
-    // Simulating Linear Mint: Amount * Rate
-    Ok(foreign_amount.saturating_mul(rate))
+    // Simulating Linear Mint: Amount * Rate, then returning only the
+    // recipient allocation because this is the router-facing output.
+    Ok(foreign_amount.saturating_mul(rate) / 4)
   }
   fn mint_with_distribution(
     who: &u64,
+    recipient: &u64,
     token_asset: AssetKind,
     foreign_asset: AssetKind,
     foreign_amount: u128,
@@ -297,7 +299,10 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
       return Err(DispatchError::Other("TMC collateral mismatch"));
     }
 
-    let total_amount = Self::calculate_user_receives(token_asset, foreign_amount)?;
+    let (_, rate) = TMC_RATES
+      .with(|r| r.borrow().get(&token_asset).cloned())
+      .ok_or(DispatchError::Other("No TMC Curve"))?;
+    let total_amount = foreign_amount.saturating_mul(rate);
 
     // 1. Burn foreign asset from user
     match foreign_asset {
@@ -321,13 +326,13 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
     let user_allocation = total_amount / 4;
     let zap_allocation = total_amount - user_allocation;
 
-    // Mint Native asset to user (only their allocation)
-    <Balances as FungibleMutate<u64>>::mint_into(who, user_allocation)?;
+    // Mint Native asset to recipient (only their allocation)
+    <Balances as FungibleMutate<u64>>::mint_into(recipient, user_allocation)?;
     // Mint to zap account
     <Balances as FungibleMutate<u64>>::mint_into(&888u64, zap_allocation)?;
 
-    // Return total amount minted (not just user portion)
-    Ok(total_amount)
+    // Return the recipient amount because this is the router-facing output.
+    Ok(user_allocation)
   }
 }
 

@@ -1195,6 +1195,7 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_zap_manager_sink() {
     let zap_foreign_before = crate::Assets::balance(ASSET_A, &zap_manager);
     let minted = TokenMintingCurve::mint_with_distribution(
       &ALICE,
+      &ALICE,
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       foreign_amount,
@@ -1242,6 +1243,7 @@ fn native_tmc_mint_rejects_wrong_collateral_without_touching_default_zap_manager
     assert_noop!(
       TokenMintingCurve::mint_with_distribution(
         &ALICE,
+        &ALICE,
         AssetKind::Native,
         AssetKind::Local(ASSET_B),
         foreign_amount,
@@ -1283,7 +1285,13 @@ fn bldr_tmc_mint_rejects_wrong_collateral_without_touching_splitter_sink() {
     let alice_bldr_before = crate::Assets::balance(bldr_id, &ALICE);
     System::reset_events();
     assert_noop!(
-      TokenMintingCurve::mint_with_distribution(&ALICE, bldr_asset, wrong_collateral, mint_amount),
+      TokenMintingCurve::mint_with_distribution(
+        &ALICE,
+        &ALICE,
+        bldr_asset,
+        wrong_collateral,
+        mint_amount,
+      ),
       pallet_tmc::Error::<Runtime>::InvalidForeignAsset
     );
     assert_eq!(Balances::free_balance(&ALICE), alice_native_before);
@@ -1327,6 +1335,7 @@ fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
     let mint_amount = 10 * primitives::ecosystem::params::PRECISION;
     let alice_native_before = Balances::free_balance(&ALICE);
     assert_ok!(crate::TokenMintingCurve::mint_with_distribution(
+      &ALICE,
       &ALICE,
       bldr_asset,
       AssetKind::Native,
@@ -1457,11 +1466,11 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
     let zm_id = aaa_ids::BLDR_ZM_AAA_ID;
     let bucket_a_id = aaa_ids::BLDR_BUCKET_A_AAA_ID;
     let splitter_sov = AAA::sovereign_account_id_system(splitter_id);
-    let zm_sov = AAA::sovereign_account_id_system(zm_id);
     let treasury_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_TREASURY_AAA_ID);
     let bucket_a_sov = AAA::sovereign_account_id_system(bucket_a_id);
-    // 1. Create NTVE-BLDR pool so ZM can add liquidity
-    super::common::setup_bldr_pool(1_000 * precision);
+    // 1. Create NTVE-BLDR pool so ZM can add liquidity. Seed it against
+    // BLDR buys so the router exercises the TMC mint path rather than XYK.
+    super::common::setup_bldr_pool_with_reserves(900 * precision, 10 * precision);
     // 2. Activate ZM execution_plan (AddLiquidity + LP → Bucket A)
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, bldr_asset);
     let zm_execution_plan =
@@ -1529,13 +1538,9 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       AAA::on_initialize(block);
       AAA::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
     }
-    // 6. Verify: Splitter distributed NTVE to ZM
-    let zm_ntve = Balances::free_balance(&zm_sov);
-    assert!(
-      zm_ntve > crate::EXISTENTIAL_DEPOSIT,
-      "ZM must have received NTVE from Splitter"
-    );
-    // 7. Verify: Splitter distributed BLDR to both ZM and Treasury
+    // 6. Verify: Splitter distributed BLDR to both ZM and Treasury. ZM may
+    // consume received NTVE immediately into LP, so the durable final proof is
+    // Bucket A receiving LP plus the Splitter sovereign draining below dust.
     let treasury_bldr =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &treasury_sov);
     assert!(treasury_bldr > 0, "Treasury must have received BLDR");
@@ -1552,8 +1557,15 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       );
     }
     // 9. Verify: Splitter sovereign is drained (execution_plan forwarded everything)
+    let splitter_ntve_final = Balances::free_balance(&splitter_sov);
     let splitter_bldr_final =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
+    assert!(
+      splitter_ntve_final < dust,
+      "Splitter must forward all NTVE (remaining={}, dust={})",
+      splitter_ntve_final,
+      dust
+    );
     assert!(
       splitter_bldr_final < dust,
       "Splitter must forward all BLDR (remaining={}, dust={})",
@@ -1763,21 +1775,10 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
     let precision = primitives::ecosystem::params::PRECISION;
-    // BLDR TMC curve exists from genesis; create NTVE-BLDR XYK pool with unfavorable price
-    // TMC gives ~1:1 at low supply; seed XYK pool at 10:1 ratio (10 NTVE per BLDR)
-    super::common::setup_bldr_pool(100 * precision);
-    // Add more NTVE to pool to make XYK price unfavorable (many NTVE per BLDR)
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&ALICE, 5000 * precision);
-    assert_ok!(crate::AssetConversion::add_liquidity(
-      RuntimeOrigin::signed(ALICE),
-      Box::new(AssetKind::Native),
-      Box::new(bldr_asset),
-      900 * precision,
-      10 * precision,
-      0,
-      0,
-      ALICE,
-    ));
+    // BLDR TMC curve exists from genesis; create NTVE-BLDR XYK pool with an
+    // unfavorable price. The skew must beat the TMC recipient allocation, not
+    // total curve emission.
+    super::common::setup_bldr_pool_with_reserves(900 * precision, 10 * precision);
     // Swap via Router — should select TMC (better price at low supply)
     let mint_amount = precision;
     let quote =
@@ -1848,9 +1849,12 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       "BLDR splitter must receive the post-fee native collateral"
     );
     assert_eq!(
-      received + splitter_bldr_after.saturating_sub(splitter_bldr_before),
-      quote.amount_out,
-      "User + splitter BLDR deltas must equal the router direct-mint output"
+      received, quote.amount_out,
+      "Router direct-mint output must be the recipient BLDR delta"
+    );
+    assert!(
+      splitter_bldr_after > splitter_bldr_before,
+      "Protocol sink must still receive the non-recipient BLDR allocation"
     );
   });
 }

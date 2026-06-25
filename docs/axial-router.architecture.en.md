@@ -9,7 +9,7 @@
 
 The Axial Router is a specialized `Deterministic Economic Automaton` designed for TMC (Token Minting Curve) ecosystems. Unlike general-purpose aggregators, it operates as a strict `Decision Engine` atop the parachain's internal liquidity.
 
-It enforces a `Protocol-First` routing logic: instead of merely finding a path, it calculates an `Efficiency Score` to arbitrate between Market Liquidity (XYK Pools) and Protocol Liquidity (TMC Curves), using the Native token as the sole routing anchor.
+It enforces a `Protocol-First` routing logic: it evaluates every viable path and routes through the one that delivers the most output, arbitrating between Market Liquidity (XYK Pools) and Protocol Liquidity (TMC Curves), using the Native token as the sole routing anchor.
 
 ## Architecture Overview
 
@@ -29,7 +29,7 @@ graph TD
 
     subgraph "Atomic Execution Block"
 
-    Router -->|2. Route Selection| Decision{Efficiency Score}
+    Router -->|2. Route Selection| Decision{Max Output}
     Router -->|3. One-Hop Fee| BurnActor[Burn Actor Account]
     Router -->|4. Pre-Swap Snapshot| Oracle[EMA Oracle]
     Oracle -.->|Update EmaPrices| OracleStorage[(EmaPrices Storage)]
@@ -52,36 +52,32 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 2. `Core Validation`: `from != to`, `amount_in > 0`.
 3. `Fee Calculation`: Zero for fee-exempt system accounts (Burn Actor, liquidity actors, Router); `Perbill`-based for users.
 4. `Gross-Debit Preflight`: Users must be able to pay the full `amount_in` under the selected preservation policy before any state-mutating swap path begins.
-5. `Route Selection`: `find_optimal_route()` evaluates all candidates, selects by highest `efficiency_score()`.
-6. `Price Protection`: Validate quote against EMA oracle and slippage bounds.
+5. `Route Selection`: `find_optimal_route()` evaluates all candidates and selects the route with the highest `expected_output` (pure mechanism: best price to the user).
+6. `Price Protection`: Validate recipient output against EMA oracle and slippage bounds.
 7. `Fee Collection`: One-hop transfer from user to the Burn Actor via `FeeAdapter::route_fee()`, inside the same transactional flow as the swap.
 8. `Pre-Swap Oracle Update`: Snapshot pool reserves and update EMA prices _before_ trade execution.
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
-10. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`.
+10. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`, where `amount_out` is the amount delivered to `recipient` (for DirectMint, excluding protocol/sink allocation).
 
 `Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets or System AAA adapters for burn/liquidity actor swaps with automatic fee exemption and keep-alive awareness.
 
-`Authoritative View Surface`: `quote_exact_input(who, from, to, amount_in)` — FRAME view function returning a typed `RouterQuote { amount_in, router_fee, amount_after_fee, amount_out, mechanism, path, price_impact, total_fees }`. This surface mirrors caller-aware router fee handling plus canonical `find_optimal_route()` selection without mutating oracle state, giving clients a bounded on-chain route preview instead of forcing browser-side TMC-vs-XYK reconstruction.
+`Authoritative View Surface`: `quote_exact_input(who, from, to, amount_in)` — FRAME view function returning a typed `RouterQuote { amount_in, router_fee, amount_after_fee, amount_out, mechanism, path, price_impact, total_fees }`. This surface mirrors caller-aware router fee handling plus canonical `find_optimal_route()` selection without mutating oracle state, giving clients a bounded on-chain route preview instead of forcing browser-side TMC-vs-XYK reconstruction. `amount_out` is recipient output; DirectMint quotes exclude the protocol/sink allocation.
 
 ## Core Components
 
 ### Path Discovery & Route Selection
 
-The router utilizes a `Lazy Discovery` algorithm via `find_optimal_route()`. It evaluates up to 3 candidate routes and selects the one with the highest efficiency score:
+The router utilizes a `Lazy Discovery` algorithm via `find_optimal_route()`. It evaluates up to 3 candidate routes and selects the one that delivers the most output (pure mechanism selection, per the project `Mechanism-Over-Policy` rule):
 
 - `Direct XYK`: `DirectXyk { pool_id }`; pool exists for `(from, to)` pair
-- `Direct Mint`: `DirectMint { foreign_asset }`; `from != Native`, `to == Native`, TMC curve exists for `to`
+- `Direct Mint`: `DirectMint { foreign_asset }`; TMC curve exists for `to` and accepts `from` as collateral
 - `Multi-Hop`: `MultiHopNative { hops }`; non-native pair routed through both native pools
 
-### Efficiency Score
+### Route Selection Policy
 
-Each `RouteComparison` candidate is scored:
+The router is a pure execution mechanism: it always picks the candidate route with the highest `expected_output`, i.e. the best price for the user. This is a deliberate `Mechanism-Over-Policy` choice — the router does not impose a quality/impact-weighted policy on top of price.
 
-```
-Score = expected_output - (price_impact × output / 1000) - total_fees
-```
-
-Price impact is calculated against EMA oracle prices for direct routes, or against a hypothetical direct quote for multi-hop routes. TMC routes have zero price impact (deterministic pricing).
+`RouteComparison` still carries `price_impact` and `total_fees` fields, but only as informational quote fields surfaced to clients via `RouterQuote`. Price impact is approximated against EMA oracle prices for direct routes, or against a hypothetical direct quote for multi-hop routes. TMC routes report zero price impact (deterministic pricing). These fields do not influence route selection.
 
 ### Fee Architecture
 
@@ -130,20 +126,22 @@ Runtime `AssetConversionAdapter` wraps `pallet_asset_conversion` with `Balance-D
 ```rust
 pub trait TmcInterface<AccountId, Balance> {
   fn has_curve(asset: AssetKind) -> bool;
-  fn calculate_user_receives(token_asset: AssetKind, foreign_amount: Balance) -> Result<Balance, DispatchError>;
+  fn supports_collateral(token_asset: AssetKind, foreign_asset: AssetKind) -> bool;
+  fn calculate_recipient_receives(token_asset: AssetKind, foreign_amount: Balance) -> Result<Balance, DispatchError>;
   fn mint_with_distribution(
-    who: &AccountId, token_asset: AssetKind, foreign_asset: AssetKind, foreign_amount: Balance,
+    who: &AccountId, recipient: &AccountId, token_asset: AssetKind,
+    foreign_asset: AssetKind, foreign_amount: Balance,
   ) -> Result<Balance, DispatchError>;
 }
 ```
 
-Runtime `TmcPalletAdapter` delegates directly to `pallet_tmc::Pallet::<T>`.
+Runtime `TmcPalletAdapter` delegates mint execution to `pallet_tmc::Pallet::<T>` but exposes router-facing quote/return values as recipient allocation rather than total curve emission.
 
 ### PriceOracle
 
 ```rust
 pub trait PriceOracle<Balance> {
-  fn update_ema_price(asset_in: AssetKind, asset_out: AssetKind, price: Balance, tvl: Balance) -> Result<(), DispatchError>;
+  fn update_ema_price(asset_in: AssetKind, asset_out: AssetKind, price: Balance) -> Result<(), DispatchError>;
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<Balance>;
   fn validate_price_deviation(asset_in: AssetKind, asset_out: AssetKind, current_price: Balance) -> Result<(), DispatchError>;
 }
@@ -240,7 +238,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 | Event               | Fields                                 | Trigger                       |
 | :------------------ | :------------------------------------- | :---------------------------- |
-| `SwapExecuted`      | `who, from, to, amount_in, amount_out` | Successful swap               |
+| `SwapExecuted`      | `who, from, to, amount_in, amount_out` | Successful swap; `amount_out` is recipient output |
 | `FeeCollected`      | `asset, amount, source, collector`     | Fee routed to Burn Actor |
 | `TrackedAssetAdded` | `asset`                                | Governance adds tracked asset |
 | `RouterFeeUpdated`  | `old_fee, new_fee`                     | Governance updates fee        |
@@ -253,7 +251,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 | `IdenticalAssets`          | `from == to`                                  |
 | `ZeroAmount`               | `amount_in == 0`                              |
 | `AmountTooLow`             | `amount_in < MinSwapForeign`                  |
-| `SlippageExceeded`         | `amount_out < min_amount_out`                 |
+| `SlippageExceeded`         | recipient output < `min_amount_out`           |
 | `DeadlinePassed`           | `current_block > deadline`                    |
 | `FeeRoutingFailed`         | Fee transfer to Burn Actor failed             |
 | `PriceDeviationExceeded`   | Spot price deviates from EMA beyond threshold |
@@ -348,7 +346,7 @@ The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementatio
 
 - `Fee Math`: `router_fee_calculation_logic`, `large_amount_fee_calculation`, `zero_amount_fee_calculation`, `updated_fee_is_used_in_calculations`.
 - `Route Intelligence`: `router_intelligence_test` — verifies XYK preferred when output > TMC, TMC preferred when output > XYK.
-- `Protection`: `circular_swap_protection_test`, `slippage_protection_test`, `sandwich_attack_simulation` — proves round-trip attack is unprofitable due to fees.
+- `Protection`: `circular_swap_protection_test`, `slippage_protection_test`, `round_trip_buy_sell_is_net_negative_test` — characterizes round-trip execution cost (router fees both legs plus AMM curvature). This is an execution-cost check, not a sandwich/MEV-resistance guarantee; this launch line has no commit/reveal or frontrunning-ordering protection.
 - `Governance`: `governance_can_update_router_fee`, `only_governance_can_update_router_fee`, `governance_can_add_tracked_assets`, `only_governance_can_add_tracked_assets`.
 - `Adapter Contracts`: `fee_routing_adapter_test`, `price_oracle_test`, `tmc_interface_test`, `asset_conversion_api_test`.
 - `Integration Math`: `tmctol_integration_flow`, `tmctol_parameter_validation`, `precision_constant_validation`.
@@ -375,7 +373,7 @@ Located in `runtime/src/tests/axial_router_integration_tests.rs`:
 
 ## Conclusion
 
-Axial Router is the central nervous system of the TMCTOL economic model. By strictly enforcing `Pre-Swap Oracle Updates` and `One-Hop Fee Routing`, it eliminates Flash Loan attacks and Dust Attacks while minimizing gas overhead. Every trade flows through the path most beneficial to both the user (best price) and the protocol (liquidity depth).
+Axial Router is the central nervous system of the TMCTOL economic model. By enforcing `Pre-Swap Oracle Updates` and `One-Hop Fee Routing`, it mitigates intra-block price manipulation and keeps fee routing atomic and cheap. Every trade flows through the path that delivers the best price to the user. Note: the pre-swap EMA snapshot and bounded deviation guard are mitigations on direct routes, not a complete MEV/flash-loan defense; multi-hop routes rely on user slippage tolerance, and full sandwich resistance would require additional ordering/commit mechanisms not present on this launch line.
 
 ---
 

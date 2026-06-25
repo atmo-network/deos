@@ -1,6 +1,6 @@
 [package]
 name = "pallet-asset-registry"
-version = "0.5.0"
+version = "0.6.4"
 description = "Governance-controlled registry for foreign asset metadata"
 authors.workspace = true
 license = "MIT-0"

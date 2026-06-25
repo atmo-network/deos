@@ -64,8 +64,14 @@ mod benches {
 
     #[block]
     {
-      Pallet::<T>::mint_with_distribution(&caller, token_asset, foreign_asset, foreign_amount)
-        .expect("mint_with_distribution must succeed in benchmark");
+      Pallet::<T>::mint_with_distribution(
+        &caller,
+        &caller,
+        token_asset,
+        foreign_asset,
+        foreign_amount,
+      )
+      .expect("mint_with_distribution must succeed in benchmark");
     }
 
     let caller_native_after = T::Currency::balance(&caller);

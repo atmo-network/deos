@@ -235,7 +235,7 @@ mod tests {
       // Test with very large input amount (near u128::MAX)
       // This should fail gracefully or saturate, but NOT panic
       let huge_amount = u128::MAX / 2;
-      let result = crate::Pallet::<Test>::calculate_user_receives(asset_id, huge_amount);
+      let result = crate::Pallet::<Test>::calculate_total_mint(asset_id, huge_amount);
       // If it succeeds, great. If it errors (ArithmeticOverflow), that's also acceptable safe behavior.
       // We just want to ensure no panic.
       if let Ok(amount) = result {
@@ -268,13 +268,12 @@ mod tests {
       // Expected Output: 1 Native Token = PRECISION base units
       let input_amount = PRECISION;
       let expected_output = PRECISION;
-      let result = crate::Pallet::<Test>::calculate_user_receives(asset_id, input_amount)
+      let result = crate::Pallet::<Test>::calculate_total_mint(asset_id, input_amount)
         .expect("Calculation should succeed for zero slope");
       assert_eq!(result, expected_output, "Stablecoin pricing failed");
       // Verify linearity: Double input -> Double output
-      let result_double =
-        crate::Pallet::<Test>::calculate_user_receives(asset_id, input_amount * 2)
-          .expect("Calculation should succeed for zero slope");
+      let result_double = crate::Pallet::<Test>::calculate_total_mint(asset_id, input_amount * 2)
+        .expect("Calculation should succeed for zero slope");
       assert_eq!(
         result_double,
         expected_output * 2,
@@ -378,7 +377,7 @@ mod tests {
         // Pallet Logic Simulation:
         // The pallet logic (mint_tokens) calculates cost based on the current curve state.
         // In the simplified test version, we are checking the underlying math the pallet relies on.
-        // Specifically, calculate_user_receives would integrate this cost.
+        // Specifically, calculate_total_mint would integrate this cost.
         // For this test, we manually integrate using the linear formula to simulate pallet state steps.
         // P_current = P0 + m*S_current
         let price_current: u128 = initial_price + (slope * current_supply) / precision;
@@ -454,9 +453,8 @@ mod tests {
       // Now verify the function executes deterministically and doesn't panic
       // Note: Full mathematical verification is deferred as the quadratic formula
       // implementation needs refinement to match the integral calculus exactly.
-      let calculated_output =
-        crate::Pallet::<Test>::calculate_user_receives(asset_id, expected_cost)
-          .expect("Calculation should succeed");
+      let calculated_output = crate::Pallet::<Test>::calculate_total_mint(asset_id, expected_cost)
+        .expect("Calculation should succeed");
       // Verify basic sanity checks:
       // 1. Output should be non-zero for non-zero cost
       assert!(
@@ -464,9 +462,8 @@ mod tests {
         "Should produce non-zero output for non-zero cost"
       );
       // 2. Function should be deterministic
-      let calculated_output_2 =
-        crate::Pallet::<Test>::calculate_user_receives(asset_id, expected_cost)
-          .expect("Calculation should succeed");
+      let calculated_output_2 = crate::Pallet::<Test>::calculate_total_mint(asset_id, expected_cost)
+        .expect("Calculation should succeed");
       assert_eq!(
         calculated_output,
         calculated_output_2,
@@ -474,9 +471,8 @@ mod tests {
       );
       // 3. Larger cost should produce larger output
       let larger_cost = expected_cost * 2;
-      let larger_output =
-        crate::Pallet::<Test>::calculate_user_receives(asset_id, larger_cost)
-          .expect("Calculation should succeed for larger cost");
+      let larger_output = crate::Pallet::<Test>::calculate_total_mint(asset_id, larger_cost)
+        .expect("Calculation should succeed for larger cost");
       assert!(
         larger_output > calculated_output,
         "Larger cost should produce larger output"
@@ -502,6 +498,7 @@ mod tests {
       ));
       assert_noop!(
         TokenMintingCurve::mint_with_distribution(
+          &1,
           &1,
           token_asset,
           wrong_foreign_asset,
@@ -589,6 +586,7 @@ mod tests {
       assert_noop!(
         TokenMintingCurve::mint_with_distribution(
           &user,
+          &user,
           AssetKind::Native,
           AssetKind::Local(1),
           foreign_amount,
@@ -639,6 +637,7 @@ mod tests {
       assert_noop!(
         TokenMintingCurve::mint_with_distribution(
           &user,
+          &user,
           AssetKind::Local(2),
           AssetKind::Native,
           foreign_amount,
@@ -685,6 +684,7 @@ mod tests {
       assert_eq!(TokenMintingCurve::total_native_burned(), 0);
       let minted = TokenMintingCurve::mint_with_distribution(
         &user,
+        &user,
         AssetKind::Native,
         AssetKind::Local(collateral_asset),
         foreign_in,
@@ -728,6 +728,7 @@ mod tests {
       let native_issuance_before = Balances::total_issuance();
       let local_issuance_before = Assets::total_issuance(token_asset_id);
       let minted = TokenMintingCurve::mint_with_distribution(
+        &user,
         &user,
         AssetKind::Local(token_asset_id),
         AssetKind::Native,
@@ -816,7 +817,7 @@ mod proptest_tmc {
           setup_user_and_curve(user);
           let ib: u128 = <Balances as polkadot_sdk::frame_support::traits::fungible::Inspect<u64>>::total_issuance();
           let result = crate::Pallet::<Test>::mint_with_distribution(
-            &user, token_asset, foreign_asset, foreign_amount,
+            &user, &user, token_asset, foreign_asset, foreign_amount,
           );
           let minted = result.unwrap_or(0);
           let ia: u128 = <Balances as polkadot_sdk::frame_support::traits::fungible::Inspect<u64>>::total_issuance();
@@ -856,7 +857,7 @@ mod proptest_tmc {
         let mut recorded = Vec::new();
         for amount in &amounts {
           let _ = crate::Pallet::<Test>::mint_with_distribution(
-            &user, token_asset, foreign_asset, *amount,
+            &user, &user, token_asset, foreign_asset, *amount,
           );
           let curve = crate::Pallet::<Test>::get_curve(token_asset).unwrap();
           recorded.push(crate::pallet::Pallet::<Test>::calculate_spot_price(&curve));

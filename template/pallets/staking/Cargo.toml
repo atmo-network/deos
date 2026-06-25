@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-staking"
-version = "0.5.0"
+version = "0.6.4"
 description = "Multi-asset share-vault staking pools"
 authors.workspace = true
 license = "MIT-0"

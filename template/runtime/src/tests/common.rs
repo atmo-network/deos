@@ -415,6 +415,41 @@ pub fn setup_bldr_pool(bldr_amount: Balance) {
   assert_ok!(result);
 }
 
+/// Creates NTVE-BLDR XYK pool and seeds it with explicit reserves.
+/// Useful when tests need router selection to compare against an intentionally
+/// favorable or unfavorable market price.
+pub fn setup_bldr_pool_with_reserves(native_amount: Balance, bldr_amount: Balance) {
+  use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
+  use primitives::ecosystem::protocol_tokens;
+  let bldr_id = protocol_tokens::BLDR_ASSET_ID;
+  let bldr_asset = AssetKind::Local(bldr_id);
+  assert_ok!(<crate::Assets as FungiblesMutate<AccountId>>::mint_into(
+    bldr_id,
+    &ALICE,
+    bldr_amount.saturating_mul(2),
+  ));
+  ensure_asset_conversion_pool(ASSET_NATIVE, bldr_asset);
+  let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
+    .find(|(pair, _)| *pair == (ASSET_NATIVE, bldr_asset) || *pair == (bldr_asset, ASSET_NATIVE))
+    .expect("BLDR pool must exist");
+  let _ =
+    <crate::Assets as polkadot_sdk::frame_support::traits::AccountTouch<u32, AccountId>>::touch(
+      pool_info.lp_token,
+      &ALICE,
+      &ALICE,
+    );
+  assert_ok!(add_liquidity(
+    RuntimeOrigin::signed(ALICE),
+    ASSET_NATIVE,
+    bldr_asset,
+    native_amount,
+    bldr_amount,
+    MIN_LIQUIDITY,
+    MIN_LIQUIDITY,
+    &ALICE,
+  ));
+}
+
 /// Returns the LP token AssetKind for a given pool pair.
 pub fn get_pool_lp_asset(asset1: AssetKind, asset2: AssetKind) -> AssetKind {
   let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()

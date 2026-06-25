@@ -231,7 +231,7 @@ For the current launch line, TMC mint preview is intentionally a `simulated / ma
 Why:
 
 - The runtime owns the canonical integral-based minting math
-- But the current docs/code do **not** define a stable frontend-facing preview surface for `calculate_user_receives`, `ΔS`, or effective mint price on arbitrary probe amounts
+- But the current docs/code do **not** define a stable frontend-facing preview surface for `calculate_total_mint`, `ΔS`, or effective mint price on arbitrary probe amounts
 - Consumers should not treat duplicated client math as the de facto protocol contract just because the underlying formula is documented
 
 So the current product contract is:
@@ -248,9 +248,10 @@ If a future launch line wants chain-native mint preview UX, it SHOULD add an exp
 The Router orchestrates minting by:
 
 1. Receiving user intent and routing to TMC mint path when economically preferred
-2. Calling TMC minting flow (`mint_with_distribution`)
-3. Preserving normal router fee semantics on swap routes, while mint-side distribution is handled by TMC and resolved liquidity-actor accounts
-4. User receiving 1/3 of minted native allocation directly
+2. Calling TMC minting flow (`mint_with_distribution`), forwarding the router's `recipient` so the freshly minted user allocation lands on the intended account rather than being hardcoded to the minter
+3. Comparing, slippage-checking, and emitting router `amount_out` against the recipient allocation only, while TMC still accounts for total curve emission internally
+4. Preserving normal router fee semantics on swap routes, while mint-side distribution is handled by TMC and resolved liquidity-actor accounts
+5. The `recipient` receiving its share of the minted allocation directly; the remaining protocol allocation always lands in the resolved liquidity-actor sink
 
 Fee architecture note: transaction fee capture and burn semantics are enforced by Axial Router + Burn Actor, not by TMC treasury logic.
 

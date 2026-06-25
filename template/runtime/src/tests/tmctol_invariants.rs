@@ -54,6 +54,7 @@ fn tmc_mint_conservation_exact() {
     let mint_amount = 10 * PRECISION;
     assert_ok!(TokenMintingCurve::mint_with_distribution(
       &ALICE,
+      &ALICE,
       bldr_asset,
       AssetKind::Native,
       mint_amount,
@@ -351,6 +352,7 @@ fn heavy_use_invariants_preserved() {
         // Mint BLDR via TMC
         2 => {
           let _ = TokenMintingCurve::mint_with_distribution(
+            &user,
             &user,
             bldr_asset,
             AssetKind::Native,

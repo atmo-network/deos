@@ -87,9 +87,9 @@ pub struct RouterQuote {
   pub mechanism: RouteMechanismKind,
   /// Canonical path chosen by the router policy
   pub path: Vec<AssetKind>,
-  /// Current route price-impact penalty snapshot
+  /// Current route price-impact snapshot for client display
   pub price_impact: Perbill,
-  /// Total fee burden accounted inside the route score
+  /// Total fee burden reported with the quote
   pub total_fees: Balance,
 }
 
@@ -109,18 +109,6 @@ impl RouteComparison {
       price_impact,
       total_fees,
     }
-  }
-
-  /// Calculate route efficiency score (higher is better)
-  pub fn efficiency_score(&self) -> Balance {
-    // Higher output with lower price impact is better
-    let base_score = self.expected_output;
-    let impact_penalty = self.price_impact.mul_floor(base_score) / 1000u128;
-    let fee_penalty = self.total_fees;
-
-    base_score
-      .saturating_sub(impact_penalty)
-      .saturating_sub(fee_penalty)
   }
 
   pub fn into_router_quote(self, amount_in: Balance, router_fee: Balance) -> RouterQuote {
@@ -249,7 +237,11 @@ pub mod pallet {
   /// Balance type
   pub type Balance = u128;
 
-  /// Assets tracked by the oracle for price monitoring
+  /// Assets registered for external oracle monitoring.
+  ///
+  /// This is a governance-managed observability/registry surface, not a protection
+  /// gate: pre-swap oracle updates and price-deviation checks operate on the actual
+  /// swap pair regardless of this list.
   #[pallet::storage]
   pub type TrackedAssets<T: Config> =
     StorageValue<_, BoundedVec<AssetKind, T::MaxTrackedAssets>, ValueQuery>;
@@ -338,12 +330,6 @@ pub mod pallet {
     MaxTrackedAssetsExceeded,
     /// Router fee exceeds the configured governance mutation bound
     RouterFeeTooHigh,
-  }
-
-  impl<T: Config> From<DispatchError> for Error<T> {
-    fn from(_: DispatchError) -> Self {
-      Error::<T>::FeeRoutingFailed
-    }
   }
 
   #[pallet::call]
@@ -468,7 +454,7 @@ pub mod pallet {
       let mechanism_kind = RouteMechanismKind::from(&route_comparison.mechanism);
       let amount_out = match route_comparison.mechanism {
         RouteMechanism::DirectMint { foreign_asset } => {
-          T::TmcPallet::mint_with_distribution(who, to, foreign_asset, amount_in)?
+          T::TmcPallet::mint_with_distribution(who, recipient, to, foreign_asset, amount_in)?
         }
         _ => Self::execute_direct_swap(
           who,
@@ -506,10 +492,12 @@ pub mod pallet {
         let current_price_normalized = current_output
           .saturating_mul(T::Precision::get())
           .saturating_div(amount_in);
-        if T::PriceOracle::validate_price_deviation(from, to, current_price_normalized).is_err() {
-          return Err(Error::<T>::NoRouteFound);
-        }
+        T::PriceOracle::validate_price_deviation(from, to, current_price_normalized)
+          .map_err(|_| Error::<T>::PriceDeviationExceeded)?;
       } else {
+        // Multi-hop (Native-anchored) routes are protected by user slippage only:
+        // the EMA deviation guard is intentionally a direct-pair check on the
+        // current launch line. Native is treated as the stable routing hub.
         Self::quote_multi_hop_route(path, amount_in).ok_or(Error::<T>::NoRouteFound)?;
       }
       Ok(())
@@ -640,6 +628,9 @@ pub mod pallet {
     }
 
     /// Get quote for swapping from asset_from to asset_to with amount_in
+    /// Raw XYK quote for `amount_in` of `asset_from` -> `asset_to`, without the
+    /// router fee. For a caller-aware preview that mirrors actual swap execution
+    /// (including the router fee and optimal mechanism), use `quote_exact_input`.
     pub fn quote_price(
       asset_from: AssetKind,
       asset_to: AssetKind,
@@ -724,7 +715,7 @@ pub mod pallet {
       // TMC mints the `to` token using `from` as collateral.
       // Supported: any pair where a curve exists for `to` and `from` is its collateral.
       if T::TmcPallet::has_curve(to) && T::TmcPallet::supports_collateral(to, from) {
-        if let Ok(tmc_output) = T::TmcPallet::calculate_user_receives(to, amount_after_fee) {
+        if let Ok(tmc_output) = T::TmcPallet::calculate_recipient_receives(to, amount_after_fee) {
           let final_output = tmc_output;
           let price_impact = Perbill::zero(); // TMC has predictable pricing
           candidate_routes.push(RouteComparison::new(
@@ -762,10 +753,13 @@ pub mod pallet {
           }
         }
       }
-      // Select route with highest efficiency score
+      // Mechanism selection: the router is a pure execution mechanism and always
+      // picks the route that delivers the most output to the swap recipient.
+      // price_impact and total_fees stay on RouteComparison only as informational
+      // quote fields.
       candidate_routes
         .into_iter()
-        .max_by_key(|route| route.efficiency_score())
+        .max_by_key(|route| route.expected_output)
     }
 
     /// Quote multi-hop route output

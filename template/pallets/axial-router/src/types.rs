@@ -38,15 +38,21 @@ pub trait TmcInterface<AccountId, Balance> {
   /// Check whether the curve accepts the provided collateral asset
   fn supports_collateral(token_asset: AssetKind, foreign_asset: AssetKind) -> bool;
 
-  /// Calculate user receives for given foreign amount
-  fn calculate_user_receives(
+  /// Calculate the amount delivered to the swap recipient for a direct TMC mint.
+  /// Protocol/sink allocation is excluded so router route selection and slippage
+  /// compare the user's actual output, not total curve emission.
+  fn calculate_recipient_receives(
     token_asset: AssetKind,
     foreign_amount: Balance,
   ) -> Result<Balance, DispatchError>;
 
-  /// Mint with distribution
+  /// Mint with distribution. Collateral is taken from `who` while the freshly
+  /// minted user allocation is delivered to `recipient`; the zap allocation
+  /// always lands in the protocol sink. Returns the amount delivered to
+  /// `recipient`, not the total curve emission.
   fn mint_with_distribution(
     who: &AccountId,
+    recipient: &AccountId,
     token_asset: AssetKind,
     foreign_asset: AssetKind,
     foreign_amount: Balance,

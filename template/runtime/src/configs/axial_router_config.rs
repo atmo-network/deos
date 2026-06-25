@@ -494,20 +494,29 @@ where
       .unwrap_or(false)
   }
 
-  fn calculate_user_receives(
+  fn calculate_recipient_receives(
     token_asset: AssetKind,
     foreign_amount: Balance,
   ) -> Result<Balance, sp_runtime::DispatchError> {
-    pallet_tmc::Pallet::<T>::calculate_user_receives(token_asset, foreign_amount)
+    let total_minted = pallet_tmc::Pallet::<T>::calculate_total_mint(token_asset, foreign_amount)?;
+    Ok(<T as pallet_tmc::pallet::Config>::UserAllocationRatio::get().mul_floor(total_minted))
   }
 
   fn mint_with_distribution(
     who: &T::AccountId,
+    recipient: &T::AccountId,
     token_asset: AssetKind,
     foreign_asset: AssetKind,
     foreign_amount: Balance,
   ) -> Result<Balance, sp_runtime::DispatchError> {
-    pallet_tmc::Pallet::<T>::mint_with_distribution(who, token_asset, foreign_asset, foreign_amount)
+    let total_minted = pallet_tmc::Pallet::<T>::mint_with_distribution(
+      who,
+      recipient,
+      token_asset,
+      foreign_asset,
+      foreign_amount,
+    )?;
+    Ok(<T as pallet_tmc::pallet::Config>::UserAllocationRatio::get().mul_floor(total_minted))
   }
 }
 
