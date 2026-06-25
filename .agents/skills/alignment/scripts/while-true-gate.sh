@@ -135,6 +135,10 @@ should_run_economic_claim_audit() {
     has_changed_path '^\.agents/skills/alignment/economic-claims\.json$' || has_changed_path '^docs/.*\.architecture\.en\.md$'
 }
 
+should_run_backlog_audit() {
+    has_changed_path '^BACKLOG\.md$'
+}
+
 check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$PROJECT_ROOT/.git" "Git repository"
@@ -156,7 +160,8 @@ plan() {
     log_info "Layer 4: Wiki trust"
     log_info "Layer 5: Economic claim integrity"
     log_info "Layer 6: Release-line consistency"
-    log_info "Layer 7: Knowledge sync"
+    log_info "Layer 7: Backlog open-work shape"
+    log_info "Layer 8: Knowledge sync"
     log_info "Audit scope: $AUDIT_SCOPE"
     log_info "Changed paths: ${#CHANGED_PATHS[@]}"
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
@@ -265,8 +270,20 @@ run_release_line_validation() {
     fi
 }
 
+run_backlog_validation() {
+    phase_banner "Step 9: Backlog open-work shape"
+    if ! should_run_backlog_audit; then
+        log_warning "Skipping backlog audit because BACKLOG.md did not change"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-backlog-open-work.sh"; then
+        log_error "Backlog open-work validation failed"
+        exit 1
+    fi
+}
+
 run_knowledge_sync() {
-    phase_banner "Step 9: Knowledge sync"
+    phase_banner "Step 10: Knowledge sync"
     if [[ "$REQUIRE_CONTEXT_SYNC" != "1" ]]; then
         log_warning "Context sync gate disabled"
         return 0
@@ -290,6 +307,7 @@ main() {
     run_wiki_trust_validation
     run_economic_claim_validation
     run_release_line_validation
+    run_backlog_validation
     run_knowledge_sync
     phase_banner "Summary"
     log_success "While-true gate passed"

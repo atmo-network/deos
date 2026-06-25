@@ -4,6 +4,12 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.6.7: Backlog Gating Audit Hardening
+
+- `[Backlog] Gated-work baseline`: Clarified the shipped backlog baseline so remaining open work is explicitly conditional, externally gated, watch-only, or product-pressure-triggered, with no active local runtime/doc anti-rot slices implied. Impact: the roadmap now reflects the post-0.6.6 reality instead of inviting agents to mine gated items as if they were active implementation tasks.
+- `[Validation] Backlog gating audit`: Hardened the alignment backlog audit and wired it into the while-true gate when `BACKLOG.md` changes. The audit now rejects ungated implementation-looking items under `Conditional / Externally Gated Work` and keeps dependency-watch items in explicit watch/gate language. Impact: future backlog edits must preserve the boundary between actionable local work, conditional slices, and external watches.
+- `[Release] Rust workspace package markers`: Synchronized the template workspace Cargo package versions and lockfile entries to `0.6.7`. Impact: Rust artifacts advertise the current backlog-gating audit release line.
+
 ## 0.6.6: Economic Claim Coverage Expansion
 
 - `[Validation] Economic-claim coverage expansion`: Extended the alignment skill's economic-claim inventory beyond the initial router/TMC/registry/governance set with staking reward-rollover boundedness and AAA active-cap cleanup economics claims, and recorded the 10-claim audited coverage in the shipped backlog baseline. Impact: the semantic drift dataset now covers more of the runtime safety surface created by staking and AAA hardening, not only the 0.6.4 router honesty path, while open backlog stays reserved for remaining conditional/gated work.

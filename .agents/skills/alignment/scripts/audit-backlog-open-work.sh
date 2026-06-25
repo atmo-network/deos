@@ -8,8 +8,9 @@ usage() {
 Usage: audit-backlog-open-work.sh [OPTIONS]
 
 Checks that BACKLOG.md remains an open-work surface and does not accumulate
-completed checkbox history or command-reference inventory. Completed delivery
-belongs in CHANGELOG.md; validation entrypoint maps belong in README/skills.
+completed checkbox history, command-reference inventory, or ungated work inside
+externally gated sections. Completed delivery belongs in CHANGELOG.md; validation
+entrypoint maps belong in README/skills.
 
 Options:
   -h, --help  Show this help message
@@ -39,7 +40,7 @@ check_prerequisites() {
         log_error "BACKLOG.md not found: $PROJECT_ROOT/BACKLOG.md"
         exit 1
     fi
-    require_commands rg
+    require_commands rg awk
     log_success "Prerequisites checked"
 }
 
@@ -63,6 +64,26 @@ run_audit() {
     matches="$(rg -n '^## .*validation entrypoints' "$PROJECT_ROOT/BACKLOG.md" || true)"
     if [[ -n "$matches" ]]; then
         log_error "Validation entrypoint reference section found in BACKLOG.md"
+        echo "$matches"
+        exit 1
+    fi
+
+    matches="$(awk '
+        /^## Conditional \/ Externally Gated Work/ { in_conditional = 1; in_watch = 0; next }
+        /^## / && in_conditional { in_conditional = 0; in_watch = 0 }
+        in_conditional && /^### External dependency watch/ { in_watch = 1; next }
+        in_conditional && /^- \[ \] `/ {
+            if (in_watch) {
+                if ($0 !~ /`(Low-severity|Formatter|Template|Track|Treat|Watch|Only if|Only when|Only after)/) {
+                    print FNR ":" $0
+                }
+            } else if ($0 !~ /`Only (if|when|after) /) {
+                print FNR ":" $0
+            }
+        }
+    ' "$PROJECT_ROOT/BACKLOG.md")"
+    if [[ -n "$matches" ]]; then
+        log_error "Ungated implementation item found under Conditional / Externally Gated Work"
         echo "$matches"
         exit 1
     fi
