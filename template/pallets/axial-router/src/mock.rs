@@ -208,7 +208,7 @@ impl polkadot_sdk::pallet_asset_conversion::Config for Test {
   type PoolSetupFee = ConstU128<100>;
   type PoolSetupFeeAsset = PoolSetupFeeAsset;
   type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
-  type LPFee = ConstU32<3>;
+  type LPFee = LiquidityWithdrawalFee;
   type PalletId = PalletIdStub;
   type MaxSwapPathLength = ConstU32<4>;
   type WeightInfo = ();

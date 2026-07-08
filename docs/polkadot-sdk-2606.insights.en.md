@@ -1,8 +1,8 @@
-# Polkadot SDK: Comprehensive Architecture Patterns and Best Practices [SDK 2603]
+# Polkadot SDK: Comprehensive Architecture Patterns and Best Practices [SDK 2606]
 
-> `Status`: Active Standard (April 2026)
-> `Version`: Polkadot SDK 2603.0.0 crate baseline + stable2603-3 operator patch line (node v1.22.3)
-> `Rust`: 1.88.0+ runtime build baseline, 1.93.0 stable toolchain tested upstream
+> `Status`: Active Standard (July 2026)
+> `Version`: Polkadot SDK 2606.0.0 crate baseline + stable2606 operator line (node v1.24.0)
+> `Rust`: 1.93.x stable toolchain line tested upstream
 
 ## Overview
 
@@ -15,7 +15,7 @@ This document is a comprehensive "kickstart" guide for developing with the moder
 3. `Async Backing is Default`: All modern parachains MUST support async backing via `FixedVelocityConsensusHook`.
 4. `Omni Node is the Standard`: No more custom node boilerplate; use the white-labeled Omni Node.
 
-### 0.1 What Distinguishes SDK 2603 from 2503/2506 Era Baselines
+### 0.1 What Distinguishes SDK 2606 from 2503/2506 Era Baselines
 
 The practical difference is not a single API change but a full operational baseline shift:
 
@@ -28,23 +28,23 @@ The practical difference is not a single API change but a full operational basel
 - `Node architecture`: Omni Node replaces custom parachain node boilerplate for production parity
 - `Assets integration`: reserves fields are part of the expected pallet-assets wiring surface
 
-In short, SDK 2603 keeps the 2512-era production baseline and adds a few important execution and operator-surface shifts that matter during upgrades.
+In short, SDK 2606 keeps the 2603-era production baseline and adds a few important execution and operator-surface shifts that matter during upgrades.
 
-### 0.2 What Changes Specifically When Moving from 2512 to 2603
+### 0.2 What Changes Specifically When Moving from 2603 to 2606
 
-The 2603 line is not a conceptual reset, but it does tighten several concrete contracts:
+The 2606 line is not a conceptual reset, but it does tighten several concrete contracts:
 
-- `Runtime upgrade staging`: RFC-123 stores authorized runtime code in `:pending_code` first and only promotes it to `:code` in the next block once `system_version >= 3`
-- `Session key ownership`: session-key generation/runtime API now carries an owner payload and proof-of-possession surface, matching the newer `author_rotateKeysWithOwner` flow
-- `XCM transactor signatures`: `TransactAsset` deposit hooks now accept `AssetsInHolding`, and some internal transfer hooks now return plain `Asset` instead of holding sets
-- `XCM executor config`: older `AssetClaims` wiring is gone from the executor config surface
-- `Client/operator line`: the current stable patch release is `polkadot-stable2603-3` (node v1.22.3), while the underlying Rust umbrella crate remains on the 2603.0.0 baseline
+- `Runtime upgrade staging`: `system_version >= 3` remains required for RFC-123 `:pending_code` staging and next-block promotion to `:code`
+- `Relay-parent runtime API`: `RelayParentOffsetApi` now exposes `max_claim_queue_offset`; the current DEOS line returns `1` while keeping `relay_parent_offset = 0`
+- `Parachain-system scheduling`: `cumulus_pallet_parachain_system::Config` now requires `SchedulingSignatureVerifier`; use `()` unless V3 scheduling is deliberately enabled after relay/collator readiness
+- `Asset-conversion fee type`: `pallet_asset_conversion::Config::LPFee` now expects `Get<Permill>`, not a raw numeric constant wrapper
+- `Client/operator line`: the current stable release is `polkadot-stable2606` (node v1.24.0), matching the 2606.0.0 Rust crate baseline
 
-For DEOS specifically, the most relevant 2603 deltas are `system_version = 3`, the session-keys runtime API change, and the XCM transactor/executor signature updates. For stable2603-3, the relevant migration is a local binary/tool tag update plus checking whether upstream crate patch versions moved; the current direct SDK dependency dry-run found no compatible lockfile delta and no DEOS runtime API shape change is required.
+For DEOS specifically, the relevant 2606 deltas are the runtime API method addition, the explicit V3-scheduling verifier type, the asset-conversion LP fee type change, and the local binary tag update. No local V3 scheduling enablement is implied by this upgrade.
 
 ---
 
-## 1. Critical Breaking Changes in SDK 2603
+## 1. Critical Breaking Changes in SDK 2606
 
 These are the immediate technical blockers encountered when upgrading from previous versions.
 
@@ -229,7 +229,7 @@ polkadot_sdk::pallet_assets::GenesisConfig::<Test> {
 
 Migrations are now defined in `frame_system::Config`, not in `Executive`.
 
-`SDK 2603 Pattern`:
+`SDK 2606 Pattern`:
 
 ```rust
 // runtime/src/lib.rs
@@ -344,10 +344,10 @@ Use workspace-level dependency management with edition 2024.
 edition = "2024"
 
 [workspace.dependencies]
-polkadot-sdk = { version = "2603.0.0", default-features = false }
-frame = { package = "polkadot-sdk-frame", version = "0.15.0", default-features = false }
-cumulus-pallet-parachain-system = { version = "0.26.0", default-features = false }
-substrate-wasm-builder = "32.0.0"
+polkadot-sdk = { version = "2606.0.0", default-features = false }
+frame = { package = "polkadot-sdk-frame", version = "0.18.0", default-features = false }
+cumulus-pallet-parachain-system = { version = "0.29.0", default-features = false }
+substrate-wasm-builder = "34.0.0"
 codec = { package = "parity-scale-codec", version = "3.7.5", default-features = false, features = ["derive"] }
 scale-info = { version = "2.11.6", default-features = false, features = ["derive"] }
 sp-arithmetic = { version = "28.0.1", default-features = false }
@@ -455,6 +455,10 @@ impl cumulus_primitives_core::RelayParentOffsetApi<Block> for Runtime {
     fn relay_parent_offset() -> u32 {
         0  // Standard offset
     }
+
+    fn max_claim_queue_offset() -> u8 {
+        1  // Keep V3 scheduling disabled unless intentionally adopted
+    }
 }
 
 // AuraApi - Must return non-empty authorities
@@ -469,7 +473,7 @@ impl sp_consensus_aura::AuraApi<Block, AuraId> for Runtime {
 }
 ```
 
-### 4.2 TxExtension Structure (SDK 2603)
+### 4.2 TxExtension Structure (SDK 2606)
 
 ```rust
 pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<

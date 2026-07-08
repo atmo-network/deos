@@ -12,8 +12,8 @@ The pallet source is now split into responsibility-scoped internal modules while
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.3` line.
-The 2603 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/session/XCM integration surfaces rather than in `pallet-governance` core logic.
+This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
+The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-governance` core logic.
 
 ## Scope
 

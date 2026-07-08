@@ -110,7 +110,7 @@ cd ..
 
 This workspace follows the repository rules from `../AGENTS.md`, especially:
 
-- Polkadot SDK 2603 patterns
+- Polkadot SDK 2606 patterns
 - FRAME v2 pallets and benchmark style
 - Runtime weight bridges in `runtime/src/weights/`
 - Bounded execution/storage surfaces

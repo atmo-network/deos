@@ -142,7 +142,7 @@ impl frame_system::Config for Runtime {
 
 /// Configure the pallet weight reclaim transaction extension.
 impl cumulus_pallet_weight_reclaim::Config for Runtime {
-  // The crate keeps its generated `SubstrateWeight` type private in SDK 2603.
+  // The crate keeps its generated `SubstrateWeight` type private in SDK 2606.
   // Its public `()` implementation returns the same measured constant weight.
   type WeightInfo = ();
 }
@@ -228,6 +228,7 @@ impl cumulus_pallet_parachain_system::Config for Runtime {
   type SelfParaId = parachain_info::Pallet<Runtime>;
   type OutboundXcmpMessageSource = XcmpQueue;
   type RelayParentOffset = ConstU32<0>;
+  type SchedulingSignatureVerifier = ();
   type DmpQueue = frame_support::traits::EnqueueWithOrigin<MessageQueue, RelayOrigin>;
   type ReservedDmpWeight = ReservedDmpWeight;
   type XcmpMessageHandler = XcmpQueue;

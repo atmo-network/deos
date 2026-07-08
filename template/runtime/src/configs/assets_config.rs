@@ -173,7 +173,7 @@ impl pallet_asset_conversion::Config for Runtime {
   type BenchmarkHelper = ();
   type HigherPrecisionBalance = polkadot_sdk::sp_core::U256;
   type LiquidityWithdrawalFee = LiquidityWithdrawalFee;
-  type LPFee = ConstU32<0>;
+  type LPFee = LiquidityWithdrawalFee;
   type MaxSwapPathLength = ConstU32<4>;
   type MintMinLiquidity = MintMinLiquidity;
   type PalletId = AssetConversionPalletId;

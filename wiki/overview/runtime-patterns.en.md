@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/polkadot-sdk-2603.insights.en.md
+  - ../../docs/polkadot-sdk-2606.insights.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer

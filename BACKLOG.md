@@ -28,8 +28,8 @@
 > - Same-asset auto-compound reward settlement
 > - Unified 20/80 transaction-fee and AAA-fee routing to collator / Fee Sink when an author exists, with 100% to Fee Sink when no author is resolved
 > - Economic-claim inventory covers 10 anchored runtime claims with proof-kind, tautology-risk, and falsification-note metadata
-> - No active local runtime/doc anti-rot slices remain; open items are conditional, externally gated, watch-only, or product-pressure-triggered
-> - Polkadot SDK `2603` / node `1.22.3` runtime line
+> - Polkadot SDK `2606` / node `1.24.0` runtime line
+> - Active framework-evolution slices focus on keeping DEOS aligned with useful Polkadot SDK runtime patterns without blindly adopting irrelevant upstream pallets or product layers
 
 ## Open Product / Client Work
 
@@ -42,6 +42,17 @@
 - [ ] `Reserved edge-lane growth slice`: only if product pressure creates another reserved left/right lane, define the concrete lane role and extend `RESERVED_LANE_SPECS` without reintroducing user-reorderable edge-lane state.
 - [ ] `Governance state separation slice`: only if proposal composition or archive work grows enough to create a named ownership conflict, split the state boundary at that concrete seam.
 - [ ] `Materialized provider boundary slice`: only when a second indexed/archive provider family exists, decide whether `adapters/materialized-history/` should become a first-class `materialized/` or `providers/` slice.
+
+## Runtime Framework Evolution
+
+> These slices keep DEOS current with useful Polkadot SDK runtime patterns while preserving the framework boundary: adopt configuration discipline, reusable primitives, and economic mechanisms; do not import unrelated product layers such as Revive contracts by default.
+> Source context for agents beyond their training cutoff: Polkadot SDK `stable2606` release notes — <https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2606>.
+
+- [ ] `Runtime cadence profile`: define a cadence profile contract that derives time-sensitive runtime constants from a configurable block-duration target instead of hardcoding one block speed. Exit criteria: audit voting periods, AAA cooldowns/retry windows, staking epochs, cleanup windows, and docs for assumptions that would break when moving between conventional ~6s blocks and faster sub-second / ~500ms profiles; add a validation guard for new block-count assumptions where practical.
+- [ ] `V3 scheduling / block-bundling readiness profile`: document and encode a non-enabled readiness profile for future V3 scheduling / block-bundling adoption. Exit criteria: list runtime/operator prerequisites, benchmark and block-weight margin checks, `on_idle` / hook pressure review, message-queue/XCM budget considerations, and a clear condition for moving from legacy scheduling to V3-ready or V3-enabled.
+- [ ] `Staking reward source abstraction`: evolve staking reward ingress so distribution logic is separated from reward origin, allowing externally funded or treasury-budgeted pots alongside existing same-asset reward inflow. Exit criteria: specify and prototype a minimal runtime/pallet interface for `ExternallyFundedPot`-style reward sources, epoch snapshot timing, pot denominator fixing, and compatibility with current auto-compound claim flows.
+- [ ] `Budget recipient primitives`: introduce typed budget-recipient primitives or runtime helpers for framework-owned economic destinations such as staking reward pots, governance treasuries, liquidity reserves, and System AAA actors. Exit criteria: replace any new raw-account economic routing in touched surfaces with typed recipient derivation and decide whether a future mutable registry pallet is justified or overkill.
+- [ ] `Unclaimed reward policy`: make staking/native reward leftovers explicit runtime policy instead of implicit residue. Exit criteria: define rollover / return-to-Fee-Sink / burn / treasury-routing options, choose the current reference policy, and cover expiry or settlement behavior with tests.
 
 ## Collator Economics & Fee Routing
 
@@ -92,7 +103,6 @@
 - [ ] `Low-severity npm audit follow-up`: monitor the current npm audit report for SvelteKit/cookie and bits-ui/runed advisories; do not apply suggested semver-major/downgrade fixes unless upstream publishes a compatible non-regressive path.
 - [ ] `Formatter peer compatibility watch`: no active formatter problem exists; keep `prettier-plugin-svelte` on the current 3.x line while `@trivago/prettier-plugin-sort-imports 6.0.2` declares optional peer compatibility with `prettier-plugin-svelte 3.x`, and revisit only when the sort-imports peer range supports 4.x or the formatter stack is intentionally changed.
 - [ ] `Watch Node type major`: Only if the web-client toolchain intentionally moves to the Node 26 surface or the 25.x line stops receiving compatible updates, evaluate `@types/node` 26.x; otherwise keep the current 25.x type line.
-- [ ] `Template cargo update blocker`: `cargo update --manifest-path template/Cargo.toml --dry-run` currently fails because SDK `polkadot-sdk v2603.0.0 -> sc-service -> sc-network -> litep2p v0.13.3 -> multihash v0.17.0` requires yanked `core2 v0.4.0`; revisit only through an upstream-compatible Polkadot SDK/litep2p path rather than local dependency surgery.
 - [ ] `Track Safrole/Sassafras release readiness and parachain-consumable randomness availability in paritytech/polkadot-sdk`
 - [ ] `Treat the current Polkadot/JAM post-quantum roadmap as a directional beacon-over-VRF signal, not as proof of a shipped parachain-consumable API`
 - [ ] `Watch the current upstream signals only in the live polkadot-sdk monorepo`: Sassafras (`#41`, `#1336`, `#7669`) and BLS stabilization (`#10327`, `#11149`)

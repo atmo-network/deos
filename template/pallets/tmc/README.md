@@ -4,8 +4,8 @@
 
 ## SDK baseline
 
-This pallet is maintained against the current DEOS `Polkadot SDK 2603 / node 1.22.3` line.
-The 2603 upgrade required one pallet-local cleanup here: the old `RuntimeDebug` derive was replaced with standard `Debug` for the current line, while the larger compatibility fallout still landed in runtime/session/XCM integration surfaces.
+This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
+The 2606 upgrade did not require further pallet-local semantic changes here; the previous 2603 `RuntimeDebug` cleanup remains in place, while the current compatibility fallout landed in runtime/parachain-system/asset-conversion integration surfaces.
 
 ## Scope
 

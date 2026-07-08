@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/polkadot-sdk-2603.insights.en.md
+  - ../../docs/polkadot-sdk-2606.insights.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: developer
@@ -34,7 +34,7 @@ The DEOS framework is built on top of modern blockchain and web technologies. Th
 
 ### Polkadot SDK
 
-DEOS is built as a Parachain runtime using the Polkadot SDK. It follows the modern `Polkadot SDK 2603` baseline, rather than outdated Substrate patterns.
+DEOS is built as a Parachain runtime using the Polkadot SDK. It follows the modern `Polkadot SDK 2606` baseline, rather than outdated Substrate patterns.
 
 - **Language**: Rust
 - **Macro System**: `frame::v2` for strongly typed pallet definitions

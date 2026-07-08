@@ -1,6 +1,6 @@
 //! The Substrate Node Template runtime. This can be compiled with `#[no_std]`, ready for Wasm.
 //!
-//! SDK 2603 Compliance:
+//! SDK 2606 Compliance:
 //! - Uses polkadot_sdk umbrella imports
 //! - Omni Node deployment (no custom node crate)
 //! - Frame V2 pallets with correct declaration order
@@ -52,7 +52,7 @@ pub const VERSION: sp_version::RuntimeVersion = sp_version::RuntimeVersion {
   authoring_version: 1,
   impl_version: 1,
   system_version: 3,
-  spec_version: 210,
+  spec_version: 211,
   transaction_version: 100,
 };
 

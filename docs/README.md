@@ -16,9 +16,9 @@ These docs describe the protocol and its reference implementation, not a finishe
 
 `START HERE`: Before contributing code or designing features, understanding the underlying framework patterns is mandatory.
 
-- [Polkadot SDK 2603 Best Practices](./polkadot-sdk-2603.insights.en.md)
+- [Polkadot SDK 2606 Best Practices](./polkadot-sdk-2606.insights.en.md)
   _! REQUIRED READING !_
-  Modern architecture patterns for the Polkadot SDK 2603 standard. Covers unified dependency management, `frame::v2` macros, `Omni Node` utilization, the newer session-key ownership/runtime-API flow, and the `Runtime-as-Config` pattern.
+  Modern architecture patterns for the Polkadot SDK 2606 standard. Covers unified dependency management, `frame::v2` macros, `Omni Node` utilization, the newer session-key ownership/runtime-API flow, and the `Runtime-as-Config` pattern.
 
 ### 2. Philosophy & Vision
 

@@ -13,7 +13,7 @@ sources:
   - ../../docs/core.architecture.en.md
   - ../../docs/asset-registry.architecture.en.md
   - ../../docs/randomness.strategy.en.md
-  - ../../docs/polkadot-sdk-2603.insights.en.md
+  - ../../docs/polkadot-sdk-2606.insights.en.md
   - ../../template/README.md
 status: active
 audience: newcomer

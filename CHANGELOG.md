@@ -4,6 +4,13 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.6.9: Stable2606 Runtime Line
+
+- `[Runtime Platform]` Upgraded the template workspace to Polkadot SDK `2606.0.0`, `polkadot-sdk-frame 0.18.0`, `cumulus-pallet-parachain-system 0.29.0`, `substrate-wasm-builder 34.0.0`, and `sp-api 43.0.0`, moved the template toolchain to the current stable Rust line, and refreshed the lockfile on the upstream-compatible path that removes the old yanked `core2` cargo-update blocker. Impact: the reference runtime now builds against the current stable2606 crate line.
+- `[Runtime Integration]` Added the SDK 2606-required `RelayParentOffsetApi::max_claim_queue_offset`, kept V3 scheduling disabled through `SchedulingSignatureVerifier = ()`, updated the runtime and test asset-conversion LP fee bindings to `Get<Permill>`, and bumped runtime `spec_version` to `211`. Impact: DEOS preserves its current async-backing posture while satisfying the new runtime API and pallet configuration contracts.
+- `[Operations / Docs / Wiki]` Local binary downloads now default to `polkadot-stable2606` / node `v1.24.0`, SDK tracking docs/context and generated wiki projections point at the 2606 baseline, and the obsolete template cargo-update blocker was retired from the backlog. Impact: operators, agents, and in-client knowledge surfaces no longer target the stable2603 patch line.
+- `[Release] Rust workspace package markers`: Synchronized the template workspace Cargo package versions and lockfile entries to `0.6.9`. Impact: Rust artifacts advertise the stable2606 runtime-line release.
+
 ## 0.6.8: Validation and Knowledge Projection Hardening
 
 - `[Simulator] Proof-boundary contract`: Clarified `/simulator` as the historical TMCTOL economic hypothesis lab and mathematical reference capsule for formulas, thresholds, conservation, floor/compression scenarios, and parameter behavior. Impact: contributors can use the simulator for tokenomic truth without treating it as a shadow runtime or parity target for pallets, AAA, governance, XCM, client flows, storage, or weights.

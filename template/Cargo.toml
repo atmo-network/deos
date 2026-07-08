@@ -61,12 +61,12 @@ pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", 
 pallet-tmc = { path = "./pallets/tmc", default-features = false }
 
 # Polkadot SDK umbrella crate
-polkadot-sdk = { version = "2603.0.0", default-features = false }
+polkadot-sdk = { version = "2606.0.0", default-features = false }
 
 # Polkadot SDK individual crates
-frame = { package = "polkadot-sdk-frame", version = "0.15.0", default-features = false }
-cumulus-pallet-parachain-system = { version = "0.26.0", default-features = false }
-substrate-wasm-builder = "32.0.0"
+frame = { package = "polkadot-sdk-frame", version = "0.18.0", default-features = false }
+cumulus-pallet-parachain-system = { version = "0.29.0", default-features = false }
+substrate-wasm-builder = "34.0.0"
 
 # External crates
 codec = { package = "parity-scale-codec", version = "3.6", default-features = false, features = ["derive"] }
@@ -78,7 +78,7 @@ scale-info = { version = "2.11", default-features = false, features = ["derive"]
 serde = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 smallvec = "1.11"
-sp-api = { version = "41.0.0", default-features = false }
+sp-api = { version = "43.0.0", default-features = false }
 sp-arithmetic = { version = "28.0.1", default-features = false }
 
 [profile.release]
