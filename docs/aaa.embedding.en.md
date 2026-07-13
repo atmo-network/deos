@@ -83,7 +83,7 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 AAA guarantees task-scoped atomicity, not whole-plan atomicity. A failed executable task rolls back all task-local storage effects and its success event. Earlier successful steps in the same execution plan remain committed. After rollback, `StepErrorPolicy` decides whether the cycle aborts or continues.
 
 | Surface                 | AAA guarantee                                                                                             | Adapter/runtime obligation                                                                                |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+|---|---|---|
 | `Transfer`              | Transfer task runs in the task transaction; failed transfer emits failure/summary only                    | Asset adapter must not preserve partial debit/credit on failure                                           |
 | `Swap`                  | Swap task rolls back if adapter returns error after intermediate mutation                                 | DEX adapter must keep quote, debit, credit, fee, and pool mutation atomic or rely on the AAA transaction  |
 | `AddLiquidity`          | LP success event persists only when the whole task succeeds                                               | DEX adapter must not leave one reserve, LP mint, or debit committed after a late error                    |

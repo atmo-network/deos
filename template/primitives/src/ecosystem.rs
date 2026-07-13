@@ -39,12 +39,14 @@ pub mod aaa_ids {
   pub const FEE_SINK_AAA_ID: u64 = 1;
 
   /// Liquidity Actor System AAA — transforms protocol capital into LP tokens
-  /// Created second active System AAA at genesis (`aaa_id = 2`; legacy constant name)
+  /// Created second active System AAA at genesis (`aaa_id = 2`)
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
   ///   hex:  `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab`
   ///   SS58: `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C`
-  pub const ZAP_MANAGER_AAA_ID: u64 = 2;
+  pub const LIQUIDITY_ACTOR_AAA_ID: u64 = 2;
+  /// Legacy alias for [`LIQUIDITY_ACTOR_AAA_ID`] (pre-AAA-abstraction Zap Manager name).
+  pub const ZAP_MANAGER_AAA_ID: u64 = LIQUIDITY_ACTOR_AAA_ID;
 
   /// TOL Bucket A (Anchor) — immutable LP accumulator
   /// Created at genesis (`aaa_id = 3`)
@@ -288,7 +290,7 @@ pub mod params {
 
   /// Default cooldown for System actors (10 blocks ≈ 1 minute).
   ///
-  /// Applied to genesis System AAAs (Burning Actor, Liquidity Actor) to prevent
+  /// Applied to genesis System AAAs (Burn Actor, Liquidity Actor) to prevent
   /// resource exhaustion on repeated cycle failures.
   pub const SYSTEM_AAA_COOLDOWN_BLOCKS: u32 = 10;
 
@@ -298,19 +300,26 @@ pub mod params {
   /// builder chooses a stricter policy.
   pub const SYSTEM_AAA_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(5);
 
-  /// Maximum tolerated slippage for liquidity-actor swap steps (3%).
-  /// Liquidity-actor execution plans derive their concrete `SwapExactIn.slippage_tolerance`
+  /// Maximum tolerated slippage for Liquidity Actor swap steps (3%).
+  /// Liquidity Actor execution plans derive their concrete `SwapExactIn.slippage_tolerance`
   /// from the current native reserve depth and clamp it to this upper bound.
-  pub const ZAP_MANAGER_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(3);
+  pub const LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(3);
+  /// Legacy alias for [`LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE`].
+  pub const ZAP_MANAGER_MAX_SWAP_SLIPPAGE: Perbill = LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE;
 
-  /// Minimum tolerated slippage for liquidity-actor swap steps (0.25%).
+  /// Minimum tolerated slippage for Liquidity Actor swap steps (0.25%).
   /// Deep pools tighten toward this floor instead of keeping the shallow-pool cap.
-  pub const ZAP_MANAGER_MIN_SWAP_SLIPPAGE: Perbill = Perbill::from_parts(2_500_000);
+  pub const LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE: Perbill = Perbill::from_parts(2_500_000);
+  /// Legacy alias for [`LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE`].
+  pub const ZAP_MANAGER_MIN_SWAP_SLIPPAGE: Perbill = LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE;
 
-  /// Native reserve depth reference for liquidity-actor dynamic slippage.
-  /// At this native reserve depth, the clamp still allows the configured Zap max;
+  /// Native reserve depth reference for Liquidity Actor dynamic slippage.
+  /// At this native reserve depth, the clamp still allows the configured max;
   /// deeper pools tighten inversely from there.
-  pub const ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance = 1_000 * PRECISION;
+  pub const LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance = 1_000 * PRECISION;
+  /// Legacy alias for [`LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE`].
+  pub const ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance =
+    LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE;
 
   /// Maximum accepted donation ratio error for native staking LP farming (1%).
   pub const NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR: Perbill = Perbill::from_percent(1);
@@ -387,9 +396,13 @@ mod tests {
   #[test]
   fn zap_slippage_bounds_are_ordered() {
     assert!(
-      params::ZAP_MANAGER_MIN_SWAP_SLIPPAGE.deconstruct()
-        <= params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE.deconstruct()
+      params::LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE.deconstruct()
+        <= params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE.deconstruct()
     );
-    assert!(params::ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE >= params::PRECISION);
+    assert!(params::LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE >= params::PRECISION);
+    assert_eq!(
+      params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE,
+      params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE
+    );
   }
 }

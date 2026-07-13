@@ -21,7 +21,7 @@ TMCTOL (Token Minting Curve + Treasury-Owned Liquidity) is a tokenomic standard 
 `2×2 Positioning Matrix (abbreviations only)`:
 
 | Curve ↓ / Liquidity → | `POL`    | `TOL`    |
-| :-------------------- | :------- | :------- |
+|:---|:---|:---|
 | `TBC`                 | `TBCPOL` | `TBCTOL` |
 | `TMC`                 | `TMCPOL` | `TMCTOL` |
 
@@ -414,7 +414,7 @@ Net effect: stress corridor compression with floor-ceiling convergence
 `Progression Example` (R_foreign = 666,667 Foreign, m = 1,500,000):
 
 | Supply | P_ceiling | P_stress (min) | Spread |
-| ------ | --------- | -------------- | ------ |
+|---|---|---|---|
 | 1M     | 1.501     | 0.11           | 13.6×  |
 | 500k   | 0.751     | 0.22           | 3.4×   |
 | 200k   | 0.301     | 0.56           | 0.54×  |

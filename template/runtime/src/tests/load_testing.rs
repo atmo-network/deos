@@ -462,8 +462,9 @@ fn test_multi_user_concurrent_chaos() {
     // Snapshot global state before chaos
     let initial_total_native = Balances::total_issuance();
     let _initial_total_asset_a = Assets::total_issuance(ASSET_A);
-    let treasury_account =
-      crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID);
+    let treasury_account = crate::AAA::sovereign_account_id_system(
+      primitives::ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
+    );
     let initial_treasury_native = Balances::free_balance(&treasury_account);
 
     // Execute random concurrent operations

@@ -131,7 +131,7 @@ npm run dev
 For local native-staking demos, regenerate the chain spec with current runtime presets, start the local network, then run:
 
 ```sh
-../scripts/07-seed-web-client-state.sh
+../scripts/seed-web-client-state.sh
 ```
 
 That script is local-dev-only.

@@ -1,7 +1,7 @@
 ---
 page_type: comparison
 title: Physics-First vs Politics-First
-summary: The DEOS manifesto argues that DAO survival should come from hard economic physics rather than from ordinary governance discretion. This comparison page summarizes that argument and the repository's L0, L1, and L2 layering model.
+summary: The DEOS manifesto separates explicit protocol mechanisms from ordinary governance so politics can direct an economy without routinely renegotiating its foundations.
 locale: en
 canonical_page_id: physics-vs-politics
 translation_status: source
@@ -23,62 +23,61 @@ related:
   - Governance Domains
   - Newcomer FAQ
   - Core Terms
-last_compiled: 2026-04-15
-confidence: 0.91
+last_compiled: 2026-07-13
+confidence: 0.95
 ---
 
 # Physics-First vs Politics-First
 
 ## Summary
 
-The DEOS manifesto frames most crypto governance systems as `politics all the way down`. In that model, even survival-critical rules remain ordinary governance subjects, so treasury, liquidity, and downside protection can all be negotiated away.
+A politics-first economy leaves issuance, liquidity, treasury discipline, and foundational risk boundaries exposed to ordinary governance cycles. During stress, governance stops steering and becomes the largest attack surface.
 
-DEOS argues for a different architecture: put survival rules into explicit economic physics first, then let governance steer growth and tactics inside those boundaries.
+The manifesto compresses the alternative into one line: `Bad Politics cannot kill Good Physics.` DEOS puts Economic Physics first through protocol-managed issuance, liquidity, routing, and autonomous execution, then gives governance strategy, direction, and accountability inside those boundaries.
 
-## The Three Layers
+Economic Physics does not make markets predictable or eliminate governance. It makes the protocol's own behavior inspectable.
 
-The manifesto uses a three-layer model:
+## Three Responsibilities
 
-- `L0 Physics` for invariants and risk boundaries
-- `L1 Strategy` for direction and capital allocation
-- `L2 Tactics` for execution through teams, agents, and local DAO loops
+- `L0 Economic Physics` defines mechanisms and risk boundaries
+- `L1 Strategy` chooses direction, delegation, and capital priorities
+- `L2 Tactics` turns direction into verifiable work through teams, dApps, communities, and agents
 
-The important claim is that higher layers should not casually rewrite the survival contract of lower layers.
+Higher layers may evolve lower-layer contracts only through explicit constitutional treatment. They should not silently bypass them through routine tactical policy.
 
-## Politics-First DAO
+## Politics-First
 
-In the manifesto's comparison, a politics-first DAO has these traits:
+- Foundational rules remain ordinary policy
+- Liquidity depends on recurring discretion
+- Treasury behaves mainly as a pool of spendable assets
+- Market shocks repeatedly become constitutional crises
+- Responsibility blurs when governance changes the assumptions it was meant to operate within
 
-- Survival is negotiable
-- Liquidity is managed manually
-- Treasury becomes a political battlefield
-- Governance decides whether the system lives
+## Physics-First
 
-That makes governance itself the main failure surface during stress.
+- Protocol reactions follow named mechanisms
+- Governance authority has explicit domains and payloads
+- Capital moves through bounded execution lanes
+- Foundational change remains visible and auditable
+- Local experiments aim to remain contained rather than silently rewriting kernel assumptions
 
-## Physics-First DAO
+Physics-first does not abolish politics. It assigns politics a strategic role while foundational mechanisms carry the system's structural load. The manifesto still states that the system can fail; its added honesty clause says failure should not begin with ambiguity about who held power or whether a promise existed in code.
 
-The physics-first alternative tries to make:
+## TMCTOL as the Reference Standard
 
-- Survival structural instead of merely social
-- Liquidity mathematically enforced instead of manually improvised
-- Governance responsible for direction rather than existential repair
+TMCTOL expresses Economic Physics through unidirectional curve issuance, Treasury-Owned Liquidity, max-output routing, System AAA execution, and domain-scoped governance.
 
-This does not eliminate governance. It narrows governance into a clearer and safer job.
+These mechanisms can create reserve support, recurring burn flow, and tighter coordination under documented preconditions. They do not guarantee price, profit, liquidity, volatility reduction, or protection from every implementation and governance failure.
 
-## Why This Matters for TMCTOL
+## The Practical Test
 
-TMCTOL expresses the physics side through mint-only issuance, treasury-owned liquidity, and fee burning. Governance still matters, but the docs try to keep the strongest risk boundaries outside ordinary tactical rewriting.
+Ask any protocol economy:
 
-That is why DEOS governance keeps explicit protection tracks and a fail-closed bias for strategic subjects.
+1. What is politically negotiable?
+2. What is mechanically non-negotiable?
+3. What happens when governance is wrong?
 
-## Broader Vision and Impact
-
-Beyond software architecture, the DEOS manifesto hints at a broader template for organizational coordination. By structurally preventing reserve extraction and moving survival-critical rules from subjective politics to objective physics, the framework offers a model where economic security relies on mathematical guarantees rather than social trust.
-
-If this standard scales, it provides a "Foundation in a Box" for sovereign communities to build institutions that cannot be destroyed by poor day-to-day management. It reduces the transactional cost of trust to near zero through an autonomous emission policy (TMC), immutable treasury-owned liquidity management (TOL), and the simultaneous execution of diverse capital strategies (storing hard pool backing, deploying decentralized capital, and routing funding streams to domains like development or network-effect stimulation).
-
-When these mechanisms interact, they generate powerful emergent properties—such as volatility stabilization (Gravity Well) and structural floor protection (Elasticity Inversion)—that a manually managed treasury could never reliably replicate. Together with deterministic cybernetic execution (AAA), these properties shift economic stability from a political negotiation to a law of protocol thermodynamics.
+Precise answers separate a protocol constitution from a governance narrative.
 
 ## Related
 

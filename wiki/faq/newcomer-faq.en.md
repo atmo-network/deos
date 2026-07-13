@@ -49,7 +49,7 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 
 **Is DEOS the token or the standard?** No. `DEOS` is the framework and reference stack. `TMCTOL` is the current flagship tokenomic standard running on top of it.
 
-**Why is the wiki organized by domains?** Because DEOS is easier to understand as interacting domains than as a pallet list: economic physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, and future gates.
+**Why is the wiki organized by domains?** Because DEOS is easier to understand as interacting domains than as a pallet list: Economic Physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, and future gates.
 
 **Where should I start?** If you only want the shortest route, read [DEOS Framework Overview](../overview/deos-framework.en.md), [Core Terms](../glossary/core-terms.en.md), and [TMCTOL Standard](../concepts/tmctol-standard.en.md). If you are about to change something, use [Reading Paths](../getting-started/reading-paths.en.md).
 

@@ -163,7 +163,7 @@ Current implementation does not maintain a dedicated `MintingPaused` storage fla
 ### 3. Configuration Parameters
 
 | Parameter             | Type      | Description                                                                 |
-| :-------------------- | :-------- | :-------------------------------------------------------------------------- |
+|:---|:---|:---|
 | `InitialPrice`        | Balance   | Base price P₀ at curve genesis                                              |
 | `SlopeParameter`      | Balance   | Linear curve slope (price increment per token)                              |
 | `Precision`           | Balance   | Scaling factor for fixed-point arithmetic (e.g., 10¹²)                      |
@@ -291,7 +291,7 @@ While TMC provides the ceiling, TOL provides floor support:
 ## Error Conditions
 
 | Error                 | Condition                                | Resolution                                  |
-| :-------------------- | :--------------------------------------- | :------------------------------------------ |
+|:---|:---|:---|
 | `CurveAlreadyExists`  | `create_curve` called for existing curve | Reuse the existing immutable launch curve   |
 | `NoCurveExists`       | Minting attempted without curve          | Governance must call `create_curve`         |
 | `InsufficientBalance` | User payment < calculated cost           | Increase payment amount                     |

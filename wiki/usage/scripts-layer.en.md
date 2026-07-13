@@ -40,7 +40,7 @@ Numbered scripts perform specific leaf operations and do not orchestrate each ot
 - `01-download-binaries.sh`: Fetch Polkadot SDK binaries
 - `03-build-runtime.sh`: Compile the WASM artifact
 - `05-spawn-zombienet.sh`: Launch the local network
-- `07-seed-web-client-state.sh`: Top up local wallet, swap, and native-staking state for live web-client testing
+- `seed-web-client-state.sh`: Top up local wallet, swap, and native-staking state for live web-client testing
 
 ### Orchestrators
 

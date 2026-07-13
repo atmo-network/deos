@@ -41,7 +41,7 @@ confidence: 0.96
 - `01-download-binaries.sh` — скачать бинарники Polkadot SDK
 - `03-build-runtime.sh` — собрать Wasm-артефакт runtime
 - `05-spawn-zombienet.sh` — поднять локальную сеть
-- `07-seed-web-client-state.sh` — подготовить локальное состояние wallet/swap/native-staking для live-тестирования web-client
+- `seed-web-client-state.sh` — подготовить локальное состояние wallet/swap/native-staking для live-тестирования web-client
 
 ### Оркестраторы
 

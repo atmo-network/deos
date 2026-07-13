@@ -116,7 +116,7 @@ The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace befor
 ### Core pool and receipt state
 
 | Storage                                      | Role                   | Notes                                   |
-| :------------------------------------------- | :--------------------- | :-------------------------------------- |
+|:---|:---|:---|
 | `Pools[asset_id]`                            | Share-vault totals     | shares, accounted balance, staker count |
 | `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | bounded receipt -> base lookup          |
 | `Positions[(asset_id, account)]`             | Legacy share ownership | bridge for pre-receipt positions        |
@@ -127,7 +127,7 @@ The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace befor
 ### Native LP security state
 
 | Storage                                       | Role                                                        |
-| :-------------------------------------------- | :---------------------------------------------------------- |
+|:---|:---|
 | `NativeLpLocks[(account, operator)]`          | Collator-specific locked LP position                        |
 | `OperatorNativeLpLocked[operator]`            | Aggregate LP backing for session ranking                    |
 | `AccountNativeLpLocked[account]`              | Aggregate account LP custody for NativeVotePower            |
@@ -463,7 +463,7 @@ Do not move unbounded history or sorted dashboards into consensus state.
 
 ### Native AMM availability
 
-Native LP nomination, AAA donation, read-model valuation, and claim+compound require the canonical `NTVE/stNTVE` pool to exist and be non-empty. The local development preset now registers the native staking asset and `stNTVE` receipt at genesis and seeds the LP asset-id namespace, while `scripts/07-seed-web-client-state.sh` can create/fund the local `NTVE/stNTVE` pool after the chain starts.
+Native LP nomination, AAA donation, read-model valuation, and claim+compound require the canonical `NTVE/stNTVE` pool to exist and be non-empty. The local development preset now registers the native staking asset and `stNTVE` receipt at genesis and seeds the LP asset-id namespace, while `scripts/seed-web-client-state.sh` can create/fund the local `NTVE/stNTVE` pool after the chain starts.
 
 ### Production/operator NTVE/stNTVE bootstrap flow
 

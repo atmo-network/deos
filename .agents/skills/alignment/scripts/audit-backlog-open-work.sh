@@ -69,17 +69,10 @@ run_audit() {
     fi
 
     matches="$(awk '
-        /^## Conditional \/ Externally Gated Work/ { in_conditional = 1; in_watch = 0; next }
-        /^## / && in_conditional { in_conditional = 0; in_watch = 0 }
-        in_conditional && /^### External dependency watch/ { in_watch = 1; next }
-        in_conditional && /^- \[ \] `/ {
-            if (in_watch) {
-                if ($0 !~ /`(Low-severity|Formatter|Template|Track|Treat|Watch|Only if|Only when|Only after)/) {
-                    print FNR ":" $0
-                }
-            } else if ($0 !~ /`Only (if|when|after) /) {
-                print FNR ":" $0
-            }
+        /^## Conditional \/ Externally Gated Work/ { in_conditional = 1; next }
+        /^## / && in_conditional { in_conditional = 0 }
+        in_conditional && /^- \[ \] `/ && $0 !~ /: Only (if|when|after) / {
+            print FNR ":" $0
         }
     ' "$PROJECT_ROOT/BACKLOG.md")"
     if [[ -n "$matches" ]]; then

@@ -38,7 +38,7 @@ confidence: 0.91
 
 ## Summary
 
-DEOS has several linked domains: framework identity, economic physics, autonomous actors, routing, governance, staking, read models, client, tooling, and future gates. You do not need to read everything in one pass.
+DEOS has several linked domains: framework identity, Economic Physics, autonomous actors, routing, governance, staking, read models, client, tooling, and future gates. You do not need to read everything in one pass.
 
 If you only need the shortest entry, use [Start Here](start-here.en.md) first. Use this page when you need a broader role-based reading route after choosing the right onboarding path.
 

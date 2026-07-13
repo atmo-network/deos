@@ -43,7 +43,7 @@ confidence: 0.86
 Эта страница связывает ключевые инварианты и угрозы DEOS/TMCTOL с owner surface, путем проверки, допустимостью governance-изменений и главным failure mode. Это не обзорная статья, а плотная карта контроля.
 
 | Инвариант                   | Владелец    | Проверка              | Governance           | Failure                |
-| --------------------------- | ----------- | --------------------- | -------------------- | ---------------------- |
+|---|---|---|---|---|
 | TMC integral pricing        | TMC         | simulator + tests     | нет post-launch      | wrong mint price       |
 | Unidirectional minting      | TMC         | pallet + runtime      | нет                  | reserve extraction     |
 | Router fee burn/split       | Router      | runtime + bench       | ограничено           | fee bypass             |
@@ -58,7 +58,7 @@ confidence: 0.86
 ## Центральные угрозы
 
 | Угроза | Форма | Защита | Owner |
-| --- | --- | --- | --- |
+|---|---|---|---|
 | Governance выводит TOL | увод резервов | domain payloads + protection | governance/spec |
 | Обход роутера | обход fee/burn | шлюз роутера | router |
 | Неправильный bucket | потеря происхождения | сегментированные каналы | TMCTOL + AAA |

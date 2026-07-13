@@ -496,7 +496,7 @@ The related state distinction is also important:
 ## Public Call Surface
 
 | Call | Extrinsic                                | Role                            |
-| :--- | :--------------------------------------- | :------------------------------ |
+|:---|:---|:---|
 | `0`  | `record_winning_vote`                    | low-level admin ingress         |
 | `1`  | `record_winning_vote_batch`              | bounded admin batch ingress     |
 | `2`  | `submit_proposal`                        | admin proposal create path      |

@@ -2,19 +2,14 @@
 
 `pallet-axial-router` is the DEOS deterministic routing and swap pallet for the current TMCTOL route families.
 
-## SDK baseline
-
-This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
-The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-axial-router` core logic.
-
 ## Scope
 
 The current kernel/runtime slice provides:
 
 - User-facing `swap` execution and pallet-facing `execute_swap_for(...)`
 - Route comparison across direct XYK, direct TMC mint, and Native-anchored multi-hop paths
-- Oracle-aware pricing and pre-swap EMA updates
-- Deterministic route selection through efficiency scoring
+- Oracle-aware pricing and pre-execution EMA snapshots
+- Deterministic route selection by maximum recipient output
 - Router fee calculation and routing through a runtime adapter
 - Tracked-asset management for oracle monitoring
 - Fee exemption for designated system accounts
@@ -22,7 +17,7 @@ The current kernel/runtime slice provides:
 ## Key rule
 
 The router is a **decision engine**, not a generic policy layer.
-It chooses among bounded route families using deterministic price/impact comparisons and the Native asset as the universal anchor.
+It chooses among bounded route families by maximum recipient output and uses the Native asset as the universal multi-hop anchor. Price-impact and fee fields remain informational quote metadata rather than route-selection inputs.
 
 ## Execution rule
 

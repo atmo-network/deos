@@ -106,7 +106,7 @@ Expected result:
 Optional local demo state:
 
 ```sh
-./scripts/07-seed-web-client-state.sh
+./scripts/seed-web-client-state.sh
 ```
 
 If you get stuck, use:
@@ -138,7 +138,7 @@ node simulator/tests.js
 Safe first-change map:
 
 | Change | Start | Then touch | Minimum validation |
-| --- | --- | --- | --- |
+|---|---|---|---|
 | TMC price/slope | Simulator + formulas | Runtime config after math holds | Simulator, then TMC tests |
 | TOL split/reserves | TMCTOL spec + simulator | AAA topology, runtime config, docs | Simulator + runtime tests |
 | Router fee policy | Axial Router | Router config, governance bounds | Router tests + claims |
@@ -160,7 +160,7 @@ Done when you know which choices are product narrative, simulator parameters, ru
 Use the smallest meaningful gate first. You do not need every gate for every change.
 
 | Path or change | Minimum validation |
-| --- | --- |
+|---|---|
 | Understanding only | No command required |
 | Wiki/onboarding text | `npm --prefix web-client run validate:wiki` |
 | Web client behavior | `npm --prefix web-client run validate` |

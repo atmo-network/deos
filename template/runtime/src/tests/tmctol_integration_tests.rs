@@ -170,7 +170,7 @@ fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
       );
     assert_ok!(AAA::update_execution_plan(
       RuntimeOrigin::root(),
-      aaa_ids::ZAP_MANAGER_AAA_ID,
+      aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
       execution_plan,
     ));
 
@@ -251,7 +251,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
     .expect("malformed zap plan still fits runtime bounds");
     assert_ok!(AAA::update_execution_plan(
       RuntimeOrigin::root(),
-      aaa_ids::ZAP_MANAGER_AAA_ID,
+      aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
       malformed_plan,
     ));
 
@@ -798,7 +798,7 @@ fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
     assert_eq!(
       execution_plan.len(),
       3,
-      "ZM execution_plan must have 3 steps"
+      "Liquidity Actor execution_plan must have 3 steps"
     );
     assert!(matches!(execution_plan[0].task, Task::AddLiquidity { .. }));
     assert_eq!(
@@ -913,7 +913,7 @@ fn zap_execution_plan_tightens_slippage_as_native_depth_grows() {
     };
     assert_eq!(
       shallow_slippage,
-      primitives::ecosystem::params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE
+      primitives::ecosystem::params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE
     );
     assert_eq!(deep_slippage, Perbill::from_parts(6_000_000));
     assert!(deep_slippage < shallow_slippage);
@@ -926,7 +926,7 @@ fn zap_execution_plan_uses_max_slippage_when_pool_depth_is_unavailable() {
     let foreign = AssetKind::Local(ASSET_A);
     assert_eq!(
       crate::configs::aaa_config::TmctolGenesisSystemAaas::resolve_zap_slippage_tolerance(foreign),
-      primitives::ecosystem::params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE
+      primitives::ecosystem::params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE
     );
   });
 }
@@ -936,35 +936,36 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
   use primitives::ecosystem::aaa_ids;
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
-    let zm = AAA::sovereign_account_id_system(aaa_ids::ZAP_MANAGER_AAA_ID);
-    let zm_id = aaa_ids::ZAP_MANAGER_AAA_ID;
+    let liquidity_actor = AAA::sovereign_account_id_system(aaa_ids::LIQUIDITY_ACTOR_AAA_ID);
+    let liquidity_actor_id = aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
     let foreign = AssetKind::Local(ASSET_A);
-    let pre_seeded = Balances::free_balance(&zm);
+    let pre_seeded = Balances::free_balance(&liquidity_actor);
     if pre_seeded > 0 {
       let _ = <Balances as Currency<crate::AccountId>>::transfer(
-        &zm,
+        &liquidity_actor,
         &ALICE,
         pre_seeded - crate::EXISTENTIAL_DEPOSIT,
         polkadot_sdk::frame_support::traits::ExistenceRequirement::KeepAlive,
       );
     }
-    let pre_seeded_foreign = crate::Assets::balance(ASSET_A, &zm);
+    let pre_seeded_foreign = crate::Assets::balance(ASSET_A, &liquidity_actor);
     if pre_seeded_foreign > 0 {
       use polkadot_sdk::frame_support::traits::fungibles::Mutate;
       let _ = <crate::Assets as Mutate<crate::AccountId>>::transfer(
         ASSET_A,
-        &zm,
+        &liquidity_actor,
         &ALICE,
         pre_seeded_foreign,
         polkadot_sdk::frame_support::traits::tokens::Preservation::Expendable,
       );
     }
     let fund_amount = 10 * primitives::ecosystem::params::PRECISION;
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&zm, fund_amount);
+    let _ =
+      <Balances as Currency<crate::AccountId>>::deposit_creating(&liquidity_actor, fund_amount);
     assert_ok!(super::common::mint_tokens(
       ASSET_A,
       &ALICE,
-      &zm,
+      &liquidity_actor,
       fund_amount
     ));
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
@@ -979,7 +980,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       );
     assert_ok!(AAA::update_execution_plan(
       RuntimeOrigin::root(),
-      zm_id,
+      liquidity_actor_id,
       execution_plan
     ));
     let price = 1_000_000_000_000u128;
@@ -1009,10 +1010,10 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       bucket_a_lp > bucket_b_lp,
       "Bucket A (50%) must receive more than B (16.67%)"
     );
-    let zm_lp_remaining = crate::Assets::balance(lp_asset_id, &zm);
+    let liquidity_actor_lp_remaining = crate::Assets::balance(lp_asset_id, &liquidity_actor);
     assert!(
-      zm_lp_remaining < dust,
-      "ZM sovereign LP must be below dust after distribution"
+      liquidity_actor_lp_remaining < dust,
+      "Liquidity Actor sovereign LP must be below dust after distribution"
     );
     assert!(has_aaa_event(|event| {
       matches!(
@@ -1021,7 +1022,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
           aaa_id: id,
           failed_steps: 0,
           ..
-        } if *id == zm_id
+        } if *id == liquidity_actor_id
       )
     }));
   });
@@ -1030,7 +1031,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
 // --- TOL Bucket Unwind to Treasury (SC-014 Variant) ---
 
 #[test]
-fn bm_and_zm_activation_for_first_foreign_asset() {
+fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
   use polkadot_sdk::frame_support::traits::tokens::{Fortitude, Precision, Preservation};
   use primitives::ecosystem::aaa_ids;
@@ -1044,7 +1045,7 @@ fn bm_and_zm_activation_for_first_foreign_asset() {
     let lp_asset = AssetKind::Local(lp_asset_id);
     let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
     let bm = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
-    let zm = AAA::sovereign_account_id_system(aaa_ids::ZAP_MANAGER_AAA_ID);
+    let liquidity_actor = AAA::sovereign_account_id_system(aaa_ids::LIQUIDITY_ACTOR_AAA_ID);
     // Clear preexisting balances to ensure clean test state
     let pre_seeded_bm_native = Balances::free_balance(&bm);
     if pre_seeded_bm_native > crate::EXISTENTIAL_DEPOSIT {
@@ -1067,9 +1068,12 @@ fn bm_and_zm_activation_for_first_foreign_asset() {
       );
     }
     let bm_fund_amount = 2 * primitives::ecosystem::params::PRECISION;
-    let zm_fund_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let liquidity_actor_fund_amount = 10 * primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, bm_fund_amount);
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&zm, zm_fund_amount);
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+      &liquidity_actor,
+      liquidity_actor_fund_amount,
+    );
     assert_ok!(super::common::mint_tokens(
       super::common::ASSET_A,
       &ALICE,
@@ -1079,8 +1083,8 @@ fn bm_and_zm_activation_for_first_foreign_asset() {
     assert_ok!(super::common::mint_tokens(
       super::common::ASSET_A,
       &ALICE,
-      &zm,
-      zm_fund_amount
+      &liquidity_actor,
+      liquidity_actor_fund_amount
     ));
     let price = 1_000_000_000_000u128;
     pallet_axial_router::EmaPrices::<Runtime>::insert(AssetKind::Native, foreign, price);
@@ -1101,7 +1105,7 @@ fn bm_and_zm_activation_for_first_foreign_asset() {
     ));
     assert_ok!(AAA::update_execution_plan(
       RuntimeOrigin::root(),
-      aaa_ids::ZAP_MANAGER_AAA_ID,
+      aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
       zap_execution_plan
     ));
     // Explicitly trigger execution since we deposited funds before updating execution plans
@@ -1111,7 +1115,7 @@ fn bm_and_zm_activation_for_first_foreign_asset() {
     ));
     assert_ok!(AAA::manual_trigger(
       RuntimeOrigin::root(),
-      aaa_ids::ZAP_MANAGER_AAA_ID
+      aaa_ids::LIQUIDITY_ACTOR_AAA_ID
     ));
     let issuance_before = Balances::total_issuance();
     let foreign_before_bm = crate::Assets::balance(super::common::ASSET_A, &bm);
@@ -1135,7 +1139,7 @@ fn bm_and_zm_activation_for_first_foreign_asset() {
     let bucket_a_lp = crate::Assets::balance(lp_asset_id, &bucket_a);
     assert!(
       bucket_a_lp > 0,
-      "ZM must distribute LP tokens to TOL buckets"
+      "Liquidity Actor must distribute LP tokens to TOL buckets"
     );
   });
 }

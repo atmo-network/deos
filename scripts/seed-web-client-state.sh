@@ -16,7 +16,7 @@ NATIVE_STAKING_LIQUIDITY="${NATIVE_STAKING_LIQUIDITY:-5000000000000}"
 
 usage() {
     cat <<'EOF'
-Usage: 07-seed-web-client-state.sh [OPTIONS]
+Usage: seed-web-client-state.sh [OPTIONS]
 
 Seeds the live local parachain with the remaining minimum economic state needed for real
 web-client wallet/swap/native-staking testing: the current dev/local chain spec is expected to

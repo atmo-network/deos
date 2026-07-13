@@ -103,11 +103,49 @@ for (const claim of data.claims || []) {
   for (const anchor of claim.falsification_tests || []) validateAnchor(claim.id, 'test', anchor);
 }
 
+// Public contract hygiene: architecture and Router entrypoints must not
+// reintroduce retired selection vocabulary or flash-loan immunity claims.
+const staleSelectionProse = [
+  { re: /efficiency[ -]*scor(?:e|ing)/i, label: 'stale efficiency-score route-selection vocabulary' },
+  { re: /protocol-first\s+routing/i, label: 'stale Protocol-First routing vocabulary' },
+];
+const flashLoanOverclaims = [
+  { re: /immune\s+to\s+flash/i, label: 'immune to flash-loan overclaim' },
+  { re: /eliminates\s+flash/i, label: 'eliminates flash-loan overclaim' },
+];
+const publicContractFiles = ['AGENTS.md', 'template/pallets/axial-router/README.md'];
+const architectureDocsDir = path.join(projectRoot, 'docs');
+if (fs.existsSync(architectureDocsDir)) {
+  for (const name of fs.readdirSync(architectureDocsDir)) {
+    if (/\.architecture\.en\.md$/.test(name)) publicContractFiles.push(path.join('docs', name));
+  }
+}
+const wikiRouterFiles = [
+  'wiki/overview/axial-router.en.md',
+  'wiki/overview/axial-router.ru.md',
+  'wiki/_meta/navigation.json',
+];
+publicContractFiles.push(...wikiRouterFiles);
+for (const relativePath of publicContractFiles) {
+  const absolutePath = path.join(projectRoot, relativePath);
+  if (!fs.existsSync(absolutePath)) continue;
+  const content = fs.readFileSync(absolutePath, 'utf8');
+  const bans = relativePath === 'AGENTS.md'
+    ? staleSelectionProse
+    : [...staleSelectionProse, ...flashLoanOverclaims];
+  for (const ban of bans) {
+    if (ban.re.test(content)) {
+      errors.push(`${relativePath}: banned economic overclaim / stale vocabulary: ${ban.label}`);
+    }
+  }
+}
+
 if (errors.length > 0) {
   for (const error of errors) console.error(error);
   process.exit(1);
 }
 console.log(`Validated ${data.claims.length} economic claims`);
+console.log('Architecture absolute-verb hygiene passed');
 NODE
     log_success "Economic claim inventory passed"
 }

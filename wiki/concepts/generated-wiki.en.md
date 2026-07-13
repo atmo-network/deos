@@ -35,7 +35,7 @@ confidence: 0.9
 
 The DEOS wiki is a self-contained interpretation product. It is grounded in repository truth, but readers should not need to leave the wiki to understand a page.
 
-Its job is to turn DEOS from a file tree into a semantic domain graph for humans, agents, and the reference client: economic physics, autonomous actors, routing, governance, staking, read models, client, tooling, and future gates.
+Its job is to turn DEOS from a file tree into a semantic domain graph for humans, agents, and the reference client: Economic Physics, autonomous actors, routing, governance, staking, read models, client, tooling, and future gates.
 
 ## Page Contract
 

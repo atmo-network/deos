@@ -36,7 +36,7 @@ Contributing to DEOS means changing a domain without weakening the rest of the g
 
 ### 1. Find the domain
 
-Use [Domain Map](../concepts/domain-map.en.md) first. Decide whether the change belongs to economic physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, or future-gated work.
+Use [Domain Map](../concepts/domain-map.en.md) first. Decide whether the change belongs to Economic Physics, autonomous actors, routing, governance, staking, read models, client UX, tooling, or future-gated work.
 
 ### 2. Respect physics-first design
 

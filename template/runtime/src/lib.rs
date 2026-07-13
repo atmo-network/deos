@@ -52,7 +52,7 @@ pub const VERSION: sp_version::RuntimeVersion = sp_version::RuntimeVersion {
   authoring_version: 1,
   impl_version: 1,
   system_version: 3,
-  spec_version: 211,
+  spec_version: 212,
   transaction_version: 100,
 };
 

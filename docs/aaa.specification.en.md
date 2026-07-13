@@ -290,7 +290,7 @@ Requirements:
 Runtime SHOULD classify tasks into coarse weight buckets to reduce maintenance fragility:
 
 | Bucket          | Tasks                                                |
-| --------------- | ---------------------------------------------------- |
+|---|---|
 | `SimpleAssetOp` | `Transfer`, `Burn`, `Mint`                           |
 | `DexSwap`       | `SwapExactIn` / `SwapExactOut`                       |
 | `DexLiquidity`  | `AddLiquidity`, `RemoveLiquidity`, `DonateLiquidity` |
@@ -785,7 +785,7 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 ### 10.3 Tooling Extrinsics
 
 | Extrinsic                        | Description                                                    |
-| -------------------------------- | -------------------------------------------------------------- |
+|---|---|
 | `permissionless_sweep(aaa_id)`   | Force lifecycle evaluation for one actor (REQUIRED)            |
 | `permissionless_sweep_many(ids)` | Bounded batch lifecycle evaluation (`len <= MaxSweepPerBlock`) |
 

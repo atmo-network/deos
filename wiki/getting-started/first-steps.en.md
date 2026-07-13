@@ -38,7 +38,7 @@ confidence: 0.93
 
 If you are new to DEOS, start with the hook before the domain graph. DEOS is a forkable runtime framework where token issuance, protocol-owned liquidity, routing, staking, governance, and automated actors become a deterministic institutional machine.
 
-The project is not just a runtime, not just a web client, and not just a tokenomic formula. It is a framework where economic physics, autonomous actors, governance, staking, client read models, and validation tools reinforce each other.
+The project is not just a runtime, not just a web client, and not just a tokenomic formula. It is a framework where Economic Physics, autonomous actors, governance, staking, client read models, and validation tools reinforce each other.
 
 A good first pass is: use [Start Here](start-here.en.md) to choose the 10-minute understanding path, the local-run path, or the fork-and-change-economy path. Then use this page when you need the broader domain map.
 

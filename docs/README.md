@@ -14,11 +14,13 @@ These docs describe the protocol and its reference implementation, not a finishe
 
 ### 1. Essential Foundation
 
-`START HERE`: Before contributing code or designing features, understanding the underlying framework patterns is mandatory.
+Before contributing code or designing features, establish the project boundary and current architecture from these maintained sources:
 
-- [Polkadot SDK 2606 Best Practices](./polkadot-sdk-2606.insights.en.md)
-  _! REQUIRED READING !_
-  Modern architecture patterns for the Polkadot SDK 2606 standard. Covers unified dependency management, `frame::v2` macros, `Omni Node` utilization, the newer session-key ownership/runtime-API flow, and the `Runtime-as-Config` pattern.
+- [Framework / Instance Contract](./framework-instance.contract.en.md) — separates reusable DEOS mechanisms from downstream product and economic policy.
+- [Core Architecture](./core.architecture.en.md) — maps the token-driven runtime, actor topology, shared primitives, and integration model.
+- [Read-Model Contract](./read-model.contract.en.md) — separates bounded canonical chain projections from indexed and materialized views.
+
+For runtime changes, also read the [Template Workspace README](../template/README.md) and the specification plus architecture document owned by the affected subsystem. Current Polkadot SDK conventions belong to the runtime workspace, code, tests, and project protocol rather than to a detached release-specific reading guide.
 
 ### 2. Philosophy & Vision
 

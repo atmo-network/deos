@@ -85,10 +85,11 @@ fn precision_constant_validation() {
 }
 
 #[test]
-fn router_intelligence_test() {
-  // Verify Router Intelligence (Bidirectional Compression)
-  // Case 1: XYK Output > TMC Output => Prefer XYK (Market Liquidity)
-  // Case 2: TMC Output > XYK Output => Prefer TMC (Protocol Liquidity/Ceiling)
+fn max_recipient_output_selects_between_xyk_and_tmc_test() {
+  // Falsification: with both mechanisms viable, changing which candidate has
+  // the greater recipient output must change the selected mechanism.
+  // Case 1: XYK output > TMC output => select XYK.
+  // Case 2: TMC output > XYK output => select TMC.
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     let user = 1u64;
@@ -96,10 +97,10 @@ fn router_intelligence_test() {
     let asset_out = AssetKind::Native;
     let amount_in = 1000 * PRECISION;
     // Setup: Mint assets to user (done in new_test_ext)
-    // Scenario 1: Market Liquidity is better (XYK > TMC)
-    // We want XYK ~ 1200, TMC ~ 1000
-    // Setup TMC: Rate 1.0 (1000*P in -> 1000*P out)
-    set_tmc_rate(asset_in, 1);
+    // Scenario 1: XYK is better while TMC remains a viable candidate.
+    // The mock TMC delivers 25% of total emission to the recipient, so rate 1
+    // yields 248.75 tokens after the router fee while XYK yields ~1496.24.
+    set_tmc_curve(asset_out, asset_in, 1);
     // Setup XYK: We need a pool that gives > TMC output (1000*P)
     // Pool formula: out = (in * res_out) / (res_in + in)
     // With amount_in = 1000*P, reserve_in = 1000*P, reserve_out = 3000*P:

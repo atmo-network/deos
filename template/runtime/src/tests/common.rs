@@ -56,7 +56,7 @@ pub fn burning_manager_account() -> AccountId {
 }
 
 pub fn liquidity_actor_account() -> AccountId {
-  crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID)
+  crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID)
 }
 
 pub fn aaa_fee_sink_account() -> AccountId {

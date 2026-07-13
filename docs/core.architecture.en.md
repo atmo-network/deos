@@ -4,7 +4,7 @@
 
 The DEOS (Deterministic Economic Operating System) framework, currently instantiated in this repository through the TMCTOL standard, represents a paradigm shift from event-driven blockchain logic to a `Token-Driven Economic Automaton`.
 
-The system operates as a deterministic state machine where specialized actors coordinate exclusively through `Balance Ingress`. It abandons the traditional "Request-Response" model in favor of `Continuous Flow Processing`. The network coordinates through explicit, permissionless token flows between dedicated accounts, ensuring that every state transition is mathematically bounded, economically productive, and immune to intra-block manipulation.
+The system operates as a deterministic state machine where specialized actors coordinate exclusively through `Balance Ingress`. It abandons the traditional "Request-Response" model in favor of `Continuous Flow Processing`. The network coordinates through explicit, permissionless token flows between dedicated accounts, keeping protocol state transitions deterministic and bounded. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
 
 All deterministic economic flows — deflationary burning, liquidity provisioning, treasury management, and protocol-token buyback — are expressed as declarative execution plans on a single runtime platform: `pallet-aaa` (Account Abstraction Actors). Fifteen genesis System actors replace three former standalone pallets, reducing total code by ~6000 LOC while expanding capability to a multi-token protocol economy.
 
@@ -33,7 +33,7 @@ All actors are System instances managed by `pallet-aaa`. The Axial Router and TM
 #### L1 Actors (Native Token Domain)
 
 | Actor                   | aaa_id | Plan summary                         | Trigger                      |
-| ----------------------- | ------ | ------------------------------------ | ---------------------------- |
+|---|---|---|---|
 | Burn Actor              | 0      | foreign → native swaps, then burn    | `Timer { every_blocks: 10 }` |
 | Liquidity Actor         | 2      | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }`  |
 | TOL Bucket A (Anchor)   | 3      | `Noop`; permanent LP accumulation    | `Timer` (Noop)               |
@@ -47,7 +47,7 @@ All actors are System instances managed by `pallet-aaa`. The Axial Router and TM
 #### L2 Actors (BLDR Protocol Token Domain)
 
 | Actor                | aaa_id | Execution Plan                         | Trigger                     |
-| -------------------- | ------ | -------------------------------------- | --------------------------- |
+|---|---|---|---|
 | BLDR Splitter        | 10     | Route NTVE + split BLDR 50/50          | `Timer { every_blocks: 1 }` |
 | BLDR Liquidity Actor | 11     | Add NTVE/BLDR LP → BLDR Bucket A       | `Timer { every_blocks: 1 }` |
 | BLDR Bucket A        | 12     | `Noop` — permanent BLDR LP accumulation | `Timer` (Noop)              |
@@ -64,7 +64,7 @@ To guarantee O(1) execution complexity and maximal interoperability, the archite
 The system uses a 32-bit ID space where the most significant nibble (4 bits) determines the asset category. Five production types are currently defined — additional nibbles are reserved for future use.
 
 | Nibble | Mask          | Constant              | Description                           |
-| :----- | :------------ | :-------------------- | :------------------------------------ |
+|:---|:---|:---|:---|
 | `0x1`  | `0x1000_0000` | `TYPE_PROTOCOL`       | Protocol-native tokens ($VETO, $BLDR) |
 | `0x5`  | `0x5000_0000` | `TYPE_STAKED`         | Native/local staking receipt assets   |
 | `0x6`  | `0x6000_0000` | `TYPE_STAKED_FOREIGN` | Foreign staking receipt assets        |
@@ -78,7 +78,7 @@ Native token ($NTVE) uses `AssetKind::Native` enum variant, not a bitmask ID.
 #### Protocol Tokens
 
 | Token   | AssetKind            | ID            | Role                                     |
-| ------- | -------------------- | ------------- | ---------------------------------------- |
+|---|---|---|---|
 | `$NTVE` | `Native`             | —             | Sovereign currency, L1 TMC emission      |
 | `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Governance token (deferred)              |
 | `$BLDR` | `Local(0x1000_0002)` | `0x1000_0002` | Builder incentive token, L2 TMC emission |
@@ -99,12 +99,12 @@ This architecture enables "Zero-Cost Inspection" where complex economic properti
 
 _The intellectual layer atop raw liquidity._
 
-- `Function`: Intelligent Aggregation. Calculates an `Efficiency Score` to choose between:
-  - `Market Liquidity`: Standard XYK Swaps.
-  - `Protocol Liquidity`: Direct Minting via TMC (if mathematically superior).
-  - `Complex Paths`: Multi-hop Native-anchored routes.
+- `Function`: Mechanism-only aggregation. Among candidate routes it always selects **max recipient output** (`max_by_key` on `expected_output`), not a policy score:
+  - `Market Liquidity`: Direct XYK swaps.
+  - `Protocol Liquidity`: Direct minting via TMC when that path delivers more output.
+  - `Complex Paths`: Multi-hop Native-anchored XYK routes.
 - `Multi-Curve Routing`: For any pair where `has_curve(to) && supports_collateral(to, from)`, the Router considers TMC as a candidate route. This generalizes beyond Native-only minting to support BLDR and future protocol tokens.
-- `Security Feature`: `Pre-Swap Oracle Update`. The router snapshots pool reserves _before_ execution to update the Oracle. This renders the system immune to Flash Loan attacks.
+- `Security mitigations (not complete MEV defense)`: **Direct** routes validate the candidate quote against the previously stored EMA, then snapshot current pre-execution pool reserves into the EMA before executing the swap; multi-hop routes rely on user `min_amount_out` / slippage only. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
 - `Execution`: Uses `Balance-Delta Verification` (Trustless Execution) — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
 
 #### 📉 TMC (Pallet — The Ceiling)
@@ -278,7 +278,7 @@ Adapters are pure pass-through — they execute operations without reinterpretin
 Execution-plan steps specify amounts via `AmountResolution`, enabling both static and dynamic resolution:
 
 | Variant                   | Description                    | Use case            |
-| ------------------------- | ------------------------------ | ------------------- |
+|---|---|---|
 | `Fixed(Balance)`          | Absolute amount                | Known transfers     |
 | `PercentageOfCurrent`     | % of current spendable balance | Gradual unwind      |
 | `PercentageOfTrigger`     | % of trigger-time balance      | Event-proportional  |
@@ -307,15 +307,15 @@ fn swap_exact_tokens_for_tokens(...) -> Result<Balance, DispatchError> {
 }
 ```
 
-### 5.2 Flash-Loan Resistant Oracle Pattern
+### 5.2 Direct-Route Deviation Validation and Pre-Execution Snapshot
 
-The system updates the pricing model based on the state _before_ the transaction distorts it.
+On direct routes the router first validates the selected quote against the previously stored EMA. After that validation succeeds, it snapshots the current pool reserves into the EMA before executing the swap. The current trade therefore cannot update the EMA before its own deviation check. This is a bounded manipulation mitigation on those paths, not a complete flash-loan or MEV defense (multi-hop relies on slippage; no ordering/commit protection on this launch line).
 
 ```rust
 pub fn swap(from: AssetKind, to: AssetKind, ...) -> DispatchResult {
-    // Update Oracle using Pre-Swap Reserves (immune to flash loans)
-    Self::update_oracle_from_reserves(from, to)?;
-    Self::execute_optimal_route(...)?;
+    let route = Self::prepare_optimal_route(...)?; // Select route; validate slippage and direct-route deviation.
+    Self::update_oracle_from_reserves(from, to)?; // Snapshot current pre-execution reserves only after validation.
+    Self::execute_prepared_route(route, ...)?;
     Ok(())
 }
 ```
@@ -428,7 +428,7 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 ### 8.1 Pallet Inventory
 
 | Pallet                    | Role                              | Hooks                      |
-| ------------------------- | --------------------------------- | -------------------------- |
+|---|---|---|
 | `pallet-aaa`              | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
 | `pallet-axial-router`     | Routing, fees, oracle             | Extrinsic-driven           |
 | `pallet-tmc`              | Multi-curve native emission       | Extrinsic-driven           |
@@ -440,7 +440,7 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 ### 8.2 Former Pallets (Consolidated into AAA)
 
 | Former Pallet                     | Replacement                         | LOC Saved |
-| --------------------------------- | ----------------------------------- | --------- |
+|---|---|---|
 | `pallet-burning-manager`          | System AAA #0 (Burn Actor plan)     | ~1100     |
 | `pallet-zap-manager`              | System AAA #2 (Liquidity Actor plan) | ~2200    |
 | `pallet-treasury-owned-liquidity` | System AAA #3..#6 (4 bucket actors) | ~3100     |
@@ -453,7 +453,7 @@ The DEOS architecture transforms the blockchain from a passive ledger into an `A
 
 By expressing all deterministic economic flows as declarative execution plans on a single platform (`pallet-aaa`), the system achieves:
 
-1. `Maximum Security`: Immune to Flash Loans and Dust Attacks. Slippage protection in every swap.
+1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see Axial Router architecture).
 2. `Composable Automation`: bounded AAA `Task` primitives compose into any economic flow. New actors require zero code changes.
 3. `Multi-Token Economy`: L1 (Native) and L2 (BLDR) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
 4. `Optimal Performance`: AAA scheduler uses budget-capped `on_idle` with bounded `on_initialize` bookkeeping only. No block bloat.
@@ -462,4 +462,4 @@ By expressing all deterministic economic flows as declarative execution plans on
 
 ---
 
-- `Last Updated`: March 2026
+- `Last Updated`: July 2026

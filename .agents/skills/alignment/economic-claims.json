@@ -1,8 +1,41 @@
 {
   "schema_version": 1,
-  "updated_for_release": "0.6.6",
-  "scope": "Load-bearing economic and runtime-safety claims in docs/*.architecture.en.md. This inventory is the source dataset for future semantic drift auditing.",
+  "updated_for_release": "0.6.10",
+  "scope": "Load-bearing economic and runtime-safety claims in docs/*.architecture.en.md. This inventory is the source dataset for future semantic drift auditing. Absolute-verb hygiene for architecture prose is enforced alongside the inventory.",
   "claims": [
+    {
+      "id": "router-max-output-selection",
+      "doc": "docs/axial-router.architecture.en.md",
+      "claim": "Axial Router selects among candidate routes by maximum recipient expected_output only; price_impact and total_fees are informational quote fields, not selection inputs.",
+      "status": "shipped mitigation",
+      "proof_kind": "characterization",
+      "tautology_risk": "low",
+      "falsification_note": "Reintroducing a non-output selection score or preferring TMC/XYK by policy would make max-output selection tests fail or diverge from prepare_optimal_route behavior.",
+      "code_anchors": [
+        "template/pallets/axial-router/src/lib.rs::max_by_key",
+        "template/pallets/axial-router/src/lib.rs::RouteComparison"
+      ],
+      "falsification_tests": [
+        "template/pallets/axial-router/src/tests.rs::max_recipient_output_selects_between_xyk_and_tmc_test"
+      ]
+    },
+    {
+      "id": "router-oracle-mitigation-not-immunity",
+      "doc": "docs/core.architecture.en.md",
+      "claim": "Pre-swap EMA snapshot and deviation guards on direct routes are shipped mitigations, not flash-loan or sandwich immunity; multi-hop routes rely on slippage only.",
+      "status": "shipped mitigation",
+      "proof_kind": "mitigation",
+      "tautology_risk": "low",
+      "falsification_note": "Removing direct-route EMA validation lets over-threshold trades succeed; architecture prose claiming immunity would also fail absolute-verb hygiene.",
+      "code_anchors": [
+        "template/pallets/axial-router/src/lib.rs::update_oracle_from_reserves",
+        "template/pallets/axial-router/src/lib.rs::validate_price_protection"
+      ],
+      "falsification_tests": [
+        "template/runtime/src/tests/tmctol_integration_tests.rs::oracle_deviation_rejects_swap_via_dexops",
+        "template/runtime/src/tests/tmctol_integration_tests.rs::axial_router_price_deviation_breakpoint_is_bound_to_pool_depth"
+      ]
+    },
     {
       "id": "tmc-integral-cost",
       "doc": "docs/tmc.architecture.en.md",

@@ -307,7 +307,7 @@ impl TmctolReadModel {
   }
 
   fn zap_postconditions() -> ZapPostconditionState<AccountId> {
-    let actor_id = ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID;
+    let actor_id = ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
     let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
     let maybe_actor = pallet_aaa::AaaInstances::<Runtime>::get(actor_id);
     let Some(zap) = maybe_actor else {

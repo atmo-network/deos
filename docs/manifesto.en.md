@@ -52,25 +52,25 @@ Execution happens through `L2 TOL DAOs` — autonomous units operating within th
 
 ## Politics-first vs Physics-first
 
-| Politics-first DAO                     | Physics-first DAO                     |
-| :------------------------------------- | :------------------------------------ |
-| Survival is negotiable                 | Survival is structural                |
-| Liquidity is managed manually          | Liquidity is enforced mathematically  |
-| Treasury is a political battlefield    | Treasury is a routing engine          |
+| Politics-first DAO | Physics-first DAO |
+|---|---|
+| Survival is negotiable | Survival is structural |
+| Liquidity is managed manually | Liquidity is enforced mathematically |
+| Treasury is a political battlefield | Treasury is a routing engine |
 | Governance decides if the system lives | Governance decides what to build next |
-| Failures become systemic               | Failures remain local                 |
+| Failures become systemic | Failures remain local |
 
 ---
 
 ## Principles
 
-| Principle                            | Meaning                                  |
-| :----------------------------------- | :--------------------------------------- |
-| **Resilience over hype**             | The system must survive market cycles    |
-| **Invariants over manual control**   | Code constrains catastrophic paths       |
+| Principle | Meaning |
+|---|---|
+| **Resilience over hype** | The system must survive market cycles |
+| **Invariants over manual control** | Code constrains catastrophic paths |
 | **Coordination over politicization** | Governance sets direction, not paralysis |
-| **Outcomes over status**             | Contribution is rewarded, not rhetoric   |
-| **Transparency over trust**          | Core rules must be verifiable            |
+| **Outcomes over status** | Contribution is rewarded, not rhetoric |
+| **Transparency over trust** | Core rules must be verifiable |
 
 ---
 
@@ -98,13 +98,6 @@ Any DAO can be evaluated with three questions:
 
 If survival is votable, governance is not a steering layer. It is only latency before failure.
 
-Join the coordination. Verify the code. Verify the math in the [TMCTOL specification](https://github.com/llblab/tmctol/blob/main/docs/tmctol.specification.en.md).
+Join the coordination. Verify the code. Verify the math in the [TMCTOL specification](./tmctol.specification.en.md).
 
 > Build a resilient form of collective governance with us.
-
----
-
-- `Version`: 0.1.0
-- `Date`: March 2026
-- `Author`: LLB Lab
-- `License`: MIT

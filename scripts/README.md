@@ -29,9 +29,6 @@ This directory is intentionally split into two classes:
 - [06-zombienet-e2e.sh](./06-zombienet-e2e.sh)
   Run the runtime-facing E2E scenario set against a live local network.
 
-- [07-seed-web-client-state.sh](./07-seed-web-client-state.sh)
-  Top up the remaining live local parachain state needed for real `web-client` wallet, swap, and native-staking testing. The current dev/local chain specs are expected to already ship the foreign asset, local native-staking asset, `stNTVE` receipt, router tracking, native curve, and staking registration in genesis, so this script focuses on Alice funding plus native/foreign and `NTVE/stNTVE` pool/liquidity bootstrapping rather than Root/Sudo-driven runtime setup.
-
 ## Orchestrators
 
 - [bootstrap-local-network.sh](./bootstrap-local-network.sh)
@@ -55,6 +52,9 @@ Project-local audit leaves are documented in `/.agents/skills/alignment/SKILL.md
   Reproduce the local CI workflow.
 
 ## Admin Utilities
+
+- [seed-web-client-state.sh](./seed-web-client-state.sh)
+  Idempotently prepare the composite live-chain state needed for local wallet, swap, and native-staking UI testing: verify genesis prerequisites, fund Alice, and create or top up the Native/foreign and `NTVE/stNTVE` pools. This is a named admin workflow rather than an atomic numbered leaf because it coordinates several state checks and transactions.
 
 - [export-papi-metadata.sh](./export-papi-metadata.sh)
   Export native runtime metadata through the committed `deos-runtime` metadata example and optionally regenerate the web-client PAPI descriptors. This replaces the old ad hoc temporary-test metadata export workflow.

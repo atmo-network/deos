@@ -116,7 +116,7 @@ AAA orchestrates actions against these pallets through adapter traits.
 `TmctolGenesisSystemAaas` currently provisions fifteen System actors:
 
 | Lane     | Actor                                | aaa_id | Genesis plan summary                   |
-| :------- | :----------------------------------- | -----: | :------------------------------------- |
+|:---|:---|---:|:---|
 | Core     | Burn Actor                           |      0 | `build_burn_execution_plan([], dust)`  |
 | Core     | Fee Sink                             |      1 | Phase 1 50/50 staking + LP donation    |
 | Core     | Liquidity Actor                      |      2 | `Noop` until pool activation           |
@@ -170,7 +170,7 @@ Current runtime operations reduce to four repeatable flows:
 ### Actor Classes
 
 | Class    | Ownership                     | Mint task allowed | Typical usage       |
-| :------- | :---------------------------- | :---------------- | :------------------ |
+|:---|:---|:---|:---|
 | `User`   | Signed owner + slot namespace | No                | User automation     |
 | `System` | Governance origin             | Yes               | Protocol automation |
 
@@ -458,7 +458,7 @@ AAA discovery is intentionally split by use case:
 ## Extrinsics (Implementation Surface)
 
 | Call | Extrinsic                        | Notes                                          |
-| :--- | :------------------------------- | :--------------------------------------------- |
+|:---|:---|:---|
 | `0`  | `create_user_aaa`                | fee, no `Mint`, default `[Noop]` close         |
 | `1`  | `create_system_aaa`              | governance origin, explicit mutability         |
 | `2`  | `pause_aaa`                      | mutable actors only                            |
@@ -628,7 +628,7 @@ Measurement environment (baseline run):
 Observed results:
 
 | Actors | Blocks | Total elapsed (ms) | ms/block | Total executions |
-| -----: | -----: | -----------------: | -------: | ---------------: |
+|---:|---:|---:|---:|---:|
 |     48 |     96 |             52.209 |   0.5438 |            4,608 |
 |    100 |    150 |             84.109 |   0.5607 |            7,200 |
 |  1,000 |    252 |            198.249 |   0.7867 |           12,096 |

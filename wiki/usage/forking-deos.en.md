@@ -82,7 +82,7 @@ If a fork changes these mechanics, it is no longer only rebranding DEOS. It is c
 A DEOS fork should not launch by only changing names. Before a downstream team treats the fork as launch-ready, it needs explicit choices for the economic, governance, runtime, client, and operator profile that turns the framework into a concrete ecosystem.
 
 | Area | Minimum fork decision |
-| --- | --- |
+|---|---|
 | Native asset | Name, ticker, decimals, allocation, role in staking/governance |
 | Foreign collateral set | Which assets can be registered, routed, or used as collateral |
 | TMC curve params | Initial price, slope, supply assumptions, launch immutability policy |

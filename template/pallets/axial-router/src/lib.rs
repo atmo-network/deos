@@ -201,7 +201,7 @@ pub mod pallet {
     #[pallet::constant]
     type BurningManagerAccount: Get<Self::AccountId>;
 
-    /// Liquidity actor account (fee-exempt system actor)
+    /// Liquidity Actor account (fee-exempt System AAA Actor)
     #[pallet::constant]
     type LiquidityActorAccount: Get<Self::AccountId>;
 
@@ -574,8 +574,8 @@ pub mod pallet {
       T::PalletId::get().into_account_truncating()
     }
 
-    /// Public entry point for system-level swaps (BM, ZM, and other pallets).
-    /// Handles fee exemption for system accounts, gross-input affordability, and optimal routing.
+    /// Public entry point for system-level swaps (Burn Actor, Liquidity Actor, and other pallets).
+    /// Handles fee exemption for system accounts, gross-input affordability, and max-output routing.
     #[transactional]
     pub fn execute_swap_for(
       who: &T::AccountId,

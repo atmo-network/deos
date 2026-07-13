@@ -42,7 +42,7 @@ confidence: 0.86
 This page maps important DEOS/TMCTOL invariants and threats to their owner surface, validation route, governance mutability, and main failure mode. It is intentionally denser than a narrative overview.
 
 | Invariant                   | Owner       | Validation            | Governance           | Failure                |
-| --------------------------- | ----------- | --------------------- | -------------------- | ---------------------- |
+|---|---|---|---|---|
 | TMC integral pricing        | TMC         | simulator + tests     | no post-launch       | wrong mint price       |
 | Unidirectional minting      | TMC         | pallet + runtime      | no                   | reserve extraction     |
 | Router fee burn/split       | Router      | runtime + bench       | bounded              | fee bypass             |
@@ -57,7 +57,7 @@ This page maps important DEOS/TMCTOL invariants and threats to their owner surfa
 ## Central Threats
 
 | Threat | Shape | Mitigation | Owner |
-| --- | --- | --- | --- |
+|---|---|---|---|
 | Governance drains TOL | reserve redirect | domain payloads + protection | governance/spec |
 | Router bypass | fee/burn avoided | router gateway | router |
 | Bucket misuse | provenance collapse | segmented lanes | TMCTOL + AAA |

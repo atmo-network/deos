@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Axial Router
-summary: The Axial Router is DEOS's protocol-first routing engine. It compares bounded route candidates by recipient output across market liquidity and protocol liquidity, updates its oracle before direct execution, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
+summary: The Axial Router is DEOS's max-output routing engine. It compares bounded route candidates by recipient output across market liquidity and protocol liquidity, updates its oracle before direct execution, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
 locale: en
 canonical_page_id: axial-router
 translation_status: source
@@ -24,7 +24,7 @@ related:
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-06-25
+last_compiled: 2026-07-13
 confidence: 0.95
 ---
 
@@ -34,7 +34,7 @@ confidence: 0.95
 
 The Axial Router is the runtime's route-selection engine. Its job is not to be a general-purpose DEX aggregator, but to make a bounded protocol decision about how a swap should execute inside a DEOS-style economy.
 
-In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity, then chooses the route that delivers the most output to the swap recipient under the runtime's rules.
+In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity, then chooses the route that delivers the most output to the swap recipient. That is pure max-output selection: no additional policy weight influences the result.
 
 Just as important, the protocol's canonical swap path goes through the router. Swapping around it is not part of the DEOS contract, because bypassing the router would bypass route selection, fee capture, and the protocol's own economic coordination logic.
 
@@ -53,7 +53,7 @@ That makes it a coordination layer, not just a convenience helper.
 
 The current implementation evaluates a small candidate set such as direct XYK routes, direct mint routes, and native-anchored multi-hop routes.
 
-It then ranks those routes by actual recipient output and executes the best one. The point is not to search an unbounded graph. The point is to give the protocol one deterministic and inspectable route-selection mechanism.
+It then ranks those routes by recipient expected output and executes the best one. Price impact and fee fields on quotes stay informational. Direct routes also apply pre-swap EMA deviation guards; multi-hop routes rely on user slippage only. That is a mitigation surface, not flash-loan or sandwich immunity.
 
 That also means the router is not optional glue around swaps. It is the required protocol gate for swap execution on the current line.
 

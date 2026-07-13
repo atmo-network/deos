@@ -9,7 +9,7 @@
 
 The Axial Router is a specialized `Deterministic Economic Automaton` designed for TMC (Token Minting Curve) ecosystems. Unlike general-purpose aggregators, it operates as a strict `Decision Engine` atop the parachain's internal liquidity.
 
-It enforces a `Protocol-First` routing logic: it evaluates every viable path and routes through the one that delivers the most output, arbitrating between Market Liquidity (XYK Pools) and Protocol Liquidity (TMC Curves), using the Native token as the sole routing anchor.
+It enforces a `Mechanism-Over-Policy` routing rule: it evaluates every viable path and always selects the route that delivers the most output to the recipient, arbitrating between Market Liquidity (XYK pools) and Protocol Liquidity (TMC curves), using the Native token as the sole multi-hop anchor.
 
 ## Architecture Overview
 
@@ -82,7 +82,7 @@ The router is a pure execution mechanism: it always picks the candidate route wi
 ### Fee Architecture
 
 | Property        | Value                                                            |
-| :-------------- | :--------------------------------------------------------------- |
+|:---|:---|
 | `Default Fee`   | `0.5%` (`Perbill::from_parts(5_000_000)`)                        |
 | `Math`          | `Perbill::mul_floor(amount_in)` — overflow-safe                  |
 | `Routing`       | One-hop: `User → Burn Actor` (no intermediate buffer)            |
@@ -166,7 +166,7 @@ Runtime `FeeManagerImpl` performs direct `Currency::transfer` (Native) or `Asset
 The EMA oracle maintains `2 dedicated storage maps` inside the Axial Router pallet:
 
 | Storage            | Type               | Key                      | Value                                   |
-| :----------------- | :----------------- | :----------------------- | :-------------------------------------- |
+|:---|:---|:---|:---|
 | `EmaPrices<T>`     | `StorageDoubleMap` | `(AssetKind, AssetKind)` | `Balance` — current EMA price           |
 | `EmaLastUpdate<T>` | `StorageDoubleMap` | `(AssetKind, AssetKind)` | `BlockNumberFor<T>` — last update block |
 
@@ -220,7 +220,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 ## Storage Summary
 
 | Storage            | Type                    | Description                            |
-| :----------------- | :---------------------- | :------------------------------------- |
+|:---|:---|:---|
 | `RouterFee<T>`     | `StorageValue<Perbill>` | Current bounded governance fee rate     |
 | `TrackedAssets<T>` | `BoundedVec`            | Governance-managed asset tracking list |
 | `EmaPrices<T>`     | `StorageDoubleMap`      | EMA prices per directional pair        |
@@ -229,7 +229,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 ## Extrinsics
 
 | Call Index | Extrinsic                                                        | Origin             | Weight      |
-| :--------- | :--------------------------------------------------------------- | :----------------- | :---------- |
+|:---|:---|:---|:---|
 | `0`        | `swap(from, to, amount_in, min_amount_out, recipient, deadline)` | Signed             | Benchmarked |
 | `1`        | `add_tracked_asset(asset)`                                       | AdminOrigin (Root) | Benchmarked |
 | `2`        | `update_router_fee(new_fee)`                                     | AdminOrigin (Root) | Benchmarked |
@@ -237,7 +237,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 ## Events
 
 | Event               | Fields                                 | Trigger                       |
-| :------------------ | :------------------------------------- | :---------------------------- |
+|:---|:---|:---|
 | `SwapExecuted`      | `who, from, to, amount_in, amount_out` | Successful swap; `amount_out` is recipient output |
 | `FeeCollected`      | `asset, amount, source, collector`     | Fee routed to Burn Actor |
 | `TrackedAssetAdded` | `asset`                                | Governance adds tracked asset |
@@ -246,7 +246,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 ## Errors
 
 | Error                      | Trigger                                       |
-| :------------------------- | :-------------------------------------------- |
+|:---|:---|
 | `NoRouteFound`             | No pool or TMC curve available for the pair   |
 | `IdenticalAssets`          | `from == to`                                  |
 | `ZeroAmount`               | `amount_in == 0`                              |
@@ -263,7 +263,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 All constants are sourced from `primitives::ecosystem` — single source of truth:
 
 | Constant            | Value                                   | Source                                          |
-| :------------------ | :-------------------------------------- | :---------------------------------------------- |
+|:---|:---|:---|
 | `PalletId`          | `*b"axialrt0"`                          | `ecosystem::pallet_ids::AXIAL_ROUTER_PALLET_ID` |
 | `DefaultRouterFee`  | `Perbill::from_parts(5_000_000)` (0.5%) | `ecosystem::params::AXIAL_ROUTER_FEE`           |
 | `MaxRouterFee`      | `Perbill::from_percent(1)`              | `ecosystem::params::MAX_AXIAL_ROUTER_FEE`       |
@@ -334,7 +334,7 @@ If a future launch line wants wider quote families, multi-scenario simulation, o
 The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementations:
 
 | Adapter                  | Trait                | Strategy                                                        |
-| :----------------------- | :------------------- | :-------------------------------------------------------------- |
+|:---|:---|:---|
 | `AssetConversionAdapter` | `AssetConversionApi` | Wraps `pallet_asset_conversion` with Balance-Delta Verification |
 | `TmcPalletAdapter<T>`    | `TmcInterface`       | Direct delegation to `pallet_tmc`                               |
 | `PriceOracleImpl<T>`     | `PriceOracle`        | Time-weighted EMA using `EmaPrices` + `EmaLastUpdate` storage   |
@@ -377,4 +377,4 @@ Axial Router is the central nervous system of the TMCTOL economic model. By enfo
 
 ---
 
-- `Last Updated`: February 2026
+- `Last Updated`: July 2026

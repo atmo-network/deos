@@ -1,138 +1,119 @@
-# DEOS: Deterministic Economic Operating System
+# DEOS
 
-> A forkable runtime framework where token issuance, protocol-owned liquidity, routing, staking, governance, and automated actors form deterministic economic circuits.
+> A forkable economic runtime where issuance, liquidity, routing, governance, and automation operate as one bounded cybernetic system.
 
-DEOS replaces discretionary DAO treasury management and vulnerable redemption narratives with explicit economic physics. By encoding liquidity accumulation, token distribution, routing, and bounded governance directly into the protocol, it turns vague downside stories into calculable, condition-dependent risk surfaces.
+DEOS is a Polkadot SDK framework for building protocol economies. It moves recurring economic coordination out of multisigs, bots, and operator convention into explicit runtime mechanisms that can be inspected, tested, configured, and forked.
 
-DEOS is intentionally the foundation layer, not a finished product. It provides the execution substrate for partner teams to fork, customize, and launch their own dApps and living ecosystems. TMCTOL is the first standard running on top of it: a mint-only curve plus treasury-owned liquidity, fee burn, bucketed policy, and bounded governance control.
+**TMCTOL** is the flagship standard implemented on DEOS. DEOS provides the reusable substrate; TMCTOL defines one concrete economy running on it.
 
-**Why the name DEOS**:
-
-- `Deterministic`: Protocol-managed economic reactions (minting, distributions, liquidity provision) are explicit and repeatable. They are executed by the runtime scheduler, not left to ad-hoc operator discretion.
-- `Economic`: The managed domain is capital formation and allocation—not arbitrary general-purpose application logic.
-- `Operating System`: The runtime kernel, AAA scheduler, routing, and governance act as domain-specific operating services for forked token economies.
-
-_For the wiki-native external entry point, start with the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md) if you are evaluating adoption, or [Start Here](./wiki/getting-started/start-here.en.md) to choose the 10-minute understanding path, the local-run path, or the fork-and-change-economy path._
+[Start in 60 seconds](./wiki/getting-started/deos-in-60-seconds.en.md) | [Evaluate DEOS](./wiki/getting-started/partner-pitch.en.md) | [Read the specification](./docs/tmctol.specification.en.md) | [Run locally](#run-locally)
 
 ---
 
-## Choose Your Path
+## One Economic Circuit
 
-- **I am evaluating DEOS as a partner** — start with the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md), which now includes the short evaluation route.
-- **I want to understand DEOS in 10 minutes** — follow [Start Here: Understand DEOS](./wiki/getting-started/start-here.en.md#path-a-understand-deos-in-10-minutes).
-- **I want to run it locally** — follow [Start Here: Run DEOS locally](./wiki/getting-started/start-here.en.md#path-b-run-deos-locally-in-30-minutes).
-- **I want to fork and change the economy** — follow [Start Here: Fork and change the economy safely](./wiki/getting-started/start-here.en.md#path-c-fork-and-change-the-economy-safely).
+- **TMC — deterministic issuance.** A unidirectional curve defines how assets enter circulation without promising protocol redemption.
+- **TOL — owned liquidity.** Mint output can accumulate into protected and governed liquidity lanes under an explicit bucket policy.
+- **Axial Router — max-output execution.** A bounded set of XYK, TMC, and Native-anchored routes compete by expected recipient output.
+- **AAA — autonomous operations.** Typed execution plans drive the Burn Actor, Liquidity Actor, splitters, buckets, and treasuries within storage and block-weight bounds.
+- **Governance — constrained change.** Domain-scoped primary/protection tracks execute typed payloads instead of exposing unrestricted administration.
 
-You do not need to read `AGENTS.md` to evaluate or fork DEOS. It is maintainer/agent operating context; newcomer onboarding starts in the wiki routes above.
-
----
-
-## 1. Key Mechanics
-
-### Unidirectional Minting (TMC)
-
-The protocol issues new tokens along a linear price curve. There is no redemption path—minting is the only way to move along the curve. This strict unidirectional rule ensures the ceiling price increases deterministically with supply.
-
-### Treasury-Owned Liquidity (TOL)
-
-When tokens are minted, the protocol automatically allocates a fixed share (66.6% in TMCTOL) into treasury-owned liquidity. Counted floor support is reported through the canonical stress-floor metric in the TMCTOL specification, including reserve scope, bucket state, supply basis, sellable-pressure assumption, and governance state.
-
-TOL liquidity is split across four buckets:
-
-- `A — Anchor`: protected floor-support liquidity, 50% of TOL
-- `B — Building`: governed LP unwind / BLDR buyback / ecosystem development, 16.6% of TOL
-- `C — Capital`: gradual LP unwind for treasury operations, 16.6% of TOL
-- `D — Dormant`: LP held until governance decides future policy, 16.6% of TOL
-
-### Bidirectional Compression & The Ratchet Effect
-
-A built-in fee is taken on trades and burned, reducing live supply when burn execution remains live. Under the named preconditions in the TMCTOL specification — counted reserves stay protected, sellable-pressure assumptions are explicit, and burn/Zap execution remains healthy — the mechanism can compress the corridor from both sides: lower live-supply ceiling pressure and stronger stress-floor support. The ratchet is therefore a condition-dependent protocol dynamic, not an unconditional price promise.
+DEOS makes deterministic execution claims, not deterministic market-outcome claims. Liquidity support, burn dynamics, oracle guards, and governance safety hold only under the preconditions defined in the specifications.
 
 ---
 
-## 2. Deterministic Automation (AAA)
+## Framework, Not Product Policy
 
-The `pallet-aaa` (Account Abstraction Actors) scheduler is DEOS's deterministic execution engine. Instead of relying on external keepers or centralized bots, DEOS orchestrates protocol operations from within the runtime.
+DEOS owns reusable mechanisms: runtime primitives, invariants, adapters, bounded read models, validation gates, and reference implementations.
 
-- **Stability Contract**: Each actor pipeline has strict weight bounds, distinct fee accounting, and atomicity guarantees. Identical network state produces identical outcomes.
-- **Event-Driven**: Actors can be triggered by scheduled timers or on-chain events (e.g., specific asset ingress).
-- **Execution Plans**: Complex economic flows are codified into predictable pipelines. DEOS currently ships with plans for **Minting** (distributing users/TOL shares), **Zapping** (converting raw emissions to LP), and **Burning** (selling accrued fees).
+A downstream ecosystem owns its identity, dApps, launch policy, labor model, treasury choices, token names, and concrete economic parameters.
 
----
-
-## 3. Project Topology
-
-- [`/docs`](./docs/) — Core architectural contracts, specifications, and architecture notes.
-- [`/template`](./template/) — The Polkadot Omni Node-ready Rust runtime workspace (`pallets/`, `runtime/`, `primitives/`).
-- [`/web-client`](./web-client/) — The SvelteKit browser reference UI and transaction flows.
-- [`/scripts`](./scripts/) — Operator and developer automation.
-- [`/simulator`](./simulator/) — The mathematical proving ground for validating core tokenomics.
-- [`/wiki`](./wiki/index.en.md) — Generated documentation optimized for frontend and newcomer onboarding; start with [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) or the [Partner Pitch](./wiki/getting-started/partner-pitch.en.md).
+Read the [Framework / Instance Contract](./docs/framework-instance.contract.en.md) before turning the reference topology into a product.
 
 ---
 
-## 4. Getting Started
+## Run Locally
 
-DEOS provides a unified local bootstrap script that automates the network environment: downloading the Polkadot SDK binaries (including the Omni Node), building the reference runtime, generating the chain spec, and spinning up a local Zombienet test network. Extra live demo state can be topped up separately after the network is running.
+### Requirements
 
-**Prerequisites**: [Rust](https://rustup.rs/) and [Node.js](https://nodejs.org/).
+- [Rust](https://rustup.rs/)
+- [Node.js](https://nodejs.org/)
+- Linux environment suitable for Polkadot SDK tooling
 
-Open **Terminal 1** for the network:
+### Start the network
 
 ```bash
-# Bootstrap the local network
-# (Downloads binaries, builds runtime, and starts Omni Node via Zombienet)
 ./scripts/bootstrap-local-network.sh
-
-# Optional: in another terminal, top up live web-client demo state
-./scripts/07-seed-web-client-state.sh
 ```
 
-Open **Terminal 2** for the web client:
+This builds the runtime, prepares the chain specification, downloads the required operator binaries, and starts a local Zombienet network through Omni Node.
+
+### Start the reference client
 
 ```bash
-# Install dependencies and start the UI
 cd web-client
 npm install
 npm run dev
 ```
 
-_(Note: When altering tokenomics or invariants, validate the math via `node ./simulator/tests.js` before touching the runtime)_
+Optional demo-state seeding, from the repository root:
+
+```bash
+./scripts/seed-web-client-state.sh
+```
+
+See [`scripts/README.md`](./scripts/README.md) for individual operator workflows and [`template/README.md`](./template/README.md) for Rust workspace commands.
 
 ---
 
-## 5. Validation
+## Repository
 
-Use the smallest meaningful gate for the touched surface. For fast repository-local hygiene before heavier builds or E2E work, run:
+| Path | Role | Entrypoint |
+|---|---|---|
+| `docs/` | Specifications and shipped architecture | [`docs/README.md`](./docs/README.md) |
+| `template/` | Runtime, pallets, primitives, weights, tests | [`template/README.md`](./template/README.md) |
+| `web-client/` | Browser reference client | [`web-client/README.md`](./web-client/README.md) |
+| `simulator/` | Deterministic TMCTOL mathematical reference | [`simulator/README.md`](./simulator/README.md) |
+| `scripts/` | Bootstrap, validation, benchmarks, administration | [`scripts/README.md`](./scripts/README.md) |
+| `wiki/` | Guided newcomer and frontend knowledge layer | [`wiki/index.en.md`](./wiki/index.en.md) |
+
+### Core contracts
+
+- [TMCTOL Specification](./docs/tmctol.specification.en.md)
+- [AAA Specification](./docs/aaa.specification.en.md)
+- [AAA External Runtime Embedding Guide](./docs/aaa.embedding.en.md)
+- [Governance Specification](./docs/governance.specification.en.md)
+- [Read-Model Contract](./docs/read-model.contract.en.md)
+- [Core Architecture](./docs/core.architecture.en.md)
+
+---
+
+## Validate
+
+Fast repository audit:
 
 ```bash
 ./scripts/validate-local.sh --audit-only
 ```
 
-That fast stack checks script entrypoints, template readiness, numeric parsing, simulator determinism and suite-mirror consistency, broad suppressions, backlog shape, web-client Domain DAG boundaries, trusted wiki markdown, and wiki consolidation drift. Add `--dependency-audit` when you intentionally want network-backed npm posture checks.
+Full changed-scope completion gate:
+
+```bash
+./.agents/skills/alignment/scripts/completion-gate.sh
+```
+
+When tokenomics, formulas, thresholds, or invariants change:
+
+```bash
+node ./simulator/tests.js
+```
 
 ---
 
-## 6. Documentation Index
+## Project State
 
-**Entrypoints**
+- [`BACKLOG.md`](./BACKLOG.md) — Open work and external gates
+- [`CHANGELOG.md`](./CHANGELOG.md) — Completed delivery history
+- [`AGENTS.md`](./AGENTS.md) — Durable architecture and engineering protocol
 
-- [Partner Pitch](./wiki/getting-started/partner-pitch.en.md) · [Start Here](./wiki/getting-started/start-here.en.md) · [DEOS in 60 Seconds](./wiki/getting-started/deos-in-60-seconds.en.md) · [Generated Wiki](./wiki/index.en.md) · [Complete Docs Index](./docs/README.md) · [Agent Protocols](./AGENTS.md)
-- [Backlog](./BACKLOG.md) · [Changelog](./CHANGELOG.md)
-
-**Specifications**
-
-- [Manifesto](./docs/manifesto.en.md) — Why physics over politics
-- [TMCTOL Spec](./docs/tmctol.specification.en.md) — Foundation, math, invariants
-- [Governance Spec](./docs/governance.specification.en.md) — Dual-track bounded governance
-- [AAA Spec](./docs/aaa.specification.en.md) — Deterministic actor automation
-- [AAA Embedding Guide](./docs/aaa.embedding.en.md) — Host-runtime checklist for reusing `pallet-aaa` without inheriting DEOS/TMCTOL topology
-- [Framework / Instance Contract](./docs/framework-instance.contract.en.md) — Mechanism-vs-policy boundary for forks
-
-**Architecture Notes**
-
-- [Core Architecture](./docs/core.architecture.en.md)
-- [TMC Architecture](./docs/tmc.architecture.en.md)
-- [Axial Router Architecture](./docs/axial-router.architecture.en.md)
-- [Asset Registry Architecture](./docs/asset-registry.architecture.en.md)
-- [AAA Internals](./docs/aaa.architecture.en.md)
+DEOS is infrastructure for economies whose rules must remain visible. It does not make markets predictable; it makes the protocol's own behavior explicit.

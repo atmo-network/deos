@@ -59,7 +59,7 @@ pub struct LiquidityActorAccount;
 impl polkadot_sdk::frame_support::traits::Get<AccountId> for LiquidityActorAccount {
   fn get() -> AccountId {
     pallet_aaa::Pallet::<crate::Runtime>::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID,
+      primitives::ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
     )
   }
 }

@@ -558,11 +558,12 @@ impl TmctolGenesisSystemAaas {
   pub fn resolve_zap_slippage_tolerance(foreign: AssetKind) -> Perbill {
     let Some((native_reserve, _)) = TmctolDexOps::get_pool_reserves(AssetKind::Native, foreign)
     else {
-      return ecosystem::params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE;
+      return ecosystem::params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE;
     };
-    let min_parts = u128::from(ecosystem::params::ZAP_MANAGER_MIN_SWAP_SLIPPAGE.deconstruct());
-    let max_parts = u128::from(ecosystem::params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE.deconstruct());
-    let reference_depth = ecosystem::params::ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE.max(1);
+    let min_parts = u128::from(ecosystem::params::LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE.deconstruct());
+    let max_parts = u128::from(ecosystem::params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE.deconstruct());
+    let reference_depth =
+      ecosystem::params::LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE.max(1);
     let scaled_parts = max_parts
       .saturating_mul(reference_depth)
       .saturating_div(native_reserve.max(1));
@@ -621,23 +622,23 @@ impl
     let fee_sink_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> =
       Self::build_phase1_fee_sink_execution_plan();
 
-    // --- Liquidity Actor (aaa_id = 2; legacy constant: ZAP_MANAGER_AAA_ID) ---
+    // --- Liquidity Actor (aaa_id = 2; legacy alias: ZAP_MANAGER_AAA_ID) ---
     // Timer-driven skeleton; real LP provisioning steps are added by governance
     // after TMC curves and pools are created (LP token IDs are pool-specific).
-    let zap_schedule = Schedule {
+    let liquidity_actor_schedule = Schedule {
       trigger: Trigger::Timer {
         every_blocks: 1,
         probability: None,
       },
       cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
     };
-    let zap_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> = alloc::vec![Step {
+    let liquidity_actor_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> = alloc::vec![Step {
       conditions: Default::default(),
       task: Task::Noop,
       on_error: StepErrorPolicy::AbortCycle,
     }]
     .try_into()
-    .expect("liquidity actor noop execution_plan fits");
+    .expect("Liquidity Actor noop execution_plan fits");
 
     alloc::vec![
       (
@@ -657,12 +658,12 @@ impl
         fee_sink_execution_plan,
       ),
       (
-        ecosystem::aaa_ids::ZAP_MANAGER_AAA_ID,
+        ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
         governance.clone(),
         Mutability::Mutable,
-        zap_schedule,
+        liquidity_actor_schedule,
         None,
-        zap_execution_plan,
+        liquidity_actor_execution_plan,
       ),
       // --- TOL Bucket A: Anchor (aaa_id = 3) ---
       (
@@ -924,7 +925,7 @@ impl TmctolGenesisSystemAaas {
       .expect("burn execution_plan fits within MaxSystemExecutionPlanSteps")
   }
 
-  /// Builds the liquidity-actor execution_plan for a specific foreign asset / LP pair.
+  /// Builds the Liquidity Actor execution_plan for a specific foreign asset / LP pair.
   ///
   /// Called by governance after pool creation, since LP asset IDs are
   /// pool-specific and unknown at genesis.
@@ -1030,7 +1031,7 @@ impl TmctolGenesisSystemAaas {
     ];
     steps
       .try_into()
-      .expect("liquidity actor execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("Liquidity Actor execution_plan fits within MaxSystemExecutionPlanSteps")
   }
 
   /// Builds a gradual LP unwind execution_plan for a TOL Bucket (B, C, or D).
@@ -1105,7 +1106,7 @@ impl TmctolGenesisSystemAaas {
   /// Builds the BLDR Splitter execution_plan.
   ///
   /// Receives both $NTVE (collateral) and $BLDR (minted zap share) from TMC output:
-  /// 1. Transfer 100% NTVE → BLDR liquidity actor
+  /// 1. Transfer 100% NTVE → BLDR Liquidity Actor
   /// 2. SplitTransfer BLDR 50/50 → BLDR liquidity + treasury lanes
   pub fn build_bldr_splitter_execution_plan(
     bldr_asset: AssetKind,
@@ -1131,7 +1132,7 @@ impl TmctolGenesisSystemAaas {
       ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
     );
     let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![
-      // Step 1: Forward all NTVE collateral to BLDR liquidity actor
+      // Step 1: Forward all NTVE collateral to BLDR Liquidity Actor
       Step {
         conditions: dust_guard(AssetKind::Native),
         task: Task::Transfer {
@@ -1168,7 +1169,7 @@ impl TmctolGenesisSystemAaas {
       .expect("BLDR splitter execution_plan fits within MaxSystemExecutionPlanSteps")
   }
 
-  /// Builds the BLDR liquidity-actor execution_plan for NTVE-BLDR provisioning.
+  /// Builds the BLDR Liquidity Actor execution_plan for NTVE-BLDR provisioning.
   ///
   /// ExecutionPlan steps:
   /// 1. AddLiquidity(NTVE, BLDR) — opportunistic at current pool ratio
@@ -1231,7 +1232,7 @@ impl TmctolGenesisSystemAaas {
     ];
     steps
       .try_into()
-      .expect("BLDR liquidity actor execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("BLDR Liquidity Actor execution_plan fits within MaxSystemExecutionPlanSteps")
   }
 
   /// Builds the Native Staking LP Farmer execution_plan.

@@ -39,7 +39,7 @@ confidence: 0.91
 ## Уровни
 
 | Уровень | Значение             | Пример                            |
-| ------- | -------------------- | --------------------------------- |
+|---|---|---|
 | Level 0 | Formula-defined      | TMC price следует curve equation  |
 | Level 1 | Simulator-supported  | Threshold держится на vectors     |
 | Level 2 | Runtime-enforced     | Tests фиксируют transition        |

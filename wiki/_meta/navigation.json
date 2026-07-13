@@ -480,8 +480,8 @@
           },
           "page_type": "overview",
           "summary": {
-            "en": "The protocol-first routing engine that compares bounded market and protocol-liquidity paths and serves as the mandatory gate for canonical swap execution.",
-            "ru": "Protocol-first движок маршрутизации, который сравнивает ограниченные пути через рыночную и протокольную ликвидность и служит обязательными воротами канонического обмена."
+            "en": "The max-output routing engine that compares bounded market and protocol-liquidity paths and serves as the mandatory gate for canonical swap execution.",
+            "ru": "Движок маршрутизации по максимальному выходу, который сравнивает ограниченные пути через рыночную и протокольную ликвидность и служит обязательными воротами канонического обмена."
           }
         },
         {
@@ -829,7 +829,7 @@
           },
           "page_type": "comparison",
           "summary": {
-            "en": "The manifesto-level contrast between structural economic physics and politics-by-default.",
+            "en": "The manifesto-level contrast between structural Economic Physics and politics-by-default.",
             "ru": "Сравнение между подходом, где правила выживания закреплены в экономической «физике», и подходом, где они остаются предметом обычной политики."
           }
         }
