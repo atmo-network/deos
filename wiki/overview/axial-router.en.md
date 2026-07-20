@@ -24,8 +24,8 @@ related:
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-07-13
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Axial Router
@@ -55,7 +55,7 @@ The current implementation evaluates a small candidate set such as direct XYK ro
 
 It then ranks those routes by recipient expected output and executes the best one. Price impact and fee fields on quotes stay informational. Direct routes also apply pre-swap EMA deviation guards; multi-hop routes rely on user slippage only. That is a mitigation surface, not flash-loan or sandwich immunity.
 
-That also means the router is not optional glue around swaps. It is the required protocol gate for swap execution on the current line.
+The router is not optional glue around canonical product swaps. It is the reference protocol gateway for fee-bearing route comparison, while the runtime does not claim that every lower-level Asset Conversion call is technically unreachable.
 
 ## Why It Matters to TMCTOL
 

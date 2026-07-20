@@ -32,14 +32,15 @@ related:
   - Token-Driven Automation
   - Governance Overview
   - Governance Domains
+  - $BLDR Builder Economy
   - Read-Model Split
   - UI Kit and Domain DAG
   - Generated Wiki
   - Reading Paths
   - Development Status
   - Newcomer FAQ
-last_compiled: 2026-05-17
-confidence: 0.96
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Core Terms
@@ -124,7 +125,7 @@ The protection token used for the strategic constitutional surface on the curren
 
 ### `$BLDR`
 
-The flagship tactical governance and builder-coordination token on the current line.
+The flagship tactical governance and builder-coordination token on the current line. See [$BLDR Builder Economy](../concepts/builder-economy.en.md).
 
 ### `stXXX`
 
@@ -177,6 +178,7 @@ The wiki current-state map for baseline domains, active focus, open boundaries, 
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Governance Overview](../overview/governance-overview.en.md)
 - [Governance Domains](../concepts/governance-domains.en.md)
+- [$BLDR Builder Economy](../concepts/builder-economy.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
 - [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)

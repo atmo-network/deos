@@ -30,8 +30,8 @@ related:
   - Tech Stack
   - Token Surfaces
   - Three-Layer Validation
-last_compiled: 2026-06-13
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Forking DEOS

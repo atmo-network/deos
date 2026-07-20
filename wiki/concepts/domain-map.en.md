@@ -25,8 +25,9 @@ related:
   - TMCTOL Standard
   - AAA System
   - Governance Overview
+  - $BLDR Builder Economy
   - Reference Client
-last_compiled: 2026-05-17
+last_compiled: 2026-07-20
 confidence: 0.9
 ---
 
@@ -70,6 +71,12 @@ The governance domain explains who may change what. DEOS governance is domain-sc
 
 Read [Governance Overview](../overview/governance-overview.en.md), [Governance Domains](governance-domains.en.md), and [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md).
 
+### Builder economy and useful work
+
+The builder domain sits where tactical governance, labor funding, protocol-owned liquidity, and downstream product demand meet. It explains how public invoices can reward completed work without turning founder status into a framework entitlement, while Native protection keeps the tactical domain inside its delegated boundary.
+
+Read [$BLDR Builder Economy](builder-economy.en.md), then use [Token Surfaces](token-surfaces.en.md) and [Governance Domains](governance-domains.en.md) for the token and authority details.
+
 ### Staking and rewards
 
 The staking domain explains share-vault receipts, native liquid staking, LP nomination, reward memory, and protocol donation into liquidity. It bridges economic security, user positions, and governance-conditioned rewards.
@@ -103,10 +110,11 @@ A useful traversal is:
 3. Autonomous actors execute recurring economic flows.
 4. Routing and asset identity connect users, assets, and protocol liquidity.
 5. Governance and protection decide which changes are allowed.
-6. Staking and rewards connect users to security and incentives.
-7. Client and read model expose the system without inventing truth.
-8. Tooling and validation keep the graph synchronized.
-9. Future gates prevent speculative work from masquerading as shipped reality.
+6. Builder economy turns delegated capital into evaluated useful work.
+7. Staking and rewards connect users to security and incentives.
+8. Client and read model expose the system without inventing truth.
+9. Tooling and validation keep the graph synchronized.
+10. Future gates prevent speculative work from masquerading as shipped reality.
 
 ## Related
 
@@ -116,4 +124,5 @@ A useful traversal is:
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [AAA System](../overview/aaa-system.en.md)
 - [Governance Overview](../overview/governance-overview.en.md)
+- [$BLDR Builder Economy](builder-economy.en.md)
 - [Reference Client](../overview/reference-client.en.md)

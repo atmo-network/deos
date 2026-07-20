@@ -24,8 +24,8 @@ related:
   - What DEOS Is Not
   - TMCTOL Standard
   - Domain Map
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # DEOS in 60 Seconds

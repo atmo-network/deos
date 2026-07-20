@@ -107,10 +107,9 @@
     {
       "page_ids": [
         "parachain-context",
-        "tol-bucket-scenarios",
-        "validation-troubleshooting"
+        "tol-bucket-scenarios"
       ],
-      "rationale": "Remaining low-confidence singletons were retained as useful standalone navigation pages, strengthened with additional provenance, sharper operational caveats, and confidence raised above the consolidation threshold."
+      "rationale": "These standalone navigation pages retain distinct scope. Their explanations now preserve launch-state and activation boundaries without inventing automatic wakeups or overstating deployed behavior."
     }
   ],
   "deferred": [

@@ -26,8 +26,8 @@ related:
   - Token-Driven Automation
   - Staking Pools
   - Core Terms
-last_compiled: 2026-06-25
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Routing and Minting Loop

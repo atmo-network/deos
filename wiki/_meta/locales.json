@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-05-28",
+  "generated_at": "2026-07-20",
   "default_locale": "en",
   "supported_locales": ["en", "ru"],
   "entrypoints": {
@@ -159,6 +159,10 @@
       "en": "concepts/token-surfaces.en.md",
       "ru": "concepts/token-surfaces.ru.md"
     },
+    "builder-economy": {
+      "en": "concepts/builder-economy.en.md",
+      "ru": "concepts/builder-economy.ru.md"
+    },
     "economic-thresholds": {
       "en": "concepts/economic-thresholds.en.md",
       "ru": "concepts/economic-thresholds.ru.md"
@@ -166,10 +170,6 @@
     "forking-deos": {
       "en": "usage/forking-deos.en.md",
       "ru": "usage/forking-deos.ru.md"
-    },
-    "validation-troubleshooting": {
-      "en": "usage/validation-troubleshooting.en.md",
-      "ru": "usage/validation-troubleshooting.ru.md"
     },
     "agent-coordination": {
       "en": "usage/agent-coordination.en.md",
@@ -182,10 +182,6 @@
     "tol-bucket-scenarios": {
       "en": "concepts/tol-bucket-scenarios.en.md",
       "ru": "concepts/tol-bucket-scenarios.ru.md"
-    },
-    "wiki-graph-metadata": {
-      "en": "usage/wiki-graph-metadata.en.md",
-      "ru": "usage/wiki-graph-metadata.ru.md"
     },
     "invariant-map": {
       "en": "concepts/invariant-map.en.md",

@@ -25,8 +25,8 @@ related:
   - DEOS за 60 секунд
   - Форк DEOS
   - Чем DEOS не является
-last_compiled: 2026-06-13
-confidence: 0.85
+last_compiled: 2026-07-20
+confidence: 0.8
 ---
 
 # Питч для партнера
@@ -80,21 +80,11 @@ DEOS меняет исходную точку. Он переносит ядро 
 
 ## Маршрут оценки
 
-Для короткой партнерской оценки прочитайте пять страниц по порядку:
+Для короткой партнерской оценки прочитайте три страницы по порядку:
 
-1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md) - главный мем.
-2. [Executive Summary](executive-summary.ru.md) - поставленное состояние и граница adoption.
-3. Этот Partner Pitch - value proposition и первые 30/90 дней.
-4. [Executive Summary](executive-summary.ru.md) - deterministic circuits против привычек committee treasury.
-5. [Форк DEOS](../usage/forking-deos.ru.md) - минимальная credible fork shape и validation boundary.
-
-После этого маршрута переходите к [Форку DEOS](../usage/forking-deos.ru.md), только если fit реален.
-
-## Первые 30/90 дней
-
-**Первые 30 дней**: понять framework, выбрать профиль форка, проверить, подходит ли TMCTOL для целевой экосистемы, и определить продуктовую поверхность вне core framework.
-
-**Первые 90 дней**: адаптировать launch parameters, тексты клиента, потребности read-model/indexer, runbooks операторов, governance handoff и конкретные dApps для downstream ecosystem.
+1. [DEOS за 60 секунд](deos-in-60-seconds.ru.md) — главная идея;
+2. [Краткое резюме](executive-summary.ru.md) — текущее состояние и границы применения;
+3. [Форк DEOS](../usage/forking-deos.ru.md) — минимальная жизнеспособная форма форка и границы его проверки.
 
 ## Что DEOS не устраняет
 

@@ -12,6 +12,12 @@ sources:
   - ../../docs/README.md
   - ../../docs/web-client.architecture.en.md
   - ../../web-client/README.md
+  - ../../.agents/skills/wiki-sync/SKILL.md
+  - ../_meta/navigation.json
+  - ../_meta/state.json
+  - ../_meta/graph.json
+  - ../_meta/aliases.json
+  - ../_meta/locales.json
 status: active
 audience: newcomer
 tags:
@@ -24,8 +30,9 @@ related:
   - Reference Client
   - UI Kit and Domain DAG
   - First Steps
+  - Agent Coordination
   - Core Terms
-last_compiled: 2026-05-17
+last_compiled: 2026-07-20
 confidence: 0.9
 ---
 
@@ -49,17 +56,41 @@ A good wiki page:
 
 The wiki may synthesize multiple source concepts into one page when that creates a clearer domain boundary. Use [Domain Map](domain-map.en.md) as the top-level owner of domain topology.
 
-## Metadata and Client Use
+## Metadata, Stable IDs, and Client Use
 
-The reference client consumes compiled manifests from `wiki/_meta/`:
+Together, the reference client, agents, and validation scripts use the compiled graph under `wiki/_meta/`; no single consumer needs to load every manifest:
 
-- `navigation.json` for sections and summaries;
-- `aliases.json` for search terms;
-- `graph.json` for typed page relations;
-- `state.json` for status, confidence, sources, and audience;
-- `locales.json` for supported locales and paths.
+- `navigation.json` orders sections and frontend summaries;
+- `state.json` records page status, audience, confidence, paths, and provenance;
+- `graph.json` stores nodes and typed reading relations;
+- `aliases.json` routes search terms to canonical page ids;
+- `locales.json` maps each page id to localized Markdown paths.
 
-These manifests support browsing and search. The prose still needs to stand on its own.
+A page id is the stable identity; locale files are renderings of it:
+
+```text
+page id: token-surfaces
+  en -> concepts/token-surfaces.en.md
+  ru -> concepts/token-surfaces.ru.md
+```
+
+Graph edges such as `uses`, `extends`, `guides`, and `recommends` describe conceptual or reading relationships, not runtime dependencies. Provenance points back to authoritative project sources, while confidence indicates the maturity of the generated projection rather than protocol truth.
+
+These manifests support browsing, search, and graph traversal. The prose still needs to stand on its own.
+
+## Confidence Bands
+
+Wiki confidence measures evidence maturity for one page, not probability, prose quality, project quality, or expected market behavior. Reviewers score the weakest material claim against source authority, claim coverage, freshness, and contradiction pressure.
+
+The wiki uses conservative `0.05` bands:
+
+- `0.95` — direct, current, nearly complete owner-source coverage;
+- `0.90` — strongly grounded synthesis with minor distributed-evidence risk;
+- `0.85` — grounded but partial, highly synthetic, or under freshness pressure;
+- `0.80` — materially incomplete, stale, indirect, or contradiction-prone;
+- `0.75` and below — weak support or known material errors requiring remediation.
+
+Page length, source count, and graph degree do not raise confidence. Shared `state.json` confidence uses the lower locale score, and the consolidation audit reports source revisions newer than `last_compiled`.
 
 ## Trust Boundary and Evolution
 
@@ -71,7 +102,7 @@ When evolving the wiki, update the owner page first, replace duplicated explanat
 
 - [Domain Map](domain-map.en.md)
 - [Reference Client](../overview/reference-client.en.md)
-- [Wiki Graph Metadata](../usage/wiki-graph-metadata.en.md)
 - [UI Kit and Domain DAG](ui-kit-and-domain-dag.en.md)
 - [First Steps](../getting-started/first-steps.en.md)
+- [Agent Coordination](../usage/agent-coordination.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

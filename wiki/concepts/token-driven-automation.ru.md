@@ -26,8 +26,8 @@ related:
   - Стандарт TMCTOL
   - Разделение read-model
   - Базовые термины
-last_compiled: 2026-04-16
-confidence: 0.92
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Токен-управляемая автоматизация

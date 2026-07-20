@@ -22,8 +22,8 @@ related:
   - Staking Pools
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-04-15
-confidence: 0.91
+last_compiled: 2026-07-20
+confidence: 0.95
 ---
 
 # Asset Identity

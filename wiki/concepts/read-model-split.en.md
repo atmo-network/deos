@@ -23,8 +23,8 @@ related:
   - Governance Domains
   - Reference Client
   - Core Terms
-last_compiled: 2026-04-16
-confidence: 0.96
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Read-Model Split

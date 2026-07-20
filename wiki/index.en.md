@@ -23,10 +23,11 @@ related:
   - First Steps
   - AAA System
   - Governance Overview
+  - $BLDR Builder Economy
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-05-17
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # DEOS Wiki
@@ -60,6 +61,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 
 - [TMCTOL Standard](concepts/tmctol-standard.en.md) — economic standard and token laws
 - [TOL Bucket Scenarios](concepts/tol-bucket-scenarios.en.md) — concrete A/B/C/D bucket wakeups and treasury lanes
+- [$BLDR Builder Economy](concepts/builder-economy.en.md) — useful-work invoices, tactical funding, and the founder-as-first-worker pattern
 - [Token Surfaces](concepts/token-surfaces.en.md) — Native, VETO, BLDR, receipts, and LP roles
 - [AAA System](overview/aaa-system.en.md) — autonomous protocol actors
 - [Axial Router](overview/axial-router.en.md) — routing, fees, and protocol liquidity decisions
@@ -75,7 +77,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [TMCTOL Formulas](math/tmctol-formulas.en.md)
 - [Economic Thresholds](concepts/economic-thresholds.en.md)
 - [Economic Claim Levels](concepts/economic-claim-levels.en.md)
-- [Invariant Map](concepts/invariant-map.en.md)
 - [Invariant and Threat Map](concepts/invariant-map.en.md)
 - [What DEOS Is Not](concepts/what-deos-is-not.en.md)
 - [Asset Identity](overview/asset-identity.en.md)
@@ -86,21 +87,17 @@ This wiki is a self-contained knowledge product for understanding that framework
 ## Governance, read models, and client shape
 
 - [Governance Domains](concepts/governance-domains.en.md)
-- [Executive Summary](getting-started/executive-summary.en.md)
 - [Physics-First vs Politics-First](comparisons/physics-vs-politics.en.md)
 - [Read-Model Split](concepts/read-model-split.en.md)
 - [UI Kit and Domain DAG](concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](concepts/generated-wiki.en.md)
-- [Wiki Graph Metadata](usage/wiki-graph-metadata.en.md)
 
 ## Workflows and status
 
 - [Development Status](development/status.en.md)
 - [Three-Layer Validation](development/three-layer-validation.en.md)
 - [Scripts Layer](usage/scripts-layer.en.md)
-- [Validation Troubleshooting](usage/validation-troubleshooting.en.md)
 - [Agent Coordination](usage/agent-coordination.en.md)
-- [Forking DEOS](usage/forking-deos.en.md)
 - [Forking DEOS](usage/forking-deos.en.md)
 - [Repository Structure](implementation/repository-structure.en.md)
 - [Tech Stack](implementation/tech-stack.en.md)
@@ -122,5 +119,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [First Steps](getting-started/first-steps.en.md)
 - [AAA System](overview/aaa-system.en.md)
 - [Governance Overview](overview/governance-overview.en.md)
+- [$BLDR Builder Economy](concepts/builder-economy.en.md)
 - [Core Terms](glossary/core-terms.en.md)
 - [Newcomer FAQ](faq/newcomer-faq.en.md)

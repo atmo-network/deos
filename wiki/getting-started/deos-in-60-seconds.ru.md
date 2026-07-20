@@ -25,8 +25,8 @@ related:
   - Чем DEOS не является
   - Стандарт TMCTOL
   - Карта доменов
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # DEOS за 60 секунд

@@ -28,8 +28,8 @@ related:
   - Контур маршрутизации и минтинга
   - Система AAA
   - Разделение read-model
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Архитектурные схемы
@@ -63,8 +63,8 @@ Swap request
       -> Compare TMC protocol path
       -> Choose best bounded route
   -> Execute swap or mint
-  -> Collect fee
-  -> Burn / treasury / actor flow
+  -> Взимание комиссии
+  -> Направление комиссии в настроенный контур Burn Actor
 ```
 
 Router координирует market liquidity и protocol liquidity. TMC владеет deterministic mint-side pricing. Long-range analytics остаются вне consensus state.
@@ -72,12 +72,13 @@ Router координирует market liquidity и protocol liquidity. TMC вл
 ## Граф AAA actors
 
 ```text
-Asset arrives on actor account
-  -> Balance ingress trigger
-  -> AAA scheduler checks lifecycle / cooldown / limits
-  -> Actor executes typed plan
-  -> Output asset lands elsewhere
-  -> Next actor may wake
+Наступает настроенное условие запуска
+  -> Поступление баланса для всеядных акторов
+     или ограниченное расписание для акторов по таймеру
+  -> Планировщик AAA проверяет lifecycle / cooldown / limits
+  -> Актор выполняет типизированный план
+  -> Выходной актив поступает на другой счет
+  -> Следующий актор по входящему балансу может пробудиться
 ```
 
 AAA — переиспользуемая система исполнения. AA-Актор — один ограниченный экземпляр внутри нее. Более крупное поведение протокола собирается из малых actor steps.

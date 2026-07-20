@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Staking Pools
-summary: DEOS staking uses a multi-asset share-vault model with transferable `stXXX` receipts. Native `$NTVE` now mints liquid `stNTVE`, while collator security and native nomination rewards come from explicitly locked `NTVE/stNTVE` LP rather than from a live `stNTVE` balance binding.
+summary: DEOS staking uses multi-asset share vaults with transferable `stXXX` receipts. The Phase 1 launch line enables liquid `$NTVE -> stNTVE` accounting but keeps user LP nomination and claimable nomination rewards inactive; those belong to an explicit Phase 2 runtime-upgrade boundary.
 locale: en
 canonical_page_id: staking-pools
 translation_status: source
@@ -23,8 +23,8 @@ related:
   - Routing and Minting Loop
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-04-25
-confidence: 0.94
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Staking Pools
@@ -33,7 +33,7 @@ confidence: 0.94
 
 DEOS staking is a multi-asset share-vault system. Each registered staking asset has a pool, deterministic accounts, and share/receipt accounting so backing can rise without writing rewards to every holder.
 
-The current native staking line is intentionally split into two surfaces: `$NTVE -> stNTVE` is liquid share-vault staking, while collator nomination and native reward exposure use locked `NTVE/stNTVE` LP. A plain `stNTVE` balance is not the collator-security signal.
+The native staking contract separates liquid `$NTVE -> stNTVE` share-vault accounting from collator nomination. The Phase 1 launch line uses trusted permissioned collators and keeps user LP nomination and claimable nomination rewards inactive. Phase 2 may use locked `NTVE/stNTVE` LP; a plain `stNTVE` balance never serves as the collator-security signal.
 
 ## Share-Vault Model
 
@@ -69,9 +69,11 @@ $NTVE
 
 This is a vault deposit and receipt mint, not an ordinary AMM swap. It increases native staking backing and mints receipt shares according to staking-pool accounting.
 
-## Collator Security Uses Locked LP
+## Phase Boundary for Collator Security
 
-Native collator backing is no longer derived from live `stNTVE` balances or transfer-driven native bindings. The current security path is explicit LP custody:
+Phase 1 uses trusted permissioned collators. It does not expose active user nomination economics or claimable nomination rewards.
+
+The explicit Phase 2 contract uses LP custody rather than live `stNTVE` balances or transfer-driven native bindings:
 
 ```text
 $NTVE + stNTVE
@@ -80,17 +82,17 @@ $NTVE + stNTVE
   -> lock_native_lp_for_collator(lp_asset_id, amount, operator)
 ```
 
-Locked `NTVE/stNTVE` LP is valued conservatively through the runtime's native-equivalent read model and feeds collator ranking / native nomination reward exposure.
+The runtime contains bounded custody and valuation surfaces for locked `NTVE/stNTVE` LP, but the launch contract keeps nomination and its reward flow inactive until an explicit Phase 2 runtime upgrade.
 
 ## Governance Custody
 
 The same native value surface can also be locked for governance-only `NativeVotePower` without nominating a collator. The current runtime includes separate LP and native-asset custody paths for tactical protection voting, with unlock requests blocked while governance lock horizons are active.
 
-## Native Nomination Rewards
+## Phase 2 Native Nomination Rewards
 
-Native nomination rewards are settled through native-specific claim paths. Generic same-asset reward settlement rejects the native staking asset so `$NTVE` nomination rewards cannot escape through legacy auto-compound semantics.
+The specification reserves native-specific claim paths for Phase 2. Generic same-asset reward settlement rejects the native staking asset so `$NTVE` nomination rewards cannot escape through legacy auto-compound semantics.
 
-The native settlement paths include:
+The implemented settlement surface includes:
 
 - `claim_nomination_reward(epoch)` for liquid `$NTVE` payout
 - `claim_and_compound_nomination_reward(epoch, operator)` for turning payout into locked LP
@@ -103,7 +105,7 @@ Staking and governance remain separate subsystems:
 - Staking owns pool math, receipts, locked LP custody, reward snapshots, and settlement
 - Governance owns bounded participation memory, vote-power policy, execution state, and exported reward coefficients
 
-For non-native assets, same-asset reward settlement can still auto-compound into fresh receipts. Native `$NTVE` nomination rewards use the dedicated native paths above.
+For non-native assets, same-asset reward settlement can still auto-compound into fresh receipts. Native `$NTVE` nomination rewards remain a dedicated, phase-gated flow and stay inactive on the trusted-collator Phase 1 launch line.
 
 ## Related
 

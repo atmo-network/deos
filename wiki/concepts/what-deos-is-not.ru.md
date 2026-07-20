@@ -24,8 +24,8 @@ related:
   - Карта инвариантов и угроз
   - Economic Claim Levels
   - Parachain context
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Чем DEOS не является

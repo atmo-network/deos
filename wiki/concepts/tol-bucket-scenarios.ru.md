@@ -28,17 +28,17 @@ related:
   - Architecture diagrams
   - AAA system
   - Token-driven automation
-last_compiled: 2026-06-13
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Сценарии TOL buckets
 
 ## Кратко
 
-TMCTOL использует treasury-owned-liquidity buckets, чтобы капитал ликвидности работал продуктивно, но разные экономические намерения не смешивались. Важно не только то, что value попадает в buckets, а какой downstream lane просыпается, когда bucket становится actionable.
+TMCTOL использует buckets ликвидности под контролем казны, чтобы разделять экономические назначения и сохранять происхождение резервов. Текущая эталонная топология отличает неизменяемое хранение в Bucket A от необязательных контуров разматывания и казны B/C/D.
 
-Базовая модель — четыре buckets. Bucket A усиливает immediate market liquidity, а buckets B/C/D сохраняют отдельные treasury- или governance-conditioned lanes.
+Состояние активации имеет значение: Bucket A служит неизменяемым хранилищем, а Bucket B, C, D и связанные с ними казначейские акторы начинают с плана `Noop`. Для последующего разматывания или казначейского действия нужен явно заданный ограниченный план после подготовки пула и казны; порог баланса не включает эти контуры автоматически.
 
 ## Bucket A: immediate liquidity
 
@@ -47,58 +47,32 @@ Bucket A — прямой liquidity lane. Когда minting или routing flow
 Сценарий:
 
 ```text
-User demand -> route/mint -> reserves grow
-  -> Bucket A receives liquidity share
-  -> Market depth improves
-  -> Future swaps see stronger protocol-owned liquidity
+Спрос пользователя -> маршрут/минтинг -> резерв поступает Liquidity Actor
+  -> после активации пула актор добавляет сбалансированную ликвидность
+  -> полученный LP поступает в неизменяемый Bucket A
+  -> глубина рынка отражает завершенную операцию
 ```
 
-Bucket A проще всего понять: он напрямую усиливает market surface.
+Bucket A хранит полученный LP; сам он не добавляет ликвидность и не исполняет последующий план.
 
-## Bucket B: segmented treasury lane
+## Необязательные Buckets B, C и D
 
-Bucket B хранит отдельное treasury-намерение. Он может накапливать liquidity или unwound value, не смешивая ее со всеми downstream purposes.
+Buckets B, C и D сохраняют отдельные политические контуры, но в текущей genesis-конфигурации каждый из них получает расписание по таймеру с планом `Noop`. Связанные акторы Treasury B/C/D также начинают с `Noop`; Bucket D остается явно бездействующим резервом.
 
-Сценарий:
+Архитектура предоставляет семейство ограниченных планов разматывания, которое после подготовки может снять заданную долю LP и направить возвращенные активы в связанную казну. Наличие такой возможности не означает, что она уже включена:
 
 ```text
-Protocol-owned LP matures or unwinds
-  -> Bucket B lane receives value
-  -> Paired treasury actor/account accumulates it
-  -> Governance can reason about that lane separately
+явное политическое решение и подтверждение готовности
+  -> установка ограниченного плана разматывания по таймеру
+  -> актор снимает заданную долю LP
+  -> возвращенные активы поступают в связанный контур казны
 ```
 
-Разделение важно: governance не должна видеть все liquidity reserves как один безликий pot.
-
-## Buckets C и D: wakeup scenarios
-
-Buckets C и D легко недооценить, потому что их смысл — отложенное и раздельное действие. Они важны, когда autonomous actor или treasury lane просыпается, потому что в bucket накопилось достаточно value для bounded operation.
-
-Пример C wakeup:
-
-```text
-Fees / unwound LP / routed value accumulate
-  -> Bucket C crosses actor-specific threshold
-  -> System AAA actor wakes
-  -> Actor executes bounded plan
-  -> Output lands in its paired treasury or liquidity lane
-```
-
-Пример D wakeup:
-
-```text
-Longer-tail accumulation continues
-  -> Bucket D remains idle until actionable
-  -> Wakeup condition becomes true
-  -> Actor attempts execution
-  -> Retry/cooldown handles unavailable markets or oracle gaps
-```
-
-Поэтому C/D lanes задают терпение и сегментацию. Protocol не обязан действовать немедленно, но накопленная value все равно может перейти в исполнимый flow, когда условия выполнены.
+Текущий контракт не задает автоматического пробуждения C или D по порогу баланса.
 
 ## Зачем paired treasuries
 
-У каждого non-immediate bucket может быть dedicated paired treasury lane. Так provenance и governance intent остаются видимыми:
+В эталонной топологии у каждого такого bucket есть отдельный счет связанной казны. Эти контуры сохраняют видимыми происхождение средств и политическое назначение, даже пока их акторы остаются `Noop`:
 
 ```text
 Bucket B -> Treasury B lane
@@ -106,7 +80,7 @@ Bucket C -> Treasury C lane
 Bucket D -> Treasury D lane
 ```
 
-Downstream fork может менять policies, но должен сохранять идею: bucket provenance — часть economic contract, а не accounting decoration. Если bucket policy меняет wakeup thresholds, treasury lanes или actor plans, сначала проверяйте изменение against TMCTOL math, а затем against AAA execution behavior.
+Производный форк может менять политику, но должен сохранять происхождение средств в buckets как часть экономического контракта, а не украшение учета. При активации или изменении казначейских контуров и планов акторов необходимо отдельно проверить математику TMCTOL и поведение исполнения AAA.
 
 ## Связанные страницы
 

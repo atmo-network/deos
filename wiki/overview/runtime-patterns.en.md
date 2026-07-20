@@ -10,6 +10,9 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
+  - ../../template/README.md
+  - ../../template/Cargo.toml
+  - ../../template/runtime/src/lib.rs
 status: active
 audience: newcomer
 tags:
@@ -21,8 +24,8 @@ related:
   - Asset Identity
   - Randomness Strategy
   - Core Terms
-last_compiled: 2026-04-15
-confidence: 0.89
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Runtime Patterns
@@ -33,17 +36,17 @@ DEOS is not just a set of economic ideas. It is also a modern Polkadot SDK runti
 
 The repository docs explicitly treat several SDK-era patterns as hard requirements for a healthy parachain baseline.
 
-## What the SDK Notes Emphasize
+## Current Runtime Evidence
 
-The Polkadot SDK guide in `/docs` highlights a few practical rules:
+The current workspace and runtime assembly make the platform posture concrete:
 
-- Template-faithful runtime wiring matters
-- Pallet order can be a runtime liveness issue
-- Async backing is the modern default posture
-- Omni Node replaces the old custom node-boilerplate model
-- Migration wiring and asset integration have current expected patterns
+- The workspace tracks the Polkadot SDK `2606` crate line;
+- Pallets use FRAME v2 typed configuration and runtime-owned adapters;
+- Omni Node replaces a repository-owned custom node crate;
+- XCM, asset identity, runtime APIs, and weights remain explicit runtime integration surfaces;
+- V3 scheduling stays disabled until its separate readiness gate is satisfied.
 
-For DEOS, these are not abstract style notes. They are part of how the runtime stays aligned with the modern SDK baseline.
+For DEOS, these are not abstract style notes. They define the current platform boundary and validation obligations.
 
 ## Why This Belongs in the Wiki
 

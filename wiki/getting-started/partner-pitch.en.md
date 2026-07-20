@@ -24,8 +24,8 @@ related:
   - DEOS in 60 Seconds
   - Forking DEOS
   - What DEOS Is Not
-last_compiled: 2026-06-13
-confidence: 0.85
+last_compiled: 2026-07-20
+confidence: 0.8
 ---
 
 # Partner Pitch
@@ -79,21 +79,11 @@ The pitch is: economic claims become bounded, inspectable, and forkable. A partn
 
 ## Evaluation route
 
-For a short partner pass, read five pages in order:
+For a short partner pass, read three pages in order:
 
-1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md) - core meme.
-2. [Executive Summary](executive-summary.en.md) - shipped state and adoption boundary.
-3. This Partner Pitch - value proposition and first 30/90 days.
-4. [Executive Summary](executive-summary.en.md) - deterministic circuits versus committee treasury habits.
-5. [Forking DEOS](../usage/forking-deos.en.md) - smallest credible fork shape and validation boundary.
-
-After that route, continue to [Forking DEOS](../usage/forking-deos.en.md) only if the fit is real.
-
-## The first 30/90 days
-
-**First 30 days**: understand the framework, choose the fork profile, validate whether TMCTOL fits the intended ecosystem, and define product-specific surface outside the core framework.
-
-**First 90 days**: adapt launch parameters, client copy, read-model/indexer needs, operator runbooks, governance handoff, and concrete dApps for the downstream ecosystem.
+1. [DEOS in 60 Seconds](deos-in-60-seconds.en.md) — core meme;
+2. [Executive Summary](executive-summary.en.md) — shipped state and adoption boundary;
+3. [Forking DEOS](../usage/forking-deos.en.md) — smallest credible fork shape and validation boundary.
 
 ## What DEOS does not remove
 

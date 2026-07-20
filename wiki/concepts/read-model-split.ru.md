@@ -24,8 +24,8 @@ related:
   - Домены Governance
   - Эталонный клиент
   - Базовые термины
-last_compiled: 2026-05-17
-confidence: 0.96
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Разделение read-model

@@ -19,22 +19,22 @@ tags:
 related:
   - Repository Structure
   - Tech Stack
-last_compiled: 2026-04-15
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Three-Layer Validation
 
 ## Summary
 
-In DEOS, truth for protocol and economic changes is established across three distinct layers: Simulation, Implementation, and Integration. When a change affects the core economic contract, all three layers must be used to guarantee mathematical, behavioral, and systemic correctness.
+In DEOS, evidence for protocol and economic changes is established across three distinct layers: Simulation, Implementation, and Integration. When a change affects the core economic contract across those boundaries, all three layers contribute distinct falsification evidence; none provides an unconditional proof by itself.
 
 ## Layer 1: Simulation (Mathematical Truth)
 
 **Location**: `/simulator`
 **Stack**: JavaScript / BigInt / PPB
 
-Before writing any runtime logic, formulas and invariants are verified in the simulator. This layer proves the mathematical model is sound, ensuring thresholds (like the Gravity Well or Elasticity Inversion) behave exactly as the `TMCTOL` specification demands.
+Before writing runtime logic, formulas and invariants are exercised in the simulator. This layer checks the mathematical model against explicit vectors and properties, including thresholds such as the Gravity Well or Elasticity Inversion.
 
 ## Layer 2: Implementation (Behavioral Truth)
 
@@ -51,7 +51,7 @@ This layer verifies that the Rust runtime code matches the mathematical model an
 **Location**: `/template/runtime`
 **Stack**: Rust / Integration Tests / XCM
 
-This layer verifies that the individual pallets and components coordinate correctly within the full Parachain runtime. It tests end-to-end scenarios, cross-pallet interactions, and XCM messaging to guarantee systemic safety.
+This layer tests how pallets and components coordinate inside the full Parachain runtime. End-to-end scenarios, cross-pallet interactions, and XCM tests provide systemic regression evidence without claiming exhaustive safety.
 
 ## Validation Priority Rules
 
@@ -63,7 +63,6 @@ This layer verifies that the individual pallets and components coordinate correc
 
 - [Repository Structure](../implementation/repository-structure.en.md)
 - [Tech Stack](../implementation/tech-stack.en.md)
-- [Validation Troubleshooting](../usage/validation-troubleshooting.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Development Status](status.en.md)

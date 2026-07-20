@@ -34,7 +34,7 @@ related:
   - Routing and Minting Loop
   - Reference Client
   - Core Terms
-last_compiled: 2026-04-16
+last_compiled: 2026-07-20
 confidence: 0.95
 ---
 

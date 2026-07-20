@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Пулы стейкинга
-summary: Стейкинг DEOS использует multi-asset share-vault модель с передаваемыми receipt-токенами `stXXX`. Нативный `$NTVE` минтит ликвидный `stNTVE`, а безопасность коллаторов и native nomination rewards идут через явно заблокированный `NTVE/stNTVE` LP, а не через live-привязку баланса `stNTVE`.
+summary: Стейкинг DEOS использует пулы долей с переносимыми квитанциями `stXXX`. На этапе Phase 1 действует ликвидный учет `$NTVE -> stNTVE`, но пользовательские LP-номинации и доступные к получению награды остаются отключенными до явного обновления runtime для Phase 2.
 locale: ru
 canonical_page_id: staking-pools
 translation_of: staking-pools.en.md
@@ -24,8 +24,8 @@ related:
   - Контур маршрутизации и минтинга
   - Базовые термины
   - FAQ для новичков
-last_compiled: 2026-04-25
-confidence: 0.94
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Пулы стейкинга
@@ -34,7 +34,7 @@ confidence: 0.94
 
 Стейкинг DEOS — это multi-asset share-vault система. У каждого зарегистрированного staking-актива есть пул, детерминированные аккаунты и учет долей/receipt-токенов. Такая модель позволяет backing расти без записи наград каждому держателю отдельно.
 
-Текущая native staking линия разделяет две поверхности. `$NTVE -> stNTVE` — это ликвидный share-vault staking. Collator nomination и native reward exposure идут через заблокированный `NTVE/stNTVE` LP. Обычный баланс `stNTVE` не является сигналом безопасности коллатора.
+Контракт нативного стейкинга отделяет ликвидный учет долей `$NTVE -> stNTVE` от номинации коллаторов. На этапе Phase 1 работают доверенные permissioned-коллаторы, а пользовательские LP-номинации и доступные к получению награды отключены. В Phase 2 может применяться заблокированный `NTVE/stNTVE` LP; обычный баланс `stNTVE` никогда не служит сигналом безопасности коллатора.
 
 ## Модель share-vault
 
@@ -70,9 +70,11 @@ $NTVE
 
 Это vault deposit и receipt mint, а не обычный AMM swap. Он увеличивает backing native staking pool и минтит receipt-доли по учетным правилам staking-пула.
 
-## Безопасность коллаторов идет через locked LP
+## Граница этапов для безопасности коллаторов
 
-Native collator backing больше не выводится из live-балансов `stNTVE` или transfer-driven native bindings. Текущий путь безопасности — явная LP custody:
+На этапе Phase 1 используются доверенные permissioned-коллаторы. Пользовательская экономика номинаций и доступные к получению награды на этом этапе не действуют.
+
+Явный контракт Phase 2 использует хранение LP вместо текущих балансов `stNTVE` или привязок, возникающих при передаче:
 
 ```text
 $NTVE + stNTVE
@@ -81,17 +83,17 @@ $NTVE + stNTVE
   -> lock_native_lp_for_collator(lp_asset_id, amount, operator)
 ```
 
-Заблокированный `NTVE/stNTVE` LP оценивается консервативно через runtime native-equivalent read model и питает рейтинг коллаторов вместе с native nomination reward exposure.
+Runtime содержит ограниченные поверхности хранения и оценки заблокированного `NTVE/stNTVE` LP, но стартовый контракт держит номинации и поток их наград отключенными до явного обновления runtime для Phase 2.
 
 ## Governance custody
 
 Та же native-value поверхность может блокироваться только для governance `NativeVotePower`, без nomination коллатора. В текущем runtime есть отдельные LP и native-asset custody paths для tactical protection voting, а unlock requests блокируются, пока активны governance lock horizons.
 
-## Native nomination rewards
+## Награды за нативную номинацию в Phase 2
 
-Native nomination rewards рассчитываются через native-specific claim paths. Generic same-asset reward settlement отвергает native staking asset, чтобы `$NTVE` nomination rewards не уходили через legacy auto-compound семантику.
+Спецификация резервирует отдельные пути получения нативных наград для Phase 2. Общий расчет награды в том же активе отвергает нативный staking asset, чтобы награды `$NTVE` не уходили через устаревшую семантику автоматического реинвестирования.
 
-Нативные settlement paths включают:
+Реализованная поверхность расчета включает:
 
 - `claim_nomination_reward(epoch)` для ликвидной выплаты `$NTVE`;
 - `claim_and_compound_nomination_reward(epoch, operator)` для превращения выплаты в locked LP;
@@ -104,7 +106,7 @@ Staking и governance остаются отдельными подсистема
 - Staking отвечает за математику пула, receipts, locked LP custody, reward snapshots и settlement;
 - Governance отвечает за bounded participation memory, vote-power policy, execution state и exported reward coefficients.
 
-Для ненативных активов same-asset reward settlement по-прежнему может auto-compound в свежие receipts. Native `$NTVE` nomination rewards используют выделенные native paths выше.
+Для ненативных активов расчет награды в том же активе по-прежнему может автоматически выпускать новые квитанции. Награды `$NTVE` за номинацию остаются отдельным, привязанным к этапу потоком и не действуют в стартовой линии Phase 1 с доверенными коллаторами.
 
 ## Связанные страницы
 

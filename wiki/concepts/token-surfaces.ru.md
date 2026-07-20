@@ -25,10 +25,11 @@ related:
   - Стандарт TMCTOL
   - Пулы стейкинга
   - Домены Governance
+  - Экономика $BLDR
   - Token Minting Curve
   - Разделение read-model
-last_compiled: 2026-05-17
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Токеновые поверхности
@@ -51,7 +52,7 @@ DEOS одновременно использует несколько token surf
 
 ### `$BLDR`
 
-`$BLDR` — флагманский tactical governance token для builder coordination. В текущей линии он связан с invoice-style tactical governance и BLDR-specific coordination lanes. Его value story не сводится к эмиссии: она зависит от того, создаст ли downstream builder ecosystem реальный спрос на tactical coordination surface.
+`$BLDR` — флагманский токен тактического управления для координации созидателей. В текущей линии он связан с управлением через счета-заявки, финансированием труда, ликвидностью под контролем протокола и специализированными контурами координации BLDR. Полный паттерн описывает [Экономика $BLDR](builder-economy.ru.md). Его ценность не сводится к эмиссии: она зависит от того, создаст ли производная экосистема реальный спрос на эту поверхность координации.
 
 ## Receipt и position tokens
 
@@ -73,6 +74,7 @@ LP tokens представляют позиции в AMM pools. Некоторы
 
 - **Emission math**: [Token Minting Curve](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md).
 - **Governance power**: [Домены Governance](governance-domains.ru.md).
+- **Координация созидателей**: [Экономика $BLDR](builder-economy.ru.md).
 - **Receipt value**: [Пулы стейкинга](staking-pools.ru.md) и учет liquidity positions.
 
 Не выводите полную monetary policy каждого токена только из governance-role. Например, `$BLDR` может быть важен для tactical governance, но wiki не должна притворяться, что downstream demand, launch allocation или ecosystem product-market fit уже решены внутри framework.
@@ -88,5 +90,6 @@ Token balances и ограниченные receipt/projection data могут б
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Пулы стейкинга](staking-pools.ru.md)
 - [Домены Governance](governance-domains.ru.md)
+- [Экономика $BLDR](builder-economy.ru.md)
 - [Token Minting Curve](../overview/token-minting-curve.ru.md)
 - [Разделение read-model](read-model-split.ru.md)

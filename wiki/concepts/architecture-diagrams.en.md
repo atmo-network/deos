@@ -27,8 +27,8 @@ related:
   - Routing and Minting Loop
   - AAA System
   - Read-Model Split
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Architecture Diagrams
@@ -63,7 +63,7 @@ Swap request
       -> choose best bounded route
   -> execute swap or mint
   -> collect fee
-  -> burn / treasury / actor flow
+  -> route fee toward the configured Burn Actor flow
 ```
 
 The router coordinates market liquidity and protocol liquidity. TMC owns deterministic mint-side pricing. Long-range analytics stay outside consensus state.
@@ -71,12 +71,13 @@ The router coordinates market liquidity and protocol liquidity. TMC owns determi
 ## AAA Actor Graph
 
 ```text
-Asset arrives on actor account
-  -> balance ingress trigger
+Configured trigger becomes due
+  -> balance ingress for omnivorous actors
+     or bounded schedule for timer-driven actors
   -> AAA scheduler checks lifecycle / cooldown / limits
   -> actor executes typed plan
   -> output asset lands elsewhere
-  -> next actor may wake
+  -> a downstream ingress actor may wake
 ```
 
 AAA is the reusable execution system. An AA-Actor is one bounded instance inside it. Larger protocol behavior can be assembled from small actor steps.

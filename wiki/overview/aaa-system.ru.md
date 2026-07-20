@@ -27,7 +27,7 @@ related:
   - Контур маршрутизации и минтинга
   - Обзор Governance
   - Базовые термины
-last_compiled: 2026-06-13
+last_compiled: 2026-07-20
 confidence: 0.95
 ---
 

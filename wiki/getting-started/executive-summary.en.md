@@ -30,8 +30,8 @@ related:
   - Physics vs Politics
   - What DEOS Is Not
   - Economic Claim Levels
-last_compiled: 2026-06-13
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Executive Summary
@@ -72,7 +72,6 @@ DEOS needs a runtime-first environment where economic rules, assets, automation,
 - AAA actor automation model.
 - SvelteKit reference client with domain slices and wiki rendering.
 - Operator scripts, validation gates, and generated wiki metadata.
-- `0.5.0` baseline release tag for the current framework line.
 
 ## What is not shipped
 

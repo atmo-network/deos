@@ -24,8 +24,8 @@ related:
   - Домены Governance
   - FAQ для новичков
   - Базовые термины
-last_compiled: 2026-07-13
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Physics-first против politics-first

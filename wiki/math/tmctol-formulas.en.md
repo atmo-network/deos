@@ -19,8 +19,8 @@ tags:
 related:
   - TMCTOL Standard
   - Routing and Minting Loop
-last_compiled: 2026-04-15
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # TMCTOL Formulas
@@ -42,7 +42,7 @@ where:
 - `P₀` = initial_price (starting price of the asset)
 - `m` = slope parameter (steepness of the curve)
 - `S` = current supply
-- `PRECISION` = denominator to prevent integer overflow in runtime arithmetic
+- `PRECISION` = fixed-point scaling denominator; runtime overflow safety comes from checked arithmetic and wider `U256` intermediates
 
 ## Quadratic Integration for Minting
 
@@ -62,14 +62,16 @@ This deterministic pricing guarantees that bulk purchases are priced fairly acco
 
 ## Distribution Ratio
 
-When a mint occurs, the generated foreign liquidity is distributed according to the invariant split:
+When a mint occurs, the minted token output is distributed according to the configured split:
 
-- `33.3%` User (Minted Token Allocation)
-- `66.6%` TOL (Treasury-Owned Liquidity)
+- approximately `33.3%` to the user;
+- approximately `66.6%` to the protocol sink used by the TOL topology.
+
+The collateral payment is transferred separately to its resolved protocol destination; this ratio does not split the foreign collateral.
 
 ## XYK Constant Product (Floor Protection)
 
-The generated TOL is injected into an XYK AMM pool, which mathematically guarantees that the price never reaches zero.
+In the idealized positive-reserve XYK model, protocol-owned liquidity creates an asymptotic price curve that stays above zero for any finite sale. This statement does not guarantee a market price or pool liveness.
 
 ```text
 XYK Invariant: k = R_native × R_foreign (constant)
@@ -91,18 +93,17 @@ The theoretical backing price $P_{backing}$ where the curve-implied market cap e
 P_backing ≈ √(R_foreign × m / PRECISION)
 ```
 
-This is a reference point and demonstrates that governance parameter changes (like slope `m` or TOL routing `R_foreign`) directly alter the structural backing targets.
+This is an analytical reference point, not a runtime quote. Launch-time Economic Physics such as slope `m` is immutable on the current line; reserve scope and bucket policy must be stated explicitly when using a backing metric.
 
 ## Supply Dynamics (Compression)
 
-The net supply trajectory is a battle between emission and burning:
+A simplified supply identity is:
 
 ```text
-dS/dt = mint_rate - burn_rate
-burn_rate = f_router × V_trade
+dS/dt = completed_mint_rate - completed_burn_rate
 ```
 
-Burning reduces the supply ($S$), which simultaneously lowers the price ceiling on the TMC curve and increases the absolute floor support in the XYK pool, compressing the spread.
+Router fee volume can fund the Burn Actor, but actual burning depends on that actor remaining funded, configured, schedulable, and able to execute. With fixed reserves, burning does not itself change the current XYK spot price. It can improve a named stress-floor envelope only under explicit assumptions about counted reserves and sellable supply; ceiling, relative parity, absolute-gap compression, and arbitrage overtake remain distinct metrics.
 
 ## Related
 

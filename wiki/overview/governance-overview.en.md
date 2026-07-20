@@ -23,8 +23,8 @@ related:
   - Physics-First vs Politics-First
   - Staking Pools
   - Core Terms
-last_compiled: 2026-05-17
-confidence: 0.94
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Governance Overview

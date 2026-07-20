@@ -31,8 +31,8 @@ related:
   - Physics vs Politics
   - Чем DEOS не является
   - Уровни экономических утверждений
-last_compiled: 2026-06-13
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Executive Summary
@@ -73,7 +73,6 @@ DEOS нужна runtime-first среда, где economic rules, assets, automat
 - AAA actor automation model.
 - SvelteKit reference client с domain slices и wiki rendering.
 - Operator scripts, validation gates и generated wiki metadata.
-- Release tag `0.5.0` для текущей линии framework.
 
 ## Что не поставлено
 

@@ -33,8 +33,8 @@ related:
   - UI Kit and Domain DAG
   - Generated Wiki
   - Core Terms
-last_compiled: 2026-05-17
-confidence: 0.93
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Newcomer FAQ

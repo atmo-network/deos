@@ -25,11 +25,9 @@ tags:
 related:
   - DEOS in 60 Seconds
   - Forking DEOS
-  - Forking DEOS
   - Three-Layer Validation
-  - Validation Troubleshooting
-last_compiled: 2026-05-28
-confidence: 0.9
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Start Here
@@ -112,7 +110,7 @@ Optional local demo state:
 If you get stuck, use:
 
 - [Scripts Layer](../usage/scripts-layer.en.md) for what each script owns
-- [Validation Troubleshooting](../usage/validation-troubleshooting.en.md) for common gate failures
+- [Three-Layer Validation](../development/three-layer-validation.en.md) for validation scope and escalation
 - `./scripts/teardown-local-network.sh` to stop local services
 - `./scripts/clean-local-artifacts.sh` to remove generated local artifacts
 
@@ -125,9 +123,8 @@ Use this path if you are a partner team or protocol builder asking how to turn D
 Start with reading:
 
 1. [Forking DEOS](../usage/forking-deos.en.md)
-2. [Forking DEOS](../usage/forking-deos.en.md)
-3. [TMCTOL Formulas](../math/tmctol-formulas.en.md)
-4. [Three-Layer Validation](../development/three-layer-validation.en.md)
+2. [TMCTOL Formulas](../math/tmctol-formulas.en.md)
+3. [Three-Layer Validation](../development/three-layer-validation.en.md)
 
 Then make the first economic experiment in the simulator before touching runtime code:
 
@@ -174,6 +171,4 @@ Use the smallest meaningful gate first. You do not need every gate for every cha
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Forking DEOS](../usage/forking-deos.en.md)
-- [Forking DEOS](../usage/forking-deos.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)
-- [Validation Troubleshooting](../usage/validation-troubleshooting.en.md)

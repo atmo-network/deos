@@ -4,6 +4,12 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.6.11: Wiki Confidence and Builder Economy
+
+- `Wiki / Builder economy and consolidation`: Added a bilingual `$BLDR` Builder Economy concept page covering the founder-as-first-worker instance pattern, invoice governance, TMC/treasury/liquidity wiring, federated Native protection, activation boundaries, and demand honesty; merged Wiki Graph Metadata into Generated Wiki and Validation Troubleshooting into its stronger validation/script owners. Impact: the flagship useful-work pattern has a direct frontend-renderable owner, and the wiki is smaller at 48 bilingual page IDs without redundant operational leaflets.
+- `Wiki / Confidence and validation`: Recalibrated every bilingual confidence value to conservative `0.05` bands and hardened the consolidation audit to validate source paths, compilation freshness, confidence bands, and state/frontmatter agreement. Impact: confidence reflects the weakest material evidence instead of decorative precision, while stale sources and low-confidence graph clusters become visible review signals.
+- `Wiki / Contract and locale honesty`: Corrected stale actor-trigger, fee-burning, staking-phase, bucket-activation, formula, status, script, and router-boundary claims, and rewrote affected Russian explanations to avoid unnecessary English phrasing. Impact: onboarding and agent-facing projections preserve current mechanism boundaries and natural localized language without overstating shipped behavior.
+
 ## 0.6.10: Router Honesty and Actor Vocabulary
 
 - `Documentation / Entrypoint`: Rebuilt the root README as a focused framework landing page with a compact economic-circuit map, mechanism boundaries, local-run steps, repository navigation, validation paths, and market-claim honesty. Impact: evaluators and builders can understand the framework and reach the right source of truth without reading an undifferentiated architecture summary.

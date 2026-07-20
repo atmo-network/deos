@@ -25,15 +25,15 @@ related:
   - Invariant Map
   - Invariant and Threat Map
   - Three-Layer Validation
-last_compiled: 2026-06-25
-confidence: 0.91
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Economic Claim Levels
 
 ## Summary
 
-DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, and market behavior in one sentence. This ladder names the level of support behind a claim, while the alignment audit keeps a small inventory of load-bearing economic claims with explicit proof kinds.
+DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, and market behavior in one sentence. This page introduces a wiki-local explanatory ladder for those evidence classes; the labels are not a canonical runtime or specification enum. The alignment audit separately keeps a small inventory of load-bearing economic claims with explicit proof kinds.
 
 ## Levels
 

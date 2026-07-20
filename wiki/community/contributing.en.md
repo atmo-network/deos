@@ -22,8 +22,8 @@ related:
   - Three-Layer Validation
   - DEOS Framework Overview
   - Scripts Layer
-last_compiled: 2026-05-17
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Contributing Guidelines

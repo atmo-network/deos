@@ -26,11 +26,9 @@ tags:
 related:
   - DEOS за 60 секунд
   - Форк DEOS
-  - Форк DEOS
   - Трехуровневая валидация
-  - Troubleshooting проверки
-last_compiled: 2026-05-28
-confidence: 0.9
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Начните здесь
@@ -113,7 +111,7 @@ npm --prefix web-client run dev
 Если застряли, используйте:
 
 - [Слой скриптов](../usage/scripts-layer.ru.md), чтобы понять ответственность каждого script
-- [Troubleshooting проверки](../usage/validation-troubleshooting.ru.md) для типичных failures gates
+- [Трехуровневая валидация](../development/three-layer-validation.ru.md), чтобы выбрать объем проверок и порядок их расширения
 - `./scripts/teardown-local-network.sh`, чтобы остановить локальные сервисы
 - `./scripts/clean-local-artifacts.sh`, чтобы удалить сгенерированные локальные артефакты
 
@@ -126,9 +124,8 @@ npm --prefix web-client run dev
 Сначала прочитайте:
 
 1. [Форк DEOS](../usage/forking-deos.ru.md)
-2. [Форк DEOS](../usage/forking-deos.ru.md)
-3. [Формулы TMCTOL](../math/tmctol-formulas.ru.md)
-4. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
+2. [Формулы TMCTOL](../math/tmctol-formulas.ru.md)
+3. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
 
 Затем сделайте первый экономический эксперимент в simulator до изменения runtime-кода:
 
@@ -175,6 +172,4 @@ node simulator/tests.js
 
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
 - [Форк DEOS](../usage/forking-deos.ru.md)
-- [Форк DEOS](../usage/forking-deos.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)
-- [Troubleshooting проверки](../usage/validation-troubleshooting.ru.md)

@@ -22,8 +22,8 @@ related:
   - Governance Overview
   - AA-Actor
   - Newcomer FAQ
-last_compiled: 2026-04-15
-confidence: 0.9
+last_compiled: 2026-07-20
+confidence: 0.95
 ---
 
 # Randomness Strategy

@@ -27,17 +27,17 @@ related:
   - Architecture Diagrams
   - AAA System
   - Token-Driven Automation
-last_compiled: 2026-06-13
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # TOL Bucket Scenarios
 
 ## Summary
 
-TMCTOL uses treasury-owned-liquidity buckets to keep liquidity capital productive while separating economic intents. The important point is not only that funds enter buckets, but which downstream lane wakes when a bucket becomes actionable.
+TMCTOL uses treasury-owned-liquidity buckets to separate economic intents and preserve reserve provenance. The current reference topology distinguishes immutable Bucket A custody from optional B/C/D unwind and treasury lanes.
 
-The reference mental model is a four-bucket split: bucket A is immediate market liquidity, while buckets B/C/D preserve distinct treasury or governance-conditioned lanes.
+Activation status matters: Bucket A is an immutable custody sink, while Bucket B, C, D and their paired treasury actors start as `Noop`. Any later unwind or treasury behavior requires an explicit bounded plan after pool and treasury readiness; balance thresholds do not activate these lanes automatically.
 
 ## Bucket A: Immediate Liquidity
 
@@ -46,58 +46,32 @@ Bucket A is the direct liquidity lane. When minting or routing flows create prot
 Scenario:
 
 ```text
-User demand -> route/mint -> reserves grow
-  -> Bucket A receives liquidity share
-  -> Market depth improves
-  -> Future swaps see stronger protocol-owned liquidity
+User demand -> route/mint -> protocol reserve reaches Liquidity Actor
+  -> actor adds balanced pool liquidity after pool activation
+  -> resulting LP moves to immutable Bucket A custody
+  -> market depth reflects the completed liquidity operation
 ```
 
-Bucket A is the easiest lane to understand because it behaves like direct reinforcement of the market surface.
+Bucket A holds the resulting LP; it does not itself add liquidity or execute a follow-on plan.
 
-## Bucket B: Segmented Treasury Lane
+## Optional Buckets B, C, and D
 
-Bucket B preserves a separated treasury intent. It can accumulate liquidity or unwound value without mixing it into every other downstream purpose.
+Buckets B, C, and D preserve separate policy lanes, but the current genesis configuration assigns each a timer schedule with a `Noop` execution plan. Their paired Treasury B/C/D actors also start as `Noop`; Bucket D remains the explicitly dormant reserve.
 
-Scenario:
+The architecture provides a bounded unwind-plan family that can remove a configured LP percentage and send reclaimed assets to the paired treasury after readiness. This capability does not imply current activation:
 
 ```text
-Protocol-owned LP matures or unwinds
-  -> Bucket B lane receives value
-  -> Paired treasury actor/account accumulates it
-  -> Governance can reason about that lane separately
+explicit policy and readiness decision
+  -> install bounded timer-driven unwind plan
+  -> actor removes configured LP percentage
+  -> reclaimed assets move to the paired treasury lane
 ```
 
-The separation matters because governance should not treat every liquidity reserve as one undifferentiated pot.
-
-## Buckets C and D: Wakeup Scenarios
-
-Buckets C and D are easiest to miss because their value is in delayed, segmented action. They matter when an autonomous actor or treasury lane wakes because the bucket contains enough value to justify a bounded operation.
-
-Example C wakeup:
-
-```text
-Fees / unwound LP / routed value accumulate
-  -> Bucket C crosses actor-specific threshold
-  -> System AAA actor wakes
-  -> Actor executes bounded plan
-  -> Output lands in its paired treasury or liquidity lane
-```
-
-Example D wakeup:
-
-```text
-Longer-tail accumulation continues
-  -> Bucket D remains idle until actionable
-  -> Wakeup condition becomes true
-  -> Actor attempts execution
-  -> Retry/cooldown handles unavailable markets or oracle gaps
-```
-
-C/D lanes therefore encode patience and segmentation. They let the protocol avoid forced immediate action while still making accumulated value eventually executable.
+No current contract defines automatic threshold-driven wakeups for C or D.
 
 ## Why Paired Treasuries Matter
 
-Each non-immediate bucket can have a dedicated paired treasury lane. This keeps provenance and governance intent visible:
+Each non-immediate bucket has a distinct paired treasury account in the reference topology. Those lanes keep provenance and policy intent visible even while their actors remain `Noop`:
 
 ```text
 Bucket B -> Treasury B lane
@@ -105,7 +79,7 @@ Bucket C -> Treasury C lane
 Bucket D -> Treasury D lane
 ```
 
-A downstream fork may alter policies, but it should preserve the idea that bucket provenance is part of the economic contract, not just accounting decoration. If bucket policy changes wakeup thresholds, treasury lanes, or actor plans, validate the change against TMCTOL math first and then against AAA execution behavior.
+A downstream fork may alter policy, but it should preserve bucket provenance as part of the economic contract rather than accounting decoration. If it activates or changes treasury lanes or actor plans, it must validate TMCTOL math and AAA execution behavior separately.
 
 ## Related
 

@@ -34,8 +34,8 @@ related:
   - UI Kit и Domain DAG
   - Generated Wiki
   - Базовые термины
-last_compiled: 2026-05-17
-confidence: 0.93
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # FAQ для новичков

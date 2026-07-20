@@ -11,16 +11,17 @@ usage() {
     cat <<'EOF'
 Usage: audit-wiki-consolidation.sh [OPTIONS]
 
-Audits generated wiki pages for consolidation pressure and low-signal leaflet drift.
-Hard failures are limited to structural issues that make pages hard to justify:
-missing metadata, missing provenance/related links, missing locale mirrors, or no
-navigation/graph path. Short or overlapping pages are reported as candidates only.
+Audits generated wiki pages for consolidation pressure, confidence drift, and
+low-signal leaflet decay. Hard failures cover missing or inconsistent metadata,
+missing/dead provenance, invalid confidence bands, missing locale mirrors, or no
+navigation/graph path. Short, low-confidence, source-stale, and graph-leaf pages
+are reported as candidates only.
 
 Options:
   --wiki-dir <path>  Override the wiki directory (default: ./wiki)
   --wiki-dir=<path> Override the wiki directory (default: ./wiki)
   --min-body-lines <n>  Candidate threshold for short pages (default: 18)
-  --low-confidence-threshold <n>  Candidate threshold for low-confidence pages (default: 0.85)
+  --low-confidence-threshold <n>  Inclusive candidate threshold for low-confidence pages (default: 0.85)
   -h, --help         Show this help message
 EOF
 }
@@ -80,7 +81,7 @@ parse_args() {
 check_prerequisites() {
     phase_banner "Step 1: Wiki consolidation prerequisites"
     hydrate_local_tool_paths
-    require_commands python3
+    require_commands git python3
     if [[ ! -d "$WIKI_DIR" ]]; then
         log_error "Wiki directory not found: $WIKI_DIR"
         exit 1
@@ -92,22 +93,78 @@ check_prerequisites() {
 
 run_audit() {
     phase_banner "Step 2: Wiki consolidation guard"
-    if ! python3 - "$WIKI_DIR" "$MIN_BODY_LINES" "$LOW_CONFIDENCE_THRESHOLD" <<'PY'
+    if ! python3 - "$WIKI_DIR" "$MIN_BODY_LINES" "$LOW_CONFIDENCE_THRESHOLD" "$PROJECT_ROOT" <<'PY'
+from datetime import date
 from pathlib import Path
 import json
 import re
+import subprocess
 import sys
 
-wiki_dir = Path(sys.argv[1])
+wiki_dir = Path(sys.argv[1]).resolve()
 min_body_lines = int(sys.argv[2])
 low_confidence_threshold = float(sys.argv[3])
+project_root = Path(sys.argv[4]).resolve()
 failures = []
 warnings = []
 pages = {}
 locales_by_id = {}
 confidence_by_id = {}
+confidence_by_locale = {}
+source_date_cache = {}
 
-required_fields = ["page_type", "title", "summary", "locale", "canonical_page_id"]
+required_fields = [
+    "page_type",
+    "title",
+    "summary",
+    "locale",
+    "canonical_page_id",
+    "last_compiled",
+    "confidence",
+]
+
+def list_field(frontmatter, field):
+    values = []
+    active = False
+    for line in frontmatter.splitlines():
+        if line == f"{field}:":
+            active = True
+            continue
+        if not active:
+            continue
+        if line.startswith("  - "):
+            values.append(line[4:].strip())
+            continue
+        if line and not line.startswith(" "):
+            break
+    return values
+
+
+def source_commit_date(source_path):
+    source_path = source_path.resolve()
+    if source_path in source_date_cache:
+        return source_date_cache[source_path]
+    try:
+        relative = source_path.relative_to(project_root)
+    except ValueError:
+        source_date_cache[source_path] = None
+        return None
+    result = subprocess.run(
+        ["git", "-C", str(project_root), "log", "-1", "--format=%cs", "--", str(relative)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    raw = result.stdout.strip()
+    if result.returncode != 0 or not raw:
+        source_date_cache[source_path] = None
+        return None
+    try:
+        value = date.fromisoformat(raw)
+    except ValueError:
+        value = None
+    source_date_cache[source_path] = value
+    return value
 
 for path in sorted(wiki_dir.rglob("*.md")):
     rel = path.relative_to(wiki_dir).as_posix()
@@ -137,27 +194,69 @@ for path in sorted(wiki_dir.rglob("*.md")):
     locale = meta.get("locale")
     if not cid or not locale:
         continue
-    pages[(cid, locale)] = rel
+    page_key = (cid, locale)
+    if page_key in pages:
+        failures.append(f"{rel}: duplicate canonical page id + locale {cid}/{locale}")
+    pages[page_key] = rel
     locales_by_id.setdefault(cid, set()).add(locale)
-    if cid != "index":
-        if "\nsources:" not in text:
-            failures.append(f"{rel}: missing sources block")
-        if "\nrelated:" not in text:
-            failures.append(f"{rel}: missing related block")
+
+    source_values = list_field(frontmatter, "sources")
+    if not source_values:
+        failures.append(f"{rel}: missing or empty sources block")
+    if cid != "index" and "\nrelated:" not in text:
+        failures.append(f"{rel}: missing related block")
+
+    compiled_raw = meta.get("last_compiled", "")
+    try:
+        compiled_date = date.fromisoformat(compiled_raw)
+    except ValueError:
+        compiled_date = None
+        if compiled_raw:
+            failures.append(f"{rel}: invalid last_compiled date {compiled_raw}")
+
+    latest_source_date = None
+    latest_source = None
+    for source_value in source_values:
+        source_path = Path(source_value)
+        if not source_path.is_absolute():
+            source_path = path.parent / source_path
+        source_path = source_path.resolve()
+        if not source_path.exists():
+            failures.append(f"{rel}: missing source path {source_value}")
+            continue
+        commit_date = source_commit_date(source_path)
+        if commit_date and (latest_source_date is None or commit_date > latest_source_date):
+            latest_source_date = commit_date
+            latest_source = source_value
+    if compiled_date and latest_source_date and latest_source_date > compiled_date:
+        warnings.append(
+            f"{rel}: source-newer-than-page confidence review candidate "
+            f"({latest_source} committed {latest_source_date.isoformat()} > {compiled_date.isoformat()})"
+        )
+
     non_empty_body_lines = [line for line in body.splitlines() if line.strip()]
     if cid != "index" and len(non_empty_body_lines) < min_body_lines:
         warnings.append(f"{rel}: short-page consolidation candidate ({len(non_empty_body_lines)} body lines)")
+
     confidence = meta.get("confidence")
-    if cid != "index" and confidence:
+    if confidence:
         try:
             confidence_value = float(confidence)
         except ValueError:
             failures.append(f"{rel}: invalid confidence value {confidence}")
         else:
+            if not 0.0 <= confidence_value <= 1.0:
+                failures.append(f"{rel}: confidence must be between 0 and 1 ({confidence_value})")
+            if abs(confidence_value * 20 - round(confidence_value * 20)) > 1e-9:
+                failures.append(
+                    f"{rel}: confidence must use conservative 0.05 bands ({confidence_value})"
+                )
+            confidence_by_locale.setdefault(cid, {})[locale] = confidence_value
             confidence_by_id[cid] = min(confidence_by_id.get(cid, confidence_value), confidence_value)
-            if confidence_value < low_confidence_threshold:
+            if cid != "index" and confidence_value <= low_confidence_threshold:
                 warnings.append(
-                    f"{rel}: low-confidence consolidation candidate ({confidence_value:.2f} < {low_confidence_threshold:.2f})"
+                    f"{rel}: low-confidence consolidation candidate "
+                    f"({confidence_value:.2f} <= {low_confidence_threshold:.2f})"
                 )
 
 for cid, locales in sorted(locales_by_id.items()):
@@ -166,6 +265,29 @@ for cid, locales in sorted(locales_by_id.items()):
     missing = {"en", "ru"} - locales
     if missing:
         failures.append(f"{cid}: missing locale mirror(s): {', '.join(sorted(missing))}")
+
+state_path = wiki_dir / "_meta" / "state.json"
+if state_path.exists():
+    state_pages = json.loads(state_path.read_text(encoding="utf-8")).get("pages", {})
+    for cid, locale_confidences in sorted(confidence_by_locale.items()):
+        if cid not in state_pages:
+            failures.append(f"_meta/state.json: missing page {cid}")
+            continue
+        state_confidence = state_pages[cid].get("confidence")
+        if not isinstance(state_confidence, (int, float)):
+            failures.append(f"_meta/state.json: missing or invalid confidence for {cid}")
+            continue
+        expected_confidence = min(locale_confidences.values())
+        if abs(float(state_confidence) - expected_confidence) > 1e-9:
+            failures.append(
+                f"_meta/state.json: confidence drift for {cid} "
+                f"({float(state_confidence):.2f} != locale minimum {expected_confidence:.2f})"
+            )
+    extra_state_ids = set(state_pages) - set(locales_by_id)
+    for cid in sorted(extra_state_ids):
+        failures.append(f"_meta/state.json: stale page entry {cid}")
+else:
+    failures.append("_meta/state.json: missing page state metadata")
 
 nav_ids = set()
 nav_path = wiki_dir / "_meta" / "navigation.json"
@@ -211,7 +333,7 @@ for cid in sorted(locales_by_id):
 
 low_confidence_nodes = {
     cid for cid, confidence in confidence_by_id.items()
-    if confidence < low_confidence_threshold and cid != "index"
+    if confidence <= low_confidence_threshold and cid != "index"
 }
 adjacency = {cid: set() for cid in low_confidence_nodes}
 for source, target in graph_edges:

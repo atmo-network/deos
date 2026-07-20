@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-25",
+  "generated_at": "2026-07-20",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -17,7 +17,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.95,
+      "confidence": 0.9,
       "sources": {
         "en": ["../docs/README.md", "../README.md"],
         "ru": ["../docs/README.md", "../README.md"]
@@ -89,7 +89,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/aaa.specification.en.md",
@@ -115,7 +115,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.95,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/axial-router.architecture.en.md",
@@ -139,7 +139,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.94,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/tmc.architecture.en.md",
@@ -163,7 +163,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.94,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/governance.specification.en.md",
@@ -189,7 +189,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.91,
+      "confidence": 0.95,
       "sources": {
         "en": [
           "../docs/asset-registry.architecture.en.md",
@@ -213,7 +213,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.9,
+      "confidence": 0.95,
       "sources": {
         "en": ["../docs/randomness.strategy.en.md", "../docs/manifesto.en.md"],
         "ru": ["../docs/randomness.strategy.en.md", "../docs/manifesto.en.md"]
@@ -231,7 +231,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.89,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/core.architecture.en.md"
@@ -253,7 +253,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/web-client.architecture.en.md",
@@ -281,7 +281,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.9,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../README.md",
@@ -313,7 +313,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../README.md",
@@ -339,7 +339,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.91,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../docs/README.md",
@@ -373,7 +373,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.94,
+      "confidence": 0.85,
       "sources": {
         "en": ["../docs/tmctol.specification.en.md", "../README.md"],
         "ru": ["../docs/tmctol.specification.en.md", "../README.md"]
@@ -391,7 +391,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.92,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/core.architecture.en.md",
@@ -417,7 +417,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.95,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/axial-router.architecture.en.md",
@@ -443,7 +443,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.94,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../docs/staking.specification.en.md",
@@ -469,7 +469,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.96,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/read-model.contract.en.md",
@@ -493,7 +493,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/governance.specification.en.md",
@@ -519,7 +519,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.92,
+      "confidence": 0.95,
       "sources": {
         "en": [
           "../docs/web-client.architecture.en.md",
@@ -550,12 +550,24 @@
         "en": [
           "../docs/README.md",
           "../docs/web-client.architecture.en.md",
-          "../web-client/README.md"
+          "../web-client/README.md",
+          "../.agents/skills/wiki-sync/SKILL.md",
+          "wiki/_meta/navigation.json",
+          "wiki/_meta/state.json",
+          "wiki/_meta/graph.json",
+          "wiki/_meta/aliases.json",
+          "wiki/_meta/locales.json"
         ],
         "ru": [
           "../docs/README.md",
           "../docs/web-client.architecture.en.md",
-          "../web-client/README.md"
+          "../web-client/README.md",
+          "../.agents/skills/wiki-sync/SKILL.md",
+          "wiki/_meta/navigation.json",
+          "wiki/_meta/state.json",
+          "wiki/_meta/graph.json",
+          "wiki/_meta/aliases.json",
+          "wiki/_meta/locales.json"
         ]
       }
     },
@@ -601,7 +613,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.91,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/manifesto.en.md",
@@ -627,7 +639,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.93,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../README.md",
@@ -665,7 +677,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.96,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../BACKLOG.md",
@@ -693,7 +705,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.96,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../README.md",
@@ -737,7 +749,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.88,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../docs/axial-router.architecture.en.md",
@@ -765,7 +777,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.88,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../docs/core.architecture.en.md",
@@ -795,7 +807,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.86,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
@@ -811,6 +823,42 @@
         ]
       }
     },
+    "builder-economy": {
+      "path": {
+        "en": "concepts/builder-economy.en.md",
+        "ru": "concepts/builder-economy.ru.md"
+      },
+      "page_type": "concept",
+      "title": {
+        "en": "$BLDR Builder Economy",
+        "ru": "Экономика $BLDR"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.9,
+      "sources": {
+        "en": [
+          "../docs/README.md",
+          "../docs/manifesto.en.md",
+          "../docs/framework-instance.contract.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/aaa.architecture.en.md",
+          "../docs/core.architecture.en.md",
+          "../docs/tmc.architecture.en.md"
+        ],
+        "ru": [
+          "../docs/README.md",
+          "../docs/manifesto.en.md",
+          "../docs/framework-instance.contract.en.md",
+          "../docs/governance.specification.en.md",
+          "../docs/governance.architecture.en.md",
+          "../docs/aaa.architecture.en.md",
+          "../docs/core.architecture.en.md",
+          "../docs/tmc.architecture.en.md"
+        ]
+      }
+    },
     "economic-thresholds": {
       "path": {
         "en": "concepts/economic-thresholds.en.md",
@@ -823,7 +871,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.86,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
@@ -849,7 +897,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.84,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -866,38 +914,6 @@
           "../docs/aaa.embedding.en.md",
           "../template/README.md",
           "../web-client/README.md"
-        ]
-      }
-    },
-    "validation-troubleshooting": {
-      "path": {
-        "en": "usage/validation-troubleshooting.en.md",
-        "ru": "usage/validation-troubleshooting.ru.md"
-      },
-      "page_type": "usage",
-      "title": {
-        "en": "Validation Troubleshooting",
-        "ru": "Troubleshooting validation"
-      },
-      "status": "active",
-      "audience": "developer",
-      "confidence": 0.86,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../web-client/README.md",
-          "../scripts/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md",
-          "../.agents/skills/alignment/SKILL.md",
-          "../scripts/validate-local.sh"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../web-client/README.md",
-          "../scripts/README.md",
-          "../.agents/skills/wiki-sync/SKILL.md",
-          "../.agents/skills/alignment/SKILL.md",
-          "../scripts/validate-local.sh"
         ]
       }
     },
@@ -913,7 +929,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.86,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -941,7 +957,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.86,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -971,7 +987,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.86,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
@@ -984,38 +1000,6 @@
           "../docs/aaa.architecture.en.md",
           "../docs/aaa.specification.en.md",
           "../AGENTS.md"
-        ]
-      }
-    },
-    "wiki-graph-metadata": {
-      "path": {
-        "en": "usage/wiki-graph-metadata.en.md",
-        "ru": "usage/wiki-graph-metadata.ru.md"
-      },
-      "page_type": "usage",
-      "title": {
-        "en": "Wiki Graph Metadata",
-        "ru": "Metadata wiki-графа"
-      },
-      "status": "active",
-      "audience": "developer",
-      "confidence": 0.86,
-      "sources": {
-        "en": [
-          "wiki/_meta/navigation.json",
-          "wiki/_meta/state.json",
-          "wiki/_meta/graph.json",
-          "wiki/_meta/aliases.json",
-          "wiki/_meta/locales.json",
-          "../.agents/skills/wiki-sync/SKILL.md"
-        ],
-        "ru": [
-          "wiki/_meta/navigation.json",
-          "wiki/_meta/state.json",
-          "wiki/_meta/graph.json",
-          "wiki/_meta/aliases.json",
-          "wiki/_meta/locales.json",
-          "../.agents/skills/wiki-sync/SKILL.md"
         ]
       }
     },
@@ -1031,7 +1015,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.86,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -1065,7 +1049,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.88,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -1091,7 +1075,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.91,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -1175,7 +1159,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.92,
+      "confidence": 0.85,
       "sources": {
         "en": ["../docs/tmctol.specification.en.md", "../simulator/README.md"],
         "ru": ["../docs/tmctol.specification.en.md", "../simulator/README.md"]
@@ -1193,7 +1177,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.92,
+      "confidence": 0.9,
       "sources": {
         "en": ["../scripts/README.md", "../AGENTS.md"],
         "ru": ["../scripts/README.md", "../AGENTS.md"]
@@ -1211,7 +1195,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.92,
+      "confidence": 0.9,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -1239,7 +1223,7 @@
       },
       "status": "active",
       "audience": "developer",
-      "confidence": 0.88,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -1267,7 +1251,7 @@
       },
       "status": "active",
       "audience": "newcomer",
-      "confidence": 0.88,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../AGENTS.md",
@@ -1295,7 +1279,7 @@
       },
       "status": "active",
       "audience": "partner",
-      "confidence": 0.85,
+      "confidence": 0.8,
       "sources": {
         "en": [
           "../README.md",
@@ -1323,7 +1307,7 @@
       },
       "status": "active",
       "audience": "partner",
-      "confidence": 0.86,
+      "confidence": 0.85,
       "sources": {
         "en": [
           "../README.md",

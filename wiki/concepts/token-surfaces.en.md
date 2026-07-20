@@ -24,10 +24,11 @@ related:
   - TMCTOL Standard
   - Staking Pools
   - Governance Domains
+  - $BLDR Builder Economy
   - Token Minting Curve
   - Read-Model Split
-last_compiled: 2026-05-17
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Token Surfaces
@@ -50,7 +51,7 @@ This page is a compact map. It does not replace the exact formulas, governance r
 
 ### `$BLDR`
 
-`$BLDR` is the flagship tactical governance token for builder coordination. In the current line it is associated with invoice-style tactical governance and BLDR-specific coordination lanes. Its value story is therefore not just emission; it depends on whether the downstream builder ecosystem gives the tactical coordination surface real demand.
+`$BLDR` is the flagship tactical governance token for builder coordination. In the current line it is associated with invoice-style tactical governance, labor funding, protocol-owned liquidity, and BLDR-specific coordination lanes. [$BLDR Builder Economy](builder-economy.en.md) owns the full pattern. Its value story is not just emission; it depends on whether the downstream builder ecosystem gives that coordination surface real demand.
 
 ## Receipt and Position Tokens
 
@@ -72,6 +73,7 @@ The current wiki intentionally separates three questions:
 
 - **Emission math**: owned by [Token Minting Curve](../overview/token-minting-curve.en.md) and [TMCTOL Formulas](../math/tmctol-formulas.en.md).
 - **Governance power**: owned by [Governance Domains](governance-domains.en.md).
+- **Builder coordination**: owned by [$BLDR Builder Economy](builder-economy.en.md).
 - **Receipt value**: owned by [Staking Pools](staking-pools.en.md) and liquidity-position accounting.
 
 Do not infer a full monetary policy for every token from governance role alone. For example, `$BLDR` can have tactical governance importance without the wiki pretending that downstream demand, launch allocation, or ecosystem product-market fit is already solved inside the framework.
@@ -87,5 +89,6 @@ Use [Read-Model Split](read-model-split.en.md) to decide which surface a token d
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [Staking Pools](staking-pools.en.md)
 - [Governance Domains](governance-domains.en.md)
+- [Builder Economy](builder-economy.en.md)
 - [Token Minting Curve](../overview/token-minting-curve.en.md)
 - [Read-Model Split](read-model-split.en.md)

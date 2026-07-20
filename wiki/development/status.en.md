@@ -23,8 +23,8 @@ related:
   - Three-Layer Validation
   - Reference Client
   - Generated Wiki
-last_compiled: 2026-05-17
-confidence: 0.96
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Development Status
@@ -39,7 +39,7 @@ This page is a current-state map. It is not the release history and not the full
 
 The current framework baseline is best understood by domain:
 
-- **Economic physics**: TMCTOL minting, routing, treasury-owned liquidity, fee burning, and bounded invariants are represented as the core economic loop.
+- **Economic physics**: TMCTOL minting, routing, treasury-owned liquidity, actor-mediated fee burning, and bounded invariants form the core economic loop.
 - **Autonomous actors**: AAA provides deterministic actor execution for burning, liquidity provisioning, treasury/bucket flows, and staking-related protocol automation.
 - **Staking and governance**: staking uses multi-asset share-vault mechanics, while governance uses bounded domain tracks, typed payloads, and protection surfaces.
 - **Reference client**: the SvelteKit client exposes on-chain-first wallet, swap, staking, governance, wiki, chart/status, automation, and execution-feedback surfaces.
@@ -49,12 +49,14 @@ Use [Domain Map](../concepts/domain-map.en.md) when you need the conceptual topo
 
 ## Active focus
 
-Current work is mostly consolidation:
+The current backlog concentrates on explicit framework boundaries:
 
-- Keep wiki pages self-contained and domain-linked;
-- Keep the reference client organized around clear owners and validation gates;
-- Keep open work expressed as closable slices with exit criteria;
-- Keep release details out of explanatory pages unless the page is explicitly a status/history surface.
+- Derive time-sensitive runtime constants from a configurable cadence profile;
+- Define a non-enabled V3 scheduling and block-bundling readiness profile;
+- Separate staking reward distribution from reward origin and define typed budget recipients;
+- Make unclaimed-reward policy explicit;
+- Preserve Phase 2 LP nomination as a runtime-upgrade boundary;
+- Allow client structure to grow only when concrete product pressure exposes a named seam.
 
 ## Open boundaries
 
@@ -63,8 +65,8 @@ The important unfinished areas are intentionally gated:
 - Wallet expansion waits for a materialized/indexed asset-discovery surface;
 - Archive/search UX waits for a materialized provider contract;
 - Permissionless collators and advanced randomness wait for an upstream relay-beacon path;
-- Extra client/UI growth waits for a named hotspot rather than broad polish;
-- Block-reward routing waits for a concrete reward source and amount contract.
+- Client composition and provider growth wait for concrete ownership pressure;
+- Block-reward routing waits for a concrete subsidy source and amount policy.
 
 ## Where to look next
 

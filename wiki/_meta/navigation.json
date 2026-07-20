@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-06-13",
+  "generated_at": "2026-07-20",
   "audience": "newcomer",
   "default_locale": "en",
   "available_locales": ["en", "ru"],
@@ -329,6 +329,22 @@
           "summary": {
             "en": "A compact map of Native, VETO, BLDR, stNTVE, LP tokens, and their economic/governance/staking/read-model roles.",
             "ru": "Краткая карта Native, VETO, BLDR, stNTVE, LP tokens и их ролей в economics/governance/staking/read-model."
+          }
+        },
+        {
+          "id": "builder-economy",
+          "title": {
+            "en": "$BLDR Builder Economy",
+            "ru": "Экономика $BLDR"
+          },
+          "path": {
+            "en": "concepts/builder-economy.en.md",
+            "ru": "concepts/builder-economy.ru.md"
+          },
+          "page_type": "concept",
+          "summary": {
+            "en": "How public invoices, tactical governance, protocol-owned liquidity, and bounded treasury payouts coordinate useful work without making founder privilege a framework entitlement.",
+            "ru": "Как публичные invoices, тактическое governance, protocol-owned liquidity и ограниченные treasury payouts координируют полезную работу без превращения статуса основателя в привилегию фреймворка."
           }
         },
         {
@@ -720,22 +736,6 @@
           }
         },
         {
-          "id": "validation-troubleshooting",
-          "title": {
-            "en": "Validation Troubleshooting",
-            "ru": "Troubleshooting validation"
-          },
-          "path": {
-            "en": "usage/validation-troubleshooting.en.md",
-            "ru": "usage/validation-troubleshooting.ru.md"
-          },
-          "page_type": "usage",
-          "summary": {
-            "en": "How to triage wiki, context, Domain DAG, web-client, simulator, Rust, and script validation failures.",
-            "ru": "Как triage wiki, context, Domain DAG, web-client, simulator, Rust и script validation failures."
-          }
-        },
-        {
           "id": "agent-coordination",
           "title": {
             "en": "Agent Coordination",
@@ -747,24 +747,8 @@
           },
           "page_type": "usage",
           "summary": {
-            "en": "How repo-local skills, ABC context files, wiki sync, validation gates, and while-true execution keep work aligned.",
-            "ru": "Как repo-local skills, ABC context files, wiki sync, validation gates и while-true execution держат работу aligned."
-          }
-        },
-        {
-          "id": "wiki-graph-metadata",
-          "title": {
-            "en": "Wiki Graph Metadata",
-            "ru": "Metadata wiki-графа"
-          },
-          "path": {
-            "en": "usage/wiki-graph-metadata.en.md",
-            "ru": "usage/wiki-graph-metadata.ru.md"
-          },
-          "page_type": "usage",
-          "summary": {
-            "en": "How to read navigation, state, graph, aliases, and locale metadata for the generated wiki.",
-            "ru": "Как читать navigation, state, graph, aliases и locale metadata generated wiki."
+            "en": "How repo-local skills, ABC context files, wiki sync, and changed-scope completion gates keep work aligned.",
+            "ru": "Как repo-local skills, ABC context files, wiki sync и changed-scope completion gates держат работу aligned."
           }
         }
       ]

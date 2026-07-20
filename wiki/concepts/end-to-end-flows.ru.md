@@ -30,8 +30,8 @@ related:
   - Стандарт TMCTOL
   - Пулы стейкинга
   - Разделение read-model
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Сквозные сценарии
@@ -48,19 +48,18 @@ confidence: 0.88
 2. Клиент читает ограниченные route/asset данные и помечает результат как живую on-chain истину, а не archive analytics.
 3. Axial Router сравнивает пути через market liquidity и protocol liquidity.
 4. Если выгоднее TMC path, маршрут идет через curve minting. Если выгоднее XYK path, он идет через market liquidity.
-5. Router fees могут питать burn или treasury flows.
+5. Комиссии маршрутизатора поступают в настроенный контур Burn Actor; сжигание происходит только после того, как обеспеченный средствами и допущенный к расписанию актор завершит исполнение.
 6. Клиент показывает execution progress через общий feedback, а не через отдельный transaction log в каждом widget.
 
 Страницы-владельцы: [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md), [Axial Router](../overview/axial-router.ru.md), [Разделение read-model](read-model-split.ru.md), [Эталонный клиент](../overview/reference-client.ru.md).
 
 ## Цепочка пробуждения акторов
 
-1. Fee, LP token или другой asset приходит на account System actor.
-2. Balance ingress работает как wakeup message.
-3. AAA scheduler допускает actor только если lifecycle, cooldown, fee и bounded-execution правила это разрешают.
-4. Actor выполняет typed plan: swap, burn, add/remove liquidity, split transfer, stake или unstake.
-5. Его output может попасть на account другого actor и разбудить следующий actor.
-6. Более крупное поведение протокола собирается из малых bounded steps, но остается читаемым actor graph.
+1. Для System Actor наступает настроенное условие запуска: входящий баланс у всеядного актора или ограниченное расписание у актора, работающего по таймеру.
+2. Планировщик AAA допускает актор, только если это разрешают правила жизненного цикла, паузы, комиссии и ограниченного исполнения.
+3. Актор выполняет типизированный план: свап, сжигание, добавление или снятие ликвидности, разделенную передачу, стейкинг или анстейкинг.
+4. Его результат может поступить на счет другого актора, запускаемого входящим балансом, и пробудить его.
+5. Более крупное поведение протокола складывается из малых ограниченных шагов, но остается читаемым как граф акторов.
 
 Страницы-владельцы: [Система AAA](../overview/aaa-system.ru.md), [AA-Актор](../overview/aa-actor.ru.md), [Токен-управляемая автоматизация](token-driven-automation.ru.md).
 

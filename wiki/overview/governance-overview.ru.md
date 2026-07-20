@@ -24,8 +24,8 @@ related:
   - Physics-first против politics-first
   - Пулы стейкинга
   - Базовые термины
-last_compiled: 2026-05-17
-confidence: 0.94
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Обзор Governance

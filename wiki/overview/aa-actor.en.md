@@ -24,8 +24,8 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-05-17
-confidence: 0.93
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # AA-Actor

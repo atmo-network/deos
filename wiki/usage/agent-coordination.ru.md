@@ -1,7 +1,7 @@
 ---
 page_type: usage
 title: Координация агентов
-summary: Как DEOS использует repo-local agent skills, ABC context files, wiki sync, validation gates и while-true execution, чтобы синхронизировать работу людей и агентов.
+summary: Как DEOS использует локальные skills агентов, контекстные файлы ABC, синхронизацию wiki и проверку завершенности измененной области, чтобы согласовать работу людей и агентов.
 locale: ru
 canonical_page_id: agent-coordination
 translation_of: agent-coordination.en.md
@@ -23,60 +23,58 @@ tags:
   - validation
 related:
   - Руководство контрибьютора
-  - Troubleshooting validation
   - Generated Wiki
   - Трехуровневая валидация
-last_compiled: 2026-05-17
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Координация агентов
 
 ## Кратко
 
-DEOS считает координацию агентов частью архитектуры. Репозиторий достаточно плотный, чтобы людям и агентам были нужны общие context files, повторяемые validation gates и локальные skills, где закреплены правила проекта.
+DEOS считает координацию агентов частью архитектуры. Репозиторий достаточно насыщен, чтобы людям и агентам требовались общие контекстные файлы, повторяемые проверки и локальные skills с закрепленными правилами проекта.
 
-Цель не в automation ради automation. Цель — держать изменения в согласии с framework contract, состоянием backlog и правдой wiki/docs.
+Цель не в автоматизации ради автоматизации. Цель — согласовать изменения с контрактом фреймворка, состоянием backlog и фактическим содержанием wiki и документации.
 
 ## Поверхности координации
 
 Главные поверхности:
 
-- `AGENTS.md`: долговременный protocol проекта и architecture rules;
+- `AGENTS.md`: долговременный протокол проекта и архитектурные правила;
 - `BACKLOG.md`: закрываемые открытые работы и внешние блокеры;
 - `CHANGELOG.md`: история завершенных поставок;
-- `/docs`: authoritative specification, architecture и implementation truth, из которого wiki берет provenance;
-- `/.agents/skills/`: repo-local skills для alignment и wiki work;
-- `/wiki`: generated domain graph для людей, агентов и reference client;
-- Validation scripts и while-true gates, которые проверяют changed scope.
+- `/docs`: задуманные контракты подсистем и карты поставленной архитектуры, из которых wiki берет сведения о происхождении;
+- Код и тесты: истина об исполняемом поведении;
+- `/.agents/skills/`: локальные skills для согласования проекта и работы с wiki;
+- `/wiki`: формируемый граф доменов для людей, агентов и эталонного клиента;
+- Скрипты проверки и completion gate, которые проверяют измененную область.
 
-`/docs` — не просто еще одна папка с текстами. Для агента это primary truth surface: перед изменениями в `/template`, `/web-client`, `/scripts` или `/wiki` нужно найти соответствующий spec/architecture контекст и не подменять его более удобной wiki-выжимкой.
+`/docs` — не просто еще одна папка с текстами, но она не переопределяет исполняемое поведение. Перед изменениями в `/template`, `/web-client`, `/scripts` или `/wiki` нужно найти соответствующую спецификацию и архитектурный контекст, а когда важна реализация — свериться с кодом и тестами. Нельзя подменять владельцев истины более удобной выжимкой из wiki.
 
-Поэтому context updates являются частью done, а не необязательной уборкой документации.
+Поэтому обновление контекста входит в критерии завершения, а не служит необязательной уборкой документации.
 
-## Как должна идти agent work
+## Как должна идти работа агента
 
-1. Классифицировать touched surface: docs, template, web-client, scripts, simulator или wiki.
-2. Прочитать owner context до редактирования.
-3. Сделать smallest coherent change.
-4. Запустить smallest meaningful validation.
-5. Обновить backlog/changelog/wiki/context, если изменилась project truth.
-6. Запустить repo-local completion gate при autonomous work.
+1. Определить затронутую область: docs, template, web-client, scripts, simulator или wiki.
+2. До редактирования прочитать контекст владельца.
+3. Сделать минимальное целостное изменение.
+4. Запустить минимальную содержательную проверку.
+5. Обновить backlog, changelog, wiki или контекст, если изменилась истина о проекте.
+6. При автономной работе запустить локальный completion gate.
 
-Если задача обнаружила новый in-scope slice, он должен появиться в backlog или закрыться в том же pass. Evergreen rules должны жить в `AGENTS.md`, а не как бессмертные backlog items.
+Если задача обнаружила новую работу в пределах области, ее нужно добавить в backlog или закрыть в том же проходе. Постоянные правила должны жить в `AGENTS.md`, а не превращаться в бессрочные пункты backlog.
 
 ## Границы skills
 
 - `Wiki-sync` владеет wiki trust, semantic projection и generated-wiki rules.
-- `Alignment` владеет while-true checks, hallucination/boundary-drift memory и completion discipline.
-- Generic coding work следует coding contract, но DEOS-specific architecture rules берутся из repository context.
+- `Alignment` владеет локальными аудитами проекта, памятью об ошибочных утверждениях и нарушениях границ, а также дисциплиной завершения.
+- Общая инженерная работа следует coding contract, но архитектурные правила DEOS берутся из контекста репозитория.
 
-Skills — cognitive infrastructure. Если skill кодирует durable project rule, ее нужно считать частью системы, а не disposable helper script.
+Skills образуют инфраструктуру знаний. Если skill закрепляет долговременное правило проекта, его нужно считать частью системы, а не одноразовым вспомогательным скриптом.
 
 ## Связанные страницы
 
 - [Руководство контрибьютора](../community/contributing.ru.md)
-- [Troubleshooting validation](validation-troubleshooting.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
-- [Metadata wiki-графа](wiki-graph-metadata.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)

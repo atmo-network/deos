@@ -19,8 +19,8 @@ tags:
 related:
   - Repository Structure
   - DEOS Framework Overview
-last_compiled: 2026-04-25
-confidence: 0.96
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Scripts Layer
@@ -40,16 +40,15 @@ Numbered scripts perform specific leaf operations and do not orchestrate each ot
 - `01-download-binaries.sh`: Fetch Polkadot SDK binaries
 - `03-build-runtime.sh`: Compile the WASM artifact
 - `05-spawn-zombienet.sh`: Launch the local network
-- `seed-web-client-state.sh`: Top up local wallet, swap, and native-staking state for live web-client testing
 
 ### Orchestrators
 
 Named workflow scripts compose atomic steps into larger developer flows:
 
-- `Bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
-- `Validate-local.sh`: Run the local CI, runtime build, and E2E validation
-- `Aaa-release-gate.sh`: Run heavy stress tests for the AAA scheduler
-- `Benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows
+- `bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
+- `validate-local.sh`: Run the selected local audit, build, and E2E validation plan
+- `aaa-release-gate.sh`: Run heavy stress tests for the AAA scheduler
+- `benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows
 
 ## Admin Utilities
 
@@ -57,12 +56,13 @@ Admin scripts assist operators in managing local or live-chain readiness without
 
 Important examples include:
 
-- `Export-papi-metadata.sh`: Export Rust runtime metadata and regenerate PAPI descriptors for the web client
-- `Bootstrap-native-staking-local.sh check`: Read native staking bootstrap readiness without submitting transactions
-- `Bootstrap-native-staking-local.sh prepare-calls`: Emit the next plan-only Root/governance staking-admin or signed operator call data needed to register/initialize native staking, create the canonical `NTVE/stNTVE` pool, or seed initial liquidity
-- `Authorized-upgrade-local.sh check`: Verify if the locally compiled WASM hash matches the pending authorized runtime upgrade on-chain
-- `Authorized-upgrade-local.sh apply`: Relay already-authorized runtime code bytes only with explicit `--submit`
-- `Teardown-local-network.sh`: Safely terminate background processes and remove temporary network state
+- `seed-web-client-state.sh`: Prepare wallet, swap, and native-staking state for live web-client testing
+- `export-papi-metadata.sh`: Export Rust runtime metadata and regenerate PAPI descriptors for the web client
+- `bootstrap-native-staking-local.sh check`: Read native staking bootstrap readiness without submitting transactions
+- `bootstrap-native-staking-local.sh prepare-calls`: Emit the next plan-only Root/governance staking-admin or signed operator call data needed to register/initialize native staking, create the canonical `NTVE/stNTVE` pool, or seed initial liquidity
+- `authorized-upgrade-local.sh check`: Verify if the locally compiled WASM hash matches the pending authorized runtime upgrade on-chain
+- `authorized-upgrade-local.sh apply`: Relay already-authorized runtime code bytes only with explicit `--submit`
+- `teardown-local-network.sh`: Safely terminate background processes and remove temporary network state
 
 ## Native Staking Bootstrap Helpers
 
@@ -90,5 +90,4 @@ They rely on `_common.sh` for logging, step tracking, and background process man
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [Tech Stack](../implementation/tech-stack.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)
-- [Validation Troubleshooting](validation-troubleshooting.en.md)
 - [Development Status](../development/status.en.md)

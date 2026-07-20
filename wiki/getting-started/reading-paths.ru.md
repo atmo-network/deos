@@ -30,9 +30,10 @@ related:
   - Generated Wiki
   - Статус разработки
   - Обзор фреймворка DEOS
+  - Экономика $BLDR
   - Базовые термины
-last_compiled: 2026-05-17
-confidence: 0.91
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Маршруты чтения
@@ -66,12 +67,13 @@ confidence: 0.91
 2. [Partner Pitch](partner-pitch.ru.md)
 3. [Executive Summary](executive-summary.ru.md)
 4. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
-5. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
-6. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-7. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
-8. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
-9. [Форк DEOS](../usage/forking-deos.ru.md)
-10. [Эталонный клиент](../overview/reference-client.ru.md)
+5. [Экономика $BLDR](../concepts/builder-economy.ru.md)
+6. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
+7. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+8. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
+9. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
+10. [Форк DEOS](../usage/forking-deos.ru.md)
+11. [Эталонный клиент](../overview/reference-client.ru.md)
 
 Этот маршрут для партнеров, ecosystem readers и technical evaluators, которым сначала нужны мем, границы, карта рисков и обязанности форка, а уже потом topology реализации.
 
@@ -82,13 +84,12 @@ confidence: 0.91
 3. [Формулы TMCTOL](../math/tmctol-formulas.ru.md)
 4. [Экономические пороги](../concepts/economic-thresholds.ru.md)
 5. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
-6. [Карта инвариантов](../concepts/invariant-map.ru.md)
-7. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
-8. [Сценарии TOL buckets](../concepts/tol-bucket-scenarios.ru.md)
-9. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
-10. [Token Minting Curve](../overview/token-minting-curve.ru.md)
-11. [Axial Router](../overview/axial-router.ru.md)
-12. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
+6. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
+7. [Сценарии TOL buckets](../concepts/tol-bucket-scenarios.ru.md)
+8. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
+9. [Token Minting Curve](../overview/token-minting-curve.ru.md)
+10. [Axial Router](../overview/axial-router.ru.md)
+11. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
 
 Экономическая работа должна сохранять различие между формулами, поведением runtime и интеграционными эффектами. Маршрут wiki должен показать, какой домен вы меняете, до запуска более глубокого набора проверок.
 
@@ -108,10 +109,11 @@ confidence: 0.91
 
 1. [Обзор Governance](../overview/governance-overview.ru.md)
 2. [Домены Governance](../concepts/governance-domains.ru.md)
-3. [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-4. [Пулы стейкинга](../concepts/staking-pools.ru.md)
-5. [Разделение read-model](../concepts/read-model-split.ru.md)
-6. [Базовые термины](../glossary/core-terms.ru.md)
+3. [Экономика $BLDR](../concepts/builder-economy.ru.md)
+4. [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
+5. [Пулы стейкинга](../concepts/staking-pools.ru.md)
+6. [Разделение read-model](../concepts/read-model-split.ru.md)
+7. [Базовые термины](../glossary/core-terms.ru.md)
 
 Работа с governance должна держать отдельно конституционную защиту, primary tracks, типизированные семейства payload и полномочия исполнения.
 
@@ -162,4 +164,5 @@ confidence: 0.91
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
 - [Статус разработки](../development/status.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
+- [Экономика $BLDR](../concepts/builder-economy.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

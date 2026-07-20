@@ -10,6 +10,12 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
+  - ../../template/Cargo.toml
+  - ../../template/runtime/src/lib.rs
+  - ../../web-client/package.json
+  - ../../web-client/src/lib/read-model.ts
+  - ../../simulator/README.md
+  - ../../scripts/README.md
 status: active
 audience: developer
 tags:
@@ -19,8 +25,8 @@ tags:
 related:
   - Repository Structure
   - Runtime Patterns
-last_compiled: 2026-04-15
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Tech Stack
@@ -54,7 +60,7 @@ The economic proving ground (`/simulator`) is written in standard **JavaScript**
 
 ## Reference Client Layer
 
-The DEOS Reference Client is built to be lightweight, reactive, and strictly on-chain-first.
+The DEOS Reference Client is lightweight, reactive, and on-chain-first while explicitly modeling session-derived and materialized data boundaries.
 
 - **Framework**: SvelteKit
 - **Language**: TypeScript

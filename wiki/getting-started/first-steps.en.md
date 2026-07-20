@@ -28,8 +28,8 @@ related:
   - Read-Model Split
   - Reference Client
   - Newcomer FAQ
-last_compiled: 2026-05-17
-confidence: 0.93
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # First Steps
@@ -89,7 +89,7 @@ Use the smallest meaningful validation layer first:
 - Runtime changes -> targeted cargo validation;
 - Client changes -> web-client validation;
 - Wiki changes -> trusted wiki validation and link sanity;
-- Cross-domain changes -> the full while-true completion gate.
+- Cross-domain changes -> the repo-local completion gate.
 
 ## Related
 

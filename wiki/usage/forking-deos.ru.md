@@ -31,8 +31,8 @@ related:
   - Технологический стек
   - Токеновые поверхности
   - Трехуровневая валидация
-last_compiled: 2026-06-13
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Форк DEOS

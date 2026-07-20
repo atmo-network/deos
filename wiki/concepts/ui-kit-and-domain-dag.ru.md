@@ -25,8 +25,8 @@ related:
   - Разделение read-model
   - Структура репозитория
   - Руководство контрибьютора
-last_compiled: 2026-05-17
-confidence: 0.92
+last_compiled: 2026-07-20
+confidence: 0.95
 ---
 
 # UI Kit и Domain DAG

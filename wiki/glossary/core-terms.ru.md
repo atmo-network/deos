@@ -33,14 +33,15 @@ related:
   - Токен-управляемая автоматизация
   - Обзор Governance
   - Домены Governance
+  - Экономика $BLDR
   - Разделение read-model
   - UI Kit и Domain DAG
   - Generated Wiki
   - Маршруты чтения
   - Статус разработки
   - FAQ для новичков
-last_compiled: 2026-05-17
-confidence: 0.96
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Базовые термины
@@ -125,7 +126,7 @@ confidence: 0.96
 
 ### `$BLDR`
 
-Флагманский токен тактического governance и координации билдеров в текущей линии.
+Флагманский токен тактического управления и координации созидателей в текущей линии. См. [Экономику $BLDR](../concepts/builder-economy.ru.md).
 
 ### `stXXX`
 
@@ -178,6 +179,7 @@ Wiki-карта текущего состояния для базовых дом
 - [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
 - [Обзор Governance](../overview/governance-overview.ru.md)
 - [Домены Governance](../concepts/governance-domains.ru.md)
+- [Экономика $BLDR](../concepts/builder-economy.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)
 - [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)

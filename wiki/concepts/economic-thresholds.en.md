@@ -25,8 +25,8 @@ related:
   - Token Minting Curve
   - Routing and Minting Loop
   - Token Surfaces
-last_compiled: 2026-05-17
-confidence: 0.86
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Economic Thresholds

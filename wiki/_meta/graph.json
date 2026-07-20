@@ -363,6 +363,18 @@
       }
     },
     {
+      "id": "builder-economy",
+      "title": {
+        "en": "$BLDR Builder Economy",
+        "ru": "Экономика $BLDR"
+      },
+      "page_type": "concept",
+      "path": {
+        "en": "concepts/builder-economy.en.md",
+        "ru": "concepts/builder-economy.ru.md"
+      }
+    },
+    {
       "id": "economic-thresholds",
       "title": {
         "en": "Economic Thresholds",
@@ -384,18 +396,6 @@
       "path": {
         "en": "usage/forking-deos.en.md",
         "ru": "usage/forking-deos.ru.md"
-      }
-    },
-    {
-      "id": "validation-troubleshooting",
-      "title": {
-        "en": "Validation Troubleshooting",
-        "ru": "Troubleshooting validation"
-      },
-      "page_type": "usage",
-      "path": {
-        "en": "usage/validation-troubleshooting.en.md",
-        "ru": "usage/validation-troubleshooting.ru.md"
       }
     },
     {
@@ -432,18 +432,6 @@
       "path": {
         "en": "concepts/tol-bucket-scenarios.en.md",
         "ru": "concepts/tol-bucket-scenarios.ru.md"
-      }
-    },
-    {
-      "id": "wiki-graph-metadata",
-      "title": {
-        "en": "Wiki Graph Metadata",
-        "ru": "Metadata wiki-графа"
-      },
-      "page_type": "usage",
-      "path": {
-        "en": "usage/wiki-graph-metadata.en.md",
-        "ru": "usage/wiki-graph-metadata.ru.md"
       }
     },
     {
@@ -983,6 +971,11 @@
       "type": "defines-wiki-knowledge-graph"
     },
     {
+      "from": "generated-wiki",
+      "to": "agent-coordination",
+      "type": "supports"
+    },
+    {
       "from": "domain-map",
       "to": "deos-framework",
       "type": "maps-framework-domain"
@@ -1199,6 +1192,46 @@
     },
     {
       "from": "domain-map",
+      "to": "builder-economy",
+      "type": "guides"
+    },
+    {
+      "from": "reading-paths",
+      "to": "builder-economy",
+      "type": "recommends"
+    },
+    {
+      "from": "token-surfaces",
+      "to": "builder-economy",
+      "type": "details"
+    },
+    {
+      "from": "builder-economy",
+      "to": "governance-domains",
+      "type": "uses"
+    },
+    {
+      "from": "builder-economy",
+      "to": "tmctol-standard",
+      "type": "uses"
+    },
+    {
+      "from": "builder-economy",
+      "to": "aaa-system",
+      "type": "automated-by"
+    },
+    {
+      "from": "builder-economy",
+      "to": "tol-bucket-scenarios",
+      "type": "uses"
+    },
+    {
+      "from": "builder-economy",
+      "to": "physics-vs-politics",
+      "type": "framed-by"
+    },
+    {
+      "from": "domain-map",
       "to": "economic-thresholds",
       "type": "guides"
     },
@@ -1278,43 +1311,8 @@
       "type": "relates"
     },
     {
-      "from": "three-layer-validation",
-      "to": "validation-troubleshooting",
-      "type": "extends"
-    },
-    {
-      "from": "validation-troubleshooting",
-      "to": "scripts-layer",
-      "type": "uses"
-    },
-    {
-      "from": "validation-troubleshooting",
-      "to": "tech-stack",
-      "type": "uses"
-    },
-    {
-      "from": "validation-troubleshooting",
-      "to": "status",
-      "type": "uses"
-    },
-    {
-      "from": "reading-paths",
-      "to": "validation-troubleshooting",
-      "type": "recommends"
-    },
-    {
-      "from": "forking-deos",
-      "to": "validation-troubleshooting",
-      "type": "uses"
-    },
-    {
       "from": "agent-coordination",
       "to": "generated-wiki",
-      "type": "uses"
-    },
-    {
-      "from": "agent-coordination",
-      "to": "validation-troubleshooting",
       "type": "uses"
     },
     {
@@ -1408,36 +1406,6 @@
       "type": "recommends"
     },
     {
-      "from": "wiki-graph-metadata",
-      "to": "generated-wiki",
-      "type": "explains"
-    },
-    {
-      "from": "wiki-graph-metadata",
-      "to": "agent-coordination",
-      "type": "supports"
-    },
-    {
-      "from": "wiki-graph-metadata",
-      "to": "reference-client",
-      "type": "supports"
-    },
-    {
-      "from": "wiki-graph-metadata",
-      "to": "validation-troubleshooting",
-      "type": "supports"
-    },
-    {
-      "from": "generated-wiki",
-      "to": "wiki-graph-metadata",
-      "type": "uses"
-    },
-    {
-      "from": "reading-paths",
-      "to": "wiki-graph-metadata",
-      "type": "recommends"
-    },
-    {
       "from": "invariant-map",
       "to": "economic-claim-levels",
       "type": "uses"
@@ -1523,11 +1491,6 @@
       "type": "uses"
     },
     {
-      "from": "tech-stack",
-      "to": "validation-troubleshooting",
-      "type": "supports"
-    },
-    {
       "from": "tmctol-formulas",
       "to": "tmctol-standard",
       "type": "explains"
@@ -1545,11 +1508,6 @@
     {
       "from": "scripts-layer",
       "to": "three-layer-validation",
-      "type": "supports"
-    },
-    {
-      "from": "scripts-layer",
-      "to": "validation-troubleshooting",
       "type": "supports"
     },
     {
@@ -1605,11 +1563,6 @@
     {
       "from": "start-here",
       "to": "scripts-layer",
-      "type": "route-local-run"
-    },
-    {
-      "from": "start-here",
-      "to": "validation-troubleshooting",
       "type": "route-local-run"
     },
     {

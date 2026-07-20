@@ -26,8 +26,8 @@ related:
   - Governance Domains
   - Staking Pools
   - Core Terms
-last_compiled: 2026-04-16
-confidence: 0.94
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # TMCTOL Standard
@@ -54,7 +54,7 @@ In plain language, that means the protocol keeps building its own liquidity base
 
 ### Fee Burning
 
-The router takes a fee on swaps and burns it. Burning reduces supply and helps tighten the gap between the curve ceiling and the liquidity floor over time.
+The router captures a fee on swaps and routes it toward the Burn Actor. Supply falls only when that funded, configured, schedulable actor completes the burn; fee capture alone is not an immediate burn guarantee.
 
 ## Mint Distribution Rule
 
@@ -85,7 +85,7 @@ TMCTOL does not claim unconditional safety. Its protections depend on governance
 - Keeping fee burning live
 - Protecting the anchor role of Bucket A
 
-Under those conditions, the docs describe a floor-support range shaped by bucket usage rather than an unlimited downside profile.
+Under those conditions, the specification reports a named stress-floor envelope from qualifying counted reserves, sellable-pressure assumptions, and bucket policy rather than an unlimited downside guarantee or a universal market-price floor.
 
 ## Why TMCTOL Runs on DEOS
 

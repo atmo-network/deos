@@ -20,8 +20,8 @@ tags:
 related:
   - Tech Stack
   - DEOS Framework Overview
-last_compiled: 2026-04-15
-confidence: 0.95
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Repository Structure
@@ -58,9 +58,13 @@ The automation layer containing Bash scripts for local node management, testing,
 
 The historical and authoritative mathematical proving ground written in JavaScript/BigInt. This is the source of truth for all tokenomic formulas, thresholds, and invariants before they are implemented in Rust.
 
+### `/wiki/`
+
+The generated bilingual semantic projection of `/docs`, with frontend-renderable pages and shared navigation, graph, alias, locale, confidence, and provenance metadata.
+
 ### `/.agents/`
 
-The cognitive infrastructure layer containing skills and prompts for agent coordination.
+The repository-local cognitive and validation infrastructure layer containing portable skills, audits, and project alignment workflows.
 
 ## Operational Priority
 

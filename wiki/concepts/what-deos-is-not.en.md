@@ -23,8 +23,8 @@ related:
   - Invariant and Threat Map
   - Economic Claim Levels
   - Parachain Context
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # What DEOS Is Not

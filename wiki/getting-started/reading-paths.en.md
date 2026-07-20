@@ -29,9 +29,10 @@ related:
   - Generated Wiki
   - Development Status
   - DEOS Framework Overview
+  - $BLDR Builder Economy
   - Core Terms
-last_compiled: 2026-05-17
-confidence: 0.91
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # Reading Paths
@@ -65,12 +66,13 @@ This path gives you project vocabulary before pallet names, runtime details, or 
 2. [Partner Pitch](partner-pitch.en.md)
 3. [Executive Summary](executive-summary.en.md)
 4. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
-5. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
-6. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-7. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
-8. [Invariant and Threat Map](../concepts/invariant-map.en.md)
-9. [Forking DEOS](../usage/forking-deos.en.md)
-10. [Reference Client](../overview/reference-client.en.md)
+5. [$BLDR Builder Economy](../concepts/builder-economy.en.md)
+6. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
+7. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+8. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
+9. [Invariant and Threat Map](../concepts/invariant-map.en.md)
+10. [Forking DEOS](../usage/forking-deos.en.md)
+11. [Reference Client](../overview/reference-client.en.md)
 
 This path is for partners, ecosystem readers, and technical evaluators who need the meme, boundaries, risk model, and fork obligations before reading implementation topology.
 
@@ -81,13 +83,12 @@ This path is for partners, ecosystem readers, and technical evaluators who need 
 3. [TMCTOL Formulas](../math/tmctol-formulas.en.md)
 4. [Economic Thresholds](../concepts/economic-thresholds.en.md)
 5. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
-6. [Invariant Map](../concepts/invariant-map.en.md)
-7. [Invariant and Threat Map](../concepts/invariant-map.en.md)
-8. [TOL Bucket Scenarios](../concepts/tol-bucket-scenarios.en.md)
-9. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
-10. [Token Minting Curve](../overview/token-minting-curve.en.md)
-11. [Axial Router](../overview/axial-router.en.md)
-12. [Three-Layer Validation](../development/three-layer-validation.en.md)
+6. [Invariant and Threat Map](../concepts/invariant-map.en.md)
+7. [TOL Bucket Scenarios](../concepts/tol-bucket-scenarios.en.md)
+8. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
+9. [Token Minting Curve](../overview/token-minting-curve.en.md)
+10. [Axial Router](../overview/axial-router.en.md)
+11. [Three-Layer Validation](../development/three-layer-validation.en.md)
 
 Economics work must preserve the difference between formulas, runtime behavior, and integration effects. The wiki route should tell you which domain you are changing before you run the deeper validation stack.
 
@@ -107,10 +108,11 @@ Runtime work should identify the affected domain first, then validate whether th
 
 1. [Governance Overview](../overview/governance-overview.en.md)
 2. [Governance Domains](../concepts/governance-domains.en.md)
-3. [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-4. [Staking Pools](../concepts/staking-pools.en.md)
-5. [Read-Model Split](../concepts/read-model-split.en.md)
-6. [Core Terms](../glossary/core-terms.en.md)
+3. [$BLDR Builder Economy](../concepts/builder-economy.en.md)
+4. [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
+5. [Staking Pools](../concepts/staking-pools.en.md)
+6. [Read-Model Split](../concepts/read-model-split.en.md)
+7. [Core Terms](../glossary/core-terms.en.md)
 
 Governance work must keep constitutional protection, primary tracks, typed payload families, and execution authority separate.
 
@@ -161,4 +163,5 @@ Tooling and fork work should stay bounded, explicit, and honest about prerequisi
 - [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Development Status](../development/status.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
+- [$BLDR Builder Economy](../concepts/builder-economy.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

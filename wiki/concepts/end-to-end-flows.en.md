@@ -29,8 +29,8 @@ related:
   - TMCTOL Standard
   - Staking Pools
   - Read-Model Split
-last_compiled: 2026-05-17
-confidence: 0.88
+last_compiled: 2026-07-20
+confidence: 0.85
 ---
 
 # End-to-End Flows
@@ -47,19 +47,18 @@ The examples are simplified, but each step names the responsible domain and the 
 2. The client reads bounded route and asset data, then labels the result as live on-chain truth rather than archive analytics.
 3. Axial Router compares available market-liquidity and protocol-liquidity paths.
 4. If the TMC path is better, the route mints through the curve. If the XYK path is better, it swaps through market liquidity.
-5. Router fees can feed burn or treasury flows.
+5. Router fees enter the configured Burn Actor flow; the burn occurs only when that actor remains funded, schedulable, and completes execution.
 6. The client shows execution progress through centralized feedback instead of each widget inventing its own transaction log.
 
 Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [Axial Router](../overview/axial-router.en.md), [Read-Model Split](read-model-split.en.md), [Reference Client](../overview/reference-client.en.md).
 
 ## Actor Wakeup Chain
 
-1. A fee, LP token, or other asset arrives at a System actor account.
-2. Balance ingress acts as a wakeup message.
-3. AAA scheduler admits the actor only if lifecycle, cooldown, fee, and bounded-execution rules allow it.
-4. The actor executes a typed plan such as swap, burn, add/remove liquidity, split transfer, stake, or unstake.
-5. Its output may land on another actor account and wake the next actor.
-6. A larger protocol behavior emerges from small bounded steps, but remains inspectable as an actor graph.
+1. A System actor reaches its configured trigger: balance ingress for omnivorous actors or a bounded schedule for timer-driven actors.
+2. AAA scheduler admits the actor only if lifecycle, cooldown, fee, and bounded-execution rules allow it.
+3. The actor executes a typed plan such as swap, burn, add/remove liquidity, split transfer, stake, or unstake.
+4. Its output may land on another ingress-driven actor account and wake that actor.
+5. A larger protocol behavior emerges from small bounded steps, but remains inspectable as an actor graph.
 
 Owner pages: [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor.en.md), [Token-Driven Automation](token-driven-automation.en.md).
 

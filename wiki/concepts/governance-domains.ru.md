@@ -23,12 +23,13 @@ related:
   - Обзор Governance
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
+  - Экономика $BLDR
   - Пулы стейкинга
   - Разделение read-model
   - Physics-first против politics-first
   - Базовые термины
-last_compiled: 2026-05-17
-confidence: 0.93
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Домены Governance
@@ -74,7 +75,7 @@ Signed public path остается намеренно ограниченным:
 
 ## Tracks, payload и authority
 
-Форма primary track принадлежит домену. Одни домены используют binary family `Aye / Nay`. Канонический тактический `$BLDR` treasury-домен использует invoice-shaped family: `Amplify`, `Approve`, `Reduce`, `Nay`. Тактической трате иногда нужен payout scalar, а не только yes/no approval.
+Форма primary track принадлежит домену. Одни домены используют binary family `Aye / Nay`. Канонический тактический `$BLDR` treasury-домен использует invoice-shaped family: `Amplify`, `Approve`, `Reduce`, `Nay`. Тактической трате иногда нужен коэффициент выплаты, а не только ответ «да» или «нет». [Экономика $BLDR](builder-economy.ru.md) связывает этот путь счета-заявки с финансированием труда, ликвидностью и исполнением выплаты из казны.
 
 Protection тоже имеет доменную форму. Домен решает, какая protection surface допустима, какие veto thresholds важны, может ли `Pass` ускорять urgent handling и как интерпретируется финальный protection gate.
 
@@ -103,6 +104,7 @@ Execution authority ограничивается доменом. `L1RootAction` 
 - [Обзор Governance](../overview/governance-overview.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
+- [Экономика $BLDR](builder-economy.ru.md)
 - [Пулы стейкинга](staking-pools.ru.md)
 - [Разделение read-model](read-model-split.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)

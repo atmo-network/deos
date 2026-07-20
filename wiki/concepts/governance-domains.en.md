@@ -22,12 +22,13 @@ related:
   - Governance Overview
   - DEOS Framework Overview
   - TMCTOL Standard
+  - $BLDR Builder Economy
   - Staking Pools
   - Read-Model Split
   - Physics-First vs Politics-First
   - Core Terms
-last_compiled: 2026-05-17
-confidence: 0.93
+last_compiled: 2026-07-20
+confidence: 0.9
 ---
 
 # Governance Domains
@@ -73,7 +74,7 @@ The signed public path remains intentionally bounded: `Intent` across domains, t
 
 ## Tracks, Payloads, and Authority
 
-Primary track shape is domain-owned. Some domains use a binary `Aye / Nay` family. The canonical tactical `$BLDR` treasury domain uses an invoice-shaped family: `Amplify`, `Approve`, `Reduce`, `Nay`. Tactical spending may need a payout scalar, not only yes/no approval.
+Primary track shape is domain-owned. Some domains use a binary `Aye / Nay` family. The canonical tactical `$BLDR` treasury domain uses an invoice-shaped family: `Amplify`, `Approve`, `Reduce`, `Nay`. Tactical spending may need a payout scalar, not only yes/no approval. [$BLDR Builder Economy](builder-economy.en.md) follows that invoice path through labor funding, liquidity, and treasury execution.
 
 Protection is also domain-shaped. A domain decides which protection surface is eligible, which veto thresholds matter, whether `Pass` can accelerate urgent handling, and how final protection gating is interpreted.
 
@@ -102,6 +103,7 @@ Read a governance domain through five questions:
 - [Governance Overview](../overview/governance-overview.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
+- [$BLDR Builder Economy](builder-economy.en.md)
 - [Staking Pools](staking-pools.en.md)
 - [Read-Model Split](read-model-split.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
