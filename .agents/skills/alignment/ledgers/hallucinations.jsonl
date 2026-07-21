@@ -9,3 +9,4 @@
 {"timestamp":"2026-04-22T23:12:18Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/runtime/src/configs/staking_config.rs"}
 {"timestamp":"2026-04-24T20:25:07Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/governance/src/proposal_resolution.rs"}
 {"timestamp":"2026-04-24T21:27:21Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/runtime/examples/export_metadata.rs"}
+{"timestamp":"2026-07-21T02:39:05Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/aaa/src/scheduler.rs"}

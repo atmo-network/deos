@@ -1,15 +1,23 @@
-use super::{AddressEventIngress, PriceForParentDelivery, RuntimeAddressEventIngress};
+use super::{
+  AddressEventIngress, PriceForParentDelivery, RuntimeAddressEventIngress, RuntimeFeeCollector,
+};
 use crate::{
   AccountId, AllPalletsWithSystem, AssetRegistry, Assets, Balance, Balances, ParachainInfo,
   ParachainSystem, PolkadotXcm, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, WeightToFee,
   XcmpQueue,
 };
+#[cfg(feature = "runtime-benchmarks")]
+use alloc::boxed::Box;
 use alloc::vec::Vec;
 
 use polkadot_sdk::{
   staging_xcm as xcm, staging_xcm_builder as xcm_builder, staging_xcm_executor as xcm_executor, *,
 };
 
+#[cfg(feature = "runtime-benchmarks")]
+use frame_support::traits::tokens::imbalance::{
+  ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting,
+};
 use frame_support::{
   parameter_types,
   traits::{ConstU32, Contains, ContainsPair, Everything, Nothing},
@@ -17,7 +25,6 @@ use frame_support::{
 };
 use frame_system::EnsureRoot;
 use pallet_xcm::XcmPassthrough;
-use polkadot_runtime_common::impls::ToAuthor;
 use polkadot_sdk::polkadot_parachain_primitives::primitives::Sibling;
 use polkadot_sdk::polkadot_sdk_frame::traits::Disabled;
 use primitives::AssetKind;
@@ -38,7 +45,9 @@ use xcm_executor::{
 };
 
 parameter_types! {
-  pub const MaxAssetsIntoHolding: u32 = 64;
+  // FixedWeightBounds cannot price DepositAsset by the number of held assets. Keep the holding
+  // register single-asset until an instruction-specific weigher replaces this launch contract.
+  pub const MaxAssetsIntoHolding: u32 = 1;
   pub const MaxInstructions: u32 = 100;
   pub const RelayLocation: Location = Location::parent();
   pub const RelayNetwork: Option<NetworkId> = None;
@@ -46,8 +55,8 @@ parameter_types! {
   // For the real deployment, it is recommended to set `RelayNetwork` according to the relay chain
   // and prepend `UniversalLocation` with `GlobalConsensus(RelayNetwork::get())`.
   pub UniversalLocation: InteriorLocation = Parachain(ParachainInfo::parachain_id().into()).into();
-  // One XCM operation is 1_000_000_000 weight - almost certainly a conservative estimate.
-  pub UnitWeightCost: Weight = Weight::from_parts(1_000_000_000, 64 * 1024);
+  pub UnitWeightCost: Weight =
+    <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::xcm_asset_deposit();
 }
 
 /// Type for specifying how a `Location` can be converted into an `AccountId`. This is used
@@ -143,14 +152,45 @@ impl AaaAwareAssetTransactor {
     Some((AssetKind::Foreign(foreign_id), amount))
   }
 
-  fn notify_ingress(what: &Asset, who: &Location, context: Option<&XcmContext>) {
+  fn preflight_ingress(
+    what: &Asset,
+    who: &Location,
+    context: Option<&XcmContext>,
+  ) -> Result<(), XcmError> {
     let Some(recipient) =
       <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(who)
     else {
-      return;
+      return Ok(());
     };
     let Some((asset, amount)) = Self::to_asset_kind_and_amount(what) else {
-      return;
+      return Ok(());
+    };
+    let Some(source) = context
+      .and_then(|ctx| ctx.origin.as_ref())
+      .and_then(|origin| {
+        <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(origin)
+      })
+    else {
+      return Ok(());
+    };
+    <RuntimeAddressEventIngress as AddressEventIngress>::preflight_xcm_inbound(
+      &recipient, asset, amount, &source,
+    )
+    .map_err(|_| XcmError::FailedToTransactAsset("AAA funding batch preflight failed"))
+  }
+
+  fn notify_ingress(
+    what: &Asset,
+    who: &Location,
+    context: Option<&XcmContext>,
+  ) -> Result<(), XcmError> {
+    let Some(recipient) =
+      <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(who)
+    else {
+      return Ok(());
+    };
+    let Some((asset, amount)) = Self::to_asset_kind_and_amount(what) else {
+      return Ok(());
     };
     let source = context
       .and_then(|ctx| ctx.origin.as_ref())
@@ -158,15 +198,101 @@ impl AaaAwareAssetTransactor {
         <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(origin)
       });
     if let Some(source) = source {
-      <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_with_source(
+      return <RuntimeAddressEventIngress as AddressEventIngress>::on_xcm_inbound(
         &recipient, asset, amount, &source,
-      );
-      return;
+      )
+      .map_err(|_| XcmError::FailedToTransactAsset("AAA funding notification failed"));
     }
     <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_without_source(
       &recipient, asset, amount,
-    );
+    )
+    .map_err(|_| XcmError::FailedToTransactAsset("AAA ingress notification failed"))
   }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+#[derive(Clone)]
+struct BenchmarkCredit(Balance);
+
+#[cfg(feature = "runtime-benchmarks")]
+impl UnsafeConstructorDestructor<Balance> for BenchmarkCredit {
+  fn unsafe_clone(&self) -> Box<dyn ImbalanceAccounting<Balance>> {
+    Box::new(Self(self.0))
+  }
+
+  fn forget_imbalance(&mut self) -> Balance {
+    core::mem::take(&mut self.0)
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+impl UnsafeManualAccounting<Balance> for BenchmarkCredit {
+  fn saturating_subsume(&mut self, mut other: Box<dyn ImbalanceAccounting<Balance>>) {
+    self.0 = self.0.saturating_add(other.amount());
+    let _ = other.forget_imbalance();
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+impl ImbalanceAccounting<Balance> for BenchmarkCredit {
+  fn amount(&self) -> Balance {
+    self.0
+  }
+
+  fn saturating_take(&mut self, amount: Balance) -> Box<dyn ImbalanceAccounting<Balance>> {
+    let taken = self.0.min(amount);
+    self.0 = self.0.saturating_sub(taken);
+    Box::new(Self(taken))
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+fn benchmark_foreign_location() -> Location {
+  Location::new(1, [Junction::Parachain(4_242)])
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn setup_benchmark_foreign_asset() -> polkadot_sdk::sp_runtime::DispatchResult {
+  AssetRegistry::register_foreign_asset(
+    RuntimeOrigin::root(),
+    benchmark_foreign_location(),
+    primitives::assets::CurrencyMetadata {
+      name: b"Benchmark Foreign".to_vec(),
+      symbol: b"BFRN".to_vec(),
+      decimals: 12,
+    },
+    1,
+    true,
+  )
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub fn benchmark_foreign_asset_deposit(
+  recipient: &AccountId,
+  source: &AccountId,
+  amount: Balance,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  let account_location = |account: &AccountId| {
+    let mut id = [0u8; 32];
+    id.copy_from_slice(account.as_ref());
+    Location::new(0, [Junction::AccountId32 { network: None, id }])
+  };
+  let mut holding = AssetsInHolding::new();
+  holding.fungible.insert(
+    AssetId(benchmark_foreign_location()),
+    Box::new(BenchmarkCredit(amount)),
+  );
+  let context = XcmContext {
+    origin: Some(account_location(source)),
+    message_id: [0xAA; 32],
+    topic: None,
+  };
+  <AaaAwareAssetTransactor as TransactAsset>::deposit_asset(
+    holding,
+    &account_location(recipient),
+    Some(&context),
+  )
+  .map_err(|_| polkadot_sdk::sp_runtime::DispatchError::Other("XcmBenchmarkDepositFailed"))
 }
 
 impl TransactAsset for AaaAwareAssetTransactor {
@@ -192,15 +318,27 @@ impl TransactAsset for AaaAwareAssetTransactor {
     context: Option<&XcmContext>,
   ) -> Result<(), (AssetsInHolding, XcmError)> {
     let notified_assets = what.assets_iter().collect::<Vec<_>>();
-    match BaseAssetTransactor::deposit_asset(what, who, context) {
-      Ok(()) => {
-        for asset in notified_assets {
-          Self::notify_ingress(&asset, who, context);
-        }
-        Ok(())
+    for asset in &notified_assets {
+      if let Err(error) = Self::preflight_ingress(asset, who, context) {
+        return Err((what, error));
       }
-      Err(error) => Err(error),
     }
+    // One non-recursive layer preserves the non-cloneable holding on notification failure.
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      for asset in &notified_assets {
+        if let Err(error) = Self::notify_ingress(asset, who, context) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err((
+            what, error,
+          )));
+        }
+      }
+      match BaseAssetTransactor::deposit_asset(what, who, context) {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
   }
 
   fn deposit_asset_with_surplus(
@@ -209,15 +347,28 @@ impl TransactAsset for AaaAwareAssetTransactor {
     context: Option<&XcmContext>,
   ) -> Result<Weight, (AssetsInHolding, XcmError)> {
     let notified_assets = what.assets_iter().collect::<Vec<_>>();
-    match BaseAssetTransactor::deposit_asset_with_surplus(what, who, context) {
-      Ok(surplus) => {
-        for asset in notified_assets {
-          Self::notify_ingress(&asset, who, context);
-        }
-        Ok(surplus)
+    for asset in &notified_assets {
+      if let Err(error) = Self::preflight_ingress(asset, who, context) {
+        return Err((what, error));
       }
-      Err(error) => Err(error),
     }
+    polkadot_sdk::frame_support::storage::with_transaction_unchecked(|| {
+      for asset in &notified_assets {
+        if let Err(error) = Self::notify_ingress(asset, who, context) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err((
+            what, error,
+          )));
+        }
+      }
+      match BaseAssetTransactor::deposit_asset_with_surplus(what, who, context) {
+        Ok(surplus) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(surplus))
+        }
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
   }
 
   fn withdraw_asset(
@@ -364,7 +515,8 @@ impl xcm_executor::Config for XcmConfig {
   type RuntimeCall = RuntimeCall;
   type SafeCallFilter = Nothing;
   type SubscriptionService = PolkadotXcm;
-  type Trader = UsingComponents<WeightToFee, RelayLocation, AccountId, Balances, ToAuthor<Runtime>>;
+  type Trader =
+    UsingComponents<WeightToFee, RelayLocation, AccountId, Balances, RuntimeFeeCollector>;
   type TransactionalProcessor = FrameTransactionalProcessor;
   type UniversalAliases = Nothing;
   type UniversalLocation = UniversalLocation;
@@ -424,6 +576,16 @@ mod tests {
     staging_xcm_executor::traits::{ConvertOrigin, Properties, ShouldExecute},
   };
   use primitives::assets::{AssetInspector, TYPE_FOREIGN};
+
+  #[test]
+  fn xcm_fixed_instruction_weight_binds_single_asset_aaa_deposit_benchmark() {
+    assert_eq!(MaxAssetsIntoHolding::get(), 1);
+    assert_eq!(
+      UnitWeightCost::get(),
+      <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::xcm_asset_deposit()
+    );
+    assert!(UnitWeightCost::get().proof_size() > 64 * 1024);
+  }
 
   #[test]
   fn test_location_to_asset_id_relay_token() {

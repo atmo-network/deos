@@ -96,15 +96,26 @@ run_shell_step() {
     log_info "Command: $command"
 
     local start_time
+    local end_time
+    local status
     start_time=$(date +%s)
     if [[ -n "$timeout_minutes" ]]; then
-        timeout "${timeout_minutes}m" bash -lc "$command"
+        if timeout "${timeout_minutes}m" bash -lc "$command"; then
+            status=0
+        else
+            status=$?
+        fi
+    elif bash -lc "$command"; then
+        status=0
     else
-        bash -lc "$command"
+        status=$?
     fi
-    local end_time
     end_time=$(date +%s)
 
+    if [[ "$status" -ne 0 ]]; then
+        log_error "$label failed with status $status after $((end_time - start_time))s"
+        return "$status"
+    fi
     log_success "$label completed in $((end_time - start_time))s"
 }
 

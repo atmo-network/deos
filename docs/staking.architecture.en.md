@@ -74,11 +74,11 @@ graph TD
 
 ### Launch reward phases
 
-The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators and keeps user nomination economics disabled. The LP-donation half is wired through Fee Sink → AAA #14 with a native-balance bridge into the local native-staking asset before donation execution. The staking-yield half is bridged after that donation hook by burning native balance held by the staking pool account and minting the local native-staking asset into pool truth. Phase 2 may enable permissionless collators, explicit LP nomination to a collator, and claimable native nomination rewards weighted by locked collator LP plus GovXP.
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-Axial action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning. The LP-donation half is wired through Fee Sink → AAA #14 with a native-balance bridge into the local native-staking asset before donation execution. The staking-yield half is bridged after that donation hook by burning native balance held by the staking pool account and minting the local native-staking asset into pool truth. A future permissionless phase may divide Fee Sink flow into equal security-reward, staking-ingress, and liquidity-provisioning thirds; explicit LP nomination and claimable native rewards remain subordinate to the unresolved bounded security-reward contract.
 
 Phase 2 is treated as a runtime-upgrade boundary. The current launch line should not expose a governance parameter that can silently enable LP nomination or claimable nomination rewards while collator selection is still permissioned.
 
-The intended outer collection rule is unified across block rewards and eligible fees once implemented: 20% to the author / collator and 80% to Fee Sink. Fee Sink then fans out to the active staking ingress channels for the current phase.
+The outer collection rule sends 100% of transaction, AAA, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split. Block issuance remains unconfigured and must receive a separate source/amount decision before entering either Fee Sink or the future security budget.
 
 ### Per-asset sovereign channels
 

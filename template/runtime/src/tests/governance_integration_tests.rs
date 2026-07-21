@@ -1,4 +1,4 @@
-use super::common::{ALICE, BOB, new_test_ext};
+use super::common::{ALICE, BOB, aaa_fee_sink_account, new_test_ext};
 use crate::configs::governance_config::{
   StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource, TacticalTreasuryInvoicePayload,
 };
@@ -873,9 +873,11 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
 }
 
 #[test]
-fn signed_intent_submission_burns_opening_fee_and_records_signer_as_proposer() {
+fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer() {
   new_test_ext().execute_with(|| {
     let balance_before = Balances::free_balance(ALICE);
+    let fee_sink = aaa_fee_sink_account();
+    let fee_sink_before = Balances::free_balance(&fee_sink);
     submit_signed_intent_proposal(110, crate::Hash::repeat_byte(12));
     assert_eq!(
       Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 110),
@@ -887,18 +889,22 @@ fn signed_intent_submission_burns_opening_fee_and_records_signer_as_proposer() {
     );
     assert!(System::events().iter().any(|record| {
       record.event
-        == RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeBurned {
+        == RuntimeEvent::Governance(pallet_governance::Event::ProposalOpeningFeeCollected {
           domain: PROTOCOL_GOVERNANCE_DOMAIN,
           item_id: 110,
           proposer: ALICE,
           amount: 10 * crate::EXISTENTIAL_DEPOSIT,
         })
     }));
+    assert_eq!(
+      Balances::free_balance(&fee_sink),
+      fee_sink_before.saturating_add(10 * crate::EXISTENTIAL_DEPOSIT)
+    );
   });
 }
 
 #[test]
-fn signed_tactical_l2_signal_submission_burns_opening_fee_and_records_signer() {
+fn signed_tactical_l2_signal_submission_collects_opening_fee_and_records_signer() {
   new_test_ext().execute_with(|| {
     let balance_before = Balances::free_balance(ALICE);
     assert_ok!(Governance::submit_signed_proposal(
@@ -921,7 +927,7 @@ fn signed_tactical_l2_signal_submission_burns_opening_fee_and_records_signer() {
 }
 
 #[test]
-fn signed_tactical_treasury_submission_burns_opening_fee_and_records_signer() {
+fn signed_tactical_treasury_submission_collects_opening_fee_and_records_signer() {
   new_test_ext().execute_with(|| {
     let balance_before = Balances::free_balance(ALICE);
     assert_ok!(Governance::submit_signed_proposal(

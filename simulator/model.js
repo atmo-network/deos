@@ -1110,12 +1110,8 @@ export class Router {
 
 // --- Reward Routing ---
 
-export function split_collator_fee(/** @type {bigint} */ amount) {
-  const collator = BigMath.mul_div(amount, 200_000_000n, PPB);
-  return {
-    collator,
-    fee_sink: amount - collator,
-  };
+export function collect_protocol_fee(/** @type {bigint} */ amount) {
+  return { fee_sink: amount };
 }
 
 export function distribute_fee_sink_phase1(/** @type {bigint} */ amount) {
@@ -1127,13 +1123,12 @@ export function distribute_fee_sink_phase1(/** @type {bigint} */ amount) {
 }
 
 export function distribute_fee_sink_phase2(/** @type {bigint} */ amount) {
-  const unit = amount / 6n;
-  const staking_pool = unit;
-  const liquidity_pool = unit;
+  const one_third = amount / 3n;
   return {
-    staking_pool,
-    liquidity_pool,
-    claimable_lp_nomination: amount - staking_pool - liquidity_pool,
+    security_rewards: one_third,
+    staking_pool: one_third,
+    liquidity_pool: one_third,
+    fee_sink_remainder: amount - one_third * 3n,
   };
 }
 

@@ -10,7 +10,7 @@ mod execution;
 mod scheduler;
 
 pub mod adapters;
-pub use adapters::{AssetOps, DexOps, LiquidityDonationOps, StakingOps};
+pub use adapters::{AssetOps, DexOps, FundingAuthority, LiquidityDonationOps, StakingOps};
 pub use types::{SYSTEM_OWNER_SLOT_SENTINEL, Task};
 
 pub mod weights;
@@ -26,10 +26,44 @@ mod benchmarking;
 
 #[cfg(feature = "runtime-benchmarks")]
 pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
+  fn setup_add_liquidity(
+    owner: &AccountId,
+  ) -> Result<(AssetId, AssetId, Balance, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  fn setup_donate_liquidity(
+    owner: &AccountId,
+  ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
   fn setup_remove_liquidity_max_k(
     owner: &AccountId,
     max_scan: u32,
   ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  fn setup_stake(
+    owner: &AccountId,
+  ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  fn setup_unstake(
+    owner: &AccountId,
+  ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  fn setup_swap_exact_in(
+    owner: &AccountId,
+  ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  fn setup_swap_exact_out(
+    owner: &AccountId,
+  ) -> Result<(AssetId, AssetId, Balance, Balance), polkadot_sdk::sp_runtime::DispatchError>;
+  fn funding_assets(max: u32) -> alloc::vec::Vec<AssetId>;
+  fn enable_asset_ops_ingress() {}
+  fn setup_address_event_ingress(
+    recipient: &AccountId,
+    source: &AccountId,
+    amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult;
+  fn run_address_event_ingress(recipient: &AccountId) -> bool;
+  fn setup_xcm_asset_deposit() -> polkadot_sdk::sp_runtime::DispatchResult;
+  fn run_xcm_asset_deposit(
+    recipient: &AccountId,
+    source: &AccountId,
+    amount: Balance,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult;
+  fn clear_address_event_ingress_events();
+  fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight;
 }
 
 pub trait EntropyProvider<Hash> {
@@ -53,8 +87,8 @@ pub trait AtomicityHook {
 
 impl AtomicityHook for () {}
 
-pub trait FeeRouter<AccountId, AssetId, Balance> {
-  fn route_fee(
+pub trait FeeCollector<AccountId, AssetId, Balance> {
+  fn collect_fee(
     payer: &AccountId,
     fee_sink: &AccountId,
     native_asset: AssetId,
@@ -63,11 +97,17 @@ pub trait FeeRouter<AccountId, AssetId, Balance> {
 }
 
 pub trait AddressEventIngressHook<BlockNumber> {
-  fn ingest(_now: BlockNumber) -> polkadot_sdk::frame_support::weights::Weight;
+  fn ingest(
+    _now: BlockNumber,
+    _remaining_weight: polkadot_sdk::frame_support::weights::Weight,
+  ) -> polkadot_sdk::frame_support::weights::Weight;
 }
 
 impl<BlockNumber> AddressEventIngressHook<BlockNumber> for () {
-  fn ingest(_now: BlockNumber) -> polkadot_sdk::frame_support::weights::Weight {
+  fn ingest(
+    _now: BlockNumber,
+    _remaining_weight: polkadot_sdk::frame_support::weights::Weight,
+  ) -> polkadot_sdk::frame_support::weights::Weight {
     polkadot_sdk::frame_support::weights::Weight::zero()
   }
 }
@@ -83,9 +123,10 @@ impl<Hash> EntropyProvider<Hash> for NoEntropyProvider {
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider, FeeRouter,
-    LiquidityDonationOps, TaskWeightInfo, WeightInfo,
+    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider, FeeCollector,
+    FundingAuthority, LiquidityDonationOps, TaskWeightInfo, WeightInfo,
   };
+  use crate::adapters::StakingOps as _;
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{PalletId, traits::EnsureOrigin},
@@ -112,6 +153,7 @@ pub mod pallet {
     type NativeAssetId: Get<Self::AssetId>;
 
     type AssetOps: AssetOps<Self::AccountId, Self::AssetId, Self::Balance>;
+    type FundingAuthority: FundingAuthority<Self::AccountId>;
     type DexOps: DexOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type StakingOps: crate::adapters::StakingOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type LiquidityDonationOps: LiquidityDonationOps<Self::AccountId, Self::AssetId, Self::Balance>;
@@ -146,6 +188,8 @@ pub mod pallet {
     type MaxWakeupBucketSize: Get<u32>;
     #[pallet::constant]
     type MaxWakeupsPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxSpilloverBlocks: Get<u32>;
     #[pallet::constant]
     type MaxQueueInsertionsPerBlock: Get<u32>;
     #[pallet::constant]
@@ -198,7 +242,7 @@ pub mod pallet {
     type AddressEventIngressHook: AddressEventIngressHook<BlockNumberFor<Self>>;
 
     type FeeSink: Get<Self::AccountId>;
-    type FeeRouter: FeeRouter<Self::AccountId, Self::AssetId, Self::Balance>;
+    type FeeCollector: FeeCollector<Self::AccountId, Self::AssetId, Self::Balance>;
 
     #[pallet::constant]
     type MaxConsecutiveFailures: Get<u32>;
@@ -262,9 +306,12 @@ pub mod pallet {
 
   pub type ExecutionPlanOf<T> = BoundedVec<StepOf<T>, <T as Config>::MaxExecutionPlanSteps>;
 
+  pub type FundingSourcePolicyOf<T> =
+    FundingSourcePolicy<<T as frame_system::Config>::AccountId, <T as Config>::MaxWhitelistSize>;
+
   pub type FundingSnapshotsOf<T> = BoundedBTreeMap<
     <T as Config>::AssetId,
-    FundingSnapshot<<T as Config>::Balance, BlockNumberFor<T>>,
+    FundingBatch<<T as Config>::Balance, BlockNumberFor<T>>,
     <T as Config>::MaxFundingTrackedAssets,
   >;
 
@@ -283,6 +330,7 @@ pub mod pallet {
     BlockNumberFor<T>,
     ScheduleOf<T>,
     ExecutionPlanOf<T>,
+    FundingSourcePolicyOf<T>,
     FundingSnapshotsOf<T>,
     FundingTrackedAssetsOf<T>,
     BalanceOf<T>,
@@ -309,7 +357,12 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, AaaId, AaaInstanceOf<T>, OptionQuery>;
 
   #[pallet::storage]
-  pub type ClosedSystemAaaIds<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, (), OptionQuery>;
+  #[pallet::getter(fn active_aaa_count)]
+  pub type ActiveAaaCount<T> = StorageValue<_, u32, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ClosedSystemAaaIds<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, Mutability, OptionQuery>;
 
   #[pallet::storage]
   pub type CurrentQueue<T: Config> =
@@ -336,6 +389,9 @@ pub mod pallet {
 
   #[pallet::storage]
   pub type WakeupScheduleDrops<T: Config> = StorageValue<_, u64, ValueQuery>;
+
+  #[pallet::storage]
+  pub type WakeupRetryPending<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, bool, ValueQuery>;
 
   #[pallet::storage]
   pub type QueueEpoch<T: Config> = StorageValue<_, u64, ValueQuery>;
@@ -382,13 +438,6 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn ingress_overflow_len)]
   pub type IngressOverflowLen<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  pub type IngressSeenBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
-
-  #[pallet::storage]
-  pub type IngressSeenSet<T: Config> =
-    StorageValue<_, BoundedBTreeSet<T::Hash, T::MaxIngressOverflowQueue>, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn idle_starvation_blocks)]
@@ -438,6 +487,7 @@ pub mod pallet {
   #[pallet::genesis_build]
   impl<T: Config> BuildGenesisConfig for GenesisConfig<T> {
     fn build(&self) {
+      STORAGE_VERSION.put::<Pallet<T>>();
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
       }
@@ -489,6 +539,7 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
+          funding_source_policy: FundingSourcePolicy::RuntimePolicy,
           funding_snapshots: Default::default(),
           funding_tracked_assets,
           cycle_weight_upper,
@@ -507,6 +558,11 @@ pub mod pallet {
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         AaaInstances::<T>::insert(aaa_id, instance);
+        ActiveAaaCount::<T>::put(
+          active_count
+            .checked_add(1)
+            .expect("genesis active actor count must not overflow"),
+        );
         AaaReadiness::<T>::insert(aaa_id, readiness);
         Pallet::<T>::prime_actor_schedule(aaa_id);
       }
@@ -526,25 +582,31 @@ pub mod pallet {
     }
 
     fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
+      let base_weight = T::WeightInfo::scheduler_on_idle_base();
+      if !base_weight.all_lte(remaining_weight) {
+        return Weight::zero();
+      }
+      let breaker_active = GlobalCircuitBreaker::<T>::get();
+      let ingress_limit = remaining_weight.saturating_sub(base_weight);
       let ingress_weight = if LastIngressIngestBlock::<T>::get() == Some(now) {
         Weight::zero()
       } else {
-        let weight = T::AddressEventIngressHook::ingest(now);
+        let hook_weight = T::AddressEventIngressHook::ingest(now, ingress_limit);
         LastIngressIngestBlock::<T>::put(now);
-        weight
+        hook_weight
       };
-      let remaining_after_ingress = remaining_weight.saturating_sub(ingress_weight);
+      let remaining_after_ingress = ingress_limit.saturating_sub(ingress_weight);
       let sweep_weight = Self::execute_zombie_sweep(remaining_after_ingress);
       let remaining_after_housekeeping = remaining_after_ingress.saturating_sub(sweep_weight);
-      let breaker_active = GlobalCircuitBreaker::<T>::get();
       Self::update_idle_starvation_state(breaker_active, remaining_after_housekeeping);
+      let housekeeping_weight = base_weight
+        .saturating_add(ingress_weight)
+        .saturating_add(sweep_weight);
       if breaker_active {
-        return ingress_weight.saturating_add(sweep_weight);
+        return housekeeping_weight;
       }
       let cycle_weight = Self::execute_cycle(remaining_after_housekeeping);
-      ingress_weight
-        .saturating_add(sweep_weight)
-        .saturating_add(cycle_weight)
+      housekeeping_weight.saturating_add(cycle_weight)
     }
   }
 
@@ -558,11 +620,6 @@ pub mod pallet {
       aaa_type: AaaType,
       mutability: Mutability,
       sovereign_account: T::AccountId,
-    },
-    AaaFunded {
-      aaa_id: AaaId,
-      asset: T::AssetId,
-      amount: BalanceOf<T>,
     },
     AaaPaused {
       aaa_id: AaaId,
@@ -687,7 +744,13 @@ pub mod pallet {
     OnCloseStepFailed {
       aaa_id: AaaId,
       step_index: u32,
+      kind: OnCloseStepFailureKind,
       error: DispatchError,
+    },
+    OnCloseStepSkipped {
+      aaa_id: AaaId,
+      step_index: u32,
+      reason: StepSkippedReason,
     },
     OnCloseExecutionPlanSummary {
       aaa_id: AaaId,
@@ -721,8 +784,30 @@ pub mod pallet {
       alive: u32,
       missing: u32,
     },
+    SecureEntropyUnavailable {
+      aaa_id: AaaId,
+    },
     IdleStarvationDetected {
       consecutive_blocks: u32,
+    },
+    FundingSourcePolicyUpdated {
+      aaa_id: AaaId,
+    },
+    FundingBatchActivated {
+      aaa_id: AaaId,
+      asset: T::AssetId,
+      amount: BalanceOf<T>,
+    },
+    FundingBatchPendingAccumulated {
+      aaa_id: AaaId,
+      asset: T::AssetId,
+      added: BalanceOf<T>,
+      pending_amount: BalanceOf<T>,
+    },
+    FundingBatchPromoted {
+      aaa_id: AaaId,
+      asset: T::AssetId,
+      amount: BalanceOf<T>,
     },
   }
 
@@ -731,6 +816,7 @@ pub mod pallet {
     AaaIdOverflow,
     AaaNotFound,
     ActiveAaaCapacityExceeded,
+    ActiveAaaCountInvariant,
     ActiveAaaLimitExceedsQueueCapacity,
     ActiveAaaLimitTooHigh,
     ActiveAaaLimitTooLow,
@@ -758,6 +844,7 @@ pub mod pallet {
     SystemAaaNotClosed,
     ExecutionPlanTooLong,
     SnapshotUnavailable,
+    FundingBatchOverflow,
     SovereignAccountCollision,
     AutoCloseNonceHorizonExceeded,
     AutoCloseNonceOverflow,
@@ -845,9 +932,11 @@ pub mod pallet {
         !AaaInstances::<T>::contains_key(aaa_id),
         Error::<T>::AaaIdOccupied
       );
+      let closed_mutability =
+        ClosedSystemAaaIds::<T>::get(aaa_id).ok_or(Error::<T>::SystemAaaNotClosed)?;
       ensure!(
-        ClosedSystemAaaIds::<T>::contains_key(aaa_id),
-        Error::<T>::SystemAaaNotClosed
+        closed_mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
       );
       Self::do_create_system_aaa(
         owner,
@@ -860,7 +949,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(2)]
-    #[pallet::weight(T::WeightInfo::pause_aaa().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::pause_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
@@ -890,7 +979,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(3)]
-    #[pallet::weight(T::WeightInfo::resume_aaa().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::resume_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
@@ -908,16 +997,16 @@ pub mod pallet {
         inst.is_paused = false;
         inst.pause_reason = None;
         inst.updated_at = frame_system::Pallet::<T>::block_number();
-        // Ringless: no need to requeue - scheduler discovers actor on next block
         Self::deposit_event(Event::AaaResumed { aaa_id });
         Ok(())
       })?;
       Self::sync_readiness_state(aaa_id);
+      Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
 
     #[pallet::call_index(4)]
-    #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
@@ -939,48 +1028,41 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(5)]
-    #[pallet::weight(T::WeightInfo::fund_aaa().saturating_add(T::WeightInfo::close_aaa()))]
-    pub fn fund_aaa(
+    // Call index 5 was the retired `fund_aaa` extrinsic and remains permanently reserved.
+
+    #[pallet::call_index(18)]
+    #[pallet::weight(
+      T::WeightInfo::update_funding_source_policy()
+        .saturating_add(Pallet::<T>::close_dispatch_weight_upper())
+    )]
+    pub fn update_funding_source_policy(
       origin: OriginFor<T>,
       aaa_id: AaaId,
-      asset: T::AssetId,
-      amount: BalanceOf<T>,
+      policy: FundingSourcePolicyOf<T>,
     ) -> DispatchResult {
-      let who = ensure_signed(origin)?;
-      ensure!(!amount.is_zero(), Error::<T>::InvalidAmountResolution);
       let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      Self::ensure_control_origin(origin, &instance)?;
+      Self::ensure_not_system_immutable(&instance)?;
       if Self::is_window_expired(&instance) {
-        let _ = Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
-        return Ok(());
+        return Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
       }
       ensure!(
-        instance.funding_tracked_assets.contains(&asset),
-        Error::<T>::SnapshotUnavailable
+        instance.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
       );
-      T::AssetOps::transfer(&who, &instance.sovereign_account, asset, amount)?;
       let now = frame_system::Pallet::<T>::block_number();
       AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        let Some(inst) = maybe.as_mut() else {
-          return;
-        };
-        let _ = inst
-          .funding_snapshots
-          .try_insert(asset, FundingSnapshot { amount, block: now });
-        inst.updated_at = now;
+        if let Some(inst) = maybe.as_mut() {
+          inst.funding_source_policy = policy;
+          inst.updated_at = now;
+        }
       });
-      Self::sync_readiness_state(aaa_id);
-      let _ = who;
-      Self::deposit_event(Event::AaaFunded {
-        aaa_id,
-        asset,
-        amount,
-      });
+      Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
       Ok(())
     }
 
     #[pallet::call_index(6)]
-    #[pallet::weight(T::WeightInfo::close_aaa())]
+    #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
@@ -989,7 +1071,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(7)]
-    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn update_schedule(
       origin: OriginFor<T>,
       aaa_id: AaaId,
@@ -1035,14 +1117,14 @@ pub mod pallet {
 
     /// Force lifecycle evaluation for a specific actor
     #[pallet::call_index(9)]
-    #[pallet::weight(T::WeightInfo::permissionless_sweep().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::permissionless_sweep().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn permissionless_sweep(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let _who = ensure_signed(origin)?;
       Self::evaluate_actor_liveness(aaa_id)
     }
 
     #[pallet::call_index(10)]
-    #[pallet::weight(T::WeightInfo::update_execution_plan().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::update_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn update_execution_plan(
       origin: OriginFor<T>,
       aaa_id: AaaId,
@@ -1130,7 +1212,7 @@ pub mod pallet {
     #[pallet::call_index(12)]
     #[pallet::weight(
       T::WeightInfo::permissionless_sweep_many(aaa_ids.len() as u32)
-        .saturating_add(T::WeightInfo::close_aaa().saturating_mul(aaa_ids.len() as u64))
+        .saturating_add(Pallet::<T>::close_dispatch_weight_upper().saturating_mul(aaa_ids.len() as u64))
     )]
     pub fn permissionless_sweep_many(
       origin: OriginFor<T>,
@@ -1162,7 +1244,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(13)]
-    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn set_auto_close_at_cycle_nonce(
       origin: OriginFor<T>,
       aaa_id: AaaId,
@@ -1192,7 +1274,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(14)]
-    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(T::WeightInfo::close_aaa()))]
+    #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn increment_auto_close_nonce(
       origin: OriginFor<T>,
       aaa_id: AaaId,
@@ -1232,7 +1314,7 @@ pub mod pallet {
 
     #[pallet::call_index(15)]
     #[pallet::weight(
-      T::WeightInfo::update_on_close_execution_plan().saturating_add(T::WeightInfo::close_aaa())
+      T::WeightInfo::update_on_close_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper())
     )]
     pub fn update_on_close_execution_plan(
       origin: OriginFor<T>,
@@ -1302,26 +1384,76 @@ pub mod pallet {
           T::TaskWeightInfo::simple_asset_op()
         }
         AaaTask::SplitTransfer { legs, .. } => T::TaskWeightInfo::split_transfer(legs.len() as u32),
-        AaaTask::SwapExactIn { .. } | AaaTask::SwapExactOut { .. } => T::TaskWeightInfo::dex_swap(),
-        AaaTask::AddLiquidity { .. } | AaaTask::RemoveLiquidity { .. } => {
-          T::TaskWeightInfo::dex_liquidity()
-        }
+        AaaTask::SwapExactIn { .. } => T::TaskWeightInfo::dex_exact_in(),
+        AaaTask::SwapExactOut { .. } => T::TaskWeightInfo::dex_exact_out(),
+        AaaTask::AddLiquidity { .. } => T::TaskWeightInfo::add_liquidity(),
+        AaaTask::RemoveLiquidity { .. } => T::TaskWeightInfo::remove_liquidity(),
         AaaTask::Noop => T::TaskWeightInfo::noop(),
-        AaaTask::Stake { .. } => T::DbWeight::get()
-          .reads(2)
-          .saturating_add(T::DbWeight::get().writes(2)),
-        AaaTask::DonateLiquidity { .. } => {
-          T::TaskWeightInfo::dex_liquidity().saturating_add(T::DbWeight::get().reads_writes(6, 6))
-        }
-        AaaTask::Unstake { .. } => T::DbWeight::get()
-          .reads(2)
-          .saturating_add(T::DbWeight::get().writes(2)),
+        AaaTask::Stake { .. } => T::TaskWeightInfo::stake(),
+        AaaTask::DonateLiquidity { .. } => T::TaskWeightInfo::donate_liquidity(),
+        AaaTask::Unstake { .. } => T::TaskWeightInfo::unstake(),
       }
     }
 
-    pub(crate) fn compute_cycle_weight_upper(execution_plan: &ExecutionPlanOf<T>) -> Weight {
-      let mut upper =
-        Weight::from_parts(5_000_000, 1000).saturating_add(T::DbWeight::get().reads_writes(2, 2));
+    fn componentwise_max_weight(left: Weight, right: Weight) -> Weight {
+      Weight::from_parts(
+        left.ref_time().max(right.ref_time()),
+        left.proof_size().max(right.proof_size()),
+      )
+    }
+
+    fn maximum_task_weight_upper() -> Weight {
+      let candidates = [
+        T::TaskWeightInfo::simple_asset_op(),
+        T::TaskWeightInfo::split_transfer(T::MaxSplitTransferLegs::get()),
+        T::TaskWeightInfo::dex_exact_in(),
+        T::TaskWeightInfo::dex_exact_out(),
+        T::TaskWeightInfo::add_liquidity(),
+        T::TaskWeightInfo::donate_liquidity(),
+        T::TaskWeightInfo::remove_liquidity(),
+        T::TaskWeightInfo::stake(),
+        T::TaskWeightInfo::unstake(),
+        T::TaskWeightInfo::noop(),
+      ];
+      candidates
+        .into_iter()
+        .fold(Weight::zero(), Self::componentwise_max_weight)
+    }
+
+    fn maximum_close_plan_weight_upper() -> Weight {
+      let max_steps =
+        T::MaxUserExecutionPlanSteps::get().max(T::MaxSystemExecutionPlanSteps::get());
+      let per_step = Weight::from_parts(1_000_000, 128)
+        .saturating_add(
+          Weight::from_parts(500_000, 64).saturating_mul(u64::from(T::MaxConditionsPerStep::get())),
+        )
+        .saturating_add(Self::maximum_task_weight_upper());
+      Weight::from_parts(5_000_000, 1000)
+        .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+        .saturating_add(per_step.saturating_mul(u64::from(max_steps)))
+    }
+
+    /// Conservative FRAME dispatch weight for any explicit or lifecycle-touch close.
+    pub fn close_dispatch_weight_upper() -> Weight {
+      let compositional = T::WeightInfo::close_aaa()
+        .saturating_add(Self::maximum_close_plan_weight_upper())
+        .saturating_add(Self::close_cleanup_weight_upper());
+      let measured_user_tail = T::WeightInfo::close_aaa_user_fee_bearing_tail(
+        T::MaxUserExecutionPlanSteps::get(),
+        T::MaxSplitTransferLegs::get(),
+      );
+      Self::componentwise_max_weight(compositional, measured_user_tail)
+    }
+
+    pub(crate) fn compute_cycle_weight_upper(
+      aaa_type: AaaType,
+      execution_plan: &ExecutionPlanOf<T>,
+    ) -> Weight {
+      let mut upper = Weight::from_parts(5_000_000, 1000)
+        .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+        .saturating_add(T::WeightInfo::funding_batch_promotion(
+          T::MaxFundingTrackedAssets::get(),
+        ));
       for step in execution_plan.iter() {
         let step_overhead = Weight::from_parts(1_000_000, 128);
         let condition_overhead =
@@ -1330,6 +1462,9 @@ pub mod pallet {
           .saturating_add(step_overhead)
           .saturating_add(condition_overhead)
           .saturating_add(Self::weight_upper_bound(&step.task));
+        if aaa_type == AaaType::User {
+          upper = upper.saturating_add(T::WeightInfo::fee_collection().saturating_mul(2));
+        }
       }
       upper
     }
@@ -1345,10 +1480,8 @@ pub mod pallet {
       for step in execution_plan.iter() {
         let eval_fee = Self::compute_eval_fee(step.conditions.len() as u32);
         upper = upper.saturating_add(eval_fee);
-        if !matches!(step.task, AaaTask::Noop) {
-          let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-          upper = upper.saturating_add(exec_fee);
-        }
+        let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
+        upper = upper.saturating_add(exec_fee);
       }
       upper
     }
@@ -1358,7 +1491,7 @@ pub mod pallet {
       execution_plan: &ExecutionPlanOf<T>,
     ) -> (Weight, BalanceOf<T>) {
       (
-        Self::compute_cycle_weight_upper(execution_plan),
+        Self::compute_cycle_weight_upper(aaa_type, execution_plan),
         Self::compute_cycle_fee_upper(aaa_type, execution_plan),
       )
     }
@@ -1372,7 +1505,8 @@ pub mod pallet {
     }
 
     pub(crate) fn close_cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
-      Self::compute_cycle_weight_upper(&instance.on_close_execution_plan)
+      Self::compute_cycle_weight_upper(instance.aaa_type, &instance.on_close_execution_plan)
+        .saturating_add(Self::close_cleanup_weight_upper())
     }
 
     pub(crate) fn close_cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
@@ -1406,7 +1540,7 @@ pub mod pallet {
       }
       let native = T::NativeAssetId::get();
       let fee_sink = T::FeeSink::get();
-      T::FeeRouter::route_fee(owner, &fee_sink, native, creation_fee)
+      T::FeeCollector::collect_fee(owner, &fee_sink, native, creation_fee)
         .map_err(|_| Error::<T>::InsufficientFee.into())
     }
 
@@ -1601,6 +1735,10 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
+          funding_source_policy: match aaa_type {
+            AaaType::User => FundingSourcePolicy::OwnerOnly,
+            AaaType::System => FundingSourcePolicy::RuntimePolicy,
+          },
           funding_snapshots: Default::default(),
           funding_tracked_assets,
           cycle_weight_upper,
@@ -1615,6 +1753,14 @@ pub mod pallet {
         created_sovereign_account = Some(sovereign_account.clone());
         SovereignIndex::<T>::insert(sovereign_account.clone(), aaa_id);
         AaaInstances::<T>::insert(aaa_id, instance);
+        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         AaaReadiness::<T>::insert(aaa_id, readiness);
         if aaa_type == AaaType::System && requested_aaa_id.is_some() {
           ClosedSystemAaaIds::<T>::remove(aaa_id);
@@ -1690,8 +1836,12 @@ pub mod pallet {
         Trigger::Timer { every_blocks, .. } => {
           ensure!(*every_blocks > 0, Error::<T>::InvalidTriggerConfiguration);
           let max_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
+          let jitter_window = every_blocks
+            .saturating_div(4)
+            .min(T::MaxTimerJitterBlocks::get());
+          let worst_case_jitter = jitter_window.saturating_sub(1);
           ensure!(
-            *every_blocks <= max_delay,
+            every_blocks.saturating_add(worst_case_jitter) <= max_delay,
             Error::<T>::ExecutionDelayTooLong
           );
         }
@@ -1827,7 +1977,14 @@ pub mod pallet {
           } => {
             check_amount(amount, *asset_a);
           }
-          AaaTask::Noop | AaaTask::Unstake { .. } => {}
+          AaaTask::Unstake { asset, shares } => {
+            if matches!(shares, AmountResolution::PercentageOfLastFunding(_)) {
+              let share_asset =
+                T::StakingOps::share_asset(*asset).ok_or(Error::<T>::InvalidAmountResolution)?;
+              check_amount(shares, share_asset);
+            }
+          }
+          AaaTask::Noop => {}
         }
       }
 
@@ -1946,20 +2103,33 @@ pub mod pallet {
       SovereignIndex::<T>::remove(sovereign);
     }
 
+    /// Performs a runtime-owned terminal transition.
+    ///
+    /// Callers at extrinsic boundaries must enforce control immutability before
+    /// reaching this function. Mandatory protocol closure remains available for
+    /// System Immutable actors after terminal execution outcomes.
     pub(crate) fn close_actor(
       aaa_id: AaaId,
       instance: &AaaInstanceOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
-      Self::ensure_not_system_immutable(instance)?;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         let reserved_fee_remaining = Self::admit_on_close_execution_plan(instance);
         Self::execute_on_close_execution_plan(aaa_id, instance, reserved_fee_remaining);
-        // Keep close-path cost independent from future wakeup backlog; delayed
-        // wakeups for missing actors are discarded lazily when their bucket is due.
         Self::remove_actor_from_queues(aaa_id);
-        ScheduledWakeupBlock::<T>::remove(aaa_id);
+        if let Some(wakeup_block) = ScheduledWakeupBlock::<T>::take(aaa_id) {
+          Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
+        }
+        WakeupRetryPending::<T>::remove(aaa_id);
         AaaInstances::<T>::remove(aaa_id);
+        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_sub(1)
+            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         AaaReadiness::<T>::remove(aaa_id);
         match instance.aaa_type {
           AaaType::User => Self::remove_owner_slot_binding(
@@ -1969,7 +2139,7 @@ pub mod pallet {
           ),
           AaaType::System => {
             SovereignIndex::<T>::remove(&instance.sovereign_account);
-            ClosedSystemAaaIds::<T>::insert(aaa_id, ());
+            ClosedSystemAaaIds::<T>::insert(aaa_id, instance.mutability);
           }
         }
         if let Err(error) = T::AtomicityHook::on_close_checkpoint(aaa_id) {
@@ -1989,8 +2159,13 @@ pub mod pallet {
       Self::user_native_balance(instance).min(close_cycle_fee_upper)
     }
 
-    fn update_idle_starvation_state(breaker_active: bool, remaining_execution_budget: Weight) {
-      if !breaker_active && remaining_execution_budget.ref_time() == 0 {
+    pub(crate) fn update_idle_starvation_state(
+      breaker_active: bool,
+      remaining_execution_budget: Weight,
+    ) {
+      let exhausted =
+        remaining_execution_budget.ref_time() == 0 || remaining_execution_budget.proof_size() == 0;
+      if !breaker_active && exhausted {
         let previous = IdleStarvationBlocks::<T>::get();
         let current = previous.saturating_add(1);
         IdleStarvationBlocks::<T>::put(current);
@@ -2025,7 +2200,7 @@ pub mod pallet {
     }
 
     pub(crate) fn active_instance_count() -> u32 {
-      AaaInstances::<T>::iter_keys().count() as u32
+      ActiveAaaCount::<T>::get()
     }
 
     pub(crate) fn remove_actor_from_queues(aaa_id: AaaId) {
@@ -2043,7 +2218,13 @@ pub mod pallet {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
       let limit = Self::effective_active_actor_limit();
       let active_count = Self::active_instance_count();
+      let actual_active_count = AaaInstances::<T>::iter_keys().count() as u32;
       let valid_owner_mask = Self::valid_owner_mask();
+      if active_count != actual_active_count {
+        return Err(TryRuntimeError::Other(
+          "ActiveAaaCount does not match AaaInstances cardinality",
+        ));
+      }
       if active_count > limit {
         return Err(TryRuntimeError::Other(
           "AaaInstances count exceeds effective active actor limit",
@@ -2176,6 +2357,13 @@ pub mod pallet {
         return Err(TryRuntimeError::Other(
           "ActorQueueEpoch marker is not aligned with QueueEpoch",
         ));
+      }
+      for aaa_id in WakeupRetryPending::<T>::iter_keys() {
+        if !AaaInstances::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "WakeupRetryPending contains missing aaa_id",
+          ));
+        }
       }
       let min_wakeup = MinWakeupBlock::<T>::get();
       for (aaa_id, block) in ScheduledWakeupBlock::<T>::iter() {

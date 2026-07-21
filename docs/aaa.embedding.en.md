@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-aaa`
-- **Release line**: `0.6.2`
+- **Release line**: `0.7.0`
 - **Audience**: external runtime implementers embedding AAA without inheriting DEOS/TMCTOL topology
 - **Companions**: `aaa.specification.en.md`, `aaa.architecture.en.md`, `template/pallets/aaa/README.md`
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System AAA catalog standardization, UI product flows
@@ -19,15 +19,16 @@ Use this guide with the normative [AAA Specification](./aaa.specification.en.md)
 An embedding runtime must provide only the bounded host surface that AAA cannot own itself:
 
 - `AssetOps`: Transfer, burn, mint, balance, minimum-balance, deposit viability, and total issuance over local `AccountId`, `AssetId`, and `Balance` types.
-- `DexOps`: Exact-in swaps, exact-out swaps, add-liquidity, and remove-liquidity with deterministic quotes, rounding, and failure behavior.
-- `StakingOps`: Generic `Stake { asset, amount }` and `Unstake { asset, shares }` semantics for local staking assets.
+- `DexOps`: Caller-aware exact-in quotes and capacity-bounded exact-out swaps plus liquidity operations with deterministic fees, slippage, rounding, and failure behavior.
+- `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `LiquidityDonationOps`: Pair-scoped liquidity donation when the runtime wants donation without LP receipt minting.
-- `TaskWeightInfo`: Worst-case task weight classes that over-approximate actual execution, including event costs.
+- `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
+- `TaskWeightInfo`: Runtime-derived worst-case task classes covering adapter, event, RefTime, and ProofSize costs; simple and split transfers must include synchronous address-event ingress under saturated bounded state, while `WeightInfo::fee_collection` separately prices each possible User fee debit.
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
-- `FeeSink`: A deposit-capable fee target for User AAA opening and execution fees.
+- `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `EntropyProvider`: Deterministic entropy source and explicit secure/insecure posture for probabilistic schedules.
-- `AddressEventIngress`: A bounded path into `notify_address_event*` for asset ingress triggers.
-- Governance/system origins, owner-slot bounds, queue/wakeup bounds, active-actor bounds, sweep bounds, and fee constants.
+- `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
+- Governance/system origins, a two-dimensional hook weight meter, owner-slot/queue/wakeup/active/sweep bounds, and fee constants.
 
 The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events.
 
@@ -38,6 +39,7 @@ A runtime may bind no-op implementations for capabilities it does not expose:
 - No DEX means swap and liquidity tasks fail deterministically through `StepErrorPolicy`.
 - No staking means `Stake` and `Unstake` fail through the staking adapter.
 - No liquidity-donation support means `DonateLiquidity` fails through `LiquidityDonationOps`.
+- No runtime-authorized funding pairs means `FundingAuthority = ()`, which safely denies every `RuntimePolicy` provenance.
 - No secure entropy means financial probabilistic schedules must be rejected when `RequireSecureEntropyForProbabilisticTasks` is enabled, or use the documented deterministic fallback posture when it is disabled.
 
 No-op adapters are valid only when user-facing plan builders and runtime docs make the unsupported task surface clear. They must not panic, loop, or depend on off-chain nondeterminism.
@@ -45,7 +47,7 @@ No-op adapters are valid only when user-facing plan builders and runtime docs ma
 ## 3. Ownership Boundary
 
 - `AAA owns`: Actor ids, sovereign account derivation, owner slots, queue/wakeup scheduling, lifecycle transitions, fee reservation, amount resolution, task admission, task-scoped atomicity, step error policy, and bounded events.
-- `Runtime owns`: Asset ledgers, DEX pricing, staking topology, liquidity-donation policy, fee-sink depositability, entropy selection, ingress producers, governance origins, genesis System AAA definitions, and task weight calibration.
+- `Runtime owns`: Asset ledgers, caller-aware DEX pricing, staking topology/share mapping, liquidity-donation policy, atomic fee-collection policy and sink depositability, entropy, ingress producers, governance origins, genesis System AAA definitions, and task weight calibration.
 - `UI owns`: Plan authoring affordances, dry-run/simulation UX, unsupported-task hiding, user recovery flows, per-cycle timeline rendering, and warnings around `ContinueNextStep` after mutating tasks.
 - `Docs own`: The separation between portable task-language patterns and a concrete runtime's System AAA topology.
 
@@ -53,7 +55,7 @@ Business policy belongs in runtime adapters or genesis actor configuration, not 
 
 ## 4. Actor Permission Model
 
-User actors are signed-owner controlled, fee-bearing, slot-bounded, and cannot mint. System actors are governance-created, slotless, fee-exempt, and may be Mutable or Immutable. System Immutable actors are protocol anchors: no runtime extrinsic may mutate, pause, trigger, close, or reopen them.
+User actors are signed-owner controlled, fee-bearing, slot-bounded, and cannot mint. System actors are governance-created, slotless, fee-exempt, and may be Mutable or Immutable. No runtime extrinsic may mutate, pause, trigger, close, or reopen a System Immutable actor, but that control guard must not block mandatory internal terminal transitions such as consecutive-failure closure.
 
 A downstream runtime decides whether to ship any genesis System actors. Genesis System AAA topology is runtime-owned configuration, not a pallet requirement.
 
@@ -71,10 +73,13 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 
 ## 6. Boundary Contracts
 
-- `Fee admission`: AAA charges User opening and per-step fees in `FeeNativeAsset`, routes fees to `FeeSink`, and reserves fee-native spend capacity during a cycle. The runtime must ensure fee-sink routing is total in the intended steady state.
-- `Fee conversion`: AAA asks the runtime's `WeightToFee` for deterministic upper-bound pricing. It does not price tasks by observed weight after dispatch.
-- `Ingress triggers`: Producers must enter through `AddressEventIngress` / `notify_address_event*`. Producers and scanners must not mutate inboxes or funding snapshots directly.
+- `Fee admission`: AAA reserves fee-native spend capacity and sends every opening/per-step charge through one atomic `FeeCollector` call; collection transfers the full amount into `FeeSink`, while downstream allocation remains outside the generic pallet.
+- `Fee conversion`: AAA asks `WeightToFee` for deterministic upper-bound pricing; runtime task bounds must include adapter and routing work in both Weight dimensions.
+- `DEX amount safety`: Exact-in quotes must match caller fees and executable route selection; exact-out receives a policy-derived maximum input that preserves minimum balance and future fee reserve.
+- `Staking amount safety`: Unstake current/trigger/all modes resolve through adapter shares; last-funding mode requires an adapter-mapped transferable share asset.
+- `Ingress triggers`: Every supported producer must enter through `AddressEventIngress` / fallible `notify_address_event*`, a weight-charging post-dispatch extension, or the bounded producer-owned overflow queue. The producer must run `preflight_funding_event` before value movement, propagate notification failure in the same transaction, and treat rejected durable enqueue as rollback; runtime event-vector scanning cannot own durability because a capped prefix cannot retain an unscanned tail.
 - `Entropy`: AAA samples only deterministic runtime-provided entropy or documented fallback inputs. Secure financial probability is a runtime capability gate, not an AAA-owned randomness scheme.
+- `Hook admission`: `on_idle` must reserve its generated fixed base before any storage access; compatibility ingress must reserve its generated one-read probe before reading queue state and a complete drain unit per event, while the runtime reserve must admit the documented baseline scheduler probe in both Weight dimensions.
 - `Task weight class`: The runtime must classify every task with a deterministic upper bound. Admission may be conservative; it must not underprice execution.
 - `Read model`: Known actor state, owner-slot recovery, scheduler state, and bounded events are canonical on-chain surfaces. Fleet dashboards, long histories, timelines, rankings, and analytics are external indexed/materialized views.
 
@@ -83,7 +88,7 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 AAA guarantees task-scoped atomicity, not whole-plan atomicity. A failed executable task rolls back all task-local storage effects and its success event. Earlier successful steps in the same execution plan remain committed. After rollback, `StepErrorPolicy` decides whether the cycle aborts or continues.
 
 | Surface                 | AAA guarantee                                                                                             | Adapter/runtime obligation                                                                                |
-|---|---|---|
+| ----------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 | `Transfer`              | Transfer task runs in the task transaction; failed transfer emits failure/summary only                    | Asset adapter must not preserve partial debit/credit on failure                                           |
 | `Swap`                  | Swap task rolls back if adapter returns error after intermediate mutation                                 | DEX adapter must keep quote, debit, credit, fee, and pool mutation atomic or rely on the AAA transaction  |
 | `AddLiquidity`          | LP success event persists only when the whole task succeeds                                               | DEX adapter must not leave one reserve, LP mint, or debit committed after a late error                    |
@@ -109,6 +114,9 @@ A runtime embedding AAA should add local tests for any adapter that mutates more
 - Close-tail failure rolls back the failed close task, emits close-tail failure/summary observability, and still deletes the actor once the tail completes.
 - Unsupported no-op adapters fail deterministically without panics or hidden state mutation.
 - Adapter-level success events do not survive a failed task unless they are explicitly outside the AAA transaction boundary and documented as such.
+- Fee collection failure rolls back the payer debit and leaves Fee Sink unchanged.
+- Funding overflow fails before or transactionally rolls back signed, internal-protocol, XCM, and durable-queue value movement; expired actors receive balance without inbox or funding-batch mutation.
+- Exact-out never debits above the AAA-provided capacity, and Unstake dynamic modes resolve against shares rather than the base asset.
 
 ## 9. Non-Goals
 

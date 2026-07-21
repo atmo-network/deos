@@ -590,35 +590,55 @@ impl<T: pallet_axial_router::pallet::Config> pallet_axial_router::PriceOracle<Ba
 impl pallet_axial_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImpl<Runtime> {
   fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> sp_runtime::DispatchResult {
     let burning_manager_account = BurningManagerAccount::get();
-    match asset {
-      AssetKind::Native => {
-        Balances::transfer(
-          who,
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(error) =
+        <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
           &burning_manager_account,
+          asset,
           amount,
-          polkadot_sdk::frame_support::traits::tokens::ExistenceRequirement::KeepAlive,
-        )
-        .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
-      }
-      AssetKind::Local(id) | AssetKind::Foreign(id) => {
-        use polkadot_sdk::frame_support::traits::fungibles::Mutate;
-        <pallet_assets::Pallet<Runtime> as Mutate<AccountId>>::transfer(
-          id,
           who,
-          &burning_manager_account,
-          amount,
-          polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
         )
-        .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
       }
-    }
-    <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_with_source(
-      &burning_manager_account,
-      asset,
-      amount,
-      who,
-    );
-    Ok(())
+      let result = (|| -> sp_runtime::DispatchResult {
+        match asset {
+          AssetKind::Native => {
+            Balances::transfer(
+              who,
+              &burning_manager_account,
+              amount,
+              polkadot_sdk::frame_support::traits::tokens::ExistenceRequirement::KeepAlive,
+            )
+            .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
+          }
+          AssetKind::Local(id) | AssetKind::Foreign(id) => {
+            use polkadot_sdk::frame_support::traits::fungibles::Mutate;
+            <pallet_assets::Pallet<Runtime> as Mutate<AccountId>>::transfer(
+              id,
+              who,
+              &burning_manager_account,
+              amount,
+              polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
+            )
+            .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
+          }
+        }
+        <RuntimeAddressEventIngress as AddressEventIngress>::on_internal_inbound(
+          &burning_manager_account,
+          asset,
+          amount,
+          who,
+        )?;
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
   }
 }
 

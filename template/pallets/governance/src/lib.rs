@@ -448,7 +448,10 @@ pub mod pallet {
   };
   use codec::{Decode, Encode};
   use frame::prelude::*;
-  use polkadot_sdk::frame_support::{traits::Currency, transactional};
+  use polkadot_sdk::frame_support::{
+    traits::{Currency, ExistenceRequirement},
+    transactional,
+  };
   use polkadot_sdk::sp_runtime::{
     FixedU128, Perbill,
     traits::{AtLeast32BitUnsigned, Zero},
@@ -463,6 +466,7 @@ pub mod pallet {
     type Currency: Currency<Self::AccountId>;
     #[pallet::constant]
     type ProposalOpeningFee: Get<BalanceOf<Self>>;
+    type ProposalFeeRecipient: Get<Self::AccountId>;
     type DomainId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
     type WinningVoteItemId: Parameter + MaxEncodedLen + Member + Copy + Ord + TypeInfo;
     type Epoch: Parameter
@@ -1315,7 +1319,7 @@ pub mod pallet {
   #[pallet::event]
   #[pallet::generate_deposit(pub(super) fn deposit_event)]
   pub enum Event<T: Config> {
-    ProposalOpeningFeeBurned {
+    ProposalOpeningFeeCollected {
       domain: T::DomainId,
       item_id: T::WinningVoteItemId,
       proposer: T::AccountId,
@@ -1590,12 +1594,14 @@ pub mod pallet {
       );
       let opening_fee = T::ProposalOpeningFee::get();
       if !opening_fee.is_zero() {
-        let (_, remainder) = T::Currency::slash(&proposer, opening_fee);
-        ensure!(
-          remainder.is_zero(),
-          Error::<T>::InsufficientProposalOpeningFeeBalance
-        );
-        Self::deposit_event(Event::ProposalOpeningFeeBurned {
+        T::Currency::transfer(
+          &proposer,
+          &T::ProposalFeeRecipient::get(),
+          opening_fee,
+          ExistenceRequirement::KeepAlive,
+        )
+        .map_err(|_| Error::<T>::InsufficientProposalOpeningFeeBalance)?;
+        Self::deposit_event(Event::ProposalOpeningFeeCollected {
           domain,
           item_id,
           proposer: proposer.clone(),

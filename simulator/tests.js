@@ -12,9 +12,9 @@ import {
   PRECISION,
   Router,
   User,
+  collect_protocol_fee,
   distribute_fee_sink_phase1,
   distribute_fee_sink_phase2,
-  split_collator_fee,
 } from "./model.js";
 
 /** @typedef {import("./model.js").SystemConfig} SystemConfig */
@@ -2122,40 +2122,44 @@ runTest("Router Intelligence - XYK Route Selection", () => {
   );
 });
 
-runTest("Two-Phase Reward Routing - 20/80 Collection", () => {
+runTest("Two-Phase Reward Routing - Unified Fee Collection", () => {
   const amount = 100n * PRECISION;
-  const split = split_collator_fee(amount);
-  assert(split.collator === 20n * PRECISION, "Collator should receive 20% of collected rewards");
-  assert(split.fee_sink === 80n * PRECISION, "Fee Sink should receive 80% of collected rewards");
-  assert(split.collator + split.fee_sink === amount, "20/80 split must conserve collected amount");
+  const collected = collect_protocol_fee(amount);
+  assert(collected.fee_sink === amount, "Fee Sink should receive 100% of protocol fees");
 });
 
 runTest("Two-Phase Reward Routing - Phase 1 Pools", () => {
-  const feeSinkAmount = 80n * PRECISION;
+  const feeSinkAmount = 100n * PRECISION;
   const split = distribute_fee_sink_phase1(feeSinkAmount);
-  assert(split.staking_pool === 40n * PRECISION, "Phase 1 staking pool should receive half of Fee Sink flow");
-  assert(split.liquidity_pool === 40n * PRECISION, "Phase 1 liquidity pool should receive half of Fee Sink flow");
+  assert(split.staking_pool === 50n * PRECISION, "Phase 1 staking pool should receive half of Fee Sink flow");
+  assert(split.liquidity_pool === 50n * PRECISION, "Phase 1 liquidity pool should receive half of Fee Sink flow");
   assert(split.staking_pool + split.liquidity_pool === feeSinkAmount, "Phase 1 distribution must conserve Fee Sink amount");
 });
 
-runTest("Two-Phase Reward Routing - Phase 2 1:1:4", () => {
+runTest("Two-Phase Reward Routing - Phase 2 Equal Thirds", () => {
   const feeSinkAmount = 60n * PRECISION;
   const split = distribute_fee_sink_phase2(feeSinkAmount);
-  assert(split.staking_pool === 10n * PRECISION, "Phase 2 staking pool should receive one part");
-  assert(split.liquidity_pool === 10n * PRECISION, "Phase 2 liquidity pool should receive one part");
-  assert(split.claimable_lp_nomination === 40n * PRECISION, "Phase 2 claimable LP nomination should receive four parts");
-  assert(split.staking_pool + split.liquidity_pool + split.claimable_lp_nomination === feeSinkAmount, "Phase 2 distribution must conserve Fee Sink amount");
+  assert(split.security_rewards === 20n * PRECISION, "Phase 2 security rewards should receive one third");
+  assert(split.staking_pool === 20n * PRECISION, "Phase 2 staking pool should receive one third");
+  assert(split.liquidity_pool === 20n * PRECISION, "Phase 2 liquidity pool should receive one third");
+  assert(split.fee_sink_remainder === 0n, "Divisible Phase 2 flow should leave no remainder");
 });
 
 runTest("Two-Phase Reward Routing - Remainder Conservation", () => {
-  const collected = 7n;
-  const outer = split_collator_fee(collected);
-  assert(outer.collator + outer.fee_sink === collected, "Outer split must conserve dust amounts");
-  assert(outer.fee_sink >= outer.collator, "Remainder should stay with Fee Sink collection path");
-  const phase1 = distribute_fee_sink_phase1(outer.fee_sink);
-  assert(phase1.staking_pool + phase1.liquidity_pool === outer.fee_sink, "Phase 1 dust split must conserve Fee Sink amount");
-  const phase2 = distribute_fee_sink_phase2(outer.fee_sink);
-  assert(phase2.staking_pool + phase2.liquidity_pool + phase2.claimable_lp_nomination === outer.fee_sink, "Phase 2 dust split must conserve Fee Sink amount");
+  const collected = collect_protocol_fee(7n);
+  assert(collected.fee_sink === 7n, "Collection must conserve dust amounts");
+  const phase1 = distribute_fee_sink_phase1(collected.fee_sink);
+  assert(phase1.staking_pool + phase1.liquidity_pool === collected.fee_sink, "Phase 1 dust split must conserve Fee Sink amount");
+  const phase2 = distribute_fee_sink_phase2(collected.fee_sink);
+  assert(
+    phase2.security_rewards +
+      phase2.staking_pool +
+      phase2.liquidity_pool +
+      phase2.fee_sink_remainder ===
+      collected.fee_sink,
+    "Phase 2 dust split plus retained Fee Sink remainder must conserve the collected amount",
+  );
+  assert(phase2.fee_sink_remainder === 1n, "Indivisible thirds should retain their remainder in Fee Sink");
 });
 
 runTest("Economic Incentive Alignment", () => {

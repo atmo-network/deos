@@ -26,7 +26,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-07-21
 confidence: 0.95
 ---
 
@@ -42,20 +42,22 @@ An [AA-Actor](aa-actor.en.md) is one concrete instance inside that system. This 
 
 AAA gives the runtime one reusable way to run bounded execution plans instead of hardcoding every recurring workflow into a dedicated pallet.
 
-At system level it provides:
+The normative system contract requires:
 
-- Deterministic scheduling;
-- Balance/event-driven triggering;
+- Deterministic scheduling with durable late, paused, cooldown, and pre-window signals;
+- Balance/event-driven triggering without silent loss beyond bounded ingress caps;
+- Two-dimensional RefTime and ProofSize admission before each housekeeping, queue, wakeup, close, or cycle operation, including a generated fixed hook base before any `on_idle` storage access;
 - Typed tasks such as transfer, swap, liquidity, burn, mint, stake, and unstake;
-- Lifecycle rules for pause, failure, auto-close, and manual close;
-- Separation between user-owned actors and governance-owned System actors;
-- Adapter boundaries so AAA orchestrates runtime mechanics without owning DEX, staking, or asset logic.
+- Lifecycle rules for pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
+- Adapter boundaries with runtime-derived worst-case weights so AAA orchestrates mechanics without owning DEX, staking, or asset logic.
 
-Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan.
+Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility.
+
+Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Producers preflight before value movement and propagate fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the cycle, pending funding promotes only after success, and bounded events expose activation, accumulation, promotion, and policy updates.
 
 ## Embedding Boundary
 
-External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, entropy, and task weights. AAA owns scheduling, lifecycle, amount resolution, fee reservation, and task orchestration.
+External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, entropy, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. Its `FeeCollector` transfers every User charge in full into the configured `FeeSink`; the DEOS reference Fee Sink then applies the current 50/50 staking/liquidity plan, while equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
 
 The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep` or `AbortCycle` then decides whether the cycle proceeds or stops.
 
@@ -68,7 +70,7 @@ Task::Stake { asset, amount }
 Task::Unstake { asset, shares }
 ```
 
-AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic stake means for the chain. In DEOS, the adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
+AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic staking position means, expose its share balance, and optionally map it to a transferable share asset for last-funding resolution. In DEOS, the adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
 
 This keeps AAA useful outside one tokenomic configuration.
 

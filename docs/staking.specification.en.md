@@ -63,7 +63,7 @@ The launch line is phase-aware:
 
 Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter. LP nomination and claimable nomination rewards MUST remain inactive while the runtime is in the trusted-collator Phase 1 line.
 
-Upstream collection follows one outer rule when the author can be resolved: 20% to the collator / block author and 80% to Fee Sink. Fee Sink redistribution selects the active downstream flows for the current phase; the current release line wires the LP-donation half into AAA #14 and bridges staking-yield native balances into staking pool truth after donation execution.
+Upstream collection sends 100% of transaction, AAA, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; Axial Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the current release line divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
 
 ### 3.1 Staking yield
 

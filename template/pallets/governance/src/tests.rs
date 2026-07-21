@@ -1291,10 +1291,11 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
 }
 
 #[test]
-fn signed_submission_burns_opening_fee_and_records_proposer() {
+fn signed_submission_collects_opening_fee_and_records_proposer() {
   new_test_ext().execute_with(|| {
     let proposer = 10u64;
     let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
     assert_ok!(submit_signed_intent_proposal(44, 105, proposer));
     assert_eq!(Governance::proposal_author(44, 105), Some(proposer));
     assert_eq!(
@@ -1303,13 +1304,17 @@ fn signed_submission_burns_opening_fee_and_records_proposer() {
     );
     assert!(System::events().iter().any(|record| {
       record.event
-        == RuntimeEvent::Governance(Event::ProposalOpeningFeeBurned {
+        == RuntimeEvent::Governance(Event::ProposalOpeningFeeCollected {
           domain: 44,
           item_id: 105,
           proposer,
           amount: 10,
         })
     }));
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before.saturating_add(10)
+    );
   });
 }
 
@@ -1348,11 +1353,16 @@ fn signed_submission_rolls_back_opening_fee_when_proposal_creation_fails() {
     let balance_before = Balances::free_balance(proposer);
     assert_ok!(submit_signed_intent_proposal(44, 108, proposer));
     let balance_after_success = Balances::free_balance(proposer);
+    let recipient_after_success = Balances::free_balance(ProposalFeeRecipient::get());
     assert_noop!(
       submit_signed_intent_proposal(44, 108, proposer),
       Error::<Test>::ProposalAlreadyActive
     );
     assert_eq!(Balances::free_balance(proposer), balance_after_success);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_after_success
+    );
     assert_eq!(balance_before.saturating_sub(balance_after_success), 10);
   });
 }

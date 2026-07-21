@@ -27,9 +27,10 @@
 
 ## Collator Economics & Fee Routing
 
-> Phase 1 uses trusted, permissioned collators and only pool-level reward flows.
-> Phase 2 introduces permissionless collators, LP nomination, and claimable LP-staking nomination rewards.
+> Phase 1 uses trusted, permissioned collators, collects 100% of transaction, AAA, governance-opening, and XCM-execution fees in the Fee Sink, and distributes available native balance 50/50 into staking ingress and liquidity provisioning.
+> A future permissionless phase may introduce equal security/staking/liquidity thirds only after bounded security-reward settlement ships; indivisible remainder stays in Fee Sink for a later cycle.
 
+- [ ] `Permissionless Collator Reward Contract`: Before assigning the future equal-third security branch, define bounded active-set eligibility, contribution attribution, settlement cadence, custody, payout recipients, unclaimed leftovers, failure behavior, and read-model surfaces; do not assume that a `CollatorRewardPot` account or pallet is the final topology.
 - [~] `Phase 2 Reward Routing Preparation`: Keep Phase 2 as a runtime-upgrade boundary, not a launch-time parameter
   - [~] `Claimable LP Nomination Flow`: Activate explicit LP-nomination reward-weight provider only when permissionless collators ship
   - [ ] `LP Nomination Activation`: Expose LP-point nomination to specific collators only when permissionless collator selection is enabled
@@ -49,7 +50,7 @@
 
 > Only actionable when the launch economy selects a concrete block subsidy / issuance source instead of assuming one exists.
 
-- [ ] `Block Subsidy Activation`: Only after the reference economy defines a concrete block-reward source and amount policy, route issued rewards through the existing 20/80 collection mechanism and test unresolved-author behavior
+- [ ] `Block Subsidy Activation`: Only after the reference economy defines a concrete block-reward source and amount policy, decide whether issuance enters the Fee Sink or the future security-reward budget; do not revive immediate author payout by default.
 
 ### Native staking LP donation route policy
 
@@ -65,4 +66,3 @@
 - [ ] `Relay-Beacon Proof Ingestion`: Only if that future per-block beacon exists, design a weight-accounted `ConsensusHook` snapshot finalized against the real upstream surface
 - [ ] `AAA Relay-Beacon Integration`: Only if that future per-block beacon exists, wire AAA to it and measure proof-size and weight impact
 - [ ] `Permissionless Collator Activation`: Only after a production-ready per-block relay/protocol beacon exists, design and prototype activation instead of reviving a local threshold line
-

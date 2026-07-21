@@ -2318,6 +2318,10 @@ pub mod pallet {
       Some(total_shares)
     }
 
+    pub fn staked_asset_id_for_queries(asset_id: T::AssetId) -> Option<T::AssetId> {
+      Self::live_staked_asset_id(asset_id)
+    }
+
     pub fn staked_receipt_balance(
       asset_id: T::AssetId,
       account: &T::AccountId,

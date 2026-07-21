@@ -15,7 +15,7 @@ use polkadot_sdk::{
 use alloc::vec;
 use core::cell::RefCell;
 
-use crate::{AssetOps, DexOps, FeeRouter, LiquidityDonationOps, StakingOps};
+use crate::{AssetOps, DexOps, FeeCollector, LiquidityDonationOps, StakingOps};
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
 pub type AccountId = u64;
@@ -152,6 +152,10 @@ thread_local! {
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN: RefCell<bool> = RefCell::new(false);
+  #[cfg(feature = "runtime-benchmarks")]
+  static BENCHMARK_INGRESS: RefCell<Option<(AccountId, AccountId, Balance)>> = RefCell::new(None);
+  #[cfg(feature = "runtime-benchmarks")]
+  static BENCHMARK_ASSET_OPS_INGRESS: RefCell<bool> = RefCell::new(false);
 }
 
 pub fn set_pool_reserves(
@@ -191,11 +195,16 @@ pub fn reset_mock_adapters() {
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow_mut() = false);
+  #[cfg(feature = "runtime-benchmarks")]
+  {
+    BENCHMARK_INGRESS.with(|event| *event.borrow_mut() = None);
+    BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow_mut() = false);
+  }
 }
 
-pub struct MockFeeRouter;
-impl FeeRouter<AccountId, TestAsset, Balance> for MockFeeRouter {
-  fn route_fee(
+pub struct MockFeeCollector;
+impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
+  fn collect_fee(
     payer: &AccountId,
     fee_sink: &AccountId,
     native_asset: TestAsset,
@@ -225,7 +234,7 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
           to,
           amount,
           polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
-        )
+        )?;
       }
       _ => ASSET_BALANCES.with(|b| {
         let mut map = b.borrow_mut();
@@ -239,8 +248,15 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
         let dst = map.get(&(*to, asset)).copied().unwrap_or(0);
         map.insert((*to, asset), dst + amount);
         Ok(())
-      }),
+      })?,
     }
+    #[cfg(feature = "runtime-benchmarks")]
+    if BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow()) {
+      if let Some(aaa_id) = crate::SovereignIndex::<Test>::get(to) {
+        crate::Pallet::<Test>::notify_address_event(aaa_id, asset, amount, from)?;
+      }
+    }
+    Ok(())
   }
 
   fn burn(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), DispatchError> {
@@ -419,9 +435,9 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     asset_in: TestAsset,
     asset_out: TestAsset,
     amount_out: Balance,
+    max_amount_in: Balance,
     slippage_tolerance: Perbill,
   ) -> Result<Balance, DispatchError> {
-    let _ = slippage_tolerance;
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
     if amount_out >= ro {
       return Err(DispatchError::Other("InsufficientPoolLiquidity"));
@@ -432,6 +448,10 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       .checked_div(denominator)
       .ok_or(DispatchError::Other("DivisionByZero"))?
       .saturating_add(1);
+    let quoted_max_in = amount_in.saturating_add(slippage_tolerance.mul_ceil(amount_in));
+    if quoted_max_in > max_amount_in {
+      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
+    }
     MockAssetOps::transfer(who, &u64::MAX, asset_in, amount_in)?;
     if FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow()) {
       return Err(DispatchError::Other("MockDexAfterInputTransferFailed"));
@@ -537,6 +557,18 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
     });
     Ok(())
   }
+
+  fn share_balance(who: &AccountId, asset: TestAsset) -> Balance {
+    MockAssetOps::balance(who, asset)
+  }
+
+  fn share_asset(asset: TestAsset) -> Option<TestAsset> {
+    if asset == TestAsset::Local(u32::MAX) {
+      None
+    } else {
+      Some(asset)
+    }
+  }
 }
 
 pub struct MockLiquidityDonationOps;
@@ -588,6 +620,135 @@ pub struct MockBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
 impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelper {
+  fn setup_add_liquidity(
+    owner: &AccountId,
+  ) -> Result<(TestAsset, TestAsset, Balance, Balance), DispatchError> {
+    let asset_a = TestAsset::Local(1);
+    let asset_b = TestAsset::Local(2);
+    let amount = 1_000_000;
+    MockAssetOps::mint(owner, asset_a, amount)?;
+    MockAssetOps::mint(owner, asset_b, amount)?;
+    Ok((asset_a, asset_b, amount, amount))
+  }
+
+  fn setup_donate_liquidity(
+    owner: &AccountId,
+  ) -> Result<(TestAsset, TestAsset, Balance), DispatchError> {
+    let asset_a = TestAsset::Local(1);
+    let asset_b = TestAsset::Local(2);
+    let amount = 1_000_000;
+    MockAssetOps::mint(owner, asset_a, amount)?;
+    MockAssetOps::mint(owner, asset_b, amount)?;
+    Ok((asset_a, asset_b, amount))
+  }
+
+  fn setup_stake(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
+    let asset = TestAsset::Local(1);
+    let amount = 1_000_000;
+    MockAssetOps::mint(owner, asset, amount)?;
+    Ok((asset, amount))
+  }
+
+  fn setup_unstake(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
+    let asset = TestAsset::Local(1);
+    let shares = 1_000_000;
+    MockAssetOps::mint(owner, asset, shares)?;
+    Ok((asset, shares))
+  }
+
+  fn setup_swap_exact_in(
+    owner: &AccountId,
+  ) -> Result<(TestAsset, TestAsset, Balance), DispatchError> {
+    let asset_in = TestAsset::Local(1);
+    let asset_out = TestAsset::Local(2);
+    let amount_in = 1_000;
+    set_pool_reserves(asset_in, asset_out, 1_000_000, 1_000_000);
+    MockAssetOps::mint(owner, asset_in, amount_in)?;
+    MockAssetOps::mint(&u64::MAX, asset_out, 1_000_000)?;
+    Ok((asset_in, asset_out, amount_in))
+  }
+
+  fn setup_swap_exact_out(
+    owner: &AccountId,
+  ) -> Result<(TestAsset, TestAsset, Balance, Balance), DispatchError> {
+    let asset_in = TestAsset::Local(1);
+    let asset_out = TestAsset::Local(2);
+    let amount_out = 1_000;
+    let max_amount_in = 2_000;
+    set_pool_reserves(asset_in, asset_out, 1_000_000, 1_000_000);
+    MockAssetOps::mint(owner, asset_in, max_amount_in)?;
+    MockAssetOps::mint(&u64::MAX, asset_out, 1_000_000)?;
+    Ok((asset_in, asset_out, amount_out, max_amount_in))
+  }
+
+  fn funding_assets(max: u32) -> alloc::vec::Vec<TestAsset> {
+    (0..max)
+      .map(|index| {
+        if index == 0 {
+          TestAsset::Native
+        } else {
+          TestAsset::Local(index)
+        }
+      })
+      .collect()
+  }
+
+  fn enable_asset_ops_ingress() {
+    BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow_mut() = true);
+  }
+
+  fn setup_address_event_ingress(
+    recipient: &AccountId,
+    source: &AccountId,
+    amount: Balance,
+  ) -> DispatchResult {
+    BENCHMARK_INGRESS.with(|event| {
+      *event.borrow_mut() = Some((*recipient, *source, amount));
+    });
+    Ok(())
+  }
+
+  fn run_address_event_ingress(recipient: &AccountId) -> bool {
+    let event = BENCHMARK_INGRESS.with(|pending| *pending.borrow());
+    let Some((event_recipient, source, amount)) = event else {
+      return false;
+    };
+    if event_recipient != *recipient {
+      return false;
+    }
+    let Some(aaa_id) = crate::SovereignIndex::<Test>::get(recipient) else {
+      return false;
+    };
+    crate::Pallet::<Test>::notify_address_event(aaa_id, TestAsset::Native, amount, &source)
+      .expect("mock benchmark ingress must succeed");
+    true
+  }
+
+  fn setup_xcm_asset_deposit() -> DispatchResult {
+    Ok(())
+  }
+
+  fn run_xcm_asset_deposit(
+    recipient: &AccountId,
+    source: &AccountId,
+    amount: Balance,
+  ) -> DispatchResult {
+    MockAssetOps::mint(recipient, TestAsset::Native, amount)?;
+    if let Some(aaa_id) = crate::SovereignIndex::<Test>::get(recipient) {
+      crate::Pallet::<Test>::notify_xcm_address_event(aaa_id, TestAsset::Native, amount, source)?;
+    }
+    Ok(())
+  }
+
+  fn clear_address_event_ingress_events() {
+    BENCHMARK_INGRESS.with(|event| *event.borrow_mut() = None);
+  }
+
+  fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight {
+    let _ = crate::Pallet::<Test>::drain_address_event_overflow(1);
+    polkadot_sdk::sp_weights::Weight::zero()
+  }
+
   fn setup_remove_liquidity_max_k(
     owner: &AccountId,
     _max_scan: u32,
@@ -697,11 +858,20 @@ impl Get<bool> for TestRequireSecureEntropyForProbabilisticTasks {
   }
 }
 
+pub struct MockFundingAuthority;
+
+impl crate::adapters::FundingAuthority<AccountId> for MockFundingAuthority {
+  fn allows(_: crate::AaaId, _: &AccountId, _: &crate::FundingProvenance<AccountId>) -> bool {
+    true
+  }
+}
+
 impl pallet_aaa::Config for Test {
   type AssetId = TestAsset;
   type Balance = Balance;
   type NativeAssetId = NativeAsset;
   type AssetOps = MockAssetOps;
+  type FundingAuthority = MockFundingAuthority;
   type DexOps = MockDexOps;
   type StakingOps = MockStakingOps;
   type LiquidityDonationOps = MockLiquidityDonationOps;
@@ -720,6 +890,7 @@ impl pallet_aaa::Config for Test {
   type MaxQueueLength = ConstU32<1024>;
   type MaxWakeupBucketSize = ConstU32<1024>;
   type MaxWakeupsPerBlock = ConstU32<64>;
+  type MaxSpilloverBlocks = ConstU32<8>;
   type MaxQueueInsertionsPerBlock = ConstU32<64>;
   type FairnessWeightSystem = ConstU32<1>;
   type FairnessWeightUser = ConstU32<2>;
@@ -742,7 +913,7 @@ impl pallet_aaa::Config for Test {
   type AtomicityHook = MockAtomicityHook;
   type AddressEventIngressHook = ();
   type FeeSink = TestFeeSink;
-  type FeeRouter = MockFeeRouter;
+  type FeeCollector = MockFeeCollector;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
   type MinUserBalance = TestMinUserBalance;
   type WeightInfo = ();

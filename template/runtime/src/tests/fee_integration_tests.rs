@@ -3,7 +3,7 @@ use super::common::{
 };
 use crate::{
   AAA, Assets, Balances, Runtime, RuntimeOrigin, Staking,
-  configs::{AssetKind, RuntimeFeeSplit, aaa_config::TmctolGenesisSystemAaas},
+  configs::{AssetKind, RuntimeFeeCollector, aaa_config::TmctolGenesisSystemAaas},
 };
 use polkadot_sdk::frame_support::{
   assert_ok,
@@ -18,7 +18,7 @@ use polkadot_sdk::frame_support::{
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 
 #[test]
-fn transaction_fee_split_routes_to_fee_sink_when_author_is_unresolved() {
+fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
   new_test_ext().execute_with(|| {
     let fee_sink = aaa_fee_sink_account();
     let amount = 1_000_000_000_000u128;
@@ -31,7 +31,7 @@ fn transaction_fee_split_routes_to_fee_sink_when_author_is_unresolved() {
       Fortitude::Polite,
     )
     .expect("Alice has enough balance for fee withdrawal");
-    RuntimeFeeSplit::on_unbalanced(credit);
+    RuntimeFeeCollector::on_unbalanced(credit);
     assert_eq!(Balances::free_balance(&fee_sink), sink_before + amount);
     assert_eq!(Balances::free_balance(&ALICE), INITIAL_BALANCE - amount);
   });

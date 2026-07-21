@@ -261,6 +261,7 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, DomainId, u32, H256>
 parameter_types! {
   pub const ExistentialDeposit: u128 = 1;
   pub const ProposalOpeningFee: u128 = 10;
+  pub const ProposalFeeRecipient: AccountId = 99;
   pub ProposalApprovalThreshold: polkadot_sdk::sp_runtime::Perbill =
     polkadot_sdk::sp_runtime::Perbill::from_percent(60);
   pub ProposalFastTrackPassThreshold: polkadot_sdk::sp_runtime::Perbill =
@@ -296,6 +297,7 @@ impl pallet_governance::Config for Test {
   type AdminOrigin = EnsureRoot<AccountId>;
   type Currency = Balances;
   type ProposalOpeningFee = ProposalOpeningFee;
+  type ProposalFeeRecipient = ProposalFeeRecipient;
   type DomainId = DomainId;
   type WinningVoteItemId = u32;
   type Epoch = Epoch;

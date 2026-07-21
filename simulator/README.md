@@ -44,7 +44,7 @@ Expected output ends with:
 - `PPB = 10^9`
 - `create_system(config_override?)`
 - Classes: `Tmc`, `Tol`, `Xyk`, `Router`, `FeeManager`, `User`, `BigMath`
-- Reward routing helpers: `split_collator_fee`, `distribute_fee_sink_phase1`, `distribute_fee_sink_phase2`
+- Reward routing helpers: `collect_protocol_fee`, `distribute_fee_sink_phase1`, `distribute_fee_sink_phase2`
 
 Minimal example:
 

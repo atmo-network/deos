@@ -512,6 +512,17 @@ pub enum StepSkippedReason {
   FundingUnavailable,
 }
 
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum OnCloseStepFailureKind {
+  EvaluationFee,
+  ExecutionFee,
+  Condition,
+  Resolution,
+  Adapter,
+}
+
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
 pub enum SourceFilter<AccountId, MaxWhitelistSize: Get<u32>> {
@@ -839,9 +850,65 @@ pub struct ScheduleWindow<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct FundingSnapshot<Balance, BlockNumber> {
+pub struct FundingBatch<Balance, BlockNumber> {
   pub amount: Balance,
   pub block: BlockNumber,
+  pub pending_amount: Balance,
+  pub pending_last_block: Option<BlockNumber>,
+}
+
+#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(MaxSignedFundingSources))]
+pub enum FundingSourcePolicy<AccountId, MaxSignedFundingSources: Get<u32>> {
+  OwnerOnly,
+  SignedAllowlist(BoundedBTreeSet<AccountId, MaxSignedFundingSources>),
+  RuntimePolicy,
+  AnySource,
+}
+
+impl<AccountId: Clone, MaxSignedFundingSources: Get<u32>> Clone
+  for FundingSourcePolicy<AccountId, MaxSignedFundingSources>
+{
+  fn clone(&self) -> Self {
+    match self {
+      Self::OwnerOnly => Self::OwnerOnly,
+      Self::SignedAllowlist(allowed) => Self::SignedAllowlist(allowed.clone()),
+      Self::RuntimePolicy => Self::RuntimePolicy,
+      Self::AnySource => Self::AnySource,
+    }
+  }
+}
+
+impl<AccountId: core::fmt::Debug, MaxSignedFundingSources: Get<u32>> core::fmt::Debug
+  for FundingSourcePolicy<AccountId, MaxSignedFundingSources>
+{
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::OwnerOnly => f.write_str("OwnerOnly"),
+      Self::SignedAllowlist(allowed) => f.debug_tuple("SignedAllowlist").field(allowed).finish(),
+      Self::RuntimePolicy => f.write_str("RuntimePolicy"),
+      Self::AnySource => f.write_str("AnySource"),
+    }
+  }
+}
+
+impl<AccountId: PartialEq, MaxSignedFundingSources: Get<u32>> PartialEq
+  for FundingSourcePolicy<AccountId, MaxSignedFundingSources>
+{
+  fn eq(&self, other: &Self) -> bool {
+    match (self, other) {
+      (Self::OwnerOnly, Self::OwnerOnly)
+      | (Self::RuntimePolicy, Self::RuntimePolicy)
+      | (Self::AnySource, Self::AnySource) => true,
+      (Self::SignedAllowlist(left), Self::SignedAllowlist(right)) => left == right,
+      _ => false,
+    }
+  }
+}
+
+impl<AccountId: Eq, MaxSignedFundingSources: Get<u32>> Eq
+  for FundingSourcePolicy<AccountId, MaxSignedFundingSources>
+{
 }
 
 #[derive(
@@ -852,6 +919,7 @@ pub struct AaaInstance<
   BlockNumber,
   Schedule,
   ExecutionPlan,
+  FundingPolicy,
   FundingSnapshots,
   FundingTrackedAssets,
   Balance,
@@ -872,6 +940,7 @@ pub struct AaaInstance<
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
   pub manual_trigger_pending: bool,
+  pub funding_source_policy: FundingPolicy,
   pub funding_snapshots: FundingSnapshots,
   pub funding_tracked_assets: FundingTrackedAssets,
   pub cycle_weight_upper: Weight,
@@ -929,9 +998,26 @@ pub struct InboxState<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub enum FundingProvenance<AccountId> {
+  Signed(AccountId),
+  InternalProtocol(AccountId),
+  Xcm(AccountId),
+}
+
+impl<AccountId> FundingProvenance<AccountId> {
+  pub fn account(&self) -> &AccountId {
+    match self {
+      Self::Signed(account) | Self::InternalProtocol(account) | Self::Xcm(account) => account,
+    }
+  }
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub struct IngressOverflowEvent<AaaId, AssetId, Balance, AccountId> {
   pub aaa_id: AaaId,
   pub asset: AssetId,
   pub amount: Balance,
-  pub source: Option<AccountId>,
+  pub provenance: Option<FundingProvenance<AccountId>>,
 }

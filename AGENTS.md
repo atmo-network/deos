@@ -135,7 +135,9 @@
 - `Reward Sources`: Keep reward distribution separable from origin so externally funded or treasury-budgeted pots remain possible.
 - `Unclaimed Rewards`: Treat leftovers as explicit runtime policy rather than accidental residue.
 - `Liquidity Slippage`: Derive Liquidity Actor swap tolerance from current reserve depth and clamp it between explicit runtime bounds.
-- `Fee Routing`: Preserve the unified author/Fee Sink collection contract and explicit unresolved-author behavior.
+- `Fee Collection`: Keep Axial Router trading fees on the Burn Actor path; collect 100% of transaction, AAA, governance-opening, and XCM-execution fees into the Fee Sink System AAA independently of actor execution liveness, and name the generic AAA boundary by collection rather than trading-route semantics.
+- `Fee Allocation Phases`: While collators remain permissioned, the Fee Sink distributes its available native balance 50/50 to staking ingress and liquidity provisioning; a future equal-thirds security/staking/liquidity plan requires permissionless collators and an explicit bounded security-reward contract, with indivisible remainder retained in Fee Sink for a later cycle.
+- `Collator Reward Gate`: Treat `CollatorRewardPot` as an unresolved design placeholder, not an accepted pallet or storage topology, until eligibility, contribution accounting, settlement cadence, custody, payout, leftovers, and failure behavior have explicit owners and bounds.
 
 ## 8. Engineering and Validation
 
@@ -150,7 +152,7 @@
 - `Rust Warnings`: Maintain zero Clippy warnings across workspace/all targets.
 - `Workspace Lints`: Keep Substrate cfg allowances and the upstream-aligned lint set honest.
 - `WASM Builder`: Keep `substrate-wasm-builder` aligned with the current Polkadot SDK line.
-- `Runtime Version`: Keep `system_version >= 3`; bump `spec_version` for runtime-upgrade-visible behavior.
+- `Runtime Version`: Before the first production genesis, keep the DEOS framework baseline at `authoring_version = 1`, `impl_version = 1`, `system_version = 3`, `spec_version = 1`, and `transaction_version = 1`; after a downstream network launches, its runtime owns monotonic compatibility bumps under SDK semantics.
 - `Source Headers`: Do not add license or copyright headers to source files.
 - `Suppressions`: Avoid broad JS/TS/Svelte lint and type suppressions; narrow and justify unavoidable exceptions.
 - `Complexity Feedback`: Treat compilation and integration failures as architectural feedback; simplify abstractions before adding compatibility layers.
@@ -194,7 +196,7 @@
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.
 - `Durable Ledgers`: Record reusable hallucinations, ambiguities, dead ends, and boundary drifts only; bare tool failures remain transient output.
 - `Wiki Role`: `/wiki` is a concise, provenance-aware learning lens over current project truth, not a release-note mirror or docs dump.
-- `Wiki Locales`: Human pages use explicit locale suffixes and mirrored page IDs/topology; shared metadata represents localized fields.
+- `Wiki Locales`: Human pages use explicit locale suffixes and mirrored page IDs/topology; shared metadata represents localized fields; Russian prose prefers natural Russian terminology and minimizes English borrowings except canonical identifiers, code symbols, and terms whose translation would reduce precision.
 - `Wiki Navigation`: New pages need provenance, related links, locale mirrors, and graph/index reachability; merge weak leaflets into stronger owner pages.
 - `Wiki Trust`: Treat repo-local wiki Markdown as reviewed content and enforce the trust boundary with the wiki validation skill.
 - `Wiki Growth`: Large wiki expansion requires consolidation; confidence and graph metadata must drive merge/remove work rather than decorative bookkeeping.

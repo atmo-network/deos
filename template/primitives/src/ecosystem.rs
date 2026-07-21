@@ -16,7 +16,7 @@ pub type Balance = u128;
 ///
 /// IDs are sequential from `0` for all core system actors in the current launch line.
 pub mod aaa_ids {
-  /// Burning Manager System AAA — collects protocol fees and burns native tokens
+  /// Burn Actor System AAA — collects Axial Router fees and burns native tokens
   /// Created first at genesis (`aaa_id = 0`)
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
@@ -27,11 +27,13 @@ pub mod aaa_ids {
   /// Fee Sink System AAA — unified fee collection and phase-aware redistribution
   /// Created at genesis (`aaa_id = 1`)
   ///
-  /// Canonical role: unified fee-collection address for protocol fees.
-  /// It is the stable 80% sink for block rewards and eligible fees after the
-  /// collator/author 20% share is paid. Fee Sink redistribution is phase-aware:
-  /// Phase 1 routes only to staking-pool yield and native LP donation flows;
-  /// Phase 2 may add claimable LP-nomination rewards weighted by GovXP.
+  /// Canonical role: unified collection address for 100% of transaction, AAA User-action,
+  /// governance-opening, and XCM-execution fees, with no immediate author share. Axial Router
+  /// trading fees remain a separate deflationary flow to the Burn Actor. During the trusted,
+  /// permissioned-collator phase, available native balance splits 50/50 between staking ingress
+  /// and liquidity provisioning. Equal security/staking/liquidity thirds require permissionless
+  /// collators plus a bounded security-reward settlement contract; indivisible remainder stays
+  /// in Fee Sink for a later cycle.
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
   ///   hex:  `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084`

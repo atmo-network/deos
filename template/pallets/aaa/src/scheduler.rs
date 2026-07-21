@@ -1,12 +1,13 @@
 use super::pallet::*;
 use super::types::Task as AaaTask;
-use super::{AssetOps, EntropyProvider};
+use super::{AssetOps, EntropyProvider, FundingAuthority, weights::WeightInfo};
 use alloc::{
   collections::{BTreeSet, VecDeque},
   vec::Vec,
 };
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::traits::{Hash as HashT, One, Saturating, Zero};
+use polkadot_sdk::sp_runtime::traits::{One, Saturating, Zero};
+use polkadot_sdk::sp_weights::WeightMeter;
 
 enum AdmissionDecision {
   Admit(Weight),
@@ -17,52 +18,63 @@ enum AdmissionDecision {
 
 impl<T: Config> Pallet<T> {
   pub(crate) fn execute_cycle(remaining_weight: Weight) -> Weight {
-    let budget = remaining_weight.ref_time();
-    if budget == 0 {
+    if remaining_weight.is_zero() {
       return Weight::zero();
     }
     // Two-layer scheduler: overdue temporal wakeups are first admitted into the
     // active run queue, then execution proceeds from the merged run-queue state.
+    let mut cycle_meter = WeightMeter::with_limit(remaining_weight);
+    let queue_storage_weight = Self::queue_storage_weight_upper();
+    if !cycle_meter.can_consume(queue_storage_weight) {
+      return Weight::zero();
+    }
+    cycle_meter.consume(queue_storage_weight);
+    let current = CurrentQueue::<T>::get().into_inner();
+    let staged = NextQueue::<T>::get().into_inner();
+    let queue_units = current
+      .len()
+      .saturating_add(staged.len())
+      .saturating_add(T::MaxQueueInsertionsPerBlock::get() as usize) as u64;
+    let queue_work_weight = Self::queue_item_weight_upper().saturating_mul(queue_units);
+    if !cycle_meter.can_consume(queue_work_weight) {
+      return cycle_meter.consumed();
+    }
+    cycle_meter.consume(queue_work_weight);
     let now = frame_system::Pallet::<T>::block_number();
     let queue_epoch = QueueEpoch::<T>::get();
-    let mut consumed = 0u64;
-    let mut total_consumed = Weight::zero();
-    let mut run_queue: VecDeque<AaaId> = CurrentQueue::<T>::take().into_inner().into();
-    let staged_next = NextQueue::<T>::take().into_inner();
-    let mut queued_set: BTreeSet<AaaId> = BTreeSet::new();
-    for aaa_id in run_queue.iter().copied() {
-      queued_set.insert(aaa_id);
-    }
-    for aaa_id in staged_next.into_iter() {
-      if queued_set.insert(aaa_id) {
-        run_queue.push_back(aaa_id);
-      }
-    }
-    for aaa_id in queued_set.iter().copied() {
-      ActorQueueEpoch::<T>::remove(aaa_id);
-    }
+    CurrentQueue::<T>::kill();
+    NextQueue::<T>::kill();
+    let (mut run_queue, mut queued_set) = Self::merge_queue_state(current, staged);
     let mut next_queue: VecDeque<AaaId> = VecDeque::new();
     let mut queue_insertions = 0u32;
     let mut periodic_continuations: Vec<AaaId> = Vec::new();
-    let wakeup_weight =
-      Self::drain_overdue_wakeups(now, &mut run_queue, &mut queued_set, &mut queue_insertions);
-    consumed = consumed.saturating_add(wakeup_weight.ref_time());
-    total_consumed = total_consumed.saturating_add(wakeup_weight);
+    Self::drain_overdue_wakeups(
+      now,
+      &mut run_queue,
+      &mut queued_set,
+      &mut queue_insertions,
+      &mut cycle_meter,
+    );
     let max_executions = T::MaxExecutionsPerBlock::get();
+    let probe_weight = Self::scheduler_probe_weight_upper();
     let mut executed = 0u32;
-    while executed < max_executions && consumed < budget {
-      let Some(aaa_id) = run_queue.pop_front() else {
+    while executed < max_executions {
+      if run_queue.is_empty() || !cycle_meter.can_consume(probe_weight) {
         break;
-      };
+      }
+      cycle_meter.consume(probe_weight);
+      let aaa_id = run_queue
+        .pop_front()
+        .expect("queue emptiness was checked before admitted pop");
       queued_set.remove(&aaa_id);
+      ActorQueueEpoch::<T>::remove(aaa_id);
       let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
         continue;
       };
-      let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, consumed, budget) {
+      let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, &cycle_meter) {
         AdmissionDecision::Admit(weight) => weight,
         AdmissionDecision::Closed(weight) => {
-          consumed = consumed.saturating_add(weight.ref_time());
-          total_consumed = total_consumed.saturating_add(weight);
+          cycle_meter.consume(weight);
           continue;
         }
         AdmissionDecision::Defer(reason) => {
@@ -78,14 +90,13 @@ impl<T: Config> Pallet<T> {
         }
         AdmissionDecision::Skip => {
           if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
-            Self::schedule_next_timer_wakeup_local(&updated, now, &mut periodic_continuations);
+            Self::preserve_skipped_readiness(&updated, now, &mut periodic_continuations);
           }
           continue;
         }
       };
       let _actual = Self::execute_single_cycle(aaa_id);
-      consumed = consumed.saturating_add(cycle_weight_upper.ref_time());
-      total_consumed = total_consumed.saturating_add(cycle_weight_upper);
+      cycle_meter.consume(cycle_weight_upper);
       executed = executed.saturating_add(1);
       if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
         Self::schedule_next_timer_wakeup_local(&updated, now, &mut periodic_continuations);
@@ -95,6 +106,7 @@ impl<T: Config> Pallet<T> {
       queued_set.remove(&aaa_id);
       Self::carry_over_block_local(aaa_id, now, queue_epoch, &mut next_queue);
     }
+    Self::merge_late_enqueues(now, queue_epoch, &mut next_queue, &mut queue_insertions);
     for aaa_id in periodic_continuations.into_iter() {
       Self::enqueue_block_local(
         aaa_id,
@@ -107,9 +119,25 @@ impl<T: Config> Pallet<T> {
     CurrentQueue::<T>::put(BoundedVec::<AaaId, T::MaxQueueLength>::truncate_from(
       next_queue.into_iter().collect::<Vec<AaaId>>(),
     ));
-    NextQueue::<T>::kill();
     QueueEpoch::<T>::put(queue_epoch.saturating_add(1));
-    total_consumed
+    cycle_meter.consumed()
+  }
+
+  pub(crate) fn merge_queue_state(
+    current: Vec<AaaId>,
+    staged: Vec<AaaId>,
+  ) -> (VecDeque<AaaId>, BTreeSet<AaaId>) {
+    let mut run_queue: VecDeque<AaaId> = current.into();
+    let mut queued_set: BTreeSet<AaaId> = BTreeSet::new();
+    for aaa_id in &run_queue {
+      queued_set.insert(*aaa_id);
+    }
+    for aaa_id in staged {
+      if queued_set.insert(aaa_id) {
+        run_queue.push_back(aaa_id);
+      }
+    }
+    (run_queue, queued_set)
   }
 
   pub(crate) fn enqueue(aaa_id: AaaId) {
@@ -175,25 +203,44 @@ impl<T: Config> Pallet<T> {
     *queue_insertions = queue_insertions.saturating_add(1);
   }
 
-  fn carry_over_block_local(
-    aaa_id: AaaId,
+  fn merge_late_enqueues(
     now: BlockNumberFor<T>,
     queue_epoch: u64,
     next_queue: &mut VecDeque<AaaId>,
+    queue_insertions: &mut u32,
   ) {
     let marker = queue_epoch.saturating_add(1);
-    if ActorQueueEpoch::<T>::get(aaa_id) == marker {
-      return;
+    for aaa_id in NextQueue::<T>::take().into_inner() {
+      if next_queue.contains(&aaa_id) {
+        continue;
+      }
+      if *queue_insertions >= T::MaxQueueInsertionsPerBlock::get()
+        || next_queue.len() >= T::MaxQueueLength::get() as usize
+      {
+        Self::defer_wakeup(aaa_id, now.saturating_add(One::one()));
+        continue;
+      }
+      next_queue.push_back(aaa_id);
+      ActorQueueEpoch::<T>::insert(aaa_id, marker);
+      *queue_insertions = queue_insertions.saturating_add(1);
     }
+  }
+
+  fn carry_over_block_local(
+    aaa_id: AaaId,
+    now: BlockNumberFor<T>,
+    _queue_epoch: u64,
+    next_queue: &mut VecDeque<AaaId>,
+  ) {
     if next_queue.len() >= T::MaxQueueLength::get() as usize {
       let next_block = now.saturating_add(One::one());
       Self::defer_wakeup(aaa_id, next_block);
       return;
     }
-    // Already-admitted backlog must carry over without consuming fresh enqueue budget,
-    // otherwise saturated queues lose fairness simply by persisting their existing order
+    // Already-admitted backlog carries forward without a fresh epoch-marker write.
+    // A concurrent next-block enqueue may stage one duplicate, but queue seeding
+    // deterministically removes it before execution and block-local dedup bounds it.
     next_queue.push_back(aaa_id);
-    ActorQueueEpoch::<T>::insert(aaa_id, marker);
   }
 
   fn enqueue_run_queue(
@@ -221,13 +268,12 @@ impl<T: Config> Pallet<T> {
     *queue_insertions = queue_insertions.saturating_add(1);
   }
 
-  fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) {
-    const MAX_SPILLOVER_BLOCKS: u32 = 8;
+  fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
     // Temporal wakeup layer: place future eligibility into bounded block buckets.
     let previous_block = ScheduledWakeupBlock::<T>::get(aaa_id);
     let mut target_block = wakeup_block;
     let mut scheduled_block: Option<BlockNumberFor<T>> = None;
-    for _ in 0..=MAX_SPILLOVER_BLOCKS {
+    for _ in 0..=T::MaxSpilloverBlocks::get() {
       let inserted = WakeupIndex::<T>::mutate(target_block, |queue| {
         if queue.contains(&aaa_id) {
           return true;
@@ -241,14 +287,13 @@ impl<T: Config> Pallet<T> {
       target_block = target_block.saturating_add(One::one());
     }
     let Some(scheduled_block) = scheduled_block else {
-      if previous_block.is_none() {
-        WakeupScheduleDrops::<T>::mutate(|drops| *drops = drops.saturating_add(1));
-        Self::deposit_event(Event::WakeupScheduleDropped {
-          aaa_id,
-          requested_block: wakeup_block,
-        });
-      }
-      return;
+      WakeupRetryPending::<T>::insert(aaa_id, true);
+      WakeupScheduleDrops::<T>::mutate(|drops| *drops = drops.saturating_add(1));
+      Self::deposit_event(Event::WakeupScheduleDropped {
+        aaa_id,
+        requested_block: wakeup_block,
+      });
+      return false;
     };
     if previous_block != Some(scheduled_block) {
       if let Some(previous_block) = previous_block {
@@ -263,13 +308,15 @@ impl<T: Config> Pallet<T> {
         scheduled_block,
       });
     }
+    WakeupRetryPending::<T>::remove(aaa_id);
     match MinWakeupBlock::<T>::get() {
       Some(current_min) if current_min <= scheduled_block => {}
       _ => MinWakeupBlock::<T>::put(scheduled_block),
     }
+    true
   }
 
-  fn remove_wakeup_bucket_entry(block: BlockNumberFor<T>, aaa_id: AaaId) {
+  pub(crate) fn remove_wakeup_bucket_entry(block: BlockNumberFor<T>, aaa_id: AaaId) {
     WakeupIndex::<T>::mutate_exists(block, |maybe_queue| {
       let Some(queue) = maybe_queue.as_mut() else {
         return;
@@ -281,13 +328,115 @@ impl<T: Config> Pallet<T> {
     });
   }
 
+  pub fn scheduler_admission_overhead() -> Weight {
+    T::WeightInfo::scheduler_on_idle_base()
+      .saturating_add(T::WeightInfo::compatibility_ingress_probe())
+      .saturating_add(T::WeightInfo::scheduler_zombie_sweep_base())
+      .saturating_add(
+        T::WeightInfo::permissionless_sweep()
+          .saturating_add(T::DbWeight::get().writes(1))
+          .saturating_mul(u64::from(T::MaxSweepPerBlock::get())),
+      )
+      .saturating_add(Self::queue_storage_weight_upper())
+      .saturating_add(
+        Self::queue_item_weight_upper()
+          .saturating_mul(u64::from(T::MaxQueueInsertionsPerBlock::get()).saturating_add(1)),
+      )
+      .saturating_add(Self::wakeup_cursor_weight())
+      .saturating_add(Self::scheduler_probe_weight_upper())
+  }
+
+  pub fn queue_bootstrap_weight_upper(queue_len: u32) -> Weight {
+    T::WeightInfo::scheduler_queue_bootstrap(queue_len)
+  }
+
+  fn queue_storage_weight_upper() -> Weight {
+    Self::queue_bootstrap_weight_upper(T::MaxQueueLength::get())
+  }
+
+  fn queue_item_weight_upper() -> Weight {
+    Weight::zero()
+  }
+
+  /// Upper-bounds terminal state deletion after the close plan has run.
+  ///
+  /// Queue removal decodes, scans, and rewrites both bounded queue stores. The
+  /// generated wakeup-bucket scan proxy covers removal from one full future bucket.
+  /// The fixed tail covers wakeup pointer/retry state, actor/readiness/cardinality
+  /// state, owner/system reverse indexes, tombstone, checkpoint, and terminal event.
+  pub(crate) fn close_cleanup_weight_upper() -> Weight {
+    let queue_items = u64::from(T::MaxQueueLength::get()).saturating_mul(2);
+    Self::queue_storage_weight_upper()
+      .saturating_add(Self::queue_item_weight_upper().saturating_mul(queue_items))
+      .saturating_add(Self::queue_bootstrap_weight_upper(
+        T::MaxWakeupBucketSize::get(),
+      ))
+      .saturating_add(Weight::from_parts(10_000_000, 32_768))
+      .saturating_add(T::DbWeight::get().reads_writes(9, 12))
+  }
+
+  pub fn wakeup_registration_weight_upper() -> Weight {
+    Self::wakeup_retry_probe_weight_upper()
+  }
+
+  fn wakeup_retry_probe_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_wakeup_spillover_probe(T::MaxSpilloverBlocks::get().saturating_add(1))
+  }
+
+  pub fn scheduler_actor_probe_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_actor_probe()
+  }
+
+  fn scheduler_probe_weight_upper() -> Weight {
+    Self::scheduler_actor_probe_weight_upper()
+  }
+
+  #[cfg(feature = "runtime-benchmarks")]
+  pub(crate) fn benchmark_scheduler_actor_probe(aaa_id: AaaId) {
+    let now = frame_system::Pallet::<T>::block_number();
+    let queue_epoch = QueueEpoch::<T>::get();
+    ActorQueueEpoch::<T>::remove(aaa_id);
+    let instance = AaaInstances::<T>::get(aaa_id).expect("benchmark actor must exist");
+    let meter = WeightMeter::with_limit(Weight::zero());
+    let AdmissionDecision::Defer(reason) = Self::apply_admission(aaa_id, &instance, &meter) else {
+      panic!("benchmark actor must defer on an exhausted cycle budget");
+    };
+    Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
+    let mut next_queue = VecDeque::new();
+    let mut queue_insertions = T::MaxQueueInsertionsPerBlock::get();
+    Self::enqueue_block_local(
+      aaa_id,
+      now,
+      queue_epoch,
+      &mut next_queue,
+      &mut queue_insertions,
+    );
+  }
+
+  pub fn wakeup_drain_weight_upper(wakeups: u32) -> Weight {
+    T::WeightInfo::scheduler_wakeup_dense_due_drain(wakeups)
+  }
+
+  fn wakeup_cursor_weight() -> Weight {
+    Self::wakeup_drain_weight_upper(0)
+  }
+
+  fn wakeup_drain_actor_weight_upper() -> Weight {
+    Self::wakeup_drain_weight_upper(1).saturating_add(Self::wakeup_retry_probe_weight_upper())
+  }
+
   fn drain_overdue_wakeups(
     now: BlockNumberFor<T>,
     run_queue: &mut VecDeque<AaaId>,
     queued_set: &mut BTreeSet<AaaId>,
     queue_insertions: &mut u32,
-  ) -> Weight {
-    let mut total = Weight::zero();
+    meter: &mut WeightMeter,
+  ) {
+    let cursor_weight = Self::wakeup_cursor_weight();
+    if !meter.can_consume(cursor_weight) {
+      return;
+    }
+    meter.consume(cursor_weight);
     let mut processed = 0u32;
     let max_wakeups = T::MaxWakeupsPerBlock::get();
     let mut scanned_blocks = 0u32;
@@ -299,15 +448,24 @@ impl<T: Config> Pallet<T> {
       if block_cursor > now {
         break;
       }
+      let bucket_weight = T::WeightInfo::scheduler_wakeup_dense_due_drain(0);
+      if !meter.can_consume(bucket_weight) {
+        break;
+      }
+      meter.consume(bucket_weight);
       scanned_blocks = scanned_blocks.saturating_add(1);
       let actors = WakeupIndex::<T>::take(block_cursor).into_inner();
       if actors.is_empty() {
         cursor = Some(block_cursor.saturating_add(One::one()));
-        total = total.saturating_add(T::DbWeight::get().reads_writes(1, 1));
         continue;
       }
+      let actor_weight = Self::wakeup_drain_actor_weight_upper();
       let mut index = 0usize;
       while index < actors.len() && processed < max_wakeups {
+        if !meter.can_consume(actor_weight) {
+          break;
+        }
+        meter.consume(actor_weight);
         let aaa_id = actors[index];
         processed = processed.saturating_add(1);
         index = index.saturating_add(1);
@@ -323,17 +481,14 @@ impl<T: Config> Pallet<T> {
           BoundedVec::<AaaId, T::MaxWakeupBucketSize>::truncate_from(actors[index..].to_vec()),
         );
         cursor = Some(block_cursor);
-        total = total.saturating_add(T::DbWeight::get().reads_writes(1, 1));
         break;
       }
       cursor = Some(block_cursor.saturating_add(One::one()));
-      total = total.saturating_add(T::DbWeight::get().reads_writes(1, 1));
     }
     match cursor {
       Some(block_cursor) => MinWakeupBlock::<T>::put(block_cursor),
       None => MinWakeupBlock::<T>::kill(),
     }
-    total
   }
 
   fn timer_jitter_blocks(aaa_id: AaaId, every_blocks: u32) -> BlockNumberFor<T> {
@@ -362,6 +517,36 @@ impl<T: Config> Pallet<T> {
       }
     }
     wakeup_block
+  }
+
+  fn preserve_skipped_readiness(
+    instance: &AaaInstanceOf<T>,
+    now: BlockNumberFor<T>,
+    periodic_continuations: &mut Vec<AaaId>,
+  ) {
+    if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
+      Self::schedule_next_timer_wakeup_local(instance, now, periodic_continuations);
+      return;
+    }
+    let pending = instance.manual_trigger_pending
+      || matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. })
+        && Self::evaluate_on_address_event(instance.aaa_id);
+    if instance.is_paused || !pending {
+      return;
+    }
+    let mut eligibility_block = now;
+    if let Some(window) = instance.schedule_window {
+      eligibility_block = eligibility_block.max(window.start);
+    }
+    if instance.cycle_nonce > 0 && instance.cycle_nonce < u64::MAX {
+      let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
+      eligibility_block = eligibility_block.max(instance.last_cycle_block.saturating_add(cooldown));
+    }
+    if eligibility_block > now {
+      Self::defer_wakeup(instance.aaa_id, eligibility_block);
+    } else {
+      periodic_continuations.push(instance.aaa_id);
+    }
   }
 
   fn schedule_next_timer_wakeup_local(
@@ -434,19 +619,14 @@ impl<T: Config> Pallet<T> {
     None
   }
 
-  fn can_fit_weight(consumed_ref_time: u64, budget_ref_time: u64, weight: Weight) -> bool {
-    consumed_ref_time.saturating_add(weight.ref_time()) <= budget_ref_time
-  }
-
   fn close_within_budget(
     aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     reason: CloseReason,
-    consumed_ref_time: u64,
-    budget_ref_time: u64,
+    meter: &WeightMeter,
   ) -> AdmissionDecision {
     let close_weight_upper = Self::close_cycle_weight_upper_bound(instance);
-    if !Self::can_fit_weight(consumed_ref_time, budget_ref_time, close_weight_upper) {
+    if !meter.can_consume(close_weight_upper) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }
     let _ = Self::close_actor(aaa_id, instance, reason);
@@ -479,44 +659,25 @@ impl<T: Config> Pallet<T> {
   fn apply_admission(
     aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
-    consumed_ref_time: u64,
-    budget_ref_time: u64,
+    meter: &WeightMeter,
   ) -> AdmissionDecision {
     if Self::is_window_expired(instance) {
-      return Self::close_within_budget(
-        aaa_id,
-        instance,
-        CloseReason::WindowExpired,
-        consumed_ref_time,
-        budget_ref_time,
-      );
+      return Self::close_within_budget(aaa_id, instance, CloseReason::WindowExpired, meter);
     }
     if instance.is_paused {
       return AdmissionDecision::Skip;
     }
     if instance.aaa_type == AaaType::User && instance.cycle_nonce == u64::MAX {
-      return Self::close_within_budget(
-        aaa_id,
-        instance,
-        CloseReason::CycleNonceExhausted,
-        consumed_ref_time,
-        budget_ref_time,
-      );
+      return Self::close_within_budget(aaa_id, instance, CloseReason::CycleNonceExhausted, meter);
     }
     if !Self::is_ready_for_execution(instance) {
       return AdmissionDecision::Skip;
     }
     if let Some(reason) = Self::user_resource_close_reason(instance, true) {
-      return Self::close_within_budget(
-        aaa_id,
-        instance,
-        reason,
-        consumed_ref_time,
-        budget_ref_time,
-      );
+      return Self::close_within_budget(aaa_id, instance, reason, meter);
     }
     let cycle_weight_upper = Self::cycle_admission_weight_upper(instance);
-    if !Self::can_fit_weight(consumed_ref_time, budget_ref_time, cycle_weight_upper) {
+    if !meter.can_consume(cycle_weight_upper) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }
     AdmissionDecision::Admit(cycle_weight_upper)
@@ -582,6 +743,11 @@ impl<T: Config> Pallet<T> {
     let Some(entropy_hash) =
       Self::resolve_timer_entropy(now, instance.aaa_id, strict_financial_entropy)
     else {
+      if strict_financial_entropy {
+        Self::deposit_event(Event::SecureEntropyUnavailable {
+          aaa_id: instance.aaa_id,
+        });
+      }
       return false;
     };
     let seed = Self::mix_seed(entropy_hash.as_ref(), instance.aaa_id, instance.cycle_nonce);
@@ -640,51 +806,57 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  pub fn register_address_event_seen(
-    aaa_id: AaaId,
-    asset: T::AssetId,
-    amount: T::Balance,
-    source: Option<&T::AccountId>,
-  ) -> bool {
-    let now = frame_system::Pallet::<T>::block_number();
-    if IngressSeenBlock::<T>::get() != Some(now) {
-      IngressSeenSet::<T>::kill();
-      IngressSeenBlock::<T>::put(now);
-    }
-    let fingerprint =
-      <T as frame_system::Config>::Hashing::hash_of(&(aaa_id, asset, amount, source.cloned()));
-    IngressSeenSet::<T>::mutate(|set| {
-      if set.contains(&fingerprint) {
-        return false;
-      }
-      let _ = set.try_insert(fingerprint);
-      true
-    })
-  }
-
   pub fn notify_address_event(
     aaa_id: AaaId,
     asset: T::AssetId,
     amount: T::Balance,
     source: &T::AccountId,
-  ) {
-    Self::notify_address_event_with_source(aaa_id, asset, amount, Some(source));
+  ) -> DispatchResult {
+    let provenance = FundingProvenance::Signed(source.clone());
+    Self::notify_address_event_with_provenance(aaa_id, asset, amount, Some(&provenance))
   }
 
-  pub fn notify_address_event_without_source(aaa_id: AaaId, asset: T::AssetId, amount: T::Balance) {
-    Self::notify_address_event_with_source(aaa_id, asset, amount, None);
+  pub fn notify_internal_address_event(
+    aaa_id: AaaId,
+    asset: T::AssetId,
+    amount: T::Balance,
+    source: &T::AccountId,
+  ) -> DispatchResult {
+    let provenance = FundingProvenance::InternalProtocol(source.clone());
+    Self::notify_address_event_with_provenance(aaa_id, asset, amount, Some(&provenance))
+  }
+
+  pub fn notify_xcm_address_event(
+    aaa_id: AaaId,
+    asset: T::AssetId,
+    amount: T::Balance,
+    source: &T::AccountId,
+  ) -> DispatchResult {
+    let provenance = FundingProvenance::Xcm(source.clone());
+    Self::notify_address_event_with_provenance(aaa_id, asset, amount, Some(&provenance))
+  }
+
+  pub fn notify_address_event_without_source(
+    aaa_id: AaaId,
+    asset: T::AssetId,
+    amount: T::Balance,
+  ) -> DispatchResult {
+    Self::notify_address_event_with_provenance(aaa_id, asset, amount, None)
   }
 
   pub fn queue_address_event(
     aaa_id: AaaId,
     asset: T::AssetId,
     amount: T::Balance,
-    source: Option<T::AccountId>,
+    provenance: Option<FundingProvenance<T::AccountId>>,
   ) -> bool {
     if amount == Zero::zero() {
       return true;
     }
-    if !Self::register_address_event_seen(aaa_id, asset, amount, source.as_ref()) {
+    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+      return true;
+    };
+    if Self::is_window_expired(&instance) {
       return true;
     }
     let capacity = T::MaxIngressOverflowQueue::get();
@@ -692,7 +864,9 @@ impl<T: Config> Pallet<T> {
       return false;
     }
     let len = IngressOverflowLen::<T>::get();
-    if len >= capacity {
+    if len >= capacity
+      || Self::preflight_funding_event(aaa_id, asset, amount, provenance.as_ref()).is_err()
+    {
       return false;
     }
     let head = IngressOverflowHead::<T>::get() % capacity;
@@ -701,8 +875,20 @@ impl<T: Config> Pallet<T> {
       aaa_id,
       asset,
       amount,
-      source,
+      provenance,
     };
+    if Self::apply_address_event_parts(
+      aaa_id,
+      asset,
+      amount,
+      event.provenance.as_ref(),
+      false,
+      true,
+    )
+    .is_err()
+    {
+      return false;
+    }
     IngressOverflowSlots::<T>::insert(tail, event);
     IngressOverflowLen::<T>::put(len.saturating_add(1));
     true
@@ -725,11 +911,13 @@ impl<T: Config> Pallet<T> {
         len = len.saturating_sub(1);
         continue;
       };
-      Self::notify_address_event_with_source(
+      let _ = Self::apply_address_event_parts(
         event.aaa_id,
         event.asset,
         event.amount,
-        event.source.as_ref(),
+        event.provenance.as_ref(),
+        true,
+        false,
       );
       head = (head.saturating_add(1)) % capacity;
       len = len.saturating_sub(1);
@@ -740,29 +928,97 @@ impl<T: Config> Pallet<T> {
     drained
   }
 
-  fn notify_address_event_with_source(
+  fn funding_event_authorized(
+    instance: &AaaInstanceOf<T>,
+    provenance: Option<&FundingProvenance<T::AccountId>>,
+  ) -> bool {
+    provenance.is_some_and(|provenance| match &instance.funding_source_policy {
+      FundingSourcePolicy::OwnerOnly => matches!(
+        provenance,
+        FundingProvenance::Signed(source) if source == &instance.owner
+      ),
+      FundingSourcePolicy::SignedAllowlist(allowed) => matches!(
+        provenance,
+        FundingProvenance::Signed(source) if allowed.contains(source)
+      ),
+      FundingSourcePolicy::RuntimePolicy => {
+        T::FundingAuthority::allows(instance.aaa_id, &instance.owner, provenance)
+      }
+      FundingSourcePolicy::AnySource => true,
+    })
+  }
+
+  pub fn preflight_funding_event(
     aaa_id: AaaId,
     asset: T::AssetId,
     amount: T::Balance,
-    source: Option<&T::AccountId>,
-  ) {
-    if !Self::register_address_event_seen(aaa_id, asset, amount, source) {
-      return;
+    provenance: Option<&FundingProvenance<T::AccountId>>,
+  ) -> DispatchResult {
+    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+      return Ok(());
+    };
+    if Self::is_window_expired(&instance)
+      || !Self::funding_event_authorized(&instance, provenance)
+      || !instance.funding_tracked_assets.contains(&asset)
+      || amount.is_zero()
+    {
+      return Ok(());
     }
+    if let Some(batch) = instance.funding_snapshots.get(&asset) {
+      ensure!(
+        batch.pending_amount.checked_add(&amount).is_some(),
+        Error::<T>::FundingBatchOverflow
+      );
+    }
+    Ok(())
+  }
+
+  fn notify_address_event_with_provenance(
+    aaa_id: AaaId,
+    asset: T::AssetId,
+    amount: T::Balance,
+    provenance: Option<&FundingProvenance<T::AccountId>>,
+  ) -> DispatchResult {
+    Self::preflight_funding_event(aaa_id, asset, amount, provenance)?;
+    polkadot_sdk::frame_support::storage::with_transaction(
+      || match Self::apply_address_event_parts(aaa_id, asset, amount, provenance, true, true) {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      },
+    )
+  }
+
+  fn apply_address_event_parts(
+    aaa_id: AaaId,
+    asset: T::AssetId,
+    amount: T::Balance,
+    provenance: Option<&FundingProvenance<T::AccountId>>,
+    apply_trigger: bool,
+    apply_funding: bool,
+  ) -> DispatchResult {
     let mut instance = match AaaInstances::<T>::get(aaa_id) {
       Some(inst) => inst,
-      None => return,
+      None => return Ok(()),
     };
+    if Self::is_window_expired(&instance) {
+      return Ok(());
+    }
     let now = frame_system::Pallet::<T>::block_number();
     let mut instance_modified = false;
     let mut inbox_matched = false;
-    if let Trigger::OnAddressEvent {
-      source_filter,
-      asset_filter,
-    } = &instance.schedule.trigger
+    if apply_trigger
+      && let Trigger::OnAddressEvent {
+        source_filter,
+        asset_filter,
+      } = &instance.schedule.trigger
     {
-      if Self::source_matches_filter(source_filter, &instance.owner, source)
-        && Self::asset_matches_filter(asset_filter, asset)
+      if Self::source_matches_filter(
+        source_filter,
+        &instance.owner,
+        provenance.map(FundingProvenance::account),
+      ) && Self::asset_matches_filter(asset_filter, asset)
       {
         inbox_matched = true;
         AddressEventInbox::<T>::mutate(aaa_id, |maybe_entry| {
@@ -777,14 +1033,45 @@ impl<T: Config> Pallet<T> {
         });
       }
     }
-    if instance.aaa_type == AaaType::System
+    if apply_funding
+      && Self::funding_event_authorized(&instance, provenance)
       && instance.funding_tracked_assets.contains(&asset)
       && amount > Zero::zero()
     {
-      let _ = instance
-        .funding_snapshots
-        .try_insert(asset, FundingSnapshot { amount, block: now });
-      instance_modified = true;
+      if let Some(batch) = instance.funding_snapshots.get_mut(&asset) {
+        let pending_amount = batch
+          .pending_amount
+          .checked_add(&amount)
+          .ok_or(Error::<T>::FundingBatchOverflow)?;
+        batch.pending_amount = pending_amount;
+        batch.pending_last_block = Some(now);
+        instance_modified = true;
+        Self::deposit_event(Event::FundingBatchPendingAccumulated {
+          aaa_id,
+          asset,
+          added: amount,
+          pending_amount,
+        });
+      } else {
+        instance
+          .funding_snapshots
+          .try_insert(
+            asset,
+            FundingBatch {
+              amount,
+              block: now,
+              pending_amount: Zero::zero(),
+              pending_last_block: None,
+            },
+          )
+          .map_err(|_| Error::<T>::FundingBatchOverflow)?;
+        instance_modified = true;
+        Self::deposit_event(Event::FundingBatchActivated {
+          aaa_id,
+          asset,
+          amount,
+        });
+      }
     }
     if instance_modified {
       AaaInstances::<T>::insert(aaa_id, instance);
@@ -793,6 +1080,7 @@ impl<T: Config> Pallet<T> {
     if inbox_matched {
       Self::enqueue(aaa_id);
     }
+    Ok(())
   }
 
   fn evaluate_on_address_event(aaa_id: AaaId) -> bool {
@@ -819,20 +1107,49 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn execute_zombie_sweep(remaining_weight: Weight) -> Weight {
     let max_check = T::MaxSweepPerBlock::get();
-    let max_id = NextAaaId::<T>::get();
-    if max_id == 0 || remaining_weight.ref_time() == 0 {
+    if remaining_weight.is_zero() {
       return Weight::zero();
     }
+    let mut meter = WeightMeter::with_limit(remaining_weight);
+    let base_weight = T::WeightInfo::scheduler_zombie_sweep_base();
+    if !meter.can_consume(base_weight) {
+      return Weight::zero();
+    }
+    meter.consume(base_weight);
+    let max_id = NextAaaId::<T>::get();
+    if max_id == 0 {
+      return meter.consumed();
+    }
     let mut cursor = SweepCursor::<T>::get();
-    let mut checked = 0u32;
-    let mut sweep_weight = Weight::zero();
-    let iteration_weight = T::DbWeight::get().reads_writes(1, 1);
+    let iteration_weight =
+      T::WeightInfo::permissionless_sweep().saturating_add(T::DbWeight::get().writes(1));
+    let retry_weight =
+      Self::scheduler_probe_weight_upper().saturating_add(Self::wakeup_retry_probe_weight_upper());
+    let now = frame_system::Pallet::<T>::block_number();
+    let mut retry_limit = 0u32;
+    let mut admitted_retry_weight = Weight::zero();
+    while retry_limit < max_check {
+      let next_weight = admitted_retry_weight.saturating_add(retry_weight);
+      if !meter.can_consume(next_weight) {
+        break;
+      }
+      admitted_retry_weight = next_weight;
+      retry_limit = retry_limit.saturating_add(1);
+    }
+    let retry_ids = WakeupRetryPending::<T>::iter_keys()
+      .take(retry_limit as usize)
+      .collect::<Vec<_>>();
+    for aaa_id in &retry_ids {
+      if AaaInstances::<T>::contains_key(aaa_id) {
+        let _ = Self::defer_wakeup(*aaa_id, now.saturating_add(One::one()));
+      } else {
+        WakeupRetryPending::<T>::remove(aaa_id);
+      }
+      meter.consume(retry_weight);
+    }
+    let mut checked = retry_ids.len() as u32;
     while checked < max_check {
-      if !Self::can_fit_weight(
-        sweep_weight.ref_time(),
-        remaining_weight.ref_time(),
-        iteration_weight,
-      ) {
+      if !meter.can_consume(iteration_weight) {
         break;
       }
       let next_cursor = (cursor + 1) % max_id;
@@ -840,27 +1157,23 @@ impl<T: Config> Pallet<T> {
         if let Some(reason) = Self::liveness_close_reason(&instance) {
           let close_weight_upper = Self::close_cycle_weight_upper_bound(&instance);
           let required_weight = iteration_weight.saturating_add(close_weight_upper);
-          if !Self::can_fit_weight(
-            sweep_weight.ref_time(),
-            remaining_weight.ref_time(),
-            required_weight,
-          ) {
+          if !meter.can_consume(required_weight) {
             break;
           }
           cursor = next_cursor;
           SweepCursor::<T>::put(cursor);
           let _ = Self::close_actor(next_cursor, &instance, reason);
           checked = checked.saturating_add(1);
-          sweep_weight = sweep_weight.saturating_add(required_weight);
+          meter.consume(required_weight);
           continue;
         }
       }
       cursor = next_cursor;
       SweepCursor::<T>::put(cursor);
       checked = checked.saturating_add(1);
-      sweep_weight = sweep_weight.saturating_add(iteration_weight);
+      meter.consume(iteration_weight);
     }
-    sweep_weight
+    meter.consumed()
   }
 
   pub(crate) fn evaluate_actor_liveness(aaa_id: AaaId) -> DispatchResult {

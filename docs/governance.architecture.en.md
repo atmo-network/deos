@@ -224,7 +224,7 @@ Public read helpers now expose these governance-observability layers, and the sa
 11. `proposal_opening_fee(domain, payload_kind)`
 
 - Additive public-submission cost scaffold over one `(domain, payload_kind)` pair
-- Reports the burned opening fee only for combinations that are actually `Signed`
+- Reports the Fee Sink-collected opening fee only for combinations that are actually `Signed`
 - The current launch line now returns the configured native opening fee for `Intent`, tactical `$BLDR` `L2SignalToL1`, and tactical `$BLDR` `L2TreasurySpend`, and `None` for admin-only combinations
 
 12. `proposal_payload_availability(domain, item_id)`
@@ -350,10 +350,10 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 
 - Signed submit path for runtime-approved public combinations only
 - Derives proposer identity from the signer rather than an admin-supplied sponsor field
-- Burns the runtime-configured native opening fee before proposal creation
-- Uses transactional semantics so duplicate/cap failures do not strand a burned fee
+- Transfers the runtime-configured native opening fee into Fee Sink before proposal creation
+- Uses transactional semantics so duplicate/cap failures do not strand a collected fee
 - Reuses the same bounded active-proposal insertion path and GovXP authorship accounting once admitted
-- Emits `ProposalOpeningFeeBurned` when the opening fee is non-zero, then `ProposalSubmitted`
+- Emits `ProposalOpeningFeeCollected` when the opening fee is non-zero, then `ProposalSubmitted`
 
 `cast_vote(domain, item_id, vote)`:
 
@@ -500,7 +500,7 @@ The related state distinction is also important:
 | `0`  | `record_winning_vote`                    | low-level admin ingress         |
 | `1`  | `record_winning_vote_batch`              | bounded admin batch ingress     |
 | `2`  | `submit_proposal`                        | admin proposal create path      |
-| `3`  | `submit_signed_proposal`                 | signed create with burn fee     |
+| `3`  | `submit_signed_proposal`                 | signed create with collected fee |
 | `4`  | `resolve_proposal`                       | manual bounded resolution       |
 | `5`  | `reject_proposal`                        | manual rejection                |
 | `6`  | `cast_vote`                              | signed ballot                   |
@@ -512,7 +512,7 @@ The related state distinction is also important:
 
 ### Events that form the live operational surface
 
-- `ProposalOpeningFeeBurned`: signed public submission paid and burned the opening fee
+- `ProposalOpeningFeeCollected`: signed public submission paid the opening fee into Fee Sink
 - `ProposalSubmitted`: active proposal creation, proposer identity, payload metadata, active-count pressure
 - `ProposalVoteCast`: bounded ballot ingress with vote epoch, replacement state, and stored track counts
 - `GovernanceLockExtended`: account-level lock horizon extension after an accepted ballot

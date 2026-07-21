@@ -18,7 +18,7 @@ This directory is intentionally split into two classes:
   Install local cargo-based tooling (`zombienet`, `chain-spec-builder`, `try-runtime`).
 
 - [03-build-runtime.sh](./03-build-runtime.sh)
-  Build the current DEOS reference runtime WASM artifact (`deos-runtime`).
+  Build the current DEOS reference runtime WASM artifact (`deos-runtime`) from the locked dependency graph and repository-pinned Rust toolchain, then report its size and SHA-256 digest.
 
 - [04-generate-chain-spec.sh](./04-generate-chain-spec.sh)
   Generate and patch `template/chain_spec.json`, including the current local-dev bootstrap surfaces used by the web-client seeding/probe flow (foreign asset, router tracking, native curve).

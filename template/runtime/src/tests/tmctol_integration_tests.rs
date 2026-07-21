@@ -1200,10 +1200,10 @@ fn bucket_c_unwind_execution_plan_transfers_lp_components_to_treasury_c() {
     for event in System::events() {
       println!("Event: {:?}", event.event);
     }
-    // 1. Verify 1% of LP was removed.
+    // 1. Verify 1% of preservable LP was removed while its minimum balance remains protected.
     let remaining_lp =
       <crate::Assets as Inspect<crate::AccountId>>::balance(lp_asset_id, &bucket_sovereign);
-    assert_eq!(remaining_lp, 9_900_000u128);
+    assert_eq!(remaining_lp, 9_900_001u128);
     // 2. Verify Treasury C received Native and Foreign.
     let treasury_native =
       <Balances as NativeInspect<crate::AccountId>>::balance(&treasury_sovereign);

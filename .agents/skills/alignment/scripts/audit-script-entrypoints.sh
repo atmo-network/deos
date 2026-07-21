@@ -8,8 +8,9 @@ usage() {
 Usage: audit-script-entrypoints.sh [OPTIONS]
 
 Checks repository shell/Node entrypoints for syntax validity, --help availability,
-and compact skill metadata shape. Also enforces that project-specific audit leaves
-live in the alignment skill, not in the root operator scripts directory.
+shared shell-step status propagation, and compact skill metadata shape. Also enforces
+that project-specific audit leaves live in the alignment skill, not in the root
+operator scripts directory.
 
 Options:
   -h, --help        Show this help message
@@ -105,6 +106,27 @@ audit_audit_leaf_ownership() {
     fi
 }
 
+audit_shell_step_status_propagation() {
+    local output
+    local status
+    if output="$(run_shell_step "Expected failure probe" "" "exit 23" 2>&1)"; then
+        log_error "run_shell_step converted a failing command into success"
+        AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        return
+    else
+        status=$?
+    fi
+    if [[ "$status" -ne 23 ]]; then
+        log_error "run_shell_step returned status $status instead of the command status 23"
+        printf '%s\n' "$output"
+        AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+    fi
+    if ! run_shell_step "Expected success probe" "" "exit 0" >/dev/null; then
+        log_error "run_shell_step rejected a successful command"
+        AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+    fi
+}
+
 audit_skill_metadata_descriptions() {
     local skill_file
     local matches=""
@@ -138,6 +160,7 @@ audit_entrypoints() {
     audit_shell_entrypoints
     audit_node_entrypoints
     audit_audit_leaf_ownership
+    audit_shell_step_status_propagation
     audit_skill_metadata_descriptions
 
     if [[ "$AUDIT_FAILURES" -gt 0 ]]; then

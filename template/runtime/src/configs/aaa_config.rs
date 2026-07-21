@@ -19,7 +19,7 @@ use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
-use pallet_aaa::{AssetOps, DexOps, FeeRouter, LiquidityDonationOps};
+use pallet_aaa::{AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps};
 
 parameter_types! {
   // --- Identity and ownership ---
@@ -52,11 +52,11 @@ parameter_types! {
   pub const AaaMaxQueueLength: u32 = 10_000;
   pub const AaaMaxWakeupBucketSize: u32 = 10_000;
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
+  pub const AaaMaxSpilloverBlocks: u32 = 8;
   pub const AaaMaxQueueInsertionsPerBlock: u32 = 512;
   pub const AaaFairnessWeightSystem: u32 = 1;
   pub const AaaFairnessWeightUser: u32 = 3;
   pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
-  pub const AaaMaxIngressScanEventsPerBlock: u32 = 4096;
   pub const AaaMaxIngressOverflowQueue: u32 = 8192;
 
   // --- Lifecycle and sweep controls ---
@@ -97,17 +97,15 @@ impl Get<Balance> for AaaMinUserBalanceGuard {
   }
 }
 
-/// Fee sink — canonical unified fee-collection address.
+/// Canonical unified fee-collection boundary for AAA charges.
 ///
-/// AAA evaluation and execution fees route here today. The address stays derived from
-/// `aaa_id = FEE_SINK_AAA_ID` so the fee collector remains stable while System AAA #1
-/// owns the Phase 1 redistribution execution plan. The broader economic contract is
-/// a unified 20% collator / 80% Fee Sink collection rule, followed by phase-aware Fee Sink
-/// redistribution into staking-pool yield, native LP donation, and later claimable
-/// LP-nomination rewards.
-pub struct TmctolFeeRouter;
-impl FeeRouter<AccountId, AssetKind, Balance> for TmctolFeeRouter {
-  fn route_fee(
+/// The collector transfers every opening, evaluation, execution, and close-tail fee in full to
+/// the Fee Sink System AAA. Phase-specific allocation happens later through that actor's bounded
+/// execution plan rather than inside the collection path.
+pub struct TmctolFeeCollector;
+
+impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
+  fn collect_fee(
     payer: &AccountId,
     fee_sink: &AccountId,
     native_asset: AssetKind,
@@ -116,18 +114,7 @@ impl FeeRouter<AccountId, AssetKind, Balance> for TmctolFeeRouter {
     if amount == 0 {
       return Ok(());
     }
-    let Some(author) = Authorship::author() else {
-      return TmctolAssetOps::transfer(payer, fee_sink, native_asset, amount);
-    };
-    let author_share = Perbill::from_percent(20) * amount;
-    let fee_sink_share = amount.saturating_sub(author_share);
-    if author_share > 0 {
-      TmctolAssetOps::transfer(payer, &author, native_asset, author_share)?;
-    }
-    if fee_sink_share > 0 {
-      TmctolAssetOps::transfer(payer, fee_sink, native_asset, fee_sink_share)?;
-    }
-    Ok(())
+    TmctolAssetOps::transfer(payer, fee_sink, native_asset, amount)
   }
 }
 
@@ -207,37 +194,47 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     asset: AssetKind,
     amount: Balance,
   ) -> Result<(), DispatchError> {
-    match asset {
-      AssetKind::Native => {
-        polkadot_sdk::frame_support::storage::with_transaction(|| {
-          if let Err(error) = <Balances as Currency<AccountId>>::transfer(
-            from,
-            to,
-            amount,
-            polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
-          ) {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-          }
-          if let Err(error) = Self::bridge_native_staking_ingress(to, amount) {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-          }
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-        })?;
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(error) =
+        <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
+          to, asset, amount, from,
+        )
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
       }
-      AssetKind::Local(id) | AssetKind::Foreign(id) => {
-        <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::transfer(
-          id,
-          from,
-          to,
-          amount,
-          Preservation::Expendable,
+      let result = (|| -> Result<(), DispatchError> {
+        match asset {
+          AssetKind::Native => {
+            <Balances as Currency<AccountId>>::transfer(
+              from,
+              to,
+              amount,
+              polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+            )?;
+            Self::bridge_native_staking_ingress(to, amount)?;
+          }
+          AssetKind::Local(id) | AssetKind::Foreign(id) => {
+            <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::transfer(
+              id,
+              from,
+              to,
+              amount,
+              Preservation::Expendable,
+            )?;
+          }
+        }
+        <RuntimeAddressEventIngress as AddressEventIngress>::on_internal_inbound(
+          to, asset, amount, from,
         )?;
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
       }
-    }
-    <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_with_source(
-      to, asset, amount, from,
-    );
-    Ok(())
+    })
   }
 
   fn burn(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), DispatchError> {
@@ -274,7 +271,7 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     }
     <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_without_source(
       to, asset, amount,
-    );
+    )?;
     Ok(())
   }
 
@@ -368,9 +365,14 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<Balance, DispatchError> {
-    let quote =
-      pallet_axial_router::Pallet::<Runtime>::quote_price(asset_in, asset_out, amount_in)?;
-    let min_out = (polkadot_sdk::sp_runtime::Perbill::one() - slippage_tolerance).mul_floor(quote);
+    let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
+      who.clone(),
+      asset_in,
+      asset_out,
+      amount_in,
+    )?;
+    let min_out =
+      (polkadot_sdk::sp_runtime::Perbill::one() - slippage_tolerance).mul_floor(quote.amount_out);
     pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
       who, asset_in, asset_out, amount_in, min_out, who,
     )
@@ -381,58 +383,49 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_out: Balance,
+    max_amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<Balance, DispatchError> {
     if amount_out == 0 {
       return Err(DispatchError::Other("ZeroAmountOut"));
     }
+    if max_amount_in == 0 {
+      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
+    }
     let quote_output = |amount_in: Balance| -> Result<Balance, DispatchError> {
       if amount_in == 0 {
         return Err(DispatchError::Other("ZeroAmountIn"));
       }
-      let fee = if pallet_axial_router::Pallet::<Runtime>::is_fee_exempt(who) {
-        0
-      } else {
-        pallet_axial_router::Pallet::<Runtime>::calculate_router_fee(amount_in)
-      };
-      let net_in = amount_in.saturating_sub(fee);
-      if net_in == 0 {
-        return Err(DispatchError::Other("AmountInBelowRouterFee"));
-      }
-      pallet_axial_router::Pallet::<Runtime>::quote_price(asset_in, asset_out, net_in)
+      Ok(
+        pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
+          who.clone(),
+          asset_in,
+          asset_out,
+          amount_in,
+        )?
+        .amount_out,
+      )
     };
-    let mut high: Balance = 1;
-    let mut found = false;
-    for _ in 0..128 {
-      match quote_output(high) {
-        Ok(quoted) if quoted >= amount_out => {
-          found = true;
-          break;
-        }
-        _ => {
-          high = high
-            .checked_mul(2)
-            .ok_or(DispatchError::Other("AmountInOverflow"))?;
-        }
-      }
-    }
-    if !found {
-      return Err(DispatchError::Other("UnableToQuoteExactOut"));
+    if quote_output(max_amount_in)? < amount_out {
+      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
     }
     let mut low: Balance = 1;
-    while low < high {
+    let mut high = max_amount_in;
+    for _ in 0..Self::MAX_EXACT_OUT_QUOTE_STEPS {
+      if low >= high {
+        break;
+      }
       let mid = low.saturating_add(high.saturating_sub(low) / 2);
       match quote_output(mid) {
-        Ok(quoted) if quoted >= amount_out => {
-          high = mid;
-        }
-        _ => {
-          low = mid.saturating_add(1);
-        }
+        Ok(quoted) if quoted >= amount_out => high = mid,
+        _ => low = mid.saturating_add(1),
       }
     }
-    let _ = slippage_tolerance;
     let required_in = high;
+    let quoted_max_in = required_in.saturating_add(slippage_tolerance.mul_ceil(required_in));
+    if quoted_max_in > max_amount_in {
+      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
+    }
     if TmctolAssetOps::balance(who, asset_in) < required_in {
       return Err(DispatchError::Other("InsufficientInputForExactOut"));
     }
@@ -516,6 +509,8 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
 }
 
 impl TmctolDexOps {
+  const MAX_EXACT_OUT_QUOTE_STEPS: u32 = Balance::BITS;
+
   fn lp_balance(who: &AccountId, asset_a: AssetKind, asset_b: AssetKind) -> Balance {
     let pool_id =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b).ok();
@@ -844,39 +839,6 @@ impl TmctolGenesisSystemAaas {
     }]
     .try_into()
     .expect("phase1 fee-sink execution_plan fits")
-  }
-
-  pub fn build_phase2_fee_sink_execution_plan() -> pallet_aaa::ExecutionPlanOf<Runtime> {
-    use pallet_aaa::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
-    // Phase 2 1:1:4 fee-sink distribution.
-    // Not activated at Phase 1 launch; reserved for a later runtime-upgrade boundary
-    // when permissionless collators and GovXP-weighted LP-nomination rewards ship.
-    alloc::vec![Step {
-      conditions: Default::default(),
-      task: Task::SplitTransfer {
-        asset: AssetKind::Native,
-        amount: AmountResolution::AllBalance,
-        legs: alloc::vec![
-          SplitLeg {
-            to: crate::Staking::pool_account_for(0),
-            share: Perbill::from_parts(166_666_667),
-          },
-          SplitLeg {
-            to: crate::Staking::lp_reward_account_for(0),
-            share: Perbill::from_parts(166_666_667),
-          },
-          SplitLeg {
-            to: crate::Staking::reward_account_for(0),
-            share: Perbill::from_parts(666_666_666),
-          },
-        ]
-        .try_into()
-        .expect("phase2 fee-sink split legs fit"),
-      },
-      on_error: StepErrorPolicy::AbortCycle,
-    }]
-    .try_into()
-    .expect("phase2 fee-sink execution_plan fits")
   }
 
   /// Builds the Burn Actor execution_plan: for each known foreign asset, add a
@@ -1365,14 +1327,19 @@ impl TmctolGenesisSystemAaas {
 }
 
 pub struct TmctolStakingOps;
+impl TmctolStakingOps {
+  fn staking_asset_id(asset: AssetKind) -> u32 {
+    match asset {
+      AssetKind::Native => <Runtime as pallet_staking::Config>::NativeStakingAssetId::get(),
+      AssetKind::Foreign(id) | AssetKind::Local(id) => id,
+    }
+  }
+}
+
 impl pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance> for TmctolStakingOps {
   fn stake(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), DispatchError> {
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let staking_asset_id = match asset {
-      primitives::AssetKind::Native => native_asset_id,
-      primitives::AssetKind::Foreign(id) => id,
-      primitives::AssetKind::Local(id) => id,
-    };
+    let staking_asset_id = Self::staking_asset_id(asset);
     if staking_asset_id == native_asset_id {
       let _ = crate::Staking::stake_native(RuntimeOrigin::signed(who.clone()).into(), amount)?;
       return Ok(());
@@ -1386,17 +1353,36 @@ impl pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance> for TmctolS
   }
 
   fn unstake(who: &AccountId, asset: AssetKind, shares: Balance) -> Result<(), DispatchError> {
-    let staking_asset_id = match asset {
-      primitives::AssetKind::Native => 0,
-      primitives::AssetKind::Foreign(id) => id,
-      primitives::AssetKind::Local(id) => id,
-    };
     let _ = crate::Staking::unstake(
       RuntimeOrigin::signed(who.clone()).into(),
-      staking_asset_id,
+      Self::staking_asset_id(asset),
       shares,
     )?;
     Ok(())
+  }
+
+  fn share_balance(who: &AccountId, asset: AssetKind) -> Balance {
+    crate::Staking::effective_share_balance_for_queries(Self::staking_asset_id(asset), who)
+      .unwrap_or_default()
+  }
+
+  fn share_asset(asset: AssetKind) -> Option<AssetKind> {
+    crate::Staking::staked_asset_id_for_queries(Self::staking_asset_id(asset)).map(AssetKind::Local)
+  }
+}
+
+pub struct DeosFundingAuthority;
+
+impl FundingAuthority<AccountId> for DeosFundingAuthority {
+  fn allows(
+    _: pallet_aaa::AaaId,
+    _: &AccountId,
+    _: &pallet_aaa::FundingProvenance<AccountId>,
+  ) -> bool {
+    // The reference launch line has no source/actor authorization entries.
+    // Downstream runtimes must add explicit pairs rather than inheriting trust
+    // from an account-shaped signed, internal-protocol, or XCM identity.
+    false
   }
 }
 
@@ -1407,6 +1393,7 @@ impl pallet_aaa::Config for Runtime {
   type NativeAssetId = AaaNativeAssetId;
   type Balance = Balance;
   type AssetOps = TmctolAssetOps;
+  type FundingAuthority = DeosFundingAuthority;
   type DexOps = TmctolDexOps;
   type StakingOps = TmctolStakingOps;
   type LiquidityDonationOps = TmctolLiquidityDonationOps;
@@ -1418,7 +1405,7 @@ impl pallet_aaa::Config for Runtime {
   type FairnessWeightSystem = AaaFairnessWeightSystem;
   type FairnessWeightUser = AaaFairnessWeightUser;
   type FeeSink = AaaFeeRecipient;
-  type FeeRouter = TmctolFeeRouter;
+  type FeeCollector = TmctolFeeCollector;
   type GenesisSystemAaas = TmctolGenesisSystemAaas;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = AaaMaxActiveActors;
@@ -1432,6 +1419,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxQueueLength = AaaMaxQueueLength;
   type MaxWakeupBucketSize = AaaMaxWakeupBucketSize;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
+  type MaxSpilloverBlocks = AaaMaxSpilloverBlocks;
   type MaxQueueInsertionsPerBlock = AaaMaxQueueInsertionsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
@@ -1476,6 +1464,95 @@ impl RuntimeAaaBenchmarkHelper {
 
 #[cfg(feature = "runtime-benchmarks")]
 impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBenchmarkHelper {
+  fn setup_add_liquidity(
+    owner: &AccountId,
+  ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
+    if current_next_lp < lp_namespace_start {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+    let local_asset_id = 300_000;
+    let asset_a = AssetKind::Native;
+    let asset_b = AssetKind::Local(local_asset_id);
+    Self::ensure_local_asset(local_asset_id, owner)?;
+    let amount: Balance = 1_000_000_000_000;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(owner, amount.saturating_mul(2));
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      local_asset_id,
+      owner,
+      amount.saturating_add(1),
+    )?;
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
+        .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    if pallet_asset_conversion::Pools::<Runtime>::contains_key(pool_id) {
+      return Err(DispatchError::Other("AddLiquidityPoolAlreadyExists"));
+    }
+    Ok((asset_a, asset_b, amount, amount))
+  }
+
+  fn setup_donate_liquidity(
+    owner: &AccountId,
+  ) -> Result<(AssetKind, AssetKind, Balance), DispatchError> {
+    let asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    Self::ensure_local_asset(asset_id, owner)?;
+    let liquidity: Balance = 1_000_000_000;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(
+      owner,
+      EXISTENTIAL_DEPOSIT.saturating_mul(100),
+    );
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      asset_id,
+      owner,
+      liquidity.saturating_mul(3),
+    )?;
+    if !pallet_staking::Pools::<Runtime>::contains_key(asset_id) {
+      crate::Staking::register_staking_asset(RuntimeOrigin::root(), asset_id)?;
+    }
+    crate::Staking::stake_native(RuntimeOrigin::signed(owner.clone()), liquidity)?;
+    let staked_asset_id = crate::Staking::staked_asset_id(asset_id)
+      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    let asset_a = AssetKind::Local(asset_id);
+    let asset_b = AssetKind::Local(staked_asset_id);
+    let lp_namespace_start = primitives::assets::TYPE_LP | 1;
+    let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
+    if current_next_lp < lp_namespace_start {
+      pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
+    }
+    AssetConversion::create_pool(
+      RuntimeOrigin::signed(owner.clone()),
+      alloc::boxed::Box::new(asset_a),
+      alloc::boxed::Box::new(asset_b),
+    )?;
+    let pool_id =
+      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
+        .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
+    let pool_info = pallet_asset_conversion::Pools::<Runtime>::get(pool_id)
+      .ok_or(DispatchError::Other("PoolNotCreated"))?;
+    if <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+      u32,
+      AccountId,
+    >>::should_touch(pool_info.lp_token, owner)
+    {
+      <pallet_assets::Pallet<Runtime> as polkadot_sdk::frame_support::traits::AccountTouch<
+        u32,
+        AccountId,
+      >>::touch(pool_info.lp_token, owner, owner)?;
+    }
+    AssetConversion::add_liquidity(
+      RuntimeOrigin::signed(owner.clone()),
+      alloc::boxed::Box::new(asset_a),
+      alloc::boxed::Box::new(asset_b),
+      liquidity / 2,
+      liquidity / 2,
+      0,
+      0,
+      owner.clone(),
+    )?;
+    Ok((asset_a, asset_b, liquidity / 10))
+  }
+
   fn setup_remove_liquidity_max_k(
     owner: &AccountId,
     max_scan: u32,
@@ -1567,5 +1644,119 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       }
     }
     target_lp.ok_or(DispatchError::Other("TargetLpMissing"))
+  }
+
+  fn setup_stake(owner: &AccountId) -> Result<(AssetKind, Balance), DispatchError> {
+    let asset_id = 200_000;
+    let amount: Balance = 1_000_000;
+    Self::ensure_local_asset(asset_id, owner)?;
+    <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+      asset_id,
+      owner,
+      amount.saturating_add(1),
+    )?;
+    crate::Staking::register_staking_asset(RuntimeOrigin::root(), asset_id)?;
+    Ok((AssetKind::Local(asset_id), amount))
+  }
+
+  fn setup_unstake(owner: &AccountId) -> Result<(AssetKind, Balance), DispatchError> {
+    let (asset, amount) = Self::setup_stake(owner)?;
+    <TmctolStakingOps as pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance>>::stake(
+      owner, asset, amount,
+    )?;
+    let shares = <TmctolStakingOps as pallet_aaa::adapters::StakingOps<
+      AccountId,
+      AssetKind,
+      Balance,
+    >>::share_balance(owner, asset);
+    if shares == 0 {
+      return Err(DispatchError::Other("UnstakeSharesMissing"));
+    }
+    Ok((asset, shares))
+  }
+
+  fn setup_swap_exact_in(
+    owner: &AccountId,
+  ) -> Result<(AssetKind, AssetKind, Balance), DispatchError> {
+    let _ = Self::setup_remove_liquidity_max_k(owner, 1)?;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(
+      &BurningManagerAccount::get(),
+      EXISTENTIAL_DEPOSIT,
+    );
+    Ok((AssetKind::Native, AssetKind::Local(100_000), 1_000_000))
+  }
+
+  fn setup_swap_exact_out(
+    owner: &AccountId,
+  ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
+    let _ = Self::setup_remove_liquidity_max_k(owner, 1)?;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(
+      &BurningManagerAccount::get(),
+      EXISTENTIAL_DEPOSIT,
+    );
+    Ok((
+      AssetKind::Native,
+      AssetKind::Local(100_000),
+      100_000,
+      1_000_000_000,
+    ))
+  }
+
+  fn funding_assets(max: u32) -> alloc::vec::Vec<AssetKind> {
+    (0..max)
+      .map(|index| {
+        if index == 0 {
+          AssetKind::Native
+        } else {
+          AssetKind::Local(index)
+        }
+      })
+      .collect()
+  }
+
+  fn setup_address_event_ingress(
+    recipient: &AccountId,
+    source: &AccountId,
+    amount: Balance,
+  ) -> DispatchResult {
+    let transferred = amount.max(EXISTENTIAL_DEPOSIT);
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(
+      source,
+      transferred.saturating_add(EXISTENTIAL_DEPOSIT),
+    );
+    System::reset_events();
+    Balances::transfer_allow_death(
+      RuntimeOrigin::signed(source.clone()),
+      polkadot_sdk::sp_runtime::MultiAddress::Id(recipient.clone()),
+      transferred,
+    )
+  }
+
+  fn run_address_event_ingress(_recipient: &AccountId) -> bool {
+    crate::configs::address_event_ingress::RuntimeAddressEventIngressHook::submit_events_since_with_verified_source(0, true)
+      .expect("benchmark ingress notification must succeed")
+  }
+
+  fn setup_xcm_asset_deposit() -> DispatchResult {
+    crate::configs::xcm_config::setup_benchmark_foreign_asset()
+  }
+
+  fn run_xcm_asset_deposit(
+    recipient: &AccountId,
+    source: &AccountId,
+    amount: Balance,
+  ) -> DispatchResult {
+    crate::configs::xcm_config::benchmark_foreign_asset_deposit(recipient, source, amount)
+  }
+
+  fn clear_address_event_ingress_events() {
+    System::reset_events();
+  }
+
+  fn run_compatibility_address_event_ingress() -> Weight {
+    <crate::configs::address_event_ingress::RuntimeAddressEventIngressHook as pallet_aaa::AddressEventIngressHook<BlockNumber>>::ingest(
+      System::block_number(),
+      Weight::MAX,
+    )
   }
 }

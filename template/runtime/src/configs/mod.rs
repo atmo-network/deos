@@ -15,8 +15,7 @@ use frame_support::{
   dispatch::DispatchClass,
   parameter_types,
   traits::{
-    ConstBool, ConstU8, ConstU32, ConstU64, EitherOfDiverse, Get, Imbalance, TransformOrigin,
-    VariantCountOf,
+    ConstBool, ConstU8, ConstU32, ConstU64, EitherOfDiverse, Get, TransformOrigin, VariantCountOf,
     fungible::{Balanced, Credit},
     fungibles::Inspect as FungiblesInspect,
   },
@@ -46,7 +45,7 @@ use xcm::latest::prelude::{AssetId, BodyId};
 
 // Local module imports
 use super::{
-  AVERAGE_ON_INITIALIZE_RATIO, AccountId, Aura, Authorship, Balance, Balances, Block, BlockNumber,
+  AVERAGE_ON_INITIALIZE_RATIO, AccountId, Aura, Balance, Balances, Block, BlockNumber,
   CollatorSelection, EXISTENTIAL_DEPOSIT, HOURS, Hash, MAXIMUM_BLOCK_WEIGHT, MICRO_UNIT,
   MILLI_UNIT, MIN_ON_IDLE_RESERVE_RATIO, MessageQueue, NORMAL_DISPATCH_RATIO, Nonce, PalletInfo,
   ParachainSystem, Runtime, RuntimeCall, RuntimeEvent, RuntimeFreezeReason, RuntimeHoldReason,
@@ -188,26 +187,18 @@ parameter_types! {
     pub const TransactionByteFee: Balance = 10 * MICRO_UNIT;
 }
 
-pub struct RuntimeFeeSplit;
-impl frame_support::traits::OnUnbalanced<Credit<AccountId, Balances>> for RuntimeFeeSplit {
+pub struct RuntimeFeeCollector;
+impl frame_support::traits::OnUnbalanced<Credit<AccountId, Balances>> for RuntimeFeeCollector {
   fn on_nonzero_unbalanced(amount: Credit<AccountId, Balances>) {
-    let author_share = Perbill::from_percent(20) * amount.peek();
-    let (author_credit, fee_sink_credit) = amount.split(author_share);
     let fee_sink = aaa_config::AaaFeeRecipient::get();
-    if let Some(author) = Authorship::author() {
-      if let Err(remainder) = Balances::resolve(&author, author_credit) {
-        let _ = Balances::resolve(&fee_sink, remainder);
-      }
-    } else {
-      let _ = Balances::resolve(&fee_sink, author_credit);
-    }
-    let _ = Balances::resolve(&fee_sink, fee_sink_credit);
+    let _ = Balances::resolve(&fee_sink, amount);
   }
 }
 
 impl pallet_transaction_payment::Config for Runtime {
   type RuntimeEvent = RuntimeEvent;
-  type OnChargeTransaction = pallet_transaction_payment::FungibleAdapter<Balances, RuntimeFeeSplit>;
+  type OnChargeTransaction =
+    pallet_transaction_payment::FungibleAdapter<Balances, RuntimeFeeCollector>;
   type WeightToFee = WeightToFee;
   type LengthToFee = ConstantMultiplier<Balance, TransactionByteFee>;
   type FeeMultiplierUpdate = SlowAdjustingFeeUpdate<Self>;

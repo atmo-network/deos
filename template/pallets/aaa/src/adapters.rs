@@ -6,6 +6,24 @@
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::Perbill;
 
+/// Runtime authorization for actors whose stored funding policy is `RuntimePolicy`.
+///
+/// The pallet handles `OwnerOnly`, `SignedAllowlist`, and `AnySource` itself. This adapter must
+/// default deny and authorize only explicit actor/source pairs over runtime-verified provenance.
+pub trait FundingAuthority<AccountId> {
+  fn allows(
+    aaa_id: crate::AaaId,
+    owner: &AccountId,
+    provenance: &crate::FundingProvenance<AccountId>,
+  ) -> bool;
+}
+
+impl<AccountId> FundingAuthority<AccountId> for () {
+  fn allows(_: crate::AaaId, _: &AccountId, _: &crate::FundingProvenance<AccountId>) -> bool {
+    false
+  }
+}
+
 /// Asset mutations and queries
 ///
 /// Covers Transfer, SplitTransfer, Burn, Mint, and balance queries.
@@ -47,6 +65,8 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
 pub trait StakingOps<AccountId, AssetId, Balance> {
   fn stake(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError>;
   fn unstake(who: &AccountId, asset: AssetId, shares: Balance) -> Result<(), DispatchError>;
+  fn share_balance(who: &AccountId, asset: AssetId) -> Balance;
+  fn share_asset(asset: AssetId) -> Option<AssetId>;
 }
 
 pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
@@ -73,6 +93,7 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     asset_in: AssetId,
     asset_out: AssetId,
     amount_out: Balance,
+    max_amount_in: Balance,
     slippage_tolerance: Perbill,
   ) -> Result<Balance, DispatchError>;
 
@@ -141,6 +162,7 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: AssetId,
     _: AssetId,
     _: Balance,
+    _: Balance,
     _: Perbill,
   ) -> Result<Balance, DispatchError> {
     Err(DispatchError::Other("DexOps not configured"))
@@ -177,6 +199,14 @@ impl<AccountId, AssetId, Balance: Default> StakingOps<AccountId, AssetId, Balanc
 
   fn unstake(_: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
     Err(DispatchError::Other("StakingOps not configured"))
+  }
+
+  fn share_balance(_: &AccountId, _: AssetId) -> Balance {
+    Balance::default()
+  }
+
+  fn share_asset(_: AssetId) -> Option<AssetId> {
+    None
   }
 }
 

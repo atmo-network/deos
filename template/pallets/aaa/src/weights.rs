@@ -17,8 +17,31 @@ pub trait WeightInfo {
   fn pause_aaa() -> Weight;
   fn resume_aaa() -> Weight;
   fn manual_trigger() -> Weight;
-  fn fund_aaa() -> Weight;
   fn close_aaa() -> Weight;
+  fn close_aaa_user_fee_bearing_tail(steps: u32, legs: u32) -> Weight;
+  fn fee_collection() -> Weight;
+  fn task_simple_asset_op() -> Weight;
+  fn task_split_transfer(legs: u32) -> Weight;
+  fn xcm_asset_deposit() -> Weight;
+  fn task_add_liquidity() -> Weight;
+  fn task_donate_liquidity() -> Weight;
+  fn task_remove_liquidity() -> Weight;
+  fn task_stake() -> Weight;
+  fn task_unstake() -> Weight;
+  fn task_dex_exact_in() -> Weight;
+  fn task_dex_exact_out() -> Weight;
+  fn scheduler_on_idle_base() -> Weight;
+  fn scheduler_zombie_sweep_base() -> Weight;
+  fn scheduler_queue_bootstrap(queue_len: u32) -> Weight;
+  fn scheduler_actor_probe() -> Weight;
+  fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight;
+  fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight;
+  fn transaction_extension_ingress_base() -> Weight;
+  fn transaction_extension_ingress_notify() -> Weight;
+  fn compatibility_ingress_probe() -> Weight;
+  fn compatibility_ingress_drain() -> Weight;
+  fn funding_batch_promotion(assets: u32) -> Weight;
+  fn update_funding_source_policy() -> Weight;
   fn update_schedule() -> Weight;
   fn update_execution_plan() -> Weight;
   fn update_on_close_execution_plan() -> Weight;
@@ -31,8 +54,13 @@ pub trait WeightInfo {
 pub trait TaskWeightInfo {
   fn simple_asset_op() -> Weight;
   fn split_transfer(legs: u32) -> Weight;
-  fn dex_swap() -> Weight;
-  fn dex_liquidity() -> Weight;
+  fn dex_exact_in() -> Weight;
+  fn dex_exact_out() -> Weight;
+  fn add_liquidity() -> Weight;
+  fn donate_liquidity() -> Weight;
+  fn remove_liquidity() -> Weight;
+  fn stake() -> Weight;
+  fn unstake() -> Weight;
   fn noop() -> Weight;
 }
 
@@ -79,16 +107,146 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(2))
   }
 
-  fn fund_aaa() -> Weight {
-    Weight::from_parts(20_000_000, 1800)
-      .saturating_add(T::DbWeight::get().reads(2))
-      .saturating_add(T::DbWeight::get().writes(2))
-  }
-
   fn close_aaa() -> Weight {
     Weight::from_parts(30_000_000, 2200)
       .saturating_add(T::DbWeight::get().reads(4))
       .saturating_add(T::DbWeight::get().writes(5))
+  }
+
+  fn close_aaa_user_fee_bearing_tail(steps: u32, legs: u32) -> Weight {
+    Weight::from_parts(60_000_000, 4_000)
+      .saturating_add(Weight::from_parts(180_000_000, 3_000).saturating_mul(steps.into()))
+      .saturating_add(Weight::from_parts(60_000_000, 3_000).saturating_mul(legs.into()))
+  }
+
+  fn fee_collection() -> Weight {
+    Weight::from_parts(100_000_000, 16_000)
+      .saturating_add(T::DbWeight::get().reads_writes(6, 4))
+  }
+
+  fn task_simple_asset_op() -> Weight {
+    Weight::from_parts(1_500_000_000, 800_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 18))
+  }
+
+  fn task_split_transfer(legs: u32) -> Weight {
+    let bounded = u64::from(legs.min(T::MaxSplitTransferLegs::get()));
+    Weight::from_parts(50_000_000, 4_000)
+      .saturating_add(Weight::from_parts(1_500_000_000, 800_000).saturating_mul(bounded))
+      .saturating_add(T::DbWeight::get().reads_writes(
+        bounded.saturating_mul(20),
+        bounded.saturating_mul(18),
+      ))
+  }
+
+  fn xcm_asset_deposit() -> Weight {
+    Weight::from_parts(1_600_000_000, 850_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 18))
+  }
+
+  fn task_add_liquidity() -> Weight {
+    Weight::from_parts(300_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_donate_liquidity() -> Weight {
+    Weight::from_parts(600_000_000, 48_000)
+      .saturating_add(T::DbWeight::get().reads_writes(40, 24))
+  }
+
+  fn task_remove_liquidity() -> Weight {
+    Weight::from_parts(300_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_stake() -> Weight {
+    Weight::from_parts(200_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_unstake() -> Weight {
+    Weight::from_parts(200_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_dex_exact_in() -> Weight {
+    Weight::from_parts(280_000_000, 13_000)
+      .saturating_add(T::DbWeight::get().reads_writes(13, 10))
+  }
+
+  fn task_dex_exact_out() -> Weight {
+    Weight::from_parts(1_500_000_000, 64_000)
+      .saturating_add(T::DbWeight::get().reads_writes(64, 12))
+  }
+
+  fn scheduler_on_idle_base() -> Weight {
+    Weight::from_parts(20_000_000, 8_000)
+      .saturating_add(T::DbWeight::get().reads(4))
+      .saturating_add(T::DbWeight::get().writes(3))
+  }
+
+  fn scheduler_zombie_sweep_base() -> Weight {
+    Weight::from_parts(15_000_000, 4_000).saturating_add(T::DbWeight::get().reads(3))
+  }
+
+  fn scheduler_queue_bootstrap(queue_len: u32) -> Weight {
+    Weight::from_parts(50_000_000, 170_000)
+      .saturating_add(Weight::from_parts(100_000, 16).saturating_mul(queue_len.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(6, 6))
+  }
+
+  fn scheduler_actor_probe() -> Weight {
+    Weight::from_parts(1_600_000_000, 850_000)
+      .saturating_add(T::DbWeight::get().reads_writes(18, 16))
+  }
+
+  fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight {
+    let bounded = u64::from(blocked_buckets.min(T::MaxSpilloverBlocks::get().saturating_add(1)));
+    Weight::from_parts(
+      20_000_000u64.saturating_add(bounded.saturating_mul(5_000_000)),
+      4_096u64.saturating_add(bounded.saturating_mul(80_497)),
+    )
+    .saturating_add(T::DbWeight::get().reads_writes(
+      6u64.saturating_add(bounded),
+      6u64.saturating_add(bounded),
+    ))
+  }
+
+  fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight {
+    Weight::from_parts(30_000_000, 100_000)
+      .saturating_add(Weight::from_parts(20_000_000, 16_000).saturating_mul(wakeups.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(
+        8u64.saturating_add(u64::from(wakeups).saturating_mul(4)),
+        8u64.saturating_add(u64::from(wakeups).saturating_mul(5)),
+      ))
+  }
+
+  fn transaction_extension_ingress_base() -> Weight {
+    Weight::from_parts(10_000_000, 4_096).saturating_add(T::DbWeight::get().reads(1))
+  }
+
+  fn transaction_extension_ingress_notify() -> Weight {
+    Weight::from_parts(1_500_000_000, 800_000)
+      .saturating_add(T::DbWeight::get().reads_writes(16, 16))
+  }
+
+  fn compatibility_ingress_probe() -> Weight {
+    Weight::from_parts(10_000_000, 1_000).saturating_add(T::DbWeight::get().reads(1))
+  }
+
+  fn compatibility_ingress_drain() -> Weight {
+    Weight::from_parts(1_600_000_000, 850_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 20))
+  }
+  fn funding_batch_promotion(assets: u32) -> Weight {
+    Weight::from_parts(20_000_000, 12_000)
+      .saturating_add(Weight::from_parts(2_000_000, 256).saturating_mul(assets.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn update_funding_source_policy() -> Weight {
+    Weight::from_parts(50_000_000, 15_000)
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
   }
 
   fn update_schedule() -> Weight {
@@ -140,34 +298,39 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> TaskWeightInfo
   for SubstrateTaskWeightInfo<T>
 {
   fn simple_asset_op() -> Weight {
-    Weight::from_parts(10_000_000, 1000)
-      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+    <T as crate::Config>::WeightInfo::task_simple_asset_op()
   }
 
   fn split_transfer(legs: u32) -> Weight {
-    let bounded_legs = u64::from(legs.min(T::MaxSplitTransferLegs::get()));
-    Weight::from_parts(
-      15_000_000u64.saturating_add(bounded_legs.saturating_mul(2_000_000)),
-      1400u64.saturating_add(bounded_legs.saturating_mul(96)),
-    )
-    .saturating_add(T::DbWeight::get().reads_writes(2, bounded_legs.saturating_add(1)))
+    <T as crate::Config>::WeightInfo::task_split_transfer(legs.min(T::MaxSplitTransferLegs::get()))
   }
 
-  fn dex_swap() -> Weight {
-    Weight::from_parts(280_000_000, 13_000)
-      .saturating_add(T::DbWeight::get().reads_writes(13, 10))
+  fn dex_exact_in() -> Weight {
+    <T as crate::Config>::WeightInfo::task_dex_exact_in()
   }
 
-  fn dex_liquidity() -> Weight {
-    let max_scan = u64::from(T::MaxAdapterScan::get());
-    Weight::from_parts(
-      220_000_000u64.saturating_add(max_scan.saturating_mul(3_000_000)),
-      3600u64.saturating_add(max_scan.saturating_mul(96)),
-    )
-    .saturating_add(T::DbWeight::get().reads_writes(
-      12u64.saturating_add(max_scan),
-      10,
-    ))
+  fn dex_exact_out() -> Weight {
+    <T as crate::Config>::WeightInfo::task_dex_exact_out()
+  }
+
+  fn add_liquidity() -> Weight {
+    <T as crate::Config>::WeightInfo::task_add_liquidity()
+  }
+
+  fn donate_liquidity() -> Weight {
+    <T as crate::Config>::WeightInfo::task_donate_liquidity()
+  }
+
+  fn remove_liquidity() -> Weight {
+    <T as crate::Config>::WeightInfo::task_remove_liquidity()
+  }
+
+  fn stake() -> Weight {
+    <T as crate::Config>::WeightInfo::task_stake()
+  }
+
+  fn unstake() -> Weight {
+    <T as crate::Config>::WeightInfo::task_unstake()
   }
 
   fn noop() -> Weight {
@@ -183,8 +346,49 @@ impl WeightInfo for () {
   fn pause_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn resume_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
-  fn fund_aaa() -> Weight { Weight::from_parts(20_000_000, 1800) }
   fn close_aaa() -> Weight { Weight::from_parts(30_000_000, 2200) }
+  fn close_aaa_user_fee_bearing_tail(steps: u32, legs: u32) -> Weight {
+    Weight::from_parts(60_000_000, 4_000)
+      .saturating_add(Weight::from_parts(180_000_000, 3_000).saturating_mul(steps.into()))
+      .saturating_add(Weight::from_parts(60_000_000, 3_000).saturating_mul(legs.into()))
+  }
+  fn fee_collection() -> Weight { Weight::from_parts(100_000_000, 16_000) }
+  fn task_simple_asset_op() -> Weight { Weight::from_parts(1_500_000_000, 800_000) }
+  fn task_split_transfer(legs: u32) -> Weight {
+    Weight::from_parts(50_000_000, 4_000)
+      .saturating_add(Weight::from_parts(1_500_000_000, 800_000).saturating_mul(legs.min(8).into()))
+  }
+  fn xcm_asset_deposit() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
+  fn task_add_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
+  fn task_donate_liquidity() -> Weight { Weight::from_parts(600_000_000, 48_000) }
+  fn task_remove_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
+  fn task_stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
+  fn task_unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
+  fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
+  fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
+  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(20_000_000, 8_000) }
+  fn scheduler_zombie_sweep_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
+  fn scheduler_queue_bootstrap(queue_len: u32) -> Weight {
+    Weight::from_parts(50_000_000, 170_000)
+      .saturating_add(Weight::from_parts(100_000, 16).saturating_mul(queue_len.into()))
+  }
+  fn scheduler_actor_probe() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
+  fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight {
+    Weight::from_parts(20_000_000u64.saturating_add(u64::from(blocked_buckets).saturating_mul(5_000_000)), 4_096)
+  }
+  fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight {
+    Weight::from_parts(30_000_000, 100_000)
+      .saturating_add(Weight::from_parts(20_000_000, 16_000).saturating_mul(wakeups.into()))
+  }
+  fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(10_000_000, 4_096) }
+  fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(1_500_000_000, 800_000) }
+  fn compatibility_ingress_probe() -> Weight { Weight::from_parts(10_000_000, 1_000) }
+  fn compatibility_ingress_drain() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
+  fn funding_batch_promotion(assets: u32) -> Weight {
+    Weight::from_parts(20_000_000, 12_000)
+      .saturating_add(Weight::from_parts(2_000_000, 256).saturating_mul(assets.into()))
+  }
+  fn update_funding_source_policy() -> Weight { Weight::from_parts(50_000_000, 15_000) }
   fn update_schedule() -> Weight { Weight::from_parts(12_000_000, 900) }
   fn update_execution_plan() -> Weight { Weight::from_parts(18_000_000, 1200) }
   fn update_on_close_execution_plan() -> Weight { Weight::from_parts(18_000_000, 1200) }
@@ -201,12 +405,14 @@ impl WeightInfo for () {
 }
 
 impl TaskWeightInfo for () {
-  fn simple_asset_op() -> Weight { Weight::from_parts(10_000_000, 1000) }
-  fn split_transfer(legs: u32) -> Weight {
-    let bounded_legs = u64::from(legs.min(8));
-    Weight::from_parts(15_000_000u64.saturating_add(bounded_legs.saturating_mul(2_000_000)), 1400)
-  }
-  fn dex_swap() -> Weight { Weight::from_parts(280_000_000, 13_000) }
-  fn dex_liquidity() -> Weight { Weight::from_parts(220_000_000, 3600) }
+  fn simple_asset_op() -> Weight { <() as WeightInfo>::task_simple_asset_op() }
+  fn split_transfer(legs: u32) -> Weight { <() as WeightInfo>::task_split_transfer(legs) }
+  fn dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
+  fn dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
+  fn add_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
+  fn donate_liquidity() -> Weight { Weight::from_parts(600_000_000, 48_000) }
+  fn remove_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
+  fn stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
+  fn unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn noop() -> Weight { Weight::from_parts(1_000_000, 0) }
 }

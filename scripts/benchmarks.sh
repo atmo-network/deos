@@ -10,6 +10,7 @@ HEAP_PAGES=4096
 CHAIN="dev"
 INCLUDE_EXTRA_BENCHMARKS=0
 PALLETS=(
+    "pallet_aaa"
     "pallet_axial_router"
     "pallet_tmc"
     "pallet_burning_manager"
@@ -103,7 +104,7 @@ check_prerequisites() {
     require_directory "$TEMPLATE_DIR" "Template directory"
     require_directory "$WEIGHTS_DIR" "Runtime weights directory"
     hydrate_local_tool_paths
-    require_commands cargo sed grep wc
+    require_commands cargo sed grep wc sort awk head
 
     if ! command -v frame-omni-bencher &>/dev/null; then
         log_warning "frame-omni-bencher not found. Install with:"
@@ -112,8 +113,15 @@ check_prerequisites() {
         log_info "Falling back to 'cargo test --features runtime-benchmarks' mode"
         BENCHER_MODE="cargo"
     else
+        local bencher_version minimum_bencher_version
+        bencher_version="$(frame-omni-bencher --version | awk '{print $2}')"
+        minimum_bencher_version="0.22.0"
+        if [[ "$(printf '%s\n%s\n' "$minimum_bencher_version" "$bencher_version" | sort -V | head -n1)" != "$minimum_bencher_version" ]]; then
+            log_error "frame-omni-bencher $bencher_version is incompatible with the current SDK; install >= $minimum_bencher_version"
+            return 1
+        fi
         BENCHER_MODE="omni"
-        log_success "frame-omni-bencher found"
+        log_success "frame-omni-bencher $bencher_version found"
     fi
 }
 
@@ -177,9 +185,7 @@ verify_weight_file_contract() {
         "scheduler_scan_hot_readiness"
         "scheduler_scan_fallback_readiness"
         "scheduler_scan_sparse_hot_readiness"
-        "scheduler_wakeup_dense_due_drain"
         "scheduler_wakeup_sparse_gap_recovery"
-        "scheduler_wakeup_spillover_probe"
         "close_aaa_on_close_execution_plan_complex"
     )
 
@@ -192,6 +198,37 @@ verify_weight_file_contract() {
             return 1
         fi
     done
+
+    local required_runtime_benchmarks=(
+        "scheduler_actor_probe"
+        "scheduler_queue_bootstrap"
+        "scheduler_wakeup_dense_due_drain"
+        "compatibility_ingress_drain"
+        "transaction_extension_ingress_base"
+        "transaction_extension_ingress_notify"
+    )
+    for benchmark in "${required_runtime_benchmarks[@]}"; do
+        if ! grep -q "fn ${benchmark}" "$output_file"; then
+            log_error "Weight file contract check failed for pallet_aaa: missing generated ${benchmark}"
+            return 1
+        fi
+    done
+
+    if grep -q 'fn compatibility_ingress_scan_notify' "$output_file"; then
+        log_error "Weight file contract check failed for pallet_aaa: retired event-vector scan weight remains"
+        return 1
+    fi
+
+    if ! grep -q 'The range of component `n` is `\[1, 5\]`.' "$output_file"; then
+        log_error "Weight file contract check failed for pallet_aaa: permissionless_sweep_many must cover MaxSweepPerBlock=5"
+        return 1
+    fi
+
+    if ! grep -q 'Storage: `AssetConversion::Pools` (r:1 w:1)' "$output_file" \
+        || ! grep -q 'Storage: `AssetConversion::NextPoolAssetId` (r:1 w:1)' "$output_file"; then
+        log_error "Weight file contract check failed for pallet_aaa: task_add_liquidity must cover missing-pool creation"
+        return 1
+    fi
 }
 
 run_pallet_benchmark() {
@@ -205,9 +242,7 @@ run_pallet_benchmark() {
             --exclude-extrinsics "pallet_aaa::scheduler_scan_hot_readiness"
             --exclude-extrinsics "pallet_aaa::scheduler_scan_fallback_readiness"
             --exclude-extrinsics "pallet_aaa::scheduler_scan_sparse_hot_readiness"
-            --exclude-extrinsics "pallet_aaa::scheduler_wakeup_dense_due_drain"
             --exclude-extrinsics "pallet_aaa::scheduler_wakeup_sparse_gap_recovery"
-            --exclude-extrinsics "pallet_aaa::scheduler_wakeup_spillover_probe"
             --exclude-extrinsics "pallet_aaa::close_aaa_on_close_execution_plan_complex"
         )
 

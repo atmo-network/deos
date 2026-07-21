@@ -32,10 +32,8 @@ mod benches {
         T::ConditionReadFee::get().saturating_mul((step.conditions.len() as u32).into()),
       );
       total = total.saturating_add(eval_fee);
-      if !matches!(step.task, AaaTask::Noop) {
-        let exec_fee = T::WeightToFee::weight_to_fee(&Pallet::<T>::weight_upper_bound(&step.task));
-        total = total.saturating_add(exec_fee);
-      }
+      let exec_fee = T::WeightToFee::weight_to_fee(&Pallet::<T>::weight_upper_bound(&step.task));
+      total = total.saturating_add(exec_fee);
     }
     total
   }
@@ -53,19 +51,17 @@ mod benches {
     BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
   }
 
-  fn make_last_funding_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
-    let step = Step {
+  fn make_tracked_funding_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
+    BoundedVec::try_from(vec![Step {
       conditions: BoundedVec::default(),
       task: AaaTask::Transfer {
         to: recipient,
         asset: T::NativeAssetId::get(),
-        amount: AmountResolution::PercentageOfLastFunding(
-          polkadot_sdk::sp_runtime::Perbill::from_percent(10),
-        ),
+        amount: AmountResolution::PercentageOfLastFunding(polkadot_sdk::sp_runtime::Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
-    };
-    BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
+    }])
+    .expect("single-step tracked funding plan must fit")
   }
 
   fn make_remove_liquidity_execution_plan<T: Config>(
@@ -380,40 +376,6 @@ mod benches {
   }
 
   #[benchmark]
-  fn fund_aaa() {
-    let caller: T::AccountId = whitelisted_caller();
-    ensure_creation_balance::<T>(&caller);
-    let recipient =
-      T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
-        .expect("decode zero account");
-    let schedule = Schedule {
-      trigger: Trigger::Manual,
-      cooldown_blocks: 10,
-    };
-    let execution_plan = make_last_funding_execution_plan::<T>(recipient);
-    Pallet::<T>::create_user_aaa(
-      RawOrigin::Signed(caller.clone()).into(),
-      Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
-    )
-    .expect("create_user_aaa must succeed in fund_aaa benchmark setup");
-    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let amount = T::MinUserBalance::get().saturating_add(One::one());
-    T::AssetOps::mint(&caller, T::NativeAssetId::get(), amount)
-      .expect("mint for fund_aaa benchmark must succeed");
-    #[extrinsic_call]
-    fund_aaa(
-      RawOrigin::Signed(caller),
-      aaa_id,
-      T::NativeAssetId::get(),
-      amount,
-    );
-    assert!(AaaInstances::<T>::get(aaa_id).is_some());
-  }
-
-  #[benchmark]
   fn close_aaa() {
     let owner: T::AccountId = whitelisted_caller();
     let recipient: T::AccountId = account("close-recipient", 0, 0);
@@ -462,15 +424,67 @@ mod benches {
   }
 
   #[benchmark]
+  fn update_funding_source_policy() {
+    let caller: T::AccountId = whitelisted_caller();
+    let aaa_id = bench_create_user::<T>(caller.clone());
+    let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
+      BoundedBTreeSet::default();
+    for index in 0..T::MaxWhitelistSize::get() {
+      allowed
+        .try_insert(account("funding-source", index, 0))
+        .expect("funding source must fit benchmark bound");
+    }
+    let policy = FundingSourcePolicy::SignedAllowlist(allowed);
+    #[extrinsic_call]
+    update_funding_source_policy(RawOrigin::Signed(caller), aaa_id, policy);
+    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after policy update");
+    assert!(matches!(
+      inst.funding_source_policy,
+      FundingSourcePolicy::SignedAllowlist(_)
+    ));
+  }
+
+  #[benchmark]
   fn update_execution_plan() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
+    let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
+    AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      let instance = maybe.as_mut().expect("benchmark actor exists");
+      for asset in funding_assets {
+        instance
+          .funding_snapshots
+          .try_insert(
+            asset,
+            FundingBatch {
+              amount: One::one(),
+              block: 1u32.into(),
+              pending_amount: One::one(),
+              pending_last_block: Some(1u32.into()),
+            },
+          )
+          .expect("funding snapshot benchmark bound fits");
+      }
+    });
     let recipient = account("recipient", 0, 0);
     let replacement = make_execution_plan::<T>(recipient);
     #[extrinsic_call]
     update_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after update_execution_plan");
     assert_eq!(inst.execution_plan, replacement);
+    assert!(inst.funding_snapshots.is_empty());
+  }
+
+  #[benchmark]
+  fn update_on_close_execution_plan() {
+    let caller: T::AccountId = whitelisted_caller();
+    let aaa_id = bench_create_user::<T>(caller.clone());
+    let recipient = account("close-recipient", 0, 0);
+    let replacement = make_execution_plan::<T>(recipient);
+    #[extrinsic_call]
+    update_on_close_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
+    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after close-plan update");
+    assert_eq!(inst.on_close_execution_plan, replacement);
   }
 
   #[benchmark]
@@ -498,14 +512,15 @@ mod benches {
   }
 
   #[benchmark]
-  fn permissionless_sweep_many(n: Linear<1, 3>) {
+  fn permissionless_sweep_many(n: Linear<1, 5>) {
     let caller: T::AccountId = whitelisted_caller();
     let mut aaa_ids: BoundedVec<AaaId, T::MaxSweepPerBlock> = BoundedVec::default();
     let schedule = Schedule {
       trigger: Trigger::Manual,
       cooldown_blocks: 10,
     };
-    for i in 0..n {
+    let bounded_n = n.min(T::MaxSweepPerBlock::get());
+    for i in 0..bounded_n {
       let owner: T::AccountId = account("sweep-owner", i, 0);
       let recipient: T::AccountId = account("sweep-recipient", i, 0);
       ensure_creation_balance::<T>(&owner);
@@ -529,7 +544,7 @@ mod benches {
     for aaa_id in aaa_ids {
       assert!(AaaInstances::<T>::get(aaa_id).is_none());
     }
-    assert_eq!(expected_len, n as usize);
+    assert_eq!(expected_len, bounded_n as usize);
   }
 
   // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
@@ -570,7 +585,7 @@ mod benches {
     assert!(AaaInstances::<T>::get(aaa_id).is_none());
   }
 
-  // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
+  // Production close-tail admission benchmark; not a dispatchable call.
   #[benchmark]
   fn close_aaa_user_fee_bearing_tail(s: Linear<1, 3>, l: Linear<2, 8>) {
     let owner: T::AccountId = whitelisted_caller();
@@ -606,6 +621,194 @@ mod benches {
         .expect("close_aaa must succeed in user fee-bearing diagnostic benchmark");
     }
     assert!(AaaInstances::<T>::get(aaa_id).is_none());
+  }
+
+  #[benchmark]
+  fn fee_collection() {
+    let payer: T::AccountId = whitelisted_caller();
+    let owner: T::AccountId = account("fee-sink-owner", 0, 0);
+    let schedule = Schedule {
+      trigger: Trigger::Timer {
+        every_blocks: 1,
+        probability: None,
+      },
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      schedule,
+      None,
+      make_noop_execution_plan::<T>(),
+    )
+    .expect("fee-collection benchmark sink must be created");
+    let fee_sink_id = NextAaaId::<T>::get().saturating_sub(1);
+    let fee_sink = Pallet::<T>::sovereign_account_id_system(fee_sink_id);
+    let native = T::NativeAssetId::get();
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    T::AssetOps::mint(&payer, native, amount.saturating_mul(2u32.into()))
+      .expect("fee-collection benchmark payer must be funded");
+    #[block]
+    {
+      T::FeeCollector::collect_fee(&payer, &fee_sink, native, amount)
+        .expect("fee collection must succeed");
+    }
+    assert!(T::AssetOps::balance(&fee_sink, native) >= amount);
+  }
+
+  #[benchmark]
+  fn task_simple_asset_op() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let native = T::NativeAssetId::get();
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    T::AssetOps::mint(&caller, native, amount.saturating_mul(2u32.into()))
+      .expect("simple-transfer benchmark caller must be funded");
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    #[block]
+    {
+      T::AssetOps::transfer(&caller, &recipient, native, amount)
+        .expect("ingress-aware transfer must succeed");
+    }
+    assert!(WakeupRetryPending::<T>::contains_key(target_id));
+  }
+
+  #[benchmark]
+  fn task_split_transfer(l: Linear<2, 8>) {
+    let caller: T::AccountId = whitelisted_caller();
+    let bounded_legs = l.min(T::MaxSplitTransferLegs::get());
+    let native = T::NativeAssetId::get();
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    let mut targets: alloc::vec::Vec<(AaaId, T::AccountId)> = alloc::vec::Vec::new();
+    for seed in 0..bounded_legs {
+      targets.push(prepare_saturated_address_actor::<T>(seed));
+    }
+    let total = amount
+      .saturating_mul(bounded_legs.into())
+      .saturating_add(T::MinUserBalance::get());
+    T::AssetOps::mint(&caller, native, total)
+      .expect("split-transfer benchmark caller must be funded");
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    #[block]
+    {
+      for (_, recipient) in &targets {
+        T::AssetOps::transfer(&caller, recipient, native, amount)
+          .expect("ingress-aware split leg must succeed");
+      }
+    }
+    for (target_id, _) in targets {
+      assert!(WakeupRetryPending::<T>::contains_key(target_id));
+    }
+  }
+
+  #[benchmark]
+  fn xcm_asset_deposit() {
+    T::BenchmarkHelper::setup_xcm_asset_deposit()
+      .expect("XCM deposit benchmark asset must be registered");
+    let source: T::AccountId = account("xcm-source", 0, 0);
+    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    #[block]
+    {
+      T::BenchmarkHelper::run_xcm_asset_deposit(&recipient, &source, amount)
+        .expect("AAA-aware XCM deposit must succeed");
+    }
+    assert!(WakeupRetryPending::<T>::contains_key(target_id));
+  }
+
+  #[benchmark]
+  fn task_add_liquidity() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (asset_a, asset_b, amount_a, amount_b) = T::BenchmarkHelper::setup_add_liquidity(&caller)
+      .expect("benchmark helper must prepare add-liquidity state");
+    #[block]
+    {
+      T::DexOps::add_liquidity(&caller, asset_a, asset_b, amount_a, amount_b)
+        .expect("add-liquidity benchmark operation must succeed");
+    }
+  }
+
+  #[benchmark]
+  fn task_donate_liquidity() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (asset_a, asset_b, amount) = T::BenchmarkHelper::setup_donate_liquidity(&caller)
+      .expect("benchmark helper must prepare liquidity-donation state");
+    #[block]
+    {
+      T::LiquidityDonationOps::donate_liquidity(&caller, asset_a, asset_b, amount, Perbill::zero())
+        .expect("liquidity-donation benchmark operation must succeed");
+    }
+  }
+
+  #[benchmark]
+  fn task_remove_liquidity() {
+    let caller: T::AccountId = whitelisted_caller();
+    let max_scan = T::MaxAdapterScan::get();
+    assert!(max_scan > 0, "MaxAdapterScan must be greater than zero");
+    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity_max_k(&caller, max_scan)
+      .expect("benchmark helper must prepare remove-liquidity worst-case state");
+    #[block]
+    {
+      T::DexOps::remove_liquidity(&caller, lp_asset, lp_amount)
+        .expect("remove-liquidity benchmark operation must succeed");
+    }
+  }
+
+  #[benchmark]
+  fn task_stake() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (asset, amount) = T::BenchmarkHelper::setup_stake(&caller)
+      .expect("benchmark helper must prepare staking state");
+    #[block]
+    {
+      T::StakingOps::stake(&caller, asset, amount)
+        .expect("staking benchmark operation must succeed");
+    }
+  }
+
+  #[benchmark]
+  fn task_unstake() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (asset, shares) = T::BenchmarkHelper::setup_unstake(&caller)
+      .expect("benchmark helper must prepare unstaking state");
+    #[block]
+    {
+      T::StakingOps::unstake(&caller, asset, shares)
+        .expect("unstaking benchmark operation must succeed");
+    }
+  }
+
+  #[benchmark]
+  fn task_dex_exact_in() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (asset_in, asset_out, amount_in) = T::BenchmarkHelper::setup_swap_exact_in(&caller)
+      .expect("benchmark helper must prepare exact-input swap state");
+    #[block]
+    {
+      T::DexOps::swap_exact_in(&caller, asset_in, asset_out, amount_in, Perbill::zero())
+        .expect("exact-input benchmark swap must succeed");
+    }
+  }
+
+  #[benchmark]
+  fn task_dex_exact_out() {
+    let caller: T::AccountId = whitelisted_caller();
+    let (asset_in, asset_out, amount_out, max_amount_in) =
+      T::BenchmarkHelper::setup_swap_exact_out(&caller)
+        .expect("benchmark helper must prepare exact-output swap state");
+    #[block]
+    {
+      T::DexOps::swap_exact_out(
+        &caller,
+        asset_in,
+        asset_out,
+        amount_out,
+        max_amount_in,
+        Perbill::zero(),
+      )
+      .expect("exact-output benchmark swap must succeed");
+    }
   }
 
   // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
@@ -688,6 +891,61 @@ mod benches {
       BoundedVec::<AaaId, T::MaxWakeupBucketSize>::try_from(ids)
         .expect("wakeup bucket must fit benchmark bounds"),
     );
+  }
+
+  fn prepare_saturated_address_actor<T: Config>(seed: u32) -> (AaaId, T::AccountId) {
+    let owner: T::AccountId = account("ingress_owner", seed, 0);
+    let schedule = Schedule {
+      trigger: Trigger::OnAddressEvent {
+        source_filter: SourceFilter::Any,
+        asset_filter: AssetFilter::Any,
+      },
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner.clone(),
+      Mutability::Mutable,
+      schedule,
+      None,
+      make_tracked_funding_execution_plan::<T>(owner),
+    )
+    .expect("create_system_aaa must succeed in ingress benchmark setup");
+    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    let recipient = Pallet::<T>::sovereign_account_id_system(aaa_id);
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      let instance = maybe.as_mut().expect("benchmark actor exists");
+      instance.funding_source_policy = FundingSourcePolicy::AnySource;
+      instance
+        .funding_snapshots
+        .try_insert(
+          T::NativeAssetId::get(),
+          FundingBatch {
+            amount: One::one(),
+            block: 1u32.into(),
+            pending_amount: One::one(),
+            pending_last_block: Some(1u32.into()),
+          },
+        )
+        .expect("tracked funding batch fits");
+    });
+    let next_queue_fill = T::MaxQueueInsertionsPerBlock::get().min(T::MaxQueueLength::get());
+    let next_queue_ids: alloc::vec::Vec<AaaId> =
+      (20_000_000..20_000_000u64.saturating_add(u64::from(next_queue_fill))).collect();
+    NextQueue::<T>::put(
+      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(next_queue_ids)
+        .expect("next queue preload must fit benchmark bounds"),
+    );
+    for offset in 0..=T::MaxSpilloverBlocks::get() {
+      let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
+      fill_wakeup_bucket::<T>(
+        block,
+        T::MaxWakeupBucketSize::get(),
+        10_000_000 + u64::from(offset) * 100_000,
+      );
+    }
+    (aaa_id, recipient)
   }
 
   fn setup_scan_only_manual_actors<T: Config>(
@@ -808,15 +1066,111 @@ mod benches {
     }
   }
 
-  // Non-dispatch diagnostic benchmark for dense overdue wakeup admission.
   #[benchmark]
-  fn scheduler_wakeup_dense_due_drain(n: Linear<1, 64>) {
+  fn scheduler_on_idle_base() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    GlobalCircuitBreaker::<T>::put(false);
+    LastIngressIngestBlock::<T>::kill();
+    let threshold = T::MaxIdleStarvationBlocks::get();
+    IdleStarvationBlocks::<T>::put(threshold.saturating_sub(1));
+    #[block]
+    {
+      let breaker_active = GlobalCircuitBreaker::<T>::get();
+      let _ = LastIngressIngestBlock::<T>::get();
+      LastIngressIngestBlock::<T>::put(now);
+      Pallet::<T>::update_idle_starvation_state(breaker_active, Weight::zero());
+    }
+    assert_eq!(LastIngressIngestBlock::<T>::get(), Some(now));
+  }
+
+  #[benchmark]
+  fn scheduler_zombie_sweep_base() {
+    NextAaaId::<T>::put(1);
+    SweepCursor::<T>::put(0);
+    #[block]
+    {
+      core::hint::black_box(NextAaaId::<T>::get());
+      core::hint::black_box(SweepCursor::<T>::get());
+      core::hint::black_box(WakeupRetryPending::<T>::iter_keys().next());
+    }
+  }
+
+  #[benchmark]
+  fn scheduler_actor_probe() {
+    let aaa_id = bench_create_system_manual::<T>(3_000);
+    AaaInstances::<T>::mutate(aaa_id, |maybe_instance| {
+      maybe_instance
+        .as_mut()
+        .expect("benchmark actor must exist")
+        .manual_trigger_pending = true;
+    });
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    for offset in 0..=T::MaxSpilloverBlocks::get() {
+      let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
+      fill_wakeup_bucket::<T>(
+        block,
+        T::MaxWakeupBucketSize::get(),
+        50_000_000 + u64::from(offset) * 100_000,
+      );
+    }
+    #[block]
+    {
+      Pallet::<T>::benchmark_scheduler_actor_probe(aaa_id);
+    }
+    assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
+  }
+
+  // Runtime-backed hook benchmark for bounded current/staged queue bootstrap and carry-over.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_queue_bootstrap(n: Linear<0, 10_000>) {
+    let bounded = n.min(T::MaxQueueLength::get());
+    let current_ids: alloc::vec::Vec<AaaId> =
+      (30_000_000..30_000_000u64.saturating_add(u64::from(bounded))).collect();
+    let staged_ids: alloc::vec::Vec<AaaId> =
+      (40_000_000..40_000_000u64.saturating_add(u64::from(bounded))).collect();
+    CurrentQueue::<T>::put(
+      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(current_ids)
+        .expect("current queue preload must fit benchmark bounds"),
+    );
+    NextQueue::<T>::put(
+      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(staged_ids)
+        .expect("staged queue preload must fit benchmark bounds"),
+    );
+    let previous_epoch = QueueEpoch::<T>::get();
+    #[block]
+    {
+      let current = CurrentQueue::<T>::take().into_inner();
+      let staged = NextQueue::<T>::take().into_inner();
+      let (mut run_queue, mut queued_set) = Pallet::<T>::merge_queue_state(current, staged);
+      let mut carried = alloc::vec::Vec::with_capacity(run_queue.len());
+      while let Some(aaa_id) = run_queue.pop_front() {
+        queued_set.remove(&aaa_id);
+        carried.push(aaa_id);
+      }
+      CurrentQueue::<T>::put(BoundedVec::<AaaId, T::MaxQueueLength>::truncate_from(
+        carried,
+      ));
+      QueueEpoch::<T>::put(previous_epoch.saturating_add(1));
+    }
+    assert_eq!(QueueEpoch::<T>::get(), previous_epoch.saturating_add(1));
+    assert!(CurrentQueue::<T>::decode_len().unwrap_or(0) <= T::MaxQueueLength::get() as usize);
+  }
+
+  // Runtime-backed hook benchmark for dense overdue wakeup admission.
+  #[benchmark]
+  fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {
     let due = n
       .min(T::MaxWakeupsPerBlock::get())
       .min(T::MaxWakeupBucketSize::get());
     let due_block: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(due_block);
+    CurrentQueue::<T>::kill();
+    NextQueue::<T>::kill();
     fill_wakeup_bucket::<T>(due_block, due, 9_000_000);
+    for i in 0..due {
+      ScheduledWakeupBlock::<T>::insert(9_000_000u64.saturating_add(u64::from(i)), due_block);
+    }
     MinWakeupBlock::<T>::put(due_block);
     #[block]
     {
@@ -841,7 +1195,7 @@ mod benches {
     assert_eq!(MinWakeupBlock::<T>::get(), Some(expected));
   }
 
-  // Non-dispatch diagnostic benchmark for bounded spillover probing in WakeupIndex.
+  // Runtime-backed hook benchmark for bounded spillover probing in WakeupIndex.
   #[benchmark]
   fn scheduler_wakeup_spillover_probe(b: Linear<0, 9>) {
     let aaa_id = bench_create_system_manual::<T>(b);
@@ -875,8 +1229,106 @@ mod benches {
     }
   }
 
+  #[benchmark]
+  fn transaction_extension_ingress_base() {
+    let owner: T::AccountId = whitelisted_caller();
+    let populated_aaa_id = bench_create_user::<T>(owner);
+    let proof_witness = AaaInstances::<T>::get(populated_aaa_id)
+      .expect("benchmark actor exists")
+      .sovereign_account;
+    let recipient: T::AccountId = account("unmatched_ingress_recipient", 0, 0);
+    let source: T::AccountId = account("ingress_source", 0, 0);
+    T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
+      .expect("benchmark helper must prepare an unmatched producer event");
+    #[block]
+    {
+      // Storage benchmarking does not attribute an absent overlay lookup to its map. Read a
+      // populated witness first so the generated envelope includes one conservative database
+      // read and the map's maximum proof before exercising the real negative lookup.
+      assert!(SovereignIndex::<T>::contains_key(&proof_witness));
+      assert!(!T::BenchmarkHelper::run_address_event_ingress(&recipient));
+    }
+  }
+
+  #[benchmark]
+  fn transaction_extension_ingress_notify() {
+    let source: T::AccountId = account("ingress_source", 0, 0);
+    let (aaa_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
+      .expect("benchmark helper must prepare a matched producer event");
+    #[block]
+    {
+      assert!(T::BenchmarkHelper::run_address_event_ingress(&recipient));
+    }
+    assert!(AddressEventInbox::<T>::contains_key(aaa_id));
+    assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
+  }
+
+  #[benchmark]
+  fn funding_batch_promotion(a: Linear<1, 10>) {
+    let owner: T::AccountId = whitelisted_caller();
+    let aaa_id = bench_create_user::<T>(owner);
+    let assets = T::BenchmarkHelper::funding_assets(a);
+    AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      let instance = maybe.as_mut().expect("benchmark actor exists");
+      for asset in assets {
+        instance
+          .funding_snapshots
+          .try_insert(
+            asset,
+            FundingBatch {
+              amount: One::one(),
+              block: 1u32.into(),
+              pending_amount: 2u32.into(),
+              pending_last_block: Some(2u32.into()),
+            },
+          )
+          .expect("promotion benchmark bound fits");
+      }
+    });
+    #[block]
+    {
+      Pallet::<T>::promote_pending_funding(aaa_id);
+    }
+    let instance = AaaInstances::<T>::get(aaa_id).expect("benchmark actor exists");
+    assert!(instance.funding_snapshots.values().all(|batch| {
+      batch.amount == 2u32.into()
+        && batch.pending_amount.is_zero()
+        && batch.pending_last_block.is_none()
+    }));
+  }
+
+  #[benchmark]
+  fn compatibility_ingress_probe() {
+    IngressOverflowLen::<T>::put(0);
+    #[block]
+    {
+      core::hint::black_box(IngressOverflowLen::<T>::get());
+    }
+  }
+
+  #[benchmark]
+  fn compatibility_ingress_drain() {
+    let source: T::AccountId = account("ingress_source", 1, 0);
+    let (aaa_id, _) = prepare_saturated_address_actor::<T>(1);
+    T::BenchmarkHelper::clear_address_event_ingress_events();
+    assert!(Pallet::<T>::queue_address_event(
+      aaa_id,
+      T::NativeAssetId::get(),
+      One::one(),
+      Some(FundingProvenance::Signed(source)),
+    ));
+    #[block]
+    {
+      let _ = Pallet::<T>::drain_address_event_overflow(1);
+    }
+    assert_eq!(IngressOverflowLen::<T>::get(), 0);
+    assert!(AddressEventInbox::<T>::contains_key(aaa_id));
+    assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
+  }
+
   /// Builds a circular chain of `n` system AAAs where each transfers 1% of its
-  /// NTVE balance to the next in ring, then runs 3 blocks and asserts zero drift.
+  /// native balance to the next actor in the ring, then runs 3 blocks and asserts zero drift.
   pub(super) fn setup_and_run_circular_chain<T: Config>(
     requested_n: u32,
   ) -> alloc::vec::Vec<T::AccountId> {

@@ -35,19 +35,19 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands rustc cargo rustup du cut
+    require_commands rustc cargo rustup du cut sha256sum
     log_success "Runtime build prerequisites checked"
 }
 
 setup_wasm_target() {
     phase_banner "Step 2: Configure WASM target"
     log_info "Checking WASM target..."
-    if ! rustup target list --installed | grep -q "wasm32-unknown-unknown"; then
-        log_info "Installing wasm32-unknown-unknown target..."
-        rustup target add wasm32-unknown-unknown
+    if ! (cd "$TEMPLATE_DIR" && rustup target list --installed) | grep -qx "wasm32-unknown-unknown"; then
+        log_info "Installing wasm32-unknown-unknown target for the repository-pinned toolchain..."
+        (cd "$TEMPLATE_DIR" && rustup target add wasm32-unknown-unknown)
         log_success "WASM target installed"
     else
-        log_success "WASM target already installed"
+        log_success "WASM target already installed for the repository-pinned toolchain"
     fi
 }
 
@@ -58,7 +58,7 @@ build_runtime() {
     cd "$TEMPLATE_DIR"
 
     local start_time=$(date +%s)
-    cargo build --release -p deos-runtime
+    cargo build --release -p deos-runtime --locked
     local end_time=$(date +%s)
     local build_duration=$((end_time - start_time))
 
@@ -70,10 +70,14 @@ verify_build() {
     local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
 
     if [[ -f "$wasm_path" ]]; then
-        local wasm_size=$(du -h "$wasm_path" | cut -f1)
+        local wasm_size
+        local wasm_sha256
+        wasm_size=$(du -h "$wasm_path" | cut -f1)
+        wasm_sha256=$(sha256sum "$wasm_path" | cut -d' ' -f1)
         log_success "Runtime WASM artifact verified"
-        echo "  Path: $wasm_path"
-        echo "  Size: $wasm_size"
+        echo "  Path:   $wasm_path"
+        echo "  Size:   $wasm_size"
+        echo "  SHA256: $wasm_sha256"
     else
         log_error "Runtime WASM not found at expected path: $wasm_path"
         exit 1

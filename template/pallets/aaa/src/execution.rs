@@ -1,6 +1,6 @@
 use super::pallet::*;
 use super::types::Task as AaaTask;
-use super::{AssetOps, DexOps, FeeRouter, LiquidityDonationOps, StakingOps};
+use super::{AssetOps, DexOps, FeeCollector, LiquidityDonationOps, StakingOps};
 use alloc::vec::Vec;
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
@@ -62,6 +62,7 @@ enum PreparedTask<T: Config> {
     asset_in: T::AssetId,
     asset_out: T::AssetId,
     amount_out: T::Balance,
+    max_amount_in: T::Balance,
     slippage_tolerance: Perbill,
   },
   AddLiquidity {
@@ -98,6 +99,37 @@ enum PreparedTaskOutcome<T: Config> {
 }
 
 impl<T: Config> Pallet<T> {
+  pub(crate) fn promote_pending_funding(aaa_id: AaaId) {
+    let mut promotions = alloc::vec::Vec::new();
+    AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      let Some(inst) = maybe.as_mut() else {
+        return;
+      };
+      let assets: alloc::vec::Vec<_> = inst.funding_snapshots.keys().copied().collect();
+      for asset in assets {
+        let Some(batch) = inst.funding_snapshots.get_mut(&asset) else {
+          continue;
+        };
+        if batch.pending_amount.is_zero() {
+          continue;
+        }
+        batch.amount = batch.pending_amount;
+        if let Some(block) = batch.pending_last_block.take() {
+          batch.block = block;
+        }
+        batch.pending_amount = Zero::zero();
+        promotions.push((asset, batch.amount));
+      }
+    });
+    for (asset, amount) in promotions {
+      Self::deposit_event(Event::FundingBatchPromoted {
+        aaa_id,
+        asset,
+        amount,
+      });
+    }
+  }
+
   pub(crate) fn execute_single_cycle(aaa_id: AaaId) -> Weight {
     let base_weight = T::DbWeight::get()
       .reads(1)
@@ -160,6 +192,7 @@ impl<T: Config> Pallet<T> {
     };
     let trigger_balances =
       Self::capture_trigger_balances(&actor, execution_plan, reserved_fee_remaining);
+    let trigger_share_balances = Self::capture_trigger_share_balances(&actor, execution_plan);
     let mut intent_buffer: Vec<PreparedTask<T>> = Vec::new();
     for (step_idx, step) in execution_plan.iter().enumerate() {
       let step_num = step_idx as u32;
@@ -186,7 +219,7 @@ impl<T: Config> Pallet<T> {
             }
             continue;
           }
-          if T::FeeRouter::route_fee(&actor, &fee_sink, native, eval_fee).is_err() {
+          if T::FeeCollector::collect_fee(&actor, &fee_sink, native, eval_fee).is_err() {
             failed_steps = failed_steps.saturating_add(1);
             Self::deposit_event(Event::StepFailed {
               aaa_id,
@@ -213,7 +246,7 @@ impl<T: Config> Pallet<T> {
       match condition_result {
         Ok(true) => {}
         Ok(false) => {
-          if is_user && !matches!(step.task, AaaTask::Noop) {
+          if is_user {
             let skip_exec_fee =
               T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
             reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
@@ -228,7 +261,7 @@ impl<T: Config> Pallet<T> {
           continue;
         }
         Err(e) => {
-          if is_user && !matches!(step.task, AaaTask::Noop) {
+          if is_user {
             let skip_exec_fee =
               T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
             reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
@@ -249,13 +282,14 @@ impl<T: Config> Pallet<T> {
         }
       }
       let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-      let charge_exec_fee = is_user && !matches!(step.task, AaaTask::Noop) && !exec_fee.is_zero();
+      let charge_exec_fee = is_user && !exec_fee.is_zero();
       let prepared_task = match Self::prepare_task(
         &step.task,
         &actor,
         instance.aaa_type,
         reserved_fee_remaining,
         &trigger_balances,
+        &trigger_share_balances,
         funding_snapshots,
       ) {
         Ok(PreparedTaskOutcome::Executable(task)) => task,
@@ -273,6 +307,9 @@ impl<T: Config> Pallet<T> {
           continue;
         }
         Ok(PreparedTaskOutcome::FundingUnavailable) => {
+          if charge_exec_fee {
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
+          }
           skipped_funding_unavailable = skipped_funding_unavailable.saturating_add(1);
           Self::deposit_event(Event::StepSkipped {
             aaa_id,
@@ -322,7 +359,7 @@ impl<T: Config> Pallet<T> {
           }
           continue;
         }
-        if T::FeeRouter::route_fee(&actor, &fee_sink, native, exec_fee).is_err() {
+        if T::FeeCollector::collect_fee(&actor, &fee_sink, native, exec_fee).is_err() {
           reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::StepFailed {
@@ -377,11 +414,6 @@ impl<T: Config> Pallet<T> {
           inst.consecutive_failures = inst.consecutive_failures.saturating_add(1);
         }
       });
-      if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
-        if !inst.is_paused && Self::failure_limit_reached(inst.consecutive_failures) {
-          let _ = Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures);
-        }
-      }
     }
     Self::deposit_event(Event::CycleSummary {
       aaa_id,
@@ -393,11 +425,18 @@ impl<T: Config> Pallet<T> {
       failed_steps,
     });
     if !execution_plan_failed {
+      Self::promote_pending_funding(aaa_id);
+    }
+    if execution_plan_failed {
       if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
-        if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
-          if cycle_nonce >= target_nonce {
-            let _ = Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached);
-          }
+        if !inst.is_paused && Self::failure_limit_reached(inst.consecutive_failures) {
+          let _ = Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures);
+        }
+      }
+    } else if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
+      if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
+        if cycle_nonce >= target_nonce {
+          let _ = Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached);
         }
       }
     }
@@ -423,6 +462,7 @@ impl<T: Config> Pallet<T> {
     let is_user = instance.aaa_type == AaaType::User;
     let trigger_balances =
       Self::capture_trigger_balances(actor, execution_plan, reserved_fee_remaining);
+    let trigger_share_balances = Self::capture_trigger_share_balances(actor, execution_plan);
     let mut intent_buffer: Vec<PreparedTask<T>> = Vec::new();
     let mut executed_steps = 0u32;
     let mut skipped_steps = 0u32;
@@ -435,22 +475,24 @@ impl<T: Config> Pallet<T> {
           let native = T::NativeAssetId::get();
           let balance = T::AssetOps::balance(actor, native);
           let fee_sink = T::FeeSink::get();
-          if balance < eval_fee {
+          if reserved_fee_remaining < eval_fee || balance < eval_fee {
             let error = DispatchError::from(Error::<T>::InsufficientFee);
             failed_steps = failed_steps.saturating_add(1);
             Self::deposit_event(Event::OnCloseStepFailed {
               aaa_id,
               step_index: step_num,
+              kind: OnCloseStepFailureKind::EvaluationFee,
               error,
             });
             continue;
           }
-          if T::FeeRouter::route_fee(actor, &fee_sink, native, eval_fee).is_err() {
+          if T::FeeCollector::collect_fee(actor, &fee_sink, native, eval_fee).is_err() {
             let error = DispatchError::Other("EvaluationFeeTransferFailed");
             failed_steps = failed_steps.saturating_add(1);
             Self::deposit_event(Event::OnCloseStepFailed {
               aaa_id,
               step_index: step_num,
+              kind: OnCloseStepFailureKind::EvaluationFee,
               error,
             });
             continue;
@@ -461,16 +503,21 @@ impl<T: Config> Pallet<T> {
       match Self::evaluate_conditions(&step.conditions, actor, reserved_fee_remaining) {
         Ok(true) => {}
         Ok(false) => {
-          if is_user && !matches!(step.task, AaaTask::Noop) {
+          if is_user {
             let skip_exec_fee =
               T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
             reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
           }
           skipped_steps = skipped_steps.saturating_add(1);
+          Self::deposit_event(Event::OnCloseStepSkipped {
+            aaa_id,
+            step_index: step_num,
+            reason: StepSkippedReason::ConditionsNotMet,
+          });
           continue;
         }
         Err(error) => {
-          if is_user && !matches!(step.task, AaaTask::Noop) {
+          if is_user {
             let skip_exec_fee =
               T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
             reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
@@ -479,6 +526,7 @@ impl<T: Config> Pallet<T> {
           Self::deposit_event(Event::OnCloseStepFailed {
             aaa_id,
             step_index: step_num,
+            kind: OnCloseStepFailureKind::Condition,
             error,
           });
           if Self::apply_error_policy(aaa_id, instance.cycle_nonce, step_num, step.on_error, error)
@@ -489,21 +537,39 @@ impl<T: Config> Pallet<T> {
         }
       }
       let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-      let charge_exec_fee = is_user && !matches!(step.task, AaaTask::Noop) && !exec_fee.is_zero();
+      let charge_exec_fee = is_user && !exec_fee.is_zero();
       let prepared_task = match Self::prepare_task(
         &step.task,
         actor,
         instance.aaa_type,
         reserved_fee_remaining,
         &trigger_balances,
+        &trigger_share_balances,
         funding_snapshots,
       ) {
         Ok(PreparedTaskOutcome::Executable(task)) => task,
-        Ok(PreparedTaskOutcome::Skipped | PreparedTaskOutcome::FundingUnavailable) => {
+        Ok(PreparedTaskOutcome::Skipped) => {
           if charge_exec_fee {
             reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
           }
           skipped_steps = skipped_steps.saturating_add(1);
+          Self::deposit_event(Event::OnCloseStepSkipped {
+            aaa_id,
+            step_index: step_num,
+            reason: StepSkippedReason::ResolutionSkipped,
+          });
+          continue;
+        }
+        Ok(PreparedTaskOutcome::FundingUnavailable) => {
+          if charge_exec_fee {
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
+          }
+          skipped_steps = skipped_steps.saturating_add(1);
+          Self::deposit_event(Event::OnCloseStepSkipped {
+            aaa_id,
+            step_index: step_num,
+            reason: StepSkippedReason::FundingUnavailable,
+          });
           continue;
         }
         Err(error) => {
@@ -514,6 +580,7 @@ impl<T: Config> Pallet<T> {
           Self::deposit_event(Event::OnCloseStepFailed {
             aaa_id,
             step_index: step_num,
+            kind: OnCloseStepFailureKind::Resolution,
             error,
           });
           if Self::apply_error_policy(aaa_id, instance.cycle_nonce, step_num, step.on_error, error)
@@ -527,22 +594,24 @@ impl<T: Config> Pallet<T> {
         let native = T::NativeAssetId::get();
         let balance = T::AssetOps::balance(actor, native);
         let fee_sink = T::FeeSink::get();
-        if balance < exec_fee {
+        if reserved_fee_remaining < exec_fee || balance < exec_fee {
           let error = DispatchError::from(Error::<T>::InsufficientFee);
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::OnCloseStepFailed {
             aaa_id,
             step_index: step_num,
+            kind: OnCloseStepFailureKind::ExecutionFee,
             error,
           });
           continue;
         }
-        if T::FeeRouter::route_fee(actor, &fee_sink, native, exec_fee).is_err() {
+        if T::FeeCollector::collect_fee(actor, &fee_sink, native, exec_fee).is_err() {
           let error = DispatchError::Other("ExecutionFeeTransferFailed");
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::OnCloseStepFailed {
             aaa_id,
             step_index: step_num,
+            kind: OnCloseStepFailureKind::ExecutionFee,
             error,
           });
           continue;
@@ -557,6 +626,7 @@ impl<T: Config> Pallet<T> {
           Self::deposit_event(Event::OnCloseStepFailed {
             aaa_id,
             step_index: step_num,
+            kind: OnCloseStepFailureKind::Adapter,
             error,
           });
           abort =
@@ -680,6 +750,24 @@ impl<T: Config> Pallet<T> {
     balances
   }
 
+  fn capture_trigger_share_balances(
+    actor: &T::AccountId,
+    execution_plan: &ExecutionPlanOf<T>,
+  ) -> alloc::vec::Vec<(T::AssetId, T::Balance)> {
+    let mut balances = alloc::vec::Vec::new();
+    let mut seen = alloc::collections::BTreeSet::new();
+    for step in execution_plan {
+      let AaaTask::Unstake { asset, shares } = &step.task else {
+        continue;
+      };
+      if !matches!(shares, AmountResolution::PercentageOfTrigger(_)) || !seen.insert(*asset) {
+        continue;
+      }
+      balances.push((*asset, T::StakingOps::share_balance(actor, *asset)));
+    }
+    balances
+  }
+
   fn trigger_balance(
     trigger_balances: &[(T::AssetId, T::Balance)],
     asset: T::AssetId,
@@ -699,9 +787,10 @@ impl<T: Config> Pallet<T> {
     aaa_type: AaaType,
     reserved: T::Balance,
     trigger_balances: &[(T::AssetId, T::Balance)],
+    trigger_share_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingSnapshot<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance, BlockNumberFor<T>>,
       T::MaxFundingTrackedAssets,
     >,
   ) -> Result<PreparedTaskOutcome<T>, DispatchError> {
@@ -852,11 +941,17 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
+        let max_amount_in = Self::spendable_balance(actor, *asset_in, reserved)
+          .saturating_sub(T::AssetOps::minimum_balance(*asset_in));
+        if max_amount_in.is_zero() {
+          return Ok(PreparedTaskOutcome::FundingUnavailable);
+        }
         Ok(PreparedTaskOutcome::Executable(
           PreparedTask::SwapExactOut {
             asset_in: *asset_in,
             asset_out: *asset_out,
             amount_out: resolved,
+            max_amount_in,
             slippage_tolerance: *slippage_tolerance,
           },
         ))
@@ -867,7 +962,7 @@ impl<T: Config> Pallet<T> {
         amount_a,
         amount_b,
       } => {
-        let resolved_a = match Self::resolve_for_task(
+        let outcome_a = Self::resolve_for_task(
           amount_a,
           *asset_a,
           actor,
@@ -875,14 +970,8 @@ impl<T: Config> Pallet<T> {
           trigger_balances,
           funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
-        )? {
-          Ok(value) => value,
-          Err(TaskResolutionOutcome::Skipped) => return Ok(PreparedTaskOutcome::Skipped),
-          Err(TaskResolutionOutcome::FundingUnavailable) => {
-            return Ok(PreparedTaskOutcome::FundingUnavailable);
-          }
-        };
-        let resolved_b = match Self::resolve_for_task(
+        )?;
+        let outcome_b = Self::resolve_for_task(
           amount_b,
           *asset_b,
           actor,
@@ -890,21 +979,24 @@ impl<T: Config> Pallet<T> {
           trigger_balances,
           funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
-        )? {
-          Ok(value) => value,
-          Err(TaskResolutionOutcome::Skipped) => return Ok(PreparedTaskOutcome::Skipped),
-          Err(TaskResolutionOutcome::FundingUnavailable) => {
-            return Ok(PreparedTaskOutcome::FundingUnavailable);
+        )?;
+        match (outcome_a, outcome_b) {
+          (Err(TaskResolutionOutcome::FundingUnavailable), _)
+          | (_, Err(TaskResolutionOutcome::FundingUnavailable)) => {
+            Ok(PreparedTaskOutcome::FundingUnavailable)
           }
-        };
-        Ok(PreparedTaskOutcome::Executable(
-          PreparedTask::AddLiquidity {
-            asset_a: *asset_a,
-            asset_b: *asset_b,
-            amount_a: resolved_a,
-            amount_b: resolved_b,
-          },
-        ))
+          (Err(TaskResolutionOutcome::Skipped), _) | (_, Err(TaskResolutionOutcome::Skipped)) => {
+            Ok(PreparedTaskOutcome::Skipped)
+          }
+          (Ok(resolved_a), Ok(resolved_b)) => Ok(PreparedTaskOutcome::Executable(
+            PreparedTask::AddLiquidity {
+              asset_a: *asset_a,
+              asset_b: *asset_b,
+              amount_a: resolved_a,
+              amount_b: resolved_b,
+            },
+          )),
+        }
       }
       AaaTask::RemoveLiquidity { lp_asset, amount } => {
         let resolved = match Self::resolve_for_task(
@@ -981,18 +1073,16 @@ impl<T: Config> Pallet<T> {
         ))
       }
       AaaTask::Unstake { asset, shares } => {
-        let resolved = match Self::resolve_for_task(
+        let resolved = match Self::resolve_unstake_shares(
           shares,
           *asset,
           actor,
-          reserved,
-          trigger_balances,
+          trigger_share_balances,
           funding_snapshots,
-          AmountResolutionPolicy::ExpendableSpend,
         )? {
-          Ok(value) => value,
-          Err(TaskResolutionOutcome::Skipped) => return Ok(PreparedTaskOutcome::Skipped),
-          Err(TaskResolutionOutcome::FundingUnavailable) => {
+          AmountResolutionOutcome::Resolved(value) => value,
+          AmountResolutionOutcome::Skipped => return Ok(PreparedTaskOutcome::Skipped),
+          AmountResolutionOutcome::FundingUnavailable => {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
@@ -1089,6 +1179,7 @@ impl<T: Config> Pallet<T> {
             asset_in,
             asset_out,
             amount_out,
+            max_amount_in,
             slippage_tolerance,
           } => {
             let amount_in = T::DexOps::swap_exact_out(
@@ -1096,6 +1187,7 @@ impl<T: Config> Pallet<T> {
               asset_in,
               asset_out,
               amount_out,
+              max_amount_in,
               slippage_tolerance,
             )?;
             Self::deposit_event(Event::SwapExecuted {
@@ -1188,7 +1280,7 @@ impl<T: Config> Pallet<T> {
     trigger_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingSnapshot<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance, BlockNumberFor<T>>,
       T::MaxFundingTrackedAssets,
     >,
     policy: AmountResolutionPolicy,
@@ -1257,6 +1349,50 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  fn resolve_unstake_shares(
+    spec: &AmountResolution<T::Balance>,
+    position_asset: T::AssetId,
+    who: &T::AccountId,
+    trigger_share_balances: &[(T::AssetId, T::Balance)],
+    funding_snapshots: &BoundedBTreeMap<
+      T::AssetId,
+      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      T::MaxFundingTrackedAssets,
+    >,
+  ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
+    let current_shares = T::StakingOps::share_balance(who, position_asset);
+    let resolved = match spec {
+      AmountResolution::Fixed(shares) => *shares,
+      AmountResolution::AllBalance => current_shares,
+      AmountResolution::PercentageOfCurrent(pct) => pct.mul_floor(current_shares),
+      AmountResolution::PercentageOfTrigger(pct) => {
+        let Some(trigger_shares) = Self::trigger_balance(trigger_share_balances, position_asset)
+        else {
+          return Ok(AmountResolutionOutcome::Skipped);
+        };
+        pct.mul_floor(trigger_shares)
+      }
+      AmountResolution::PercentageOfLastFunding(pct) => {
+        let share_asset =
+          T::StakingOps::share_asset(position_asset).ok_or(Error::<T>::InvalidAmountResolution)?;
+        let Some(snapshot) = funding_snapshots.get(&share_asset) else {
+          return Ok(AmountResolutionOutcome::FundingUnavailable);
+        };
+        if snapshot.amount.is_zero() {
+          return Ok(AmountResolutionOutcome::FundingUnavailable);
+        }
+        pct.mul_floor(snapshot.amount)
+      }
+    };
+    if resolved.is_zero() {
+      return Ok(AmountResolutionOutcome::Skipped);
+    }
+    if resolved > current_shares {
+      return Ok(AmountResolutionOutcome::FundingUnavailable);
+    }
+    Ok(AmountResolutionOutcome::Resolved(resolved))
+  }
+
   fn resolve_amount_with_policy(
     spec: &AmountResolution<T::Balance>,
     asset: T::AssetId,
@@ -1265,24 +1401,23 @@ impl<T: Config> Pallet<T> {
     trigger_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingSnapshot<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance, BlockNumberFor<T>>,
       T::MaxFundingTrackedAssets,
     >,
     policy: AmountResolutionPolicy,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     let spendable_current = Self::spendable_balance(who, asset, reserved);
+    let policy_spend_limit = if policy == AmountResolutionPolicy::PreserveSpend {
+      spendable_current.saturating_sub(T::AssetOps::minimum_balance(asset))
+    } else {
+      spendable_current
+    };
     let resolved = match spec {
       AmountResolution::Fixed(amount) => *amount,
-      AmountResolution::AllBalance => {
-        if policy == AmountResolutionPolicy::PreserveSpend {
-          spendable_current.saturating_sub(T::AssetOps::minimum_balance(asset))
-        } else {
-          spendable_current
-        }
-      }
+      AmountResolution::AllBalance => policy_spend_limit,
       AmountResolution::PercentageOfCurrent(pct) => {
-        let value = pct.mul_floor(spendable_current);
-        if !pct.is_zero() && !spendable_current.is_zero() && value.is_zero() {
+        let value = pct.mul_floor(policy_spend_limit);
+        if !pct.is_zero() && !policy_spend_limit.is_zero() && value.is_zero() {
           return Ok(AmountResolutionOutcome::Skipped);
         }
         value
@@ -1308,16 +1443,13 @@ impl<T: Config> Pallet<T> {
         if !pct.is_zero() && value.is_zero() {
           return Ok(AmountResolutionOutcome::Skipped);
         }
-        if policy == AmountResolutionPolicy::PreserveSpend && value > spendable_current {
-          return Ok(AmountResolutionOutcome::FundingUnavailable);
-        }
         value
       }
     };
     if resolved.is_zero() {
       return Ok(AmountResolutionOutcome::Skipped);
     }
-    if policy == AmountResolutionPolicy::PreserveSpend && resolved > spendable_current {
+    if policy == AmountResolutionPolicy::PreserveSpend && resolved > policy_spend_limit {
       return Ok(AmountResolutionOutcome::FundingUnavailable);
     }
     Ok(AmountResolutionOutcome::Resolved(resolved))

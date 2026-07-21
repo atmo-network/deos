@@ -467,12 +467,12 @@ Validation of adaptive system behaviors, intelligent routing decisions, and econ
 - Validates: Router chooses XYK route when pool has sufficient liquidity; XYK provides better price than TMC in established state; router correctly compares TMC vs XYK prices
 - Failure Criteria: Router selects TMC when XYK provides better price; incorrect price comparison
 
-### 12.4 Two-Phase Reward Routing - 20/80 Collection
+### 12.4 Two-Phase Reward Routing - Unified Fee Collection
 
-- Nature: Tests the outer fee split between collator and Fee Sink.
-- Necessity: Validates the shared collection rule before phase-specific redistribution.
-- Validates: 20% collator share, 80% Fee Sink share, and exact conservation.
-- Failure Criteria: Split ratio wrong or total amount not conserved.
+- Nature: Tests collection of non-router protocol fees into Fee Sink.
+- Necessity: Keeps collection separate from phase-specific allocation and the Axial Router burn path.
+- Validates: Fee Sink receives 100% of the collected amount.
+- Failure Criteria: Any amount bypasses Fee Sink or total value is not conserved.
 
 ### 12.5 Two-Phase Reward Routing - Phase 1 Pools
 
@@ -481,18 +481,18 @@ Validation of adaptive system behaviors, intelligent routing decisions, and econ
 - Validates: 50/50 pool split and exact conservation.
 - Failure Criteria: Any missing half, extra destination, or conservation failure.
 
-### 12.6 Two-Phase Reward Routing - Phase 2 1:1:4
+### 12.6 Two-Phase Reward Routing - Phase 2 Equal Thirds
 
-- Nature: Tests future permissionless-collator redistribution shape.
-- Necessity: Keeps the gated Phase 2 target explicit without activating it at launch.
-- Validates: 1 part staking pool, 1 part liquidity pool, 4 parts claimable LP nomination.
-- Failure Criteria: Wrong ratio or non-conserved Fee Sink amount.
+- Nature: Tests the future permissionless-collator redistribution shape.
+- Necessity: Keeps the gated Phase 2 target explicit without inventing its unresolved security-reward topology.
+- Validates: Equal thirds for security rewards, staking ingress, and liquidity provisioning.
+- Failure Criteria: Unequal allocations or non-conserved Fee Sink amount.
 
 ### 12.7 Two-Phase Reward Routing - Remainder Conservation
 
 - Nature: Tests reward-routing splits with dust-sized, non-divisible amounts.
 - Necessity: Prevents integer division from leaking or inventing value when fees are smaller than clean ratio units.
-- Validates: Outer 20/80 collection, Phase 1, and Phase 2 all conserve total input with remainders assigned to existing destinations.
+- Validates: Full Fee Sink collection, Phase 1, and Phase 2 all conserve total input, with indivisible equal-third remainder retained by Fee Sink for a later cycle.
 - Failure Criteria: Any split loses value, creates value, or routes remainder outside the configured destination set.
 
 ### 12.8 Economic Incentive Alignment

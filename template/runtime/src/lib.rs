@@ -52,8 +52,8 @@ pub const VERSION: sp_version::RuntimeVersion = sp_version::RuntimeVersion {
   authoring_version: 1,
   impl_version: 1,
   system_version: 3,
-  spec_version: 212,
-  transaction_version: 100,
+  spec_version: 1,
+  transaction_version: 1,
 };
 
 /// The version information used to identify this runtime when compiled natively.
@@ -62,6 +62,20 @@ pub fn native_version() -> sp_version::NativeVersion {
   sp_version::NativeVersion {
     runtime_version: VERSION,
     can_author_with: Default::default(),
+  }
+}
+
+#[cfg(test)]
+mod runtime_version_tests {
+  use super::VERSION;
+
+  #[test]
+  fn pre_launch_framework_runtime_version_uses_fresh_genesis_baseline() {
+    assert_eq!(VERSION.authoring_version, 1);
+    assert_eq!(VERSION.impl_version, 1);
+    assert_eq!(VERSION.system_version, 3);
+    assert_eq!(VERSION.spec_version, 1);
+    assert_eq!(VERSION.transaction_version, 1);
   }
 }
 
@@ -90,6 +104,7 @@ pub type TxExtension = cumulus_pallet_weight_reclaim::StorageWeightReclaim<
     frame_system::CheckEra<Runtime>,
     frame_system::CheckNonce<Runtime>,
     frame_system::CheckWeight<Runtime>,
+    configs::address_event_ingress::AddressEventIngressExtension,
     pallet_transaction_payment::ChargeTransactionPayment<Runtime>,
     frame_metadata_hash_extension::CheckMetadataHash<Runtime>,
   ),
@@ -138,7 +153,7 @@ pub(crate) use async_backing_params::*;
 pub const HOURS: BlockNumber = 600;
 pub const MAXIMUM_BLOCK_WEIGHT: Weight = Weight::from_parts(2_000_000_000_000, 5_000_000);
 pub const NORMAL_DISPATCH_RATIO: Perbill = Perbill::from_percent(75);
-pub const MIN_ON_IDLE_RESERVE_RATIO: Perbill = Perbill::from_percent(10);
+pub const MIN_ON_IDLE_RESERVE_RATIO: Perbill = Perbill::from_percent(22);
 pub const AVERAGE_ON_INITIALIZE_RATIO: Perbill = Perbill::from_percent(10);
 
 /// Handles converting a weight scalar to a fee value.

@@ -661,6 +661,7 @@ impl pallet_governance::Config for Runtime {
   type AdminOrigin = EnsureRoot<AccountId>;
   type Currency = Balances;
   type ProposalOpeningFee = ProposalOpeningFee;
+  type ProposalFeeRecipient = crate::configs::aaa_config::AaaFeeRecipient;
   type DomainId = AssetId;
   type WinningVoteItemId = u32;
   type Epoch = BlockNumber;

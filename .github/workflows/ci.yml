@@ -183,6 +183,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-bench-
 
+      - name: Production runtime Wasm
+        run: |
+          cargo build --release -p deos-runtime --locked
+          test -s target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
+          sha256sum target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
+
       - name: Governance benchmark tests
         run: cargo test -p pallet-deos-governance --features runtime-benchmarks --locked
 

@@ -132,13 +132,13 @@ _The deflationary engine._
 
 _The launch economics fan-out hub._
 
-- `Function`: Collects all protocol fees and routes them into the active reward flows for the current launch phase.
-- `Collection Rule`: Unified 20% collator / 80% Fee Sink split applied to transaction fees, AAA fees, and future block rewards once the block reward source is defined. When the author cannot be resolved, 100% goes to Fee Sink.
+- `Function`: Collects all non-Axial protocol action fees and routes them into the active reward flows for the current launch phase; Axial Router trading fees remain the dedicated Burn Actor flow.
+- `Collection Rule`: 100% of transaction, AAA, governance-opening, and XCM-execution fees enters Fee Sink before allocation; collection never pays the current author directly.
 - `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — every block, timer-driven `every_blocks = 1`:
   1. 50% → staking-pool ingress holding account as native balance, later burned and minted into the local native-staking asset after AAA #14 donation execution
   2. 50% → native staking LP provisioning actor AAA #14 as native balance, immediately burned and bridged into the local native-staking asset for donation execution
 - `Release Gate`: the Phase 1 staking-yield and LP-donation bridge is wired; block reward source/amount design remains the separate future gate.
-- `Phase 2 (future)`: 1∶1∶4 redistribution into staking pool, liquidity pool, and claimable LP-nomination rewards weighted by GovXP.
+- `Permissionless Phase (future)`: Equal thirds flow to bounded security rewards, staking ingress, and liquidity provisioning only after permissionless collators and the security-reward settlement contract ship; indivisible remainder stays in Fee Sink for a later cycle, and no `CollatorRewardPot` topology is assumed before that gate.
 - `Resilience`: Phase 1 SplitTransfer legs are unwrapped synchronously, with ED preservation for the Fee Sink sovereign account.
 
 #### ⚡ Liquidity Actor (System AAA #2 — The Transformer)
@@ -377,7 +377,7 @@ The parachain acts as a `Sovereign Liquidity Hub`, accepting assets from Relay C
 
 - `Ingress Protocol`: The system accepts `ReserveAssetDeposited` and `Teleport` instructions.
 - `Asset Mapping (Hybrid)`: bidirectional `Location <-> AssetId` stored on-chain in the Asset Registry; IDs are generated once at registration (`hash(Location)`) and then persisted as the stable identity contract. This protects against XCM location-key drift while keeping forward lookup, reverse lookup, and bijectivity O(1).
-- `Holding Register`: Incoming assets are held in a temporary register before being dispatched to the `ForeignAssetsTransactor`.
+- `Holding Register`: Incoming assets are held temporarily before dispatch to the asset transactor. The reference runtime caps this register at one asset while `FixedWeightBounds` is active, so one generated saturated foreign-asset AAA deposit envelope safely prices every instruction; multi-asset holding requires an instruction-specific weigher before activation.
 - `Sovereign Transact Surface`: The current reference line keeps barrier/origin-conversion plumbing for paid and explicit unpaid execution classes, but exposes no sovereign-XCM runtime-call dispatch surface by default; `SafeCallFilter = Nothing` makes `Transact` fail-closed unless a later constitutional/runtime slice explicitly opts concrete calls in.
 
 ### 6.2 Foreign Asset Transactor

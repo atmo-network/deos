@@ -611,7 +611,7 @@ The specification MUST state the intended control contract honestly:
 
 1. Signed users SHOULD be able to participate in the public voting tracks enabled for their domain + payload-kind combinations
 2. Proposal submission MAY remain payload-kind-specific and runtime-configurable, but the public v1 path SHOULD move toward signed submission for the combinations that are meant to be public
-3. Submission MAY charge a runtime-configured burned opening fee; the v1 anti-spam contract intentionally uses fee plus bounded active-cap pressure rather than an outcome-dependent proposal bond
+3. Submission MAY charge a runtime-configured opening fee collected into the runtime Fee Sink; the v1 anti-spam contract intentionally uses fee plus bounded active-cap pressure rather than an outcome-dependent proposal bond
 4. If GovXP / reputation policy depends on proposal authorship, each live proposal MUST carry one explicit proposer / sponsor identity even when a privileged origin submits it on that account's behalf
 5. Proposal-opening and proposal-success authorship counters MUST be recorded on-chain from v1 so later GovXP policy can consume them without archive reconstruction
 6. Narrow admin recovery / override tools MAY exist, but they MUST be explicit and limited
@@ -833,7 +833,7 @@ The governance contract SHOULD remain analyzable against at least these attack f
 - `mint-whale or tactical capture` — mitigated by explicit primary/protection hierarchy above tactical execution
 - `flash or late-stage governance` — mitigated by early-open protection, lead-in, and ballot-time Declining Power on ordinary tracks
 - `protocol capture` — mitigated by the constitutional `$VETO` protection layer above strategic governance
-- `proposal spam or agenda flooding` — mitigated by bounded active caps plus a burned opening fee on proposal creation
+- `proposal spam or agenda flooding` — mitigated by bounded active caps plus a Fee Sink-collected opening fee on proposal creation
 - `treasury drain or invoice fraud` — mitigated by domain/payload-specific thresholds, binary protection cancellation, and explicit proposal/invoice lifecycle rules
 - `GovXP farming or reputation manipulation` — mitigated in v1 by storing bounded counters while deferring any live vote-power amplification to a later explicit policy revision, and by keeping advisory payloads non-rewarding by default
 
@@ -911,7 +911,7 @@ This version does not try to specify:
 - A promise that all governance payload kinds become public-submittable in the immediate next runtime slice
 - Conviction-style lock-for-weight mechanics — TMCTOL's liquid staking architecture (`stXXX` receipts) is structurally incompatible with hard token locks; the temporal-weighting role is already served by Declining Power, and commitment signals belong in later GovXP policy rather than in a separate lock multiplier
 - Per-track delegation or proxy voting — reserved for a later version, not specified here
-- Proposal bonds or refundable decision deposits as the anti-spam contract for v1; this version prefers a burned opening fee plus bounded caps
+- Proposal bonds or refundable decision deposits as the anti-spam contract for v1; this version prefers a Fee Sink-collected opening fee plus bounded caps
 - Adaptive approval/support curves in any form
 
 Those remain future evolutions or explicit exclusions, but any later extension SHOULD compose with the track, vote-power, lifecycle, and boundedness rules defined here.
