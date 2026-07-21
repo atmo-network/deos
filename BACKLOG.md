@@ -2,6 +2,10 @@
 
 > Open framework work only; durable protocol lives in `AGENTS.md`, and completed delivery history lives in `CHANGELOG.md`.
 
+## 0.7.0 Release Gates
+
+- [ ] `Exact-Commit Release Evidence`: Require the corrected release commit to pass the full GitHub CI, including a real production Wasm artifact build with `SKIP_WASM_BUILD` absent, before creating `v0.7.0`.
+
 ## Open Product / Client Work
 
 ### Wallet and portfolio boundary

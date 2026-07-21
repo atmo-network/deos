@@ -57,6 +57,8 @@ build_runtime() {
 
     cd "$TEMPLATE_DIR"
 
+    # substrate-wasm-builder treats any presence of SKIP_WASM_BUILD, including `0`, as skip.
+    unset SKIP_WASM_BUILD
     local start_time=$(date +%s)
     cargo build --release -p deos-runtime --locked
     local end_time=$(date +%s)

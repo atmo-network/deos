@@ -140,8 +140,6 @@ jobs:
     name: Benchmark Compilability
     runs-on: ubuntu-24.04
     timeout-minutes: 90
-    env:
-      SKIP_WASM_BUILD: 0
     defaults:
       run:
         working-directory: template

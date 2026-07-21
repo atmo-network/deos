@@ -4,7 +4,14 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
-export SKIP_WASM_BUILD
+if [[ "$SKIP_WASM_BUILD" == "1" ]]; then
+    export SKIP_WASM_BUILD
+elif [[ "$SKIP_WASM_BUILD" == "0" ]]; then
+    unset SKIP_WASM_BUILD
+else
+    echo "SKIP_WASM_BUILD must be 0 or 1" >&2
+    exit 2
+fi
 
 usage() {
     cat <<'EOF'
