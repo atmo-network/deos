@@ -200,6 +200,10 @@ verify_weight_file_contract() {
     local required_runtime_benchmarks=(
         "scheduler_actor_probe"
         "scheduler_queue_bootstrap"
+        "scheduler_paged_append_existing_page"
+        "scheduler_paged_append_new_page"
+        "scheduler_paged_consume_preserve_page"
+        "scheduler_paged_consume_delete_page"
         "scheduler_wakeup_dense_due_drain"
         "compatibility_ingress_drain"
         "transaction_extension_ingress_base"

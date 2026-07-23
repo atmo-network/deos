@@ -560,11 +560,21 @@ Selected configured bounds in the current DEOS reference runtime:
 
 - `MaxExecutionsPerBlock = 48` until the paged scheduler replaces the active execution path; the accepted 0.7.2 reference value is 1,000
 - `MaxActiveActors = 10,000` (compile-time hard cap checked against `ActiveAaaCount`)
-- `QueuePageSize = 64` provisionally compiles the inactive paged-FIFO substrate; it is not the production selection until generated 32/64/128 comparison lands
+- `QueuePageSize = 64` provisionally compiles the inactive paged-FIFO substrate; single-page production-Wasm evidence now covers 32/64/128, but production selection still awaits multi-page traversal evidence
 - `MaxQueueEntriesScannedPerBlock = 10,000`, independently bounded by physical queue capacity and not aliased to the execution ceiling
 - `ActiveActorLimit` (governance operational cap, `<= min(MaxActiveActors, MaxQueueLength)`)
 - `MaxWakeupBucketSize = 10,000` (temporal wakeup bucket bound, decoupled from run-queue semantics)
 - Runtime block-weight policy divides capacity equally between transaction dispatch and background execution: `50%` dispatch and `50%` guaranteed `on_idle` headroom; Operational extrinsics retain their priority/fee class but have no dedicated weight reserve until a concrete critical call justifies a measured allocation, and a runtime regression pins the partition plus `reserved = None`
+
+Production-Wasm queue-operation comparison (`50` steps, `20` repeats; each cell is `RefTime / estimated ProofSize`):
+
+| Page entries | Append existing | Append new | Consume preserve | Consume delete |
+| --- | --- | --- | --- | --- |
+| 32 | `27,169,000 / 4,752` | `26,191,000 / 4,566` | `21,442,000 / 4,125` | `22,908,000 / 4,117` |
+| 64 | `31,499,000 / 5,179` | `27,169,000 / 4,665` | `21,511,000 / 4,125` | `22,908,000 / 4,117` |
+| 128 | `37,715,000 / 5,862` | `29,543,000 / 4,670` | `21,372,000 / 4,125` | `22,769,000 / 4,117` |
+
+These measurements establish the generated append and consume/delete models. They do not select page size or establish end-to-end scheduler throughput because page-touch frequency and multi-page scan cost remain unmeasured.
 - The `50%` reserve provides `Weight::from_parts(1_000_000_000_000, 2_500_000)` and admits the guaranteed scheduler envelope (`1,061,855` proof bytes), reference genesis System AAA `0` cycle (`757,966`), and its close tail (`370,971`) together at `2,190,792` proof bytes. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work, not every optional ingress-drain, heavyweight wakeup-retry, or sweep-time terminal-close unit; saturated durable housekeeping therefore converges across blocks and may defer an actor cycle
 - Runtime binds `GuaranteedOnIdleWeight` directly to the 50% reserve. Genesis construction asserts the contract, create/reopen reject before fee collection or mutation, and both plan-update paths validate the prospective run/close pair; `ExecutionPlanExceedsOnIdleBudget` reports either-dimensional rejection
 - Every reference genesis actor fits the guaranteed scheduler envelope, its cycle, and close tail under that gate; a runtime regression checks the full set. Exact-reserve stress regressions prove mixed zero-amount staking/transfer FIFO carry-over with nonce spread `<= 1`, no starvation or failed steps, eventual drain of a maximum address-ingress batch while an XCM deposit trigger remains executable, and convergence of a maximum wakeup-retry prefix plus expired-actor cleanup while a non-empty close tail and live actors progress

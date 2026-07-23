@@ -94,8 +94,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1910`
 		//  Estimated: `81487`
-		// Minimum execution time: 181_171_000 picoseconds.
-		Weight::from_parts(197_166_000, 0)
+		// Minimum execution time: 181_660_000 picoseconds.
+		Weight::from_parts(196_746_000, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(12))
@@ -138,8 +138,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1836`
 		//  Estimated: `81487`
-		// Minimum execution time: 178_727_000 picoseconds.
-		Weight::from_parts(197_934_000, 0)
+		// Minimum execution time: 178_657_000 picoseconds.
+		Weight::from_parts(192_067_000, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(12))
@@ -168,8 +168,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `947`
 		//  Estimated: `3629`
-		// Minimum execution time: 50_077_000 picoseconds.
-		Weight::from_parts(54_058_000, 0)
+		// Minimum execution time: 49_938_000 picoseconds.
+		Weight::from_parts(53_360_000, 0)
 			.saturating_add(Weight::from_parts(0, 3629))
 			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(7))
@@ -200,8 +200,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1032`
 		//  Estimated: `3629`
-		// Minimum execution time: 56_642_000 picoseconds.
-		Weight::from_parts(60_902_000, 0)
+		// Minimum execution time: 56_643_000 picoseconds.
+		Weight::from_parts(61_042_000, 0)
 			.saturating_add(Weight::from_parts(0, 3629))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(7))
@@ -224,8 +224,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `999`
 		//  Estimated: `3629`
-		// Minimum execution time: 42_534_000 picoseconds.
-		Weight::from_parts(45_816_000, 0)
+		// Minimum execution time: 42_814_000 picoseconds.
+		Weight::from_parts(46_166_000, 0)
 			.saturating_add(Weight::from_parts(0, 3629))
 			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(5))
@@ -248,8 +248,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `697`
 		//  Estimated: `3629`
-		// Minimum execution time: 42_813_000 picoseconds.
-		Weight::from_parts(46_725_000, 0)
+		// Minimum execution time: 42_115_000 picoseconds.
+		Weight::from_parts(45_817_000, 0)
 			.saturating_add(Weight::from_parts(0, 3629))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(5))
@@ -280,8 +280,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1041`
 		//  Estimated: `81487`
-		// Minimum execution time: 46_096_000 picoseconds.
-		Weight::from_parts(49_658_000, 0)
+		// Minimum execution time: 46_235_000 picoseconds.
+		Weight::from_parts(50_147_000, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().writes(10))
@@ -294,8 +294,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `833`
 		//  Estimated: `12141`
-		// Minimum execution time: 27_448_000 picoseconds.
-		Weight::from_parts(30_102_000, 0)
+		// Minimum execution time: 27_657_000 picoseconds.
+		Weight::from_parts(30_521_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -308,8 +308,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `834`
 		//  Estimated: `12141`
-		// Minimum execution time: 31_499_000 picoseconds.
-		Weight::from_parts(34_781_000, 0)
+		// Minimum execution time: 31_709_000 picoseconds.
+		Weight::from_parts(34_851_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -328,8 +328,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `878`
 		//  Estimated: `81487`
-		// Minimum execution time: 39_531_000 picoseconds.
-		Weight::from_parts(44_559_000, 0)
+		// Minimum execution time: 40_788_000 picoseconds.
+		Weight::from_parts(44_280_000, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -366,8 +366,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `4593`
 		//  Estimated: `86889`
-		// Minimum execution time: 2_117_205_000 picoseconds.
-		Weight::from_parts(2_219_384_000, 0)
+		// Minimum execution time: 2_123_070_000 picoseconds.
+		Weight::from_parts(2_210_792_000, 0)
 			.saturating_add(Weight::from_parts(0, 86889))
 			.saturating_add(T::DbWeight::get().reads(75))
 			.saturating_add(T::DbWeight::get().writes(44))
@@ -380,8 +380,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `833`
 		//  Estimated: `12141`
-		// Minimum execution time: 35_690_000 picoseconds.
-		Weight::from_parts(39_880_000, 0)
+		// Minimum execution time: 35_271_000 picoseconds.
+		Weight::from_parts(38_623_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -396,8 +396,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `970`
 		//  Estimated: `12141`
-		// Minimum execution time: 37_575_000 picoseconds.
-		Weight::from_parts(41_068_000, 0)
+		// Minimum execution time: 37_995_000 picoseconds.
+		Weight::from_parts(41_137_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -412,8 +412,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1340`
 		//  Estimated: `12141`
-		// Minimum execution time: 45_817_000 picoseconds.
-		Weight::from_parts(50_636_000, 0)
+		// Minimum execution time: 46_655_000 picoseconds.
+		Weight::from_parts(50_008_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -428,8 +428,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `970`
 		//  Estimated: `12141`
-		// Minimum execution time: 40_439_000 picoseconds.
-		Weight::from_parts(44_769_000, 0)
+		// Minimum execution time: 40_649_000 picoseconds.
+		Weight::from_parts(44_211_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -453,8 +453,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `288`
 		//  Estimated: `1489`
-		// Minimum execution time: 13_270_000 picoseconds.
-		Weight::from_parts(15_715_000, 0)
+		// Minimum execution time: 13_619_000 picoseconds.
+		Weight::from_parts(15_435_000, 0)
 			.saturating_add(Weight::from_parts(0, 1489))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -469,7 +469,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1011`
 		//  Estimated: `12141`
-		// Minimum execution time: 29_543_000 picoseconds.
+		// Minimum execution time: 29_613_000 picoseconds.
 		Weight::from_parts(32_407_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(3))
@@ -505,11 +505,11 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1034 + n * (382 ±0)`
 		//  Estimated: `81487 + n * (11151 ±0)`
-		// Minimum execution time: 77_595_000 picoseconds.
-		Weight::from_parts(32_040_595, 0)
+		// Minimum execution time: 77_735_000 picoseconds.
+		Weight::from_parts(32_901_312, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
-			// Standard Error: 68_176
-			.saturating_add(Weight::from_parts(52_754_688, 0).saturating_mul(n.into()))
+			// Standard Error: 67_747
+			.saturating_add(Weight::from_parts(52_149_601, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().reads((6_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(4))
@@ -553,14 +553,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn close_aaa_user_fee_bearing_tail(s: u32, l: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2397 + l * (82 ±0) + s * (127 ±0)`
-		//  Estimated: `81487 + l * (2694 ±24) + s * (1458 ±64)`
-		// Minimum execution time: 701_637_000 picoseconds.
-		Weight::from_parts(94_336_700, 0)
+		//  Estimated: `81487 + l * (2694 ±0) + s * (1458 ±64)`
+		// Minimum execution time: 705_827_000 picoseconds.
+		Weight::from_parts(84_581_381, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
-			// Standard Error: 702_711
-			.saturating_add(Weight::from_parts(200_812_503, 0).saturating_mul(s.into()))
-			// Standard Error: 272_265
-			.saturating_add(Weight::from_parts(56_888_520, 0).saturating_mul(l.into()))
+			// Standard Error: 502_069
+			.saturating_add(Weight::from_parts(201_853_917, 0).saturating_mul(s.into()))
+			// Standard Error: 194_526
+			.saturating_add(Weight::from_parts(57_809_259, 0).saturating_mul(l.into()))
 			.saturating_add(T::DbWeight::get().reads(17))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(s.into())))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(l.into())))
@@ -585,8 +585,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1636`
 		//  Estimated: `12141`
-		// Minimum execution time: 108_186_000 picoseconds.
-		Weight::from_parts(114_053_000, 0)
+		// Minimum execution time: 108_745_000 picoseconds.
+		Weight::from_parts(114_611_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -623,8 +623,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `726057`
 		//  Estimated: `743463`
-		// Minimum execution time: 1_326_658_000 picoseconds.
-		Weight::from_parts(1_457_402_000, 0)
+		// Minimum execution time: 1_297_113_000 picoseconds.
+		Weight::from_parts(1_442_455_000, 0)
 			.saturating_add(Weight::from_parts(0, 743463))
 			.saturating_add(T::DbWeight::get().reads(20))
 			.saturating_add(T::DbWeight::get().writes(15))
@@ -662,11 +662,11 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `725604 + l * (429 ±0)`
 		//  Estimated: `743463 + l * (11151 ±0)`
-		// Minimum execution time: 2_455_870_000 picoseconds.
-		Weight::from_parts(560_139_129, 0)
+		// Minimum execution time: 2_405_443_000 picoseconds.
+		Weight::from_parts(349_475_974, 0)
 			.saturating_add(Weight::from_parts(0, 743463))
-			// Standard Error: 4_311_309
-			.saturating_add(Weight::from_parts(1_146_716_000, 0).saturating_mul(l.into()))
+			// Standard Error: 3_734_738
+			.saturating_add(Weight::from_parts(1_134_029_983, 0).saturating_mul(l.into()))
 			.saturating_add(T::DbWeight::get().reads(13))
 			.saturating_add(T::DbWeight::get().reads((7_u64).saturating_mul(l.into())))
 			.saturating_add(T::DbWeight::get().writes(11))
@@ -709,8 +709,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `726429`
 		//  Estimated: `743463`
-		// Minimum execution time: 1_316_950_000 picoseconds.
-		Weight::from_parts(1_458_310_000, 0)
+		// Minimum execution time: 1_276_649_000 picoseconds.
+		Weight::from_parts(1_386_791_000, 0)
 			.saturating_add(Weight::from_parts(0, 743463))
 			.saturating_add(T::DbWeight::get().reads(22))
 			.saturating_add(T::DbWeight::get().writes(16))
@@ -731,8 +731,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `771`
 		//  Estimated: `11426`
-		// Minimum execution time: 237_185_000 picoseconds.
-		Weight::from_parts(253_109_000, 0)
+		// Minimum execution time: 237_045_000 picoseconds.
+		Weight::from_parts(247_661_000, 0)
 			.saturating_add(Weight::from_parts(0, 11426))
 			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().writes(9))
@@ -751,8 +751,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1631`
 		//  Estimated: `14035`
-		// Minimum execution time: 197_374_000 picoseconds.
-		Weight::from_parts(207_642_000, 0)
+		// Minimum execution time: 197_514_000 picoseconds.
+		Weight::from_parts(207_013_000, 0)
 			.saturating_add(Weight::from_parts(0, 14035))
 			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().writes(9))
@@ -769,8 +769,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `4504`
 		//  Estimated: `81150`
-		// Minimum execution time: 315_758_000 picoseconds.
-		Weight::from_parts(344_394_000, 0)
+		// Minimum execution time: 314_011_000 picoseconds.
+		Weight::from_parts(344_463_000, 0)
 			.saturating_add(Weight::from_parts(0, 81150))
 			.saturating_add(T::DbWeight::get().reads(38))
 			.saturating_add(T::DbWeight::get().writes(6))
@@ -789,8 +789,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1252`
 		//  Estimated: `11699`
-		// Minimum execution time: 105_672_000 picoseconds.
-		Weight::from_parts(113_354_000, 0)
+		// Minimum execution time: 105_462_000 picoseconds.
+		Weight::from_parts(111_399_000, 0)
 			.saturating_add(Weight::from_parts(0, 11699))
 			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(8))
@@ -811,8 +811,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1594`
 		//  Estimated: `11699`
-		// Minimum execution time: 126_834_000 picoseconds.
-		Weight::from_parts(134_796_000, 0)
+		// Minimum execution time: 127_462_000 picoseconds.
+		Weight::from_parts(134_307_000, 0)
 			.saturating_add(Weight::from_parts(0, 11699))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(8))
@@ -851,8 +851,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `2380`
 		//  Estimated: `81487`
-		// Minimum execution time: 297_459_000 picoseconds.
-		Weight::from_parts(324_279_000, 0)
+		// Minimum execution time: 299_135_000 picoseconds.
+		Weight::from_parts(320_856_000, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
 			.saturating_add(T::DbWeight::get().reads(16))
 			.saturating_add(T::DbWeight::get().writes(10))
@@ -891,8 +891,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `2380`
 		//  Estimated: `81487`
-		// Minimum execution time: 854_313_000 picoseconds.
-		Weight::from_parts(910_956_000, 0)
+		// Minimum execution time: 851_240_000 picoseconds.
+		Weight::from_parts(890_910_000, 0)
 			.saturating_add(Weight::from_parts(0, 81487))
 			.saturating_add(T::DbWeight::get().reads(16))
 			.saturating_add(T::DbWeight::get().writes(10))
@@ -908,7 +908,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		//  Measured:  `334`
 		//  Estimated: `1489`
 		// Minimum execution time: 12_292_000 picoseconds.
-		Weight::from_parts(14_248_000, 0)
+		Weight::from_parts(14_317_000, 0)
 			.saturating_add(Weight::from_parts(0, 1489))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -923,8 +923,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `406`
 		//  Estimated: `3490`
-		// Minimum execution time: 10_476_000 picoseconds.
-		Weight::from_parts(12_432_000, 0)
+		// Minimum execution time: 10_756_000 picoseconds.
+		Weight::from_parts(12_502_000, 0)
 			.saturating_add(Weight::from_parts(0, 3490))
 			.saturating_add(T::DbWeight::get().reads(3))
 	}
@@ -950,8 +950,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `721329`
 		//  Estimated: `743463`
-		// Minimum execution time: 1_179_569_000 picoseconds.
-		Weight::from_parts(1_327_426_000, 0)
+		// Minimum execution time: 1_140_666_000 picoseconds.
+		Weight::from_parts(1_202_407_000, 0)
 			.saturating_add(Weight::from_parts(0, 743463))
 			.saturating_add(T::DbWeight::get().reads(15))
 			.saturating_add(T::DbWeight::get().writes(12))
@@ -967,14 +967,86 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `342 + n * (16 ±0)`
 		//  Estimated: `1823 + n * (16 ±0)`
-		// Minimum execution time: 8_521_000 picoseconds.
-		Weight::from_parts(9_708_000, 0)
+		// Minimum execution time: 8_869_000 picoseconds.
+		Weight::from_parts(9_988_000, 0)
 			.saturating_add(Weight::from_parts(0, 1823))
-			// Standard Error: 183
-			.saturating_add(Weight::from_parts(290_093, 0).saturating_mul(n.into()))
+			// Standard Error: 85
+			.saturating_add(Weight::from_parts(272_987, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(3))
 			.saturating_add(Weight::from_parts(0, 16).saturating_mul(n.into()))
+	}
+	/// Storage: `AAA::ActorHot` (r:1 w:1)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(164), added: 2639, mode: `Measured`)
+	/// Storage: `AAA::QueueHead` (r:1 w:0)
+	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueueTail` (r:1 w:1)
+	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueuePages` (r:1 w:1)
+	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
+	fn scheduler_paged_append_existing_page() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1714`
+		//  Estimated: `5179`
+		// Minimum execution time: 29_054_000 picoseconds.
+		Weight::from_parts(31_499_000, 0)
+			.saturating_add(Weight::from_parts(0, 5179))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+	/// Storage: `AAA::ActorHot` (r:1 w:1)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(164), added: 2639, mode: `Measured`)
+	/// Storage: `AAA::QueueHead` (r:1 w:0)
+	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueueTail` (r:1 w:1)
+	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueuePages` (r:1 w:1)
+	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
+	fn scheduler_paged_append_new_page() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `1200`
+		//  Estimated: `4665`
+		// Minimum execution time: 24_794_000 picoseconds.
+		Weight::from_parts(27_169_000, 0)
+			.saturating_add(Weight::from_parts(0, 4665))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(3))
+	}
+	/// Storage: `AAA::QueueHead` (r:1 w:1)
+	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueueTail` (r:1 w:0)
+	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueuePages` (r:1 w:0)
+	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
+	/// Storage: `AAA::ActorHot` (r:1 w:1)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(164), added: 2639, mode: `Measured`)
+	fn scheduler_paged_consume_preserve_page() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `660`
+		//  Estimated: `4125`
+		// Minimum execution time: 19_625_000 picoseconds.
+		Weight::from_parts(21_511_000, 0)
+			.saturating_add(Weight::from_parts(0, 4125))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(2))
+	}
+	/// Storage: `AAA::QueueHead` (r:1 w:1)
+	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueueTail` (r:1 w:1)
+	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueuePages` (r:1 w:1)
+	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
+	/// Storage: `AAA::ActorHot` (r:1 w:1)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(164), added: 2639, mode: `Measured`)
+	fn scheduler_paged_consume_delete_page() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `652`
+		//  Estimated: `4117`
+		// Minimum execution time: 21_092_000 picoseconds.
+		Weight::from_parts(22_908_000, 0)
+			.saturating_add(Weight::from_parts(0, 4117))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 	/// Storage: `AAA::CurrentQueue` (r:1 w:1)
 	/// Proof: `AAA::CurrentQueue` (`max_values`: Some(1), `max_size`: Some(80002), added: 80497, mode: `MaxEncodedLen`)
@@ -997,11 +1069,11 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `517 + n * (40 ±0)`
 		//  Estimated: `83487 + n * (2639 ±0)`
-		// Minimum execution time: 15_714_000 picoseconds.
-		Weight::from_parts(21_222_488, 0)
+		// Minimum execution time: 16_273_000 picoseconds.
+		Weight::from_parts(21_213_975, 0)
 			.saturating_add(Weight::from_parts(0, 83487))
-			// Standard Error: 4_899
-			.saturating_add(Weight::from_parts(8_634_262, 0).saturating_mul(n.into()))
+			// Standard Error: 2_285
+			.saturating_add(Weight::from_parts(8_361_680, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(5))
@@ -1028,17 +1100,17 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn scheduler_wakeup_spillover_probe(b: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `4784 + b * (80032 ±0)`
-		//  Estimated: `86570 + b * (81320 ±0)`
-		// Minimum execution time: 26_680_000 picoseconds.
-		Weight::from_parts(20_067_393, 0)
-			.saturating_add(Weight::from_parts(0, 86570))
-			// Standard Error: 237_172
-			.saturating_add(Weight::from_parts(137_981_169, 0).saturating_mul(b.into()))
+		//  Estimated: `86958 + b * (81168 ±0)`
+		// Minimum execution time: 27_588_000 picoseconds.
+		Weight::from_parts(17_880_193, 0)
+			.saturating_add(Weight::from_parts(0, 86958))
+			// Standard Error: 107_930
+			.saturating_add(Weight::from_parts(127_795_665, 0).saturating_mul(b.into()))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(b.into())))
 			.saturating_add(T::DbWeight::get().writes(5))
 			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(b.into())))
-			.saturating_add(Weight::from_parts(0, 81320).saturating_mul(b.into()))
+			.saturating_add(Weight::from_parts(0, 81168).saturating_mul(b.into()))
 	}
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
@@ -1046,8 +1118,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `748`
 		//  Estimated: `3521`
-		// Minimum execution time: 12_851_000 picoseconds.
-		Weight::from_parts(14_737_000, 0)
+		// Minimum execution time: 13_131_000 picoseconds.
+		Weight::from_parts(14_877_000, 0)
 			.saturating_add(Weight::from_parts(0, 3521))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
@@ -1079,8 +1151,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `725713`
 		//  Estimated: `743463`
-		// Minimum execution time: 1_252_555_000 picoseconds.
-		Weight::from_parts(1_397_687_000, 0)
+		// Minimum execution time: 1_227_760_000 picoseconds.
+		Weight::from_parts(1_263_379_000, 0)
 			.saturating_add(Weight::from_parts(0, 743463))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(14))
@@ -1092,11 +1164,11 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `463 + a * (37 ±0)`
 		//  Estimated: `4426`
-		// Minimum execution time: 18_508_000 picoseconds.
-		Weight::from_parts(19_103_200, 0)
+		// Minimum execution time: 18_927_000 picoseconds.
+		Weight::from_parts(18_341_713, 0)
 			.saturating_add(Weight::from_parts(0, 4426))
-			// Standard Error: 4_979
-			.saturating_add(Weight::from_parts(2_393_403, 0).saturating_mul(a.into()))
+			// Standard Error: 1_306
+			.saturating_add(Weight::from_parts(2_374_391, 0).saturating_mul(a.into()))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -1106,8 +1178,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `311`
 		//  Estimated: `1489`
-		// Minimum execution time: 5_168_000 picoseconds.
-		Weight::from_parts(7_054_000, 0)
+		// Minimum execution time: 5_587_000 picoseconds.
+		Weight::from_parts(7_124_000, 0)
 			.saturating_add(Weight::from_parts(0, 1489))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
@@ -1141,8 +1213,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `725605`
 		//  Estimated: `743463`
-		// Minimum execution time: 1_195_703_000 picoseconds.
-		Weight::from_parts(1_354_525_000, 0)
+		// Minimum execution time: 1_168_114_000 picoseconds.
+		Weight::from_parts(1_227_411_000, 0)
 			.saturating_add(Weight::from_parts(0, 743463))
 			.saturating_add(T::DbWeight::get().reads(19))
 			.saturating_add(T::DbWeight::get().writes(16))

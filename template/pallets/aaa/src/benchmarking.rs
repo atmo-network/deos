@@ -1149,6 +1149,79 @@ mod benches {
     assert!(CurrentQueue::<T>::decode_len().unwrap_or(0) <= T::MaxQueueLength::get() as usize);
   }
 
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_append_existing_page() {
+    let page_size = T::QueuePageSize::get();
+    assert!(
+      page_size >= 2,
+      "benchmark requires a non-trivial queue page"
+    );
+    for i in 0..page_size.saturating_sub(1) {
+      let aaa_id = bench_create_system_manual::<T>(31_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    }
+    let aaa_id = bench_create_system_manual::<T>(32_000_000);
+    #[block]
+    {
+      assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    }
+    assert_eq!(QueueTail::<T>::get(), u64::from(page_size));
+    assert_eq!(
+      ActorHot::<T>::get(aaa_id).and_then(|hot| hot.queue_ticket),
+      Some(u64::from(page_size - 1))
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_append_new_page() {
+    let page_size = T::QueuePageSize::get();
+    for i in 0..page_size {
+      let aaa_id = bench_create_system_manual::<T>(33_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    }
+    let aaa_id = bench_create_system_manual::<T>(34_000_000);
+    #[block]
+    {
+      assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    }
+    assert_eq!(
+      QueueTail::<T>::get(),
+      u64::from(page_size).saturating_add(1)
+    );
+    assert_eq!(QueuePages::<T>::get(1).map(|page| page.len()), Some(1));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_consume_preserve_page() {
+    let first = bench_create_system_manual::<T>(35_000_000);
+    let second = bench_create_system_manual::<T>(35_000_001);
+    assert!(Pallet::<T>::paged_enqueue(first));
+    assert!(Pallet::<T>::paged_enqueue(second));
+    #[block]
+    {
+      assert!(Pallet::<T>::paged_consume_head(0));
+    }
+    assert_eq!(QueueHead::<T>::get(), 1);
+    assert!(QueuePages::<T>::contains_key(0));
+    assert_eq!(
+      ActorHot::<T>::get(first).and_then(|hot| hot.queue_ticket),
+      None
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_consume_delete_page() {
+    let aaa_id = bench_create_system_manual::<T>(36_000_000);
+    assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    #[block]
+    {
+      assert!(Pallet::<T>::paged_consume_head(0));
+    }
+    assert_eq!(QueueHead::<T>::get(), u64::from(T::QueuePageSize::get()));
+    assert_eq!(QueueTail::<T>::get(), u64::from(T::QueuePageSize::get()));
+    assert!(!QueuePages::<T>::contains_key(0));
+  }
+
   // Runtime-backed hook benchmark for dense overdue wakeup admission.
   #[benchmark]
   fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {
