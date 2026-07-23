@@ -1251,6 +1251,64 @@ mod benches {
     assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
   }
 
+  /// Measures actual scheduler admission and complete execution for up to 1,000
+  /// minimal one-step System actors. `Weight::MAX` exposes the full production-Wasm
+  /// cost curve; separate guaranteed-budget stress evidence determines how many
+  /// executions the reference block budget actually admits. Setup writes the split actor stores and paged FIFO outside
+  /// the measured block so the result isolates queue scanning, admission,
+  /// execution, and consumption rather than actor creation.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_execute_cheap(n: Linear<1, 1_000>) {
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    MinWakeupBlock::<T>::kill();
+    GlobalCircuitBreaker::<T>::put(false);
+    let bounded = n
+      .min(T::MaxExecutionsPerBlock::get())
+      .min(T::MaxQueueEntriesScannedPerBlock::get())
+      .min(T::MaxQueueLength::get());
+    assert!(bounded > 0, "runtime limits must admit at least one sample");
+    let template_id = bench_create_system_manual::<T>(40_000_000);
+    let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    let program_template = ActorProgram::<T>::get(template_id).expect("benchmark program template");
+    let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
+    ActorHot::<T>::remove(template_id);
+    ActorProgram::<T>::remove(template_id);
+    ActorFunding::<T>::remove(template_id);
+
+    let first_id = 41_000_000u64;
+    for offset in 0..bounded {
+      let aaa_id = first_id.saturating_add(u64::from(offset));
+      let mut hot = hot_template.clone();
+      hot.cycle_nonce = 0;
+      hot.last_cycle_block = Zero::zero();
+      hot.manual_trigger_pending = true;
+      hot.queue_ticket = None;
+      ActorHot::<T>::insert(aaa_id, hot);
+      ActorProgram::<T>::insert(aaa_id, program_template.clone());
+      ActorFunding::<T>::insert(aaa_id, funding_template.clone());
+      assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    }
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
+    }
+    let executed = (0..bounded)
+      .filter(|offset| {
+        let aaa_id = first_id.saturating_add(u64::from(*offset));
+        ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.cycle_nonce == 1)
+      })
+      .count() as u32;
+    assert_eq!(
+      executed, bounded,
+      "unbounded diagnostic budget completed only {executed} of {bounded} requested cheap actors"
+    );
+    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+  }
+
   // Runtime-backed hook benchmark for dense overdue wakeup admission.
   #[benchmark]
   fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {

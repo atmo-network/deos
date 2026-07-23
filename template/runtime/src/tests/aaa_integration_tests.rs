@@ -677,6 +677,11 @@ fn paged_queue_limits_are_independent_runtime_controls() {
       <Runtime as pallet_aaa::Config>::MaxQueueEntriesScannedPerBlock::get(),
       10_000
     );
+    assert_eq!(
+      <Runtime as pallet_aaa::Config>::MaxExecutionsPerBlock::get(),
+      1_000,
+      "the execution count is a safety ceiling; WeightMeter remains primary"
+    );
     assert_ne!(
       <Runtime as pallet_aaa::Config>::MaxQueueEntriesScannedPerBlock::get(),
       <Runtime as pallet_aaa::Config>::MaxExecutionsPerBlock::get(),
@@ -684,6 +689,38 @@ fn paged_queue_limits_are_independent_runtime_controls() {
     );
     assert_eq!(AAA::queue_head(), 0);
     assert_eq!(AAA::queue_tail(), 0);
+  });
+}
+
+#[test]
+fn guaranteed_idle_budget_executes_more_than_the_legacy_48_actor_ceiling() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let total = 100u32;
+    let plan = BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution_plan fits");
+    let mut ids = Vec::with_capacity(total as usize);
+    for _ in 0..total {
+      let aaa_id = create_system(ALICE, manual_schedule(), None, plan.clone());
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      ids.push(aaa_id);
+    }
+
+    AAA::on_idle(
+      System::block_number(),
+      crate::configs::aaa_config::AaaGuaranteedOnIdleWeight::get(),
+    );
+    let executed = ids
+      .iter()
+      .filter(|aaa_id| AAA::actor_hot(aaa_id).is_some_and(|hot| hot.cycle_nonce == 1))
+      .count();
+    assert!(
+      executed > 48,
+      "generated WeightMeter bounds must permit more than the retired ceiling; got {executed}"
+    );
+    assert!(
+      executed < total as usize,
+      "the 1,000 ceiling must not masquerade as a throughput guarantee"
+    );
   });
 }
 
@@ -4143,10 +4180,9 @@ fn assert_core_stability(aaa_ids: &[u64], diag: &StressDiagnostics) {
   }
 }
 
-/// Under-capacity: 45 chain actors + 3 active genesis actors in the worst block.
-/// Runtime has MaxExecutionsPerBlock=48.
+/// Under-capacity: 45 chain actors plus active genesis work fit both the
+/// configurable execution ceiling and an unbounded diagnostic WeightMeter.
 /// Dormant and custody-only genesis addresses never compete for scheduler capacity.
-/// 45 + 3 = 48 → all chain actors must fire every block.
 ///
 /// Asserts: exact balance conservation, 100% per-block coverage, zero deferrals,
 /// zero failures, uniform cycle_nonce, zero consecutive_failures.
@@ -4155,7 +4191,6 @@ fn circular_chain_under_capacity_every_actor_every_block() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    // 45 chain + 3 active genesis = MaxExecutionsPerBlock(48)
     let chain_len = 45u64;
     let num_blocks = 50u32;
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
@@ -4280,10 +4315,10 @@ fn diagnose_over_capacity_first_blocks() {
   });
 }
 
-/// Over-capacity fairness: 100 chain actors + 13 genesis compete for
-/// MaxExecutionsPerBlock=48 slots. Scheduler must rotate without starvation.
+/// A 100-actor chain remains fair while the configurable count ceiling and
+/// WeightMeter independently bound per-block execution.
 #[test]
-fn circular_chain_over_capacity_fair_rotation() {
+fn circular_chain_respects_execution_ceiling_and_remains_fair() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -4309,9 +4344,10 @@ fn circular_chain_over_capacity_fair_rotation() {
       total_after.abs_diff(total_before),
     );
     // Per-block execution cap respected
+    let execution_ceiling = <Runtime as pallet_aaa::Config>::MaxExecutionsPerBlock::get();
     assert!(
-      diag.max_per_block <= 48,
-      "Per-block throughput must not exceed MaxExecutionsPerBlock=48 (got {})",
+      diag.max_per_block <= execution_ceiling,
+      "Per-block throughput must not exceed MaxExecutionsPerBlock={execution_ceiling} (got {})",
       diag.max_per_block,
     );
     assert!(
@@ -5028,9 +5064,9 @@ fn execution_order_lower_id_executes_before_higher_id() {
 /// This test fills the remaining capacity so ActiveActors reaches exactly 10,000,
 /// then verifies starvation-freedom and fairness for newly added stress actors.
 ///
-/// With MaxExecutionsPerBlock=48, a full rotation takes ceil(10000/48) ≈ 209 blocks.
-/// Over 500 blocks, each stress actor should execute approximately floor(500*48/9987) ≈ 2 times.
-/// Nonce spread (max - min) must be ≤ 2 for near-perfect fairness.
+/// The configured execution ceiling and FIFO size determine the count-limited
+/// rotation horizon; WeightMeter remains an independent limiter under finite budgets.
+/// Nonce spread (max - min) must remain ≤ 3 for near-perfect fairness.
 ///
 /// Acceptance criteria:
 /// - ActiveActors reaches exactly 10,000
@@ -5097,13 +5133,14 @@ fn stress_10k_actors_queue_scheduler() {
       max_nonce,
     );
     // Throughput: per-block cap respected and utilization remains high
+    let execution_ceiling = <Runtime as pallet_aaa::Config>::MaxExecutionsPerBlock::get();
     assert!(
-      diag.max_per_block <= 48,
-      "Per-block executions {} exceeds MaxExecutionsPerBlock=48",
+      diag.max_per_block <= execution_ceiling,
+      "Per-block executions {} exceeds MaxExecutionsPerBlock={execution_ceiling}",
       diag.max_per_block,
     );
     let total_executions: u32 = diag.actor_cycle_counts.values().sum();
-    let theoretical_max = num_blocks * 48;
+    let theoretical_max = num_blocks.saturating_mul(execution_ceiling);
     assert!(
       total_executions > theoretical_max * 9 / 10,
       "Total executions {} should exceed 90% of theoretical max {}",
@@ -5154,17 +5191,17 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
       AAA::on_idle(block, Weight::MAX);
     }
     let final_active = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count();
-    let executed = aaa_ids
+    let progressed = aaa_ids
       .iter()
       .filter(|id| {
         AAA::aaa_instances(**id)
           .map(|inst| inst.cycle_nonce > 0)
-          .unwrap_or(false)
+          .unwrap_or(true)
       })
       .count();
     assert!(
-      executed > 0,
-      "Scheduler should execute at least some dust actors"
+      progressed > 0,
+      "Scheduler should execute or terminally close at least some dust actors"
     );
     assert!(
       final_active > 0,
