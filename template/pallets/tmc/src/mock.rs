@@ -148,6 +148,7 @@ impl crate::MintDistributionHook<u64> for MockMintDistributionHook {
   }
 
   fn before_sink_mint(
+    _source: &u64,
     _minted_asset: primitives::AssetKind,
     _account: &u64,
     _amount: u128,

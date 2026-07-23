@@ -18,7 +18,7 @@ Use this guide with the normative [AAA Specification](./aaa.specification.en.md)
 
 An embedding runtime must provide only the bounded host surface that AAA cannot own itself:
 
-- `AssetOps`: Transfer, burn, mint, balance, minimum-balance, deposit viability, and total issuance over local `AccountId`, `AssetId`, and `Balance` types.
+- `AssetOps`: Transfer, burn, mint, balance, minimum-balance, and deposit viability over local `AccountId`, `AssetId`, and `Balance` types.
 - `DexOps`: Caller-aware exact-in quotes and capacity-bounded exact-out swaps plus liquidity operations with deterministic fees, slippage, rounding, and failure behavior.
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `LiquidityDonationOps`: Pair-scoped liquidity donation when the runtime wants donation without LP receipt minting.
@@ -27,9 +27,9 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
-- Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/sweep bounds, and fee constants.
+- Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, and fee constants.
 
-The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events.
+The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no program or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
 
 ## 2. Optional No-Op Adapters
 

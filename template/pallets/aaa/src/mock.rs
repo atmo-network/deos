@@ -347,20 +347,6 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     }
     amount >= Self::minimum_balance(asset)
   }
-
-  fn total_issuance(asset: TestAsset) -> Balance {
-    match asset {
-      TestAsset::Native => {
-        use polkadot_sdk::frame_support::traits::Currency;
-        <Balances as Currency<AccountId>>::total_issuance()
-      }
-      _ => {
-        let minted = MINTED.with(|m| m.borrow().get(&asset).copied().unwrap_or(0));
-        let burned = BURNED.with(|b| b.borrow().get(&asset).copied().unwrap_or(0));
-        minted.saturating_sub(burned)
-      }
-    }
-  }
 }
 
 pub fn staked_balance(who: AccountId, asset: TestAsset) -> Balance {
@@ -477,23 +463,6 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
   ) -> Result<(Balance, Balance), DispatchError> {
     let half = lp_amount / 2;
     Ok((half, half))
-  }
-
-  fn get_pool_reserves(asset_a: TestAsset, asset_b: TestAsset) -> Option<(Balance, Balance)> {
-    let key = if asset_a <= asset_b {
-      (asset_a, asset_b)
-    } else {
-      (asset_b, asset_a)
-    };
-    POOL_RESERVES.with(|p| {
-      let map = p.borrow();
-      let (ra, rb) = map.get(&key).copied()?;
-      if asset_a <= asset_b {
-        Some((ra, rb))
-      } else {
-        Some((rb, ra))
-      }
-    })
   }
 }
 
@@ -905,6 +874,7 @@ impl pallet_aaa::Config for Test {
   type GuaranteedOnIdleWeight = TestGuaranteedOnIdleWeight;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
   type MaxActiveActors = ConstU32<10_000>;
+  type MaxActorIdentities = ConstU32<10_000>;
   type StepBaseFee = TestStepBaseFee;
   type ConditionReadFee = TestConditionReadFee;
   type AaaCreationFee = TestAaaCreationFee;

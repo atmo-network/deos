@@ -32,26 +32,28 @@ The reference constellation below uses System AAA instances; the pallet also sup
 
 #### L1 Actors (Native Token Domain)
 
-| Actor | aaa_id | Plan summary | Trigger |
+| Role | aaa_id | Genesis state | Program/trigger |
 | --- | --- | --- | --- |
-| Burn Actor | 0 | foreign → native swaps, then burn | `Timer { every_blocks: 10 }` |
-| Liquidity Actor | 2 | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }` |
-| TOL Bucket A (Anchor) | 3 | `Noop`; permanent LP accumulation | `Timer` (Noop) |
-| TOL Bucket B (Building) | 4 | `Noop`; optional bounded LP transfer to Treasury B | `Timer` (Noop) |
-| TOL Bucket C (Capital) | 5 | `Noop`; optional bounded LP transfer to Treasury C | `Timer` (Noop) |
-| TOL Bucket D (Dormant) | 6 | `Noop`; optional bounded LP transfer to Treasury D | `Timer` (Noop) |
-| Treasury B (Building) | 7 | `Noop`; optional paired LP removal, with buyback as a later policy stage | `Timer` (Noop) |
-| Treasury C (Capital) | 8 | `Noop`; optional paired LP removal after Bucket C transfer | `Timer` (Noop) |
-| Treasury D (Dormant) | 9 | `Noop`; optional paired LP removal after Bucket D transfer | `Timer` (Noop) |
+| Burn Actor | 0 | Active System AAA | Burn plan; omnivorous `OnAddressEvent` |
+| Fee Sink | 1 | Active System AAA | Phase-one fee allocation; omnivorous `OnAddressEvent` |
+| Liquidity Actor | 2 | Dormant System identity | No program until pool-specific activation |
+| TOL Bucket A (Anchor) | 3 | Custody-only account | No generic AAA identity or program |
+| TOL Bucket B (Building) | 4 | Dormant System identity | No program until explicit activation |
+| TOL Bucket C (Capital) | 5 | Dormant System identity | No program until explicit activation |
+| TOL Bucket D (Dormant) | 6 | Dormant System identity | No program until explicit activation |
+| Treasury B (Building) | 7 | Dormant System identity | No program until explicit activation |
+| Treasury C (Capital) | 8 | Dormant System identity | No program until explicit activation |
+| Treasury D (Dormant) | 9 | Dormant System identity | No program until explicit activation |
+| Native Staking LP Farmer | 14 | Dormant System identity | No program until pool-specific activation |
 
 #### L2 Actors (BLDR Protocol Token Domain)
 
-| Actor | aaa_id | Execution Plan | Trigger |
+| Role | aaa_id | Genesis state | Program/trigger |
 | --- | --- | --- | --- |
-| BLDR Splitter | 10 | Split BLDR 50/50 | `Timer { every_blocks: 1 }` |
-| BLDR Liquidity Actor | 11 | Add NTVE/BLDR LP → BLDR Bucket A | `Timer { every_blocks: 1 }` |
-| BLDR Bucket A | 12 | `Noop` — permanent BLDR LP accumulation | `Timer` (Noop) |
-| BLDR Treasury | 13 | `Noop` — BLDR ecosystem fund | `Timer` (Noop) |
+| BLDR Splitter | 10 | Active System AAA | Split BLDR 50/50; omnivorous `OnAddressEvent` |
+| BLDR Liquidity Actor | 11 | Dormant System identity | No program until NTVE/BLDR pool activation |
+| BLDR Bucket A | 12 | Custody-only account | No generic AAA identity or program |
+| BLDR Treasury | 13 | Dormant System identity | No program until explicit activation |
 
 See [`aaa.architecture.en.md`](./aaa.architecture.en.md#current-tmctol-system-aaa-topology-on-deos) for the integrated System AAA topology, execution-plan families, and governance activation flows.
 
@@ -149,18 +151,18 @@ _The liquidity compositor._
   2. `SwapExactIn(foreign→native)` — patriotic accumulation of surplus foreign with reserve-aware slippage derived from current native pool depth
   3. `SplitTransfer(LP → TOL buckets)` — 50/16.67/16.67/16.66% to bucket AAA sovereign accounts
 - `Launch Policy`: The current runtime freezes this reserve-aware slippage at execution-plan build time rather than recomputing it live on every cycle; richer live per-cycle recomputation remains a future opt-in refinement, not launch debt.
-- `Genesis`: Noop dormant plan. Real execution plan installed after pools exist.
+- `Genesis`: Dormant System identity with no program. Activation installs the real execution plan after pools exist.
 
 #### TOL Buckets (System AAA #3..#6 — The Floor)
 
 _The volatility dampener._
 
-- `Function`: Four independent actors holding protocol-owned LP tokens. Each bucket is a sovereign entity with its own lifecycle.
-- `Genesis`: All Noop. Governance activates bucket-specific policies via `update_execution_plan`.
+- `Function`: Four sovereign accounts separate protocol-owned LP custody and optional policy lanes. Bucket A remains custody-only; B/C/D retain dormant System identities with independently activatable lifecycles.
+- `Genesis`: Bucket A owns no generic AAA program. B/C/D own dormant identities and enroll no scheduler work until activation.
 - `Buckets`:
   - _Bucket A — Anchor (50%):_ Permanent LP accumulation. No unwind — the mathematical survival layer.
-  - _Bucket B — Building (16.67%):_ Genesis `Noop`; governance may activate bounded LP transfer into Treasury B, whose separate admitted cycle removes liquidity.
-  - _Bucket C — Capital (16.67%):_ Genesis `Noop`; governance may activate bounded LP transfer into Treasury C, whose separate admitted cycle removes liquidity.
+  - _Bucket B — Building (16.67%):_ Dormant identity; governance may activate bounded LP transfer into Treasury B, whose separate admitted cycle removes liquidity.
+  - _Bucket C — Capital (16.67%):_ Dormant identity; governance may activate bounded LP transfer into Treasury C, whose separate admitted cycle removes liquidity.
   - _Bucket D — Dormant (16.66%):_ LP held until governance decides future policy.
 
 #### Treasury B — BLDR Buyback & Burn (System AAA #7)

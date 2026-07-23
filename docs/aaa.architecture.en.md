@@ -15,25 +15,20 @@
 
 `pallet-aaa` is the execution platform for deterministic protocol behavior in DEOS. It provides a deterministic scheduler, bounded execution model, and adapter-driven task runtime for both user-owned and system-owned actors.
 
-In the current DEOS reference runtime, fifteen System actors are provisioned at genesis. This shipped topology currently instantiates the TMCTOL standard:
+The current DEOS reference runtime reserves fifteen deterministic System addresses for the TMCTOL topology but enrolls only actual programs in the scheduler:
 
-- `aaa_id = 0`: Burn Actor execution-plan family
-- `aaa_id = 1`: Fee Sink System AAA for unified fee collection and Phase 1 staking/LP redistribution
-- `aaa_id = 2`: Liquidity Actor dormant execution-plan family
-- `aaa_id = 3..6`: TOL bucket actors (A/B/C/D), initialized as timer + noop
-- `aaa_id = 7..9`: Treasury B/C/D actors, initialized as timer + noop
-- `aaa_id = 10`: BLDR Splitter execution-plan family
-- `aaa_id = 11`: BLDR Liquidity Actor dormant execution-plan family
-- `aaa_id = 12`: BLDR Bucket A actor, initialized as timer + noop
-- `aaa_id = 13`: BLDR Treasury actor, initialized as timer + noop
-- `aaa_id = 14`: Native staking LP provisioning actor, initialized as timer + noop until the canonical `NTVE/stNTVE` pool is activated
+- Active actors: Burn Actor `0`, Fee Sink `1`, and BLDR Splitter `10`; all three use omnivorous `OnAddressEvent` intake rather than periodic polling.
+- Dormant identities: Liquidity Actor `2`, TOL Buckets B/C/D `4..=6`, Treasuries B/C/D `7..=9`, BLDR Liquidity Actor `11`, BLDR Treasury `13`, and native staking LP provisioning actor `14`.
+- Custody-only accounts outside generic actor storage: TOL Bucket A `3` and BLDR Bucket A `12`.
+
+Dormant identities retain their deterministic sovereign address, owner, Mutable System class, and genesis provider but have no `AaaInstances`, readiness, inbox, queue, wakeup, funding, fee, or cycle state. Custody-only accounts receive only a runtime-declared genesis provider so assets can enter safely; they have no generic AAA identity or control surface.
 
 The pallet itself is generic and runtime-agnostic. Chain-specific behavior is injected through `AssetOps`, `DexOps`, weight/fee conversion, bounds, and genesis actor specs. External host-runtime obligations are summarized in the [AAA External Runtime Embedding Guide](./aaa.embedding.en.md).
 
 ### Canonical Address Catalog (Current Runtime, Full System Map)
 
 All addresses below are deterministic for `AaaPalletId = *b"aaactor0"` (`AccountId32`, SS58 prefix 42).
-This catalog is the full current runtime System AAA catalog, including the Fee Sink actor address.
+This catalog is the full current runtime deterministic System address map, including active actors, dormant identities, and custody-only accounts.
 
 - aaa_id: `—`; pallet-aaa` (pallet account)
   - Hex: `0x6d6f646c61616163746f72300000000000000000000000000000000000000000`
@@ -113,28 +108,27 @@ AAA orchestrates actions against these pallets through adapter traits.
 
 ### Genesis actor matrix
 
-`TmctolGenesisSystemAaas` currently provisions fifteen System actors:
+`TmctolGenesisSystemAaas` currently classifies fifteen deterministic addresses:
 
-| Lane | Actor | aaa_id | Genesis plan summary |
+| Lane | Role | aaa_id | Genesis lifecycle |
 | --- | --- | ---: | --- |
-| Core | Burn Actor | 0 | `build_burn_execution_plan([], dust)` |
-| Core | Fee Sink | 1 | Phase 1 50/50 staking + LP donation |
-| Core | Liquidity Actor | 2 | `Noop` until pool activation |
-| TOL | Bucket A (Anchor) | 3 | Immutable `[Noop]` |
-| TOL | Bucket B (Building) | 4 | `Noop` |
-| TOL | Bucket C (Capital) | 5 | `Noop` |
-| TOL | Bucket D (Dormant) | 6 | `Noop` |
-| Treasury | Treasury B | 7 | `Noop` |
-| Treasury | Treasury C | 8 | `Noop` |
-| Treasury | Treasury D | 9 | `Noop` |
-| BLDR | BLDR Splitter | 10 | `build_bldr_splitter_execution_plan` |
-| BLDR | BLDR Liquidity Actor | 11 | `Noop` until NTVE-BLDR pool activation |
-| BLDR | BLDR Bucket A | 12 | Immutable `[Noop]` |
-| BLDR | BLDR Treasury | 13 | `Noop` |
-| Staking | Native staking LP provisioning actor | 14 | `Noop` until `NTVE/stNTVE` activation |
+| Core | Burn Actor | 0 | Active: `build_burn_execution_plan([], dust)` |
+| Core | Fee Sink | 1 | Active: Phase 1 50/50 staking + LP donation |
+| Core | Liquidity Actor | 2 | Dormant |
+| TOL | Bucket A (Anchor) | 3 | Custody-only account |
+| TOL | Bucket B (Building) | 4 | Dormant |
+| TOL | Bucket C (Capital) | 5 | Dormant |
+| TOL | Bucket D | 6 | Dormant |
+| Treasury | Treasury B | 7 | Dormant |
+| Treasury | Treasury C | 8 | Dormant |
+| Treasury | Treasury D | 9 | Dormant |
+| BLDR | BLDR Splitter | 10 | Active: `build_bldr_splitter_execution_plan` |
+| BLDR | BLDR Liquidity Actor | 11 | Dormant |
+| BLDR | BLDR Bucket A | 12 | Custody-only account |
+| BLDR | BLDR Treasury | 13 | Dormant |
+| Staking | Native staking LP provisioning actor | 14 | Dormant |
 
-All timer schedules use `SYSTEM_AAA_COOLDOWN_BLOCKS`; all actors are `AaaType::System` and perpetual (`schedule_window = None`). TOL Bucket A (`aaa_id=3`) and BLDR Bucket A (`aaa_id=12`) are `Mutability::Immutable`; the remaining genesis System AAA are Mutable.
-These `aaa_id` values remain the stable recovery addresses for Mutable System AAA: closing preserves balances on the same sovereign account, and governance regains control only through `reopen_system_aaa` on that exact `aaa_id`. Reopen preserves the Mutable class; it cannot convert a closed Mutable actor into an Immutable anchor. System Immutable actors cannot be closed or reopened through runtime extrinsics.
+Active genesis actors use `SYSTEM_AAA_COOLDOWN_BLOCKS`, `AaaType::System`, `Mutability::Mutable`, and no schedule window. Dormant entries occupy `DormantAaaIdentities` and `SovereignIndex` but do not count toward `ActiveAaaCount`; custody-only accounts occupy neither store. `ActorIdentityCount` covers the thirteen active plus dormant identities. `NextAaaId` remains `15`, preserving the reserved address range.
 
 ### Canonical execution-plan families
 
@@ -218,7 +212,6 @@ Task set in implementation:
 - `Stake`
 - `DonateLiquidity`
 - `Unstake`
-- `Noop`
 
 ### Amount Resolution
 
@@ -294,7 +287,7 @@ Lifecycle lease-by-cycles is supported via `auto_close_at_cycle_nonce`: after a 
 
 ### Fee Collection Boundary
 
-The generic pallet collects opening, condition-evaluation, execution, and close-tail fees through one runtime-supplied `FeeCollector`. Every executable User step, including `Noop`, charges the execution fee derived from its task weight, while condition/resolution/funding skips release that reserved execution fee. `TmctolFeeCollector` atomically transfers each full charge into the Fee Sink System AAA; authorship and downstream allocation do not participate in collection. Collection failure returns to the owning create or execution path without partial debit. Pallet regressions cover opening-, evaluation-, and execution-fee failures, while runtime integration proves the payer debit and Fee Sink credit remain equal to the full collected amount.
+The generic pallet collects opening, condition-evaluation, execution, and close-tail fees through one runtime-supplied `FeeCollector`. Every executable User step charges the execution fee derived from its task weight, while condition/resolution/funding skips release that reserved execution fee. `TmctolFeeCollector` atomically transfers each full charge into the Fee Sink System AAA; authorship and downstream allocation do not participate in collection. Collection failure returns to the owning create or execution path without partial debit. Pallet regressions cover opening-, evaluation-, and execution-fee failures, while runtime integration proves the payer debit and Fee Sink credit remain equal to the full collected amount.
 
 ### Queue Execution Model (Bounded Double Buffer)
 
@@ -399,8 +392,10 @@ Funding state follows typed provenance rather than a dedicated value-transfer ca
 Primary storage in pallet implementation follows two ownership classes: Section 13's stable behavioral stores constrain compatibility, while derived readiness and bounded ingress machinery remain replaceable implementation state whose semantics come from the owning scheduler/ingress contract.
 
 - `NextAaaId`: monotonic AAA id allocator
-- `AaaInstances`: full actor state: plan, lifecycle, and bounded `funding_snapshots[asset] = FundingBatch { amount, block, pending_amount, pending_last_block }` metadata
-- `ActiveAaaCount`: transactionally maintained O(1) cardinality used by creation and operational-cap checks; try-runtime reconciles it against `AaaInstances`
+- `AaaInstances`: active/paused actor state: plan, lifecycle, and bounded `funding_snapshots[asset] = FundingBatch { amount, block, pending_amount, pending_last_block }` metadata
+- `DormantAaaIdentities`: identity-only records with no executable or scheduler state
+- `ActorIdentityCount`: transactionally maintained O(1) cardinality across `AaaInstances` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
+- `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `AaaInstances`
 - `AaaReadiness`: derived compact hot-state for scheduler readiness checks; implementation-owned rather than a stable public storage promise
 - `CurrentQueue`: bounded run queue for current block
 - `NextQueue`: staged queue merged into active run queue on next `on_idle`
@@ -408,7 +403,7 @@ Primary storage in pallet implementation follows two ownership classes: Section 
 - `QueueEpoch` / `ActorQueueEpoch`: deterministic queue dedup and epoch tracking
 - `ActiveActorLimit`: governance-configurable operational active cap
 - `OwnerSlotMask`: user owner-slot occupancy bitmask; System AAA never consumes it
-- `SovereignIndex`: reverse index from sovereign account to `aaa_id`
+- `SovereignIndex`: reverse index from sovereign account to active or dormant `aaa_id`; custody-only accounts intentionally have no entry
 - `ClosedSystemAaaIds`: closed System AAA id tombstones retaining the actor's mutability; only tombstones recorded as Mutable permit governance reopen
 - `AddressEventInbox`: event-trigger pending latch per actor
 - `IngressOverflowHead/Len/Slots`: implementation-owned bounded O(1) carry-over ring for over-cap ingress
@@ -423,11 +418,13 @@ The AAA `0.7.x` pre-launch line supports fresh genesis only; it does not claim a
 
 ## Lifecycle State Machine
 
-The implementation now mirrors the specification's single lifecycle machine:
+The implementation separates identity-only dormancy from active execution:
 
 ```text
-Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed
+Created Dormant ⇄ Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed
 ```
+
+`activate_aaa` accepts typed `ProgramInput` and validates the schedule/window, run plan, explicit close plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and production idle envelope before moving a Mutable identity into `AaaInstances`; `ProgramInput::Dormant` is rejected on activation. `deactivate_aaa` clears queues, wakeups, readiness, inbox, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances. Active and dormant creation paths now normalize into the same typed internal program boundary, while the legacy creation/reopen metadata still supplies separate schedule/run-plan arguments and class-derived close/funding defaults. Converting that external metadata to `ProgramInput` remains open.
 
 Runtime interpretation:
 
@@ -435,7 +432,7 @@ Runtime interpretation:
 - `Close tail`: terminal `on_close_execution_plan` run; does not increment `cycle_nonce`; emits close-tail events followed by `AaaClosed`
 - `Lifecycle touch`: extrinsics such as `manual_trigger`, `pause_aaa`, `permissionless_sweep`, and plan/schedule updates may detect terminal state before their normal mutation path; ordinary deposits into expired/closed sovereign addresses remain balance-only
 
-Creation and Mutable System reopen inject the canonical `[Noop]` close plan. Mutable actors can replace it through `update_on_close_execution_plan`; Immutable User/System creation intentionally fixes `[Noop]` for actor lifetime, and pallet coverage asserts both the injected shape and rejected update paths. User actors cannot admit `Mint` in either the normal plan or close plan. System Immutable actors are hard protocol anchors at the control boundary: no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, close, or reopen them. Mandatory runtime-owned terminal transitions remain distinct from that control guard, so an Immutable actor reaching the consecutive-failure threshold executes its close tail and leaves an Immutable tombstone that governance cannot reopen; only a runtime upgrade can restore or alter that anchor.
+Both lowest-free-slot and exact-slot User creation now accept the complete typed `ProgramInput`, including an explicit close plan and funding policy for Active programs or no program for Dormant identities. Fresh System creation and Mutable System reopen now accept the complete typed Active or Dormant `ProgramInput`; Active programs carry their explicit close plan and funding policy through admission without class-derived metadata defaults. Mutable actors can replace an installed close plan through `update_on_close_execution_plan`; Immutable actors fix their admitted close plan for actor lifetime. User actors cannot admit `Mint` in either the normal plan or close plan. System Immutable actors are hard protocol anchors at the control boundary: no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, close, or reopen them. Mandatory runtime-owned terminal transitions remain distinct from that control guard, so an Immutable actor reaching the consecutive-failure threshold executes its close tail and leaves an Immutable tombstone that governance cannot reopen; only a runtime upgrade can restore or alter that anchor.
 
 Scheduler hygiene follows the bounded liveness matrix in the specification: execution-created late enqueues merge into next-block queue state; Manual and AddressEvent latches deferred by cooldown or a future schedule window receive a wakeup at their earliest eligibility; resume re-primes pending non-timer actors after a paused queue pop; deterministic delayed timers re-arm after execution; and closed/missing stale queue or wakeup entries are ignored deterministically. Pallet regressions cover paused-pop-resume, cooldown, and pre-window orderings, while runtime integration `asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter` proves actor-to-actor ingress remains queued across the `on_idle` boundary.
 
@@ -478,10 +475,10 @@ AAA discovery is intentionally split by use case:
 
 | Call | Extrinsic | Notes |
 | --- | --- | --- |
-| `0` | `create_user_aaa` | fee, no `Mint`, default `[Noop]` close |
-| `1` | `create_user_aaa_at_slot` | exact slot, default `[Noop]` close |
-| `2` | `create_system_aaa` | governance origin, explicit mutability |
-| `3` | `reopen_system_aaa` | reopen closed Mutable System id as Mutable |
+| `0` | `create_user_aaa` | fee; complete Active or Dormant program input; no User `Mint` |
+| `1` | `create_user_aaa_at_slot` | exact slot; same complete Active or Dormant input |
+| `2` | `create_system_aaa` | governance origin; explicit mutability and complete Active or Dormant program input |
+| `3` | `reopen_system_aaa` | reopen a closed Mutable System id with a complete Active or Dormant program input |
 | `4` | `pause_aaa` | mutable actors only |
 | `5` | `resume_aaa` | mutable actors only |
 | `6` | `manual_trigger` | set flag and enqueue/schedule |
@@ -496,8 +493,11 @@ AAA discovery is intentionally split by use case:
 | `15` | `set_auto_close_at_cycle_nonce` | set/clear cycle lease with horizon checks |
 | `16` | `increment_auto_close_nonce` | extend cycle lease, checked and bounded |
 | `17` | `update_on_close_execution_plan` | replace fully admitted close-tail plan |
+| `18..=20` | reserved | retired transitional dormant creation calls; canonical User/System creation accepts `ProgramInput::Dormant` |
+| `21` | `activate_aaa` | typed Active program with explicit schedule, plans, funding policy, and admission validation |
+| `22` | `deactivate_aaa` | remove program/scheduler state while preserving identity and balances |
 
-Calls `4`, `5`, `6`, `7`, `8`, `9`, `12`, `15`, `16`, and `17` share the same authority gate: signed owner for both actor types, plus governance origin for System AAA only.
+Calls `4`, `5`, `6`, `7`, `8`, `9`, `12`, `15`, `16`, `17`, `21`, and `22` use the class-specific control authority: signed owner for User actors, signed owner or governance for System actors. Active-only calls reject dormant identities; `close_aaa` handles either lifecycle.
 
 ---
 
@@ -513,9 +513,11 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
   - Local/Foreign: `pallet-assets`
   - `balance()` is adapter-visible transferable balance; AAA derives `spendable_balance` by subtracting only transient native fee reservation
   - includes `minimum_balance` / `can_deposit` semantics
+  - exposes only queries used by portable AAA execution; total issuance remains a runtime-local ledger query
 - `DexOps = TmctolDexOps`
   - swaps via Axial Router (`execute_swap_for`)
   - liquidity via `pallet-asset-conversion`
+  - exposes only task execution methods; the System AAA genesis builder reads reserve depth directly from the runtime AMM
 - `StakingOps = TmctolStakingOps`
   - generic `Stake { asset, amount }` delegates to the runtime staking adapter for all staking assets
   - the DEOS adapter routes its native staking asset representation to `pallet-staking::stake_native(amount)` and routes other staking assets to `pallet-staking::stake(...)`
@@ -527,14 +529,14 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
 Additional runtime bindings:
 
 - `WeightToFee` conversion used for execution-fee charging
-- Runtime `WeightInfo` regenerated with frame omni bencher 0.22 / benchmark CLI 58 against the shipped `ActiveAaaCount`, queue-cleanup, wakeup-retry, sweep, funding-policy update, fixed hook bases, close-plan-update, User fee collection, saturated ingress-aware asset transfer, and User fee-bearing close-tail topology; generated storage annotations contain no retired active-list stores
+- Runtime `WeightInfo` regenerated with frame omni bencher 0.22 / benchmark CLI 58 against the shipped identity/active counts, dormant lifecycle, queue-cleanup, wakeup-retry, sweep, funding-policy update, fixed hook bases, close-plan-update, User fee collection, saturated ingress-aware asset transfer, and User fee-bearing close-tail topology; dedicated lifecycle classes measure dormant System creation at `44,979,000` RefTime with seven reads/five writes and `13,311` proof bytes, activation at `41,416,000` RefTime with five reads/four writes and `13,311` proof bytes, and deactivation at `41,835,000` RefTime with five reads/nine writes and `81,487` proof bytes; generated storage annotations contain no retired active-list stores
 - Explicit close dispatch admission takes the component-wise maximum of the compositional System/User bound and the parameterized measured User fee-bearing close-tail model
 - User cycle and close-tail admission adds two generated `fee_collection` envelopes per configured step for possible evaluation and execution charging; System admission adds neither envelope
 - `Transfer`/`Burn`/`Mint` bind the generated saturated `task_simple_asset_op` envelope, while `SplitTransfer` binds the generated `task_split_transfer(l)` model over `2..=8` independently notified recipients with full queue and nine-bucket spillover pressure
 - XCM `UnitWeightCost` binds generated `xcm_asset_deposit` measurement of a registered foreign asset entering a saturated `OnAddressEvent` actor through registry conversion, pallet-assets mutation, funding/inbox updates, full queue, and nine-bucket spillover pressure; the fixed weigher remains sound by restricting holding to one asset
 - `SwapExactIn` and `SwapExactOut` have separate generated runtime task models covering caller-aware router execution, fee routing, and ingress effects; the exact-output class additionally covers its bounded 128-step quote search
 - `Stake` and `Unstake` have separate generated runtime task models covering the shipped staking pool, transferable receipt, account, position-query, and reward-touch paths
-- `AddLiquidity`, `DonateLiquidity`, and `RemoveLiquidity` have separate generated runtime task models; add-liquidity covers its worst-case missing-pool branch through pool/LP creation and first liquidity provision, donation covers native receipt acquisition, balanced pool donation, and yield bridging, while removal resolves an LP asset through all `MaxAdapterScan` candidate pools before mutation
+- `AddLiquidity`, `DonateLiquidity`, and `RemoveLiquidity` have separate generated runtime task models; add-liquidity covers its worst-case missing-pool branch through pool/LP creation and first liquidity provision, donation covers native receipt acquisition, balanced pool donation, and yield bridging, while removal currently resolves an LP asset through all `MaxAdapterScan` candidate pools before mutation. `MaxAdapterScan` remains in generic `Config` only because the production adapter and its benchmark share that bound; removing the scan and this temporary embedding obligation requires a runtime-owned reverse LP index.
 - All runtime-backed task adapter classes use generated measurements
 - Scheduler queue admission uses a generated zero-through-10,000 model over the extracted current/staged merge primitive; both queue values use measured PoV mode, so the production artifact charges the observed `401 + 16n` proof model (with a conservative generated intercept) for two full queues through deduplication, carry-over, bounded truncation, and epoch advance and also anchors terminal queue cleanup
 - Wakeup spillover/drop retry admission uses a generated runtime model parameterized by blocked buckets and binds the shipped maximum nine-bucket probe
@@ -562,7 +564,7 @@ Selected configured bounds in the current DEOS reference runtime:
 - Runtime block-weight policy divides capacity equally between transaction dispatch and background execution: `50%` dispatch and `50%` guaranteed `on_idle` headroom; Operational extrinsics retain their priority/fee class but have no dedicated weight reserve until a concrete critical call justifies a measured allocation, and a runtime regression pins the partition plus `reserved = None`
 - The `50%` reserve provides `Weight::from_parts(1_000_000_000_000, 2_500_000)` and admits the guaranteed scheduler envelope (`1,061,855` proof bytes), reference genesis System AAA `0` cycle (`757,966`), and its close tail (`370,971`) together at `2,190,792` proof bytes. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work, not every optional ingress-drain, heavyweight wakeup-retry, or sweep-time terminal-close unit; saturated durable housekeeping therefore converges across blocks and may defer an actor cycle
 - Runtime binds `GuaranteedOnIdleWeight` directly to the 50% reserve. Genesis construction asserts the contract, create/reopen reject before fee collection or mutation, and both plan-update paths validate the prospective run/close pair; `ExecutionPlanExceedsOnIdleBudget` reports either-dimensional rejection
-- Every reference genesis actor fits the guaranteed scheduler envelope, its cycle, and close tail under that gate; a runtime regression checks the full set. Exact-reserve stress regressions prove mixed Noop/transfer FIFO carry-over with nonce spread `<= 1`, no starvation or failed steps, eventual drain of a maximum address-ingress batch while an XCM deposit trigger remains executable, and convergence of a maximum wakeup-retry prefix plus expired-actor cleanup while a non-empty close tail and live actors progress
+- Every reference genesis actor fits the guaranteed scheduler envelope, its cycle, and close tail under that gate; a runtime regression checks the full set. Exact-reserve stress regressions prove mixed zero-amount staking/transfer FIFO carry-over with nonce spread `<= 1`, no starvation or failed steps, eventual drain of a maximum address-ingress batch while an XCM deposit trigger remains executable, and convergence of a maximum wakeup-retry prefix plus expired-actor cleanup while a non-empty close tail and live actors progress
 - A componentwise-max 10-step cycle plus close tail still requires `18,295,309` proof bytes and is therefore unadmissible despite fitting the syntactic vector bounds
 - `MaxUserExecutionPlanSteps = 3`
 - `MaxSystemExecutionPlanSteps = 10`
@@ -630,8 +632,8 @@ Implementation is covered by:
 - `template/pallets/aaa/src/tests.rs` — pallet-level unit/regression suite
 - `template/runtime/src/tests/aaa_integration_tests.rs` — runtime integration suite with explicit fast/stress scheduler lanes
 - `template/pallets/aaa/src/benchmarking.rs` — FRAME v2 benchmarks for all dispatchables + scheduler/close-path diagnostic benchmarks
-- `aaa_0_7_1_candidate_scale_variant_indices_are_explicit` — pins candidate indices through SCALE type metadata for core `Task`, amount resolution, conditions, source/asset/funding policies, triggers, actor type/mutability, pause/close/defer/skip/failure outcomes, pallet events/errors, and compact dispatch calls (`0..=17`) before the post-1.0 append-only lock activates
-- `aaa_0_7_1_candidate_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 25 candidate entry names, query modifiers, plain/map shapes, `Blake2_128Concat` map hashers, and concrete key/value SCALE types through FRAME storage metadata, making accidental schema drift fail before a live-chain migration contract exists
+- `aaa_0_7_2_candidate_scale_variant_indices_are_explicit` — pins candidate indices through SCALE type metadata for core `Task`, amount resolution, conditions, source/asset/funding policies, triggers, actor type/mutability, pause/close/defer/skip/failure outcomes, pallet events/errors, canonical typed creation calls (`0..=3`), retained control calls (`4..=17`), reserved retired creation indices (`18..=20`), and lifecycle calls (`21..=22`) before the post-1.0 append-only lock activates
+- `aaa_0_7_2_candidate_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 27 candidate entry names, including dormant identity and identity-count state, query modifiers, plain/map shapes, `Blake2_128Concat` map hashers, and concrete key/value SCALE types through FRAME storage metadata, making accidental schema drift fail before a live-chain migration contract exists
 
 Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, funding semantics, lifecycle transitions, and emergency starvation path.
 

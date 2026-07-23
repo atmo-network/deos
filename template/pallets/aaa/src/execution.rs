@@ -89,7 +89,6 @@ enum PreparedTask<T: Config> {
     asset: T::AssetId,
     shares: T::Balance,
   },
-  Noop,
 }
 
 enum PreparedTaskOutcome<T: Config> {
@@ -744,7 +743,7 @@ impl<T: Config> Pallet<T> {
       } => {
         Self::push_trigger_asset(amount, *asset_a, assets);
       }
-      AaaTask::Noop | AaaTask::Unstake { .. } => {}
+      AaaTask::Unstake { .. } => {}
     }
   }
 
@@ -1107,7 +1106,6 @@ impl<T: Config> Pallet<T> {
           shares: resolved,
         }))
       }
-      AaaTask::Noop => Ok(PreparedTaskOutcome::Executable(PreparedTask::Noop)),
     }
   }
 
@@ -1277,7 +1275,6 @@ impl<T: Config> Pallet<T> {
               shares,
             });
           }
-          PreparedTask::Noop => {}
         }
         Ok(())
       })();

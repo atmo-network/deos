@@ -80,7 +80,6 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     asset: AssetId,
     shares: AmountResolution<Balance>,
   },
-  Noop,
 }
 
 impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get<u32>> Clone
@@ -166,7 +165,6 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         asset: asset.clone(),
         shares: shares.clone(),
       },
-      Self::Noop => Self::Noop,
     }
   }
 }
@@ -269,7 +267,6 @@ impl<
         .field("asset", asset)
         .field("shares", shares)
         .finish(),
-      Self::Noop => f.write_str("Noop"),
     }
   }
 }
@@ -429,7 +426,6 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
           shares: right_shares,
         },
       ) => left_asset == right_asset && left_shares == right_shares,
-      (Self::Noop, Self::Noop) => true,
       _ => false,
     }
   }
@@ -899,6 +895,34 @@ impl<AccountId: PartialEq, MaxSignedFundingSources: Get<u32>> PartialEq
 impl<AccountId: Eq, MaxSignedFundingSources: Get<u32>> Eq
   for FundingSourcePolicy<AccountId, MaxSignedFundingSources>
 {
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
+  Dormant,
+  Active {
+    schedule: Schedule,
+    schedule_window: Option<ScheduleWindow<BlockNumber>>,
+    execution_plan: ExecutionPlan,
+    on_close_execution_plan: ExecutionPlan,
+    funding_source_policy: FundingPolicy,
+  },
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DormantAaaIdentity<AccountId, BlockNumber> {
+  pub aaa_id: AaaId,
+  pub sovereign_account: AccountId,
+  pub owner: AccountId,
+  pub owner_slot: u8,
+  pub aaa_type: AaaType,
+  pub mutability: Mutability,
+  pub created_at: BlockNumber,
+  pub updated_at: BlockNumber,
 }
 
 #[derive(

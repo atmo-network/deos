@@ -36,35 +36,43 @@ This specification MUST stay at or below **1280 lines** (formatting-preserving c
 
 - **Terminology**: An **Execution Plan** is the static bounded list of steps configured on the actor. An **Execution Run (Cycle)** is one admitted execution attempt of the current plan, identified by `(aaa_id, cycle_nonce)`. All external observability and indexer correlation MUST be run-centric. Execution plans, trigger filters, and actor-to-actor asset flows are part of the on-chain behavioral surface of AAA, but they operate inside the scheduler, fee, lifecycle, and safety contract of this runtime; within existing task, adapter, and safety limits, protocol workflow changes SHOULD prefer actor-graph reconfiguration over runtime rewrites.
 - **Native-asset terminology**: `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, fee collection, and fee reservation. Staking uses the generic `Stake { asset, amount }` task only; any native staking representation is a runtime-defined `AssetId` interpreted by `StakingOps`, not a separate AAA task.
-- **Stable plan shape**: `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty; creation and reopen extrinsics MUST omit it and inject the canonical `[Noop]` close plan. Actors that want no close-time side effects keep `[Noop]`; mutable actors MAY replace it through `update_on_close_execution_plan`. Immutable actors intentionally keep `[Noop]` for their lifetime: admitting a custom close plan would expand their immutable creation commitment and requires a future explicit creation-contract revision rather than a post-creation mutation path.
+- **Stable plan shape**: An active `execution_plan` MUST be non-empty. `on_close_execution_plan` MAY be empty to express no close-time side effects; Mutable actors MAY replace it through `update_on_close_execution_plan`. Dormant identities store neither plan. Immutable active actors commit both plans at creation and expose no post-creation mutation path.
 - **Production-budget admission**: The embedding runtime MUST provide one gross two-dimensional `GuaranteedOnIdleWeight`. Genesis, create, reopen, and either plan update MUST compose the guaranteed scheduler envelope (`scheduler_admission_overhead`) + run cycle + close cycle/cleanup for the prospective plan pair and reject it with `ExecutionPlanExceedsOnIdleBudget` unless both RefTime and ProofSize fit. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work rather than every optional compatibility-ingress drain, heavyweight wakeup-retry, or sweep-time terminal-close unit. Those durable housekeeping paths consume only complete units that fit and MAY defer actor work across blocks without losing the trigger, retry marker, or terminal condition. Admission happens before opening-fee collection or state mutation; bounded vector shape alone never implies production admissibility.
 
 ```rust
-struct AaaInstance<AccountId, BlockNumber, Balance> {
+enum ActorClass { UserMutable { owner_slot: u8 }, UserImmutable { owner_slot: u8 }, SystemMutable, SystemImmutable }
+
+struct ActorIdentity<AccountId, BlockNumber> {
     aaa_id: u64,
-    aaa_type: AaaType,
+    class: ActorClass,
     sovereign_account: AccountId,
     owner: AccountId,
-    owner_slot: u8,
-    mutability: Mutability,
-    is_paused: bool,
-    pause_reason: Option<PauseReason>,
+    created_at: BlockNumber,
+    updated_at: BlockNumber,
+}
+
+struct ActorHot<BlockNumber, Balance> {
+    lifecycle: ActiveLifecycle,
     auto_close_at_cycle_nonce: Option<u64>,
-    schedule: Schedule,
-    schedule_window: Option<ScheduleWindow>,
-    execution_plan: BoundedVec<Step, MaxSteps>,
-    on_close_execution_plan: BoundedVec<Step, MaxSteps>,
     cycle_nonce: u64,
     last_cycle_block: BlockNumber,
     consecutive_failures: u32,
     manual_trigger_pending: bool,
+    cycle_weight_upper: Weight,
+    cycle_fee_upper: Balance,
+}
+
+struct ActorProgram {
+    schedule: Schedule,
+    schedule_window: Option<ScheduleWindow>,
+    execution_plan: BoundedVec<Step, MaxSteps>,
+    on_close_execution_plan: BoundedVec<Step, MaxSteps>,
+}
+
+struct ActorFunding<AccountId, BlockNumber, Balance> {
     funding_source_policy: FundingSourcePolicy<AccountId>,
     funding_tracked_assets: BoundedBTreeSet<AssetId, MaxFundingTrackedAssets>,
     funding_snapshots: BoundedBTreeMap<AssetId, FundingBatch<Balance, BlockNumber>, MaxFundingTrackedAssets>,
-    cycle_weight_upper: Weight,
-    cycle_fee_upper: Balance,
-    created_at: BlockNumber,
-    updated_at: BlockNumber,
 }
 
 struct FundingBatch<Balance, BlockNumber> { amount: Balance, block: BlockNumber, pending_amount: Balance, pending_last_block: Option<BlockNumber> }
@@ -80,7 +88,7 @@ Mutability rules:
 - **Mutable**: control origin MAY pause/resume/update schedule/update execution plan/update on-close execution plan/update funding-source policy/set or increment auto-close target.
 - **Control origin**: signed owner for both actor types; governance origin is additionally valid for System AAA only.
 - **User Immutable**: owner mutation calls MUST fail with `ImmutableAaa`; a runtime MAY expose emergency governance override for User actors only.
-- **System Immutable**: no runtime extrinsic, including governance/root, may mutate, pause/resume, manually trigger, close, or reopen the actor; only runtime upgrade may alter the invariant. Its injected close plan remains canonical `[Noop]`.
+- **System Immutable**: no runtime extrinsic, including governance/root, may mutate, activate/deactivate, pause/resume, manually trigger, close, or reopen the actor; only runtime upgrade may alter the invariant. It MUST be created active.
 - Ordinary inbound transfers remain available regardless of actor mutability; mutability does not grant funding authority. `manual_trigger` MUST remain available for User AAA and System Mutable AAA unless another lifecycle gate rejects it; System Immutable `manual_trigger` MUST fail with `ImmutableAaa`.
 
 ### 2.3 Sovereign Derivation and Slot Allocation
@@ -89,7 +97,7 @@ Mutability rules:
 2. **System AAA**: `seed = Blake2_256( SCALE(AaaPalletId, b"system", aaa_id) )`, `sovereign_account = AccountId::decode(TrailingZeroInput(seed))`. Slotless: MUST NOT consume bits in `OwnerSlotMask`; stored/emitted `owner_slot` MUST remain `0` as a compatibility sentinel and MUST be interpreted together with `aaa_type`.
 3. User slot bit MUST be cleared on User AAA destruction.
 4. Recreating a User AAA with the same `(owner, owner_slot)` or reopening a closed System AAA with the same `aaa_id` MUST derive the same `sovereign_account`.
-5. Collision check MUST guard only active AAA ownership of the same sovereign account; this case MUST fail with `SovereignAccountCollision`.
+5. Collision check MUST guard active or dormant AAA ownership of the same sovereign account; this case MUST fail with `SovereignAccountCollision`.
 6. Pre-existing account state on a derived sovereign account (balances, dust, locks, reserves, third-party transfers) MUST be treated as valid and MUST NOT be considered a collision.
 
 - `OwnerSlotMask: Map<AccountId, u8>`
@@ -117,8 +125,8 @@ System AAA id rules:
 
 1. `create_system_aaa(mutability, ...)` MUST allocate a fresh `aaa_id` from `NextAaaId`; governance MUST NOT choose an explicit fresh `aaa_id` through the stable surface.
 2. `reopen_system_aaa(aaa_id, mutability, ...)` is the only stable explicit-id System AAA creation path. It MAY reopen only a previously closed Mutable System AAA id, the requested new `mutability` MUST also be Mutable, and either Immutable case MUST fail with `ImmutableAaa`; an id without a System close tombstone MUST fail with `SystemAaaNotClosed`.
-3. `reopen_system_aaa` MUST fail with `AaaIdOccupied` if the requested `aaa_id` is already active.
-4. System AAA creation/reopen MUST insert `SovereignIndex[sovereign_account] = aaa_id` atomically with `AaaInstances`; active occupancy of that sovereign account remains the only collision criterion.
+3. `reopen_system_aaa` MUST fail with `AaaIdOccupied` if the requested `aaa_id` already has an active or dormant identity.
+4. System AAA creation/reopen MUST insert `SovereignIndex[sovereign_account] = aaa_id` atomically with actor identity; active or dormant identity occupancy of that sovereign account is the collision criterion, while runtime-declared custody-only accounts remain outside this generic index.
 5. `NextAaaId` MUST remain monotonic. Reopening a previously closed lower id MUST NOT rewind it.
 
 ### 2.4 Lifecycle
@@ -136,7 +144,15 @@ System AAA is exempt from `MinUserBalance` checks and MUST NOT auto-pause on `Fu
 
 `WindowExpired` MUST be evaluated at every lifecycle touch point (scheduler admission, sweep extrinsics, `manual_trigger`, pause/resume, schedule/execution-plan/funding-policy update). `schedule_window = None` never expires. If `current_block > schedule_window.end`, runtime closes before and instead of other mutations in that call. Ordinary transfers remain balance movements rather than lifecycle touchpoints; ingress for an expired actor MUST NOT arm new funding state before bounded lifecycle closure. Schedule window eligibility is inclusive on `end`: `start <= current_block <= end`; closure starts only when `current_block > end`.
 
-Lifecycle is a single state machine: `Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed`. Normal cycles are scheduler-owned runs of `execution_plan`, increment `cycle_nonce` at admission, and emit `CycleStarted`/`CycleSummary`. Close tails are terminal runs of `on_close_execution_plan`; they are not normal cycles, MUST NOT increment `cycle_nonce`, and emit close-tail events followed by `AaaClosed`. Lifecycle touch extrinsics MAY detect terminal state and enter the close path, but MUST NOT present that path as a normal cycle.
+Lifecycle separates durable actor identity from an optional executable program. The class is one of `UserMutable { owner_slot }`, `UserImmutable { owner_slot }`, `SystemMutable`, or `SystemImmutable`; implementations MUST reject or make unrepresentable a User without a valid occupied slot, any Immutable actor without an active program, and any class/mutability mismatch. Program lifecycle is `Dormant | Active | Paused(PauseReason)`. `Dormant` retains `aaa_id`, class, owner, sovereign account, creation lineage, and owner-slot occupancy but owns no schedule, window, plans, funding policy or batches, cached plan bounds, readiness mirror, queue ticket, wakeup pointer, inbox latch, cycle/failure/lease counters, fee work, or periodic events. A runtime-specific protocol/custody account that needs only deterministic account derivation MUST remain outside actor identity storage entirely.
+
+Active lifecycle is `Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed`; pause is an active-program state rather than dormancy. Normal cycles are scheduler-owned runs of `execution_plan`, increment `cycle_nonce` at admission, and emit `CycleStarted`/`CycleSummary`. Close tails are terminal runs of `on_close_execution_plan`; they are not normal cycles, MUST NOT increment `cycle_nonce`, and emit close-tail events followed by `AaaClosed`. Lifecycle touch extrinsics MAY detect terminal state and enter the close path, but MUST NOT present that path as a normal cycle.
+
+Creation and reopen take one typed `ProgramInput`: `Dormant`, or `Active { schedule, schedule_window, execution_plan, on_close_execution_plan, funding_source_policy }`. `Dormant` MUST be rejected for both Immutable classes. Active input MUST validate the complete class policy, trigger, window, both plans, funding policy, tracked assets, cached weight/fee bounds, deferred horizon, and guaranteed production admission envelope before writing actor, scheduler, readiness, inbox, queue, or wakeup state. Dormant creation performs no plan scan, fee forecast, readiness calculation, or scheduler enrollment.
+
+A Mutable active actor MAY transition to Dormant through `deactivate_aaa`. Deactivation MUST invalidate all canonical and derived scheduler membership, remove the executable program and funding state, clear cycle/failure/lease state, preserve identity, sovereign balances, and User slot occupancy, decrement only active cardinality, and emit exactly one `AaaDeactivated` transition event; it MUST NOT execute either plan or emit cycle/close events. A Mutable dormant actor MAY transition through `activate_aaa` using the complete Active input above; activation MUST finish all validation and active-capacity admission before any mutation, then install the program and scheduler state atomically and emit exactly one `AaaActivated` event. Inbound value to a dormant or custody-only sovereign account is balance-only and MUST NOT create funding, inbox, queue, wakeup, fee, or cycle work. Pause/resume apply only to active programs; System Immutable actors cannot activate, deactivate, pause, resume, close, or reopen through mutable control paths.
+
+`ActorIdentityCount` MUST count active plus dormant actor identities against a hard `MaxActorIdentities` bound. `ActiveAaaCount` MUST count active and paused programs only, MUST exclude dormant identities and custody-only accounts, and MUST alone govern `ActiveActorLimit`; create-active and activate transitions increment it only after full validation, while deactivation decrements it atomically. Closing either active or dormant identity decrements identity cardinality, releases a User slot or records Mutable System reopen lineage, and preserves sovereign balances.
 
 Close precedence is checkpoint-scoped and deterministic: `WindowExpired` dominates all external/admission touch points; for unpaused User AAA admission, `BalanceExhausted` dominates `FeeBudgetExhausted`; stored nonce exhaustion prevents any further normal-cycle admission; after an admitted cycle, `ConsecutiveFailures` is the only post-failure terminal close and `AutoCloseNonceReached` is the only post-success terminal close. If a scheduler, post-cycle, or sweep-time close transaction rolls back, the actor MUST emit `CycleDeferred(CloseTransitionFailed)` and retry the stored terminal reason deterministically: scheduler/post-cycle paths remain durably queued before readiness or another normal cycle, while sweep cleanup retains its cursor before the actor and stops that pass so the next sweep retries the same candidate.
 
@@ -144,7 +160,7 @@ Before terminal state removal, runtime MUST enter close-tail execution for expli
 
 Close-tail contract matrix:
 
-- Creation: omitted close plan injects canonical `[Noop]`; mutable actors MAY replace it later
+- Creation/activation: active input commits an explicit bounded close plan, which MAY be empty; mutable actors MAY replace it later
 - Explicit close: control origin enters close tail inline before deletion, independent of mutability
 - Automatic close: scheduler admits close tail only when bounded budget fits; otherwise closure defers
 - Sweep close: sweep is a lifecycle touchpoint; it may enter terminal close but MUST NOT admit a normal cycle
@@ -153,7 +169,7 @@ Close-tail contract matrix:
 - Deletion: remove actor/readiness/index state, remove its authoritative future wakeup through the reverse pointer, clear User slot, preserve sovereign balances, emit `AaaClosed`
 - Recovery: User reattaches with `create_user_aaa_at_slot`; System reopens with `reopen_system_aaa`
 
-Create/close transitions MUST synchronize `AaaInstances` and `SovereignIndex`; queue/readiness entries MUST be removed, or deterministic stale queue entries MUST be ignored at pop. Direct post-destruction balance-rescue extrinsics remain out of the stable contract.
+Create/close transitions MUST synchronize actor identity/program stores and `SovereignIndex`; deactivate/close MUST invalidate queue/readiness entries, and deterministic stale queue entries MUST be ignored at pop. Direct post-destruction balance-rescue extrinsics remain out of the stable contract.
 
 ### 2.5 Funding Batches
 
@@ -196,7 +212,6 @@ trait AssetOps<AccountId, AssetId, Balance> {
     fn balance(who: &AccountId, asset: AssetId) -> Balance;
     fn minimum_balance(asset: AssetId) -> Balance;
     fn can_deposit(who: &AccountId, asset: AssetId, amount: Balance) -> bool;
-    fn total_issuance(asset: AssetId) -> Balance;
 }
 ```
 
@@ -296,7 +311,6 @@ Runtime SHOULD classify tasks by materially distinct worst-case work rather than
 | `DexLiquidity` | `AddLiquidity`, `RemoveLiquidity`, `DonateLiquidity` |
 | `Staking` | `Stake`, `Unstake` with runtime adapter bounds |
 | `Fanout` | `SplitTransfer` (parameterized by `legs`) |
-| `Noop` | `Noop` |
 
 ---
 
@@ -320,7 +334,7 @@ Per-step formulas:
 - `eval_fee = StepBaseFee + ConditionReadFee × conditions.len()`
 - `exec_fee_upper = WeightToFee(weight_upper_bound(task, params))`
 - `cycle_fee_upper = Σ(eval_fee_i + exec_fee_upper_i)`
-  Execution fee is charged once a step becomes executable, including executable `Noop`, even if dispatch later fails; steps resolved to `Skipped` or `FundingUnavailable` do not incur execution fee, and their unused execution-fee reservation MUST be released before resolving later steps.
+  Execution fee is charged once a step becomes executable, even if dispatch later fails; steps resolved to `Skipped` or `FundingUnavailable` do not incur execution fee, and their unused execution-fee reservation MUST be released before resolving later steps.
 
 `StepBaseFee` and `ConditionReadFee` are charged before task dispatch and MUST be calibrated to economically cover non-executable paths (`StepSkipped`, `StepFailed`) that still consume reads/writes and emit events.
 
@@ -398,7 +412,7 @@ Resolution policies — runtime MUST apply one per task:
 
 - `PreserveSpend`: `Transfer`, `SplitTransfer`, `SwapExactIn`, `AddLiquidity`, `RemoveLiquidity`, `Stake`, `DonateLiquidity`; subtract ED and require a spendable source; `DonateLiquidity` resolves only its declared `asset_a` amount, while the adapter derives `asset_b`
 - `Mint`: `Mint`, `SwapExactOut`; no ED subtraction or spendability requirement; for `SwapExactOut`, this policy applies only to target output, while the `DexOps` capacity contract (Section 3.2) and task input rule (Section 6.1) define the input-capacity bound
-- `ExpendableSpend`: `Burn`, using full spendable balance; `ShareSpend`: `Unstake`, using adapter-visible shares with full withdrawal allowed; `Noop` performs no amount resolution; multi-amount tasks MUST resolve every field before dispatch and apply outcome precedence `FundingUnavailable > Skipped > Executable` independent of field order
+- `ExpendableSpend`: `Burn`, using full spendable balance; `ShareSpend`: `Unstake`, using adapter-visible shares with full withdrawal allowed; multi-amount tasks MUST resolve every field before dispatch and apply outcome precedence `FundingUnavailable > Skipped > Executable` independent of field order
 
 For `SwapExactOut`, `Mint` policy applies only to target output resolution. AAA MUST derive `max_amount_in` from the `asset_in` policy capacity, including `reserved_fee_remaining` and minimum-balance preservation for `FeeNativeAsset`, and the DEX adapter MUST enforce that bound atomically.
 
@@ -472,7 +486,6 @@ If an early step mutates asset composition and a later step fails, post-mutation
 - `Stake`: deposit declared asset into staking adapter; native support uses the runtime's chosen `AssetId`
 - `DonateLiquidity`: donate value into a pair without minting LP; adapters own pair-specific balancing
 - `Unstake`: withdraw shares from staking pool
-- `Noop`: observation/padding step
 
 `SwapExactIn` parameter contract:
 
@@ -680,7 +693,7 @@ The AAA runtime is a **deterministic event-driven actor runtime**. Actors are ne
 
 1. **Active Run Queue (`CurrentQueue` + `NextQueue`)**: Each `on_idle` pass seeds one bounded execution queue from `CurrentQueue` plus staged `NextQueue`; deferred carry-over and enqueues created after that snapshot MUST merge into next-block queue storage and MUST NOT be deleted at finalization.
 2. **Queue Continuation**: Cadence `every_blocks <= 1` re-admits actors via run-queue continuation (`NextQueue`) instead of timer indexing.
-3. **Temporal Wakeup Layer (`WakeupIndex` + `MinWakeupBlock`)**: Governs deferred eligibility and overdue wakeup admission for timer-delayed actors (`every_blocks > 1`) through canonical block-bucketed wakeup storage bounded by `MaxWakeupBucketSize`, plus an actor-keyed live wakeup pointer, with closed/missing actors dropped lazily when their due bucket is drained.
+3. **Temporal Wakeup Layer (`WakeupIndex` + `MinWakeupBlock`)**: Governs deferred eligibility and overdue wakeup admission for timer-delayed actors (`every_blocks > 1`) through canonical block-bucketed wakeup storage bounded by `MaxWakeupBucketSize`, plus an actor-keyed live wakeup pointer, with dormant/closed/missing actors dropped lazily when their due bucket is drained.
 4. **Dedup Epochs**: `QueueEpoch` increments each block. `ActorQueueEpoch` tracks the last block an actor was queued, preventing multi-enqueue amplification within the same block.
 
 ### 8.2 Execution Flow
@@ -695,7 +708,7 @@ Each block MUST use a two-dimensional weight meter to admit bounded ingress, wak
 - Manual trigger: set flag and enqueue/schedule; deferral preserves flag until admitted cycle start
 - Queue/wakeup full: spill deterministically; if no bucket fits, emit drop and retain source latch when any
 - Paused/cooldown/pre-window actor: pop preserves manual/inbox latches and MUST retain or schedule one future eligibility entry; resume re-enqueues pending non-timer signals
-- Closed/missing actor: stale queue/wakeup entries are ignored; close removes canonical readiness/pointers
+- Dormant/closed/missing actor: stale queue/wakeup entries are ignored; deactivate/close removes canonical readiness/pointers
 - Window expired at touch/pop: enter terminal close before normal mutation or execution
 - Breaker active: bounded housekeeping may continue; normal cycles and scheduler-owned automatic close-tail admission MUST defer without cycle/close-tail events; explicit lifecycle touchpoints and sweep-time terminal close remain allowed
 
@@ -748,8 +761,10 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 
 ### 10.1 Owner / Control Extrinsics
 
-- `create_user_aaa(mutability, schedule, schedule_window, execution_plan)`: create actor, lowest free owner slot, canonical `[Noop]` close plan; Immutable actors retain it for life
-- `create_user_aaa_at_slot(owner_slot, mutability, schedule, schedule_window, execution_plan)`: exact recovery slot, canonical `[Noop]` close plan; Immutable actors retain it for life
+- `create_user_aaa(mutability, program)`: create active or dormant actor at the lowest free owner slot; `program` is the complete typed input from Section 2.4
+- `create_user_aaa_at_slot(owner_slot, mutability, program)`: exact recovery slot with the same complete active/dormant input
+- `activate_aaa(aaa_id, active_program)`: atomically validate and install a complete program on a Mutable dormant actor
+- `deactivate_aaa(aaa_id)`: atomically remove a Mutable actor's program and scheduler/funding state while preserving identity, slot, and balances
 - `pause_aaa(aaa_id)`: pause actor (Mutable only)
 - `resume_aaa(aaa_id)`: resume actor (Mutable only)
 - `manual_trigger(aaa_id)`: set manual trigger flag
@@ -762,16 +777,16 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 - `update_on_close_execution_plan(aaa_id, on_close_execution_plan)`: replace close-time plan (Mutable only)
 
 `execution_plan` is the normative term for the run-step vector.
-`pause_aaa`, `resume_aaa`, `manual_trigger`, `close_aaa`, `update_schedule`, `update_execution_plan`, `update_funding_source_policy`, `set_auto_close_at_cycle_nonce`, `increment_auto_close_nonce`, and `update_on_close_execution_plan` share the same control gate: signed owner for both actor types, plus governance origin for System AAA only; governance MUST NOT control User AAA through this path. After origin passes, System Immutable actors MUST reject these control paths with `ImmutableAaa`. Every extrinsic that can close inline after lifecycle inspection MUST declare a FRAME dispatch weight that component-wise upper-bounds the maximum User/System close plan and complete terminal cleanup; no runtime "remaining dispatch weight" preflight substitutes for transaction admission.
+`activate_aaa`, `deactivate_aaa`, `pause_aaa`, `resume_aaa`, `manual_trigger`, `close_aaa`, `update_schedule`, `update_execution_plan`, `update_funding_source_policy`, `set_auto_close_at_cycle_nonce`, `increment_auto_close_nonce`, and `update_on_close_execution_plan` share the same control gate: signed owner for both actor types, plus governance origin for System AAA only; governance MUST NOT control User AAA through this path. After origin passes, System Immutable actors MUST reject these control paths with `ImmutableAaa`. Every extrinsic that can close inline after lifecycle inspection MUST declare a FRAME dispatch weight that component-wise upper-bounds the maximum User/System close plan and complete terminal cleanup; no runtime "remaining dispatch weight" preflight substitutes for transaction admission.
 
 `create_user_aaa` MUST pay normal transaction fees, charge `AaaCreationFee` through the atomic runtime `FeeCollector` (Section 4.4), and enforce the deferred-horizon cap (Section 7.4).
 
-`create_user_aaa` and `create_system_aaa` MUST fail with `ActiveAaaCapacityExceeded` when active AAA instance count reaches `ActiveActorLimit`; capacity checks and limit updates MUST use transactionally maintained O(1) active-count state rather than map iteration.
+Active creation and `activate_aaa` MUST fail with `ActiveAaaCapacityExceeded` when active program count reaches `ActiveActorLimit`. Every creation or reopen MUST fail with `ActorIdentityCapacityExceeded` when active plus dormant identity count reaches `MaxActorIdentities`. Capacity checks and limit updates MUST use transactionally maintained O(1) counts rather than map iteration.
 
 ### 10.2 Governance Extrinsics
 
-- `create_system_aaa(mutability, ...)`: create Mutable or Immutable System AAA with canonical `[Noop]`; Immutable actors retain it for life
-- `reopen_system_aaa(aaa_id, mutability, ...)`: reopen a closed Mutable System AAA as Mutable at the same `aaa_id` with canonical `[Noop]`
+- `create_system_aaa(mutability, program)`: create a Mutable active/dormant or Immutable active System AAA
+- `reopen_system_aaa(aaa_id, mutability, program)`: reopen a closed Mutable System AAA as Mutable active or dormant at the same `aaa_id`
 - `set_global_circuit_breaker(paused: bool)`: global scheduler stop/resume
 - `set_active_actor_limit(new_limit: u32)`: operational cap update (`0 < new_limit <= min(MaxActiveActors, MaxQueueLength)`)
 
@@ -799,8 +814,10 @@ When breaker is active:
 ### 11.1 Events
 
 ```rust
+AaaActivated { aaa_id }
 AaaClosed { aaa_id, reason: CloseReason }
-AaaCreated { aaa_id, owner, owner_slot, aaa_type, mutability, sovereign_account }
+AaaCreated { aaa_id, owner, actor_class, sovereign_account, lifecycle }
+AaaDeactivated { aaa_id }
 AaaPaused { aaa_id, reason: PauseReason }
 AaaResumed { aaa_id }
 ActiveActorLimitSet { old_limit: u32, new_limit: u32 }
@@ -933,7 +950,6 @@ enum Task<AccountId, AssetId, Balance> {
     Stake { asset: AssetId, amount: AmountResolution<Balance> },
     DonateLiquidity { asset_a: AssetId, asset_b: AssetId, amount: AmountResolution<Balance>, max_ratio_error: Perbill },
     Unstake { asset: AssetId, shares: AmountResolution<Balance> },
-    Noop,
 }
 ```
 
@@ -941,12 +957,16 @@ enum Task<AccountId, AssetId, Balance> {
 
 ```rust
 enum Error {
+    AaaAlreadyActive,
+    AaaDormant,
     AaaIdOccupied,
     AaaIdOverflow,
     AaaNotFound,
     AaaPaused,
     ActiveAaaCapacityExceeded,
     ActiveAaaCountInvariant,
+    ActorIdentityCapacityExceeded,
+    ActorIdentityCountInvariant,
     ActiveAaaLimitExceedsQueueCapacity,
     ActiveAaaLimitTooHigh,
     ActiveAaaLimitTooLow,
@@ -980,7 +1000,7 @@ enum Error {
 }
 ```
 
-`AaaIdOccupied` applies only to explicit-id System AAA reopen attempts where the requested `aaa_id` is already active. `EmptyExecutionPlan` applies to both run and close execution plans in the current stable contract.
+`AaaIdOccupied` applies only to explicit-id System AAA reopen attempts where the requested `aaa_id` already has an active or dormant identity. `EmptyExecutionPlan` applies only to an active run plan; an empty close plan is valid. Active-only controls fail with `AaaDormant`, while activating an active/paused actor fails with `AaaAlreadyActive`.
 
 Resolution-time non-terminal cases (`Skipped`, `FundingUnavailable`) are modeled as deterministic resolution outcomes, not `Error` variants.
 
@@ -993,8 +1013,12 @@ Resolution-time non-terminal cases (`Skipped`, `FundingUnavailable`) are modeled
 This section defines the stable storage surface. Actor cardinality/capacity, immutable-close lineage, and single-entry wakeup topology are behaviorally required contracts rather than replaceable caches. Derived readiness plus ingress overflow/dedup implementation stores remain architecture-owned unless promoted here explicitly.
 
 - `NextAaaId` (`AaaId`): monotonic allocator; reopen never rewinds
-- `AaaInstances` (`Map<Blake2_128Concat(AaaId), AaaInstance>`): full actor state
-- `ActiveAaaCount` (`u32`): transactionally maintained O(1) cardinality of `AaaInstances`
+- `ActorIdentity` (`Map<Blake2_128Concat(AaaId), Identity>`): class, owner, sovereign account, and creation lineage for active and dormant actors
+- `ActorHot` (`Map<Blake2_128Concat(AaaId), HotState>`): active/paused lifecycle, scheduler pointers, attempt/cycle state, and compact admission facts; absent for dormant identities
+- `ActorProgram` (`Map<Blake2_128Concat(AaaId), Program>`): schedule/window and bounded run/close plans; absent for dormant identities
+- `ActorFunding` (`Map<Blake2_128Concat(AaaId), FundingState>`): funding policy, tracked assets, and batches; absent for dormant identities
+- `ActorIdentityCount` (`u32`): transactionally maintained O(1) cardinality of `ActorIdentity`, bounded by `MaxActorIdentities`
+- `ActiveAaaCount` (`u32`): transactionally maintained O(1) cardinality of active plus paused `ActorHot` entries; excludes dormant identities
 - `ClosedSystemAaaIds` (`Map<Blake2_128Concat(AaaId), Mutability>`): System close tombstones governing reopen eligibility
 - `CurrentQueue` / `NextQueue` (`BoundedVec<AaaId, MaxQueueLength>`): current block-local and next-block staged run queues
 - `WakeupIndex` (`Map<Blake2_128Concat(BlockNum), BoundedVec<AaaId, MaxWakeupBucketSize>>`) / `MinWakeupBlock` (`BlockNumber`): canonical temporal index and earliest unresolved bucket
@@ -1002,7 +1026,7 @@ This section defines the stable storage surface. Actor cardinality/capacity, imm
 - `WakeupScheduleDrops` (`u64`): counter of wakeups that could not be scheduled
 - `ActorQueueEpoch` (`Map<Blake2_128Concat(AaaId), u64>`) / `QueueEpoch` (`u64`): per-actor dedup marker and global queue generation
 - `AddressEventInbox` (`Map<Blake2_128Concat(AaaId), InboxState>`): `OnAddressEvent` pending latch
-- `OwnerSlotMask` (`Map<Blake2_128Concat(AccountId), u8>`) / `SovereignIndex` (`Map<Blake2_128Concat(AccountId), AaaId>`): User-slot occupancy and active sovereign guard
+- `OwnerSlotMask` (`Map<Blake2_128Concat(AccountId), u8>`) / `SovereignIndex` (`Map<Blake2_128Concat(AccountId), AaaId>`): User-slot occupancy and active-or-dormant sovereign guard
 - `ActiveActorLimit` (`u32`): governance-controlled operational cap constrained by hard and queue bounds; stored `0` resolves to the bounded runtime default for compatibility
 - `SweepCursor` (`AaaId`): zombie sweep cursor
 - `GlobalCircuitBreaker` (`bool`) / `IdleStarvationBlocks` (`u32`): scheduler halt and breaker-inactive zero-budget observability
@@ -1015,7 +1039,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 
 1. AAA admits each housekeeping, queue, wakeup, close, and cycle operation against both remaining Weight dimensions, and runtime enforces `MinOnIdleReservePct` dispatchable headroom (Section 8.4; Section 9.2)
 2. All loops and queues remain bounded by explicit `Max*` constants and no bounded operation executes unmetered (Section 1 item 2)
-3. Slot allocation and active-occupancy mutations are synchronous and race-safe (Section 1 item 8; Section 2.3)
+3. Slot allocation and active-or-dormant identity occupancy mutations are synchronous and race-safe (Section 1 item 8; Section 2.3)
 4. Determinism holds for equal state/context, including deterministic timer jitter (Section 1 item 1; Section 7.1)
 5. AAA exposes no probability or entropy input in `Timer`, configuration, errors, events, or embedding obligations (Section 7.1)
 6. Adapters are deterministic and their runtime-derived upper bounds cover canonical iteration, quote search, storage proof, fee collection, and fixed rounding in both Weight dimensions (Section 3.2; Section 3.5)
@@ -1037,11 +1061,12 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 22. `TriggerSnapshot` is built once at cycle or admitted close-tail start, remains read-only, and is never persisted (Section 5.4)
 23. `FundingUnavailable` is non-terminal, emits `StepSkipped`, and does not increment `consecutive_failures` (Section 2.5 item 8; Section 5.3)
 24. Scheduler execution is strictly bounded and fully metered by `MaxExecutionsPerBlock`, `MaxWakeupsPerBlock`, `MaxQueueInsertionsPerBlock`, and `MaxWakeupBucketSize`; wakeup-overflow incidents remain observable and a bounded canonical-key pass over `WakeupRetryPending` retries them without an external signal or historical-ID-proportional delay (Section 8.3; Section 8.4)
-25. `ActiveActorLimit` satisfies `0 < limit <= min(MaxActiveActors, MaxQueueLength)`, and transactionally maintained O(1) active count makes creation fail fast at capacity (Section 10.1; Section 10.2)
+25. `ActiveActorLimit` satisfies `0 < limit <= min(MaxActiveActors, MaxQueueLength)`, transactionally maintained O(1) active count makes active creation/activation fail fast, and `ActorIdentityCount <= MaxActorIdentities` bounds dormant plus active identity state (Section 2.4; Section 10.1; Section 10.2)
 26. Event-driven queueing enforces strict block-local `ActorQueueEpoch` deduplication without deleting execution-created late enqueues (Section 8.1 item 4; Section 8.3)
 27. Governance updates of `ActiveActorLimit` fail fast when `new_limit > MaxQueueLength`; the default/effective operational cap remains queue-bounded to avoid scheduler actor-loss under full activation (Section 10.2; Section 15)
 28. Timer scheduling is hybrid and deterministic: cadence `<=1` uses queue continuation, delayed timers use the canonical `WakeupIndex`, and bounded jitter reduces synchronized wakeup bursts (Section 7.1 items 3, 4, 5; Section 8.1 item 3)
 29. `IdleStarvationBlocks` increments only when a breaker-inactive post-housekeeping budget exhausts either Weight dimension, resets when both remain positive, and emits `IdleStarvationDetected` on threshold crossing only (Section 8.6 items 3, 4, 5; Section 9.2)
+30. Dormant identities and custody-only accounts own no executable program, scheduler/readiness/funding state, recurring reads/writes, fee work, or cycle events; activate/deactivate transitions preserve identity, slots, and balances atomically (Section 2.4)
 
 ---
 
@@ -1049,9 +1074,10 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 
 - `AaaCreationFee`: runtime-specific; non-refundable opening fee through `FeeCollector` into `FeeSink`
 - `AaaPalletId`: `PalletId(*b"aaactor0")`; sovereign derivation id (Section 2.3)
-- `ActiveActorLimit`: 1..`min(MaxActiveActors, MaxQueueLength)`; queue-bounded creation cap
+- `ActiveActorLimit`: 1..`min(MaxActiveActors, MaxQueueLength)`; queue-bounded active-program cap
 - `ConditionReadFee`: runtime-specific; reference default 0.0005 Native per condition
-- `MaxActiveActors`: 10,000; hard cap for active AAA instances
+- `MaxActiveActors`: 10,000; hard cap for active plus paused programs
+- `MaxActorIdentities`: runtime-specific hard cap for active plus dormant identities; MUST be at least `MaxActiveActors`
 - `MaxQueueLength`: 1,024–16,384; `CurrentQueue`/`NextQueue` bound
 - `MaxWakeupBucketSize`: 1,024–16,384; one-block `WakeupIndex` bucket bound
 - `MaxQueueInsertionsPerBlock`: 64–1,024; per-block enqueue cap before deferred wakeup

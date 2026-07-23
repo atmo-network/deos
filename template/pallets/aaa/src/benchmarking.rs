@@ -25,6 +25,32 @@ mod benches {
     let _ = T::AssetOps::mint(owner, T::NativeAssetId::get(), amount);
   }
 
+  fn user_program<T: Config>(
+    schedule: ScheduleOf<T>,
+    execution_plan: ExecutionPlanOf<T>,
+  ) -> ProgramInputOf<T> {
+    ProgramInput::Active {
+      schedule,
+      schedule_window: None,
+      execution_plan,
+      on_close_execution_plan: Default::default(),
+      funding_source_policy: FundingSourcePolicy::OwnerOnly,
+    }
+  }
+
+  fn system_program<T: Config>(
+    schedule: ScheduleOf<T>,
+    execution_plan: ExecutionPlanOf<T>,
+  ) -> ProgramInputOf<T> {
+    ProgramInput::Active {
+      schedule,
+      schedule_window: None,
+      execution_plan,
+      on_close_execution_plan: Default::default(),
+      funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+    }
+  }
+
   fn cycle_fee_upper<T: Config>(execution_plan: &ExecutionPlanOf<T>) -> T::Balance {
     let mut total = T::Balance::zero();
     for step in execution_plan.iter() {
@@ -217,9 +243,7 @@ mod benches {
     Pallet::<T>::create_user_aaa(
       RawOrigin::Signed(caller).into(),
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      user_program::<T>(schedule, execution_plan),
     )
     .expect("create_user_aaa must succeed in benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -244,9 +268,7 @@ mod benches {
     create_user_aaa(
       RawOrigin::Signed(caller),
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      user_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_user_aaa");
@@ -271,9 +293,7 @@ mod benches {
       RawOrigin::Signed(caller),
       requested_slot,
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      user_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst =
@@ -297,9 +317,7 @@ mod benches {
       RawOrigin::Root,
       owner,
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      system_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_system_aaa");
@@ -321,9 +339,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      schedule.clone(),
-      None,
-      execution_plan.clone(),
+      system_program::<T>(schedule.clone(), execution_plan.clone()),
     )
     .expect("create_system_aaa must succeed in benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -335,12 +351,78 @@ mod benches {
       aaa_id,
       owner,
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      system_program::<T>(schedule, execution_plan),
     );
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after reopen_system_aaa");
     assert_eq!(inst.aaa_id, aaa_id);
+  }
+
+  #[benchmark]
+  fn create_dormant_system_aaa() {
+    let owner: T::AccountId = whitelisted_caller();
+    #[block]
+    {
+      Pallet::<T>::create_system_aaa(
+        RawOrigin::Root.into(),
+        owner,
+        Mutability::Mutable,
+        ProgramInput::Dormant,
+      )
+      .expect("dormant System identity creation must succeed");
+    }
+    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    assert!(DormantAaaIdentities::<T>::contains_key(aaa_id));
+    assert!(!AaaInstances::<T>::contains_key(aaa_id));
+  }
+
+  #[benchmark]
+  fn activate_aaa() {
+    let owner: T::AccountId = whitelisted_caller();
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner.clone(),
+      Mutability::Mutable,
+      ProgramInput::Dormant,
+    )
+    .expect("dormant System identity creation must succeed");
+    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    let recipient: T::AccountId = account("activate-recipient", 0, 0);
+    let program = system_program::<T>(
+      Schedule {
+        trigger: Trigger::Manual,
+        cooldown_blocks: 100,
+      },
+      make_execution_plan::<T>(recipient),
+    );
+    #[extrinsic_call]
+    activate_aaa(RawOrigin::Signed(owner), aaa_id, program);
+    assert!(AaaInstances::<T>::contains_key(aaa_id));
+    assert!(!DormantAaaIdentities::<T>::contains_key(aaa_id));
+  }
+
+  #[benchmark]
+  fn deactivate_aaa() {
+    let owner: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("deactivate-recipient", 0, 0);
+    let execution_plan = make_execution_plan::<T>(recipient);
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner.clone(),
+      Mutability::Mutable,
+      system_program::<T>(
+        Schedule {
+          trigger: Trigger::Manual,
+          cooldown_blocks: 100,
+        },
+        execution_plan,
+      ),
+    )
+    .expect("System AAA creation must succeed");
+    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    #[extrinsic_call]
+    deactivate_aaa(RawOrigin::Signed(owner), aaa_id);
+    assert!(!AaaInstances::<T>::contains_key(aaa_id));
+    assert!(DormantAaaIdentities::<T>::contains_key(aaa_id));
   }
 
   #[benchmark]
@@ -388,9 +470,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      system_program::<T>(schedule, execution_plan),
     )
     .expect("create_system_aaa must succeed in close_aaa benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -479,8 +559,7 @@ mod benches {
   fn update_on_close_execution_plan() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
-    let recipient = account("close-recipient", 0, 0);
-    let replacement = make_execution_plan::<T>(recipient);
+    let replacement = make_inert_execution_plan::<T>();
     #[extrinsic_call]
     update_on_close_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after close-plan update");
@@ -528,9 +607,7 @@ mod benches {
       Pallet::<T>::create_user_aaa(
         RawOrigin::Signed(owner).into(),
         Mutability::Mutable,
-        schedule.clone(),
-        None,
-        execution_plan,
+        user_program::<T>(schedule.clone(), execution_plan),
       )
       .expect("create_user_aaa must succeed in permissionless_sweep_many setup");
       let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -561,9 +638,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      system_program::<T>(schedule, execution_plan),
     )
     .expect("create_system_aaa must succeed in diagnostic setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -599,9 +674,7 @@ mod benches {
     Pallet::<T>::create_user_aaa(
       RawOrigin::Signed(owner.clone()).into(),
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      user_program::<T>(schedule, execution_plan),
     )
     .expect("create_user_aaa must succeed in diagnostic setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -635,9 +708,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      schedule,
-      None,
-      make_noop_execution_plan::<T>(),
+      system_program::<T>(schedule, make_inert_execution_plan::<T>()),
     )
     .expect("fee-collection benchmark sink must be created");
     let fee_sink_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -825,9 +896,7 @@ mod benches {
     Pallet::<T>::create_user_aaa(
       RawOrigin::Signed(caller.clone()).into(),
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      user_program::<T>(schedule, execution_plan),
     )
     .expect("create_user_aaa must succeed in setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -849,10 +918,13 @@ mod benches {
     assert_eq!(inst.consecutive_failures, 0);
   }
 
-  fn make_noop_execution_plan<T: Config>() -> ExecutionPlanOf<T> {
+  fn make_inert_execution_plan<T: Config>() -> ExecutionPlanOf<T> {
     let step = Step {
       conditions: BoundedVec::default(),
-      task: AaaTask::Noop,
+      task: AaaTask::Stake {
+        asset: T::NativeAssetId::get(),
+        amount: AmountResolution::Fixed(T::Balance::zero()),
+      },
       on_error: StepErrorPolicy::AbortCycle,
     };
     BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
@@ -864,14 +936,12 @@ mod benches {
       trigger: Trigger::Manual,
       cooldown_blocks: 0,
     };
-    let execution_plan = make_noop_execution_plan::<T>();
+    let execution_plan = make_inert_execution_plan::<T>();
     Pallet::<T>::create_system_aaa(
       RawOrigin::Root.into(),
       owner,
       Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
+      system_program::<T>(schedule, execution_plan),
     )
     .expect("create_system_aaa must succeed in wakeup benchmark setup");
     NextAaaId::<T>::get().saturating_sub(1)
@@ -903,9 +973,7 @@ mod benches {
       RawOrigin::Root.into(),
       owner.clone(),
       Mutability::Mutable,
-      schedule,
-      None,
-      make_tracked_funding_execution_plan::<T>(owner),
+      system_program::<T>(schedule, make_tracked_funding_execution_plan::<T>(owner)),
     )
     .expect("create_system_aaa must succeed in ingress benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -960,7 +1028,7 @@ mod benches {
       trigger: Trigger::Manual,
       cooldown_blocks: 0,
     };
-    let execution_plan = make_noop_execution_plan::<T>();
+    let execution_plan = make_inert_execution_plan::<T>();
     let mut aaa_ids: alloc::vec::Vec<AaaId> = alloc::vec::Vec::with_capacity(n as usize);
     for i in 0..n {
       let owner: T::AccountId = account("scan_owner", i, 0);
@@ -968,9 +1036,7 @@ mod benches {
         RawOrigin::Root.into(),
         owner,
         Mutability::Mutable,
-        schedule.clone(),
-        None,
-        execution_plan.clone(),
+        system_program::<T>(schedule.clone(), execution_plan.clone()),
       )
       .expect("create_system_aaa must succeed");
       let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -1000,7 +1066,7 @@ mod benches {
       trigger: Trigger::Manual,
       cooldown_blocks: 0,
     };
-    let execution_plan = make_noop_execution_plan::<T>();
+    let execution_plan = make_inert_execution_plan::<T>();
     let mut aaa_ids: alloc::vec::Vec<AaaId> = alloc::vec::Vec::with_capacity(n as usize);
     for i in 0..n {
       let owner: T::AccountId = account("scan_sparse_owner", i, 0);
@@ -1008,9 +1074,7 @@ mod benches {
         RawOrigin::Root.into(),
         owner,
         Mutability::Mutable,
-        schedule.clone(),
-        None,
-        execution_plan.clone(),
+        system_program::<T>(schedule.clone(), execution_plan.clone()),
       )
       .expect("create_system_aaa must succeed");
       let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
@@ -1347,19 +1411,12 @@ mod benches {
     let mut aaa_ids: alloc::vec::Vec<AaaId> = alloc::vec::Vec::with_capacity(n as usize);
     for i in 0..n {
       let owner: T::AccountId = account("owner", i, 0);
-      let temp_execution_plan: ExecutionPlanOf<T> = BoundedVec::try_from(alloc::vec![Step {
-        conditions: BoundedVec::default(),
-        task: AaaTask::Noop,
-        on_error: StepErrorPolicy::AbortCycle,
-      }])
-      .expect("temp execution_plan fits");
+      let temp_execution_plan = make_inert_execution_plan::<T>();
       Pallet::<T>::create_system_aaa(
         RawOrigin::Root.into(),
         owner,
         Mutability::Mutable,
-        schedule.clone(),
-        None,
-        temp_execution_plan,
+        system_program::<T>(schedule.clone(), temp_execution_plan),
       )
       .expect("create_system_aaa must succeed");
       let aaa_id = NextAaaId::<T>::get().saturating_sub(1);

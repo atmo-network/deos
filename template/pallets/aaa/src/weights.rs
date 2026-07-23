@@ -14,6 +14,9 @@ pub trait WeightInfo {
   fn create_user_aaa_at_slot() -> Weight;
   fn create_system_aaa() -> Weight;
   fn reopen_system_aaa() -> Weight;
+  fn create_dormant_system_aaa() -> Weight;
+  fn activate_aaa() -> Weight;
+  fn deactivate_aaa() -> Weight;
   fn pause_aaa() -> Weight;
   fn resume_aaa() -> Weight;
   fn manual_trigger() -> Weight;
@@ -61,7 +64,6 @@ pub trait TaskWeightInfo {
   fn remove_liquidity() -> Weight;
   fn stake() -> Weight;
   fn unstake() -> Weight;
-  fn noop() -> Weight;
 }
 
 pub struct SubstrateWeight<T>(PhantomData<T>);
@@ -87,6 +89,18 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(100_642_000, 174_945)
       .saturating_add(T::DbWeight::get().reads(20))
       .saturating_add(T::DbWeight::get().writes(4))
+  }
+
+  fn create_dormant_system_aaa() -> Weight {
+    Self::create_system_aaa()
+  }
+
+  fn activate_aaa() -> Weight {
+    Self::create_system_aaa()
+  }
+
+  fn deactivate_aaa() -> Weight {
+    Self::reopen_system_aaa()
   }
 
   fn pause_aaa() -> Weight {
@@ -332,10 +346,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> TaskWeightInfo
   fn unstake() -> Weight {
     <T as crate::Config>::WeightInfo::task_unstake()
   }
-
-  fn noop() -> Weight {
-    Weight::from_parts(1_000_000, 0)
-  }
 }
 
 impl WeightInfo for () {
@@ -343,6 +353,9 @@ impl WeightInfo for () {
   fn create_user_aaa_at_slot() -> Weight { Self::create_user_aaa() }
   fn create_system_aaa() -> Weight { Weight::from_parts(25_000_000, 2000) }
   fn reopen_system_aaa() -> Weight { Weight::from_parts(100_642_000, 174_945) }
+  fn create_dormant_system_aaa() -> Weight { Self::create_system_aaa() }
+  fn activate_aaa() -> Weight { Self::create_system_aaa() }
+  fn deactivate_aaa() -> Weight { Self::reopen_system_aaa() }
   fn pause_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn resume_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
@@ -414,5 +427,4 @@ impl TaskWeightInfo for () {
   fn remove_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
   fn stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
-  fn noop() -> Weight { Weight::from_parts(1_000_000, 0) }
 }

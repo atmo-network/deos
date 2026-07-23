@@ -48,7 +48,7 @@ The normative system contract requires:
 - Balance/event-driven triggering without silent loss beyond bounded ingress caps;
 - Two-dimensional RefTime and ProofSize admission before each housekeeping, queue, wakeup, close, or cycle operation, including a generated fixed hook base before any `on_idle` storage access;
 - Typed tasks such as transfer, swap, liquidity, burn, mint, stake, and unstake;
-- Lifecycle rules for pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
+- Lifecycle rules for identity-only dormancy, atomic activation/deactivation, pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
 - Adapter boundaries with runtime-derived worst-case weights so AAA orchestrates mechanics without owning DEX, staking, or asset logic.
 
 Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility.
@@ -78,7 +78,7 @@ This keeps AAA useful outside one tokenomic configuration.
 
 On the current reference line, AAA is the execution substrate for runtime-side protocol behavior: burning, liquidity provisioning, treasury splitting, bucket handling, BLDR lane flows, and native staking LP provisioning.
 
-The shipped runtime provisions System actors at genesis, plus one deterministic fee-sink address. Native staking LP provisioning starts dormant and can activate only after the native staking receipt, staking pool, actor, and non-empty `NTVE/stNTVE` AMM are ready.
+The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active programs at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These programs react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-program input with explicit schedule, run/close plans, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
 
 AAA does not replace TMC, Axial Router, staking, or governance. Those subsystems own math and domain rules. AAA gives them a deterministic way to be orchestrated together.
 

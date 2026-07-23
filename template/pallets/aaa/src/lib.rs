@@ -197,6 +197,9 @@ pub mod pallet {
     /// Set to 10,000 for production use cases.
     #[pallet::constant]
     type MaxActiveActors: Get<u32>;
+    /// Hard cap across active and dormant actor identities.
+    #[pallet::constant]
+    type MaxActorIdentities: Get<u32>;
 
     /// Per-step flat evaluation cost
     #[pallet::constant]
@@ -284,6 +287,9 @@ pub mod pallet {
   pub type FundingSourcePolicyOf<T> =
     FundingSourcePolicy<<T as frame_system::Config>::AccountId, <T as Config>::MaxWhitelistSize>;
 
+  pub type ProgramInputOf<T> =
+    ProgramInput<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>, FundingSourcePolicyOf<T>>;
+
   pub type FundingSnapshotsOf<T> = BoundedBTreeMap<
     <T as Config>::AssetId,
     FundingBatch<<T as Config>::Balance, BlockNumberFor<T>>,
@@ -311,6 +317,9 @@ pub mod pallet {
     BalanceOf<T>,
   >;
 
+  pub type DormantAaaIdentityOf<T> =
+    DormantAaaIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
+
   pub type AaaReadinessStateOf<T> = AaaReadinessState<BlockNumberFor<T>>;
 
   #[pallet::pallet]
@@ -330,6 +339,15 @@ pub mod pallet {
   #[pallet::getter(fn aaa_instances)]
   pub type AaaInstances<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, AaaInstanceOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn dormant_aaa_identities)]
+  pub type DormantAaaIdentities<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, DormantAaaIdentityOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn actor_identity_count)]
+  pub type ActorIdentityCount<T> = StorageValue<_, u32, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn active_aaa_count)]
@@ -434,6 +452,16 @@ pub mod pallet {
       Option<ScheduleWindow>,
       ExecutionPlan,
     )>;
+
+    fn dormant_system_aaas() -> alloc::vec::Vec<(AaaId, AccountId)> {
+      alloc::vec::Vec::new()
+    }
+
+    /// Runtime-declared deterministic custody accounts that need a provider at genesis
+    /// but own no generic AAA identity, program, or scheduler state.
+    fn system_custody_accounts() -> alloc::vec::Vec<AaaId> {
+      alloc::vec::Vec::new()
+    }
   }
 
   /// Default no-op implementation: no System AAA created at genesis.
@@ -544,8 +572,71 @@ pub mod pallet {
             .checked_add(1)
             .expect("genesis active actor count must not overflow"),
         );
+        ActorIdentityCount::<T>::put(
+          ActorIdentityCount::<T>::get()
+            .checked_add(1)
+            .expect("genesis actor identity count must not overflow"),
+        );
+        assert!(
+          ActorIdentityCount::<T>::get() <= T::MaxActorIdentities::get(),
+          "genesis actor identity capacity exceeded at aaa_id={aaa_id}"
+        );
         AaaReadiness::<T>::insert(aaa_id, readiness);
         Pallet::<T>::prime_actor_schedule(aaa_id);
+      }
+      for (aaa_id, owner) in T::GenesisSystemAaas::dormant_system_aaas() {
+        assert!(
+          !AaaInstances::<T>::contains_key(aaa_id)
+            && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+          "duplicate genesis System AAA id: {aaa_id}"
+        );
+        let next_id = aaa_id
+          .checked_add(1)
+          .expect("genesis AAA id must not overflow u64");
+        if NextAaaId::<T>::get() < next_id {
+          NextAaaId::<T>::put(next_id);
+        }
+        let sovereign_account = Pallet::<T>::sovereign_account_id_system(aaa_id);
+        assert!(
+          !SovereignIndex::<T>::contains_key(&sovereign_account),
+          "genesis System AAA sovereign collision at aaa_id={aaa_id}"
+        );
+        let identity = DormantAaaIdentity {
+          aaa_id,
+          sovereign_account: sovereign_account.clone(),
+          owner,
+          owner_slot: SYSTEM_OWNER_SLOT_SENTINEL,
+          aaa_type: AaaType::System,
+          mutability: Mutability::Mutable,
+          created_at: Zero::zero(),
+          updated_at: Zero::zero(),
+        };
+        let identity_count = ActorIdentityCount::<T>::get();
+        assert!(
+          identity_count < T::MaxActorIdentities::get(),
+          "genesis actor identity capacity exceeded at aaa_id={aaa_id}"
+        );
+        SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
+        frame_system::Pallet::<T>::inc_providers(&sovereign_account);
+        DormantAaaIdentities::<T>::insert(aaa_id, identity);
+        ActorIdentityCount::<T>::put(
+          identity_count
+            .checked_add(1)
+            .expect("genesis actor identity count must not overflow"),
+        );
+      }
+      for aaa_id in T::GenesisSystemAaas::system_custody_accounts() {
+        assert!(
+          !AaaInstances::<T>::contains_key(aaa_id)
+            && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+          "genesis custody account collides with actor identity: {aaa_id}"
+        );
+        let sovereign_account = Pallet::<T>::sovereign_account_id_system(aaa_id);
+        assert!(
+          !SovereignIndex::<T>::contains_key(&sovereign_account),
+          "genesis custody account has generic sovereign index: {aaa_id}"
+        );
+        frame_system::Pallet::<T>::inc_providers(&sovereign_account);
       }
     }
   }
@@ -601,6 +692,12 @@ pub mod pallet {
       aaa_type: AaaType,
       mutability: Mutability,
       sovereign_account: T::AccountId,
+    },
+    AaaActivated {
+      aaa_id: AaaId,
+    },
+    AaaDeactivated {
+      aaa_id: AaaId,
     },
     AaaPaused {
       aaa_id: AaaId,
@@ -795,6 +892,10 @@ pub mod pallet {
     AaaNotFound,
     ActiveAaaCapacityExceeded,
     ActiveAaaCountInvariant,
+    ActorIdentityCapacityExceeded,
+    ActorIdentityCountInvariant,
+    AaaAlreadyActive,
+    AaaDormant,
     ActiveAaaLimitExceedsQueueCapacity,
     ActiveAaaLimitTooHigh,
     ActiveAaaLimitTooLow,
@@ -836,19 +937,10 @@ pub mod pallet {
     pub fn create_user_aaa(
       origin: OriginFor<T>,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       let owner = ensure_signed(origin)?;
-      Self::do_create_user_aaa(
-        owner,
-        mutability,
-        None,
-        schedule,
-        schedule_window,
-        execution_plan,
-      )
+      Self::do_create_user_aaa(owner, mutability, None, program)
     }
 
     #[pallet::call_index(1)]
@@ -857,40 +949,25 @@ pub mod pallet {
       origin: OriginFor<T>,
       owner_slot: u8,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       let owner = ensure_signed(origin)?;
-      Self::do_create_user_aaa(
-        owner,
-        mutability,
-        Some(owner_slot),
-        schedule,
-        schedule_window,
-        execution_plan,
-      )
+      Self::do_create_user_aaa(owner, mutability, Some(owner_slot), program)
     }
 
     #[pallet::call_index(2)]
-    #[pallet::weight(T::WeightInfo::create_system_aaa())]
+    #[pallet::weight(match &program {
+      ProgramInput::Dormant => T::WeightInfo::create_dormant_system_aaa(),
+      ProgramInput::Active { .. } => T::WeightInfo::create_system_aaa(),
+    })]
     pub fn create_system_aaa(
       origin: OriginFor<T>,
       owner: T::AccountId,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
-      Self::do_create_system_aaa(
-        owner,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        None,
-      )
+      Self::do_create_system_aaa(owner, mutability, program, None)
     }
 
     #[pallet::call_index(3)]
@@ -900,9 +977,7 @@ pub mod pallet {
       aaa_id: AaaId,
       owner: T::AccountId,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
       ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
@@ -916,14 +991,7 @@ pub mod pallet {
         closed_mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      Self::do_create_system_aaa(
-        owner,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        Some(aaa_id),
-      )
+      Self::do_create_system_aaa(owner, mutability, program, Some(aaa_id))
     }
 
     #[pallet::call_index(4)]
@@ -1039,10 +1107,14 @@ pub mod pallet {
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
-      Self::ensure_control_origin(origin, &instance)?;
-      Self::ensure_not_system_immutable(&instance)?;
-      Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated)
+      if let Some(instance) = AaaInstances::<T>::get(aaa_id) {
+        Self::ensure_control_origin(origin, &instance)?;
+        Self::ensure_not_system_immutable(&instance)?;
+        return Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated);
+      }
+      let identity = DormantAaaIdentities::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      Self::ensure_dormant_control_origin(origin, &identity)?;
+      Self::close_dormant_actor(aaa_id, &identity, CloseReason::OwnerInitiated)
     }
 
     #[pallet::call_index(9)]
@@ -1357,6 +1429,42 @@ pub mod pallet {
       Self::sync_readiness_state(aaa_id);
       Ok(())
     }
+
+    #[pallet::call_index(21)]
+    #[pallet::weight(T::WeightInfo::activate_aaa())]
+    pub fn activate_aaa(
+      origin: OriginFor<T>,
+      aaa_id: AaaId,
+      program: ProgramInputOf<T>,
+    ) -> DispatchResult {
+      let identity = DormantAaaIdentities::<T>::get(aaa_id).ok_or_else(|| {
+        if AaaInstances::<T>::contains_key(aaa_id) {
+          Error::<T>::AaaAlreadyActive
+        } else {
+          Error::<T>::AaaNotFound
+        }
+      })?;
+      Self::ensure_dormant_control_origin(origin, &identity)?;
+      Self::do_activate_aaa(identity, program)
+    }
+
+    #[pallet::call_index(22)]
+    #[pallet::weight(T::WeightInfo::deactivate_aaa())]
+    pub fn deactivate_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
+      let instance = AaaInstances::<T>::get(aaa_id).ok_or_else(|| {
+        if DormantAaaIdentities::<T>::contains_key(aaa_id) {
+          Error::<T>::AaaDormant
+        } else {
+          Error::<T>::AaaNotFound
+        }
+      })?;
+      Self::ensure_control_origin(origin, &instance)?;
+      ensure!(
+        instance.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      Self::do_deactivate_aaa(aaa_id, instance)
+    }
   }
 
   impl<T: Config> Pallet<T> {
@@ -1371,7 +1479,6 @@ pub mod pallet {
         AaaTask::SwapExactOut { .. } => T::TaskWeightInfo::dex_exact_out(),
         AaaTask::AddLiquidity { .. } => T::TaskWeightInfo::add_liquidity(),
         AaaTask::RemoveLiquidity { .. } => T::TaskWeightInfo::remove_liquidity(),
-        AaaTask::Noop => T::TaskWeightInfo::noop(),
         AaaTask::Stake { .. } => T::TaskWeightInfo::stake(),
         AaaTask::DonateLiquidity { .. } => T::TaskWeightInfo::donate_liquidity(),
         AaaTask::Unstake { .. } => T::TaskWeightInfo::unstake(),
@@ -1396,7 +1503,6 @@ pub mod pallet {
         T::TaskWeightInfo::remove_liquidity(),
         T::TaskWeightInfo::stake(),
         T::TaskWeightInfo::unstake(),
-        T::TaskWeightInfo::noop(),
       ];
       candidates
         .into_iter()
@@ -1530,12 +1636,7 @@ pub mod pallet {
     }
 
     pub(crate) fn default_on_close_execution_plan() -> ExecutionPlanOf<T> {
-      BoundedVec::try_from(alloc::vec![Step {
-        conditions: BoundedVec::default(),
-        task: AaaTask::Noop,
-        on_error: StepErrorPolicy::ContinueNextStep,
-      }])
-      .expect("default on-close execution_plan must fit")
+      BoundedVec::default()
     }
 
     fn valid_owner_mask() -> u8 {
@@ -1610,69 +1711,158 @@ pub mod pallet {
       Ok((SYSTEM_OWNER_SLOT_SENTINEL, sovereign_account))
     }
 
-    fn do_create_user_aaa(
+    fn do_create_dormant_aaa(
       owner: T::AccountId,
-      mutability: Mutability,
-      preferred_slot: Option<u8>,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
-    ) -> DispatchResult {
-      ensure!(
-        !GlobalCircuitBreaker::<T>::get(),
-        Error::<T>::GlobalCircuitBreakerActive
-      );
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      ensure!(
-        (execution_plan.len() as u32) <= T::MaxUserExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
-      );
-      ensure!(
-        !Self::execution_plan_contains_mint(&execution_plan),
-        Error::<T>::MintNotAllowedForUserAaa
-      );
-      Self::do_create_aaa(
-        owner,
-        AaaType::User,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        preferred_slot,
-        None,
-      )
-    }
-
-    fn do_create_system_aaa(
-      owner: T::AccountId,
-      mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      aaa_type: AaaType,
+      preferred_user_slot: Option<u8>,
       requested_aaa_id: Option<AaaId>,
     ) -> DispatchResult {
       ensure!(
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      if mutability == Mutability::Immutable {
-        ensure!(schedule_window.is_none(), Error::<T>::InvalidScheduleWindow);
-      }
       ensure!(
-        (execution_plan.len() as u32) <= T::MaxSystemExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
+        ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
+        Error::<T>::ActorIdentityCapacityExceeded
       );
-      Self::do_create_aaa(
+      let current_next_id = NextAaaId::<T>::get();
+      let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
+      ensure!(
+        !AaaInstances::<T>::contains_key(aaa_id)
+          && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+        Error::<T>::AaaIdOccupied
+      );
+      let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
+      let now = frame_system::Pallet::<T>::block_number();
+      let mut created_identity: Option<DormantAaaIdentityOf<T>> = None;
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if aaa_type == AaaType::User {
+          if let Err(error) = Self::charge_creation_fee(&owner) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+        }
+        let (owner_slot, sovereign_account) = match aaa_type {
+          AaaType::User => match Self::allocate_owner_slot(&owner, preferred_user_slot) {
+            Ok(result) => result,
+            Err(error) => {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                error.into(),
+              ));
+            }
+          },
+          AaaType::System => match Self::allocate_system_sovereign(aaa_id) {
+            Ok(result) => result,
+            Err(error) => {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                error.into(),
+              ));
+            }
+          },
+        };
+        let identity = DormantAaaIdentity {
+          aaa_id,
+          sovereign_account: sovereign_account.clone(),
+          owner: owner.clone(),
+          owner_slot,
+          aaa_type,
+          mutability: Mutability::Mutable,
+          created_at: now,
+          updated_at: now,
+        };
+        SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
+        DormantAaaIdentities::<T>::insert(aaa_id, &identity);
+        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if aaa_type == AaaType::System && requested_aaa_id.is_some() {
+          ClosedSystemAaaIds::<T>::remove(aaa_id);
+        }
+        if current_next_id < next_id {
+          NextAaaId::<T>::put(next_id);
+        }
+        frame_system::Pallet::<T>::inc_providers(&sovereign_account);
+        created_identity = Some(identity);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      let identity = created_identity.expect("atomic dormant create always sets identity");
+      Self::deposit_event(Event::AaaCreated {
+        aaa_id,
         owner,
-        AaaType::System,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        None,
-        requested_aaa_id,
-      )
+        owner_slot: identity.owner_slot,
+        aaa_type,
+        mutability: Mutability::Mutable,
+        sovereign_account: identity.sovereign_account,
+      });
+      Ok(())
+    }
+
+    fn do_create_user_aaa(
+      owner: T::AccountId,
+      mutability: Mutability,
+      preferred_slot: Option<u8>,
+      program: ProgramInputOf<T>,
+    ) -> DispatchResult {
+      match program {
+        ProgramInput::Dormant => {
+          ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
+          Self::do_create_dormant_aaa(owner, AaaType::User, preferred_slot, None)
+        }
+        ProgramInput::Active {
+          schedule,
+          schedule_window,
+          execution_plan,
+          on_close_execution_plan,
+          funding_source_policy,
+        } => Self::do_create_aaa(
+          owner,
+          AaaType::User,
+          mutability,
+          schedule,
+          schedule_window,
+          execution_plan,
+          on_close_execution_plan,
+          funding_source_policy,
+          preferred_slot,
+          None,
+        ),
+      }
+    }
+
+    fn do_create_system_aaa(
+      owner: T::AccountId,
+      mutability: Mutability,
+      program: ProgramInputOf<T>,
+      requested_aaa_id: Option<AaaId>,
+    ) -> DispatchResult {
+      match program {
+        ProgramInput::Dormant => {
+          ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
+          Self::do_create_dormant_aaa(owner, AaaType::System, None, requested_aaa_id)
+        }
+        ProgramInput::Active {
+          schedule,
+          schedule_window,
+          execution_plan,
+          on_close_execution_plan,
+          funding_source_policy,
+        } => Self::do_create_aaa(
+          owner,
+          AaaType::System,
+          mutability,
+          schedule,
+          schedule_window,
+          execution_plan,
+          on_close_execution_plan,
+          funding_source_policy,
+          None,
+          requested_aaa_id,
+        ),
+      }
     }
 
     fn do_create_aaa(
@@ -1682,20 +1872,50 @@ pub mod pallet {
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
+      on_close_execution_plan: ExecutionPlanOf<T>,
+      funding_source_policy: FundingSourcePolicyOf<T>,
       preferred_user_slot: Option<u8>,
       requested_aaa_id: Option<AaaId>,
     ) -> DispatchResult {
+      ensure!(
+        !GlobalCircuitBreaker::<T>::get(),
+        Error::<T>::GlobalCircuitBreakerActive
+      );
+      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      let max_steps = match aaa_type {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (execution_plan.len() as u32) <= max_steps
+          && (on_close_execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if aaa_type == AaaType::User {
+        ensure!(
+          !Self::execution_plan_contains_mint(&execution_plan)
+            && !Self::execution_plan_contains_mint(&on_close_execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
+        );
+      }
+      if aaa_type == AaaType::System && mutability == Mutability::Immutable {
+        ensure!(schedule_window.is_none(), Error::<T>::InvalidScheduleWindow);
+      }
       Self::validate_schedule(&schedule)?;
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
+      Self::validate_execution_plan_shape(&on_close_execution_plan)?;
       let active_count = Self::active_instance_count();
       ensure!(
         active_count < Self::effective_active_actor_limit(),
         Error::<T>::ActiveAaaCapacityExceeded
       );
-      let on_close_execution_plan = Self::default_on_close_execution_plan();
+      ensure!(
+        ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
+        Error::<T>::ActorIdentityCapacityExceeded
+      );
       Self::ensure_execution_plans_fit_idle_budget(
         aaa_type,
         &execution_plan,
@@ -1706,7 +1926,8 @@ pub mod pallet {
       let current_next_id = NextAaaId::<T>::get();
       let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
       ensure!(
-        !AaaInstances::<T>::contains_key(aaa_id),
+        !AaaInstances::<T>::contains_key(aaa_id)
+          && !DormantAaaIdentities::<T>::contains_key(aaa_id),
         Error::<T>::AaaIdOccupied
       );
       let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
@@ -1755,10 +1976,7 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
-          funding_source_policy: match aaa_type {
-            AaaType::User => FundingSourcePolicy::OwnerOnly,
-            AaaType::System => FundingSourcePolicy::RuntimePolicy,
-          },
+          funding_source_policy,
           funding_snapshots: Default::default(),
           funding_tracked_assets,
           cycle_weight_upper,
@@ -1777,6 +1995,14 @@ pub mod pallet {
           *count = count
             .checked_add(1)
             .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
           Ok(())
         }) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
@@ -1805,6 +2031,162 @@ pub mod pallet {
         sovereign_account,
       });
       Self::prime_actor_schedule(aaa_id);
+      Ok(())
+    }
+
+    fn do_activate_aaa(
+      identity: DormantAaaIdentityOf<T>,
+      program: ProgramInputOf<T>,
+    ) -> DispatchResult {
+      let ProgramInput::Active {
+        schedule,
+        schedule_window,
+        execution_plan,
+        on_close_execution_plan,
+        funding_source_policy,
+      } = program
+      else {
+        return Err(Error::<T>::EmptyExecutionPlan.into());
+      };
+      ensure!(
+        !GlobalCircuitBreaker::<T>::get(),
+        Error::<T>::GlobalCircuitBreakerActive
+      );
+      ensure!(
+        identity.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      let max_steps = match identity.aaa_type {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if identity.aaa_type == AaaType::User {
+        ensure!(
+          !Self::execution_plan_contains_mint(&execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
+        );
+      }
+      Self::validate_schedule(&schedule)?;
+      if let Some(ref window) = schedule_window {
+        Self::validate_schedule_window(window)?;
+      }
+      Self::validate_execution_plan_shape(&execution_plan)?;
+      ensure!(
+        (on_close_execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if identity.aaa_type == AaaType::User {
+        ensure!(
+          !Self::execution_plan_contains_mint(&on_close_execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
+        );
+      }
+      Self::validate_execution_plan_shape(&on_close_execution_plan)?;
+      Self::ensure_execution_plans_fit_idle_budget(
+        identity.aaa_type,
+        &execution_plan,
+        &on_close_execution_plan,
+      )?;
+      let funding_tracked_assets =
+        Self::derive_combined_funding_tracked_assets(&execution_plan, &on_close_execution_plan)?;
+      ensure!(
+        Self::active_instance_count() < Self::effective_active_actor_limit(),
+        Error::<T>::ActiveAaaCapacityExceeded
+      );
+      let (cycle_weight_upper, cycle_fee_upper) =
+        Self::compute_cycle_bounds(identity.aaa_type, &execution_plan);
+      let now = frame_system::Pallet::<T>::block_number();
+      let instance = AaaInstance {
+        aaa_id: identity.aaa_id,
+        sovereign_account: identity.sovereign_account,
+        owner: identity.owner,
+        owner_slot: identity.owner_slot,
+        aaa_type: identity.aaa_type,
+        mutability: identity.mutability,
+        is_paused: false,
+        pause_reason: None,
+        schedule,
+        schedule_window,
+        execution_plan,
+        on_close_execution_plan,
+        cycle_nonce: 0,
+        consecutive_failures: 0,
+        manual_trigger_pending: false,
+        funding_source_policy,
+        funding_snapshots: Default::default(),
+        funding_tracked_assets,
+        cycle_weight_upper,
+        cycle_fee_upper,
+        auto_close_at_cycle_nonce: None,
+        created_at: identity.created_at,
+        updated_at: now,
+        last_cycle_block: Zero::zero(),
+      };
+      let readiness = Self::readiness_state_from_instance(&instance);
+      let aaa_id = instance.aaa_id;
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if !DormantAaaIdentities::<T>::contains_key(aaa_id)
+          || AaaInstances::<T>::contains_key(aaa_id)
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaAlreadyActive.into(),
+          ));
+        }
+        DormantAaaIdentities::<T>::remove(aaa_id);
+        AaaInstances::<T>::insert(aaa_id, instance);
+        AaaReadiness::<T>::insert(aaa_id, readiness);
+        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      Self::deposit_event(Event::AaaActivated { aaa_id });
+      Self::prime_actor_schedule(aaa_id);
+      Ok(())
+    }
+
+    fn do_deactivate_aaa(aaa_id: AaaId, instance: AaaInstanceOf<T>) -> DispatchResult {
+      let identity = DormantAaaIdentity {
+        aaa_id,
+        sovereign_account: instance.sovereign_account,
+        owner: instance.owner,
+        owner_slot: instance.owner_slot,
+        aaa_type: instance.aaa_type,
+        mutability: instance.mutability,
+        created_at: instance.created_at,
+        updated_at: frame_system::Pallet::<T>::block_number(),
+      };
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        Self::remove_actor_from_queues(aaa_id);
+        if let Some(wakeup_block) = ScheduledWakeupBlock::<T>::take(aaa_id) {
+          Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
+        }
+        WakeupRetryPending::<T>::remove(aaa_id);
+        AddressEventInbox::<T>::remove(aaa_id);
+        AaaReadiness::<T>::remove(aaa_id);
+        AaaInstances::<T>::remove(aaa_id);
+        DormantAaaIdentities::<T>::insert(aaa_id, identity);
+        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_sub(1)
+            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      Self::deposit_event(Event::AaaDeactivated { aaa_id });
       Ok(())
     }
 
@@ -1897,7 +2279,6 @@ pub mod pallet {
           AaaTask::SwapExactIn { .. }
           | AaaTask::SwapExactOut { .. }
           | AaaTask::AddLiquidity { .. }
-          | AaaTask::Noop
           | AaaTask::Stake { .. }
           | AaaTask::DonateLiquidity { .. }
           | AaaTask::Unstake { .. } => {}
@@ -1967,7 +2348,6 @@ pub mod pallet {
               check_amount(shares, share_asset);
             }
           }
-          AaaTask::Noop => {}
         }
       }
 
@@ -2020,6 +2400,22 @@ pub mod pallet {
       ensure!(
         !(instance.aaa_type == AaaType::System && instance.mutability == Mutability::Immutable),
         Error::<T>::ImmutableAaa
+      );
+      Ok(())
+    }
+
+    fn ensure_dormant_control_origin(
+      origin: OriginFor<T>,
+      identity: &DormantAaaIdentityOf<T>,
+    ) -> DispatchResult {
+      if let Ok(who) = ensure_signed(origin.clone()) {
+        ensure!(who == identity.owner, Error::<T>::NotOwner);
+        return Ok(());
+      }
+      T::SystemOrigin::ensure_origin(origin)?;
+      ensure!(
+        identity.aaa_type == AaaType::System,
+        Error::<T>::NotGovernance
       );
       Ok(())
     }
@@ -2109,6 +2505,14 @@ pub mod pallet {
         }) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_sub(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         AaaReadiness::<T>::remove(aaa_id);
         match instance.aaa_type {
           AaaType::User => Self::remove_owner_slot_binding(
@@ -2123,6 +2527,38 @@ pub mod pallet {
         }
         if let Err(error) = T::AtomicityHook::on_close_checkpoint(aaa_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      Self::deposit_event(Event::AaaClosed { aaa_id, reason });
+      Ok(())
+    }
+
+    fn close_dormant_actor(
+      aaa_id: AaaId,
+      identity: &DormantAaaIdentityOf<T>,
+      reason: CloseReason,
+    ) -> DispatchResult {
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        DormantAaaIdentities::<T>::remove(aaa_id);
+        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_sub(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        match identity.aaa_type {
+          AaaType::User => Self::remove_owner_slot_binding(
+            &identity.owner,
+            identity.owner_slot,
+            &identity.sovereign_account,
+          ),
+          AaaType::System => {
+            SovereignIndex::<T>::remove(&identity.sovereign_account);
+            ClosedSystemAaaIds::<T>::insert(aaa_id, identity.mutability);
+          }
         }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
       })?;
@@ -2209,6 +2645,18 @@ pub mod pallet {
           "AaaInstances count exceeds effective active actor limit",
         ));
       }
+      let dormant_count = DormantAaaIdentities::<T>::iter_keys().count() as u32;
+      let identity_count = ActorIdentityCount::<T>::get();
+      if identity_count != active_count.saturating_add(dormant_count) {
+        return Err(TryRuntimeError::Other(
+          "ActorIdentityCount does not match active plus dormant cardinality",
+        ));
+      }
+      if identity_count > T::MaxActorIdentities::get() {
+        return Err(TryRuntimeError::Other(
+          "ActorIdentityCount exceeds MaxActorIdentities",
+        ));
+      }
       let mut max_id: Option<AaaId> = None;
       for (aaa_id, instance) in AaaInstances::<T>::iter() {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
@@ -2248,6 +2696,53 @@ pub mod pallet {
           }
         }
       }
+      let dormant_identities = DormantAaaIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
+      for (aaa_id, identity) in dormant_identities {
+        max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
+        if AaaInstances::<T>::contains_key(aaa_id)
+          || AaaReadiness::<T>::contains_key(aaa_id)
+          || AddressEventInbox::<T>::contains_key(aaa_id)
+          || ScheduledWakeupBlock::<T>::contains_key(aaa_id)
+          || WakeupRetryPending::<T>::get(aaa_id)
+          || ActorQueueEpoch::<T>::contains_key(aaa_id)
+        {
+          return Err(TryRuntimeError::Other(
+            "Dormant identity owns active scheduler or inbox state",
+          ));
+        }
+        match SovereignIndex::<T>::get(&identity.sovereign_account) {
+          Some(mapped_id) if mapped_id == aaa_id => {}
+          _ => {
+            return Err(TryRuntimeError::Other(
+              "Dormant SovereignIndex does not map sovereign_account back to aaa_id",
+            ));
+          }
+        }
+        match identity.aaa_type {
+          AaaType::User => {
+            if identity.owner_slot >= T::MaxOwnerSlots::get() {
+              return Err(TryRuntimeError::Other(
+                "Dormant User AAA owner_slot exceeds MaxOwnerSlots",
+              ));
+            }
+            let owner_mask = OwnerSlotMask::<T>::get(&identity.owner) & valid_owner_mask;
+            if (owner_mask & (1u8 << identity.owner_slot)) == 0 {
+              return Err(TryRuntimeError::Other(
+                "Dormant User AAA owner_slot is missing from OwnerSlotMask",
+              ));
+            }
+          }
+          AaaType::System => {
+            if identity.owner_slot != SYSTEM_OWNER_SLOT_SENTINEL
+              || identity.mutability != Mutability::Mutable
+            {
+              return Err(TryRuntimeError::Other(
+                "Dormant System AAA must be Mutable and slotless",
+              ));
+            }
+          }
+        }
+      }
       let queue_capacity = T::MaxQueueLength::get();
       if queue_capacity < limit {
         return Err(TryRuntimeError::Other(
@@ -2263,9 +2758,11 @@ pub mod pallet {
         }
       }
       for aaa_id in ClosedSystemAaaIds::<T>::iter_keys() {
-        if AaaInstances::<T>::contains_key(aaa_id) {
+        if AaaInstances::<T>::contains_key(aaa_id)
+          || DormantAaaIdentities::<T>::contains_key(aaa_id)
+        {
           return Err(TryRuntimeError::Other(
-            "ClosedSystemAaaIds contains an active aaa_id",
+            "ClosedSystemAaaIds contains an occupied aaa_id",
           ));
         }
       }
