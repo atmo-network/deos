@@ -1028,7 +1028,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
   });
 }
 
-// --- TOL Bucket Unwind to Treasury (SC-014 Variant) ---
+// --- Foreign-Asset Actor Activation ---
 
 #[test]
 fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
@@ -1145,83 +1145,116 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
 }
 
 #[test]
-fn bucket_c_unwind_execution_plan_transfers_lp_components_to_treasury_c() {
-  use polkadot_sdk::frame_support::traits::fungible::Inspect as NativeInspect;
-  use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
+fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
-    let foreign_id = ASSET_A;
-    // Get LP token ID from the created pool
-    let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
-      .next()
-      .expect("pool must exist after setup");
-    let lp_asset_id = pool_info.lp_token;
-    let lp_asset = AssetKind::Local(lp_asset_id);
-    let bucket_c_id = aaa_ids::TOL_BUCKET_C_AAA_ID;
-    let treasury_c_id = aaa_ids::TREASURY_C_AAA_ID;
-    let bucket_sovereign = AAA::sovereign_account_id_system(bucket_c_id);
-    let treasury_sovereign = AAA::sovereign_account_id_system(treasury_c_id);
-    // Endow Bucket C with 10_000_000 LP tokens
-    let initial_lp_amount = 10_000_000u128;
-    assert_ok!(<crate::Assets as Mutate<crate::AccountId>>::mint_into(
-      lp_asset_id,
-      &bucket_sovereign,
-      initial_lp_amount
-    ));
-    // Endow the treasury account with native ED so it doesn't fail on first native transfer
-    let ed = crate::EXISTENTIAL_DEPOSIT;
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&treasury_sovereign, ed);
-    // Also endow the Bucket C sovereign account with native ED so it can receive small liquidity removals
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bucket_sovereign, ed);
-    let dust = 100u128;
-    let unwind_pct = Perbill::from_percent(1); // 1% unwind per cycle
-    // Build the execution_plan and activate Bucket C
-    let execution_plan =
-      crate::configs::aaa_config::TmctolGenesisSystemAaas::build_bucket_unwind_execution_plan(
+    let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, foreign);
+    let lp_id = match lp_asset {
+      AssetKind::Local(id) => id,
+      _ => panic!("LP must be local"),
+    };
+    let bucket_id = aaa_ids::TOL_BUCKET_C_AAA_ID;
+    let treasury_id = aaa_ids::TREASURY_C_AAA_ID;
+    let bucket = AAA::sovereign_account_id_system(bucket_id);
+    let treasury = AAA::sovereign_account_id_system(treasury_id);
+    let initial_lp = 10_000_000u128;
+    let independently_supplied_lp = 500_000u128;
+    assert_ok!(
+      <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(lp_id, &bucket, initial_lp,)
+    );
+    // Treasury admission is asset-specific, not sender-specific: model the configured LP already
+    // present from an independent source before the paired Bucket transfer executes.
+    assert_ok!(
+      <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
+        lp_id,
+        &treasury,
+        independently_supplied_lp,
+      )
+    );
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+      &bucket,
+      crate::EXISTENTIAL_DEPOSIT,
+    );
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+      &treasury,
+      crate::EXISTENTIAL_DEPOSIT,
+    );
+
+    let bucket_plan =
+      crate::configs::aaa_config::TmctolGenesisSystemAaas::build_bucket_lp_transfer_execution_plan(
         lp_asset,
-        foreign,
-        dust,
-        unwind_pct,
-        treasury_c_id,
+        100,
+        Perbill::from_percent(10),
+        treasury_id,
+      );
+    let treasury_plan =
+      crate::configs::aaa_config::TmctolGenesisSystemAaas::build_treasury_lp_unwind_execution_plan(
+        lp_asset, 100,
       );
     assert_ok!(AAA::update_execution_plan(
       RuntimeOrigin::root(),
-      bucket_c_id,
-      execution_plan
+      bucket_id,
+      bucket_plan,
     ));
-    // Manually trigger execution of the Bucket C unwind cycle
-    assert_ok!(pallet_aaa::Pallet::<Runtime>::manual_trigger(
+    assert_ok!(AAA::update_execution_plan(
       RuntimeOrigin::root(),
-      bucket_c_id
+      treasury_id,
+      treasury_plan,
     ));
-    System::set_block_number(System::block_number() + 1);
-    AAA::on_idle(System::block_number(), Weight::MAX); // This will execute the pending manual trigger
-    for event in System::events() {
-      println!("Event: {:?}", event.event);
+    assert_ok!(AAA::update_schedule(
+      RuntimeOrigin::root(),
+      bucket_id,
+      pallet_aaa::Schedule {
+        trigger: pallet_aaa::Trigger::Manual,
+        cooldown_blocks: 0,
+      },
+      None,
+    ));
+    assert_ok!(AAA::update_schedule(
+      RuntimeOrigin::root(),
+      treasury_id,
+      pallet_aaa::Schedule {
+        trigger: pallet_aaa::Trigger::Timer {
+          every_blocks: 1,
+          probability: None,
+        },
+        cooldown_blocks: 0,
+      },
+      None,
+    ));
+
+    assert_eq!(
+      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &treasury),
+      independently_supplied_lp
+    );
+    let treasury_native_before = Balances::free_balance(&treasury);
+    let treasury_foreign_before =
+      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(ASSET_A, &treasury);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), bucket_id));
+    let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as
+      polkadot_sdk::frame_support::traits::Get<Weight>>::get();
+    for block in 2..=8 {
+      System::set_block_number(block);
+      AAA::on_initialize(block);
+      AAA::on_idle(block, budget);
     }
-    // 1. Verify 1% of preservable LP was removed while its minimum balance remains protected.
-    let remaining_lp =
-      <crate::Assets as Inspect<crate::AccountId>>::balance(lp_asset_id, &bucket_sovereign);
-    assert_eq!(remaining_lp, 9_900_001u128);
-    // 2. Verify Treasury C received Native and Foreign.
-    let treasury_native =
-      <Balances as NativeInspect<crate::AccountId>>::balance(&treasury_sovereign);
-    let treasury_foreign =
-      <crate::Assets as Inspect<crate::AccountId>>::balance(foreign_id, &treasury_sovereign);
-    assert!(treasury_native > ed);
-    assert!(treasury_foreign > 0);
-    // 3. Verify the cycle succeeded entirely
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::CycleSummary {
-          aaa_id: id,
-          failed_steps: 0,
-          ..
-        } if *id == bucket_c_id
-      )
-    }));
+
+    let bucket_lp = <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket);
+    let treasury_lp =
+      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &treasury);
+    assert!(bucket_lp < initial_lp);
+    assert_eq!(treasury_lp, 1);
+    assert!(Balances::free_balance(&treasury) > treasury_native_before);
+    assert!(
+      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(ASSET_A, &treasury)
+        > treasury_foreign_before
+    );
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSummary { aaa_id, failed_steps: 0, .. }
+        if *aaa_id == bucket_id || *aaa_id == treasury_id
+    )));
   });
 }
 
@@ -1384,6 +1417,7 @@ fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
     let curve = crate::TokenMintingCurve::get_curve(bldr_asset).unwrap();
     assert_eq!(curve.foreign_asset, AssetKind::Native);
     let splitter_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
+    let bldr_zm_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_ZM_AAA_ID);
     // Mint BLDR via TMC directly to verify distribution
     let mint_amount = 10 * primitives::ecosystem::params::PRECISION;
     let alice_native_before = Balances::free_balance(&ALICE);
@@ -1423,11 +1457,16 @@ fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
       splitter_bldr > alice_bldr,
       "Splitter (66%) must receive more than user (33%)"
     );
-    // 7. Verify collateral (NTVE) went to Splitter (single output sink)
-    let splitter_native = Balances::free_balance(&splitter_sov);
+    // 7. Verify collateral (NTVE) went directly to the BLDR Liquidity Actor
+    let bldr_zm_native = Balances::free_balance(&bldr_zm_sov);
     assert!(
-      splitter_native > crate::EXISTENTIAL_DEPOSIT,
-      "Splitter must receive NTVE collateral from TMC output"
+      bldr_zm_native > crate::EXISTENTIAL_DEPOSIT,
+      "BLDR Liquidity Actor must receive NTVE collateral from TMC output"
+    );
+    assert_eq!(
+      Balances::free_balance(&splitter_sov),
+      crate::EXISTENTIAL_DEPOSIT,
+      "BLDR Splitter must receive only the minted BLDR share"
     );
   });
 }
@@ -1443,9 +1482,8 @@ fn bldr_splitter_distributes_to_zm_and_treasury() {
     let splitter_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
     let bldr_zm_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_ZM_AAA_ID);
     let bldr_treasury_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_TREASURY_AAA_ID);
-    // Fund splitter with BLDR tokens and NTVE collateral (simulating TMC output)
+    // Fund splitter with the minted BLDR share (simulating TMC output)
     let fund_amount = 100 * primitives::ecosystem::params::PRECISION;
-    let ntve_collateral = 50 * primitives::ecosystem::params::PRECISION;
     assert_ok!(
       <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
         bldr_id,
@@ -1453,9 +1491,6 @@ fn bldr_splitter_distributes_to_zm_and_treasury() {
         fund_amount,
       )
     );
-    let _ =
-      <Balances as Currency<crate::AccountId>>::deposit_creating(&splitter_sov, ntve_collateral);
-    let zm_native_before = Balances::free_balance(&bldr_zm_sov);
     // Activate splitter execution_plan
     let execution_plan =
       crate::configs::aaa_config::TmctolGenesisSystemAaas::build_bldr_splitter_execution_plan(
@@ -1493,12 +1528,6 @@ fn bldr_splitter_distributes_to_zm_and_treasury() {
       total_distributed,
       fund_amount
     );
-    // Verify NTVE collateral was forwarded to BLDR ZM
-    let zm_native_after = Balances::free_balance(&bldr_zm_sov);
-    assert!(
-      zm_native_after > zm_native_before,
-      "BLDR ZM must receive forwarded NTVE from Splitter"
-    );
   });
 }
 
@@ -1519,6 +1548,7 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
     let zm_id = aaa_ids::BLDR_ZM_AAA_ID;
     let bucket_a_id = aaa_ids::BLDR_BUCKET_A_AAA_ID;
     let splitter_sov = AAA::sovereign_account_id_system(splitter_id);
+    let zm_sov = AAA::sovereign_account_id_system(zm_id);
     let treasury_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_TREASURY_AAA_ID);
     let bucket_a_sov = AAA::sovereign_account_id_system(bucket_a_id);
     // 1. Create NTVE-BLDR pool so ZM can add liquidity. Seed it against
@@ -1574,13 +1604,12 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       alice_bldr_after > alice_bldr_before,
       "Alice must receive BLDR"
     );
-    // Verify Splitter received both NTVE collateral and BLDR zap share
-    let splitter_ntve = Balances::free_balance(&splitter_sov);
+    // Verify TMC routed collateral directly to the Liquidity Actor and the minted share to Splitter
     let splitter_bldr =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     assert!(
-      splitter_ntve > crate::EXISTENTIAL_DEPOSIT,
-      "Splitter must hold NTVE collateral"
+      Balances::free_balance(&zm_sov) > crate::EXISTENTIAL_DEPOSIT,
+      "BLDR Liquidity Actor must hold NTVE collateral"
     );
     assert!(splitter_bldr > 0, "Splitter must hold BLDR zap share");
     // 5. Run blocks to execute Splitter → ZM → Bucket A chain.
@@ -1609,16 +1638,9 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
         "Bucket A must hold LP tokens from ZM liquidity provisioning"
       );
     }
-    // 9. Verify: Splitter sovereign is drained (execution_plan forwarded everything)
-    let splitter_ntve_final = Balances::free_balance(&splitter_sov);
+    // 9. Verify: Splitter distributed its complete BLDR input below dust
     let splitter_bldr_final =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
-    assert!(
-      splitter_ntve_final < dust,
-      "Splitter must forward all NTVE (remaining={}, dust={})",
-      splitter_ntve_final,
-      dust
-    );
     assert!(
       splitter_bldr_final < dust,
       "Splitter must forward all BLDR (remaining={}, dust={})",
@@ -1714,110 +1736,6 @@ fn treasury_b_buyback_burns_bldr() {
   });
 }
 
-// --- Bucket B Unwind → Treasury B ---
-
-#[test]
-fn bucket_b_unwinds_lp_and_feeds_treasury_b() {
-  use primitives::ecosystem::aaa_ids;
-  seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
-    let foreign = AssetKind::Local(ASSET_A);
-    let precision = primitives::ecosystem::params::PRECISION;
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
-    let bucket_b_id = aaa_ids::TOL_BUCKET_B_AAA_ID;
-    let treasury_b_id = aaa_ids::TREASURY_B_AAA_ID;
-    let bucket_b_sov = AAA::sovereign_account_id_system(bucket_b_id);
-    let treasury_b_sov = AAA::sovereign_account_id_system(treasury_b_id);
-    // 1. Get LP asset for NTVE-Foreign pool
-    let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, foreign);
-    let lp_id = match lp_asset {
-      AssetKind::Local(id) => id,
-      _ => panic!("LP must be Local"),
-    };
-    // 2. Seed Bucket B with LP tokens by adding liquidity from its sovereign
-    let seed_amount = 100 * precision;
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bucket_b_sov, seed_amount);
-    assert_ok!(
-      <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Mutate<
-        crate::AccountId,
-      >>::mint_into(ASSET_A, &bucket_b_sov, seed_amount)
-    );
-    assert_ok!(crate::AssetConversion::add_liquidity(
-      RuntimeOrigin::signed(bucket_b_sov.clone()),
-      Box::new(AssetKind::Native),
-      Box::new(foreign),
-      seed_amount / 2,
-      seed_amount / 2,
-      0,
-      0,
-      bucket_b_sov.clone(),
-    ));
-    let lp_before =
-      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket_b_sov);
-    assert!(lp_before > 0, "Bucket B must hold LP tokens");
-    // 3. Activate Bucket B unwind execution_plan
-    let unwind_pct = Perbill::from_percent(10);
-    let execution_plan =
-      crate::configs::aaa_config::TmctolGenesisSystemAaas::build_bucket_unwind_execution_plan(
-        lp_asset,
-        foreign,
-        dust,
-        unwind_pct,
-        treasury_b_id,
-      );
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
-      bucket_b_id,
-      execution_plan,
-    ));
-    assert_ok!(AAA::update_schedule(
-      RuntimeOrigin::root(),
-      bucket_b_id,
-      pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
-        cooldown_blocks: 0,
-      },
-      None,
-    ));
-    // 4. Record Treasury B balances before unwind
-    let treasury_ntve_before = Balances::free_balance(&treasury_b_sov);
-    let treasury_foreign_before =
-      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(ASSET_A, &treasury_b_sov);
-    // 5. Run blocks for unwind execution
-    System::reset_events();
-    for block in 2..=40 {
-      System::set_block_number(block);
-      AAA::on_initialize(block);
-      AAA::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
-    }
-    // 6. Verify: Bucket B LP decreased
-    let lp_after =
-      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket_b_sov);
-    assert!(
-      lp_after < lp_before,
-      "Bucket B LP must decrease (before={}, after={})",
-      lp_before,
-      lp_after,
-    );
-    // 7. Verify: Treasury B received NTVE
-    let treasury_ntve_after = Balances::free_balance(&treasury_b_sov);
-    assert!(
-      treasury_ntve_after > treasury_ntve_before,
-      "Treasury B must receive NTVE from unwind"
-    );
-    // 8. Verify: Treasury B received Foreign
-    let treasury_foreign_after =
-      <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(ASSET_A, &treasury_b_sov);
-    assert!(
-      treasury_foreign_after > treasury_foreign_before,
-      "Treasury B must receive Foreign from unwind"
-    );
-  });
-}
-
 // --- Router TMC Efficiency Arbitration ---
 
 #[test]
@@ -1838,8 +1756,9 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       crate::AxialRouter::quote_exact_input(ALICE, AssetKind::Native, bldr_asset, mint_amount)
         .expect("direct-mint quote must exist");
     let splitter_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
+    let zm_sov = AAA::sovereign_account_id_system(aaa_ids::BLDR_ZM_AAA_ID);
     let burning_manager_before = Balances::free_balance(&burning_manager_account());
-    let splitter_native_before = Balances::free_balance(&splitter_sov);
+    let zm_native_before = Balances::free_balance(&zm_sov);
     let splitter_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let alice_bldr_before =
@@ -1855,7 +1774,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
     ));
     let alice_bldr_after =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
-    let splitter_native_after = Balances::free_balance(&splitter_sov);
+    let zm_native_after = Balances::free_balance(&zm_sov);
     let splitter_bldr_after =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let received = alice_bldr_after.saturating_sub(alice_bldr_before);
@@ -1897,9 +1816,9 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       "Router direct-mint path must route the native fee to the burning manager"
     );
     assert_eq!(
-      splitter_native_after - splitter_native_before,
+      zm_native_after - zm_native_before,
       quote.amount_after_fee,
-      "BLDR splitter must receive the post-fee native collateral"
+      "BLDR Liquidity Actor must receive the post-fee native collateral"
     );
     assert_eq!(
       received, quote.amount_out,

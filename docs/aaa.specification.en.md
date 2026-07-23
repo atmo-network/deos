@@ -1,7 +1,7 @@
 # AAA Specification
 
 - **Component**: `pallet-aaa` (Account Abstraction Actors)
-- **Specification line**: `0.7.0`
+- **Specification line**: `0.7.1`
 - **Date**: July 2026
 - **Status**: Normative
 
@@ -11,7 +11,7 @@
 
 ## 0. Specification Maintenance Meta-Layer
 
-This specification MUST stay at or below **1080 lines** (formatting-preserving count), add new normative content only with equal-or-greater removal of obsolete content, state rules as positive executable behavior unless a negative safety-critical constraint is required, keep normative facts single-sourced with references instead of duplication, preserve mandatory blank-line separation above and below numbered headings, and ensure every line carries normative meaning, traceability, or required implementation context.
+This specification MUST stay at or below **1280 lines** (formatting-preserving count), add new normative content only with equal-or-greater removal of obsolete content, state rules as positive executable behavior unless a negative safety-critical constraint is required, keep normative facts single-sourced with references instead of duplication, preserve mandatory blank-line separation above and below numbered headings, and ensure every line carries normative meaning, traceability, or required implementation context.
 
 ---
 
@@ -28,9 +28,7 @@ This specification MUST stay at or below **1080 lines** (formatting-preserving c
 9. **Saturating Arithmetic**: Intermediate fee/limit math MUST use saturating semantics. User-visible amount resolution MUST NOT silently overflow or underflow and MUST resolve deterministically (`Skipped` outcome or explicit failure).
 10. **Execution-Context Correctness**: Rules MUST respect FRAME hook semantics (e.g., no reliance on current block hash during execution).
 11. **Deferred-Horizon Cap**: Runtime MUST reject configurations that postpone first eligible execution beyond ten years.
-12. **Spec-Impl Sync**: Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass.
-
----
+12. **Spec-Impl and Compatibility Lock**: Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass. The `0.7.x` pre-launch line remains fresh-genesis and MAY make an explicitly released breaking cleanup without shipping historical migration ceremony. Once AAA `1.0` is declared, existing task/condition/trigger/amount/close/event/error SCALE discriminants and dispatch call indices become append-only; existing call argument encodings and semantics remain stable; storage prefix/hasher/key/value encoding changes require a bounded migration, incremented pallet `StorageVersion`, and runtime compatibility bump; removals or semantic reinterpretations require an AAA major version; additive adapters/configuration or conservative weight recalibration follow Rust/package semver and runtime metadata/spec-version policy without pretending that package version alone migrates a live chain.
 
 ## 2. Actor Model
 
@@ -39,6 +37,7 @@ This specification MUST stay at or below **1080 lines** (formatting-preserving c
 - **Terminology**: An **Execution Plan** is the static bounded list of steps configured on the actor. An **Execution Run (Cycle)** is one admitted execution attempt of the current plan, identified by `(aaa_id, cycle_nonce)`. All external observability and indexer correlation MUST be run-centric. Execution plans, trigger filters, and actor-to-actor asset flows are part of the on-chain behavioral surface of AAA, but they operate inside the scheduler, fee, lifecycle, and safety contract of this runtime; within existing task, adapter, and safety limits, protocol workflow changes SHOULD prefer actor-graph reconfiguration over runtime rewrites.
 - **Native-asset terminology**: `FeeNativeAsset` denotes the balance surface used for `AaaCreationFee`, per-step User fees, `MinUserBalance`, fee collection, and fee reservation. Staking uses the generic `Stake { asset, amount }` task only; any native staking representation is a runtime-defined `AssetId` interpreted by `StakingOps`, not a separate AAA task.
 - **Stable plan shape**: `execution_plan` MUST be non-empty. `on_close_execution_plan` MUST also be non-empty; creation and reopen extrinsics MUST omit it and inject the canonical `[Noop]` close plan. Actors that want no close-time side effects keep `[Noop]`; mutable actors MAY replace it through `update_on_close_execution_plan`. Immutable actors intentionally keep `[Noop]` for their lifetime: admitting a custom close plan would expand their immutable creation commitment and requires a future explicit creation-contract revision rather than a post-creation mutation path.
+- **Production-budget admission**: The embedding runtime MUST provide one gross two-dimensional `GuaranteedOnIdleWeight`. Genesis, create, reopen, and either plan update MUST compose the guaranteed scheduler envelope (`scheduler_admission_overhead`) + run cycle + close cycle/cleanup for the prospective plan pair and reject it with `ExecutionPlanExceedsOnIdleBudget` unless both RefTime and ProofSize fit. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work rather than every optional compatibility-ingress drain, heavyweight wakeup-retry, or sweep-time terminal-close unit. Those durable housekeeping paths consume only complete units that fit and MAY defer actor work across blocks without losing the trigger, retry marker, or terminal condition. Admission happens before opening-fee collection or state mutation; bounded vector shape alone never implies production admissibility.
 
 ```rust
 struct AaaInstance<AccountId, BlockNumber, Balance> {
@@ -98,7 +97,8 @@ Mutability rules:
 - Bits above `MaxOwnerSlots` MUST be zero
 - `valid_mask(n)` denotes a `u8` mask with the lowest `n` bits set
 - `create_user_aaa(...)` picks the lowest free slot; `create_user_aaa_at_slot(owner_slot, ...)` requires the exact slot and fails with `InvalidOwnerSlot` or `OwnerSlotOccupied`
-  _Integration note: The bitmask is Little-Endian SCALE encoded (`(1 << n) - 1`). Before creating or recreating a User AAA, clients SHOULD precompute the target sovereign account and display current balances/locks/reserves; `create_user_aaa_at_slot` is the stable recovery path when execution control must reattach to the original sovereign account._
+
+_Integration note: The bitmask is Little-Endian SCALE encoded (`(1 << n) - 1`). Before creating or recreating a User AAA, clients SHOULD precompute the target sovereign account and display current balances/locks/reserves; `create_user_aaa_at_slot` is the stable recovery path when execution control must reattach to the original sovereign account._
 
 ```rust
 let mut mask: u8 = OwnerSlotMask::get(&owner);
@@ -138,7 +138,7 @@ System AAA is exempt from `MinUserBalance` checks and MUST NOT auto-pause on `Fu
 
 Lifecycle is a single state machine: `Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed`. Normal cycles are scheduler-owned runs of `execution_plan`, increment `cycle_nonce` at admission, and emit `CycleStarted`/`CycleSummary`. Close tails are terminal runs of `on_close_execution_plan`; they are not normal cycles, MUST NOT increment `cycle_nonce`, and emit close-tail events followed by `AaaClosed`. Lifecycle touch extrinsics MAY detect terminal state and enter the close path, but MUST NOT present that path as a normal cycle.
 
-Close precedence is checkpoint-scoped and deterministic: `WindowExpired` dominates all external/admission touch points; for unpaused User AAA admission, `BalanceExhausted` dominates `FeeBudgetExhausted`; stored nonce exhaustion prevents any further normal-cycle admission; after an admitted cycle, `ConsecutiveFailures` is the only post-failure terminal close and `AutoCloseNonceReached` is the only post-success terminal close.
+Close precedence is checkpoint-scoped and deterministic: `WindowExpired` dominates all external/admission touch points; for unpaused User AAA admission, `BalanceExhausted` dominates `FeeBudgetExhausted`; stored nonce exhaustion prevents any further normal-cycle admission; after an admitted cycle, `ConsecutiveFailures` is the only post-failure terminal close and `AutoCloseNonceReached` is the only post-success terminal close. If a scheduler, post-cycle, or sweep-time close transaction rolls back, the actor MUST emit `CycleDeferred(CloseTransitionFailed)` and retry the stored terminal reason deterministically: scheduler/post-cycle paths remain durably queued before readiness or another normal cycle, while sweep cleanup retains its cursor before the actor and stops that pass so the next sweep retries the same candidate.
 
 Before terminal state removal, runtime MUST enter close-tail execution for explicit and automatic close paths. The close tail uses the same task, condition, amount-resolution, error-policy, adapter, and weight-upper-bound semantics as the main plan. User close-tail admission derives `close_cycle_weight_upper`/`close_cycle_fee_upper`, reserves `min(fee_native_balance_at_close_entry, close_cycle_fee_upper)`, and builds a fresh `TriggerSnapshot`; System AAA uses the same execution semantics with zero User fee charging. Close-tail execution MUST NOT recurse into another close. If fee-native balance depletes or fee collection fails during admitted close execution, affected close steps MUST fail/skip observably while final closure still completes; whole-tail skip is not part of the current contract.
 
@@ -156,8 +156,10 @@ Close-tail contract matrix:
 Create/close transitions MUST synchronize `AaaInstances` and `SovereignIndex`; queue/readiness entries MUST be removed, or deterministic stale queue entries MUST be ignored at pop. Direct post-destruction balance-rescue extrinsics remain out of the stable contract.
 
 ### 2.5 Funding Batches
+
 The bounded per-asset `funding_snapshots` map is the canonical baseline for `PercentageOfLastFunding` resolution (Section 5.3). Each `FundingBatch` exposes the armed `amount`/`block` plus checked-add pending funding for the next successful operation; `funding_tracked_assets` bounds the map and producer work.
 Required behavior:
+
 1. **Execution-Plan Scanning**: On creation or either plan update, runtime MUST scan BOTH plans and populate `funding_tracked_assets` with each ordinary spent `AssetId` using `PercentageOfLastFunding` and each Unstake `StakingOps::share_asset(position_asset)` used by that mode; validation MUST reject Unstake last-funding resolution when the adapter returns `None`. Updates MUST fully recompute tracked assets and prune batch state no longer tracked.
 2. **Source Policy**: Each actor stores one bounded `FundingSourcePolicy`: `OwnerOnly`, `SignedAllowlist(BoundedSet<AccountId>)`, `RuntimePolicy`, or explicit `AnySource`. User AAA defaults to `OwnerOnly`; System AAA defaults to `RuntimePolicy`. `AnySource` accepts every verified producer provenance, not source-less ingress. Immutable actors fix policy at creation; Mutable actors may update it through the same class-specific control authority, without rewriting existing batches.
 3. **Verified Provenance**: Supported producers MUST supply runtime-verified provenance independently of trigger matching: signed ingress identifies the debited signer, internal-protocol ingress identifies a typed runtime source, and XCM ingress identifies its converted origin/location class. The pallet MUST evaluate stored policy: `OwnerOnly`/`SignedAllowlist` compare the verified debited signer, `SignedAllowlist` remains bounded, `AnySource` still requires provenance, and only `RuntimePolicy` delegates `(aaa_id, owner, provenance)` to the runtime `FundingAuthority`, which MUST default deny absent an explicit actor/source authorization. Actor class determines the default policy; missing, unverified, or policy-rejected provenance is balance-only.
@@ -277,8 +279,8 @@ Runtime MUST expose deterministic worst-case bounds:
 
 Requirements:
 
-- State-independent for fixed params.
-- Bounded by configured `Max*`.
+- State-independent for fixed params and bounded by configured `Max*`.
+- A new core `Task` variant MUST represent a reusable economic primitive rather than runtime topology or product policy; prove that existing task composition plus an adapter cannot preserve the required atomicity/custody contract; define typed bounded parameters, amount-resolution and funding/donation sensitivity, adapter ownership, events/errors/`StepErrorPolicy` behavior, task-scoped rollback, a generated two-dimensional worst-case bound, production-budget admission evidence, semantic tests, and explicit SCALE discriminant/schema-version impact before merge. Runtime-specific behavior that fails this gate belongs in an adapter or actor graph, not the core enum.
 - Always `>=` actual execution in both Weight dimensions, including adapter calls, storage proofs, fee collection, and emitted events.
 - Full-cycle admission uses the sum of step bounds plus evaluation/execution fee-collection and cycle/lifecycle overhead.
 - Task-level `weight_upper_bound` MUST include worst-case event emission cost for events produced by successful task execution.
@@ -287,7 +289,7 @@ Requirements:
 Runtime SHOULD classify tasks by materially distinct worst-case work rather than merge adapters with different bounds:
 
 | Bucket | Tasks |
-|---|---|
+| --- | --- |
 | `SimpleAssetOp` | `Transfer`, `Burn`, `Mint` |
 | `DexExactIn` | `SwapExactIn` |
 | `DexExactOut` | `SwapExactOut`, including bounded quote search |
@@ -782,7 +784,7 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 ### 10.3 Tooling Extrinsics
 
 | Extrinsic | Description |
-|---|---|
+| --- | --- |
 | `permissionless_sweep(aaa_id)` | Force lifecycle evaluation for one actor (REQUIRED) |
 | `permissionless_sweep_many(ids)` | Bounded batch lifecycle evaluation (`len <= MaxSweepPerBlock`) |
 
@@ -849,7 +851,7 @@ Indexer-facing correlation key is `(aaa_id, cycle_nonce)`.
 Event ordering:
 
 1. **Admitted cycle**: `CycleStarted` → zero or more step-level events (`StepSkipped` / `StepFailed` / task events) → `CycleSummary`; this ordering covers skip-only, all-failed-`ContinueNextStep`, and `AbortCycle` runs, while only the success predicate in Section 2.6 controls failure reset and auto-close eligibility.
-2. **No admitted cycle**: weight rejection emits `CycleDeferred` without `CycleStarted`/`CycleSummary`; an ordinary probability miss emits no cycle/defer event; direct close-only execution emits only the close-tail sequence below.
+2. **No admitted cycle**: weight rejection or a rolled-back scheduler close emits `CycleDeferred` without `CycleStarted`/`CycleSummary`; an ordinary probability miss emits no cycle/defer event; direct close-only execution emits only the close-tail sequence below.
 3. **Terminal close with admitted close tail**: when closure follows an admitted successful normal cycle, that cycle MUST first end with `CycleSummary`; then zero or more close-tail task / `OnCloseStepSkipped` / `OnCloseStepFailed` events → `OnCloseExecutionPlanSummary` → `AaaClosed`. Direct close-only execution starts at the close-tail sequence and MUST NOT emit `CycleStarted`/`CycleSummary`.
 
 Frontends SHOULD derive per-cycle step-status bitmask from `StepSkipped`/`StepFailed` events. `CycleSummary` is authoritative when present.
@@ -882,7 +884,7 @@ enum CloseReason {
 }
 
 enum DeferReason {
-    InsufficientWeightBudget,
+    InsufficientWeightBudget, CloseTransitionFailed,
 }
 
 enum StepSkippedReason {
@@ -890,6 +892,7 @@ enum StepSkippedReason {
     FundingUnavailable,
     ResolutionSkipped,
 }
+
 enum OnCloseStepFailureKind { EvaluationFee, ExecutionFee, Condition, Resolution, Adapter }
 
 enum PauseReason {
@@ -948,6 +951,7 @@ enum Error {
     AaaNotFound,
     AaaPaused,
     ActiveAaaCapacityExceeded,
+    ActiveAaaCountInvariant,
     ActiveAaaLimitExceedsQueueCapacity,
     ActiveAaaLimitTooHigh,
     ActiveAaaLimitTooLow,
@@ -956,6 +960,7 @@ enum Error {
     AutoCloseNonceOverflow,
     EmptyExecutionPlan,
     ExecutionDelayTooLong,
+    ExecutionPlanExceedsOnIdleBudget,
     ExecutionPlanTooLong,
     FundingBatchOverflow,
     GlobalCircuitBreakerActive,
@@ -989,7 +994,7 @@ Resolution-time non-terminal cases (`Skipped`, `FundingUnavailable`) are modeled
 
 ## 13. Storage
 
-> All collections MUST remain bounded by `Max*` constants. The reference `0.7.0` line is a fresh-genesis baseline and does not support in-place upgrade from `0.6.x`; its storage version marks the current schema rather than migration history. After any downstream chain launches, its storage-layout changes MUST use versioned, idempotent, bounded `OnRuntimeUpgrade` migrations.
+> All collections MUST remain bounded by `Max*` constants. The reference `0.7.x` pre-launch line is a fresh-genesis baseline and does not support in-place upgrade from `0.6.x`; its storage version marks the current schema rather than migration history. After any downstream chain launches, its storage-layout changes MUST use versioned, idempotent, bounded `OnRuntimeUpgrade` migrations.
 
 This section defines the stable storage surface. Actor cardinality/capacity, immutable-close lineage, and single-entry wakeup topology are behaviorally required contracts rather than replaceable caches. Derived readiness plus ingress overflow/dedup implementation stores remain architecture-owned unless promoted here explicitly.
 
@@ -1071,7 +1076,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 - `MaxSweepPerBlock`: 5; zombie sweep throughput
 - `MaxSystemExecutionPlanSteps` / `MaxUserExecutionPlanSteps`: 10 / 3; actor-class bounds independently applied to both run and close plan vectors
 - `MaxWhitelistSize`: 16; max source-filter whitelist length
-- `MinOnIdleReservePct`: 22%; reference headroom covers the generated fixed base, bounded sweep pass, maximum queue bootstrap, wakeup cursor, and one actor probe in both Weight dimensions
+- `MinOnIdleReservePct`: 50%; defines reference `GuaranteedOnIdleWeight`, covering the guaranteed scheduler envelope plus an admitted cycle and close tail in both Weight dimensions; optional compatibility-ingress drain, heavyweight wakeup-retry, and sweep-time terminal-close units consume available headroom and carry over durably when saturated. The other half is shared dispatch capacity, with no dedicated Operational reserve until a concrete critical call justifies one
 - `MinUserBalance`: runtime-specific, `>= FeeNativeAsset` ED; pre-cycle user safety floor
 - `MinWindowLength`: 100 blocks; minimum schedule window
 - `StepBaseFee`: runtime-specific; reference default 0.002 Native per-step evaluation base fee

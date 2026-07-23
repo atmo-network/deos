@@ -122,8 +122,11 @@ pub fn set_forced_mint_failure(mode: Option<ForcedMintFailure>) {
 /// Default resolver: routes all TMC output to account 888
 pub struct DefaultMintOutput;
 impl crate::MintOutputResolver<u64> for DefaultMintOutput {
-  fn output_account(_minted_asset: primitives::AssetKind) -> u64 {
-    888
+  fn output_accounts(_minted_asset: primitives::AssetKind) -> crate::MintOutputAccounts<u64> {
+    crate::MintOutputAccounts {
+      collateral: 888,
+      minted: 888,
+    }
   }
 }
 

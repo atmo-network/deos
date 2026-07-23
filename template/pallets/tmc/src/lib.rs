@@ -57,13 +57,15 @@ impl DomainGlueHook for () {
   }
 }
 
-/// Resolves the output destination for a given minting curve.
-///
-/// TMC sends both the collateral and the zap share of minted tokens
-/// to a single sink address. Downstream routing (splitting, liquidity
-/// provisioning) is the sink's responsibility.
+/// Runtime-selected destinations for one TMC mint.
+pub struct MintOutputAccounts<AccountId> {
+  pub collateral: AccountId,
+  pub minted: AccountId,
+}
+
+/// Resolves collateral and minted-liquidity destinations for a curve.
 pub trait MintOutputResolver<AccountId> {
-  fn output_account(minted_asset: AssetKind) -> AccountId;
+  fn output_accounts(minted_asset: AssetKind) -> MintOutputAccounts<AccountId>;
 }
 
 pub trait MintDistributionHook<AccountId> {
@@ -129,7 +131,7 @@ pub mod pallet {
     /// Precision for mathematical calculations
     type Precision: Get<Self::Balance>;
 
-    /// Resolves the output sink per minting curve
+    /// Resolves collateral and minted-liquidity destinations per curve
     type MintOutputResolver: MintOutputResolver<Self::AccountId>;
 
     /// Distribution ratio for user allocation (1/3)
@@ -443,13 +445,24 @@ pub mod pallet {
       Self::ensure_asset_exists(token_asset)?;
       Self::ensure_asset_exists(foreign_asset)?;
       let mint_amount = Self::calculate_total_mint(token_asset, foreign_amount)?;
-      let output = T::MintOutputResolver::output_account(token_asset);
+      let outputs = T::MintOutputResolver::output_accounts(token_asset);
       match foreign_asset {
         AssetKind::Native => {
-          T::Currency::transfer(who, &output, foreign_amount, Preservation::Expendable)?;
+          T::Currency::transfer(
+            who,
+            &outputs.collateral,
+            foreign_amount,
+            Preservation::Expendable,
+          )?;
         }
         AssetKind::Local(id) | AssetKind::Foreign(id) => {
-          T::Assets::transfer(id, who, &output, foreign_amount, Preservation::Expendable)?;
+          T::Assets::transfer(
+            id,
+            who,
+            &outputs.collateral,
+            foreign_amount,
+            Preservation::Expendable,
+          )?;
         }
       }
       let user_allocation = T::UserAllocationRatio::get().mul_floor(mint_amount);
@@ -458,15 +471,15 @@ pub mod pallet {
         AssetKind::Native => {
           T::MintDistributionHook::before_user_mint(token_asset, recipient, user_allocation)?;
           T::Currency::mint_into(recipient, user_allocation)?;
-          T::MintDistributionHook::before_sink_mint(token_asset, &output, zap_allocation)?;
-          T::Currency::mint_into(&output, zap_allocation)?;
+          T::MintDistributionHook::before_sink_mint(token_asset, &outputs.minted, zap_allocation)?;
+          T::Currency::mint_into(&outputs.minted, zap_allocation)?;
           TotalNativeMinted::<T>::mutate(|acc| *acc = acc.saturating_add(mint_amount));
         }
         AssetKind::Local(id) | AssetKind::Foreign(id) => {
           T::MintDistributionHook::before_user_mint(token_asset, recipient, user_allocation)?;
           T::Assets::mint_into(id, recipient, user_allocation)?;
-          T::MintDistributionHook::before_sink_mint(token_asset, &output, zap_allocation)?;
-          T::Assets::mint_into(id, &output, zap_allocation)?;
+          T::MintDistributionHook::before_sink_mint(token_asset, &outputs.minted, zap_allocation)?;
+          T::Assets::mint_into(id, &outputs.minted, zap_allocation)?;
         }
       }
       Self::deposit_event(Event::ZapAllocationDistributed {

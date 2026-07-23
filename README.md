@@ -69,7 +69,7 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 ## Repository
 
 | Path | Role | Entrypoint |
-|---|---|---|
+| --- | --- | --- |
 | `docs/` | Specifications and shipped architecture | [`docs/README.md`](./docs/README.md) |
 | `template/` | Runtime, pallets, primitives, weights, tests | [`template/README.md`](./template/README.md) |
 | `web-client/` | Browser reference client | [`web-client/README.md`](./web-client/README.md) |

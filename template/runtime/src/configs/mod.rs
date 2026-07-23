@@ -92,10 +92,7 @@ parameter_types! {
       })
       .for_class(DispatchClass::Operational, |weights| {
           weights.max_total = Some(MaxDispatchableExtrinsicWeight::get());
-          weights.reserved = Some(
-              MaxDispatchableExtrinsicWeight::get()
-                  .saturating_sub(NORMAL_DISPATCH_RATIO * MAXIMUM_BLOCK_WEIGHT)
-          );
+          weights.reserved = None;
       })
       .avg_block_initialization(AVERAGE_ON_INITIALIZE_RATIO)
       .build_or_panic();

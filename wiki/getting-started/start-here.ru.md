@@ -136,7 +136,7 @@ node simulator/tests.js
 Карта безопасного первого изменения:
 
 | Изменение | Где начать | Что потом трогать | Минимальная проверка |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | TMC price/slope | Simulator + formulas | Runtime config после математики | Simulator, затем TMC tests |
 | TOL split/reserves | TMCTOL spec + simulator | AAA topology, runtime config, docs | Simulator + runtime tests |
 | Router fee policy | Axial Router | Router config, governance bounds | Router tests + claims |
@@ -158,7 +158,7 @@ node simulator/tests.js
 Сначала используйте наименьший осмысленный gate. Не каждый change требует все gates.
 
 | Путь или изменение | Минимальная проверка |
-|---|---|
+| --- | --- |
 | Только понимание | Команды не нужны |
 | Wiki/onboarding text | `npm --prefix web-client run validate:wiki` |
 | Поведение web client | `npm --prefix web-client run validate` |

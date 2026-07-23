@@ -76,10 +76,10 @@ graph TD
 
 `5. Transactional Distribution Split`
 
-- Transfer collateral to the resolved sink account
+- Transfer collateral to the resolved collateral account
 - Mint total `ΔS` tokens inside one transactional flow
 - Transfer 1/3 to user (`UserAllocationRatio` = 1/3)
-- Transfer 2/3 to the resolved liquidity actor / splitter sink account
+- Mint the remaining 2/3 into the separately resolved protocol-liquidity account
 - If either mint leg fails, the collateral transfer rolls back too
 - Emit `ZapAllocationDistributed` event only after the whole distribution succeeds
 
@@ -162,14 +162,14 @@ Current implementation does not maintain a dedicated `MintingPaused` storage fla
 
 ### 3. Configuration Parameters
 
-| Parameter             | Type      | Description                                                                 |
-|:---|:---|:---|
-| `InitialPrice`        | Balance   | Base price P₀ at curve genesis                                              |
-| `SlopeParameter`      | Balance   | Linear curve slope (price increment per token)                              |
-| `Precision`           | Balance   | Scaling factor for fixed-point arithmetic (e.g., 10¹²)                      |
-| `UserAllocationRatio` | Perbill   | Fraction to user (default: 1/3 = 333_333_333 Perbill)                       |
-| `PalletId`            | PalletId  | Derives the TMC pallet account for pallet-owned operations                  |
-| `TreasuryAccount`     | AccountId | Compatibility/config hook; currently mapped to the TOL pallet account       |
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `InitialPrice` | Balance | Base price P₀ at curve genesis |
+| `SlopeParameter` | Balance | Linear curve slope (price increment per token) |
+| `Precision` | Balance | Scaling factor for fixed-point arithmetic (e.g., 10¹²) |
+| `UserAllocationRatio` | Perbill | Fraction to user (default: 1/3 = 333_333_333 Perbill) |
+| `PalletId` | PalletId | Derives the TMC pallet account for pallet-owned operations |
+| `TreasuryAccount` | AccountId | Compatibility/config hook; currently mapped to the TOL pallet account |
 | `LiquidityActorAccount` | AccountId | Active liquidity-actor recipient for non-specialized mint output |
 
 ### 4. Extrinsics (Governance-Controlled)
@@ -250,8 +250,8 @@ The Router orchestrates minting by:
 1. Receiving user intent and routing to TMC mint path when economically preferred
 2. Calling TMC minting flow (`mint_with_distribution`), forwarding the router's `recipient` so the freshly minted user allocation lands on the intended account rather than being hardcoded to the minter
 3. Comparing, slippage-checking, and emitting router `amount_out` against the recipient allocation only, while TMC still accounts for total curve emission internally
-4. Preserving normal router fee semantics on swap routes, while mint-side distribution is handled by TMC and resolved liquidity-actor accounts
-5. The `recipient` receiving its share of the minted allocation directly; the remaining protocol allocation always lands in the resolved liquidity-actor sink
+4. Preserving normal router fee semantics on swap routes, while TMC independently resolves collateral and minted-liquidity destinations
+5. The `recipient` receiving its share directly; the remaining minted allocation lands in the resolved protocol-liquidity account while collateral may route to a different bounded actor account
 
 Fee architecture note: transaction fee capture and burn semantics are enforced by Axial Router + Burn Actor, not by TMC treasury logic.
 
@@ -290,21 +290,21 @@ While TMC provides the ceiling, TOL provides floor support:
 
 ## Error Conditions
 
-| Error                 | Condition                                | Resolution                                  |
-|:---|:---|:---|
-| `CurveAlreadyExists`  | `create_curve` called for existing curve | Reuse the existing immutable launch curve   |
-| `NoCurveExists`       | Minting attempted without curve          | Governance must call `create_curve`         |
-| `InsufficientBalance` | User payment < calculated cost           | Increase payment amount                     |
-| `ZeroAmount`          | Mint requested with zero cost            | Provide non-zero payment                    |
-| `ArithmeticOverflow`  | U256 calculation exceeded bounds         | Should be impossible with proper parameters |
-| `InvalidParameters`   | Slope or price = 0 at curve creation     | Use non-zero parameters                     |
-| `ExceedsMaxSupply`    | Mint would exceed Balance::MAX           | Theoretical limit, unlikely in practice     |
+| Error | Condition | Resolution |
+| --- | --- | --- |
+| `CurveAlreadyExists` | `create_curve` called for existing curve | Reuse the existing immutable launch curve |
+| `NoCurveExists` | Minting attempted without curve | Governance must call `create_curve` |
+| `InsufficientBalance` | User payment < calculated cost | Increase payment amount |
+| `ZeroAmount` | Mint requested with zero cost | Provide non-zero payment |
+| `ArithmeticOverflow` | U256 calculation exceeded bounds | Should be impossible with proper parameters |
+| `InvalidParameters` | Slope or price = 0 at curve creation | Use non-zero parameters |
+| `ExceedsMaxSupply` | Mint would exceed Balance::MAX | Theoretical limit, unlikely in practice |
 
 ## Implementation Status
 
 - `Mechanism`: Extrinsic-driven (user initiates via Router).
 - `Math Engine`: Integral-based quadratic solver with U256 overflow protection.
-- `Distribution`: 1/3 user, 2/3 resolved liquidity actor / splitter sink account (configurable via `UserAllocationRatio`).
+- `Distribution`: 1/3 user and 2/3 resolved protocol-liquidity account, with an independently resolved collateral account (ratio configurable via `UserAllocationRatio`).
 - `Governance`: Curve parameters are configured at launch-time creation and remain immutable on the current line; forks may intentionally widen that surface, but that is outside the default TMCTOL contract.
 - `Compression`: Bidirectional with Burn Actor (burns reduce ceiling dynamically).
 - `Domain Glue`: `create_curve` executes runtime hook that bootstraps TOL domain routing and enables liquidity-actor processing for the token.

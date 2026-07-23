@@ -46,20 +46,31 @@ impl pallet_tmc::DomainGlueHook for TmctolDomainGlue {
   }
 }
 
-/// Routes TMC output to a single sink per curve.
+/// Routes collateral and minted liquidity share per curve.
 ///
-/// L1 (Native): output → Liquidity Actor (handles liquidity provisioning)
-/// L2 (BLDR):   output → BLDR Splitter (handles NTVE→Liquidity Actor, BLDR→50/50 Liquidity Actor+Treasury)
+/// L1 (Native): both outputs → Liquidity Actor.
+/// L2 (BLDR): collateral → BLDR Liquidity Actor; minted share → BLDR Splitter.
 pub struct TmctolMintOutput;
 impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
-  fn output_account(minted_asset: AssetKind) -> AccountId {
+  fn output_accounts(minted_asset: AssetKind) -> pallet_tmc::MintOutputAccounts<AccountId> {
     match minted_asset {
       AssetKind::Local(id) if id == ecosystem::protocol_tokens::BLDR_ASSET_ID => {
-        pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
-          ecosystem::aaa_ids::BLDR_SPLITTER_AAA_ID,
-        )
+        pallet_tmc::MintOutputAccounts {
+          collateral: pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::aaa_ids::BLDR_ZM_AAA_ID,
+          ),
+          minted: pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::aaa_ids::BLDR_SPLITTER_AAA_ID,
+          ),
+        }
       }
-      _ => LiquidityActorAccount::get(),
+      _ => {
+        let liquidity_actor = LiquidityActorAccount::get();
+        pallet_tmc::MintOutputAccounts {
+          collateral: liquidity_actor.clone(),
+          minted: liquidity_actor,
+        }
+      }
     }
   }
 }

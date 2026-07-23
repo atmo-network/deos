@@ -495,18 +495,18 @@ The related state distinction is also important:
 
 ## Public Call Surface
 
-| Call | Extrinsic                                | Role                            |
-|:---|:---|:---|
-| `0`  | `record_winning_vote`                    | low-level admin ingress         |
-| `1`  | `record_winning_vote_batch`              | bounded admin batch ingress     |
-| `2`  | `submit_proposal`                        | admin proposal create path      |
-| `3`  | `submit_signed_proposal`                 | signed create with collected fee |
-| `4`  | `resolve_proposal`                       | manual bounded resolution       |
-| `5`  | `reject_proposal`                        | manual rejection                |
-| `6`  | `cast_vote`                              | signed ballot                   |
-| `7`  | `resolve_proposal_from_votes`            | maturity resolution             |
-| `8`  | `requeue_proposal_for_auto_finalization` | deferred-item recovery          |
-| `9`  | `force_resolve_proposal_from_votes`      | policy-aware early finalization |
+| Call | Extrinsic | Role |
+| --- | --- | --- |
+| `0` | `record_winning_vote` | low-level admin ingress |
+| `1` | `record_winning_vote_batch` | bounded admin batch ingress |
+| `2` | `submit_proposal` | admin proposal create path |
+| `3` | `submit_signed_proposal` | signed create with collected fee |
+| `4` | `resolve_proposal` | manual bounded resolution |
+| `5` | `reject_proposal` | manual rejection |
+| `6` | `cast_vote` | signed ballot |
+| `7` | `resolve_proposal_from_votes` | maturity resolution |
+| `8` | `requeue_proposal_for_auto_finalization` | deferred-item recovery |
+| `9` | `force_resolve_proposal_from_votes` | policy-aware early finalization |
 
 ## Events and Errors
 

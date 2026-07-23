@@ -12,6 +12,7 @@ use polkadot_sdk::sp_weights::WeightMeter;
 enum AdmissionDecision {
   Admit(Weight),
   Closed(Weight),
+  CloseFailed(Weight),
   Defer(DeferReason),
   Skip,
 }
@@ -75,6 +76,21 @@ impl<T: Config> Pallet<T> {
         AdmissionDecision::Admit(weight) => weight,
         AdmissionDecision::Closed(weight) => {
           cycle_meter.consume(weight);
+          continue;
+        }
+        AdmissionDecision::CloseFailed(weight) => {
+          cycle_meter.consume(weight);
+          Self::deposit_event(Event::CycleDeferred {
+            aaa_id,
+            reason: DeferReason::CloseTransitionFailed,
+          });
+          Self::enqueue_block_local(
+            aaa_id,
+            now,
+            queue_epoch,
+            &mut next_queue,
+            &mut queue_insertions,
+          );
           continue;
         }
         AdmissionDecision::Defer(reason) => {
@@ -328,6 +344,12 @@ impl<T: Config> Pallet<T> {
     });
   }
 
+  /// Baseline scheduler envelope reserved ahead of one actor run/close pair.
+  ///
+  /// Compatibility-ingress drains and heavyweight wakeup-retry or terminal
+  /// sweep units remain independently metered durable carry-over work. They
+  /// may defer actor execution in a saturated block and therefore do not form
+  /// part of this same-block plan-admission guarantee.
   pub fn scheduler_admission_overhead() -> Weight {
     T::WeightInfo::scheduler_on_idle_base()
       .saturating_add(T::WeightInfo::compatibility_ingress_probe())
@@ -629,8 +651,20 @@ impl<T: Config> Pallet<T> {
     if !meter.can_consume(close_weight_upper) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }
-    let _ = Self::close_actor(aaa_id, instance, reason);
-    AdmissionDecision::Closed(close_weight_upper)
+    match Self::close_actor(aaa_id, instance, reason) {
+      Ok(()) => AdmissionDecision::Closed(close_weight_upper),
+      Err(_) => AdmissionDecision::CloseFailed(close_weight_upper),
+    }
+  }
+
+  fn pending_post_cycle_close_reason(instance: &AaaInstanceOf<T>) -> Option<CloseReason> {
+    if Self::failure_limit_reached(instance.consecutive_failures) {
+      return Some(CloseReason::ConsecutiveFailures);
+    }
+    instance
+      .auto_close_at_cycle_nonce
+      .filter(|target| instance.cycle_nonce >= *target)
+      .map(|_| CloseReason::AutoCloseNonceReached)
   }
 
   fn cycle_may_close_on_failure(instance: &AaaInstanceOf<T>) -> bool {
@@ -661,6 +695,9 @@ impl<T: Config> Pallet<T> {
     instance: &AaaInstanceOf<T>,
     meter: &WeightMeter,
   ) -> AdmissionDecision {
+    if GlobalCircuitBreaker::<T>::get() {
+      return AdmissionDecision::Skip;
+    }
     if Self::is_window_expired(instance) {
       return Self::close_within_budget(aaa_id, instance, CloseReason::WindowExpired, meter);
     }
@@ -669,6 +706,9 @@ impl<T: Config> Pallet<T> {
     }
     if instance.aaa_type == AaaType::User && instance.cycle_nonce == u64::MAX {
       return Self::close_within_budget(aaa_id, instance, CloseReason::CycleNonceExhausted, meter);
+    }
+    if let Some(reason) = Self::pending_post_cycle_close_reason(instance) {
+      return Self::close_within_budget(aaa_id, instance, reason, meter);
     }
     if !Self::is_ready_for_execution(instance) {
       return AdmissionDecision::Skip;
@@ -1160,12 +1200,23 @@ impl<T: Config> Pallet<T> {
           if !meter.can_consume(required_weight) {
             break;
           }
-          cursor = next_cursor;
-          SweepCursor::<T>::put(cursor);
-          let _ = Self::close_actor(next_cursor, &instance, reason);
-          checked = checked.saturating_add(1);
-          meter.consume(required_weight);
-          continue;
+          match Self::close_actor(next_cursor, &instance, reason) {
+            Ok(()) => {
+              cursor = next_cursor;
+              SweepCursor::<T>::put(cursor);
+              checked = checked.saturating_add(1);
+              meter.consume(required_weight);
+              continue;
+            }
+            Err(_) => {
+              Self::deposit_event(Event::CycleDeferred {
+                aaa_id: next_cursor,
+                reason: DeferReason::CloseTransitionFailed,
+              });
+              meter.consume(required_weight);
+              break;
+            }
+          }
         }
       }
       cursor = next_cursor;

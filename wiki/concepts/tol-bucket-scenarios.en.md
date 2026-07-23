@@ -27,7 +27,7 @@ related:
   - Architecture Diagrams
   - AAA System
   - Token-Driven Automation
-last_compiled: 2026-07-20
+last_compiled: 2026-07-22
 confidence: 0.85
 ---
 
@@ -58,13 +58,13 @@ Bucket A holds the resulting LP; it does not itself add liquidity or execute a f
 
 Buckets B, C, and D preserve separate policy lanes, but the current genesis configuration assigns each a timer schedule with a `Noop` execution plan. Their paired Treasury B/C/D actors also start as `Noop`; Bucket D remains the explicitly dormant reserve.
 
-The architecture provides a bounded unwind-plan family that can remove a configured LP percentage and send reclaimed assets to the paired treasury after readiness. This capability does not imply current activation:
+The architecture provides a production-admissible two-actor unwind family. The Bucket transfers a configured LP percentage; the corresponding Treasury removes all preservable balance of that configured system LP asset in its own cycle, so both underlying assets are born directly in Treasury custody. Treasury does not filter the LP sender: pairing names the reference lane rather than an ingress permission. This capability does not imply genesis activation:
 
 ```text
 explicit policy and readiness decision
-  -> install bounded timer-driven unwind plan
-  -> actor removes configured LP percentage
-  -> reclaimed assets move to the paired treasury lane
+  -> Bucket transfers bounded LP percentage to paired Treasury
+  -> Treasury timer observes LP and removes liquidity in a separate admitted cycle
+  -> reclaimed Native and foreign assets remain in that Treasury lane
 ```
 
 No current contract defines automatic threshold-driven wakeups for C or D.
@@ -79,7 +79,7 @@ Bucket C -> Treasury C lane
 Bucket D -> Treasury D lane
 ```
 
-A downstream fork may alter policy, but it should preserve bucket provenance as part of the economic contract rather than accounting decoration. If it activates or changes treasury lanes or actor plans, it must validate TMCTOL math and AAA execution behavior separately.
+A downstream fork may alter policy, but it should preserve bucket provenance as part of the economic contract rather than accounting decoration. The reference split avoids a same-actor RemoveLiquidity plus dual-transfer plan that exceeds the 50% ProofSize reserve. If a fork activates or changes treasury lanes or actor plans, it must validate TMCTOL math and AAA execution behavior separately.
 
 ## Related
 

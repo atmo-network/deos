@@ -141,7 +141,9 @@ impl<T: Config> Pallet<T> {
     };
     if instance.cycle_nonce == u64::MAX {
       if instance.aaa_type == AaaType::User {
-        let _ = Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted);
+        if Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted).is_err() {
+          Self::defer_failed_close(aaa_id);
+        }
       } else {
         AaaInstances::<T>::mutate(aaa_id, |maybe| {
           if let Some(inst) = maybe.as_mut() {
@@ -159,14 +161,16 @@ impl<T: Config> Pallet<T> {
       }
       return base_weight;
     }
-    let cycle_nonce = AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let inst = maybe.as_mut().expect("instance verified above");
+    let Some(cycle_nonce) = AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      let inst = maybe.as_mut()?;
       inst.cycle_nonce = inst.cycle_nonce.saturating_add(1);
       inst.manual_trigger_pending = false;
       inst.last_cycle_block = now;
       inst.updated_at = now;
-      inst.cycle_nonce
-    });
+      Some(inst.cycle_nonce)
+    }) else {
+      return base_weight;
+    };
     Self::sync_readiness_state(aaa_id);
     if matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. }) {
       Self::consume_address_event(aaa_id);
@@ -430,13 +434,17 @@ impl<T: Config> Pallet<T> {
     if execution_plan_failed {
       if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
         if !inst.is_paused && Self::failure_limit_reached(inst.consecutive_failures) {
-          let _ = Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures);
+          if Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures).is_err() {
+            Self::defer_failed_close(aaa_id);
+          }
         }
       }
     } else if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
       if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
         if cycle_nonce >= target_nonce {
-          let _ = Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached);
+          if Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached).is_err() {
+            Self::defer_failed_close(aaa_id);
+          }
         }
       }
     }
@@ -444,6 +452,14 @@ impl<T: Config> Pallet<T> {
       5_000_000u64.saturating_mul(executed_steps as u64 + 1),
       1000u64.saturating_mul(executed_steps as u64 + 1),
     ))
+  }
+
+  fn defer_failed_close(aaa_id: AaaId) {
+    Self::deposit_event(Event::CycleDeferred {
+      aaa_id,
+      reason: DeferReason::CloseTransitionFailed,
+    });
+    Self::enqueue(aaa_id);
   }
 
   pub(crate) fn failure_limit_reached(consecutive_failures: u32) -> bool {
@@ -1449,7 +1465,7 @@ impl<T: Config> Pallet<T> {
     if resolved.is_zero() {
       return Ok(AmountResolutionOutcome::Skipped);
     }
-    if policy == AmountResolutionPolicy::PreserveSpend && resolved > policy_spend_limit {
+    if policy != AmountResolutionPolicy::Mint && resolved > policy_spend_limit {
       return Ok(AmountResolutionOutcome::FundingUnavailable);
     }
     Ok(AmountResolutionOutcome::Resolved(resolved))

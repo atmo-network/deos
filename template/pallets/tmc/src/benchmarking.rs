@@ -43,12 +43,12 @@ mod benches {
     let precision: u128 =
       <T::Balance as UniqueSaturatedInto<u128>>::unique_saturated_into(T::Precision::get());
     let foreign_amount = precision.saturating_mul(10);
-    let output = T::MintOutputResolver::output_account(token_asset);
+    let outputs = T::MintOutputResolver::output_accounts(token_asset);
     T::BenchmarkHelper::create_asset(token_asset_id).expect("token asset must be creatable");
     T::BenchmarkHelper::mint_native(&caller, foreign_amount.saturating_mul(2))
       .expect("caller native funding must succeed");
-    T::BenchmarkHelper::mint_native(&output, precision)
-      .expect("output native funding must succeed");
+    T::BenchmarkHelper::mint_native(&outputs.collateral, precision)
+      .expect("collateral output native funding must succeed");
     Pallet::<T>::create_curve(
       RawOrigin::Root.into(),
       token_asset,
@@ -59,8 +59,8 @@ mod benches {
     .expect("curve creation must succeed in benchmark setup");
     let caller_native_before = T::Currency::balance(&caller);
     let caller_token_before = T::Assets::balance(token_asset_id, &caller);
-    let output_native_before = T::Currency::balance(&output);
-    let output_token_before = T::Assets::balance(token_asset_id, &output);
+    let output_native_before = T::Currency::balance(&outputs.collateral);
+    let output_token_before = T::Assets::balance(token_asset_id, &outputs.minted);
 
     #[block]
     {
@@ -76,8 +76,8 @@ mod benches {
 
     let caller_native_after = T::Currency::balance(&caller);
     let caller_token_after = T::Assets::balance(token_asset_id, &caller);
-    let output_native_after = T::Currency::balance(&output);
-    let output_token_after = T::Assets::balance(token_asset_id, &output);
+    let output_native_after = T::Currency::balance(&outputs.collateral);
+    let output_token_after = T::Assets::balance(token_asset_id, &outputs.minted);
     assert_eq!(
       caller_native_before.saturating_sub(caller_native_after),
       foreign_amount

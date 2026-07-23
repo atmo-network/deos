@@ -115,25 +115,25 @@ The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace befor
 
 ### Core pool and receipt state
 
-| Storage                                      | Role                   | Notes                                   |
-|:---|:---|:---|
-| `Pools[asset_id]`                            | Share-vault totals     | shares, accounted balance, staker count |
-| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | bounded receipt -> base lookup          |
-| `Positions[(asset_id, account)]`             | Legacy share ownership | bridge for pre-receipt positions        |
-| `OperatorCommissions[operator]`              | Operator commission    | bounded by `MaxOperatorCommission`      |
+| Storage | Role | Notes |
+| --- | --- | --- |
+| `Pools[asset_id]` | Share-vault totals | shares, accounted balance, staker count |
+| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | bounded receipt -> base lookup |
+| `Positions[(asset_id, account)]` | Legacy share ownership | bridge for pre-receipt positions |
+| `OperatorCommissions[operator]` | Operator commission | bounded by `MaxOperatorCommission` |
 
 `Positions` is retained only for legacy compatibility. Fresh ownership is receipt-based.
 
 ### Native LP security state
 
-| Storage                                       | Role                                                        |
-|:---|:---|
-| `NativeLpLocks[(account, operator)]`          | Collator-specific locked LP position                        |
-| `OperatorNativeLpLocked[operator]`            | Aggregate LP backing for session ranking                    |
-| `AccountNativeLpLocked[account]`              | Aggregate account LP custody for NativeVotePower            |
-| `AccountNativeCollatorLpLocked[account]`      | Collator-locked LP only, used for native nomination rewards |
-| `TotalNativeLpLocked`                         | Aggregate native LP custody                                 |
-| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal   |
+| Storage | Role |
+| --- | --- |
+| `NativeLpLocks[(account, operator)]` | Collator-specific locked LP position |
+| `OperatorNativeLpLocked[operator]` | Aggregate LP backing for session ranking |
+| `AccountNativeLpLocked[account]` | Aggregate account LP custody for NativeVotePower |
+| `AccountNativeCollatorLpLocked[account]` | Collator-locked LP only, used for native nomination rewards |
+| `TotalNativeLpLocked` | Aggregate native LP custody |
+| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal |
 
 Unlock requests immediately remove LP from backing and reward/governance aggregates, then delay token withdrawal by `NativeLpUnlockDelay`.
 

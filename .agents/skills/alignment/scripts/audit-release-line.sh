@@ -203,6 +203,17 @@ check_changelog_order() {
     done < <(rg '^## [0-9]+\.[0-9]+\.[0-9]+:' "$PROJECT_ROOT/CHANGELOG.md")
 }
 
+check_markdown_release_marker() {
+    local path="$1"
+    local label="$2"
+    local expected_version="$3"
+    local expected="- **${label}**: \`${expected_version}\`"
+    if ! rg -Fqx -- "$expected" "$path"; then
+        log_error "Release marker drift: ${path#$PROJECT_ROOT/} must contain ${expected}"
+        exit 1
+    fi
+}
+
 run_audit() {
     phase_banner "Step 2: Release-line consistency"
     local heading
@@ -223,6 +234,8 @@ run_audit() {
     check_changelog_order
 
     check_template_workspace_versions "$latest_version"
+    check_markdown_release_marker "$PROJECT_ROOT/docs/aaa.specification.en.md" "Specification line" "$latest_version"
+    check_markdown_release_marker "$PROJECT_ROOT/docs/aaa.embedding.en.md" "Release line" "$latest_version"
     log_success "Release-line audit passed"
 }
 

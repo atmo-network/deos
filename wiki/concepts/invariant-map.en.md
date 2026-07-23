@@ -41,29 +41,29 @@ confidence: 0.85
 
 This page maps important DEOS/TMCTOL invariants and threats to their owner surface, validation route, governance mutability, and main failure mode. It is intentionally denser than a narrative overview.
 
-| Invariant                   | Owner       | Validation            | Governance           | Failure                |
-|---|---|---|---|---|
-| TMC integral pricing        | TMC         | simulator + tests     | no post-launch       | wrong mint price       |
-| Unidirectional minting      | TMC         | pallet + runtime      | no                   | reserve extraction     |
-| Router fee capture + burn flow | Router + AAA | runtime + bench    | bounded config       | noncanonical path or actor liveness |
+| Invariant | Owner | Validation | Governance | Failure |
+| --- | --- | --- | --- | --- |
+| TMC integral pricing | TMC | simulator + tests | no post-launch | wrong mint price |
+| Unidirectional minting | TMC | pallet + runtime | no | reserve extraction |
+| Router fee capture + burn flow | Router + AAA | runtime + bench | bounded config | noncanonical path or actor liveness |
 | AAA bounded work and signal durability | AAA | generated fixed-base weights + transactional ingress + adversarial scheduler tests | typed funding authority | overweight work, partial funding, lost signal, or stuck graph |
-| TOL bucket topology         | TOL + AAA   | sim + runtime         | explicit plans       | provenance or activation drift |
-| Asset identity bijection    | Registry    | runtime tests         | register/update only | identity drift         |
-| Staking share accounting    | Staking     | pallet + runtime      | no override          | receipt dilution       |
-| Governance domain authority | Governance  | tests + review        | explicit policy      | authority creep        |
-| Read-model honesty          | Client/docs | DAG + wiki + validate | no                   | false chain truth      |
-| Wiki trust boundary         | Wiki/client | trust validator       | no                   | unsafe rendering       |
+| TOL bucket topology | TOL + AAA | sim + runtime | explicit plans | provenance or activation drift |
+| Asset identity bijection | Registry | runtime tests | register/update only | identity drift |
+| Staking share accounting | Staking | pallet + runtime | no override | receipt dilution |
+| Governance domain authority | Governance | tests + review | explicit policy | authority creep |
+| Read-model honesty | Client/docs | DAG + wiki + validate | no | false chain truth |
+| Wiki trust boundary | Wiki/client | trust validator | no | unsafe rendering |
 
 ## Central Threats
 
 | Threat | Shape | Mitigation | Owner |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Reserve commitment weakened | authorized policy redirects or unwinds reserves | typed domain authority, protection, and explicit instance policy | governance/spec |
 | Noncanonical swap path | lower-level conversion avoids router fee flow | canonical client gateway, explicit scope, and runtime audits; not a universal call barrier | router/runtime |
 | Bucket misuse | provenance or activation state collapses | segmented accounts, explicit plans, and readiness gates | TMCTOL + AAA |
 | Indexer truth confusion | archive shown as truth | provenance badges | client/docs |
 | Collator trust phase | trust mistaken as permissionless | launch-line constraint | runtime/ops |
-| Actor graph stuck | late enqueue, pause/cooldown/window miss, insufficient hook reserve, outage, or oracle gap | durable queue/wakeup eligibility, generated base admission, 22% reference reserve, and bounded retry | AAA |
+| Actor graph stuck | late enqueue, pause/cooldown/window miss, insufficient hook reserve, outage, or oracle gap | durable queue/wakeup eligibility, generated base admission, 50% reference reserve, and bounded retry | AAA |
 | Parameter griefing | params leave assumptions | bounded settings | runtime/gov |
 | LP valuation attack | LP overvalued/double-counted | conservative custody | staking/gov |
 | Frontend provenance lie | UI hides data class | read-model contract | web client |

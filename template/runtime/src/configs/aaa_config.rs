@@ -54,10 +54,10 @@ parameter_types! {
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
   pub const AaaMaxSpilloverBlocks: u32 = 8;
   pub const AaaMaxQueueInsertionsPerBlock: u32 = 512;
-  pub const AaaFairnessWeightSystem: u32 = 1;
-  pub const AaaFairnessWeightUser: u32 = 3;
   pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
   pub const AaaMaxIngressOverflowQueue: u32 = 8192;
+  pub AaaGuaranteedOnIdleWeight: Weight =
+    MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
 
   // --- Lifecycle and sweep controls ---
 
@@ -697,7 +697,7 @@ impl
         noop_execution_plan(),
       ),
       // --- Treasury B: Building Treasury (aaa_id = 7) ---
-      // Receives Native + Foreign from Bucket B unwind; Noop until governance activates spending
+      // Paired Bucket B LP-removal lane; Noop until governance activates both plans
       (
         ecosystem::aaa_ids::TREASURY_B_AAA_ID,
         governance.clone(),
@@ -707,7 +707,7 @@ impl
         noop_execution_plan(),
       ),
       // --- Treasury C: Capital Treasury (aaa_id = 8) ---
-      // Receives Native + Foreign from Bucket C unwind; Noop until governance activates spending
+      // Paired Bucket C LP-removal lane; Noop until governance activates both plans
       (
         ecosystem::aaa_ids::TREASURY_C_AAA_ID,
         governance.clone(),
@@ -717,7 +717,7 @@ impl
         noop_execution_plan(),
       ),
       // --- Treasury D: Dormant Treasury (aaa_id = 9) ---
-      // Receives Native + Foreign from Bucket D unwind; Noop until governance activates spending
+      // Paired Bucket D LP-removal lane; Noop until governance activates both plans
       (
         ecosystem::aaa_ids::TREASURY_D_AAA_ID,
         governance.clone(),
@@ -996,80 +996,67 @@ impl TmctolGenesisSystemAaas {
       .expect("Liquidity Actor execution_plan fits within MaxSystemExecutionPlanSteps")
   }
 
-  /// Builds a gradual LP unwind execution_plan for a TOL Bucket (B, C, or D).
+  /// Builds the Bucket-side half of production-admissible LP unwind.
   ///
-  /// Each cycle removes a small percentage of LP, then transfers the resulting
-  /// Native and Foreign tokens to the paired Treasury AAA sovereign account.
-  ///
-  /// Called by governance after pool creation and Treasury AAA activation.
-  ///
-  /// ExecutionPlan steps:
-  /// 1. If LP > dust → RemoveLiquidity (percentage of current LP holdings)
-  /// 2. If Native > dust → Transfer Native to Treasury sovereign
-  /// 3. If Foreign > dust → Transfer Foreign to Treasury sovereign
-  pub fn build_bucket_unwind_execution_plan(
+  /// The Bucket transfers a bounded LP fraction into the paired Treasury sovereign.
+  /// The Treasury then removes liquidity in its own independently admitted cycle.
+  pub fn build_bucket_lp_transfer_execution_plan(
     lp_asset: AssetKind,
-    foreign: AssetKind,
     dust_threshold: Balance,
     unwind_pct: polkadot_sdk::sp_runtime::Perbill,
     treasury_aaa_id: u64,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
-    let dust_guard = |asset: AssetKind| -> Conditions {
-      alloc::vec![Condition::BalanceAbove {
-        asset,
+    let treasury_account =
+      pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(treasury_aaa_id);
+    alloc::vec![Step {
+      conditions: alloc::vec![Condition::BalanceAbove {
+        asset: lp_asset,
         threshold: dust_threshold,
       }]
       .try_into()
-      .expect("single condition fits")
-    };
-    let treasury_account =
-      pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(treasury_aaa_id);
-    let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![
-      // Step 1: Remove a small fraction of LP holdings
-      Step {
-        conditions: dust_guard(lp_asset),
-        task: Task::RemoveLiquidity {
-          lp_asset,
-          amount: AmountResolution::PercentageOfCurrent(unwind_pct),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
+      .expect("single condition fits"),
+      task: Task::Transfer {
+        to: treasury_account,
+        asset: lp_asset,
+        amount: AmountResolution::PercentageOfCurrent(unwind_pct),
       },
-      // Step 2: Send reclaimed Native to paired Treasury
-      Step {
-        conditions: dust_guard(AssetKind::Native),
-        task: Task::Transfer {
-          to: treasury_account.clone(),
-          asset: AssetKind::Native,
-          amount: AmountResolution::AllBalance,
-        },
-        on_error: StepErrorPolicy::ContinueNextStep,
-      },
-      // Step 3: Send reclaimed Foreign to paired Treasury
-      Step {
-        conditions: dust_guard(foreign),
-        task: Task::Transfer {
-          to: treasury_account,
-          asset: foreign,
-          amount: AmountResolution::AllBalance,
-        },
-        on_error: StepErrorPolicy::ContinueNextStep,
-      },
-    ];
-    steps
+      on_error: StepErrorPolicy::AbortCycle,
+    }]
+    .try_into()
+    .expect("single-step Bucket LP transfer fits")
+  }
+
+  /// Builds the Treasury-side half of production-admissible LP unwind.
+  ///
+  /// Removing all preservable LP leaves both underlying assets in Treasury custody.
+  pub fn build_treasury_lp_unwind_execution_plan(
+    lp_asset: AssetKind,
+    dust_threshold: Balance,
+  ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
+    use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    alloc::vec![Step {
+      conditions: alloc::vec![Condition::BalanceAbove {
+        asset: lp_asset,
+        threshold: dust_threshold,
+      }]
       .try_into()
-      .expect("bucket unwind execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("single condition fits"),
+      task: Task::RemoveLiquidity {
+        lp_asset,
+        amount: AmountResolution::AllBalance,
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    }]
+    .try_into()
+    .expect("single-step Treasury LP unwind fits")
   }
 
   /// Builds the BLDR Splitter execution_plan.
   ///
-  /// Receives both $NTVE (collateral) and $BLDR (minted zap share) from TMC output:
-  /// 1. Transfer 100% NTVE → BLDR Liquidity Actor
-  /// 2. SplitTransfer BLDR 50/50 → BLDR liquidity + treasury lanes
+  /// Receives the minted $BLDR liquidity share from TMC output and splits it 50/50
+  /// between BLDR liquidity and treasury lanes. TMC routes collateral directly to
+  /// the BLDR Liquidity Actor.
   pub fn build_bldr_splitter_execution_plan(
     bldr_asset: AssetKind,
     dust_threshold: Balance,
@@ -1093,39 +1080,26 @@ impl TmctolGenesisSystemAaas {
     let bldr_treasury_account = pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
       ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
     );
-    let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![
-      // Step 1: Forward all NTVE collateral to BLDR Liquidity Actor
-      Step {
-        conditions: dust_guard(AssetKind::Native),
-        task: Task::Transfer {
-          to: bldr_zm_account.clone(),
-          asset: AssetKind::Native,
-          amount: AmountResolution::AllBalance,
-        },
-        on_error: StepErrorPolicy::ContinueNextStep,
+    let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![Step {
+      conditions: dust_guard(bldr_asset),
+      task: Task::SplitTransfer {
+        asset: bldr_asset,
+        amount: AmountResolution::AllBalance,
+        legs: alloc::vec![
+          SplitLeg {
+            to: bldr_zm_account,
+            share: ecosystem::params::BLDR_SPLITTER_ZM_SHARE,
+          },
+          SplitLeg {
+            to: bldr_treasury_account,
+            share: ecosystem::params::BLDR_SPLITTER_TREASURY_SHARE,
+          },
+        ]
+        .try_into()
+        .expect("2 legs fit"),
       },
-      // Step 2: Split BLDR 50/50 to BLDR liquidity + treasury lanes
-      Step {
-        conditions: dust_guard(bldr_asset),
-        task: Task::SplitTransfer {
-          asset: bldr_asset,
-          amount: AmountResolution::AllBalance,
-          legs: alloc::vec![
-            SplitLeg {
-              to: bldr_zm_account,
-              share: ecosystem::params::BLDR_SPLITTER_ZM_SHARE,
-            },
-            SplitLeg {
-              to: bldr_treasury_account,
-              share: ecosystem::params::BLDR_SPLITTER_TREASURY_SHARE,
-            },
-          ]
-          .try_into()
-          .expect("2 legs fit"),
-        },
-        on_error: StepErrorPolicy::AbortCycle,
-      },
-    ];
+      on_error: StepErrorPolicy::AbortCycle,
+    },];
     steps
       .try_into()
       .expect("BLDR splitter execution_plan fits within MaxSystemExecutionPlanSteps")
@@ -1402,8 +1376,6 @@ impl pallet_aaa::Config for Runtime {
   type AtomicityHook = ();
   type ConditionReadFee = AaaConditionReadFee;
   type EntropyProvider = pallet_aaa::NoEntropyProvider;
-  type FairnessWeightSystem = AaaFairnessWeightSystem;
-  type FairnessWeightUser = AaaFairnessWeightUser;
   type FeeSink = AaaFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
   type GenesisSystemAaas = TmctolGenesisSystemAaas;
@@ -1423,6 +1395,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxQueueInsertionsPerBlock = AaaMaxQueueInsertionsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
+  type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;
   type MaxIngressOverflowQueue = AaaMaxIngressOverflowQueue;
   type MaxOwnerSlots = AaaMaxOwnerSlots;
   type MaxExecutionPlanSteps = AaaMaxExecutionPlanSteps;

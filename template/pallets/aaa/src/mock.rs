@@ -144,6 +144,8 @@ thread_local! {
 
   static MOCK_ENTROPY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
   static REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS: RefCell<bool> = RefCell::new(false);
+  static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
+    RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_CLOSE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
@@ -187,6 +189,7 @@ pub fn reset_mock_adapters() {
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   MOCK_ENTROPY.with(|e| *e.borrow_mut() = None);
   REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow_mut() = false);
+  GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
@@ -823,6 +826,17 @@ impl Get<u32> for TestMaxIdleStarvationBlocks {
   }
 }
 
+pub struct TestGuaranteedOnIdleWeight;
+impl Get<polkadot_sdk::sp_weights::Weight> for TestGuaranteedOnIdleWeight {
+  fn get() -> polkadot_sdk::sp_weights::Weight {
+    GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow())
+  }
+}
+
+pub fn set_guaranteed_on_idle_weight(weight: polkadot_sdk::sp_weights::Weight) {
+  GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = weight);
+}
+
 pub struct TestMaxAutoCloseNonceHorizon;
 impl Get<u64> for TestMaxAutoCloseNonceHorizon {
   fn get() -> u64 {
@@ -892,8 +906,6 @@ impl pallet_aaa::Config for Test {
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSpilloverBlocks = ConstU32<8>;
   type MaxQueueInsertionsPerBlock = ConstU32<64>;
-  type FairnessWeightSystem = ConstU32<1>;
-  type FairnessWeightUser = ConstU32<2>;
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;
   type MaxSplitTransferLegs = ConstU32<8>;
@@ -901,6 +913,7 @@ impl pallet_aaa::Config for Test {
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = ConstU32<64>;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
+  type GuaranteedOnIdleWeight = TestGuaranteedOnIdleWeight;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
   type MaxActiveActors = ConstU32<10_000>;
   type StepBaseFee = TestStepBaseFee;

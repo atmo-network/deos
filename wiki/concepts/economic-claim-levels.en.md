@@ -37,13 +37,13 @@ DEOS/TMCTOL claims should not mix math, simulation, implementation, governance, 
 
 ## Levels
 
-| Level   | Meaning              | Example                              |
-|---|---|---|
-| Level 0 | Formula-defined      | TMC price follows the curve equation |
-| Level 1 | Simulator-supported  | Threshold holds in vectors           |
-| Level 2 | Runtime-enforced     | Tests pin the transition             |
-| Level 3 | Governance-dependent | True inside bounded policy           |
-| Level 4 | Market assumption    | Depends on users/liquidity/demand    |
+| Level | Meaning | Example |
+| --- | --- | --- |
+| Level 0 | Formula-defined | TMC price follows the curve equation |
+| Level 1 | Simulator-supported | Threshold holds in vectors |
+| Level 2 | Runtime-enforced | Tests pin the transition |
+| Level 3 | Governance-dependent | True inside bounded policy |
+| Level 4 | Market assumption | Depends on users/liquidity/demand |
 
 ## Reading Rule
 

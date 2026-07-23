@@ -82,7 +82,7 @@ pub mod aaa_ids {
   ///   SS58: `5GpMdwY6iMiA8LRUczsZH6p9WoxN4rX15U7FJWbeqTqTrPLX`
   pub const TOL_BUCKET_D_AAA_ID: u64 = 6;
 
-  /// Treasury B (Building Treasury) — receives Native + Foreign from Bucket B unwind
+  /// Treasury B (Building Treasury) — paired custody lane for admitted Bucket B LP unwind
   /// Created at genesis (`aaa_id = 7`), Noop by default
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
@@ -90,7 +90,7 @@ pub mod aaa_ids {
   ///   SS58: `5FghFeZDxtGWmvASpM4etxnYtreW9yamSx1Pwh1aGYkny2uv`
   pub const TREASURY_B_AAA_ID: u64 = 7;
 
-  /// Treasury C (Capital Treasury) — receives Native + Foreign from Bucket C unwind
+  /// Treasury C (Capital Treasury) — paired custody lane for admitted Bucket C LP unwind
   /// Created at genesis (`aaa_id = 8`), Noop by default
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
@@ -98,7 +98,7 @@ pub mod aaa_ids {
   ///   SS58: `5GekJ6zNwu6ABqhpcagnxbPmP6UtJ1gUKdvJywZKugWkCLhe`
   pub const TREASURY_C_AAA_ID: u64 = 8;
 
-  /// Treasury D (Dormant Treasury) — receives Native + Foreign from Bucket D unwind
+  /// Treasury D (Dormant Treasury) — paired custody lane for admitted Bucket D LP unwind
   /// Created at genesis (`aaa_id = 9`), Noop by default
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):

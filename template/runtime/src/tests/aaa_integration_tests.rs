@@ -23,7 +23,7 @@ use pallet_aaa::{
 use pallet_axial_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
-  dispatch::GetDispatchInfo,
+  dispatch::{DispatchClass, GetDispatchInfo},
   traits::{
     Currency, Get, GetStorageVersion, Hooks, StorageVersion,
     fungibles::Inspect as FungiblesInspect,
@@ -900,38 +900,6 @@ fn automatic_close_defers_until_runtime_can_admit_close_tail() {
 }
 
 // --- AAA Platform: Amount Resolution ---
-
-#[test]
-fn percentage_of_trigger_uses_cycle_start_snapshot() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let execution_plan = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: AssetKind::Native,
-        amount: AmountResolution::Fixed(50),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: AssetKind::Native,
-        amount: AmountResolution::PercentageOfTrigger(Perbill::from_percent(50)),
-      }),
-    ])
-    .expect("execution_plan fits");
-    let aaa_id = create_system(ALICE, manual_schedule(), None, execution_plan);
-    let funding = 1_000_000_000_000u128;
-    fund_native(aaa_id, funding);
-    let bob_before = native_balance(&BOB);
-    let charlie_before = native_balance(&CHARLIE);
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    run_idle(Weight::MAX);
-    assert_eq!(native_balance(&BOB), bob_before.saturating_add(50));
-    assert_eq!(
-      native_balance(&CHARLIE),
-      charlie_before.saturating_add(funding / 2)
-    );
-  });
-}
 
 #[test]
 fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
@@ -2522,6 +2490,87 @@ fn xcm_mixed_ingress_single_deposit_triggers_single_cycle() {
 }
 
 #[test]
+fn reference_idle_budget_drains_max_ingress_with_xcm_and_preserves_both_signals() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let signed_amount = 111u128;
+    let xcm_amount = 222u128;
+    let signed_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_execution_plan(BOB, AssetKind::Native, signed_amount),
+    );
+    let xcm_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_execution_plan(CHARLIE, AssetKind::Native, xcm_amount),
+    );
+    fund_native(signed_id, 100_000_000_000_000);
+    fund_native(xcm_id, 100_000_000_000_000);
+
+    let ingress_cap = crate::configs::aaa_config::AaaMaxIngressEventsPerBlock::get();
+    for _ in 0..ingress_cap {
+      assert!(AAA::queue_address_event(
+        signed_id,
+        AssetKind::Native,
+        1,
+        Some(pallet_aaa::FundingProvenance::Signed(ALICE))
+      ));
+    }
+    let recipient = account_location(aaa_account(xcm_id));
+    let context = xcm::latest::XcmContext {
+      origin: Some(account_location(ALICE)),
+      message_id: [10u8; 32],
+      topic: None,
+    };
+    assert!(
+      <crate::configs::AaaAwareAssetTransactor as TransactAsset>::deposit_asset(
+        asset_to_holding(native_xcm_asset(5_000)),
+        &recipient,
+        Some(&context),
+      )
+      .is_ok()
+    );
+    assert_eq!(AAA::ingress_overflow_len(), ingress_cap);
+
+    let bob_before = native_balance(&BOB);
+    let charlie_before = native_balance(&CHARLIE);
+    let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
+    for block in 2..=1_100 {
+      System::set_block_number(block);
+      AAA::on_initialize(block);
+      run_idle(budget);
+      if AAA::ingress_overflow_len() == 0
+        && AAA::aaa_instances(signed_id).is_some_and(|actor| actor.cycle_nonce > 0)
+        && AAA::aaa_instances(xcm_id).is_some_and(|actor| actor.cycle_nonce > 0)
+      {
+        break;
+      }
+    }
+
+    assert_eq!(AAA::ingress_overflow_len(), 0);
+    let signed_cycles = AAA::aaa_instances(signed_id)
+      .expect("AAA exists")
+      .cycle_nonce;
+    assert!(signed_cycles > 0);
+    assert_eq!(
+      AAA::aaa_instances(xcm_id).expect("AAA exists").cycle_nonce,
+      1
+    );
+    assert_eq!(
+      native_balance(&BOB),
+      bob_before.saturating_add(signed_amount.saturating_mul(u128::from(signed_cycles)))
+    );
+    assert_eq!(
+      native_balance(&CHARLIE),
+      charlie_before.saturating_add(xcm_amount)
+    );
+  });
+}
+
+#[test]
 fn ingress_hook_empty_queue_consumes_probe_only() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -2817,31 +2866,10 @@ fn fee_insufficiency_is_terminal_without_deferral_guard() {
 }
 
 #[test]
-fn scheduler_falls_back_to_non_empty_class_when_preferred_queue_is_empty() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let execution_plan =
-      BoundedVec::try_from(vec![make_step(Task::Noop)]).expect("execution_plan fits");
-    let schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
-      },
-      cooldown_blocks: 0,
-    };
-    let aaa_id = create_system(ALICE, schedule, None, execution_plan);
-    System::set_block_number(2);
-    run_idle(Weight::MAX);
-    let instance = AAA::aaa_instances(aaa_id).expect("system AAA exists");
-    assert_eq!(instance.cycle_nonce, 1);
-  });
-}
-
-#[test]
-fn scheduler_cycle_started_order_is_deterministic_for_equal_state() {
+fn scheduler_fifo_order_is_deterministic_across_actor_types() {
   let cases = [(2u32, 2u32), (3u32, 3u32), (4u32, 2u32)];
   for (system_count, user_count) in cases {
-    let run_case = || -> alloc::vec::Vec<AaaId> {
+    let run_case = || -> (alloc::vec::Vec<AaaId>, alloc::vec::Vec<AaaId>) {
       seeded_test_ext().execute_with(|| {
         System::set_block_number(1);
         let schedule = Schedule {
@@ -2868,20 +2896,22 @@ fn scheduler_cycle_started_order_is_deterministic_for_equal_state() {
           tracked.push(user_id);
         }
         run_idle(Weight::MAX);
-        aaa_events()
+        let actual = aaa_events()
           .into_iter()
           .filter_map(|event| match event {
             Event::CycleStarted { aaa_id, .. } if tracked.contains(&aaa_id) => Some(aaa_id),
             _ => None,
           })
-          .collect()
+          .collect();
+        (tracked, actual)
       })
     };
     let first = run_case();
     let second = run_case();
+    assert_eq!(first.1, first.0, "scheduler must preserve FIFO order");
     assert_eq!(
       first, second,
-      "cycle order must be deterministic for system_count={}, user_count={}",
+      "FIFO order must be deterministic for system_count={}, user_count={}",
       system_count, user_count
     );
   }
@@ -3464,6 +3494,58 @@ fn on_initialize_does_not_execute_cycles_after_starvation() {
 }
 
 #[test]
+fn block_weight_partition_is_50_dispatch_50_on_idle_without_operational_reserve() {
+  let maximum = crate::MAXIMUM_BLOCK_WEIGHT;
+  let normal = crate::NORMAL_DISPATCH_RATIO * maximum;
+  let on_idle = crate::MIN_ON_IDLE_RESERVE_RATIO * maximum;
+  let dispatchable = crate::configs::MaxDispatchableExtrinsicWeight::get();
+  let operational = dispatchable.saturating_sub(normal);
+
+  assert_eq!(normal, Perbill::from_percent(50) * maximum);
+  assert_eq!(operational, Weight::zero());
+  assert_eq!(on_idle, Perbill::from_percent(50) * maximum);
+  assert_eq!(
+    crate::configs::RuntimeBlockWeights::get()
+      .get(DispatchClass::Operational)
+      .reserved,
+    None
+  );
+  assert_eq!(
+    normal.saturating_add(operational).saturating_add(on_idle),
+    maximum
+  );
+}
+
+#[test]
+fn configured_on_idle_reserve_admits_every_genesis_actor_with_close_tail() {
+  seeded_test_ext().execute_with(|| {
+    let reserve = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
+    assert_eq!(
+      reserve,
+      crate::MIN_ON_IDLE_RESERVE_RATIO * crate::MAXIMUM_BLOCK_WEIGHT
+    );
+    let mut actor_count = 0u32;
+    for instance in pallet_aaa::AaaInstances::<Runtime>::iter_values() {
+      let required = AAA::execution_plan_admission_weight_upper(
+        instance.aaa_type,
+        &instance.execution_plan,
+        &instance.on_close_execution_plan,
+      );
+      assert!(
+        required.all_lte(reserve),
+        "aaa_id={}, required={required:?}, reserve={reserve:?}",
+        instance.aaa_id,
+      );
+      actor_count = actor_count.saturating_add(1);
+    }
+    assert!(
+      actor_count > 0,
+      "reference genesis must contain System AAAs"
+    );
+  });
+}
+
+#[test]
 fn configured_on_idle_reserve_admits_one_scheduler_actor_probe() {
   let required = AAA::scheduler_admission_overhead();
   let reserve = crate::MIN_ON_IDLE_RESERVE_RATIO * crate::MAXIMUM_BLOCK_WEIGHT;
@@ -3900,6 +3982,7 @@ fn run_blocks_with_queue_diagnostics(
         }
         RuntimeEvent::AAA(Event::CycleDeferred { reason, .. }) => match reason {
           DeferReason::InsufficientWeightBudget => diag.total_deferred_weight += 1,
+          DeferReason::CloseTransitionFailed => {}
         },
         _ => {}
       }
@@ -4342,6 +4425,131 @@ fn scheduler_fast_lane_sparse_topology_liveness_smoke() {
       min_count,
       max_count,
     );
+  });
+}
+
+#[test]
+fn reference_idle_budget_carries_mixed_admitted_tasks_without_starvation() {
+  use super::common::new_test_ext;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+    let mut aaa_ids = setup_noop_actors(4, 10_000u128);
+    let (transfer_ids, _) = setup_circular_chain(4, 10_000u128);
+    aaa_ids.extend(transfer_ids);
+    let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
+    let (diag, queue_diag) = run_blocks_with_queue_diagnostics(&aaa_ids, 40, budget);
+    let counts: alloc::vec::Vec<u32> = aaa_ids
+      .iter()
+      .map(|id| diag.actor_cycle_counts[id])
+      .collect();
+    let min_cycles = *counts.iter().min().expect("actors exist");
+    let max_cycles = *counts.iter().max().expect("actors exist");
+
+    assert!(min_cycles > 0, "every admitted actor must make progress");
+    assert!(
+      max_cycles.saturating_sub(min_cycles) <= 1,
+      "FIFO carry-over must keep mixed-task nonce spread <= 1: {counts:?}"
+    );
+    assert_eq!(diag.total_failed_steps, 0);
+    assert!(
+      diag.max_per_block < aaa_ids.len() as u32,
+      "reference budget must force work across blocks"
+    );
+    assert!(
+      queue_diag.max_current_queue_len > 0 || queue_diag.max_wakeup_backlog > 0,
+      "budget-limited work must remain durably queued"
+    );
+  });
+}
+
+#[test]
+fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
+  use super::common::new_test_ext;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+
+    let retry_ids = setup_noop_actors(
+      u64::from(<Runtime as pallet_aaa::Config>::MaxSweepPerBlock::get()),
+      10_000u128,
+    );
+    for &aaa_id in &retry_ids {
+      pallet_aaa::WakeupRetryPending::<Runtime>::insert(aaa_id, true);
+    }
+
+    let expired_count = <Runtime as pallet_aaa::Config>::MaxSweepPerBlock::get();
+    let mut expired_ids = alloc::vec::Vec::new();
+    for _ in 0..expired_count {
+      expired_ids.push(create_system(
+        ALICE,
+        manual_schedule(),
+        Some(ScheduleWindow { start: 1, end: 101 }),
+        BoundedVec::try_from(vec![make_step(Task::Noop)]).expect("execution_plan fits"),
+      ));
+    }
+    let asset_id = 90u32;
+    assert_ok!(create_test_asset(asset_id, &ALICE));
+    assert_ok!(Assets::set_team(
+      RuntimeOrigin::signed(ALICE),
+      asset_id,
+      ALICE.into(),
+      ALICE.into(),
+      ALICE.into(),
+    ));
+    let close_id = expired_ids[0];
+    let close_account = aaa_account(close_id);
+    assert_ok!(mint_tokens(asset_id, &ALICE, &close_account, 500));
+    assert_ok!(AAA::update_on_close_execution_plan(
+      RuntimeOrigin::root(),
+      close_id,
+      BoundedVec::try_from(vec![make_step(Task::Transfer {
+        to: ALICE,
+        asset: AssetKind::Local(asset_id),
+        amount: AmountResolution::AllBalance,
+      })])
+      .expect("on-close execution_plan fits"),
+    ));
+
+    let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
+    for block in 102..=150 {
+      System::set_block_number(block);
+      AAA::on_initialize(block);
+      run_idle(budget);
+      let retries_done = retry_ids
+        .iter()
+        .all(|id| !pallet_aaa::WakeupRetryPending::<Runtime>::get(id));
+      let closes_done = expired_ids
+        .iter()
+        .all(|id| AAA::aaa_instances(*id).is_none());
+      let live_progress = retry_ids
+        .iter()
+        .all(|id| AAA::aaa_instances(*id).is_some_and(|actor| actor.cycle_nonce > 0));
+      if retries_done && closes_done && live_progress {
+        break;
+      }
+    }
+
+    assert!(
+      retry_ids
+        .iter()
+        .all(|id| !pallet_aaa::WakeupRetryPending::<Runtime>::get(id)),
+      "durable wakeup retries must converge"
+    );
+    assert!(
+      retry_ids
+        .iter()
+        .all(|id| AAA::aaa_instances(*id).is_some_and(|actor| actor.cycle_nonce > 0)),
+      "live actors must progress while cleanup converges"
+    );
+    assert!(
+      expired_ids
+        .iter()
+        .all(|id| AAA::aaa_instances(*id).is_none()),
+      "expired actors must close under exact reserve"
+    );
+    assert_eq!(Assets::balance(asset_id, close_account), 1);
+    assert_eq!(Assets::balance(asset_id, ALICE), 499);
   });
 }
 

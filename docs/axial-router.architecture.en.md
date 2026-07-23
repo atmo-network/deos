@@ -81,12 +81,12 @@ The router is a pure execution mechanism: it always picks the candidate route wi
 
 ### Fee Architecture
 
-| Property        | Value                                                            |
-|:---|:---|
-| `Default Fee`   | `0.5%` (`Perbill::from_parts(5_000_000)`)                        |
-| `Math`          | `Perbill::mul_floor(amount_in)` — overflow-safe                  |
-| `Routing`       | One-hop: `User → Burn Actor` (no intermediate buffer)            |
-| `Governance`    | Updatable via `update_router_fee` within `MaxRouterFee`          |
+| Property | Value |
+| --- | --- |
+| `Default Fee` | `0.5%` (`Perbill::from_parts(5_000_000)`) |
+| `Math` | `Perbill::mul_floor(amount_in)` — overflow-safe |
+| `Routing` | One-hop: `User → Burn Actor` (no intermediate buffer) |
+| `Governance` | Updatable via `update_router_fee` within `MaxRouterFee` |
 | `Self-Taxation` | Router and System AAA actor accounts are fee-exempt via `is_fee_exempt()` |
 
 The `FeeRoutingAdapter` trait provides the transfer interface:
@@ -165,9 +165,9 @@ Runtime `FeeManagerImpl` performs direct `Currency::transfer` (Native) or `Asset
 
 The EMA oracle maintains `2 dedicated storage maps` inside the Axial Router pallet:
 
-| Storage            | Type               | Key                      | Value                                   |
-|:---|:---|:---|:---|
-| `EmaPrices<T>`     | `StorageDoubleMap` | `(AssetKind, AssetKind)` | `Balance` — current EMA price           |
+| Storage | Type | Key | Value |
+| --- | --- | --- | --- |
+| `EmaPrices<T>` | `StorageDoubleMap` | `(AssetKind, AssetKind)` | `Balance` — current EMA price |
 | `EmaLastUpdate<T>` | `StorageDoubleMap` | `(AssetKind, AssetKind)` | `BlockNumberFor<T>` — last update block |
 
 All maps use `Blake2_128Concat` hashing and are keyed by directional asset pairs `(asset_in, asset_out)`.
@@ -219,60 +219,60 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ## Storage Summary
 
-| Storage            | Type                    | Description                            |
-|:---|:---|:---|
-| `RouterFee<T>`     | `StorageValue<Perbill>` | Current bounded governance fee rate     |
-| `TrackedAssets<T>` | `BoundedVec`            | Governance-managed asset tracking list |
-| `EmaPrices<T>`     | `StorageDoubleMap`      | EMA prices per directional pair        |
-| `EmaLastUpdate<T>` | `StorageDoubleMap`      | Last update block per pair             |
+| Storage | Type | Description |
+| --- | --- | --- |
+| `RouterFee<T>` | `StorageValue<Perbill>` | Current bounded governance fee rate |
+| `TrackedAssets<T>` | `BoundedVec` | Governance-managed asset tracking list |
+| `EmaPrices<T>` | `StorageDoubleMap` | EMA prices per directional pair |
+| `EmaLastUpdate<T>` | `StorageDoubleMap` | Last update block per pair |
 
 ## Extrinsics
 
-| Call Index | Extrinsic                                                        | Origin             | Weight      |
-|:---|:---|:---|:---|
-| `0`        | `swap(from, to, amount_in, min_amount_out, recipient, deadline)` | Signed             | Benchmarked |
-| `1`        | `add_tracked_asset(asset)`                                       | AdminOrigin (Root) | Benchmarked |
-| `2`        | `update_router_fee(new_fee)`                                     | AdminOrigin (Root) | Benchmarked |
+| Call Index | Extrinsic | Origin | Weight |
+| --- | --- | --- | --- |
+| `0` | `swap(from, to, amount_in, min_amount_out, recipient, deadline)` | Signed | Benchmarked |
+| `1` | `add_tracked_asset(asset)` | AdminOrigin (Root) | Benchmarked |
+| `2` | `update_router_fee(new_fee)` | AdminOrigin (Root) | Benchmarked |
 
 ## Events
 
-| Event               | Fields                                 | Trigger                       |
-|:---|:---|:---|
-| `SwapExecuted`      | `who, from, to, amount_in, amount_out` | Successful swap; `amount_out` is recipient output |
-| `FeeCollected`      | `asset, amount, source, collector`     | Fee routed to Burn Actor |
-| `TrackedAssetAdded` | `asset`                                | Governance adds tracked asset |
-| `RouterFeeUpdated`  | `old_fee, new_fee`                     | Governance updates fee        |
+| Event | Fields | Trigger |
+| --- | --- | --- |
+| `SwapExecuted` | `who, from, to, amount_in, amount_out` | Successful swap; `amount_out` is recipient output |
+| `FeeCollected` | `asset, amount, source, collector` | Fee routed to Burn Actor |
+| `TrackedAssetAdded` | `asset` | Governance adds tracked asset |
+| `RouterFeeUpdated` | `old_fee, new_fee` | Governance updates fee |
 
 ## Errors
 
-| Error                      | Trigger                                       |
-|:---|:---|
-| `NoRouteFound`             | No pool or TMC curve available for the pair   |
-| `IdenticalAssets`          | `from == to`                                  |
-| `ZeroAmount`               | `amount_in == 0`                              |
-| `AmountTooLow`             | `amount_in < MinSwapForeign`                  |
-| `SlippageExceeded`         | recipient output < `min_amount_out`           |
-| `DeadlinePassed`           | `current_block > deadline`                    |
-| `FeeRoutingFailed`         | Fee transfer to Burn Actor failed             |
-| `PriceDeviationExceeded`   | Spot price deviates from EMA beyond threshold |
-| `MaxTrackedAssetsExceeded` | `TrackedAssets` at capacity (64)              |
-| `RouterFeeTooHigh`         | New router fee exceeds `MaxRouterFee`         |
+| Error | Trigger |
+| --- | --- |
+| `NoRouteFound` | No pool or TMC curve available for the pair |
+| `IdenticalAssets` | `from == to` |
+| `ZeroAmount` | `amount_in == 0` |
+| `AmountTooLow` | `amount_in < MinSwapForeign` |
+| `SlippageExceeded` | recipient output < `min_amount_out` |
+| `DeadlinePassed` | `current_block > deadline` |
+| `FeeRoutingFailed` | Fee transfer to Burn Actor failed |
+| `PriceDeviationExceeded` | Spot price deviates from EMA beyond threshold |
+| `MaxTrackedAssetsExceeded` | `TrackedAssets` at capacity (64) |
+| `RouterFeeTooHigh` | New router fee exceeds `MaxRouterFee` |
 
 ## Configuration Constants
 
 All constants are sourced from `primitives::ecosystem` — single source of truth:
 
-| Constant            | Value                                   | Source                                          |
-|:---|:---|:---|
-| `PalletId`          | `*b"axialrt0"`                          | `ecosystem::pallet_ids::AXIAL_ROUTER_PALLET_ID` |
-| `DefaultRouterFee`  | `Perbill::from_parts(5_000_000)` (0.5%) | `ecosystem::params::AXIAL_ROUTER_FEE`           |
-| `MaxRouterFee`      | `Perbill::from_percent(1)`              | `ecosystem::params::MAX_AXIAL_ROUTER_FEE`       |
-| `Precision`         | `1_000_000_000_000` (10¹²)              | `ecosystem::params::PRECISION`                  |
-| `EmaHalfLife`       | `100` blocks (~10 min @ 6s/block)       | `ecosystem::params::EMA_HALF_LIFE_BLOCKS`       |
-| `MaxPriceDeviation` | `Perbill::from_percent(20)`             | `ecosystem::params::MAX_PRICE_DEVIATION`        |
-| `MaxHops`           | `3`                                     | `ecosystem::params::MAX_HOPS`                   |
-| `MaxTrackedAssets`  | `64`                                    | Runtime `ConstU32`                              |
-| `MinSwapForeign`    | `1_000_000_000_000` (1.0 token)         | `ecosystem::params::MIN_SWAP_FOREIGN`           |
+| Constant | Value | Source |
+| --- | --- | --- |
+| `PalletId` | `*b"axialrt0"` | `ecosystem::pallet_ids::AXIAL_ROUTER_PALLET_ID` |
+| `DefaultRouterFee` | `Perbill::from_parts(5_000_000)` (0.5%) | `ecosystem::params::AXIAL_ROUTER_FEE` |
+| `MaxRouterFee` | `Perbill::from_percent(1)` | `ecosystem::params::MAX_AXIAL_ROUTER_FEE` |
+| `Precision` | `1_000_000_000_000` (10¹²) | `ecosystem::params::PRECISION` |
+| `EmaHalfLife` | `100` blocks (~10 min @ 6s/block) | `ecosystem::params::EMA_HALF_LIFE_BLOCKS` |
+| `MaxPriceDeviation` | `Perbill::from_percent(20)` | `ecosystem::params::MAX_PRICE_DEVIATION` |
+| `MaxHops` | `3` | `ecosystem::params::MAX_HOPS` |
+| `MaxTrackedAssets` | `64` | Runtime `ConstU32` |
+| `MinSwapForeign` | `1_000_000_000_000` (1.0 token) | `ecosystem::params::MIN_SWAP_FOREIGN` |
 
 ## Genesis Configuration
 
@@ -333,12 +333,12 @@ If a future launch line wants wider quote families, multi-scenario simulation, o
 
 The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementations:
 
-| Adapter                  | Trait                | Strategy                                                        |
-|:---|:---|:---|
+| Adapter | Trait | Strategy |
+| --- | --- | --- |
 | `AssetConversionAdapter` | `AssetConversionApi` | Wraps `pallet_asset_conversion` with Balance-Delta Verification |
-| `TmcPalletAdapter<T>`    | `TmcInterface`       | Direct delegation to `pallet_tmc`                               |
-| `PriceOracleImpl<T>`     | `PriceOracle`        | Time-weighted EMA using `EmaPrices` + `EmaLastUpdate` storage   |
-| `FeeManagerImpl<T>`      | `FeeRoutingAdapter`  | Direct transfer to Burn Actor (`Preservation::Protect`)         |
+| `TmcPalletAdapter<T>` | `TmcInterface` | Direct delegation to `pallet_tmc` |
+| `PriceOracleImpl<T>` | `PriceOracle` | Time-weighted EMA using `EmaPrices` + `EmaLastUpdate` storage |
+| `FeeManagerImpl<T>` | `FeeRoutingAdapter` | Direct transfer to Burn Actor (`Preservation::Protect`) |
 
 ## Test Coverage
 

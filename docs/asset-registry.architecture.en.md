@@ -123,14 +123,14 @@ graph TD
 
 The runtime uses a 4-bit type prefix for O(1) asset kind inspection:
 
-| Type            | Bitmask       | Example       | Description                               |
-|:---|:---|:---|:---|
-| `Native`        | `0x0000_0000` | `0x0000_0000` | Native chain token (single instance)      |
-| `Protocol`      | `0x1XXX_XXXX` | `0x1000_0042` | Protocol/local assets (28-bit index)      |
-| `StakedLocal`   | `0x5XXX_XXXX` | `0x5000_002A` | Native/local staking receipt assets       |
-| `StakedForeign` | `0x6XXX_XXXX` | `0x6000_002A` | Foreign staking receipt assets            |
-| `LP`            | `0x7XXX_XXXX` | `0x7000_002A` | Liquidity pool tokens (28-bit index)      |
-| `Foreign`       | `0xFXXX_XXXX` | `0xF123_4567` | XCM-bridged foreign assets (28-bit index) |
+| Type | Bitmask | Example | Description |
+| --- | --- | --- | --- |
+| `Native` | `0x0000_0000` | `0x0000_0000` | Native chain token (single instance) |
+| `Protocol` | `0x1XXX_XXXX` | `0x1000_0042` | Protocol/local assets (28-bit index) |
+| `StakedLocal` | `0x5XXX_XXXX` | `0x5000_002A` | Native/local staking receipt assets |
+| `StakedForeign` | `0x6XXX_XXXX` | `0x6000_002A` | Foreign staking receipt assets |
+| `LP` | `0x7XXX_XXXX` | `0x7000_002A` | Liquidity pool tokens (28-bit index) |
+| `Foreign` | `0xFXXX_XXXX` | `0xF123_4567` | XCM-bridged foreign assets (28-bit index) |
 
 `Classification logic`:
 
@@ -214,11 +214,11 @@ impl Convert<Location, AssetId> for LocationToAssetIdConverter {
 
 ### 4. Governance Parameters
 
-| Parameter          | Type                         | Description                                           |
-|:---|:---|:---|
-| `RegistryOrigin`   | `EnsureOrigin`               | Who can register assets (typically Root/Council)      |
-| `AssetOwner`       | `AccountId`                  | Account that owns created assets (typically Treasury) |
-| `AssetIdGenerator` | `Convert<Location, AssetId>` | Hashing strategy (BLAKE2 default)                     |
+| Parameter | Type | Description |
+| --- | --- | --- |
+| `RegistryOrigin` | `EnsureOrigin` | Who can register assets (typically Root/Council) |
+| `AssetOwner` | `AccountId` | Account that owns created assets (typically Treasury) |
+| `AssetIdGenerator` | `Convert<Location, AssetId>` | Hashing strategy (BLAKE2 default) |
 
 ## Asset Registry Read-Model Contract
 
@@ -298,9 +298,9 @@ Liquidity-provisioning actors can create liquidity pools with foreign assets:
 
 ## Events
 
-| Event                                                       | Description                                 |
-|:---|:---|
-| `ForeignAssetRegistered { asset_id, location, symbol }`     | New foreign asset registered or linked      |
+| Event | Description |
+| --- | --- |
+| `ForeignAssetRegistered { asset_id, location, symbol }` | New foreign asset registered or linked |
 | `MigrationApplied { asset_id, old_location, new_location }` | Location key migrated (XCM version upgrade) |
 
 ## Migration Pattern (XCM Version Upgrades)

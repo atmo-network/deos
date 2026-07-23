@@ -1,8 +1,10 @@
 # DEOS Backlog
 
 > Open framework work only; durable protocol lives in `AGENTS.md`, and completed delivery history lives in `CHANGELOG.md`.
+>
+> Release boundary: every open item is post-`0.7.1` and must not expand the frozen release scope.
 
-## Open Product / Client Work
+## Post-0.7.1 Product / Client Work
 
 ### Wallet and portfolio boundary
 
@@ -14,7 +16,7 @@
 - [ ] `Governance State Separation`: Only if proposal composition or archive work grows enough to create a named ownership conflict, split the state boundary at that concrete seam.
 - [ ] `Materialized Provider Boundary`: Only when a second indexed/archive provider family exists, decide whether `adapters/materialized-history/` should become a first-class `materialized/` or `providers/` slice.
 
-## Runtime Framework Evolution
+## Post-0.7.1 Runtime Framework Evolution
 
 > These slices keep DEOS current with useful Polkadot SDK runtime patterns while preserving the framework boundary: adopt configuration discipline, reusable primitives, and economic mechanisms; do not import unrelated product layers such as Revive contracts by default.
 > Source context for agents beyond their training cutoff: Polkadot SDK `stable2606` release notes — <https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2606>.
@@ -25,7 +27,15 @@
 - [ ] `Budget Recipient Primitives`: Introduce typed budget-recipient primitives or runtime helpers for framework-owned economic destinations such as staking reward pots, governance treasuries, liquidity reserves, and System AAA actors. Exit criteria: replace any new raw-account economic routing in touched surfaces with typed recipient derivation and decide whether a future mutable registry pallet is justified or overkill.
 - [ ] `Unclaimed Reward Policy`: Make staking/native reward leftovers explicit runtime policy instead of implicit residue. Exit criteria: define rollover / return-to-Fee-Sink / burn / treasury-routing options, choose the current reference policy, and cover expiry or settlement behavior with tests.
 
-## Collator Economics & Fee Routing
+## Post-0.7.1 AAA Evidence and Portability
+
+> Keep AAA a bounded deterministic economic actor runtime rather than expanding it into a general-purpose VM. Stabilize the semantic core first, then strengthen independent embedding evidence and operator tooling.
+
+- [ ] `AAA 1.0 Declaration Gate`: Declare the `1.0` append-only compatibility line only after an independent runtime embedding validates the `0.7.1` semantic-core candidate without requiring another breaking correction; otherwise revise the candidate and repeat that evidence gate.
+- [ ] `AAA Independent Runtime Embedding`: Build a minimal second runtime that integrates `pallet-aaa` through the public embedding contract without copying DEOS/TMCTOL topology, and use its failures to harden the portable boundary before calling AAA an external standard.
+- [ ] `AAA Control-Plane Tooling`: Define canonical plan representation and add plan diff/version history, dry-run amount resolution, fee/weight forecasting, partial-execution simulation, donation-sensitivity classification, governance payload composition, and indexed cycle/funding history without expanding consensus state.
+
+## Post-0.7.1 Collator Economics & Fee Routing
 
 > Phase 1 uses trusted, permissioned collators, collects 100% of transaction, AAA, governance-opening, and XCM-execution fees in the Fee Sink, and distributes available native balance 50/50 into staking ingress and liquidity provisioning.
 > A future permissionless phase may introduce equal security/staking/liquidity thirds only after bounded security-reward settlement ships; indivisible remainder stays in Fee Sink for a later cycle.
@@ -35,7 +45,7 @@
   - [~] `Claimable LP Nomination Flow`: Activate explicit LP-nomination reward-weight provider only when permissionless collators ship
   - [ ] `LP Nomination Activation`: Expose LP-point nomination to specific collators only when permissionless collator selection is enabled
 
-## Conditional / Externally Gated Work
+## Post-0.7.1 Conditional / Externally Gated Work
 
 ### Governance execution expansion policy
 

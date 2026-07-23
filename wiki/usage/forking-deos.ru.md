@@ -83,7 +83,7 @@ Builder invoices, bucketed capital flows, protocol-owned liquidity, governance p
 DEOS fork не должен запускаться простой заменой названий. До launch-ready состояния downstream-команде нужны явные решения по экономическому, governance, runtime, клиентскому и операторскому профилю, который превращает framework в конкретную экосистему.
 
 | Область | Минимальное решение форка |
-|---|---|
+| --- | --- |
 | Native asset | Название, ticker, decimals, allocation, роль в staking/governance |
 | Foreign collateral set | Какие assets можно register, route или использовать как collateral |
 | TMC curve params | Initial price, slope, supply assumptions, launch immutability policy |

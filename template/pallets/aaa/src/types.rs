@@ -501,6 +501,7 @@ pub enum StepErrorPolicy {
 )]
 pub enum DeferReason {
   InsufficientWeightBudget,
+  CloseTransitionFailed,
 }
 
 #[derive(

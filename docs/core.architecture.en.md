@@ -2,56 +2,56 @@
 
 ## 1. Executive Summary
 
-The DEOS (Deterministic Economic Operating System) framework, currently instantiated in this repository through the TMCTOL standard, represents a paradigm shift from event-driven blockchain logic to a `Token-Driven Economic Automaton`.
+The DEOS (Deterministic Economic Operating System) framework, currently instantiated in this repository through the TMCTOL standard, combines dedicated economic pallets with a bounded actor scheduler. Token movement can act as an explicit coordination message rather than requiring one bespoke privileged call per flow.
 
-The system operates as a deterministic state machine where specialized actors coordinate exclusively through `Balance Ingress`. It abandons the traditional "Request-Response" model in favor of `Continuous Flow Processing`. The network coordinates through explicit, permissionless token flows between dedicated accounts, keeping protocol state transitions deterministic and bounded. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
+The runtime remains a deterministic state machine. AAA actors become eligible through typed balance ingress, timers, or manual governance/owner signals, then execute only fully admitted work through runtime adapters. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
 
-All deterministic economic flows — deflationary burning, liquidity provisioning, treasury management, and protocol-token buyback — are expressed as declarative execution plans on a single runtime platform: `pallet-aaa` (Account Abstraction Actors). Fifteen genesis System actors replace three former standalone pallets, reducing total code by ~6000 LOC while expanding capability to a multi-token protocol economy.
+Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-aaa` execution plans. Fifteen genesis System actors consolidate the reference topology, while TMC, routing, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
 
 ## 2. Core Philosophy: The "Omnivorous" Machine
 
 ### 2.1 The Coordination Rule
 
-The entire network follows a single, immutable coordination rule:
+Token-driven actor flows follow this bounded coordination pattern:
 
-> `Balance-in → Deterministic State Transition → Balance-out`
+> `Authorized balance ingress → Admitted deterministic transition → Observable balance/state result`
 
 ### 2.2 Key Architectural Properties
 
-1. `Origin-Agnostic`: Actors do not validate _who_ sent the tokens. They only validate _what_ arrived. This makes the system permissionless and interoperable by default.
-2. `Stateless Execution`: The system minimizes on-chain storage. Intermediate buffers are removed; flows are direct (One-Hop).
-3. `Graceful Degradation`: The system is "economically omnivorous." Erroneous transfers (e.g., a user sending funds directly to the Burn Actor sovereign) are not lost errors—they are processed as valid economic contributions (e.g., burnt or added to liquidity).
-4. `Reactive Resilience`: The system applies backpressure (cooldown-based retry) instead of failing catastrophically. If conditions are unsafe (e.g., slippage exceeded), actors skip the step and retry on next trigger cycle.
+1. `Provenance-Aware Ingress`: Source/asset trigger filters and funding-source policy decide whether a deposit influences readiness or funding snapshots; ordinary balance credit remains separate from execution authority.
+2. `Plan-Local Statelessness`: Steps read current state without mutable cross-step scratch storage, while bounded lifecycle, readiness, queue, funding-batch, and observability state remains explicit on-chain.
+3. `Donation Sensitivity`: Assets transferred to a sovereign account remain real balances, but only configured tasks and authorized trigger/funding semantics determine whether and when they affect protocol execution. A donation is not automatically a burn or liquidity contribution.
+4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, durable queues, and wakeup retry provide bounded backpressure. Unsafe conditions may skip or abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
 5. `Explicit Read-Model Split`: DEOS separates bounded authoritative on-chain values/projections that clients can consume directly from externally indexed materializations used for archive/search/analytics. Canonical product flows should rely on raw on-chain state when a bounded projection is the real protocol contract; unbounded history and heavy dashboard aggregation should remain off-chain instead of being smuggled into consensus state. The project-wide subsystem matrix and design checklist live in [`read-model.contract.en.md`](./read-model.contract.en.md).
 
 ## 3. Actor Architecture & Economic Topology
 
 ### 3.1 The Actor Constellation
 
-All actors are System instances managed by `pallet-aaa`. The Axial Router and TMC remain dedicated pallets providing routing and minting infrastructure.
+The reference constellation below uses System AAA instances; the pallet also supports bounded owner-controlled User actors. The Axial Router and TMC remain dedicated pallets providing routing and minting infrastructure.
 
 #### L1 Actors (Native Token Domain)
 
-| Actor                   | aaa_id | Plan summary                         | Trigger                      |
-|---|---|---|---|
-| Burn Actor              | 0      | foreign → native swaps, then burn    | `Timer { every_blocks: 10 }` |
-| Liquidity Actor         | 2      | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }`  |
-| TOL Bucket A (Anchor)   | 3      | `Noop`; permanent LP accumulation    | `Timer` (Noop)               |
-| TOL Bucket B (Building) | 4      | LP unwind to Treasury B              | `Timer` (future)             |
-| TOL Bucket C (Capital)  | 5      | LP unwind to Treasury C              | `Timer` (future)             |
-| TOL Bucket D (Dormant)  | 6      | `Noop`; future governance policy     | `Timer` (Noop)               |
-| Treasury B (Building)   | 7      | NTVE → BLDR buyback and burn         | `Timer { every: 600 }`       |
-| Treasury C (Capital)    | 8      | `Noop`; receives Bucket C unwind     | `Timer` (Noop)               |
-| Treasury D (Dormant)    | 9      | `Noop`; receives Bucket D unwind     | `Timer` (Noop)               |
+| Actor | aaa_id | Plan summary | Trigger |
+| --- | --- | --- | --- |
+| Burn Actor | 0 | foreign → native swaps, then burn | `Timer { every_blocks: 10 }` |
+| Liquidity Actor | 2 | add LP, patriotic swap, split to TOL | `Timer { every_blocks: 1 }` |
+| TOL Bucket A (Anchor) | 3 | `Noop`; permanent LP accumulation | `Timer` (Noop) |
+| TOL Bucket B (Building) | 4 | `Noop`; optional bounded LP transfer to Treasury B | `Timer` (Noop) |
+| TOL Bucket C (Capital) | 5 | `Noop`; optional bounded LP transfer to Treasury C | `Timer` (Noop) |
+| TOL Bucket D (Dormant) | 6 | `Noop`; optional bounded LP transfer to Treasury D | `Timer` (Noop) |
+| Treasury B (Building) | 7 | `Noop`; optional paired LP removal, with buyback as a later policy stage | `Timer` (Noop) |
+| Treasury C (Capital) | 8 | `Noop`; optional paired LP removal after Bucket C transfer | `Timer` (Noop) |
+| Treasury D (Dormant) | 9 | `Noop`; optional paired LP removal after Bucket D transfer | `Timer` (Noop) |
 
 #### L2 Actors (BLDR Protocol Token Domain)
 
-| Actor                | aaa_id | Execution Plan                         | Trigger                     |
-|---|---|---|---|
-| BLDR Splitter        | 10     | Route NTVE + split BLDR 50/50          | `Timer { every_blocks: 1 }` |
-| BLDR Liquidity Actor | 11     | Add NTVE/BLDR LP → BLDR Bucket A       | `Timer { every_blocks: 1 }` |
-| BLDR Bucket A        | 12     | `Noop` — permanent BLDR LP accumulation | `Timer` (Noop)              |
-| BLDR Treasury        | 13     | `Noop` — BLDR ecosystem fund           | `Timer` (Noop)              |
+| Actor | aaa_id | Execution Plan | Trigger |
+| --- | --- | --- | --- |
+| BLDR Splitter | 10 | Split BLDR 50/50 | `Timer { every_blocks: 1 }` |
+| BLDR Liquidity Actor | 11 | Add NTVE/BLDR LP → BLDR Bucket A | `Timer { every_blocks: 1 }` |
+| BLDR Bucket A | 12 | `Noop` — permanent BLDR LP accumulation | `Timer` (Noop) |
+| BLDR Treasury | 13 | `Noop` — BLDR ecosystem fund | `Timer` (Noop) |
 
 See [`aaa.architecture.en.md`](./aaa.architecture.en.md#current-tmctol-system-aaa-topology-on-deos) for the integrated System AAA topology, execution-plan families, and governance activation flows.
 
@@ -63,13 +63,13 @@ To guarantee O(1) execution complexity and maximal interoperability, the archite
 
 The system uses a 32-bit ID space where the most significant nibble (4 bits) determines the asset category. Five production types are currently defined — additional nibbles are reserved for future use.
 
-| Nibble | Mask          | Constant              | Description                           |
-|:---|:---|:---|:---|
-| `0x1`  | `0x1000_0000` | `TYPE_PROTOCOL`       | Protocol-native tokens ($VETO, $BLDR) |
-| `0x5`  | `0x5000_0000` | `TYPE_STAKED`         | Native/local staking receipt assets   |
-| `0x6`  | `0x6000_0000` | `TYPE_STAKED_FOREIGN` | Foreign staking receipt assets        |
-| `0x7`  | `0x7000_0000` | `TYPE_LP`             | Liquidity Pool shares                 |
-| `0xF`  | `0xF000_0000` | `TYPE_FOREIGN`        | XCM foreign assets                    |
+| Nibble | Mask | Constant | Description |
+| --- | --- | --- | --- |
+| `0x1` | `0x1000_0000` | `TYPE_PROTOCOL` | Protocol-native tokens ($VETO, $BLDR) |
+| `0x5` | `0x5000_0000` | `TYPE_STAKED` | Native/local staking receipt assets |
+| `0x6` | `0x6000_0000` | `TYPE_STAKED_FOREIGN` | Foreign staking receipt assets |
+| `0x7` | `0x7000_0000` | `TYPE_LP` | Liquidity Pool shares |
+| `0xF` | `0xF000_0000` | `TYPE_FOREIGN` | XCM foreign assets |
 
 Nibbles `0x0`, `0x2`–`0x4`, `0x8`–`0xE` are reserved. The `0x0` nibble is intentionally unused — zero type bits cause false positives in `(id & MASK_TYPE) == TYPE` checks.
 
@@ -77,10 +77,10 @@ Native token ($NTVE) uses `AssetKind::Native` enum variant, not a bitmask ID.
 
 #### Protocol Tokens
 
-| Token   | AssetKind            | ID            | Role                                     |
-|---|---|---|---|
-| `$NTVE` | `Native`             | —             | Sovereign currency, L1 TMC emission      |
-| `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Governance token (deferred)              |
+| Token | AssetKind | ID | Role |
+| --- | --- | --- | --- |
+| `$NTVE` | `Native` | — | Sovereign currency, L1 TMC emission |
+| `$VETO` | `Local(0x1000_0001)` | `0x1000_0001` | Governance token (deferred) |
 | `$BLDR` | `Local(0x1000_0002)` | `0x1000_0002` | Builder incentive token, L2 TMC emission |
 
 #### 3.2.2 Zero-Cost Abstractions
@@ -95,7 +95,7 @@ This architecture enables "Zero-Cost Inspection" where complex economic properti
 
 ### 3.3 Actor Responsibilities
 
-#### 🧠 Axial Router (Pallet — The Decision Engine)
+#### Axial Router (Pallet — The Decision Engine)
 
 _The intellectual layer atop raw liquidity._
 
@@ -107,7 +107,7 @@ _The intellectual layer atop raw liquidity._
 - `Security mitigations (not complete MEV defense)`: **Direct** routes validate the candidate quote against the previously stored EMA, then snapshot current pre-execution pool reserves into the EMA before executing the swap; multi-hop routes rely on user `min_amount_out` / slippage only. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
 - `Execution`: Uses `Balance-Delta Verification` (Trustless Execution) — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
 
-#### 📉 TMC (Pallet — The Ceiling)
+#### TMC (Pallet — The Ceiling)
 
 _The algorithmic issuer._
 
@@ -115,12 +115,10 @@ _The algorithmic issuer._
 - `Multi-Curve Architecture`: Each curve is identified by its `minted_asset` (formerly `native_asset`). The system supports multiple concurrent curves:
   - L1: `minted_asset = Native`, `foreign_asset = Foreign` (e.g., USDC)
   - L2: `minted_asset = Local(BLDR_ASSET_ID)`, `foreign_asset = Native`
-- `MintOutputResolver`: Single-method trait mapping `minted_asset → output_account`. TMC sends both the user's portion directly and routes the liquidity share (collateral + minted tokens) to a single sink address. The sink is responsible for downstream fan-out.
-  - Native → Liquidity Actor sovereign (L1 liquidity provisioning)
-  - BLDR → BLDR Splitter sovereign (L2 distribution)
+- `MintOutputResolver`: Maps each `minted_asset` to explicit collateral and minted-liquidity output accounts. The reference L1 route sends both outputs to the Liquidity Actor; the BLDR route sends NTVE collateral directly to the BLDR Liquidity Actor and the minted BLDR share to the BLDR Splitter.
 - `Role`: Sets the "Hard Ceiling" on price. If market price > curve price, the Router automatically routes trades through TMC, creating arbitrage that feeds the protocol.
 
-#### 🔥 Burn Actor (System AAA #0 — The Sink)
+#### Burn Actor (System AAA #0 — The Sink)
 
 _The deflationary engine._
 
@@ -128,7 +126,7 @@ _The deflationary engine._
 - `Execution Plan`: For each registered foreign asset — `SwapExactIn(foreign→native, AllBalance, 5% slippage)` with `BalanceAbove` dust guard. Final step — `Burn(native, AllBalance)`.
 - `Resilience`: Swap failures → `ContinueNextStep` → skip to next asset or burn step. Cooldown prevents retry storms.
 
-#### 💸 Fee Sink (System AAA #1 — Unified Fee Collection and Phase 1 Redistribution)
+#### Fee Sink (System AAA #1 — Unified Fee Collection and Phase 1 Redistribution)
 
 _The launch economics fan-out hub._
 
@@ -141,7 +139,7 @@ _The launch economics fan-out hub._
 - `Permissionless Phase (future)`: Equal thirds flow to bounded security rewards, staking ingress, and liquidity provisioning only after permissionless collators and the security-reward settlement contract ship; indivisible remainder stays in Fee Sink for a later cycle, and no `CollatorRewardPot` topology is assumed before that gate.
 - `Resilience`: Phase 1 SplitTransfer legs are unwrapped synchronously, with ED preservation for the Fee Sink sovereign account.
 
-#### ⚡ Liquidity Actor (System AAA #2 — The Transformer)
+#### Liquidity Actor (System AAA #2 — The Transformer)
 
 _The liquidity compositor._
 
@@ -153,7 +151,7 @@ _The liquidity compositor._
 - `Launch Policy`: The current runtime freezes this reserve-aware slippage at execution-plan build time rather than recomputing it live on every cycle; richer live per-cycle recomputation remains a future opt-in refinement, not launch debt.
 - `Genesis`: Noop dormant plan. Real execution plan installed after pools exist.
 
-#### 🏛️ TOL Buckets (System AAA #3..#6 — The Floor)
+#### TOL Buckets (System AAA #3..#6 — The Floor)
 
 _The volatility dampener._
 
@@ -161,31 +159,29 @@ _The volatility dampener._
 - `Genesis`: All Noop. Governance activates bucket-specific policies via `update_execution_plan`.
 - `Buckets`:
   - _Bucket A — Anchor (50%):_ Permanent LP accumulation. No unwind — the mathematical survival layer.
-  - _Bucket B — Building (16.67%):_ Gradual LP unwind → Native + Foreign → Treasury B (BLDR buyback).
-  - _Bucket C — Capital (16.67%):_ Gradual LP unwind → Native + Foreign → Treasury C (operational).
+  - _Bucket B — Building (16.67%):_ Genesis `Noop`; governance may activate bounded LP transfer into Treasury B, whose separate admitted cycle removes liquidity.
+  - _Bucket C — Capital (16.67%):_ Genesis `Noop`; governance may activate bounded LP transfer into Treasury C, whose separate admitted cycle removes liquidity.
   - _Bucket D — Dormant (16.66%):_ LP held until governance decides future policy.
 
-#### 💰 Treasury B — BLDR Buyback & Burn (System AAA #7)
+#### Treasury B — BLDR Buyback & Burn (System AAA #7)
 
 _The deflationary flywheel for protocol tokens._
 
-- `Function`: Accumulates NTVE from Bucket B unwind. Uses ~1%/day of current balance to buy BLDR on the open market and burn it.
-- `Execution Plan` (2 steps, activated by governance):
+- `Function`: Receives LP through the optional admitted Bucket B transfer and can remove it into Treasury custody; the downstream buyback plan remains a separate optional policy stage.
+- `Execution Plan` (2-step policy target, not currently production-admissible):
   1. `SwapExactIn(NTVE → BLDR, PercentageOfCurrent(~0.042%))` — hourly micro-buyback
   2. `Burn(BLDR, AllBalance)` — destroy all acquired BLDR
 - `Cadence`: `Timer { every_blocks: 600 }` (~1 hour). Compounding: `(1-0.000418)^24 ≈ 0.99` → ~1% of balance/day.
 - `Design`: Multiple small buybacks create smooth market pressure vs. single lumpy daily purchase.
 
-#### 🔀 BLDR Splitter (System AAA #10 — L2 Distribution Hub)
+#### BLDR Splitter (System AAA #10 — L2 Distribution Hub)
 
 _The fan-out actor for BLDR TMC output._
 
-- `Function`: Receives both NTVE collateral and BLDR liquidity share from TMC MintOutputResolver. Distributes to the BLDR Liquidity Actor and BLDR Treasury.
-- `Execution Plan` (2 steps):
-  1. `Transfer(NTVE, AllBalance → BLDR Liquidity Actor)` — collateral for liquidity provisioning
-  2. `SplitTransfer(BLDR, AllBalance, 50% → BLDR Liquidity Actor, 50% → BLDR Treasury)` — token distribution
+- `Function`: Receives the minted BLDR liquidity share from TMC and distributes it between the BLDR Liquidity Actor and BLDR Treasury; TMC routes NTVE collateral directly to the Liquidity Actor.
+- `Execution Plan`: `SplitTransfer(BLDR, AllBalance, 50% → BLDR Liquidity Actor, 50% → BLDR Treasury)`.
 
-#### ⚡ BLDR Liquidity Actor (System AAA #11 — L2 Liquidity)
+#### BLDR Liquidity Actor (System AAA #11 — L2 Liquidity)
 
 _The BLDR-domain liquidity provisioner._
 
@@ -226,35 +222,34 @@ Each step is independently reversible and governance-gated. No implicit cross-pa
 
 ### 4.1 The Unified Execution Model
 
-All deterministic economic flows execute through a single `pallet-aaa` scheduler, replacing the former per-pallet `on_initialize` / `on_idle` hooks.
+AAA-managed recurring automation executes through one `pallet-aaa` scheduler; task adapters call the dedicated pallets that own minting, routing, staking, balances, and AMM state.
 
 #### Execution Architecture
 
 ```
 Block N:
   on_initialize:
-    - Emergency path: if IdleStarvationBlocks > threshold, execute one System AAA
-    - Inbox processing: drain AddressEvent inbox for OnAddressEvent-triggered actors
+    - Bounded bookkeeping only; never execute AAA cycles
 
   on_idle(remaining_weight):
-    - refill_ready_ring: scan actors, evaluate triggers, enqueue ready ones
-    - execute_cycle(budget):
-        - Weighted fairness: alternate System/User actors
-        - For each ready actor:
-            1. Budget admission (weight + fee pre-flight)
-            2. Execution-plan execution (step by step)
-            3. Condition evaluation per step
-            4. Task execution via adapter (DexOps / AssetOps)
-            5. Error handling per on_error policy
-    - execute_zombie_sweep: clean up closed actors
+    - Admit the generated fixed hook base in both Weight dimensions
+    - Drain bounded producer-owned address ingress
+    - Run bounded wakeup-retry and zombie-sweep housekeeping
+    - Bootstrap CurrentQueue + NextQueue and drain due wakeups
+    - Process actors in deterministic FIFO order up to MaxExecutionsPerBlock:
+        1. Reserve the complete actor-probe bound
+        2. Apply trigger, cooldown, breaker, window, fee, and lifecycle gates
+        3. Admit the complete cycle and any predictable close tail
+        4. Execute the bounded plan through runtime adapters
+        5. Persist deferred and late-enqueued work for the next block
 ```
 
 #### Key Properties
 
-- `Budget-capped`: Scheduler consumes the full remaining `on_idle` weight after bounded housekeeping in the hook.
-- `Fair scheduling`: System and User actors alternate based on configurable fairness weights. No single actor class can starve the other.
-- `Starvation observability`: If `on_idle` receives zero weight for consecutive blocks (`IdleStarvationBlocks`), runtime emits `IdleStarvationDetected`; recovery is governance-operated.
-- `Deferred requeue`: Actors that can't execute because of insufficient weight are re-enqueued; User fee insufficiency is terminal (`FeeBudgetExhausted`).
+- `Budget-capped`: Every housekeeping, queue, cycle, and close unit starts only after two-dimensional admission against the remaining `on_idle` budget.
+- `Deterministic FIFO fairness`: Current and staged queues preserve bounded FIFO carry-over without class-weight knobs; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
+- `Starvation observability`: After the fixed hook base is admitted, exhaustion of either post-housekeeping Weight dimension advances `IdleStarvationBlocks`; recovery remains governance-operated and never dispatches emergency work in `on_initialize`.
+- `Deferred requeue`: Actors that cannot execute because of insufficient weight retain a bounded path to future eligibility; User fee insufficiency remains terminal (`FeeBudgetExhausted`).
 
 ### 4.2 Resilience: Backpressure via Cooldown
 
@@ -266,24 +261,27 @@ The system implements "Economic Backpressure" to handle volatility gracefully.
 
 ### 4.3 Adapter Architecture
 
-AAA delegates all external operations to two adapter traits:
+AAA delegates host behavior through typed runtime contracts:
 
-- `DexOps`: `swap_exact_in`, `swap_exact_out`, `add_liquidity`, `remove_liquidity`; routes through Axial Router
-- `AssetOps`: `balance`, `transfer`, `burn`, `mint`, `total_issuance`; wraps `pallet-balances` + `pallet-assets`
+- `AssetOps`: transferable balances, transfer, burn, mint, minimum-balance, and deposit checks
+- `DexOps`: caller-aware swaps plus liquidity addition and removal
+- `StakingOps`: runtime-defined stake positions, shares, and transferable share assets
+- `LiquidityDonationOps`: adapter-owned pair balancing and receipt-suppression semantics
+- `FeeCollector`, `FundingAuthority`, entropy, ingress, task-weight, and atomicity hooks: host-owned authority, metering, provenance, and lifecycle integration
 
-Adapters are pure pass-through — they execute operations without reinterpreting execution-plan parameters. `swap_exact_in` computes `min_out` internally via DEX quote, while `swap_exact_out` deterministically resolves required input before execution.
+Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The detailed portable contract lives in `aaa.specification.en.md` and `aaa.embedding.en.md`; the current DEOS binding lives in `aaa.architecture.en.md`.
 
 ### 4.4 Amount Resolution
 
 Execution-plan steps specify amounts via `AmountResolution`, enabling both static and dynamic resolution:
 
-| Variant                   | Description                    | Use case            |
-|---|---|---|
-| `Fixed(Balance)`          | Absolute amount                | Known transfers     |
-| `PercentageOfCurrent`     | % of current spendable balance | Gradual unwind      |
-| `PercentageOfTrigger`     | % of trigger-time balance      | Event-proportional  |
-| `PercentageOfLastFunding` | % of last funding snapshot     | DCA repeats         |
-| `AllBalance`              | Spendable balance              | Burn/final transfer |
+| Variant | Description | Use case |
+| --- | --- | --- |
+| `Fixed(Balance)` | Absolute amount | Known transfers |
+| `PercentageOfCurrent` | % of current spendable balance | Gradual unwind |
+| `PercentageOfTrigger` | % of trigger-time balance | Event-proportional |
+| `PercentageOfLastFunding` | % of last funding snapshot | DCA repeats |
+| `AllBalance` | Spendable balance | Burn/final transfer |
 
 ## 5. Code Integration Patterns
 
@@ -322,7 +320,7 @@ pub fn swap(from: AssetKind, to: AssetKind, ...) -> DispatchResult {
 
 ### 5.3 Declarative Execution-Plan Pattern
 
-All deterministic economic logic is expressed as composable execution plans:
+AAA-managed economic automation is expressed as production-admitted execution plans:
 
 ```rust
 // Burn Actor execution plan: swap all foreign → native, then burn
@@ -335,11 +333,8 @@ vec![
            on_error: AbortCycle },
 ]
 
-// BLDR Splitter execution plan: forward NTVE, split BLDR
+// BLDR Splitter execution plan: TMC routes collateral directly; actor splits BLDR
 vec![
-    Step { conditions: [BalanceAbove(Native, dust)],
-           task: Transfer { Native, AllBalance → BLDR Liquidity Actor },
-           on_error: ContinueNextStep },
     Step { conditions: [BalanceAbove(BLDR, dust)],
            task: SplitTransfer { BLDR, AllBalance, 50%→Liquidity + 50%→Treasury },
            on_error: AbortCycle },
@@ -416,9 +411,9 @@ The BLDR economy creates a self-reinforcing loop:
 
 ```
 User buys BLDR (via Router TMC)
-  → NTVE collateral → BLDR Splitter → BLDR Liquidity Actor → LP → BLDR Bucket A (floor ↑)
+  → NTVE collateral → BLDR Liquidity Actor → LP → BLDR Bucket A (floor ↑)
   → BLDR liquidity share → 50% to Liquidity Actor (more LP), 50% to Treasury (ecosystem fund)
-  → Bucket B unwind → Treasury B → buyback BLDR on XYK → burn (supply ↓)
+  → Optional Bucket B LP transfer → Treasury B LP removal → buyback BLDR on XYK → burn (downstream policy target)
 ```
 
 BLDR floor support and ceiling pressure can compress over time when LP accumulation remains counted as support and buyback-burn execution remains live.
@@ -427,23 +422,23 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 
 ### 8.1 Pallet Inventory
 
-| Pallet                    | Role                              | Hooks                      |
-|---|---|---|
-| `pallet-aaa`              | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
-| `pallet-axial-router`     | Routing, fees, oracle             | Extrinsic-driven           |
-| `pallet-tmc`              | Multi-curve native emission       | Extrinsic-driven           |
-| `pallet-asset-registry`   | Foreign asset registry            | Extrinsic-driven           |
-| `pallet-asset-conversion` | Uniswap V2-like AMM pools         | Extrinsic-driven           |
-| `pallet-assets`           | Fungible asset ledger             | —                          |
-| `pallet-balances`         | Native token ledger               | —                          |
+| Pallet | Role | Hooks |
+| --- | --- | --- |
+| `pallet-aaa` | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
+| `pallet-axial-router` | Routing, fees, oracle | Extrinsic-driven |
+| `pallet-tmc` | Multi-curve native emission | Extrinsic-driven |
+| `pallet-asset-registry` | Foreign asset registry | Extrinsic-driven |
+| `pallet-asset-conversion` | Uniswap V2-like AMM pools | Extrinsic-driven |
+| `pallet-assets` | Fungible asset ledger | — |
+| `pallet-balances` | Native token ledger | — |
 
 ### 8.2 Former Pallets (Consolidated into AAA)
 
-| Former Pallet                     | Replacement                         | LOC Saved |
-|---|---|---|
-| `pallet-burning-manager`          | System AAA #0 (Burn Actor plan)     | ~1100     |
-| `pallet-zap-manager`              | System AAA #2 (Liquidity Actor plan) | ~2200    |
-| `pallet-treasury-owned-liquidity` | System AAA #3..#6 (4 bucket actors) | ~3100     |
+| Former Pallet | Replacement | LOC Saved |
+| --- | --- | --- |
+| `pallet-burning-manager` | System AAA #0 (Burn Actor plan) | ~1100 |
+| `pallet-zap-manager` | System AAA #2 (Liquidity Actor plan) | ~2200 |
+| `pallet-treasury-owned-liquidity` | System AAA #3..#6 (4 bucket actors) | ~3100 |
 
 Additional cleanup: the former TMC-to-liquidity adapter traits were removed from TMC (~150 LOC), superseded by `MintOutputResolver` + AAA execution-plan-driven routing.
 
@@ -451,14 +446,14 @@ Additional cleanup: the former TMC-to-liquidity adapter traits were removed from
 
 The DEOS architecture transforms the blockchain from a passive ledger into an `Active Economic Automaton`.
 
-By expressing all deterministic economic flows as declarative execution plans on a single platform (`pallet-aaa`), the system achieves:
+By separating dedicated economic mechanisms from production-admitted `pallet-aaa` automation, the system provides:
 
 1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see Axial Router architecture).
-2. `Composable Automation`: bounded AAA `Task` primitives compose into any economic flow. New actors require zero code changes.
+2. `Composable Automation`: bounded AAA tasks and runtime adapters compose reconfigurable flows only when the resulting plan fits production admission and preserves custody/atomicity. New actor graphs avoid runtime code changes when existing primitives satisfy that contract; new mechanics require an admitted adapter or core-task review.
 3. `Multi-Token Economy`: L1 (Native) and L2 (BLDR) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
-4. `Optimal Performance`: AAA scheduler uses budget-capped `on_idle` with bounded `on_initialize` bookkeeping only. No block bloat.
-5. `Total Autonomy`: The economy runs itself — burning fees, provisioning liquidity, buying back protocol tokens, and managing treasury buckets every block cycle.
-6. `Radical Simplicity`: 4 pallets replace 7. Net −6000 LOC. Every deleted line is a line that can't have bugs.
+4. `Bounded Background Execution`: AAA uses budget-capped `on_idle`, bounded `on_initialize` bookkeeping, and durable carry-over rather than claiming zero congestion under every workload.
+5. `Conditional Automation`: Activated, funded actors can burn, provision liquidity, or route treasury value when adapters, pools, triggers, and safety conditions remain healthy; dormant or unadmitted policy targets do not produce effects.
+6. `Focused Ownership`: Dedicated pallets own minting, routing, staking, assets, and AMM mechanics while AAA owns bounded orchestration, avoiding duplicated manager loops without turning the actor kernel into a universal VM.
 
 ---
 

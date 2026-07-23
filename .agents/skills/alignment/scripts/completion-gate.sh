@@ -139,6 +139,10 @@ should_run_shell_syntax_check() {
     [[ ${#CHANGED_SHELL_PATHS[@]} -gt 0 ]]
 }
 
+should_run_markdown_table_audit() {
+    has_changed_path '\.md$' || has_changed_path '^\.agents/skills/alignment/scripts/audit-markdown-tables\.sh$'
+}
+
 should_run_wiki_trust() {
     has_changed_path '^wiki/.*\.md$'
 }
@@ -173,11 +177,12 @@ plan() {
     log_info "Layer 1: Changed shell syntax"
     log_info "Layer 2: Mathematical truth"
     log_info "Layer 3: Behavioral truth"
-    log_info "Layer 4: Wiki trust"
-    log_info "Layer 5: Economic claim integrity"
-    log_info "Layer 6: Release-line consistency"
-    log_info "Layer 7: Backlog open-work shape"
-    log_info "Layer 8: Knowledge sync"
+    log_info "Layer 4: Markdown table compactness"
+    log_info "Layer 5: Wiki trust"
+    log_info "Layer 6: Economic claim integrity"
+    log_info "Layer 7: Release-line consistency"
+    log_info "Layer 8: Backlog open-work shape"
+    log_info "Layer 9: Knowledge sync"
     log_info "Audit scope: $AUDIT_SCOPE"
     log_info "Changed paths: ${#CHANGED_PATHS[@]}"
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
@@ -256,8 +261,20 @@ run_behavior_validation() {
     fi
 }
 
+run_markdown_table_validation() {
+    phase_banner "Step 6: Markdown table compactness"
+    if ! should_run_markdown_table_audit; then
+        log_warning "Skipping Markdown table audit because no Markdown files changed"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-markdown-tables.sh"; then
+        log_error "Markdown table compactness validation failed"
+        exit 1
+    fi
+}
+
 run_wiki_trust_validation() {
-    phase_banner "Step 6: Wiki trust"
+    phase_banner "Step 7: Wiki trust"
     if ! should_run_wiki_trust; then
         log_warning "Skipping wiki validation because no wiki markdown files changed"
         return 0
@@ -272,7 +289,7 @@ run_wiki_trust_validation() {
 }
 
 run_economic_claim_validation() {
-    phase_banner "Step 7: Economic claim integrity"
+    phase_banner "Step 8: Economic claim integrity"
     if ! should_run_economic_claim_audit; then
         log_warning "Skipping economic claim audit because no claim inventory or architecture docs changed"
         return 0
@@ -284,7 +301,7 @@ run_economic_claim_validation() {
 }
 
 run_release_line_validation() {
-    phase_banner "Step 8: Release-line consistency"
+    phase_banner "Step 9: Release-line consistency"
     if ! should_run_release_line_audit; then
         log_warning "Skipping release-line audit because no release marker files changed"
         return 0
@@ -296,7 +313,7 @@ run_release_line_validation() {
 }
 
 run_backlog_validation() {
-    phase_banner "Step 9: Backlog open-work shape"
+    phase_banner "Step 10: Backlog open-work shape"
     if ! should_run_backlog_audit; then
         log_warning "Skipping backlog audit because BACKLOG.md did not change"
         return 0
@@ -308,7 +325,7 @@ run_backlog_validation() {
 }
 
 run_knowledge_sync() {
-    phase_banner "Step 10: Knowledge sync"
+    phase_banner "Step 11: Knowledge sync"
     if [[ "$REQUIRE_CONTEXT_SYNC" != "1" ]]; then
         log_warning "Context sync gate disabled"
         return 0
@@ -329,6 +346,7 @@ main() {
     run_shell_syntax_validation
     run_simulator_validation
     run_behavior_validation
+    run_markdown_table_validation
     run_wiki_trust_validation
     run_economic_claim_validation
     run_release_line_validation

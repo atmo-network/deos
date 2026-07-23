@@ -38,13 +38,13 @@ confidence: 0.85
 
 ## Уровни
 
-| Уровень | Значение             | Пример                            |
-|---|---|---|
-| Level 0 | Formula-defined      | TMC price следует curve equation  |
-| Level 1 | Simulator-supported  | Threshold держится на vectors     |
-| Level 2 | Runtime-enforced     | Tests фиксируют transition        |
-| Level 3 | Governance-dependent | True внутри bounded policy        |
-| Level 4 | Market assumption    | Зависит от users/liquidity/demand |
+| Уровень | Значение | Пример |
+| --- | --- | --- |
+| Level 0 | Formula-defined | TMC price следует curve equation |
+| Level 1 | Simulator-supported | Threshold держится на vectors |
+| Level 2 | Runtime-enforced | Tests фиксируют transition |
+| Level 3 | Governance-dependent | True внутри bounded policy |
+| Level 4 | Market assumption | Зависит от users/liquidity/demand |
 
 ## Правило чтения
 

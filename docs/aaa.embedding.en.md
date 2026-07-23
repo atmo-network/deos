@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-aaa`
-- **Release line**: `0.7.0`
+- **Release line**: `0.7.1`
 - **Audience**: external runtime implementers embedding AAA without inheriting DEOS/TMCTOL topology
 - **Companions**: `aaa.specification.en.md`, `aaa.architecture.en.md`, `template/pallets/aaa/README.md`
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System AAA catalog standardization, UI product flows
@@ -28,7 +28,7 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `EntropyProvider`: Deterministic entropy source and explicit secure/insecure posture for probabilistic schedules.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
-- Governance/system origins, a two-dimensional hook weight meter, owner-slot/queue/wakeup/active/sweep bounds, and fee constants.
+- Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/sweep bounds, and fee constants.
 
 The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events.
 
@@ -79,28 +79,30 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 - `Staking amount safety`: Unstake current/trigger/all modes resolve through adapter shares; last-funding mode requires an adapter-mapped transferable share asset.
 - `Ingress triggers`: Every supported producer must enter through `AddressEventIngress` / fallible `notify_address_event*`, a weight-charging post-dispatch extension, or the bounded producer-owned overflow queue. The producer must run `preflight_funding_event` before value movement, propagate notification failure in the same transaction, and treat rejected durable enqueue as rollback; runtime event-vector scanning cannot own durability because a capped prefix cannot retain an unscanned tail.
 - `Entropy`: AAA samples only deterministic runtime-provided entropy or documented fallback inputs. Secure financial probability is a runtime capability gate, not an AAA-owned randomness scheme.
-- `Hook admission`: `on_idle` must reserve its generated fixed base before any storage access; compatibility ingress must reserve its generated one-read probe before reading queue state and a complete drain unit per event, while the runtime reserve must admit the documented baseline scheduler probe in both Weight dimensions.
+- `Hook admission`: `on_idle` must reserve its generated fixed base before any storage access; compatibility ingress must reserve its generated one-read probe before reading queue state and a complete drain unit per event. `GuaranteedOnIdleWeight` must equal genuinely reserved gross headroom, and every prospective run/close plan pair must fit it after the guaranteed `scheduler_admission_overhead` envelope in both Weight dimensions. Optional ingress drain, heavyweight wakeup-retry, and sweep-time terminal-close units consume only available headroom and may defer actor execution, so their durable queues/markers/conditions and deterministic cross-block convergence form part of the embedding contract.
 - `Task weight class`: The runtime must classify every task with a deterministic upper bound. Admission may be conservative; it must not underprice execution.
+- `Core task admission`: Extend the portable `Task` enum only for a reusable economic primitive that existing composition plus an adapter cannot express without violating atomicity or custody. The change must ship bounded typed parameters, amount/funding/donation semantics, adapter ownership, events/errors/rollback behavior, generated two-dimensional weights, production-budget evidence, semantic tests, and an explicit SCALE/schema-version decision together; runtime topology and product policy stay in adapters and actor graphs.
+- `Compatibility/versioning`: `0.7.x` is a fresh-genesis pre-launch line. After AAA `1.0`, existing public enum discriminants and dispatch indices are append-only; encoded argument or storage-layout changes require the owning major/migration contract, while additive host adapters and weight recalibration follow package/runtime version policy. A Cargo version never substitutes for pallet `StorageVersion`, runtime `spec_version`, or a bounded live-chain migration.
 - `Read model`: Known actor state, owner-slot recovery, scheduler state, and bounded events are canonical on-chain surfaces. Fleet dashboards, long histories, timelines, rankings, and analytics are external indexed/materialized views.
 
 ## 7. Task-Scoped Atomicity Contract
 
 AAA guarantees task-scoped atomicity, not whole-plan atomicity. A failed executable task rolls back all task-local storage effects and its success event. Earlier successful steps in the same execution plan remain committed. After rollback, `StepErrorPolicy` decides whether the cycle aborts or continues.
 
-| Surface                 | AAA guarantee                                                                                             | Adapter/runtime obligation                                                                                |
-| ----------------------- | --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `Transfer`              | Transfer task runs in the task transaction; failed transfer emits failure/summary only                    | Asset adapter must not preserve partial debit/credit on failure                                           |
-| `Swap`                  | Swap task rolls back if adapter returns error after intermediate mutation                                 | DEX adapter must keep quote, debit, credit, fee, and pool mutation atomic or rely on the AAA transaction  |
-| `AddLiquidity`          | LP success event persists only when the whole task succeeds                                               | DEX adapter must not leave one reserve, LP mint, or debit committed after a late error                    |
-| `Stake`                 | Stake success event persists only when adapter succeeds                                                   | Staking adapter must not leave partial receipt mint, pool share update, or source debit after failure     |
-| `Unstake`               | Unstake success event persists only when adapter succeeds                                                 | Staking adapter must not burn shares without returning underlying value on failure                        |
-| `DonateLiquidity`       | Donation success event records returned amounts only on success                                           | Donation adapter owns pair balancing and must roll back partial donation/burn/reserve mutation on failure |
-| Close-tail task         | Same task-scoped rollback as normal execution                                                             | Close adapters must preserve per-task atomicity even though final actor deletion still completes          |
-| `ContinueNextStep`      | Failed task rolls back, emits `StepFailed`, then later steps may execute                                  | Plan authors should add balance guards after mutating tasks                                               |
-| `AbortCycle`            | Failed task rolls back, emits `StepFailed`, aborts cycle, and may increment failure count                 | Adapter rollback must complete before abort handling                                                      |
-| Earlier successful step | Remains committed after a later task fails                                                                | Whole-plan compensation is outside AAA core                                                               |
-| Task-local rollback     | Reverts task storage effects and success event                                                            | Multi-step adapter mutations must be transaction-safe                                                     |
-| Event visibility        | Success event is not emitted or is rolled back with failed task; failure/summary events remain observable | Adapters should not emit misleading durable success events outside the transaction boundary               |
+| Surface | AAA guarantee | Adapter/runtime obligation |
+| --- | --- | --- |
+| `Transfer` | Transfer task runs in the task transaction; failed transfer emits failure/summary only | Asset adapter must not preserve partial debit/credit on failure |
+| `Swap` | Swap task rolls back if adapter returns error after intermediate mutation | DEX adapter must keep quote, debit, credit, fee, and pool mutation atomic or rely on the AAA transaction |
+| `AddLiquidity` | LP success event persists only when the whole task succeeds | DEX adapter must not leave one reserve, LP mint, or debit committed after a late error |
+| `Stake` | Stake success event persists only when adapter succeeds | Staking adapter must not leave partial receipt mint, pool share update, or source debit after failure |
+| `Unstake` | Unstake success event persists only when adapter succeeds | Staking adapter must not burn shares without returning underlying value on failure |
+| `DonateLiquidity` | Donation success event records returned amounts only on success | Donation adapter owns pair balancing and must roll back partial donation/burn/reserve mutation on failure |
+| Close-tail task | Same task-scoped rollback as normal execution | Close adapters must preserve per-task atomicity even though final actor deletion still completes |
+| `ContinueNextStep` | Failed task rolls back, emits `StepFailed`, then later steps may execute | Plan authors should add balance guards after mutating tasks |
+| `AbortCycle` | Failed task rolls back, emits `StepFailed`, aborts cycle, and may increment failure count | Adapter rollback must complete before abort handling |
+| Earlier successful step | Remains committed after a later task fails | Whole-plan compensation is outside AAA core |
+| Task-local rollback | Reverts task storage effects and success event | Multi-step adapter mutations must be transaction-safe |
+| Event visibility | Success event is not emitted or is rolled back with failed task; failure/summary events remain observable | Adapters should not emit misleading durable success events outside the transaction boundary |
 
 For close tails, low fee-native balance or task failure is observable through close-tail failure/summary events and does not block final deletion. This is still task-scoped atomicity: the failed close task rolls back, while actor destruction proceeds after the admitted tail completes.
 

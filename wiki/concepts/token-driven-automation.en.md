@@ -25,7 +25,7 @@ related:
   - TMCTOL Standard
   - Read-Model Split
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-07-22
 confidence: 0.9
 ---
 
@@ -41,9 +41,9 @@ The main execution system for that model is `pallet-aaa`, which hosts both syste
 
 A simple way to read the architecture is:
 
-`Balance in -> Deterministic state transition -> Balance out`
+`Authorized balance ingress -> Admitted deterministic transition -> Observable balance/state result`
 
-That rule pushes the system toward origin-agnostic handling. The important question is not who sent the tokens. The important question is what arrived and which bounded plan should react.
+AAA separates ordinary balance credit from execution influence. Source and asset filters decide whether ingress triggers an actor, while funding policy decides whether provenance updates funding snapshots. Timers and manual signals provide additional bounded trigger paths.
 
 ## Why This Model Exists
 
@@ -52,10 +52,10 @@ The model gives the runtime one reusable way to express flows such as:
 - Burning collected fees
 - Provisioning liquidity
 - Splitting emissions across treasury destinations
-- Unwinding or holding bucket liquidity
+- Holding bucket liquidity and activating only production-admissible policies
 - Running deterministic task pipelines under bounded scheduler control
 
-In the current reference line, most shipped protocol flows use System AAA actors.
+In the current reference line, most shipped protocol automation uses System AAA actors. Dedicated pallets still own minting, routing, staking, balances, and AMM mechanics.
 
 ## Stable AAA Properties
 
@@ -67,15 +67,15 @@ The specification keeps a few guarantees central:
 - Predictable failure modes such as deferred, skipped, failed, or closed
 - No automatic refund fan-out when an actor is destroyed
 
-## Why Origin-Agnostic Handling Matters
+## Why Provenance-Aware Ingress Matters
 
-Origin-agnostic execution makes the system more robust. An actor can react to balances or configured triggers without depending on one privileged caller path.
+An actor can accept ordinary transfers without granting every sender trigger or funding authority. Configured source/asset filters and funding policy make that influence explicit rather than assuming every deposit has the same meaning.
 
-The core architecture also frames this as graceful degradation: even an unexpected transfer to a system account may still become an economically meaningful input instead of turning into dead state.
+Unexpected transfers remain real sovereign-account balances, but they become burns, liquidity, or treasury inputs only when an admitted task and valid trigger consume them. This distinction prevents donation sensitivity from becoming hidden execution authority.
 
 ## Relationship to TMCTOL
 
-In the current reference line, TMCTOL uses AAA actors to execute its runtime-side economics. The math lives in the standard, while the recurring operational behavior lives in bounded execution plans.
+In the current reference line, TMCTOL uses AAA actors for recurring runtime automation that existing tasks and adapters can express safely. The math lives in the standard, dedicated pallets own economic primitives, and AAA plans own bounded orchestration. Optional Bucket B/C/D unwind now splits LP transfer and Treasury-owned liquidity removal into separate admitted cycles; the lanes remain dormant until governance activates both plans.
 
 ## Related
 

@@ -148,6 +148,7 @@
 - `Weight Bridge`: Generate pallet weight templates and bind runtime-specific implementations under `template/runtime/src/weights`.
 - `Production Weights`: Runtime configs must use real `WeightInfo`; do not ship `()` placeholders.
 - `Idle Safety`: Preserve block-weight headroom for `on_idle` work and account for hook pressure in scheduling changes.
+- `Operational Reserve`: The reference runtime intentionally carries no dedicated Operational weight reserve while no concrete critical Operational extrinsic consumes it; introducing such a call requires a measured reserve and an explicit dispatch/`on_idle` rebalance in the same change.
 - `Rust Imports`: Prefer direct `polkadot_sdk`, `frame_support`, and `sp_runtime` paths over compatibility shims unless a macro/generated boundary requires them.
 - `Rust Warnings`: Maintain zero Clippy warnings across workspace/all targets.
 - `Workspace Lints`: Keep Substrate cfg allowances and the upstream-aligned lint set honest.
@@ -165,7 +166,7 @@
 - `Delivery Sequence`: For non-trivial subsystems, refine specification, implement and validate code, then update architecture documentation from shipped truth.
 - `Paired Docs`: Non-trivial pallets should have a specification and a separate architecture map.
 - `Doc Filenames`: Use full dotted forms such as `name.specification.en.md`, `name.architecture.en.md`, `name.contract.en.md`, and `name.strategy.en.md`.
-- `Markdown Tables`: Use compact delimiter rows such as `|---|---|`, preserving alignment only when meaningful with `|:---|---:|`.
+- `Markdown Tables`: Use exactly one padding space inside every cell boundary and compact delimiter rows such as `| --- | --- |`, preserving alignment only when meaningful with `| :--- | ---: |`.
 - `Architecture Neutrality`: Architecture docs describe current implementation truth without embedding release-number rhetoric.
 - `README Neutrality`: Entrypoint READMEs explain current purpose, setup, navigation, and validation; release history belongs in `CHANGELOG.md`.
 - `Canonical Consolidation`: Merge extension specs into stronger canonical contracts when ownership converges; retire old files as redirect stubs when necessary.

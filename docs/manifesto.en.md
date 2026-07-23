@@ -53,7 +53,7 @@ Execution happens through `L2 TOL DAOs` — autonomous units operating within th
 ## Politics-first vs Physics-first
 
 | Politics-first DAO | Physics-first DAO |
-|---|---|
+| --- | --- |
 | Survival is negotiable | Survival is structural |
 | Liquidity is managed manually | Liquidity is enforced mathematically |
 | Treasury is a political battlefield | Treasury is a routing engine |
@@ -65,7 +65,7 @@ Execution happens through `L2 TOL DAOs` — autonomous units operating within th
 ## Principles
 
 | Principle | Meaning |
-|---|---|
+| --- | --- |
 | **Resilience over hype** | The system must survive market cycles |
 | **Invariants over manual control** | Code constrains catastrophic paths |
 | **Coordination over politicization** | Governance sets direction, not paralysis |

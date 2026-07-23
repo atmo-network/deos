@@ -193,10 +193,6 @@ pub mod pallet {
     #[pallet::constant]
     type MaxQueueInsertionsPerBlock: Get<u32>;
     #[pallet::constant]
-    type FairnessWeightSystem: Get<u32>;
-    #[pallet::constant]
-    type FairnessWeightUser: Get<u32>;
-    #[pallet::constant]
     type MaxSweepPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxWhitelistSize: Get<u32>;
@@ -210,6 +206,9 @@ pub mod pallet {
     type MaxTimerJitterBlocks: Get<u32>;
     #[pallet::constant]
     type MaxIdleStarvationBlocks: Get<u32>;
+    /// Gross two-dimensional `on_idle` weight guaranteed by the embedding runtime.
+    #[pallet::constant]
+    type GuaranteedOnIdleWeight: Get<Weight>;
     #[pallet::constant]
     type MaxAutoCloseNonceHorizon: Get<u64>;
     /// Maximum number of active AAA instances. Bounds the BTreeSet storage.
@@ -516,6 +515,14 @@ pub mod pallet {
         Pallet::<T>::validate_probability_entropy_policy(&schedule, &execution_plan)
           .expect("genesis probabilistic financial actor requires secure entropy provider");
         let on_close_execution_plan = Pallet::<T>::default_on_close_execution_plan();
+        Pallet::<T>::ensure_execution_plans_fit_idle_budget(
+          AaaType::System,
+          &execution_plan,
+          &on_close_execution_plan,
+        )
+        .unwrap_or_else(|_| {
+          panic!("genesis System AAA {aaa_id} exceeds the guaranteed on_idle budget")
+        });
         let funding_tracked_assets = Pallet::<T>::derive_combined_funding_tracked_assets(
           &execution_plan,
           &on_close_execution_plan,
@@ -822,6 +829,7 @@ pub mod pallet {
     ActiveAaaLimitTooLow,
     AaaPaused,
     EmptyExecutionPlan,
+    ExecutionPlanExceedsOnIdleBudget,
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
     ImmutableAaa,
@@ -873,7 +881,7 @@ pub mod pallet {
       )
     }
 
-    #[pallet::call_index(16)]
+    #[pallet::call_index(1)]
     #[pallet::weight(T::WeightInfo::create_user_aaa_at_slot())]
     pub fn create_user_aaa_at_slot(
       origin: OriginFor<T>,
@@ -894,7 +902,7 @@ pub mod pallet {
       )
     }
 
-    #[pallet::call_index(1)]
+    #[pallet::call_index(2)]
     #[pallet::weight(T::WeightInfo::create_system_aaa())]
     pub fn create_system_aaa(
       origin: OriginFor<T>,
@@ -915,7 +923,7 @@ pub mod pallet {
       )
     }
 
-    #[pallet::call_index(17)]
+    #[pallet::call_index(3)]
     #[pallet::weight(T::WeightInfo::reopen_system_aaa())]
     pub fn reopen_system_aaa(
       origin: OriginFor<T>,
@@ -948,7 +956,7 @@ pub mod pallet {
       )
     }
 
-    #[pallet::call_index(2)]
+    #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
@@ -978,7 +986,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(3)]
+    #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
@@ -1005,7 +1013,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(4)]
+    #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
@@ -1019,7 +1027,6 @@ pub mod pallet {
         ensure!(!inst.is_paused, Error::<T>::AaaPaused);
         inst.manual_trigger_pending = true;
         inst.updated_at = frame_system::Pallet::<T>::block_number();
-        // Ringless: no need to requeue - scheduler checks manual_trigger_pending flag
         Self::deposit_event(Event::ManualTriggerSet { aaa_id });
         Ok(())
       })?;
@@ -1028,9 +1035,7 @@ pub mod pallet {
       Ok(())
     }
 
-    // Call index 5 was the retired `fund_aaa` extrinsic and remains permanently reserved.
-
-    #[pallet::call_index(18)]
+    #[pallet::call_index(7)]
     #[pallet::weight(
       T::WeightInfo::update_funding_source_policy()
         .saturating_add(Pallet::<T>::close_dispatch_weight_upper())
@@ -1061,7 +1066,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(6)]
+    #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
@@ -1070,7 +1075,7 @@ pub mod pallet {
       Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated)
     }
 
-    #[pallet::call_index(7)]
+    #[pallet::call_index(9)]
     #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn update_schedule(
       origin: OriginFor<T>,
@@ -1106,7 +1111,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(8)]
+    #[pallet::call_index(10)]
     #[pallet::weight(T::WeightInfo::set_global_circuit_breaker())]
     pub fn set_global_circuit_breaker(origin: OriginFor<T>, paused: bool) -> DispatchResult {
       T::GlobalBreakerOrigin::ensure_origin(origin)?;
@@ -1116,14 +1121,14 @@ pub mod pallet {
     }
 
     /// Force lifecycle evaluation for a specific actor
-    #[pallet::call_index(9)]
+    #[pallet::call_index(11)]
     #[pallet::weight(T::WeightInfo::permissionless_sweep().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn permissionless_sweep(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
       let _who = ensure_signed(origin)?;
       Self::evaluate_actor_liveness(aaa_id)
     }
 
-    #[pallet::call_index(10)]
+    #[pallet::call_index(12)]
     #[pallet::weight(T::WeightInfo::update_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn update_execution_plan(
       origin: OriginFor<T>,
@@ -1139,6 +1144,11 @@ pub mod pallet {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       Self::validate_probability_entropy_policy(&snapshot.schedule, &execution_plan)?;
+      Self::ensure_execution_plans_fit_idle_budget(
+        snapshot.aaa_type,
+        &execution_plan,
+        &snapshot.on_close_execution_plan,
+      )?;
       AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
@@ -1185,7 +1195,7 @@ pub mod pallet {
       })
     }
 
-    #[pallet::call_index(11)]
+    #[pallet::call_index(13)]
     #[pallet::weight(T::WeightInfo::set_active_actor_limit())]
     pub fn set_active_actor_limit(origin: OriginFor<T>, new_limit: u32) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
@@ -1209,7 +1219,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(12)]
+    #[pallet::call_index(14)]
     #[pallet::weight(
       T::WeightInfo::permissionless_sweep_many(aaa_ids.len() as u32)
         .saturating_add(Pallet::<T>::close_dispatch_weight_upper().saturating_mul(aaa_ids.len() as u64))
@@ -1243,7 +1253,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(13)]
+    #[pallet::call_index(15)]
     #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn set_auto_close_at_cycle_nonce(
       origin: OriginFor<T>,
@@ -1273,7 +1283,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(14)]
+    #[pallet::call_index(16)]
     #[pallet::weight(T::WeightInfo::update_schedule().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn increment_auto_close_nonce(
       origin: OriginFor<T>,
@@ -1312,7 +1322,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(15)]
+    #[pallet::call_index(17)]
     #[pallet::weight(
       T::WeightInfo::update_on_close_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper())
     )]
@@ -1332,6 +1342,11 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      Self::ensure_execution_plans_fit_idle_budget(
+        snapshot.aaa_type,
+        &snapshot.execution_plan,
+        &on_close_execution_plan,
+      )?;
       AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
@@ -1513,6 +1528,39 @@ pub mod pallet {
       Self::compute_cycle_fee_upper(instance.aaa_type, &instance.on_close_execution_plan)
     }
 
+    /// Upper-bounds one prospective run/close pair after the baseline scheduler envelope.
+    /// Independently metered durable housekeeping may defer this pair across blocks.
+    pub fn execution_plan_admission_weight_upper(
+      aaa_type: AaaType,
+      execution_plan: &ExecutionPlanOf<T>,
+      on_close_execution_plan: &ExecutionPlanOf<T>,
+    ) -> Weight {
+      Self::scheduler_admission_overhead()
+        .saturating_add(Self::compute_cycle_weight_upper(aaa_type, execution_plan))
+        .saturating_add(Self::compute_cycle_weight_upper(
+          aaa_type,
+          on_close_execution_plan,
+        ))
+        .saturating_add(Self::close_cleanup_weight_upper())
+    }
+
+    fn ensure_execution_plans_fit_idle_budget(
+      aaa_type: AaaType,
+      execution_plan: &ExecutionPlanOf<T>,
+      on_close_execution_plan: &ExecutionPlanOf<T>,
+    ) -> DispatchResult {
+      ensure!(
+        Self::execution_plan_admission_weight_upper(
+          aaa_type,
+          execution_plan,
+          on_close_execution_plan,
+        )
+        .all_lte(T::GuaranteedOnIdleWeight::get()),
+        Error::<T>::ExecutionPlanExceedsOnIdleBudget
+      );
+      Ok(())
+    }
+
     pub(crate) fn default_on_close_execution_plan() -> ExecutionPlanOf<T> {
       BoundedVec::try_from(alloc::vec![Step {
         conditions: BoundedVec::default(),
@@ -1681,6 +1729,11 @@ pub mod pallet {
         Error::<T>::ActiveAaaCapacityExceeded
       );
       let on_close_execution_plan = Self::default_on_close_execution_plan();
+      Self::ensure_execution_plans_fit_idle_budget(
+        aaa_type,
+        &execution_plan,
+        &on_close_execution_plan,
+      )?;
       let funding_tracked_assets =
         Self::derive_combined_funding_tracked_assets(&execution_plan, &on_close_execution_plan)?;
       let current_next_id = NextAaaId::<T>::get();
