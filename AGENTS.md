@@ -5,6 +5,7 @@
 ## 0. Meta-Protocol Principles
 
 - `Reflexive Protocol`: The context system must obey the same boundedness, ownership, validation, and cleanup rules that it imposes on the project.
+- `Rationalist Discipline`: Treat rationalism as an operating method: expose assumptions, separate evidence from inference and preference, make load-bearing claims falsifiable, state material uncertainty, and update conclusions when better evidence arrives.
 - `Mandatory Knowledge Sync`: Every meaningful task reconciles durable rules, open work, delivery history, entrypoints, and subsystem truth when reality changes.
 - `Flat Structure`: Use second-level headings and one-level lists only so rules remain scannable, addressable, and independently editable.
 - `Single Ownership`: Keep each fact in one authoritative surface and replace duplicated detail with a truth-owner reference.
