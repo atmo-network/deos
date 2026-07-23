@@ -350,13 +350,18 @@ export class BlockchainAdapter implements Adapter {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const instance =
-            await snapshot.typedApi.query.AAA.AaaInstances.getValue(
+          const [hot, program] = await Promise.all([
+            snapshot.typedApi.query.AAA.ActorHot.getValue(BigInt(actor.aaaId), {
+              at: snapshot.at,
+            }),
+            snapshot.typedApi.query.AAA.ActorProgram.getValue(
               BigInt(actor.aaaId),
               { at: snapshot.at },
-            );
+            ),
+          ]);
+          const exists = hot != null && program != null;
           const sovereignAccount =
-            instance?.sovereign_account ??
+            hot?.sovereign_account ??
             deriveSystemAaaSovereignAccount(actor.aaaId);
           const account = await snapshot.typedApi.query.System.Account.getValue(
             sovereignAccount,
@@ -366,10 +371,10 @@ export class BlockchainAdapter implements Adapter {
             aaaId: actor.aaaId,
             label: actor.label,
             role: actor.role,
-            exists: instance != null,
-            paused: automationActorPaused(instance),
-            lastCycleBlock: instance?.last_cycle_block ?? null,
-            triggerLabel: automationTriggerLabel(instance?.schedule.trigger),
+            exists,
+            paused: automationActorPaused(hot),
+            lastCycleBlock: hot?.last_cycle_block ?? null,
+            triggerLabel: automationTriggerLabel(program?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,
           } satisfies AutomationActorSnapshot;
         }),

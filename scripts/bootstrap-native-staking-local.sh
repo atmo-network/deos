@@ -298,7 +298,13 @@ try {
   const exchangeRate = await api.view.Staking.native_staking_exchange_rate({ at: block.hash });
   const pool = await api.view.Staking.native_staking_liquidity_pool({ at: block.hash });
   if (mode === "check") {
-    const lpFarmerAaa = await api.query.AAA.AaaInstances.getValue(aaaId, { at: block.hash });
+    const [lpFarmerHot, lpFarmerProgram] = await Promise.all([
+      api.query.AAA.ActorHot.getValue(aaaId, { at: block.hash }),
+      api.query.AAA.ActorProgram.getValue(aaaId, { at: block.hash }),
+    ]);
+    const lpFarmerAaa = lpFarmerHot != null && lpFarmerProgram != null
+      ? { hot: lpFarmerHot, program: lpFarmerProgram }
+      : null;
     const checks = {
       nativeAssetExists: nativeAssetDetails != null,
       stakedAssetExists: stakedAssetDetails != null,

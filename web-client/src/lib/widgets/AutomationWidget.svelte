@@ -21,7 +21,7 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- AAA.AaaInstances + System.Account',
+    'automationWidget <- AAA.ActorHot + AAA.ActorProgram + System.Account',
   ).provenance;
 
   function syncViewport() {
