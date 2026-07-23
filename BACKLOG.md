@@ -9,12 +9,6 @@
 > `0.7.2` supersedes `0.7.1` as the next AAA semantic-core candidate. The release evolves AAA from bounded execution into a work-proportional deterministic actor runtime: consensus state, ProofSize, decoding, storage writes, and scheduler work must scale with actual pending work rather than maximum configured capacity, inactive economic accounts, completed plan prefixes, or monolithic bounded containers.
 >
 > This remains the pre-`1.0`, fresh-genesis compatibility window. Breaking semantic, SCALE, call, and storage cleanup remains allowed before the append-only AAA `1.0` line; no historical migration ceremony is required for the unlaunched reference chain, but every changed surface and storage-version consequence must remain explicit. AAA `1.0` stays blocked through the independent non-TMCTOL embedding gates for both this release and the planned `0.7.3` Continuation extension. AAA must remain a bounded deterministic economic actor runtime rather than becoming a general-purpose VM, and every retained or added mechanism must justify its consensus-state, ProofSize, weight, and semantic cost. Both releases preserve task-scoped transactional rollback and plan-level non-atomicity; neither may add whole-plan rollback.
->
-> Project harness evolution is part of `0.7.2` acceptance because targeted validation, benchmark routing, compact evidence, graceful degradation, and skill/script ownership determine whether agents can verify the work-proportional runtime without unrelated execution or shadow automation.
-
-### Harness evolution
-
-- [ ] `0.7.2 / Harness / Alignment routing`: Alignment owns the changed-scope matrix and completion gate, and shared CI supports narrow package/test routes. Retain `validate-local.sh` in root `/scripts` but remove broad default compositions that run unrelated audit, client, build, or network branches.
 
 ### Slice 3 — Effective eligibility scheduling
 

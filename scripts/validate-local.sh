@@ -3,20 +3,20 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-RUN_SCRIPT_AUDIT="${RUN_SCRIPT_AUDIT:-1}"
-RUN_TEMPLATE_AUDIT="${RUN_TEMPLATE_AUDIT:-1}"
-RUN_NUMERIC_AUDIT="${RUN_NUMERIC_AUDIT:-1}"
-RUN_SIMULATOR_DETERMINISM_AUDIT="${RUN_SIMULATOR_DETERMINISM_AUDIT:-1}"
-RUN_SIMULATOR_CONSISTENCY_AUDIT="${RUN_SIMULATOR_CONSISTENCY_AUDIT:-1}"
-RUN_CODE_SUPPRESSION_AUDIT="${RUN_CODE_SUPPRESSION_AUDIT:-1}"
-RUN_BACKLOG_AUDIT="${RUN_BACKLOG_AUDIT:-1}"
-RUN_RELEASE_LINE_AUDIT="${RUN_RELEASE_LINE_AUDIT:-1}"
-RUN_PORTABILITY_AUDIT="${RUN_PORTABILITY_AUDIT:-1}"
-RUN_DOMAIN_DAG_AUDIT="${RUN_DOMAIN_DAG_AUDIT:-1}"
-RUN_WIKI_TRUST_AUDIT="${RUN_WIKI_TRUST_AUDIT:-1}"
+RUN_SCRIPT_AUDIT="${RUN_SCRIPT_AUDIT:-0}"
+RUN_TEMPLATE_AUDIT="${RUN_TEMPLATE_AUDIT:-0}"
+RUN_NUMERIC_AUDIT="${RUN_NUMERIC_AUDIT:-0}"
+RUN_SIMULATOR_DETERMINISM_AUDIT="${RUN_SIMULATOR_DETERMINISM_AUDIT:-0}"
+RUN_SIMULATOR_CONSISTENCY_AUDIT="${RUN_SIMULATOR_CONSISTENCY_AUDIT:-0}"
+RUN_CODE_SUPPRESSION_AUDIT="${RUN_CODE_SUPPRESSION_AUDIT:-0}"
+RUN_BACKLOG_AUDIT="${RUN_BACKLOG_AUDIT:-0}"
+RUN_RELEASE_LINE_AUDIT="${RUN_RELEASE_LINE_AUDIT:-0}"
+RUN_PORTABILITY_AUDIT="${RUN_PORTABILITY_AUDIT:-0}"
+RUN_DOMAIN_DAG_AUDIT="${RUN_DOMAIN_DAG_AUDIT:-0}"
+RUN_WIKI_TRUST_AUDIT="${RUN_WIKI_TRUST_AUDIT:-0}"
 RUN_DEPENDENCY_AUDIT="${RUN_DEPENDENCY_AUDIT:-0}"
-RUN_CI="${RUN_CI:-1}"
-RUN_BUILD="${RUN_BUILD:-1}"
+RUN_CI="${RUN_CI:-0}"
+RUN_BUILD="${RUN_BUILD:-0}"
 RUN_E2E="${RUN_E2E:-0}"
 PREPARE_E2E="${PREPARE_E2E:-0}"
 KEEP_NETWORK="${KEEP_NETWORK:-0}"
@@ -30,7 +30,8 @@ usage() {
     cat <<'EOF2'
 Usage: validate-local.sh [OPTIONS]
 
-DEOS local validation orchestrator
+DEOS local validation orchestrator. No validation plan is selected by default;
+choose an explicit mode or enable individual environment flags.
 
 Options:
   --all            Run script audit + template audit + numeric audit + simulator determinism/consistency audits + code suppression audit + backlog/release-line/portability audits + domain DAG audit + wiki trust audit + CI + runtime build + E2E
@@ -245,7 +246,7 @@ parse_args() {
 check_plan() {
     phase_banner "Step 1: Validation plan"
     if (( RUN_SCRIPT_AUDIT == 0 && RUN_TEMPLATE_AUDIT == 0 && RUN_NUMERIC_AUDIT == 0 && RUN_SIMULATOR_DETERMINISM_AUDIT == 0 && RUN_SIMULATOR_CONSISTENCY_AUDIT == 0 && RUN_CODE_SUPPRESSION_AUDIT == 0 && RUN_BACKLOG_AUDIT == 0 && RUN_RELEASE_LINE_AUDIT == 0 && RUN_PORTABILITY_AUDIT == 0 && RUN_DOMAIN_DAG_AUDIT == 0 && RUN_WIKI_TRUST_AUDIT == 0 && RUN_DEPENDENCY_AUDIT == 0 && RUN_CI == 0 && RUN_BUILD == 0 && RUN_E2E == 0 )); then
-        log_error "Nothing to run. Enable at least one validation stage"
+        log_error "Nothing to run. Select an explicit mode or enable at least one validation stage"
         exit 1
     fi
     log_info "Plan: script_audit=$RUN_SCRIPT_AUDIT template_audit=$RUN_TEMPLATE_AUDIT numeric_audit=$RUN_NUMERIC_AUDIT simulator_determinism_audit=$RUN_SIMULATOR_DETERMINISM_AUDIT simulator_consistency_audit=$RUN_SIMULATOR_CONSISTENCY_AUDIT code_suppression_audit=$RUN_CODE_SUPPRESSION_AUDIT backlog_audit=$RUN_BACKLOG_AUDIT release_line_audit=$RUN_RELEASE_LINE_AUDIT portability_audit=$RUN_PORTABILITY_AUDIT domain_dag_audit=$RUN_DOMAIN_DAG_AUDIT wiki_trust_audit=$RUN_WIKI_TRUST_AUDIT dependency_audit=$RUN_DEPENDENCY_AUDIT"
