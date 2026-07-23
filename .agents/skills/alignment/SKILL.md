@@ -72,6 +72,7 @@ Select additional leaves only when the touched contract requires them. Routing f
 | AAA scheduler slice | `aaa-release-gate.sh --quick`, then completion gate | Full stress and occupancy profile | Capacity, fairness, liveness, or release gate changed |
 | Benchmark code | `benchmarks.sh --check`, then one exact extrinsic or owning pallet | Other pallets and runtime release build | Production weights or Wasm accepted |
 | Runtime integration | Scoped `deos-runtime` tests, then completion gate | Full workspace, E2E, client | Runtime metadata/Wasm or network behavior changed |
+| Runtime upgrade delivery | `runtime-upgrade-delivery` evidence ladder through shared root scripts | Live relay and publication | Explicit target, matching authorization, and relay approval exist |
 | Wiki only | Wiki trust/consolidation leaves | Client build and Cargo | Renderer/client contract changed |
 | Full release | `validate-local.sh --all` | Nothing | Explicit release acceptance only |
 

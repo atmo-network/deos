@@ -69,7 +69,7 @@ Commands executed through the shared script harness use compact output by defaul
   Consolidated native staking bootstrap helper. `check` reads live readiness for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding. It never signs or submits transactions.
 
 - [authorized-upgrade-local.sh](./authorized-upgrade-local.sh)
-  Consolidated authorized runtime-upgrade helper. `check` verifies a local WASM hash against the chain's pending authorized hash and can emit offline call data; `apply` stays plan-only unless explicit `--submit` relays matching code bytes through `System.apply_authorized_upgrade { code }`.
+  Consolidated authorized runtime-upgrade helper. `check` verifies a local WASM hash against the chain's pending authorized hash and can emit offline call data; `apply` stays plan-only unless explicit `--submit` relays matching code bytes through `System.apply_authorized_upgrade { code }`. The [`runtime-upgrade-delivery` skill](../.agents/skills/runtime-upgrade-delivery/SKILL.md) owns evidence sequencing, approval boundaries, and post-upgrade handoff without duplicating this command.
 
 - [teardown-local-network.sh](./teardown-local-network.sh)
   Stop local `zombienet` / `polkadot*` / `vite` dev-server processes and remove Zombienet temp directories.
