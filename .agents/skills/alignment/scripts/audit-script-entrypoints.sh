@@ -8,10 +8,10 @@ usage() {
 Usage: audit-script-entrypoints.sh [OPTIONS]
 
 Checks repository shell/Node entrypoints for syntax validity, --help availability,
-independent human-callable atomic-script contracts, shared shell-step status
-propagation, GitHub-to-root shared automation placement, skill name/directory
-identity, and compact metadata shape. Also enforces that project-specific audit leaves live in the
-alignment skill, not in the root operator scripts directory.
+independent human-callable atomic-script contracts, executable inventory
+coverage, shared shell-step status propagation, GitHub-to-root automation
+placement, skill ownership/DAG boundaries, and compact metadata shape. It also
+enforces that project-specific audit leaves live with `alignment`, not in root scripts.
 
 Options:
   -h, --help        Show this help message
@@ -169,6 +169,52 @@ audit_shared_script_placement() {
     fi
 }
 
+audit_root_script_inventory() {
+    local readme="$ROOT_SCRIPT_DIR/README.md"
+    local script basename
+    while IFS= read -r script; do
+        basename="$(basename "$script")"
+        if ! grep -Fq "[$basename](./$basename)" "$readme"; then
+            log_error "Root script is missing from scripts/README.md ownership map: $basename"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        fi
+    done < <(find "$ROOT_SCRIPT_DIR" -maxdepth 1 -type f -name '*.sh' | sort)
+}
+
+audit_skill_script_ownership() {
+    local script skill_dir skill_name skill_file
+    while IFS= read -r script; do
+        skill_dir="${script%%/scripts/*}"
+        skill_name="$(basename "$skill_dir")"
+        skill_file="$skill_dir/SKILL.md"
+        if [[ ! -f "$skill_file" ]]; then
+            log_error "Skill-local executable has no owning SKILL.md: ${script#$PROJECT_ROOT/}"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+        if ! grep -Fq "| \`$skill_name\` |" "$PROJECT_ROOT/.agents/skills/README.md"; then
+            log_error "Skill-local executable owner is absent from the project skill graph: $skill_name"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        fi
+    done < <(find "$PROJECT_ROOT/.agents/skills" -path '*/scripts/*' -type f \( -name '*.sh' -o -name '*.mjs' \) | sort)
+
+    local owner reference referenced_owner file
+    while IFS= read -r file; do
+        if [[ "$file" == */SKILL.md ]]; then
+            owner="$(basename "$(dirname "$file")")"
+        else
+            owner="$(basename "$(dirname "$(dirname "$file")")")"
+        fi
+        while IFS= read -r reference; do
+            referenced_owner="$(cut -d/ -f3 <<<"$reference")"
+            if [[ "$referenced_owner" != "$owner" ]]; then
+                log_error "Skill must not reference sibling script internals: ${file#$PROJECT_ROOT/} -> $reference"
+                AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            fi
+        done < <(grep -Eo '\.agents/skills/[A-Za-z0-9_-]+/scripts/' "$file" | sort -u || true)
+    done < <(find "$PROJECT_ROOT/.agents/skills" -type f \( -name 'SKILL.md' -o -path '*/scripts/*.sh' -o -path '*/scripts/*.mjs' \) | sort)
+}
+
 audit_skill_metadata_descriptions() {
     local skill_file
     local matches=""
@@ -211,6 +257,8 @@ audit_entrypoints() {
     audit_audit_leaf_ownership
     audit_shell_step_status_propagation
     audit_shared_script_placement
+    audit_root_script_inventory
+    audit_skill_script_ownership
     audit_skill_metadata_descriptions
 
     if [[ "$AUDIT_FAILURES" -gt 0 ]]; then

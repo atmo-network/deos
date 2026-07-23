@@ -11,6 +11,21 @@ This directory contains deterministic command surfaces, not agent strategy:
 - `Full named/admin implementations` follow `usage -> parse_args -> check_prerequisites/plan -> main`.
 - `All entrypoints` expose `--help` and keep declared environment/behavior contracts honest.
 
+## Executable Ownership Inventory
+
+Path classes provide the inventory without duplicating the per-command map below:
+
+| Path class | Classification and owner | Consumer contract |
+| --- | --- | --- |
+| `/scripts/[0-9][0-9]-*.sh` | Shared human-callable atoms; root scripts layer | Humans, CI, workflows, and skills call the owning file directly |
+| `/scripts/<name>.sh` | Shared deterministic compositions/admin utilities; root scripts layer | Shared consumers call one canonical implementation; `_common.sh` remains support-only |
+| `/.agents/skills/alignment/scripts/*` | Project audit and completion capability; `alignment` | Root validation and agents may call the public audit contract; no audit implementation belongs in `/scripts` |
+| `/.agents/skills/domain-dag/scripts/*` | Portable graph-validator capability; `domain-dag` | Package bridges and agents call the owning validator rather than copy its rules |
+| `/.agents/skills/wiki-sync/scripts/*` | Portable wiki trust/consolidation capability; `wiki-sync` | Package bridges and agents call the owning validator rather than copy its rules |
+| `/web-client/scripts/*.mjs` | Client-package entrypoints or thin capability bridges; web client | npm owns invocation; bridges contain no duplicated validator semantics |
+
+GitHub workflows invoke root shared implementations only. Skills never call sibling skill internals, support files are not public entrypoints, and a consumer references the canonical owner rather than maintaining a second executable copy.
+
 ## Human-Callable Atomic Scripts
 
 Each numbered command is independently callable by a human or CI from any working directory. Its `--help` declares inputs, outputs, side effects, and configurable environment. The command checks its own prerequisites and never invokes another numbered command. Numbers show the common local-network sequence only; they do not create a hidden requirement to run earlier scripts.

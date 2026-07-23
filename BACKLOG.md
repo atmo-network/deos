@@ -14,7 +14,6 @@
 
 ### Harness evolution
 
-- [ ] `0.7.2 / Harness / Ownership inventory`: Human-callable atoms, GitHub shared-script placement, and AAA gate ownership are now explicit and audited. Classify the remaining named/admin scripts and skill leaves as shared root implementations, agent-specific leaves, or deletion candidates; map their human, CI, root-composition, and multi-skill consumers.
 - [ ] `0.7.2 / Harness / Alignment routing`: Alignment owns the changed-scope matrix and completion gate, and shared CI supports narrow package/test routes. Retain `validate-local.sh` in root `/scripts` but remove broad default compositions that run unrelated audit, client, build, or network branches.
 
 ### Slice 3 — Effective eligibility scheduling
