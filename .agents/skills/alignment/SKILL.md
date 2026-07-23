@@ -74,7 +74,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover architecture drift, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
+Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
 
 ### Intensive Evolution Rule
 
@@ -106,7 +106,7 @@ Local delivery slices should pass the repo-local completion gate before continui
 ./.agents/skills/alignment/scripts/completion-gate.sh
 ```
 
-The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, cargo check, runtime unit tests for runtime-source changes, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
+The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, Cargo checks, runtime unit tests for runtime-source changes, Markdown table/readability checks, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
 
 Useful flags:
 
