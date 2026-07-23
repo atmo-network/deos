@@ -80,7 +80,7 @@ impl<T: Config> Pallet<T> {
         }
         continue;
       };
-      let instance = AaaInstances::<T>::compose(hot, program);
+      let instance = Self::compose_active_actor(hot, program);
       let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, &cycle_meter) {
         AdmissionDecision::Admit(weight) => {
           if !Self::paged_consume_head(ticket) {
@@ -109,7 +109,7 @@ impl<T: Config> Pallet<T> {
           if !Self::paged_consume_head(ticket) {
             break;
           }
-          if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
+          if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
             Self::preserve_skipped_readiness(aaa_id, &updated, now, &mut periodic_continuations);
           }
           continue;
@@ -118,7 +118,7 @@ impl<T: Config> Pallet<T> {
       let _actual = Self::execute_single_cycle(aaa_id);
       cycle_meter.consume(cycle_weight_upper);
       executed = executed.saturating_add(1);
-      if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
+      if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
         Self::schedule_next_timer_wakeup_local(aaa_id, &updated, now, &mut periodic_continuations);
       }
     }
@@ -309,7 +309,7 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) {
-    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+    let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
       return;
     };
     let now = frame_system::Pallet::<T>::block_number();
@@ -449,7 +449,7 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn benchmark_scheduler_actor_probe(aaa_id: AaaId) {
     let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
     let program = ActorProgram::<T>::get(aaa_id).expect("benchmark actor program state must exist");
-    let instance = AaaInstances::<T>::compose(hot, program);
+    let instance = Self::compose_active_actor(hot, program);
     let meter = WeightMeter::with_limit(Weight::zero());
     let AdmissionDecision::Defer(reason) = Self::apply_admission(aaa_id, &instance, &meter) else {
       panic!("benchmark actor must defer on an exhausted cycle budget");
@@ -884,7 +884,7 @@ impl<T: Config> Pallet<T> {
     if amount == Zero::zero() {
       return true;
     }
-    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+    let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
       return true;
     };
     if Self::is_window_expired(&instance) {
@@ -987,7 +987,7 @@ impl<T: Config> Pallet<T> {
     amount: T::Balance,
     provenance: Option<&FundingProvenance<T::AccountId>>,
   ) -> DispatchResult {
-    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+    let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
       return Ok(());
     };
     if Self::is_window_expired(&instance) || amount.is_zero() {
@@ -1033,7 +1033,7 @@ impl<T: Config> Pallet<T> {
     apply_trigger: bool,
     apply_funding: bool,
   ) -> DispatchResult {
-    let instance = match AaaInstances::<T>::get(aaa_id) {
+    let instance = match Self::active_actor_snapshot(aaa_id) {
       Some(inst) => inst,
       None => return Ok(()),
     };
@@ -1144,7 +1144,7 @@ impl<T: Config> Pallet<T> {
       .take(retry_limit as usize)
       .collect::<Vec<_>>();
     for aaa_id in &retry_ids {
-      if AaaInstances::<T>::contains_key(*aaa_id) {
+      if ActorHot::<T>::contains_key(*aaa_id) {
         let _ = Self::defer_wakeup(*aaa_id, now.saturating_add(One::one()));
       } else {
         WakeupRetryPending::<T>::remove(aaa_id);
@@ -1157,7 +1157,7 @@ impl<T: Config> Pallet<T> {
         break;
       }
       let next_cursor = (cursor + 1) % max_id;
-      if let Some(instance) = AaaInstances::<T>::get(next_cursor) {
+      if let Some(instance) = Self::active_actor_snapshot(next_cursor) {
         if let Some(reason) = Self::liveness_close_reason(&instance) {
           let close_weight_upper = Self::close_cycle_weight_upper_bound(&instance);
           let required_weight = iteration_weight.saturating_add(close_weight_upper);
@@ -1192,7 +1192,7 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn evaluate_actor_liveness(aaa_id: AaaId) -> DispatchResult {
-    let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+    let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
     if let Some(reason) = Self::liveness_close_reason(&instance) {
       return Self::close_actor(aaa_id, &instance, reason);
     }

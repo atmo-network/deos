@@ -359,12 +359,8 @@ pub mod pallet {
   pub type ActorFunding<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, ActorFundingStateOf<T>, OptionQuery>;
 
-  /// Rust compatibility facade over the canonical split active-actor stores.
-  /// This is not a storage item and does not recreate the retired monolithic value.
-  pub struct AaaInstances<T: Config>(core::marker::PhantomData<T>);
-
-  impl<T: Config> AaaInstances<T> {
-    pub(crate) fn compose(
+  impl<T: Config> Pallet<T> {
+    pub(crate) fn compose_active_actor(
       hot: ActorHotStateOf<T>,
       program: ActorProgramStateOf<T>,
     ) -> AaaInstanceOf<T> {
@@ -389,6 +385,26 @@ pub mod pallet {
         first_eligible_at: hot.first_eligible_at,
         last_cycle_block: hot.last_cycle_block,
       }
+    }
+
+    pub(crate) fn active_actor_snapshot(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
+      Some(Self::compose_active_actor(
+        ActorHot::<T>::get(aaa_id)?,
+        ActorProgram::<T>::get(aaa_id)?,
+      ))
+    }
+  }
+
+  /// Rust compatibility facade over the canonical split active-actor stores.
+  /// This is not a storage item and does not recreate the retired monolithic value.
+  pub struct AaaInstances<T: Config>(core::marker::PhantomData<T>);
+
+  impl<T: Config> AaaInstances<T> {
+    pub(crate) fn compose(
+      hot: ActorHotStateOf<T>,
+      program: ActorProgramStateOf<T>,
+    ) -> AaaInstanceOf<T> {
+      Pallet::<T>::compose_active_actor(hot, program)
     }
 
     fn split(instance: AaaInstanceOf<T>) -> (ActorHotStateOf<T>, ActorProgramStateOf<T>) {
@@ -420,10 +436,7 @@ pub mod pallet {
     }
 
     pub fn get(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
-      Some(Self::compose(
-        ActorHot::<T>::get(aaa_id)?,
-        ActorProgram::<T>::get(aaa_id)?,
-      ))
+      Pallet::<T>::active_actor_snapshot(aaa_id)
     }
 
     pub fn contains_key(aaa_id: AaaId) -> bool {

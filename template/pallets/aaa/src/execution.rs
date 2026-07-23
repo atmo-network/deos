@@ -143,7 +143,7 @@ impl<T: Config> Pallet<T> {
       Some(program) => program,
       None => return base_weight,
     };
-    let instance = AaaInstances::<T>::compose(hot, program);
+    let instance = Self::compose_active_actor(hot, program);
     if instance.cycle_nonce == u64::MAX {
       if instance.actor_class.aaa_type() == AaaType::User {
         if Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted).is_err() {
@@ -435,14 +435,14 @@ impl<T: Config> Pallet<T> {
       Self::promote_pending_funding(aaa_id);
     }
     if execution_plan_failed {
-      if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
+      if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
         if !inst.lifecycle.is_paused() && Self::failure_limit_reached(inst.consecutive_failures) {
           if Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures).is_err() {
             Self::defer_failed_close(aaa_id);
           }
         }
       }
-    } else if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
+    } else if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
       if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
         if cycle_nonce >= target_nonce {
           if Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached).is_err() {
