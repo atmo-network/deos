@@ -7,6 +7,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 | `alignment` | Changed-scope validation routing, DEOS audits, completion gate, durable failure memory | Subsystem implementation policy; release publication | `alignment/SKILL.md`; `alignment/scripts/completion-gate.sh` |
 | `aaa-delivery` | AAA validation profile selection, stress/occupancy evidence policy, benchmark handoff | AAA runtime semantics; shared gate execution | `aaa-delivery/SKILL.md`; shared `scripts/aaa-release-gate.sh` implementation |
 | `domain-dag` | Generic ownership/DAG review and validator | DEOS subsystem policy; workflow-specific delivery gates | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
+| `gscsmof` | Qualification, creation, evolution, consolidation, and retirement of epic implementation organs | Feature implementation; backlog priority; child-organ delivery; hidden automation | `gscsmof/SKILL.md` |
 | `benchmarking` | Benchmark design, evidence classification, interpretation, and integration; currently FRAME runtime measurement | Runtime semantics; shared command execution; scheduler stress; release publication; frontend benchmarking without an adopted route | `benchmarking/SKILL.md`; shared `scripts/benchmarks.sh` and `scripts/03-build-runtime.sh` implementations |
 | `upgrade-delivery` | Upgrade preparation sequence, evidence rungs, relay approval boundary, and post-upgrade handoff | Governance authorization decisions; version/migration semantics; credentials; shared commands | `upgrade-delivery/SKILL.md`; shared runtime-build, try-runtime, and authorized-upgrade scripts |
 | `staking-delivery` | Native-staking bootstrap sequence, readiness interpretation, authority boundary, and activation handoff | Staking/AAA semantics; signing; funds; shared commands | `staking-delivery/SKILL.md`; shared `scripts/bootstrap-native-staking-local.sh` implementation |
@@ -18,7 +19,7 @@ Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a sk
 
 Some delivery skills become implementation organs for an evolving feature: they maintain its feedback loop from repository reality through the next slice, evidence, gates, and plan reconciliation. They may emerge after repeated implementation friction, improve as real failures expose missing guidance, and help later slices reproduce the stronger method without expanding every backlog item into procedural prose. Capability skills remain reusable instruments rather than feature organs.
 
-Scaffolding must not become permanent by inertia. Consolidate, generalize, or delete a skill when the subsystem stabilizes, its method moves into deterministic tooling, or it no longer has a distinct reusable decision boundary. Keep implementation truth in code/docs, open outcomes in the backlog, and completed outcomes in the changelog.
+Scaffolding must not become permanent by inertia. Consolidate, generalize, or delete a skill when the subsystem stabilizes, its method moves into deterministic tooling, or it no longer has a distinct reusable decision boundary. `gscsmof` owns this creation/lifecycle method but never the child organ's feature loop. Keep implementation truth in code/docs, open outcomes in the backlog, and completed outcomes in the changelog.
 
 ## Dependency Direction
 
