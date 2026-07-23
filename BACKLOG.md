@@ -4,18 +4,20 @@
 >
 > Release boundary: `DEOS 0.7.2 — Work-Proportional AAA` is the next runtime release candidate; every other open item remains outside that release unless the dedicated plan below explicitly owns it.
 
-## Project Harness Evolution
-
-- [ ] `Harness / Ownership inventory`: Classify every executable as a shared root implementation, agent-specific skill leaf, or deletion candidate; prove GitHub, CI, human, root-composition, and multi-skill consumers never depend on skill-local execution.
-- [ ] `Harness / Declarative routing`: Give each owning project skill a compact changed-scope route matrix naming exact script leaves, intentional exclusions, escalation triggers, and external prerequisites; close only when agents can select package/test/benchmark/build/network branches without raw commands or a duplicate harness.
-- [ ] `Harness / Alignment routing`: Keep shared `validate-local.sh` execution in root `/scripts`, move scope-selection judgment into alignment's declarative routes, and remove broad default compositions that run unrelated validation branches.
-- [ ] `Harness / Domain workflows`: Add skill ownership for benchmark interpretation and guarded runtime-upgrade/native-staking coordination while keeping every human/CI/multi-skill executable in root `/scripts` as the sole shared implementation.
-
 ## DEOS 0.7.2 — Work-Proportional AAA
 
 > `0.7.2` supersedes `0.7.1` as the next AAA semantic-core candidate. The release evolves AAA from bounded execution into a work-proportional deterministic actor runtime: consensus state, ProofSize, decoding, storage writes, and scheduler work must scale with actual pending work rather than maximum configured capacity, inactive economic accounts, completed plan prefixes, or monolithic bounded containers.
 >
 > This remains the pre-`1.0`, fresh-genesis compatibility window. Breaking semantic, SCALE, call, and storage cleanup remains allowed before the append-only AAA `1.0` line; no historical migration ceremony is required for the unlaunched reference chain, but every changed surface and storage-version consequence must remain explicit. AAA `1.0` stays blocked through the independent non-TMCTOL embedding gates for both this release and the planned `0.7.3` Continuation extension. AAA must remain a bounded deterministic economic actor runtime rather than becoming a general-purpose VM, and every retained or added mechanism must justify its consensus-state, ProofSize, weight, and semantic cost. Both releases preserve task-scoped transactional rollback and plan-level non-atomicity; neither may add whole-plan rollback.
+>
+> Project harness evolution is part of `0.7.2` acceptance because targeted validation, benchmark routing, compact evidence, graceful degradation, and skill/script ownership determine whether agents can verify the work-proportional runtime without unrelated execution or shadow automation.
+
+### Harness evolution
+
+- [ ] `0.7.2 / Harness / Ownership inventory`: Classify every executable as a shared root implementation, agent-specific skill leaf, or deletion candidate; prove GitHub, CI, human, root-composition, and multi-skill consumers never depend on skill-local execution.
+- [ ] `0.7.2 / Harness / Declarative routing`: Give each owning project skill a compact changed-scope route matrix naming exact script leaves, intentional exclusions, escalation triggers, and external prerequisites; close only when agents can select package/test/benchmark/build/network branches without raw commands or a duplicate harness.
+- [ ] `0.7.2 / Harness / Alignment routing`: Keep shared `validate-local.sh` execution in root `/scripts`, move scope-selection judgment into alignment's declarative routes, and remove broad default compositions that run unrelated validation branches.
+- [ ] `0.7.2 / Harness / Domain workflows`: Add skill ownership for benchmark interpretation and guarded runtime-upgrade/native-staking coordination while keeping every human/CI/multi-skill executable in root `/scripts` as the sole shared implementation.
 
 ### Slice 3 — Effective eligibility scheduling
 
