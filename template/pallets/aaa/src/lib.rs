@@ -169,6 +169,9 @@ pub mod pallet {
     /// Physical I/O granularity for the monotonic active FIFO.
     #[pallet::constant]
     type QueuePageSize: Get<u32>;
+    /// Physical I/O granularity for the paged temporal wakeup index.
+    #[pallet::constant]
+    type WakeupPageSize: Get<u32>;
     /// Independent ceiling for physical queue-entry inspection per scheduler pass.
     #[pallet::constant]
     type MaxQueueEntriesScannedPerBlock: Get<u32>;
@@ -304,6 +307,8 @@ pub mod pallet {
     BoundedBTreeSet<<T as Config>::AssetId, <T as Config>::MaxFundingTrackedAssets>;
 
   pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
+  pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
+  pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
 
   pub type IngressOverflowEventOf<T> = IngressOverflowEvent<
     AaaId,

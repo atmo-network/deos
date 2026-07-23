@@ -53,6 +53,8 @@ parameter_types! {
   pub const AaaMaxQueueLength: u32 = 10_000;
   /// Balanced production granularity selected from 32/64/128 production-Wasm evidence.
   pub const AaaQueuePageSize: u32 = 64;
+  /// Provisional temporal page granularity; production selection remains benchmark-gated.
+  pub const AaaWakeupPageSize: u32 = 64;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const AaaMaxWakeupBucketSize: u32 = 10_000;
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
@@ -1259,6 +1261,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxExecutionsPerBlock = AaaMaxExecutionsPerBlock;
   type MaxQueueLength = AaaMaxQueueLength;
   type QueuePageSize = AaaQueuePageSize;
+  type WakeupPageSize = AaaWakeupPageSize;
   type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
   type MaxWakeupBucketSize = AaaMaxWakeupBucketSize;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;

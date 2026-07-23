@@ -4,6 +4,45 @@ use polkadot_sdk::sp_runtime::Perbill;
 pub type AaaId = u64;
 pub type QueueTicket = u64;
 pub type QueuePageId = u64;
+pub type WakeupPageId = u64;
+pub type WakeupSlot = u32;
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupPointer<BlockNumber> {
+  pub block: BlockNumber,
+  pub page_id: WakeupPageId,
+  pub slot: WakeupSlot,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupEntry {
+  pub aaa_id: AaaId,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupPage<Entries> {
+  pub entries: Entries,
+  pub live_entries: u32,
+  pub scan_slot: WakeupSlot,
+  pub previous_page: Option<WakeupPageId>,
+  pub next_page: Option<WakeupPageId>,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupBucketState {
+  pub head_page: WakeupPageId,
+  pub tail_page: WakeupPageId,
+  pub next_page_id: WakeupPageId,
+  pub live_entries: u32,
+}
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,

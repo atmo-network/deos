@@ -4,8 +4,8 @@ use crate::{
   IdleStarvationBlocks, Mutability, NextAaaId, OnCloseStepFailureKind, OwnerSlotMask, PauseReason,
   ProgramInput, QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow,
   SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy,
-  StepOf, StepSkippedReason, SweepCursor, Task, TaskOf, Trigger, adapters::AssetOps, mock::*,
-  types::FundingBatch,
+  StepOf, StepSkippedReason, SweepCursor, Task, TaskOf, Trigger, WakeupBucketState, WakeupEntry,
+  WakeupPage, WakeupPointer, adapters::AssetOps, mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
 use polkadot_sdk::frame_support::{
@@ -252,6 +252,47 @@ fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
     ("activate_aaa", 21),
     ("deactivate_aaa", 22),
   ]);
+}
+
+#[test]
+fn paged_wakeup_primitives_encode_exact_pointer_and_bounded_page_ownership() {
+  let pointer = WakeupPointer {
+    block: 42u64,
+    page_id: 7,
+    slot: 3,
+  };
+  assert_eq!(pointer.block, 42);
+  assert_eq!(pointer.page_id, 7);
+  assert_eq!(pointer.slot, 3);
+
+  let entries =
+    BoundedVec::<Option<WakeupEntry>, <Test as crate::Config>::WakeupPageSize>::try_from(vec![
+      Some(WakeupEntry { aaa_id: 9 }),
+      None,
+    ])
+    .expect("wakeup page entries fit");
+  let page = WakeupPage {
+    entries,
+    live_entries: 1,
+    scan_slot: 0,
+    previous_page: Some(6),
+    next_page: Some(8),
+  };
+  assert_eq!(page.entries[0], Some(WakeupEntry { aaa_id: 9 }));
+  assert_eq!(page.entries[1], None);
+  assert_eq!(page.live_entries, 1);
+  assert_eq!((page.previous_page, page.next_page), (Some(6), Some(8)));
+
+  let bucket = WakeupBucketState {
+    head_page: 6,
+    tail_page: 8,
+    next_page_id: 9,
+    live_entries: 65,
+  };
+  assert_eq!(bucket.head_page, 6);
+  assert_eq!(bucket.tail_page, 8);
+  assert_eq!(bucket.next_page_id, 9);
+  assert_eq!(bucket.live_entries, 65);
 }
 
 #[test]

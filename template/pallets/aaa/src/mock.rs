@@ -861,6 +861,7 @@ impl pallet_aaa::Config for Test {
   type MaxExecutionsPerBlock = ConstU32<3>;
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
+  type WakeupPageSize = ConstU32<32>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxWakeupBucketSize = ConstU32<1024>;
   type MaxWakeupsPerBlock = ConstU32<64>;

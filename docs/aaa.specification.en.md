@@ -1033,10 +1033,11 @@ This section defines the stable storage surface. Actor cardinality/capacity, imm
 - `ClosedSystemAaaIds` (`Map<Blake2_128Concat(AaaId), Mutability>`): System close tombstones governing reopen eligibility
 - `QueueHead` / `QueueTail` (`QueueTicket = u64`): monotonic unconsumed interval and next append ticket
 - `QueuePages` (`Map<Blake2_128Concat<QueuePageId>, BoundedVec<QueueEntry, QueuePageSize>>`): bounded physical pages for the logical FIFO; tickets derive from page and slot unless benchmarked production metadata explicitly stores them
-- `WakeupIndex` (`Map<Blake2_128Concat(BlockNum), BoundedVec<AaaId, MaxWakeupBucketSize>>`) / `MinWakeupBlock` (`BlockNumber`): canonical temporal index and earliest unresolved bucket
-- `ScheduledWakeupBlock` (`Map<Blake2_128Concat(AaaId), BlockNumber>`) / `WakeupRetryPending` (`Map<Blake2_128Concat(AaaId), bool>`): canonical single-entry wakeup pointer and durable saturation-retry marker per actor
-- `WakeupScheduleDrops` (`u64`): counter of wakeups that could not be scheduled
+- `WakeupPages` (`Map<Blake2_128Concat((BlockNumber, WakeupPageId)), WakeupPage>`): fixed-size temporal pages whose optional slots contain only `WakeupEntry { aaa_id }`; each page owns a bounded scan cursor, live-entry count, and previous/next page links
+- `WakeupBuckets` (`Map<Blake2_128Concat(BlockNumber), WakeupBucketState>`): bounded head/tail/next-page/live-entry metadata for one target block; page ids are monotonic within the bucket and page unlink remains O(1)
+- `MinWakeupBlock` (`BlockNumber`): earliest unresolved temporal bucket or bounded repair cursor; sparse-future and overdue recovery MUST NOT require an actor scan
 - `ActorHot.queue_ticket` (`Option<QueueTicket>`): sole live queue membership and lazy-invalidation marker
+- `ActorHot.wakeup_pointer` (`Option<WakeupPointer { block, page_id, slot }>`): sole live temporal membership; replacement and lifecycle invalidation update the exact bounded page slot, while drain clears only a matching pointer
 - `ActorHot.pending_signal` (`bool`): canonical Manual/AddressEvent readiness latch
 - `OwnerSlotMask` (`Map<Blake2_128Concat(AccountId), u8>`) / `SovereignIndex` (`Map<Blake2_128Concat(AccountId), AaaId>`): User-slot occupancy and active-or-dormant sovereign guard
 - `ActiveActorLimit` (`u32`): governance-controlled operational cap constrained by hard and queue bounds; stored `0` resolves to the bounded runtime default for compatibility
