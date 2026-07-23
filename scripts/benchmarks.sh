@@ -204,6 +204,7 @@ verify_weight_file_contract() {
         "scheduler_paged_append_new_page"
         "scheduler_paged_consume_preserve_page"
         "scheduler_paged_consume_delete_page"
+        "scheduler_paged_tombstone_drain"
         "scheduler_wakeup_dense_due_drain"
         "compatibility_ingress_drain"
         "transaction_extension_ingress_base"

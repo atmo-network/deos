@@ -2676,6 +2676,81 @@ fn paged_queue_replacement_ticket_leaves_old_entry_as_tombstone() {
 }
 
 #[test]
+fn paged_tombstone_drain_is_scan_bounded_and_reclaims_multiple_pages() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut actors = Vec::new();
+    for _ in 0..65 {
+      let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      assert!(AAA::paged_enqueue(aaa_id));
+      actors.push(aaa_id);
+    }
+    for aaa_id in actors {
+      assert!(AAA::paged_invalidate(aaa_id).is_some());
+    }
+
+    let cutoff = AAA::queue_tail();
+    let first = AAA::paged_drain_tombstones(cutoff, 10);
+    assert_eq!(first.entries_scanned, 10);
+    assert_eq!(first.tombstones_skipped, 10);
+    assert_eq!(first.pages_touched, 1);
+    assert_eq!(first.pages_deleted, 0);
+    assert_eq!(AAA::queue_head(), 10);
+
+    let rest = AAA::paged_drain_tombstones(cutoff, 55);
+    assert_eq!(rest.entries_scanned, 55);
+    assert_eq!(rest.tombstones_skipped, 55);
+    assert_eq!(rest.pages_touched, 3);
+    assert_eq!(rest.pages_deleted, 3);
+    assert_eq!(AAA::queue_head(), 96);
+    assert_eq!(AAA::queue_tail(), 96);
+    assert!(AAA::queue_pages(0).is_none());
+    assert!(AAA::queue_pages(1).is_none());
+    assert!(AAA::queue_pages(2).is_none());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn paged_tombstone_drain_stops_at_live_head_and_honors_cutoff() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let stale = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let live = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let appended_after_cutoff =
+      create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    assert!(AAA::paged_enqueue(stale));
+    assert!(AAA::paged_enqueue(live));
+    let cutoff = AAA::queue_tail();
+    assert!(AAA::paged_enqueue(appended_after_cutoff));
+    assert_eq!(AAA::paged_invalidate(stale), Some(0));
+    assert_eq!(AAA::paged_invalidate(appended_after_cutoff), Some(2));
+
+    let drained = AAA::paged_drain_tombstones(cutoff, 100);
+    assert_eq!(drained.entries_scanned, 2);
+    assert_eq!(drained.tombstones_skipped, 1);
+    assert_eq!(drained.pages_touched, 1);
+    assert_eq!(AAA::queue_head(), 1);
+    assert_eq!(AAA::queue_tail(), 3);
+    assert_eq!(
+      AAA::actor_hot(live).expect("live actor").queue_ticket,
+      Some(1)
+    );
+
+    assert!(AAA::paged_consume_head(1));
+    let after_live = AAA::paged_drain_tombstones(cutoff, 100);
+    assert_eq!(
+      after_live.entries_scanned, 0,
+      "ticket 2 is beyond the captured cutoff"
+    );
+    assert_eq!(AAA::queue_head(), 2);
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
 fn actor_queue_epoch_deduplicates_same_block_enqueue_attempts() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

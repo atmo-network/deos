@@ -574,7 +574,15 @@ Production-Wasm queue-operation comparison (`50` steps, `20` repeats; each cell 
 | 64 | `31,499,000 / 5,179` | `27,169,000 / 4,665` | `21,511,000 / 4,125` | `22,908,000 / 4,117` |
 | 128 | `37,715,000 / 5,862` | `29,543,000 / 4,670` | `21,372,000 / 4,125` | `22,769,000 / 4,117` |
 
-These measurements establish the generated append and consume/delete models. They do not select page size or establish end-to-end scheduler throughput because page-touch frequency and multi-page scan cost remain unmeasured.
+These measurements establish the generated append and consume/delete models. A second production-Wasm benchmark drains `n` absent-actor tombstones over multiple pages and yields:
+
+| Page entries | RefTime model | Estimated ProofSize model | Page keys at 10,000 entries |
+| --- | --- | --- | --- |
+| 32 | `20,394,000 + 2,313,709n` | `2,949 + 2,484n` | 313 |
+| 64 | `20,254,000 + 2,166,703n` | `2,903 + 2,484n` | 157 |
+| 128 | `20,045,000 + 2,084,347n` | `2,844 + 2,483n` | 79 |
+
+The reusable drain primitive snapshots an explicit cutoff, stops at the first live ticket, persists exact partial progress, reclaims exhausted pages, and reports entries scanned, tombstones skipped, pages touched, and pages deleted independently. These measurements still do not select page size or establish end-to-end scheduler throughput: mixed live/stale execution, 1,000 cheap actors, and sustained 10,000-entry recovery remain open evidence.
 - The `50%` reserve provides `Weight::from_parts(1_000_000_000_000, 2_500_000)` and admits the guaranteed scheduler envelope (`1,061,855` proof bytes), reference genesis System AAA `0` cycle (`757,966`), and its close tail (`370,971`) together at `2,190,792` proof bytes. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work, not every optional ingress-drain, heavyweight wakeup-retry, or sweep-time terminal-close unit; saturated durable housekeeping therefore converges across blocks and may defer an actor cycle
 - Runtime binds `GuaranteedOnIdleWeight` directly to the 50% reserve. Genesis construction asserts the contract, create/reopen reject before fee collection or mutation, and both plan-update paths validate the prospective run/close pair; `ExecutionPlanExceedsOnIdleBudget` reports either-dimensional rejection
 - Every reference genesis actor fits the guaranteed scheduler envelope, its cycle, and close tail under that gate; a runtime regression checks the full set. Exact-reserve stress regressions prove mixed zero-amount staking/transfer FIFO carry-over with nonce spread `<= 1`, no starvation or failed steps, eventual drain of a maximum address-ingress batch while an XCM deposit trigger remains executable, and convergence of a maximum wakeup-retry prefix plus expired-actor cleanup while a non-empty close tail and live actors progress

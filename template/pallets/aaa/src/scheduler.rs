@@ -285,6 +285,73 @@ impl<T: Config> Pallet<T> {
     true
   }
 
+  /// Drain only stale physical entries before `cutoff`, stopping at the first
+  /// live actor ticket. Scanning and successful execution therefore remain
+  /// independent resources, and a caller can snapshot `QueueTail` at block start.
+  pub fn paged_drain_tombstones(cutoff: QueueTicket, scan_limit: u32) -> QueueDrainStats {
+    let mut stats = QueueDrainStats::default();
+    if scan_limit == 0 {
+      return stats;
+    }
+    let original_head = QueueHead::<T>::get();
+    let tail = QueueTail::<T>::get();
+    let cutoff = cutoff.min(tail);
+    let page_size = Self::queue_page_size();
+    let mut head = original_head;
+    let mut last_deleted_page = None;
+
+    'pages: while head < cutoff && stats.entries_scanned < scan_limit {
+      let (page_id, mut slot) = Self::queue_page_and_slot(head);
+      let Some(page) = QueuePages::<T>::get(page_id) else {
+        break;
+      };
+      stats.pages_touched = stats.pages_touched.saturating_add(1);
+      while head < cutoff && stats.entries_scanned < scan_limit && slot < page.len() {
+        let entry = page[slot];
+        stats.entries_scanned = stats.entries_scanned.saturating_add(1);
+        let is_live =
+          ActorHot::<T>::get(entry.aaa_id).is_some_and(|hot| hot.queue_ticket == Some(head));
+        if is_live {
+          break 'pages;
+        }
+        stats.tombstones_skipped = stats.tombstones_skipped.saturating_add(1);
+        head = head.saturating_add(1);
+        slot = slot.saturating_add(1);
+      }
+      if slot == page.len() {
+        QueuePages::<T>::remove(page_id);
+        last_deleted_page = Some(page_id);
+        stats.pages_deleted = stats.pages_deleted.saturating_add(1);
+      } else if slot < page.len() {
+        break;
+      }
+    }
+
+    if head == original_head {
+      return stats;
+    }
+    if head == tail {
+      let remainder = tail % page_size;
+      let aligned = if remainder == 0 {
+        tail
+      } else {
+        tail.saturating_add(page_size.saturating_sub(remainder))
+      };
+      if remainder != 0 {
+        let (page_id, _) = Self::queue_page_and_slot(head.saturating_sub(1));
+        if last_deleted_page != Some(page_id) {
+          QueuePages::<T>::remove(page_id);
+          stats.pages_deleted = stats.pages_deleted.saturating_add(1);
+        }
+      }
+      QueueHead::<T>::put(aligned);
+      QueueTail::<T>::put(aligned);
+    } else {
+      QueueHead::<T>::put(head);
+    }
+    stats
+  }
+
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) {
     let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
       return;

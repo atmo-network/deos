@@ -11,6 +11,14 @@ pub type QueuePageId = u64;
 pub struct QueueEntry {
   pub aaa_id: AaaId,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueueDrainStats {
+  pub entries_scanned: u32,
+  pub tombstones_skipped: u32,
+  pub pages_touched: u32,
+  pub pages_deleted: u32,
+}
 pub const SYSTEM_OWNER_SLOT_SENTINEL: u8 = 0;
 
 #[derive(

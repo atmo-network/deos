@@ -1222,6 +1222,40 @@ mod benches {
     assert!(!QueuePages::<T>::contains_key(0));
   }
 
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_tombstone_drain(n: Linear<1, 10_000>) {
+    let bounded = n.min(T::MaxQueueLength::get());
+    let page_size = T::QueuePageSize::get();
+    let mut ticket = 0u64;
+    while ticket < u64::from(bounded) {
+      let page_id = ticket / u64::from(page_size);
+      let remaining = u64::from(bounded).saturating_sub(ticket);
+      let entries = remaining.min(u64::from(page_size));
+      let page = (0..entries)
+        .map(|offset| QueueEntry {
+          aaa_id: 37_000_000u64.saturating_add(ticket).saturating_add(offset),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      QueuePages::<T>::insert(
+        page_id,
+        BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
+          .expect("benchmark queue page must fit configured page size"),
+      );
+      ticket = ticket.saturating_add(entries);
+    }
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(bounded));
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::paged_drain_tombstones(
+        u64::from(bounded),
+        bounded,
+      ));
+    }
+    assert!(QueueHead::<T>::get() >= u64::from(bounded));
+    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+  }
+
   // Runtime-backed hook benchmark for dense overdue wakeup admission.
   #[benchmark]
   fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {
