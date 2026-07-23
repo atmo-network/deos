@@ -10,6 +10,8 @@
 - `Single Ownership`: Keep each fact in one authoritative surface and replace duplicated detail with a truth-owner reference.
 - `Boundary Clarity`: Keep meta-protocol, project architecture, open work, delivery history, and subsystem implementation truth in their respective layers.
 - `Constraint-Driven Evolution`: Add structure only after real constraints expose the need; preserve complexity earned by invariants and delete complexity created by habit.
+- `Progressive Enhancement`: Keep the smallest correct baseline independently usable, then add capability, evidence, performance, and integration layers only when their contracts and prerequisites become explicit.
+- `Graceful Degradation`: When an optional tool, provider, adapter, or evidence layer is unavailable, fall back to an explicit narrower capability without weakening invariants, atomicity, safety, or truth classification; required layers fail closed instead of silently changing semantics.
 - `Test-Driven Evolution`: Treat context structure, links, terminology, claims, and open-work truth as testable infrastructure rather than optional prose hygiene.
 - `Context Optimization`: Evolution includes addition, consolidation, relocation, and deletion; growth alone does not count as improvement.
 - `Progressive Consolidation`: Move exploratory knowledge toward stable contracts as evidence accumulates, then retire parallel or superseded explanations.

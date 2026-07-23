@@ -62,7 +62,7 @@ Default changed-scope route:
 ./.agents/skills/alignment/scripts/completion-gate.sh
 ```
 
-Select additional leaves only when the touched contract requires them:
+Select additional leaves only when the touched contract requires them. Routing follows progressive enhancement and graceful degradation: begin with the smallest sufficient canonical route, escalate through declared layers, and represent unavailable optional evidence as an explicit narrower result. Never replace a missing required layer with a weaker semantic claim.
 
 | Changed scope | Targeted route | Excluded by default | Escalation trigger |
 | --- | --- | --- | --- |
