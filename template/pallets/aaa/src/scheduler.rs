@@ -922,9 +922,10 @@ impl<T: Config> Pallet<T> {
   fn funding_event_authorized(
     aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
+    funding: &ActorFundingStateOf<T>,
     provenance: Option<&FundingProvenance<T::AccountId>>,
   ) -> bool {
-    provenance.is_some_and(|provenance| match &instance.funding_source_policy {
+    provenance.is_some_and(|provenance| match &funding.funding_source_policy {
       FundingSourcePolicy::OwnerOnly => matches!(
         provenance,
         FundingProvenance::Signed(source) if source == &instance.owner
@@ -949,14 +950,16 @@ impl<T: Config> Pallet<T> {
     let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
       return Ok(());
     };
-    if Self::is_window_expired(&instance)
-      || !Self::funding_event_authorized(aaa_id, &instance, provenance)
-      || !instance.funding_tracked_assets.contains(&asset)
-      || amount.is_zero()
+    if Self::is_window_expired(&instance) || amount.is_zero() {
+      return Ok(());
+    }
+    let funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+    if !Self::funding_event_authorized(aaa_id, &instance, &funding, provenance)
+      || !funding.funding_tracked_assets.contains(&asset)
     {
       return Ok(());
     }
-    if let Some(batch) = instance.funding_snapshots.get(&asset) {
+    if let Some(batch) = funding.funding_snapshots.get(&asset) {
       ensure!(
         batch.pending_amount.checked_add(&amount).is_some(),
         Error::<T>::FundingBatchOverflow
@@ -990,14 +993,13 @@ impl<T: Config> Pallet<T> {
     apply_trigger: bool,
     apply_funding: bool,
   ) -> DispatchResult {
-    let mut instance = match AaaInstances::<T>::get(aaa_id) {
+    let instance = match AaaInstances::<T>::get(aaa_id) {
       Some(inst) => inst,
       None => return Ok(()),
     };
     if Self::is_window_expired(&instance) {
       return Ok(());
     }
-    let mut instance_modified = false;
     let mut inbox_matched = false;
     if apply_trigger
       && let Trigger::OnAddressEvent {
@@ -1015,45 +1017,42 @@ impl<T: Config> Pallet<T> {
         AddressEventInbox::<T>::insert(aaa_id, ());
       }
     }
-    if apply_funding
-      && Self::funding_event_authorized(aaa_id, &instance, provenance)
-      && instance.funding_tracked_assets.contains(&asset)
-      && amount > Zero::zero()
-    {
-      if let Some(batch) = instance.funding_snapshots.get_mut(&asset) {
-        let pending_amount = batch
-          .pending_amount
-          .checked_add(&amount)
-          .ok_or(Error::<T>::FundingBatchOverflow)?;
-        batch.pending_amount = pending_amount;
-        instance_modified = true;
-        Self::deposit_event(Event::FundingBatchPendingAccumulated {
-          aaa_id,
-          asset,
-          added: amount,
-          pending_amount,
-        });
-      } else {
-        instance
-          .funding_snapshots
-          .try_insert(
+    if apply_funding && amount > Zero::zero() {
+      let mut funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      if Self::funding_event_authorized(aaa_id, &instance, &funding, provenance)
+        && funding.funding_tracked_assets.contains(&asset)
+      {
+        if let Some(batch) = funding.funding_snapshots.get_mut(&asset) {
+          let pending_amount = batch
+            .pending_amount
+            .checked_add(&amount)
+            .ok_or(Error::<T>::FundingBatchOverflow)?;
+          batch.pending_amount = pending_amount;
+          Self::deposit_event(Event::FundingBatchPendingAccumulated {
+            aaa_id,
             asset,
-            FundingBatch {
-              amount,
-              pending_amount: Zero::zero(),
-            },
-          )
-          .map_err(|_| Error::<T>::FundingBatchOverflow)?;
-        instance_modified = true;
-        Self::deposit_event(Event::FundingBatchActivated {
-          aaa_id,
-          asset,
-          amount,
-        });
+            added: amount,
+            pending_amount,
+          });
+        } else {
+          funding
+            .funding_snapshots
+            .try_insert(
+              asset,
+              FundingBatch {
+                amount,
+                pending_amount: Zero::zero(),
+              },
+            )
+            .map_err(|_| Error::<T>::FundingBatchOverflow)?;
+          Self::deposit_event(Event::FundingBatchActivated {
+            aaa_id,
+            asset,
+            amount,
+          });
+        }
+        ActorFunding::<T>::insert(aaa_id, funding);
       }
-    }
-    if instance_modified {
-      AaaInstances::<T>::insert(aaa_id, instance);
     }
     if inbox_matched {
       Self::enqueue(aaa_id);

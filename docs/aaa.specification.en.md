@@ -70,7 +70,7 @@ struct ActorProgram {
     on_close_execution_plan: BoundedVec<Step, MaxSteps>,
 }
 
-struct ActorFunding<AccountId, BlockNumber, Balance> {
+struct ActorFunding<AccountId, Balance> {
     funding_source_policy: FundingSourcePolicy<AccountId>,
     funding_tracked_assets: BoundedBTreeSet<AssetId, MaxFundingTrackedAssets>,
     funding_snapshots: BoundedBTreeMap<AssetId, FundingBatch<Balance>, MaxFundingTrackedAssets>,
@@ -145,7 +145,7 @@ System AAA is exempt from `MinUserBalance` checks and MUST NOT auto-pause on `Fu
 
 `WindowExpired` MUST be evaluated at every lifecycle touch point (scheduler admission, sweep extrinsics, `manual_trigger`, pause/resume, schedule/execution-plan/funding-policy update). `schedule_window = None` never expires. If `current_block > schedule_window.end`, runtime closes before and instead of other mutations in that call. Ordinary transfers remain balance movements rather than lifecycle touchpoints; ingress for an expired actor MUST NOT arm new funding state before bounded lifecycle closure. Schedule window eligibility is inclusive on `end`: `start <= current_block <= end`; closure starts only when `current_block > end`.
 
-Lifecycle separates durable actor identity from an optional executable program. The class is one of `UserMutable { owner_slot }`, `UserImmutable { owner_slot }`, `SystemMutable`, or `SystemImmutable`; implementations MUST reject or make unrepresentable a User without a valid occupied slot, any Immutable actor without an active program, and any class/mutability mismatch. Program lifecycle is `Dormant | Active | Paused(PauseReason)`. `Dormant` retains `aaa_id`, class, owner, sovereign account, creation lineage, and owner-slot occupancy but owns no schedule, window, plans, funding policy or batches, cached plan bounds, readiness mirror, queue ticket, wakeup pointer, inbox latch, cycle/failure/lease counters, fee work, or periodic events. A runtime-specific protocol/custody account that needs only deterministic account derivation MUST remain outside actor identity storage entirely.
+Lifecycle separates durable actor identity from an optional executable program. `ActorClass` is `User { owner_slot } | System`, with mutability stored independently; implementations MUST reject or make unrepresentable a User without a valid occupied slot and any Immutable actor without an active program. Program lifecycle is `Dormant | Active | Paused(PauseReason)`. `Dormant` retains `aaa_id`, class, owner, sovereign account, creation lineage, and owner-slot occupancy but owns no schedule, window, plans, funding policy or batches, cached plan bounds, readiness mirror, queue ticket, wakeup pointer, inbox latch, cycle/failure/lease counters, fee work, or periodic events. A runtime-specific protocol/custody account that needs only deterministic account derivation MUST remain outside actor identity storage entirely.
 
 Active lifecycle is `Created → Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed`; pause is an active-program state rather than dormancy. Normal cycles are scheduler-owned runs of `execution_plan`, increment `cycle_nonce` at admission, and emit `CycleStarted`/`CycleSummary`. Close tails are terminal runs of `on_close_execution_plan`; they are not normal cycles, MUST NOT increment `cycle_nonce`, and emit close-tail events followed by `AaaClosed`. Lifecycle touch extrinsics MAY detect terminal state and enter the close path, but MUST NOT present that path as a normal cycle.
 
@@ -698,7 +698,7 @@ Each block MUST use a two-dimensional weight meter to admit bounded ingress, wak
 
 ### 8.3 Scheduler Liveness Matrix
 
-- Queue carry-over: deferred, leftover, and execution-created late enqueues persist in deterministic FIFO order and MUST be revalidated at pop
+- Queue carry-over: deferred, leftover, and execution-created late enqueues persist in deterministic FIFO order and MUST be revalidated at pop. A ready live head that fails admission only because the remaining block budget cannot fit its complete unit MUST retain its queue position and become the first candidate next block; carry-over MUST NOT move it behind a later entry or assign it a new FIFO identity.
 - Timer due: delayed wakeup moves to active queue; actor wakeup pointer clears when drained
 - AddressEvent matched: set/keep inbox latch; enqueue best effort; overflow MUST NOT clear the latch
 - Manual trigger: set flag and enqueue/schedule; deferral preserves flag until admitted cycle start

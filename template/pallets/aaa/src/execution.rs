@@ -100,13 +100,13 @@ enum PreparedTaskOutcome<T: Config> {
 impl<T: Config> Pallet<T> {
   pub(crate) fn promote_pending_funding(aaa_id: AaaId) {
     let mut promotions = alloc::vec::Vec::new();
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let Some(inst) = maybe.as_mut() else {
+    ActorFunding::<T>::mutate(aaa_id, |maybe| {
+      let Some(funding) = maybe.as_mut() else {
         return;
       };
-      let assets: alloc::vec::Vec<_> = inst.funding_snapshots.keys().copied().collect();
+      let assets: alloc::vec::Vec<_> = funding.funding_snapshots.keys().copied().collect();
       for asset in assets {
-        let Some(batch) = inst.funding_snapshots.get_mut(&asset) else {
+        let Some(batch) = funding.funding_snapshots.get_mut(&asset) else {
           continue;
         };
         if batch.pending_amount.is_zero() {
@@ -170,10 +170,13 @@ impl<T: Config> Pallet<T> {
       aaa_id,
       cycle_nonce,
     });
+    let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
+      return base_weight;
+    };
     let actor = instance.sovereign_account.clone();
     let is_user = instance.actor_class.aaa_type() == AaaType::User;
     let execution_plan = &instance.execution_plan;
-    let funding_snapshots = &instance.funding_snapshots;
+    let funding_snapshots = &funding.funding_snapshots;
     let mut executed_steps: u32 = 0;
     let mut skipped_conditions: u32 = 0;
     let mut skipped_resolution: u32 = 0;
@@ -463,9 +466,12 @@ impl<T: Config> Pallet<T> {
     instance: &AaaInstanceOf<T>,
     mut reserved_fee_remaining: T::Balance,
   ) {
+    let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
+      return;
+    };
     let actor = &instance.sovereign_account;
     let execution_plan = &instance.on_close_execution_plan;
-    let funding_snapshots = &instance.funding_snapshots;
+    let funding_snapshots = &funding.funding_snapshots;
     let is_user = instance.actor_class.aaa_type() == AaaType::User;
     let trigger_balances =
       Self::capture_trigger_balances(actor, execution_plan, reserved_fee_remaining);

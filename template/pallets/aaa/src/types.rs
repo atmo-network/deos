@@ -961,16 +961,7 @@ pub struct DormantAaaIdentity<AccountId, BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct AaaInstance<
-  AccountId,
-  BlockNumber,
-  Schedule,
-  ExecutionPlan,
-  FundingPolicy,
-  FundingSnapshots,
-  FundingTrackedAssets,
-  Balance,
-> {
+pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
@@ -984,13 +975,19 @@ pub struct AaaInstance<
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
   pub manual_trigger_pending: bool,
-  pub funding_source_policy: FundingPolicy,
-  pub funding_snapshots: FundingSnapshots,
-  pub funding_tracked_assets: FundingTrackedAssets,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
   pub created_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorFundingState<FundingPolicy, FundingSnapshots, FundingTrackedAssets> {
+  pub funding_source_policy: FundingPolicy,
+  pub funding_snapshots: FundingSnapshots,
+  pub funding_tracked_assets: FundingTrackedAssets,
 }
 
 #[derive(

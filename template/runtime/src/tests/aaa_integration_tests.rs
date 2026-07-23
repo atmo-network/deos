@@ -190,6 +190,10 @@ fn create_system(
   id
 }
 
+fn actor_funding(aaa_id: AaaId) -> pallet_aaa::ActorFundingStateOf<Runtime> {
+  AAA::actor_funding(aaa_id).expect("active actor funding exists")
+}
+
 fn aaa_account(aaa_id: AaaId) -> crate::AccountId {
   AAA::aaa_instances(aaa_id)
     .map(|instance| instance.sovereign_account)
@@ -918,7 +922,7 @@ fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert_eq!(instance.lifecycle, pallet_aaa::ActiveLifecycle::Active);
     fund_native_via_call(CHARLIE, aaa_id, 8_000_000_000_000);
-    let updated = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    let updated = actor_funding(aaa_id);
     let batch = updated
       .funding_snapshots
       .get(&AssetKind::Native)
@@ -1864,10 +1868,10 @@ fn internal_asset_transfer_rolls_back_when_funding_pending_overflows() {
       FundingSourcePolicy::AnySource
     ));
     let sovereign = aaa_account(aaa_id);
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_id, |maybe| {
+    pallet_aaa::ActorFunding::<Runtime>::mutate(aaa_id, |maybe| {
       maybe
         .as_mut()
-        .expect("system actor")
+        .expect("system actor funding")
         .funding_snapshots
         .try_insert(
           AssetKind::Native,
@@ -2000,10 +2004,10 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
       FundingSourcePolicy::AnySource
     ));
     let sovereign = aaa_account(bm_id);
-    pallet_aaa::AaaInstances::<Runtime>::mutate(bm_id, |maybe| {
+    pallet_aaa::ActorFunding::<Runtime>::mutate(bm_id, |maybe| {
       maybe
         .as_mut()
-        .expect("burning manager")
+        .expect("burning manager funding")
         .funding_snapshots
         .try_insert(
           AssetKind::Native,
@@ -2086,9 +2090,9 @@ fn privileged_asset_transfer_source_cannot_impersonate_verified_signed_funding()
     ));
 
     assert_eq!(Assets::balance(ASSET_A, sovereign), 10_000);
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    let funding = actor_funding(aaa_id);
     assert!(
-      !instance
+      !funding
         .funding_snapshots
         .contains_key(&AssetKind::Local(ASSET_A))
     );
@@ -2250,7 +2254,7 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
       sender_id
     ));
     run_idle(Weight::MAX);
-    let updated = AAA::aaa_instances(target_id).expect("AAA exists");
+    let updated = actor_funding(target_id);
     let batch = updated
       .funding_snapshots
       .get(&AssetKind::Native)
@@ -2351,8 +2355,8 @@ fn system_runtime_policy_defaults_deny_for_signed_internal_and_xcm_provenance() 
       native_balance(&sovereign),
       sourced_amount.saturating_add(source_less_amount)
     );
-    let instance = AAA::aaa_instances(aaa_id).expect("system actor");
-    assert!(instance.funding_snapshots.get(&AssetKind::Native).is_none());
+    let funding = actor_funding(aaa_id);
+    assert!(funding.funding_snapshots.get(&AssetKind::Native).is_none());
   });
 }
 
@@ -2373,10 +2377,10 @@ fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
       FundingSourcePolicy::AnySource
     ));
     let sovereign = aaa_account(aaa_id);
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_id, |maybe| {
+    pallet_aaa::ActorFunding::<Runtime>::mutate(aaa_id, |maybe| {
       maybe
         .as_mut()
-        .expect("system actor")
+        .expect("system actor funding")
         .funding_snapshots
         .try_insert(
           AssetKind::Native,
@@ -2634,7 +2638,7 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
       7_000,
       Some(pallet_aaa::FundingProvenance::Signed(ALICE))
     ));
-    let queued = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    let queued = actor_funding(aaa_id);
     let batch = queued
       .funding_snapshots
       .get(&AssetKind::Native)
@@ -2644,7 +2648,7 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
     assert!(AAA::address_event_inbox(aaa_id).is_none());
 
     assert_eq!(AAA::drain_address_event_overflow(2), 2);
-    let drained = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    let drained = actor_funding(aaa_id);
     let batch = drained
       .funding_snapshots
       .get(&AssetKind::Native)
@@ -3137,12 +3141,7 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
         .saturating_add(donor_amount)
         .saturating_add(1)
     );
-    assert!(
-      AAA::aaa_instances(aaa_id)
-        .expect("AAA exists")
-        .funding_snapshots
-        .is_empty()
-    );
+    assert!(actor_funding(aaa_id).funding_snapshots.is_empty());
 
     let owner_amount = 11_000_000_000_000;
     let owner_call =
@@ -3154,8 +3153,8 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
       Executive::apply_extrinsic(signed_extrinsic(&owner_pair, 0, owner_call)),
       Ok(Ok(_))
     ));
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    let batch = instance
+    let funding = actor_funding(aaa_id);
+    let batch = funding
       .funding_snapshots
       .get(&AssetKind::Native)
       .expect("owner activates funding");
@@ -3202,12 +3201,7 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
       Ok(Ok(_))
     ));
     assert_eq!(Assets::balance(asset_id, sovereign.clone()), donor_amount);
-    assert!(
-      AAA::aaa_instances(aaa_id)
-        .expect("AAA exists")
-        .funding_snapshots
-        .is_empty()
-    );
+    assert!(actor_funding(aaa_id).funding_snapshots.is_empty());
 
     let owner_amount = 11_000;
     let owner_call = RuntimeCall::Assets(polkadot_sdk::pallet_assets::Call::transfer {
@@ -3223,8 +3217,8 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
       Assets::balance(asset_id, sovereign),
       donor_amount.saturating_add(owner_amount)
     );
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    let batch = instance
+    let funding = actor_funding(aaa_id);
+    let batch = funding
       .funding_snapshots
       .get(&tracked_asset)
       .expect("owner activates asset funding");
@@ -3256,10 +3250,10 @@ fn signed_fixed_transfer_is_rejected_before_dispatch_when_funding_pending_overfl
       execution_plan,
     );
     let sovereign = aaa_account(aaa_id);
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_id, |maybe| {
+    pallet_aaa::ActorFunding::<Runtime>::mutate(aaa_id, |maybe| {
       maybe
         .as_mut()
-        .expect("user actor")
+        .expect("user actor funding")
         .funding_snapshots
         .try_insert(
           AssetKind::Native,
@@ -3304,10 +3298,10 @@ fn signed_transfer_all_is_rejected_before_dispatch_when_funding_pending_overflow
       execution_plan,
     );
     let sovereign = aaa_account(aaa_id);
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_id, |maybe| {
+    pallet_aaa::ActorFunding::<Runtime>::mutate(aaa_id, |maybe| {
       maybe
         .as_mut()
-        .expect("user actor")
+        .expect("user actor funding")
         .funding_snapshots
         .try_insert(
           AssetKind::Native,

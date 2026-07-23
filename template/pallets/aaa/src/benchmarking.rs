@@ -516,9 +516,9 @@ mod benches {
     let policy = FundingSourcePolicy::SignedAllowlist(allowed);
     #[extrinsic_call]
     update_funding_source_policy(RawOrigin::Signed(caller), aaa_id, policy);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after policy update");
+    let funding = ActorFunding::<T>::get(aaa_id).expect("actor funding must exist after update");
     assert!(matches!(
-      inst.funding_source_policy,
+      funding.funding_source_policy,
       FundingSourcePolicy::SignedAllowlist(_)
     ));
   }
@@ -528,10 +528,10 @@ mod benches {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
     let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let instance = maybe.as_mut().expect("benchmark actor exists");
+    ActorFunding::<T>::mutate(aaa_id, |maybe| {
+      let funding = maybe.as_mut().expect("benchmark actor funding exists");
       for asset in funding_assets {
-        instance
+        funding
           .funding_snapshots
           .try_insert(
             asset,
@@ -549,7 +549,12 @@ mod benches {
     update_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after update_execution_plan");
     assert_eq!(inst.execution_plan, replacement);
-    assert!(inst.funding_snapshots.is_empty());
+    assert!(
+      ActorFunding::<T>::get(aaa_id)
+        .expect("actor funding exists")
+        .funding_snapshots
+        .is_empty()
+    );
   }
 
   #[benchmark]
@@ -976,10 +981,10 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let recipient = Pallet::<T>::sovereign_account_id_system(aaa_id);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let instance = maybe.as_mut().expect("benchmark actor exists");
-      instance.funding_source_policy = FundingSourcePolicy::AnySource;
-      instance
+    ActorFunding::<T>::mutate(aaa_id, |maybe| {
+      let funding = maybe.as_mut().expect("benchmark actor funding exists");
+      funding.funding_source_policy = FundingSourcePolicy::AnySource;
+      funding
         .funding_snapshots
         .try_insert(
           T::NativeAssetId::get(),
@@ -1256,10 +1261,10 @@ mod benches {
     let owner: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(owner);
     let assets = T::BenchmarkHelper::funding_assets(a);
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let instance = maybe.as_mut().expect("benchmark actor exists");
+    ActorFunding::<T>::mutate(aaa_id, |maybe| {
+      let funding = maybe.as_mut().expect("benchmark actor funding exists");
       for asset in assets {
-        instance
+        funding
           .funding_snapshots
           .try_insert(
             asset,
@@ -1275,9 +1280,9 @@ mod benches {
     {
       Pallet::<T>::promote_pending_funding(aaa_id);
     }
-    let instance = AaaInstances::<T>::get(aaa_id).expect("benchmark actor exists");
+    let funding = ActorFunding::<T>::get(aaa_id).expect("benchmark actor funding exists");
     assert!(
-      instance
+      funding
         .funding_snapshots
         .values()
         .all(|batch| batch.amount == 2u32.into() && batch.pending_amount.is_zero())

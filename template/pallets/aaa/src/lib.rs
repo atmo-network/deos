@@ -311,11 +311,11 @@ pub mod pallet {
     BlockNumberFor<T>,
     ScheduleOf<T>,
     ExecutionPlanOf<T>,
-    FundingSourcePolicyOf<T>,
-    FundingSnapshotsOf<T>,
-    FundingTrackedAssetsOf<T>,
     BalanceOf<T>,
   >;
+
+  pub type ActorFundingStateOf<T> =
+    ActorFundingState<FundingSourcePolicyOf<T>, FundingSnapshotsOf<T>, FundingTrackedAssetsOf<T>>;
 
   pub type DormantAaaIdentityOf<T> =
     DormantAaaIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
@@ -337,6 +337,11 @@ pub mod pallet {
   #[pallet::getter(fn aaa_instances)]
   pub type AaaInstances<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, AaaInstanceOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn actor_funding)]
+  pub type ActorFunding<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorFundingStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn dormant_aaa_identities)]
@@ -538,9 +543,6 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
-          funding_source_policy: FundingSourcePolicy::RuntimePolicy,
-          funding_snapshots: Default::default(),
-          funding_tracked_assets,
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
@@ -555,6 +557,14 @@ pub mod pallet {
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         AaaInstances::<T>::insert(aaa_id, instance);
+        ActorFunding::<T>::insert(
+          aaa_id,
+          ActorFundingState {
+            funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+            funding_snapshots: Default::default(),
+            funding_tracked_assets,
+          },
+        );
         ActiveAaaCount::<T>::put(
           active_count
             .checked_add(1)
@@ -1069,11 +1079,11 @@ pub mod pallet {
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        if let Some(inst) = maybe.as_mut() {
-          inst.funding_source_policy = policy;
-        }
-      });
+      ActorFunding::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+        let funding = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+        funding.funding_source_policy = policy;
+        Ok(())
+      })?;
       Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
       Ok(())
     }
@@ -1161,49 +1171,47 @@ pub mod pallet {
         &execution_plan,
         &snapshot.on_close_execution_plan,
       )?;
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      let max_steps = match snapshot.actor_class.aaa_type() {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if snapshot.actor_class.aaa_type() == AaaType::User {
         ensure!(
-          inst.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
+          !Self::execution_plan_contains_mint(&execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
         );
-        let max_steps = match inst.actor_class.aaa_type() {
-          AaaType::User => T::MaxUserExecutionPlanSteps::get(),
-          AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
-        };
-        ensure!(
-          (execution_plan.len() as u32) <= max_steps,
-          Error::<T>::ExecutionPlanTooLong
-        );
-        if inst.actor_class.aaa_type() == AaaType::User {
-          ensure!(
-            !Self::execution_plan_contains_mint(&execution_plan),
-            Error::<T>::MintNotAllowedForUserAaa
-          );
-        }
-        let new_tracked = Self::derive_combined_funding_tracked_assets(
-          &execution_plan,
-          &inst.on_close_execution_plan,
-        )?;
-        inst.funding_tracked_assets = new_tracked.clone();
-        let mut stale_keys = alloc::vec::Vec::new();
-        for key in inst.funding_snapshots.keys() {
-          if !new_tracked.contains(key) {
-            stale_keys.push(*key);
-          }
-        }
-        for key in stale_keys {
-          let _ = inst.funding_snapshots.remove(&key);
-        }
-        let (cycle_weight_upper, cycle_fee_upper) =
-          Self::compute_cycle_bounds(inst.actor_class.aaa_type(), &execution_plan);
+      }
+      let new_tracked = Self::derive_combined_funding_tracked_assets(
+        &execution_plan,
+        &snapshot.on_close_execution_plan,
+      )?;
+      let mut funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      funding.funding_tracked_assets = new_tracked.clone();
+      funding
+        .funding_snapshots
+        .retain(|asset, _| new_tracked.contains(asset));
+      let (cycle_weight_upper, cycle_fee_upper) =
+        Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
+      AaaInstances::<T>::mutate(aaa_id, |maybe| {
+        let inst = maybe
+          .as_mut()
+          .expect("active actor existence was prevalidated");
         inst.execution_plan = execution_plan;
         inst.cycle_weight_upper = cycle_weight_upper;
         inst.cycle_fee_upper = cycle_fee_upper;
         inst.consecutive_failures = 0;
-        Self::deposit_event(Event::ExecutionPlanUpdated { aaa_id });
-        Ok(())
-      })
+      });
+      ActorFunding::<T>::insert(aaa_id, funding);
+      Self::deposit_event(Event::ExecutionPlanUpdated { aaa_id });
+      Ok(())
     }
 
     #[pallet::call_index(13)]
@@ -1354,44 +1362,41 @@ pub mod pallet {
         &snapshot.execution_plan,
         &on_close_execution_plan,
       )?;
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      let max_steps = match snapshot.actor_class.aaa_type() {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (on_close_execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if snapshot.actor_class.aaa_type() == AaaType::User {
         ensure!(
-          inst.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
+          !Self::execution_plan_contains_mint(&on_close_execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
         );
-        let max_steps = match inst.actor_class.aaa_type() {
-          AaaType::User => T::MaxUserExecutionPlanSteps::get(),
-          AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
-        };
-        ensure!(
-          (on_close_execution_plan.len() as u32) <= max_steps,
-          Error::<T>::ExecutionPlanTooLong
-        );
-        if inst.actor_class.aaa_type() == AaaType::User {
-          ensure!(
-            !Self::execution_plan_contains_mint(&on_close_execution_plan),
-            Error::<T>::MintNotAllowedForUserAaa
-          );
-        }
-        let new_tracked = Self::derive_combined_funding_tracked_assets(
-          &inst.execution_plan,
-          &on_close_execution_plan,
-        )?;
-        inst.funding_tracked_assets = new_tracked.clone();
-        let mut stale_keys = alloc::vec::Vec::new();
-        for key in inst.funding_snapshots.keys() {
-          if !new_tracked.contains(key) {
-            stale_keys.push(*key);
-          }
-        }
-        for key in stale_keys {
-          let _ = inst.funding_snapshots.remove(&key);
-        }
+      }
+      let new_tracked = Self::derive_combined_funding_tracked_assets(
+        &snapshot.execution_plan,
+        &on_close_execution_plan,
+      )?;
+      let mut funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      funding.funding_tracked_assets = new_tracked.clone();
+      funding
+        .funding_snapshots
+        .retain(|asset, _| new_tracked.contains(asset));
+      AaaInstances::<T>::mutate(aaa_id, |maybe| {
+        let inst = maybe
+          .as_mut()
+          .expect("active actor existence was prevalidated");
         inst.on_close_execution_plan = on_close_execution_plan;
-        Self::deposit_event(Event::OnCloseExecutionPlanUpdated { aaa_id });
-        Ok(())
-      })?;
+      });
+      ActorFunding::<T>::insert(aaa_id, funding);
+      Self::deposit_event(Event::OnCloseExecutionPlanUpdated { aaa_id });
       Ok(())
     }
 
@@ -1950,9 +1955,6 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
-          funding_source_policy,
-          funding_snapshots: Default::default(),
-          funding_tracked_assets,
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
@@ -1963,6 +1965,14 @@ pub mod pallet {
         created_sovereign_account = Some(sovereign_account.clone());
         SovereignIndex::<T>::insert(sovereign_account.clone(), aaa_id);
         AaaInstances::<T>::insert(aaa_id, instance);
+        ActorFunding::<T>::insert(
+          aaa_id,
+          ActorFundingState {
+            funding_source_policy,
+            funding_snapshots: Default::default(),
+            funding_tracked_assets,
+          },
+        );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_add(1)
@@ -2086,9 +2096,6 @@ pub mod pallet {
         cycle_nonce: 0,
         consecutive_failures: 0,
         manual_trigger_pending: false,
-        funding_source_policy,
-        funding_snapshots: Default::default(),
-        funding_tracked_assets,
         cycle_weight_upper,
         cycle_fee_upper,
         auto_close_at_cycle_nonce: None,
@@ -2105,6 +2112,14 @@ pub mod pallet {
         }
         DormantAaaIdentities::<T>::remove(aaa_id);
         AaaInstances::<T>::insert(aaa_id, instance);
+        ActorFunding::<T>::insert(
+          aaa_id,
+          ActorFundingState {
+            funding_source_policy,
+            funding_snapshots: Default::default(),
+            funding_tracked_assets,
+          },
+        );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_add(1)
@@ -2136,6 +2151,7 @@ pub mod pallet {
         WakeupRetryPending::<T>::remove(aaa_id);
         AddressEventInbox::<T>::remove(aaa_id);
         AaaInstances::<T>::remove(aaa_id);
+        ActorFunding::<T>::remove(aaa_id);
         DormantAaaIdentities::<T>::insert(aaa_id, identity);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
@@ -2426,6 +2442,7 @@ pub mod pallet {
         }
         WakeupRetryPending::<T>::remove(aaa_id);
         AaaInstances::<T>::remove(aaa_id);
+        ActorFunding::<T>::remove(aaa_id);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_sub(1)
@@ -2588,6 +2605,11 @@ pub mod pallet {
       let mut max_id: Option<AaaId> = None;
       for (aaa_id, instance) in AaaInstances::<T>::iter() {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
+        if !ActorFunding::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "AaaInstances entry has no matching ActorFunding entry",
+          ));
+        }
         match SovereignIndex::<T>::get(&instance.sovereign_account) {
           Some(mapped_id) if mapped_id == aaa_id => {}
           _ => {
@@ -2610,10 +2632,18 @@ pub mod pallet {
           }
         }
       }
+      for aaa_id in ActorFunding::<T>::iter_keys() {
+        if !AaaInstances::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorFunding entry has no matching AaaInstances entry",
+          ));
+        }
+      }
       let dormant_identities = DormantAaaIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
       for (aaa_id, identity) in dormant_identities {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         if AaaInstances::<T>::contains_key(aaa_id)
+          || ActorFunding::<T>::contains_key(aaa_id)
           || AddressEventInbox::<T>::contains_key(aaa_id)
           || ScheduledWakeupBlock::<T>::contains_key(aaa_id)
           || WakeupRetryPending::<T>::get(aaa_id)
