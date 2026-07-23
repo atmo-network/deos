@@ -548,14 +548,12 @@ fn aaa_fee_collector_routes_the_full_amount_to_fee_sink() {
     let amount = crate::EXISTENTIAL_DEPOSIT;
     let payer_before = native_balance(&payer);
     let fee_sink_before = native_balance(&fee_sink);
-
     assert_ok!(TmctolFeeCollector::collect_fee(
       &payer,
       &fee_sink,
       AssetKind::Native,
       amount,
     ));
-
     assert_eq!(native_balance(&payer), payer_before.saturating_sub(amount));
     assert_eq!(
       native_balance(&fee_sink),
@@ -1118,10 +1116,8 @@ fn user_exact_out_zero_tolerance_preserves_later_step_fees() {
         .saturating_add(fee_reserve)
         .saturating_add(crate::EXISTENTIAL_DEPOSIT),
     );
-
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
-
     assert!(has_aaa_event(|event| {
       matches!(
         event,
@@ -1471,10 +1467,8 @@ fn aaa_unstake_percentage_current_resolves_live_staking_shares() {
       crate::configs::aaa_config::TmctolStakingOps::share_asset(AssetKind::Native),
       crate::Staking::staked_asset_id_for_queries(0).map(AssetKind::Local)
     );
-
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(BOB), aaa_id));
     run_idle(Weight::MAX);
-
     assert_eq!(
       crate::configs::aaa_config::TmctolStakingOps::share_balance(&actor, AssetKind::Native),
       shares_before.saturating_sub(Perbill::from_percent(50).mul_floor(shares_before))
@@ -1884,7 +1878,6 @@ fn internal_asset_transfer_rolls_back_when_funding_pending_overflows() {
     });
     let alice_before = native_balance(&ALICE);
     let sovereign_before = native_balance(&sovereign);
-
     assert_noop!(
       <TmctolAssetOps as AssetOps<AccountId, AssetKind, Balance>>::transfer(
         &ALICE,
@@ -1949,6 +1942,159 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
     assert_eq!(
       native_balance(&BOB),
       bob_before.saturating_add(receiver_amount)
+    );
+  });
+}
+
+#[test]
+fn repeated_same_block_transfers_coalesce_to_one_actor_execution() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let aaa_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
+    );
+    fund_native_via_call(ALICE, aaa_id, 100_000_000_000_000);
+    fund_native_via_call(ALICE, aaa_id, 50_000_000_000_000);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor exists")
+        .cycle_nonce,
+      1,
+      "multiple same-block funding events must coalesce into one execution"
+    );
+  });
+}
+
+#[test]
+fn manual_signal_then_same_block_funding_coalesces_to_one_actor_execution() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let aaa_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::OwnerOnly, AssetFilter::Any),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
+    );
+    fund_native(aaa_id, 100_000_000_000_000);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    fund_native_via_call(ALICE, aaa_id, 50_000_000_000_000);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor exists")
+        .cycle_nonce,
+      1,
+      "manual and funding readiness must share one live queue membership"
+    );
+  });
+}
+
+#[test]
+fn actor_self_reenqueue_during_execution_waits_until_next_block() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let aaa_id = create_user(
+      ALICE,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
+    );
+    let sovereign = aaa_account(aaa_id);
+    assert_ok!(AAA::update_execution_plan(
+      RuntimeOrigin::signed(ALICE),
+      aaa_id,
+      transfer_execution_plan(sovereign, AssetKind::Native, 1_000),
+    ));
+    assert_ok!(AAA::update_funding_source_policy(
+      RuntimeOrigin::signed(ALICE),
+      aaa_id,
+      FundingSourcePolicy::AnySource,
+    ));
+    fund_native(aaa_id, 100_000_000_000_000);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor exists")
+        .cycle_nonce,
+      1
+    );
+    assert!(
+      pallet_aaa::CurrentQueue::<Runtime>::get().contains(&aaa_id),
+      "self-enqueue created by execution must survive only as next-block work"
+    );
+  });
+}
+
+#[test]
+fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let event_schedule = on_address_event_schedule(SourceFilter::Any, AssetFilter::Any);
+    let actor_a = create_user(
+      ALICE,
+      event_schedule.clone(),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution plan fits"),
+    );
+    let actor_a_account = aaa_account(actor_a);
+    let actor_b = create_user(
+      CHARLIE,
+      event_schedule,
+      None,
+      transfer_execution_plan(actor_a_account, AssetKind::Native, 1_000),
+    );
+    let actor_b_account = aaa_account(actor_b);
+    assert_ok!(AAA::update_execution_plan(
+      RuntimeOrigin::signed(ALICE),
+      actor_a,
+      transfer_execution_plan(actor_b_account, AssetKind::Native, 1_000),
+    ));
+    for (owner, aaa_id) in [(ALICE, actor_a), (CHARLIE, actor_b)] {
+      assert_ok!(AAA::update_funding_source_policy(
+        RuntimeOrigin::signed(owner.clone()),
+        aaa_id,
+        FundingSourcePolicy::AnySource,
+      ));
+      fund_native(aaa_id, 100_000_000_000_000);
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(owner), aaa_id));
+    }
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(actor_a)
+        .expect("actor A exists")
+        .cycle_nonce,
+      1
+    );
+    assert_eq!(
+      AAA::aaa_instances(actor_b)
+        .expect("actor B exists")
+        .cycle_nonce,
+      1
+    );
+    assert!(
+      pallet_aaa::CurrentQueue::<Runtime>::get().contains(&actor_a),
+      "B triggering already-executed A must create next-block work"
+    );
+    System::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(actor_a)
+        .expect("actor A exists")
+        .cycle_nonce,
+      2
+    );
+    assert_eq!(
+      AAA::aaa_instances(actor_b)
+        .expect("actor B exists")
+        .cycle_nonce,
+      1,
+      "A-triggered recursive work for B must remain beyond block two's cutoff"
     );
   });
 }
@@ -2020,7 +2166,6 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
     });
     let alice_before = native_balance(&ALICE);
     let sovereign_before = native_balance(&sovereign);
-
     assert_noop!(
       crate::configs::axial_router_config::FeeManagerImpl::<Runtime>::route_fee(
         &ALICE,
@@ -2077,7 +2222,6 @@ fn privileged_asset_transfer_source_cannot_impersonate_verified_signed_funding()
     let aaa_id = create_user(ALICE, manual_schedule(), None, execution_plan);
     let sovereign = aaa_account(aaa_id);
     let producer_start = System::event_count();
-
     assert_ok!(Assets::force_transfer(
       RuntimeOrigin::signed(ALICE.clone()),
       ASSET_A,
@@ -2088,7 +2232,6 @@ fn privileged_asset_transfer_source_cannot_impersonate_verified_signed_funding()
     assert!(RuntimeAddressEventIngressHook::submit_events_since(
       producer_start
     ));
-
     assert_eq!(Assets::balance(ASSET_A, sovereign), 10_000);
     let funding = actor_funding(aaa_id);
     assert!(
@@ -2126,7 +2269,6 @@ fn producer_owned_asset_ingress_survives_adversarial_event_prefix() {
       sovereign.into(),
       10_000,
     ));
-
     assert!(RuntimeAddressEventIngressHook::submit_events_since(
       producer_start
     ));
@@ -2350,7 +2492,6 @@ fn system_runtime_policy_defaults_deny_for_signed_internal_and_xcm_provenance() 
       4_000,
       &ALICE
     ));
-
     assert_eq!(
       native_balance(&sovereign),
       sourced_amount.saturating_add(source_less_amount)
@@ -2403,7 +2544,6 @@ fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
       &recipient,
       Some(&context),
     );
-
     assert!(matches!(
       result,
       Err((_, xcm::latest::Error::FailedToTransactAsset(_)))
@@ -2499,7 +2639,6 @@ fn reference_idle_budget_drains_max_ingress_with_xcm_and_preserves_both_signals(
     );
     fund_native(signed_id, 100_000_000_000_000);
     fund_native(xcm_id, 100_000_000_000_000);
-
     let ingress_cap = crate::configs::aaa_config::AaaMaxIngressEventsPerBlock::get();
     for _ in 0..ingress_cap {
       assert!(AAA::queue_address_event(
@@ -2524,7 +2663,6 @@ fn reference_idle_budget_drains_max_ingress_with_xcm_and_preserves_both_signals(
       .is_ok()
     );
     assert_eq!(AAA::ingress_overflow_len(), ingress_cap);
-
     let bob_before = native_balance(&BOB);
     let charlie_before = native_balance(&CHARLIE);
     let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
@@ -2597,7 +2735,6 @@ fn ingress_hook_drains_only_the_bounded_durable_overflow_prefix() {
     let weight = <RuntimeAddressEventIngressHook as pallet_aaa::AddressEventIngressHook<
       crate::BlockNumber,
     >>::ingest(System::block_number(), Weight::MAX);
-
     assert_eq!(
       weight,
       RuntimeAddressEventIngressHook::probe_weight().saturating_add(
@@ -2625,7 +2762,6 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
       None,
       execution_plan,
     );
-
     assert!(AAA::queue_address_event(
       aaa_id,
       AssetKind::Native,
@@ -2646,7 +2782,6 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
     assert_eq!(batch.amount, 5_000);
     assert_eq!(batch.pending_amount, 7_000);
     assert!(AAA::address_event_inbox(aaa_id).is_none());
-
     assert_eq!(AAA::drain_address_event_overflow(2), 2);
     let drained = actor_funding(aaa_id);
     let batch = drained
@@ -3142,7 +3277,6 @@ fn signed_balance_deposit_credits_rejected_donor_but_only_owner_activates_fundin
         .saturating_add(1)
     );
     assert!(actor_funding(aaa_id).funding_snapshots.is_empty());
-
     let owner_amount = 11_000_000_000_000;
     let owner_call =
       RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
@@ -3202,7 +3336,6 @@ fn signed_asset_deposit_keeps_rejected_donor_balance_only_and_owner_authoritativ
     ));
     assert_eq!(Assets::balance(asset_id, sovereign.clone()), donor_amount);
     assert!(actor_funding(aaa_id).funding_snapshots.is_empty());
-
     let owner_amount = 11_000;
     let owner_call = RuntimeCall::Assets(polkadot_sdk::pallet_assets::Call::transfer {
       id: asset_id,
@@ -3269,7 +3402,6 @@ fn signed_fixed_transfer_is_rejected_before_dispatch_when_funding_pending_overfl
       dest: Address::Id(sovereign.clone()),
       value: 1,
     });
-
     assert!(Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call)).is_err());
     assert_eq!(native_balance(&sovereign), sovereign_before);
   });
@@ -3317,7 +3449,6 @@ fn signed_transfer_all_is_rejected_before_dispatch_when_funding_pending_overflow
       dest: Address::Id(sovereign.clone()),
       keep_alive: true,
     });
-
     assert!(Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call)).is_err());
     assert_eq!(native_balance(&sovereign), sovereign_before);
   });
@@ -3344,7 +3475,6 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::transaction_extension_ingress_notify();
     let base_weight =
       <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::transaction_extension_ingress_base();
-
     let transfer_amount = 10_000_000_000_000;
     let matched = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
       dest: Address::Id(sovereign.clone()),
@@ -3357,7 +3487,6 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       .saturating_sub(native_balance(&signer_account))
       .saturating_sub(transfer_amount);
     assert!(AAA::address_event_inbox(aaa_id).is_some());
-
     let unmatched = RuntimeCall::Balances(
       polkadot_sdk::pallet_balances::Call::transfer_allow_death {
         dest: Address::Id(BOB),
@@ -3377,7 +3506,6 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       "successful tracked calls without an AAA recipient must refund the unused notification envelope"
     );
     assert!(notify_weight.saturating_sub(base_weight) != Weight::zero());
-
     assert!(AAA::address_event_inbox(aaa_id).is_some());
     let untracked = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark {
       remark: b"untracked ingress call".to_vec(),
@@ -3387,7 +3515,6 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       Ok(Ok(_))
     ));
     assert!(AAA::address_event_inbox(aaa_id).is_some());
-
     let failed = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
       dest: Address::Id(sovereign),
       value: u128::MAX,
@@ -4395,7 +4522,6 @@ fn reference_idle_budget_carries_mixed_admitted_tasks_without_starvation() {
       .collect();
     let min_cycles = *counts.iter().min().expect("actors exist");
     let max_cycles = *counts.iter().max().expect("actors exist");
-
     assert!(min_cycles > 0, "every admitted actor must make progress");
     assert!(
       max_cycles.saturating_sub(min_cycles) <= 1,
@@ -4419,7 +4545,6 @@ fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     close_genesis_system_actors();
-
     let retry_ids = setup_inert_actors(
       u64::from(<Runtime as pallet_aaa::Config>::MaxSweepPerBlock::get()),
       10_000u128,
@@ -4460,7 +4585,6 @@ fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
       })])
       .expect("on-close execution_plan fits"),
     ));
-
     let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
     for block in 102..=150 {
       System::set_block_number(block);
