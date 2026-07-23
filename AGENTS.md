@@ -168,7 +168,8 @@
 - `Doc Filenames`: Use full dotted forms such as `name.specification.en.md`, `name.architecture.en.md`, `name.contract.en.md`, and `name.strategy.en.md`.
 - `Markdown Tables`: Use exactly one padding space inside every cell boundary and compact delimiter rows such as `| --- | --- |`, preserving alignment only when meaningful with `| :--- | ---: |`.
 - `Architecture Neutrality`: Architecture docs describe current implementation truth without embedding release-number rhetoric.
-- `Architecture Readability`: Keep each architecture-doc prose paragraph or list item independently addressable and at most 600 characters; decompose mixed claims into short paragraphs, one-level lists, or compact tables rather than hiding growth through hard line wrapping.
+- `Architecture Readability`: Keep each architecture-doc prose paragraph, list item, or table row independently addressable and at most 600 characters; decompose mixed claims rather than hiding growth through hard line wrapping.
+- `Dimensional Tables`: Use a compact table when multiple peer entities repeat the same dimensions or attributes; keep cells fact-dense and short, and place rationale, exceptions, or procedural flow outside the table instead of turning cells into prose paragraphs.
 - `README Neutrality`: Entrypoint READMEs explain current purpose, setup, navigation, and validation; release history belongs in `CHANGELOG.md`.
 - `Canonical Consolidation`: Merge extension specs into stronger canonical contracts when ownership converges; retire old files as redirect stubs when necessary.
 - `Economic Claims`: Load-bearing architecture claims require code anchors and falsification tests that would fail if behavior regressed.

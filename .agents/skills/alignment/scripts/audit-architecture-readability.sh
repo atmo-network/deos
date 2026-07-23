@@ -9,8 +9,8 @@ usage() {
     cat <<'EOF'
 Usage: audit-architecture-readability.sh [ARCHITECTURE_FILE...]
 
-Rejects oversized prose paragraphs and list items in English architecture
-Markdown. Tables, fenced code, headings, and generated HTML are excluded.
+Rejects oversized prose paragraphs, list items, and table rows in English
+architecture Markdown. Fenced code, headings, and generated HTML are excluded.
 The default maximum semantic block length is 600 characters.
 
 With no arguments, audits docs/*.architecture.en.md.
@@ -88,7 +88,15 @@ run_audit() {
             /^```/ { flush(); fenced = !fenced; next }
             fenced { next }
             /^[[:space:]]*$/ { flush(); next }
-            /^#/ || /^>/ || /^[[:space:]]*\|/ || /^<!--/ || /^-->/ { flush(); next }
+            /^#/ || /^>/ || /^<!--/ || /^-->/ { flush(); next }
+            /^[[:space:]]*\|/ {
+                flush()
+                if (length($0) > max) {
+                    printf "%s:%d: table row has %d characters (maximum %d)\n", display, FNR, length($0), max
+                    bad = 1
+                }
+                next
+            }
             /^[[:space:]]*([-*+] |[0-9]+\. )/ {
                 flush()
                 kind = "list"
