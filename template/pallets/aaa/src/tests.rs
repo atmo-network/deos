@@ -1,11 +1,11 @@
 use crate::{
-  AaaInstances, AaaType, ActiveLifecycle, ActorClass, AmountResolution, AssetFilter, AssetFilterOf,
-  CloseReason, Condition, DeferReason, Error, Event, FundingSourcePolicy, IdleStarvationBlocks,
-  Mutability, NextAaaId, OnCloseStepFailureKind, OwnerSlotMask, PauseReason, ProgramInput,
-  QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow, SourceFilter,
-  SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf,
-  StepSkippedReason, SweepCursor, Task, TaskOf, Trigger, adapters::AssetOps, mock::*,
-  types::FundingBatch,
+  AaaInstances, AaaType, ActiveLifecycle, ActorClass, ActorHot, ActorProgram, AmountResolution,
+  AssetFilter, AssetFilterOf, CloseReason, Condition, DeferReason, Error, Event,
+  FundingSourcePolicy, IdleStarvationBlocks, Mutability, NextAaaId, OnCloseStepFailureKind,
+  OwnerSlotMask, PauseReason, ProgramInput, QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule,
+  ScheduleOf, ScheduleWindow, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
+  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SweepCursor, Task, TaskOf,
+  Trigger, adapters::AssetOps, mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
 use polkadot_sdk::frame_support::{
@@ -2377,10 +2377,10 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_with_close_tail
       AAA::close_aaa(RuntimeOrigin::root(), aaa_id),
       Error::<Test>::ImmutableAaa
     );
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
+    ActorProgram::<Test>::mutate(aaa_id, |maybe| {
       maybe
         .as_mut()
-        .expect("immutable System AAA exists")
+        .expect("immutable System AAA program exists")
         .on_close_execution_plan = transfer_execution_plan(CHARLIE, 7);
     });
     fund_native(aaa_id, 100);
@@ -3753,8 +3753,8 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
       .expect("two steps fit"),
     );
     fund_native(continue_id, 100);
-    AaaInstances::<Test>::mutate(continue_id, |maybe| {
-      maybe.as_mut().expect("actor exists").consecutive_failures = 2;
+    ActorHot::<Test>::mutate(continue_id, |maybe| {
+      maybe.as_mut().expect("actor hot state exists").consecutive_failures = 2;
     });
     assert_ok!(AAA::set_auto_close_at_cycle_nonce(
       RuntimeOrigin::root(),
@@ -5098,9 +5098,9 @@ fn ordinary_transfer_updates_snapshot_without_resuming_paused_system_actor() {
       amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(100)),
     }));
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      let inst = maybe.as_mut().expect("AAA exists");
-      inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      let hot = maybe.as_mut().expect("AAA hot state exists");
+      hot.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
     });
     assert_ok!(ordinary_transfer_to_aaa(
       RuntimeOrigin::signed(ALICE),
@@ -5139,9 +5139,9 @@ fn notify_address_event_updates_snapshot_without_resuming_paused_system_actor() 
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     let actor = sovereign_account(aaa_id);
     fund_native(aaa_id, 500);
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      let inst = maybe.as_mut().expect("AAA exists");
-      inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      let hot = maybe.as_mut().expect("AAA hot state exists");
+      hot.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
     });
     assert_ok!(AAA::notify_address_event(
       aaa_id,
@@ -5413,8 +5413,11 @@ fn governance_can_manage_system_aaa_control_surface() {
       AAA::aaa_instances(aaa_id).expect("system actor").schedule,
       updated_schedule
     );
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      maybe.as_mut().expect("system actor").consecutive_failures = 2;
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("system actor hot state")
+        .consecutive_failures = 2;
     });
     let updated_plan = transfer_execution_plan(BOB, 1);
     assert_ok!(AAA::update_execution_plan(
@@ -5511,8 +5514,11 @@ fn cycle_nonce_max_value_is_the_last_executable_cycle() {
     );
     fund_native(aaa_id, 100);
     let bob_before = native_balance(&BOB);
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      maybe.as_mut().expect("system AAA exists").cycle_nonce = u64::MAX - 1;
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("system AAA hot state exists")
+        .cycle_nonce = u64::MAX - 1;
     });
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
@@ -5541,8 +5547,11 @@ fn cycle_nonce_exhaustion_closes_user_actor() {
     );
     fund_native(aaa_id, 1_000);
     let bob_before = native_balance(&BOB);
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      maybe.as_mut().expect("user AAA exists").cycle_nonce = u64::MAX;
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("user AAA hot state exists")
+        .cycle_nonce = u64::MAX;
     });
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
@@ -5577,8 +5586,11 @@ fn cycle_nonce_exhaustion_pauses_system_actor() {
       transfer_execution_plan(BOB, 1),
     );
     let bob_before = native_balance(&BOB);
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      maybe.as_mut().expect("system AAA exists").cycle_nonce = u64::MAX;
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("system AAA hot state exists")
+        .cycle_nonce = u64::MAX;
     });
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
@@ -8437,9 +8449,9 @@ fn increment_auto_close_nonce_enforces_bounds_and_overflow_rules() {
     ));
     let inst = AAA::aaa_instances(aaa_id).expect("AAA must exist");
     assert_eq!(inst.auto_close_at_cycle_nonce, Some(5));
-    AaaInstances::<Test>::mutate(aaa_id, |maybe| {
-      if let Some(inst) = maybe.as_mut() {
-        inst.auto_close_at_cycle_nonce = Some(u64::MAX);
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      if let Some(hot) = maybe.as_mut() {
+        hot.auto_close_at_cycle_nonce = Some(u64::MAX);
       }
     });
     assert_noop!(

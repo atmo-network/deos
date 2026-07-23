@@ -430,13 +430,13 @@ pub mod pallet {
       ActorHot::<T>::contains_key(aaa_id) && ActorProgram::<T>::contains_key(aaa_id)
     }
 
-    pub fn insert(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
+    pub(crate) fn insert(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
       let (hot, program) = Self::split(instance);
       ActorHot::<T>::insert(aaa_id, hot);
       ActorProgram::<T>::insert(aaa_id, program);
     }
 
-    pub fn remove(aaa_id: AaaId) {
+    pub(crate) fn remove(aaa_id: AaaId) {
       ActorHot::<T>::remove(aaa_id);
       ActorProgram::<T>::remove(aaa_id);
     }
@@ -449,29 +449,6 @@ pub mod pallet {
       ActorHot::<T>::iter().filter_map(|(aaa_id, hot)| {
         ActorProgram::<T>::get(aaa_id).map(|program| (aaa_id, Self::compose(hot, program)))
       })
-    }
-
-    pub fn mutate<R>(aaa_id: AaaId, mutate: impl FnOnce(&mut Option<AaaInstanceOf<T>>) -> R) -> R {
-      let mut instance = Self::get(aaa_id);
-      let result = mutate(&mut instance);
-      match instance {
-        Some(instance) => Self::insert(aaa_id, instance),
-        None => Self::remove(aaa_id),
-      }
-      result
-    }
-
-    pub fn try_mutate<R, E>(
-      aaa_id: AaaId,
-      mutate: impl FnOnce(&mut Option<AaaInstanceOf<T>>) -> Result<R, E>,
-    ) -> Result<R, E> {
-      let mut instance = Self::get(aaa_id);
-      let result = mutate(&mut instance)?;
-      match instance {
-        Some(instance) => Self::insert(aaa_id, instance),
-        None => Self::remove(aaa_id),
-      }
-      Ok(result)
     }
   }
 

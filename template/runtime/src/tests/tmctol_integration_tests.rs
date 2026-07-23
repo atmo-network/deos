@@ -164,9 +164,9 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
 #[test]
 fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
   new_test_ext().execute_with(|| {
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_ids::BURNING_MANAGER_AAA_ID, |maybe| {
-      let actor = maybe.as_mut().expect("Burning Manager exists");
-      actor.execution_plan = alloc::vec![pallet_aaa::Step {
+    pallet_aaa::ActorProgram::<Runtime>::mutate(aaa_ids::BURNING_MANAGER_AAA_ID, |maybe| {
+      let program = maybe.as_mut().expect("Burning Manager program exists");
+      program.execution_plan = alloc::vec![pallet_aaa::Step {
         conditions: Default::default(),
         task: pallet_aaa::Task::Transfer {
           to: ALICE,

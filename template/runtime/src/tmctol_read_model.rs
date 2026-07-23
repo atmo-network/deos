@@ -73,7 +73,7 @@ impl TmctolReadModel {
       (AnchorDomain::Tol, ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID)
         | (AnchorDomain::Bldr, ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID)
     );
-    let actor_identity_exists = pallet_aaa::AaaInstances::<Runtime>::contains_key(aaa_id)
+    let actor_identity_exists = pallet_aaa::ActorHot::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(aaa_id);
     let scheduler_state_exists = pallet_aaa::AddressEventInbox::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::ScheduledWakeupBlock::<Runtime>::contains_key(aaa_id)
@@ -240,7 +240,8 @@ impl TmctolReadModel {
     let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
     let target_balance = Self::asset_balance(target_asset, &sovereign_account);
     let dust_threshold = ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
-    let maybe_actor = pallet_aaa::AaaInstances::<Runtime>::get(actor_id);
+    let maybe_actor = pallet_aaa::ActorHot::<Runtime>::get(actor_id)
+      .zip(pallet_aaa::ActorProgram::<Runtime>::get(actor_id));
     let (
       actor_exists,
       is_system,
@@ -249,22 +250,22 @@ impl TmctolReadModel {
       has_required_burn_step,
       has_required_swap_step,
     ) = maybe_actor
-      .map(|actor| {
+      .map(|(hot, program)| {
         let has_address_event_trigger =
-          matches!(actor.schedule.trigger, Trigger::OnAddressEvent { .. });
-        let has_required_burn_step = actor
+          matches!(program.schedule.trigger, Trigger::OnAddressEvent { .. });
+        let has_required_burn_step = program
           .execution_plan
           .iter()
           .any(|step| burn_match(&step.task));
         let has_required_swap_step = !requires_swap
-          || actor
+          || program
             .execution_plan
             .iter()
             .any(|step| swap_match(&step.task));
         (
           true,
-          actor.actor_class.aaa_type() == AaaType::System,
-          actor.lifecycle.is_paused(),
+          hot.actor_class.aaa_type() == AaaType::System,
+          hot.lifecycle.is_paused(),
           has_address_event_trigger,
           has_required_burn_step,
           has_required_swap_step,
@@ -309,8 +310,9 @@ impl TmctolReadModel {
   fn zap_postconditions() -> ZapPostconditionState<AccountId> {
     let actor_id = ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
     let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
-    let maybe_actor = pallet_aaa::AaaInstances::<Runtime>::get(actor_id);
-    let Some(zap) = maybe_actor else {
+    let maybe_actor = pallet_aaa::ActorHot::<Runtime>::get(actor_id)
+      .zip(pallet_aaa::ActorProgram::<Runtime>::get(actor_id));
+    let Some((hot, program)) = maybe_actor else {
       let status = if pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(actor_id) {
         GuaranteeStatus::NotInitialized
       } else {
@@ -335,8 +337,9 @@ impl TmctolReadModel {
       };
     };
 
-    let is_system = zap.actor_class.aaa_type() == AaaType::System;
-    let has_address_event_trigger = matches!(zap.schedule.trigger, Trigger::OnAddressEvent { .. });
+    let is_system = hot.actor_class.aaa_type() == AaaType::System;
+    let has_address_event_trigger =
+      matches!(program.schedule.trigger, Trigger::OnAddressEvent { .. });
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;
     let mut configured_lp_asset: Option<AssetKind> = None;
@@ -347,7 +350,7 @@ impl TmctolReadModel {
     let mut split_shares_sum_to_one = false;
     let mut split_shares_match_policy = false;
 
-    for step in zap.execution_plan.iter() {
+    for step in &program.execution_plan {
       match &step.task {
         Task::AddLiquidity {
           asset_a, asset_b, ..
@@ -423,7 +426,7 @@ impl TmctolReadModel {
       && split_targets_all_buckets
       && split_shares_sum_to_one
       && split_shares_match_policy;
-    let status = if !is_system || zap.lifecycle.is_paused() || !has_address_event_trigger {
+    let status = if !is_system || hot.lifecycle.is_paused() || !has_address_event_trigger {
       GuaranteeStatus::Violated
     } else if structure_satisfied {
       GuaranteeStatus::Satisfied
@@ -437,7 +440,7 @@ impl TmctolReadModel {
       sovereign_account,
       actor_exists: true,
       is_system,
-      is_paused: zap.lifecycle.is_paused(),
+      is_paused: hot.lifecycle.is_paused(),
       has_address_event_trigger,
       configured_foreign_asset,
       configured_lp_asset,

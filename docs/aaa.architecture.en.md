@@ -186,7 +186,7 @@ The shipped runtime stores each active actor across three canonical values:
 - `ActorProgram`: trigger/cooldown schedule, optional execution window, run plan, and close plan
 - `ActorFunding`: funding policy, tracked assets, bounded armed/pending batches, and canonical pending indication
 
-`aaa_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives first eligibility from current block, window start, cadence, and actor-stable jitter. The typed lifecycle forbids contradictory pause state. The Rust-only `AaaInstances` compatibility facade composes hot and program values for remaining internal callers and tests; it is not consensus storage and has no metadata prefix.
+`aaa_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives first eligibility from current block, window start, cadence, and actor-stable jitter. The typed lifecycle forbids contradictory pause state. The temporary Rust-only `AaaInstances` compatibility facade composes hot and program values for remaining internal readers and tests; it is not consensus storage, has no metadata prefix, exposes no aggregate mutation API, and keeps construction/removal helpers crate-private for lifecycle-owned transitions only.
 
 This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current runtime-shaped storage realization.
 

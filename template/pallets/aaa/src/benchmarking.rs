@@ -475,11 +475,9 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let max_steps = T::MaxSystemExecutionPlanSteps::get();
     let max_legs = T::MaxSplitTransferLegs::get();
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let Some(instance) = maybe.as_mut() else {
-        return;
-      };
-      instance.on_close_execution_plan =
+    ActorProgram::<T>::mutate(aaa_id, |maybe| {
+      let program = maybe.as_mut().expect("benchmark actor program exists");
+      program.on_close_execution_plan =
         make_complex_on_close_execution_plan::<T>(&owner, max_steps, max_legs);
     });
     seed_on_close_complexity_budget::<T>(aaa_id, max_steps, max_legs);
@@ -646,11 +644,9 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let steps = s.min(T::MaxSystemExecutionPlanSteps::get());
     let legs = l.min(T::MaxSplitTransferLegs::get());
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let Some(instance) = maybe.as_mut() else {
-        return;
-      };
-      instance.on_close_execution_plan =
+    ActorProgram::<T>::mutate(aaa_id, |maybe| {
+      let program = maybe.as_mut().expect("benchmark actor program exists");
+      program.on_close_execution_plan =
         make_complex_on_close_execution_plan::<T>(&owner, steps, legs);
     });
     seed_on_close_complexity_budget::<T>(aaa_id, steps, legs);
@@ -682,11 +678,9 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let steps = s.min(T::MaxUserExecutionPlanSteps::get());
     let legs = l.min(T::MaxSplitTransferLegs::get());
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let Some(instance) = maybe.as_mut() else {
-        return;
-      };
-      instance.on_close_execution_plan =
+    ActorProgram::<T>::mutate(aaa_id, |maybe| {
+      let program = maybe.as_mut().expect("benchmark actor program exists");
+      program.on_close_execution_plan =
         make_complex_on_close_execution_plan::<T>(&owner, steps, legs);
     });
     seed_on_close_complexity_budget::<T>(aaa_id, steps, legs);
@@ -1084,10 +1078,10 @@ mod benches {
   #[benchmark]
   fn scheduler_actor_probe() {
     let aaa_id = bench_create_system_manual::<T>(3_000);
-    AaaInstances::<T>::mutate(aaa_id, |maybe_instance| {
-      maybe_instance
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
         .as_mut()
-        .expect("benchmark actor must exist")
+        .expect("benchmark actor hot state must exist")
         .manual_trigger_pending = true;
     });
     frame_system::Pallet::<T>::set_block_number(1u32.into());

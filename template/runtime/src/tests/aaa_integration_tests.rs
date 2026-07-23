@@ -4400,10 +4400,12 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
 }
 
 fn clear_genesis_system_actors_for_stress_fixture() {
-  let instances: alloc::vec::Vec<_> = pallet_aaa::AaaInstances::<Runtime>::iter().collect();
-  for (aaa_id, instance) in instances {
-    pallet_aaa::AaaInstances::<Runtime>::remove(aaa_id);
-    pallet_aaa::SovereignIndex::<Runtime>::remove(&instance.sovereign_account);
+  let actors: alloc::vec::Vec<_> = pallet_aaa::ActorHot::<Runtime>::iter().collect();
+  for (aaa_id, hot) in actors {
+    pallet_aaa::ActorHot::<Runtime>::remove(aaa_id);
+    pallet_aaa::ActorProgram::<Runtime>::remove(aaa_id);
+    pallet_aaa::ActorFunding::<Runtime>::remove(aaa_id);
+    pallet_aaa::SovereignIndex::<Runtime>::remove(&hot.sovereign_account);
   }
   let dormant: alloc::vec::Vec<_> = pallet_aaa::DormantAaaIdentities::<Runtime>::iter().collect();
   for (aaa_id, identity) in dormant {
