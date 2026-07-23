@@ -18,19 +18,13 @@ Use this skill when an AAA change needs validation scope selection, scheduler st
 
 ## Deterministic Entrypoint
 
-Run the co-located gate directly:
-
-```bash
-./.agents/skills/aaa-delivery/scripts/release-gate.sh --help
-```
-
-The stable operator/CI compatibility bridge remains:
+The shared human/CI/skill implementation lives at the root public automation boundary:
 
 ```bash
 ./scripts/aaa-release-gate.sh --help
 ```
 
-Both paths execute the same implementation. Successful orchestration stays compact; failures retain a complete temporary log and print a bounded tail. Set `DEOS_VERBOSE=1` only for diagnosis.
+This skill selects and interprets that command; it does not own a second executable copy. Successful orchestration stays compact, failures retain a complete temporary log and print a bounded tail, and `DEOS_VERBOSE=1` restores diagnostic detail.
 
 ## Completion Evidence
 

@@ -9,8 +9,8 @@ Usage: audit-script-entrypoints.sh [OPTIONS]
 
 Checks repository shell/Node entrypoints for syntax validity, --help availability,
 independent human-callable atomic-script contracts, shared shell-step status
-propagation, declared root-to-skill bridges, skill
-name/directory identity, and compact metadata shape. Also enforces that project-specific audit leaves live in the
+propagation, GitHub-to-root shared automation placement, skill name/directory
+identity, and compact metadata shape. Also enforces that project-specific audit leaves live in the
 alignment skill, not in the root operator scripts directory.
 
 Options:
@@ -157,27 +157,16 @@ audit_shell_step_status_propagation() {
     fi
 }
 
-audit_skill_bridges() {
-    local bridge owner entrypoint implementation
-    while IFS= read -r bridge; do
-        owner="$(awk -F': ' '/^# Skill-Owner: / { print $2; exit }' "$bridge")"
-        entrypoint="$(awk -F': ' '/^# Skill-Entrypoint: / { print $2; exit }' "$bridge")"
-        if [[ -z "$entrypoint" ]]; then
-            log_error "Skill bridge lacks Skill-Entrypoint metadata: ${bridge#$PROJECT_ROOT/}"
-            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
-            continue
-        fi
-        implementation="$PROJECT_ROOT/.agents/skills/$owner/$entrypoint"
-        if [[ ! -x "$implementation" || ! -f "$PROJECT_ROOT/.agents/skills/$owner/SKILL.md" ]]; then
-            log_error "Skill bridge owner or executable is missing: ${bridge#$PROJECT_ROOT/} -> $owner/$entrypoint"
-            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
-            continue
-        fi
-        if ! grep -Fq ".agents/skills/$owner/$entrypoint" "$bridge"; then
-            log_error "Skill bridge does not delegate to its declared entrypoint: ${bridge#$PROJECT_ROOT/}"
-            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
-        fi
-    done < <(grep -l '^# Skill-Owner: ' "$ROOT_SCRIPT_DIR"/*.sh || true)
+audit_shared_script_placement() {
+    local matches=""
+    if [[ -d "$PROJECT_ROOT/.github/workflows" ]]; then
+        matches="$(grep -R -n -E '\.agents/skills/[^/]+/scripts/' "$PROJECT_ROOT/.github/workflows" || true)"
+    fi
+    if [[ -n "$matches" ]]; then
+        log_error "GitHub workflows must invoke shared implementations from root scripts/, not skill-local scripts"
+        printf '%s\n' "$matches"
+        AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+    fi
 }
 
 audit_skill_metadata_descriptions() {
@@ -221,7 +210,7 @@ audit_entrypoints() {
     audit_atomic_script_independence
     audit_audit_leaf_ownership
     audit_shell_step_status_propagation
-    audit_skill_bridges
+    audit_shared_script_placement
     audit_skill_metadata_descriptions
 
     if [[ "$AUDIT_FAILURES" -gt 0 ]]; then

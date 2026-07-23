@@ -6,9 +6,9 @@ This directory contains deterministic command surfaces, not agent strategy:
 
 - `Numbered scripts` are reusable atomic operations. They may depend on `_common.sh`, external tools, and artifacts on disk, but they do not orchestrate other numbered scripts.
 - `Named implementations` are deterministic operator utilities or compositions whose mode and outcome need no agent interpretation.
-- `Skill bridges` preserve stable human/CI commands while delegating unchanged arguments to a workflow implementation co-located with its project skill.
-- `Agent-owned workflows` live under `/.agents/skills/<domain>` when they require scope selection, coordination, evidence interpretation, knowledge synchronization, or handoff judgment.
-- `Full named/admin implementations` follow `usage -> parse_args -> check_prerequisites/plan -> main`; thin bridges only resolve the repository root and delegate.
+- `Shared implementations` stay here whenever humans, GitHub Actions, CI, root compositions, or multiple skills invoke them.
+- `Agent-owned workflows` live under `/.agents/skills/<domain>` when they require scope selection, coordination, evidence interpretation, knowledge synchronization, or handoff judgment; they call public root scripts for shared execution.
+- `Full named/admin implementations` follow `usage -> parse_args -> check_prerequisites/plan -> main`.
 - `All entrypoints` expose `--help` and keep declared environment/behavior contracts honest.
 
 ## Human-Callable Atomic Scripts
@@ -33,7 +33,7 @@ Each numbered command is independently callable by a human or CI from any workin
 - [06-zombienet-e2e.sh](./06-zombienet-e2e.sh)
   Run the runtime-facing E2E scenario set against a live local network.
 
-## Deterministic Compositions and Skill Bridges
+## Deterministic Compositions
 
 - [bootstrap-local-network.sh](./bootstrap-local-network.sh)
   Run the local bootstrap chain: binaries -> tools -> runtime build -> chain spec -> Zombienet. Start the web client directly from `web-client` with `npm run dev`.
@@ -42,7 +42,7 @@ Each numbered command is independently callable by a human or CI from any workin
   Run the local script-entrypoint/template-readiness/numeric-parsing/simulator-determinism/simulator-consistency/code-suppression/backlog/release-line/portability/domain-DAG/wiki-trust/dependency/CI/build/E2E validation workflow. The fast audit leaves live under the repo-local `alignment` skill and are orchestrated from here. Use `--audit-only` for the fast local audit stack and `--dependency-audit` when network-backed npm posture checks are desired.
 
 - [aaa-release-gate.sh](./aaa-release-gate.sh)
-  Stable operator/CI bridge to `/.agents/skills/aaa-delivery/scripts/release-gate.sh`. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff.
+  Shared human/GitHub/CI/skill implementation of the AAA scheduler stress gate. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
