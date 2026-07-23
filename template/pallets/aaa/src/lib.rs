@@ -422,6 +422,7 @@ pub mod pallet {
           consecutive_failures: instance.consecutive_failures,
           pending_signal: instance.manual_trigger_pending,
           queue_ticket: instance.queue_ticket,
+          wakeup_pointer: None,
           last_user_queue_mutation_block: instance.last_user_queue_mutation_block,
           cycle_weight_upper: instance.cycle_weight_upper,
           cycle_fee_upper: instance.cycle_fee_upper,
@@ -481,6 +482,23 @@ pub mod pallet {
   #[pallet::getter(fn queue_pages)]
   pub type QueuePages<T: Config> =
     StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
+
+  /// Fixed-size pages for the next temporal wakeup substrate.
+  #[pallet::storage]
+  #[pallet::getter(fn wakeup_pages)]
+  pub type WakeupPages<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    (BlockNumberFor<T>, WakeupPageId),
+    WakeupPageOf<T>,
+    OptionQuery,
+  >;
+
+  /// Small per-block ownership and allocation metadata for temporal pages.
+  #[pallet::storage]
+  #[pallet::getter(fn wakeup_buckets)]
+  pub type WakeupBuckets<T: Config> =
+    StorageMap<_, Blake2_128Concat, BlockNumberFor<T>, WakeupBucketState, OptionQuery>;
 
   #[pallet::storage]
   pub type WakeupIndex<T: Config> = StorageMap<
@@ -2976,6 +2994,124 @@ pub mod pallet {
         if entry.aaa_id != aaa_id {
           return Err(TryRuntimeError::Other(
             "ActorHot live queue ticket resolves to a different actor",
+          ));
+        }
+      }
+      if T::WakeupPageSize::get() == 0 {
+        return Err(TryRuntimeError::Other("WakeupPageSize must be non-zero"));
+      }
+      let mut wakeup_live_by_block = alloc::collections::BTreeMap::new();
+      let mut wakeup_page_count = 0u32;
+      let wakeup_pages = WakeupPages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only paged-wakeup invariant audit
+      for ((block, page_id), page) in wakeup_pages {
+        wakeup_page_count = wakeup_page_count.saturating_add(1);
+        if page.entries.is_empty() || page.entries.len() > T::WakeupPageSize::get() as usize {
+          return Err(TryRuntimeError::Other(
+            "WakeupPages entry has invalid length",
+          ));
+        }
+        if page.scan_slot as usize > page.entries.len() {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage scan cursor exceeds page length",
+          ));
+        }
+        let live_entries = page
+          .entries
+          .iter() // deos-bypass: bounded-iter — try-state-only WakeupPageSize slot audit
+          .filter(|entry| entry.is_some())
+          .count() as u32;
+        if live_entries == 0 || page.live_entries != live_entries {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage live-entry count disagrees with slots",
+          ));
+        }
+        let Some(bucket) = WakeupBuckets::<T>::get(block) else {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage has no matching bucket metadata",
+          ));
+        };
+        if let Some(previous_page) = page.previous_page
+          && WakeupPages::<T>::get((block, previous_page)).and_then(|previous| previous.next_page)
+            != Some(page_id)
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage previous link is not reciprocal",
+          ));
+        }
+        if let Some(next_page) = page.next_page
+          && WakeupPages::<T>::get((block, next_page)).and_then(|next| next.previous_page)
+            != Some(page_id)
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage next link is not reciprocal",
+          ));
+        }
+        if page_id == bucket.head_page && page.previous_page.is_some() {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket head page has a predecessor",
+          ));
+        }
+        if page_id == bucket.tail_page && page.next_page.is_some() {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket tail page has a successor",
+          ));
+        }
+        let block_live = wakeup_live_by_block.entry(block).or_insert(0u32);
+        *block_live = block_live.saturating_add(live_entries);
+        for (slot, entry) in page
+          .entries
+          .iter() // deos-bypass: bounded-iter — try-state-only WakeupPageSize pointer audit
+          .enumerate()
+        {
+          let Some(entry) = entry else {
+            continue;
+          };
+          let expected = WakeupPointer {
+            block,
+            page_id,
+            slot: slot as WakeupSlot,
+          };
+          if ActorHot::<T>::get(entry.aaa_id).and_then(|hot| hot.wakeup_pointer) != Some(expected) {
+            return Err(TryRuntimeError::Other(
+              "WakeupPage live slot has no matching ActorHot pointer",
+            ));
+          }
+        }
+      }
+      if wakeup_page_count > active_count {
+        return Err(TryRuntimeError::Other(
+          "WakeupPages count exceeds active actor count",
+        ));
+      }
+      let wakeup_buckets = WakeupBuckets::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor-bounded bucket audit
+      for (block, bucket) in wakeup_buckets {
+        if wakeup_live_by_block.get(&block).copied() != Some(bucket.live_entries) {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket live-entry count disagrees with pages",
+          ));
+        }
+        if !WakeupPages::<T>::contains_key((block, bucket.head_page))
+          || !WakeupPages::<T>::contains_key((block, bucket.tail_page))
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket head or tail page is missing",
+          ));
+        }
+      }
+      let mut live_wakeup_pointers = alloc::collections::BTreeSet::new();
+      let hot_wakeup_states = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxActiveActors pointer audit
+      for (aaa_id, hot) in hot_wakeup_states {
+        let Some(pointer) = hot.wakeup_pointer else {
+          continue;
+        };
+        if !live_wakeup_pointers.insert((pointer.block, pointer.page_id, pointer.slot)) {
+          return Err(TryRuntimeError::Other(
+            "multiple actors own the same wakeup pointer",
+          ));
+        }
+        if !Self::wakeup_page_entry_matches(pointer, aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorHot wakeup pointer does not resolve to its actor",
           ));
         }
       }

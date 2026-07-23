@@ -296,6 +296,118 @@ fn paged_wakeup_primitives_encode_exact_pointer_and_bounded_page_ownership() {
 }
 
 #[test]
+fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_execution_plan(BOB, 1),
+    );
+
+    assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+    let first = AAA::actor_hot(aaa_id)
+      .expect("hot state")
+      .wakeup_pointer
+      .expect("first wakeup pointer");
+    assert_eq!((first.block, first.page_id, first.slot), (10, 0, 0));
+    assert_eq!(
+      AAA::wakeup_buckets(10).expect("first bucket").live_entries,
+      1
+    );
+
+    assert!(AAA::wakeup_substrate_schedule(aaa_id, 20));
+    let replacement = AAA::actor_hot(aaa_id)
+      .expect("hot state")
+      .wakeup_pointer
+      .expect("replacement wakeup pointer");
+    assert_eq!(
+      (replacement.block, replacement.page_id, replacement.slot),
+      (20, 0, 0)
+    );
+    assert!(AAA::wakeup_buckets(10).is_none());
+    assert!(AAA::wakeup_pages((10, 0)).is_none());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+
+    assert_eq!(AAA::wakeup_substrate_invalidate(aaa_id), Some(replacement));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("hot state")
+        .wakeup_pointer
+        .is_none()
+    );
+    assert!(AAA::wakeup_buckets(20).is_none());
+    assert!(AAA::wakeup_pages((20, 0)).is_none());
+  });
+}
+
+#[test]
+fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let page_size: u32 = <Test as crate::Config>::WakeupPageSize::get();
+    let count = page_size.saturating_mul(2).saturating_add(1);
+    let mut actors = Vec::new();
+    for _ in 0..count {
+      let aaa_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_execution_plan(BOB, 1),
+      );
+      assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+      actors.push(aaa_id);
+    }
+
+    let bucket = AAA::wakeup_buckets(10).expect("dense bucket");
+    assert_eq!(bucket.live_entries, count);
+    assert_eq!(
+      (bucket.head_page, bucket.tail_page, bucket.next_page_id),
+      (0, 2, 3)
+    );
+    assert_eq!(
+      AAA::wakeup_pages((10, 0)).expect("head page").next_page,
+      Some(1)
+    );
+    assert_eq!(
+      AAA::wakeup_pages((10, 1)).expect("middle page").next_page,
+      Some(2)
+    );
+    assert_eq!(
+      AAA::wakeup_pages((10, 2)).expect("tail page").previous_page,
+      Some(1)
+    );
+
+    let page_size = page_size as usize;
+    for aaa_id in &actors[page_size..page_size * 2] {
+      assert!(AAA::wakeup_substrate_invalidate(*aaa_id).is_some());
+    }
+    let bucket = AAA::wakeup_buckets(10).expect("bucket after middle unlink");
+    assert_eq!(bucket.live_entries, count.saturating_sub(page_size as u32));
+    assert!(AAA::wakeup_pages((10, 1)).is_none());
+    assert_eq!(
+      AAA::wakeup_pages((10, 0)).expect("head page").next_page,
+      Some(2)
+    );
+    assert_eq!(
+      AAA::wakeup_pages((10, 2)).expect("tail page").previous_page,
+      Some(0)
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+
+    for aaa_id in actors {
+      let _ = AAA::wakeup_substrate_invalidate(aaa_id);
+    }
+    assert!(AAA::wakeup_buckets(10).is_none());
+    assert!(AAA::wakeup_pages((10, 0)).is_none());
+    assert!(AAA::wakeup_pages((10, 2)).is_none());
+  });
+}
+
+#[test]
 fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   let storage_info = AAA::storage_info();
   assert!(storage_info.iter().all(|entry| entry.pallet_name == b"AAA"));
@@ -318,6 +430,8 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       "QueueHead",
       "QueueTail",
       "QueuePages",
+      "WakeupPages",
+      "WakeupBuckets",
       "WakeupIndex",
       "MinWakeupBlock",
       "ScheduledWakeupBlock",
@@ -367,6 +481,8 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       ("QueueHead", false, false),
       ("QueueTail", false, false),
       ("QueuePages", true, true),
+      ("WakeupPages", true, true),
+      ("WakeupBuckets", true, true),
       ("WakeupIndex", false, true),
       ("MinWakeupBlock", true, false),
       ("ScheduledWakeupBlock", true, true),
@@ -397,23 +513,25 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   assert_plain_storage_type::<u64>(&entries[9]);
   assert_plain_storage_type::<u64>(&entries[10]);
   assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[11]);
+  assert_map_storage_types::<(MockBlockNumber, u64), crate::WakeupPageOf<Test>>(&entries[12]);
+  assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[13]);
   assert_map_storage_types::<
     MockBlockNumber,
     BoundedVec<u64, <Test as crate::Config>::MaxWakeupBucketSize>,
-  >(&entries[12]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[13]);
-  assert_map_storage_types::<u64, MockBlockNumber>(&entries[14]);
-  assert_plain_storage_type::<u64>(&entries[15]);
-  assert_map_storage_types::<u64, bool>(&entries[16]);
-  assert_map_storage_types::<AccountId, u8>(&entries[17]);
-  assert_map_storage_types::<AccountId, u64>(&entries[18]);
-  assert_plain_storage_type::<u32>(&entries[19]);
-  assert_plain_storage_type::<bool>(&entries[20]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[21]);
-  assert_plain_storage_type::<u32>(&entries[22]);
-  assert_plain_storage_type::<u32>(&entries[23]);
+  >(&entries[14]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[15]);
+  assert_map_storage_types::<u64, MockBlockNumber>(&entries[16]);
+  assert_plain_storage_type::<u64>(&entries[17]);
+  assert_map_storage_types::<u64, bool>(&entries[18]);
+  assert_map_storage_types::<AccountId, u8>(&entries[19]);
+  assert_map_storage_types::<AccountId, u64>(&entries[20]);
+  assert_plain_storage_type::<u32>(&entries[21]);
+  assert_plain_storage_type::<bool>(&entries[22]);
+  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[23]);
   assert_plain_storage_type::<u32>(&entries[24]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[25]);
+  assert_plain_storage_type::<u32>(&entries[25]);
+  assert_plain_storage_type::<u32>(&entries[26]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[27]);
 }
 
 fn ordinary_transfer_to_aaa(

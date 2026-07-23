@@ -1027,6 +1027,7 @@ pub struct ActorHotState<AccountId, BlockNumber, Balance> {
   pub consecutive_failures: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
+  pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
   pub last_user_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,

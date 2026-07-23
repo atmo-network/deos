@@ -308,6 +308,211 @@ impl<T: Config> Pallet<T> {
     stats
   }
 
+  pub(crate) fn wakeup_page_entry_matches(
+    pointer: WakeupPointer<BlockNumberFor<T>>,
+    aaa_id: AaaId,
+  ) -> bool {
+    WakeupPages::<T>::get((pointer.block, pointer.page_id))
+      .and_then(|page| page.entries.get(pointer.slot as usize).copied().flatten())
+      .is_some_and(|entry| entry.aaa_id == aaa_id)
+  }
+
+  fn wakeup_substrate_invalidate_inner(aaa_id: AaaId) -> Option<WakeupPointer<BlockNumberFor<T>>> {
+    let pointer = ActorHot::<T>::get(aaa_id)?.wakeup_pointer?;
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      if let Some(hot) = maybe_hot
+        && hot.wakeup_pointer == Some(pointer)
+      {
+        hot.wakeup_pointer = None;
+      }
+    });
+    let key = (pointer.block, pointer.page_id);
+    let Some(mut page) = WakeupPages::<T>::get(key) else {
+      return Some(pointer);
+    };
+    let Some(slot) = page.entries.get_mut(pointer.slot as usize) else {
+      return Some(pointer);
+    };
+    if !slot.is_some_and(|entry| entry.aaa_id == aaa_id) {
+      return Some(pointer);
+    }
+    *slot = None;
+    page.live_entries = page.live_entries.saturating_sub(1);
+    let Some(mut bucket) = WakeupBuckets::<T>::get(pointer.block) else {
+      WakeupPages::<T>::insert(key, page);
+      return Some(pointer);
+    };
+    bucket.live_entries = bucket.live_entries.saturating_sub(1);
+    if page.live_entries > 0 {
+      WakeupPages::<T>::insert(key, page);
+      WakeupBuckets::<T>::insert(pointer.block, bucket);
+      return Some(pointer);
+    }
+
+    if let Some(previous_page) = page.previous_page {
+      WakeupPages::<T>::mutate((pointer.block, previous_page), |maybe_previous| {
+        if let Some(previous) = maybe_previous {
+          previous.next_page = page.next_page;
+        }
+      });
+    } else {
+      bucket.head_page = page.next_page.unwrap_or(bucket.tail_page);
+    }
+    if let Some(next_page) = page.next_page {
+      WakeupPages::<T>::mutate((pointer.block, next_page), |maybe_next| {
+        if let Some(next) = maybe_next {
+          next.previous_page = page.previous_page;
+        }
+      });
+    } else {
+      bucket.tail_page = page.previous_page.unwrap_or(bucket.head_page);
+    }
+    WakeupPages::<T>::remove(key);
+    if bucket.live_entries == 0 {
+      WakeupBuckets::<T>::remove(pointer.block);
+    } else {
+      WakeupBuckets::<T>::insert(pointer.block, bucket);
+    }
+    Some(pointer)
+  }
+
+  pub fn wakeup_substrate_invalidate(aaa_id: AaaId) -> Option<WakeupPointer<BlockNumberFor<T>>> {
+    Self::wakeup_substrate_invalidate_inner(aaa_id)
+  }
+
+  fn wakeup_substrate_schedule_inner(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
+    let Some(hot) = ActorHot::<T>::get(aaa_id) else {
+      return false;
+    };
+    if let Some(pointer) = hot.wakeup_pointer {
+      if pointer.block == wakeup_block && Self::wakeup_page_entry_matches(pointer, aaa_id) {
+        return true;
+      }
+      Self::wakeup_substrate_invalidate_inner(aaa_id);
+    }
+
+    let (page_id, slot) = if let Some(mut bucket) = WakeupBuckets::<T>::get(wakeup_block) {
+      let tail_key = (wakeup_block, bucket.tail_page);
+      let Some(mut tail_page) = WakeupPages::<T>::get(tail_key) else {
+        return false;
+      };
+      let reusable_slot = tail_page
+        .entries
+        .iter() // deos-bypass: bounded-iter — WakeupPageSize-bounded tail-page slot reuse
+        .enumerate()
+        .skip(tail_page.scan_slot as usize)
+        .find_map(|(slot, entry)| entry.is_none().then_some(slot));
+      let slot = if let Some(slot) = reusable_slot {
+        tail_page.entries[slot] = Some(WakeupEntry { aaa_id });
+        slot
+      } else if tail_page.entries.len() < T::WakeupPageSize::get() as usize {
+        let slot = tail_page.entries.len();
+        if tail_page
+          .entries
+          .try_push(Some(WakeupEntry { aaa_id }))
+          .is_err()
+        {
+          return false;
+        }
+        slot
+      } else {
+        let page_id = bucket.next_page_id;
+        let Some(next_page_id) = page_id.checked_add(1) else {
+          return false;
+        };
+        let mut entries = WakeupPageEntriesOf::<T>::default();
+        if entries.try_push(Some(WakeupEntry { aaa_id })).is_err() {
+          return false;
+        }
+        tail_page.next_page = Some(page_id);
+        WakeupPages::<T>::insert(tail_key, tail_page);
+        WakeupPages::<T>::insert(
+          (wakeup_block, page_id),
+          WakeupPage {
+            entries,
+            live_entries: 1,
+            scan_slot: 0,
+            previous_page: Some(bucket.tail_page),
+            next_page: None,
+          },
+        );
+        bucket.tail_page = page_id;
+        bucket.next_page_id = next_page_id;
+        bucket.live_entries = bucket.live_entries.saturating_add(1);
+        WakeupBuckets::<T>::insert(wakeup_block, bucket);
+        return Self::set_wakeup_pointer(aaa_id, wakeup_block, page_id, 0);
+      };
+      tail_page.live_entries = tail_page.live_entries.saturating_add(1);
+      let page_id = bucket.tail_page;
+      WakeupPages::<T>::insert(tail_key, tail_page);
+      bucket.live_entries = bucket.live_entries.saturating_add(1);
+      WakeupBuckets::<T>::insert(wakeup_block, bucket);
+      (page_id, slot as WakeupSlot)
+    } else {
+      let mut entries = WakeupPageEntriesOf::<T>::default();
+      if entries.try_push(Some(WakeupEntry { aaa_id })).is_err() {
+        return false;
+      }
+      WakeupPages::<T>::insert(
+        (wakeup_block, 0),
+        WakeupPage {
+          entries,
+          live_entries: 1,
+          scan_slot: 0,
+          previous_page: None,
+          next_page: None,
+        },
+      );
+      WakeupBuckets::<T>::insert(
+        wakeup_block,
+        WakeupBucketState {
+          head_page: 0,
+          tail_page: 0,
+          next_page_id: 1,
+          live_entries: 1,
+        },
+      );
+      (0, 0)
+    };
+    Self::set_wakeup_pointer(aaa_id, wakeup_block, page_id, slot)
+  }
+
+  fn set_wakeup_pointer(
+    aaa_id: AaaId,
+    block: BlockNumberFor<T>,
+    page_id: WakeupPageId,
+    slot: WakeupSlot,
+  ) -> bool {
+    let pointer = WakeupPointer {
+      block,
+      page_id,
+      slot,
+    };
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      if let Some(hot) = maybe_hot {
+        hot.wakeup_pointer = Some(pointer);
+      }
+    });
+    match MinWakeupBlock::<T>::get() {
+      Some(current_min) if current_min <= block => {}
+      _ => MinWakeupBlock::<T>::put(block),
+    }
+    true
+  }
+
+  pub fn wakeup_substrate_schedule(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
+    let result: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if Self::wakeup_substrate_schedule_inner(aaa_id, wakeup_block) {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      } else {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          Error::<T>::AaaNotFound.into(),
+        ))
+      }
+    });
+    result.is_ok()
+  }
+
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) {
     let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
       return;
