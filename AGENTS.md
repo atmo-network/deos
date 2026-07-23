@@ -191,8 +191,10 @@
 
 ## 11. Scripts, Skills, and Wiki
 
-- `Script Classes`: Numbered scripts perform atomic leaf operations and must not orchestrate other numbered scripts; named scripts own orchestration or composite administration.
-- `Script Skeleton`: Named/admin entrypoints follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`.
+- `Script Classes`: Root numbered scripts perform reusable atomic operations; root named scripts expose deterministic operator utilities or compositions that require no agent judgment.
+- `Skill Workflow Ownership`: Domain-specific agent strategy, mode selection, evidence interpretation, coordination, and handoff belong in project skills with co-located script leaves where useful; do not encode those decisions only in root shell orchestration or README prose.
+- `Root Script Bridges`: Keep a root named entrypoint only when humans or CI need a stable command; when a skill owns the workflow, the root script must remain a thin compatibility bridge to the co-located implementation.
+- `Script Skeleton`: Full named/admin implementations follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`; thin skill bridges only resolve the repository root and delegate arguments unchanged.
 - `Script Help`: Every script entrypoint exposes `--help` and accurately declares environment and behavior.
 - `Compact Command Output`: Shared script-harness steps suppress successful child-command output by default, report concise timing, and retain full failure logs while printing a bounded tail; `DEOS_VERBOSE=1` restores live full output for diagnosis.
 - `Validation Entrypoints`: Run tests, Clippy, builds, benchmarks, formatting, and workspace checks through repository scripts whenever an entrypoint exists; when a needed mode is missing, extend the owning script first so repeated agent work strengthens shared tooling instead of bypassing it with raw Cargo or npm commands.

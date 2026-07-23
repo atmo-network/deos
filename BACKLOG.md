@@ -4,6 +4,12 @@
 >
 > Release boundary: `DEOS 0.7.2 — Work-Proportional AAA` is the next runtime release candidate; every other open item remains outside that release unless the dedicated plan below explicitly owns it.
 
+## Project Harness Evolution
+
+- [ ] `Harness / Ownership inventory`: Classify every root named script as a deterministic operator implementation, skill-owned compatibility bridge, or candidate for deletion; remove the ambiguous generic orchestrator category from the scripts entrypoint.
+- [ ] `Harness / Alignment bridge`: Move the `validate-local.sh` implementation beside the alignment skill while preserving a thin root human/CI bridge and one authoritative option/help contract.
+- [ ] `Harness / Domain workflows`: Add project-skill ownership for benchmark interpretation and guarded runtime-upgrade/native-staking coordination where agent scope selection, evidence judgment, or approval boundaries exceed deterministic shell execution.
+
 ## DEOS 0.7.2 — Work-Proportional AAA
 
 > `0.7.2` supersedes `0.7.1` as the next AAA semantic-core candidate. The release evolves AAA from bounded execution into a work-proportional deterministic actor runtime: consensus state, ProofSize, decoding, storage writes, and scheduler work must scale with actual pending work rather than maximum configured capacity, inactive economic accounts, completed plan prefixes, or monolithic bounded containers.

@@ -3,7 +3,7 @@
 # Source this file: source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="${DEOS_PROJECT_ROOT:-$(dirname "$SCRIPT_DIR")}"
 TEMPLATE_DIR="$PROJECT_ROOT/template"
 BIN_DIR="$PROJECT_ROOT/bin"
 

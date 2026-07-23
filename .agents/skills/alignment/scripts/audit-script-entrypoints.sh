@@ -8,9 +8,9 @@ usage() {
 Usage: audit-script-entrypoints.sh [OPTIONS]
 
 Checks repository shell/Node entrypoints for syntax validity, --help availability,
-shared shell-step status propagation, and compact skill metadata shape. Also enforces
-that project-specific audit leaves live in the alignment skill, not in the root
-operator scripts directory.
+shared shell-step status propagation, declared root-to-skill bridges, and compact
+skill metadata shape. Also enforces that project-specific audit leaves live in the
+alignment skill, not in the root operator scripts directory.
 
 Options:
   -h, --help        Show this help message
@@ -44,7 +44,7 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$ROOT_SCRIPT_DIR" "Root scripts directory"
     require_directory "$SCRIPT_DIR" "Alignment skill scripts directory"
-    require_commands bash find sort basename node awk
+    require_commands bash find sort basename node awk grep
     log_success "Prerequisites checked"
 }
 
@@ -131,6 +131,29 @@ audit_shell_step_status_propagation() {
     fi
 }
 
+audit_skill_bridges() {
+    local bridge owner entrypoint implementation
+    while IFS= read -r bridge; do
+        owner="$(awk -F': ' '/^# Skill-Owner: / { print $2; exit }' "$bridge")"
+        entrypoint="$(awk -F': ' '/^# Skill-Entrypoint: / { print $2; exit }' "$bridge")"
+        if [[ -z "$entrypoint" ]]; then
+            log_error "Skill bridge lacks Skill-Entrypoint metadata: ${bridge#$PROJECT_ROOT/}"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+        implementation="$PROJECT_ROOT/.agents/skills/$owner/$entrypoint"
+        if [[ ! -x "$implementation" || ! -f "$PROJECT_ROOT/.agents/skills/$owner/SKILL.md" ]]; then
+            log_error "Skill bridge owner or executable is missing: ${bridge#$PROJECT_ROOT/} -> $owner/$entrypoint"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+        if ! grep -Fq ".agents/skills/$owner/$entrypoint" "$bridge"; then
+            log_error "Skill bridge does not delegate to its declared entrypoint: ${bridge#$PROJECT_ROOT/}"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        fi
+    done < <(grep -l '^# Skill-Owner: ' "$ROOT_SCRIPT_DIR"/*.sh || true)
+}
+
 audit_skill_metadata_descriptions() {
     local skill_file
     local matches=""
@@ -165,6 +188,7 @@ audit_entrypoints() {
     audit_node_entrypoints
     audit_audit_leaf_ownership
     audit_shell_step_status_propagation
+    audit_skill_bridges
     audit_skill_metadata_descriptions
 
     if [[ "$AUDIT_FAILURES" -gt 0 ]]; then

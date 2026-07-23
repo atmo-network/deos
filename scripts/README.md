@@ -2,12 +2,14 @@
 
 This directory is the operator/developer automation layer of the DEOS reference stack. In the current repository topology it supports `/docs`, `/template`, and `/web-client`; it is not the primary conceptual control plane.
 
-This directory is intentionally split into two classes:
+This directory contains deterministic command surfaces, not agent strategy:
 
-- `Numbered scripts` are atomic leaf operations. They may depend on `_common.sh`, external tools, and artifacts on disk, but they should not orchestrate other numbered scripts.
-- `Named scripts` are orchestrators or admin utilities. They may compose numbered scripts into larger local workflows.
-- `Named/admin entrypoints` should follow one shell skeleton: `usage -> parse_args -> check_prerequisites/plan -> main`, with `_common.sh` providing the shared execution harness.
-- `All entrypoints` should expose `--help` and keep declared environment/behavior contracts honest.
+- `Numbered scripts` are reusable atomic operations. They may depend on `_common.sh`, external tools, and artifacts on disk, but they do not orchestrate other numbered scripts.
+- `Named implementations` are deterministic operator utilities or compositions whose mode and outcome need no agent interpretation.
+- `Skill bridges` preserve stable human/CI commands while delegating unchanged arguments to a workflow implementation co-located with its project skill.
+- `Agent-owned workflows` live under `/.agents/skills/<domain>` when they require scope selection, coordination, evidence interpretation, knowledge synchronization, or handoff judgment.
+- `Full named/admin implementations` follow `usage -> parse_args -> check_prerequisites/plan -> main`; thin bridges only resolve the repository root and delegate.
+- `All entrypoints` expose `--help` and keep declared environment/behavior contracts honest.
 
 ## Atomic Scripts
 
@@ -29,7 +31,7 @@ This directory is intentionally split into two classes:
 - [06-zombienet-e2e.sh](./06-zombienet-e2e.sh)
   Run the runtime-facing E2E scenario set against a live local network.
 
-## Orchestrators
+## Deterministic Compositions and Skill Bridges
 
 - [bootstrap-local-network.sh](./bootstrap-local-network.sh)
   Run the local bootstrap chain: binaries -> tools -> runtime build -> chain spec -> Zombienet. Start the web client directly from `web-client` with `npm run dev`.
@@ -38,7 +40,7 @@ This directory is intentionally split into two classes:
   Run the local script-entrypoint/template-readiness/numeric-parsing/simulator-determinism/simulator-consistency/code-suppression/backlog/release-line/portability/domain-DAG/wiki-trust/dependency/CI/build/E2E validation workflow. The fast audit leaves live under the repo-local `alignment` skill and are orchestrated from here. Use `--audit-only` for the fast local audit stack and `--dependency-audit` when network-backed npm posture checks are desired.
 
 - [aaa-release-gate.sh](./aaa-release-gate.sh)
-  Run the heavy AAA scheduler stress gate used by the scheduled stress lane.
+  Stable operator/CI bridge to `/.agents/skills/aaa-delivery/scripts/release-gate.sh`. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
@@ -74,4 +76,4 @@ Commands executed through the shared script harness use compact output by defaul
   Remove generated local artifacts (`chain_spec.json`, optionally `target/` and `bin/`).
 
 - [_common.sh](./_common.sh)
-  Shared path, logging, timed-step, and background-process helpers used by the orchestrator/admin script layer.
+  Shared path, logging, timed-step, and background-process helpers used by deterministic root commands and project-skill script leaves. A co-located skill script supplies `DEOS_PROJECT_ROOT` before sourcing it.
