@@ -104,6 +104,9 @@ impl<T: Config> Pallet<T> {
       let Some(funding) = maybe.as_mut() else {
         return;
       };
+      if !funding.has_pending_funding {
+        return;
+      }
       let assets: alloc::vec::Vec<_> = funding.funding_snapshots.keys().copied().collect();
       for asset in assets {
         let Some(batch) = funding.funding_snapshots.get_mut(&asset) else {
@@ -116,6 +119,7 @@ impl<T: Config> Pallet<T> {
         batch.pending_amount = Zero::zero();
         promotions.push((asset, batch.amount));
       }
+      funding.has_pending_funding = false;
     });
     for (asset, amount) in promotions {
       Self::deposit_event(Event::FundingBatchPromoted {

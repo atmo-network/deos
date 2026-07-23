@@ -1028,6 +1028,7 @@ impl<T: Config> Pallet<T> {
             .checked_add(&amount)
             .ok_or(Error::<T>::FundingBatchOverflow)?;
           batch.pending_amount = pending_amount;
+          funding.has_pending_funding = true;
           Self::deposit_event(Event::FundingBatchPendingAccumulated {
             aaa_id,
             asset,

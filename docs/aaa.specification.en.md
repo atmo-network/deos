@@ -74,6 +74,7 @@ struct ActorFunding<AccountId, Balance> {
     funding_source_policy: FundingSourcePolicy<AccountId>,
     funding_tracked_assets: BoundedBTreeSet<AssetId, MaxFundingTrackedAssets>,
     funding_snapshots: BoundedBTreeMap<AssetId, FundingBatch<Balance>, MaxFundingTrackedAssets>,
+    has_pending_funding: bool,
 }
 
 struct FundingBatch<Balance> { amount: Balance, pending_amount: Balance }
@@ -1024,7 +1025,7 @@ This section defines the stable storage surface. Actor cardinality/capacity, imm
 - `ActorIdentity` (`Map<Blake2_128Concat(AaaId), Identity>`): class, owner, sovereign account, and creation lineage for active and dormant actors
 - `ActorHot` (`Map<Blake2_128Concat(AaaId), HotState>`): active/paused lifecycle, scheduler pointers, attempt/cycle state, and compact admission facts; absent for dormant identities
 - `ActorProgram` (`Map<Blake2_128Concat(AaaId), Program>`): schedule/window and bounded run/close plans; absent for dormant identities
-- `ActorFunding` (`Map<Blake2_128Concat(AaaId), FundingState>`): funding policy, tracked assets, and batches; absent for dormant identities
+- `ActorFunding` (`Map<Blake2_128Concat(AaaId), FundingState>`): funding policy, tracked assets, batches, and canonical `has_pending_funding`; absent for dormant identities
 - `ActorIdentityCount` (`u32`): transactionally maintained O(1) cardinality of `ActorIdentity`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount` (`u32`): transactionally maintained O(1) cardinality of active plus paused `ActorHot` entries; excludes dormant identities
 - `ClosedSystemAaaIds` (`Map<Blake2_128Concat(AaaId), Mutability>`): System close tombstones governing reopen eligibility

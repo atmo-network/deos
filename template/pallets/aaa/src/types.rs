@@ -988,6 +988,7 @@ pub struct ActorFundingState<FundingPolicy, FundingSnapshots, FundingTrackedAsse
   pub funding_source_policy: FundingPolicy,
   pub funding_snapshots: FundingSnapshots,
   pub funding_tracked_assets: FundingTrackedAssets,
+  pub has_pending_funding: bool,
 }
 
 #[derive(

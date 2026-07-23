@@ -1263,6 +1263,7 @@ mod benches {
     let assets = T::BenchmarkHelper::funding_assets(a);
     ActorFunding::<T>::mutate(aaa_id, |maybe| {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
+      funding.has_pending_funding = true;
       for asset in assets {
         funding
           .funding_snapshots

@@ -3807,6 +3807,7 @@ fn percentage_of_last_funding_freezes_active_and_accumulates_pending() {
       100
     ));
     let funding = actor_funding(aaa_id);
+    assert!(!funding.has_pending_funding);
     assert_eq!(
       funding
         .funding_snapshots
@@ -3834,6 +3835,7 @@ fn percentage_of_last_funding_freezes_active_and_accumulates_pending() {
       .expect("funding batch");
     assert_eq!(batch.amount, 100);
     assert_eq!(batch.pending_amount, 200);
+    assert!(funding.has_pending_funding);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle_until_cycle_nonce(aaa_id, 2);
     let inst = AAA::aaa_instances(aaa_id).expect("AAA exists");
@@ -3846,6 +3848,7 @@ fn percentage_of_last_funding_freezes_active_and_accumulates_pending() {
       .expect("promoted funding batch");
     assert_eq!(batch.amount, 200);
     assert_eq!(batch.pending_amount, 0);
+    assert!(!funding.has_pending_funding);
     assert!(has_aaa_event(|event| matches!(
       event,
       Event::FundingBatchPromoted {

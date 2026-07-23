@@ -563,6 +563,7 @@ pub mod pallet {
             funding_source_policy: FundingSourcePolicy::RuntimePolicy,
             funding_snapshots: Default::default(),
             funding_tracked_assets,
+            has_pending_funding: false,
           },
         );
         ActiveAaaCount::<T>::put(
@@ -1198,6 +1199,10 @@ pub mod pallet {
       funding
         .funding_snapshots
         .retain(|asset, _| new_tracked.contains(asset));
+      funding.has_pending_funding = funding
+        .funding_snapshots
+        .values()
+        .any(|batch| !batch.pending_amount.is_zero());
       let (cycle_weight_upper, cycle_fee_upper) =
         Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
       AaaInstances::<T>::mutate(aaa_id, |maybe| {
@@ -1389,6 +1394,10 @@ pub mod pallet {
       funding
         .funding_snapshots
         .retain(|asset, _| new_tracked.contains(asset));
+      funding.has_pending_funding = funding
+        .funding_snapshots
+        .values()
+        .any(|batch| !batch.pending_amount.is_zero());
       AaaInstances::<T>::mutate(aaa_id, |maybe| {
         let inst = maybe
           .as_mut()
@@ -1971,6 +1980,7 @@ pub mod pallet {
             funding_source_policy,
             funding_snapshots: Default::default(),
             funding_tracked_assets,
+            has_pending_funding: false,
           },
         );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2118,6 +2128,7 @@ pub mod pallet {
             funding_source_policy,
             funding_snapshots: Default::default(),
             funding_tracked_assets,
+            has_pending_funding: false,
           },
         );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2605,9 +2616,18 @@ pub mod pallet {
       let mut max_id: Option<AaaId> = None;
       for (aaa_id, instance) in AaaInstances::<T>::iter() {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
-        if !ActorFunding::<T>::contains_key(aaa_id) {
+        let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
           return Err(TryRuntimeError::Other(
             "AaaInstances entry has no matching ActorFunding entry",
+          ));
+        };
+        let has_pending_funding = funding
+          .funding_snapshots
+          .values()
+          .any(|batch| !batch.pending_amount.is_zero());
+        if funding.has_pending_funding != has_pending_funding {
+          return Err(TryRuntimeError::Other(
+            "ActorFunding pending indication disagrees with funding batches",
           ));
         }
         match SovereignIndex::<T>::get(&instance.sovereign_account) {
