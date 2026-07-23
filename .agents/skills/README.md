@@ -8,7 +8,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 | `aaa-delivery` | AAA validation profile selection, stress/occupancy evidence policy, benchmark handoff | AAA runtime semantics; shared gate execution | `aaa-delivery/SKILL.md`; shared `scripts/aaa-release-gate.sh` implementation |
 | `domain-dag` | Generic ownership/DAG review and validator | DEOS subsystem policy; workflow-specific delivery gates | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
 | `benchmarking` | Benchmark design, evidence classification, interpretation, and integration; currently FRAME runtime measurement | Runtime semantics; shared command execution; scheduler stress; release publication; frontend benchmarking without an adopted route | `benchmarking/SKILL.md`; shared `scripts/benchmarks.sh` and `scripts/03-build-runtime.sh` implementations |
-| `runtime-upgrade-delivery` | Upgrade preparation sequence, evidence rungs, relay approval boundary, and post-upgrade handoff | Governance authorization decisions; version/migration semantics; credentials; shared commands | `runtime-upgrade-delivery/SKILL.md`; shared runtime-build, try-runtime, and authorized-upgrade scripts |
+| `upgrade-delivery` | Upgrade preparation sequence, evidence rungs, relay approval boundary, and post-upgrade handoff | Governance authorization decisions; version/migration semantics; credentials; shared commands | `upgrade-delivery/SKILL.md`; shared runtime-build, try-runtime, and authorized-upgrade scripts |
 | `wiki-sync` | Generated wiki projection, provenance, trust, and consolidation workflow | Source specification ownership; browser implementation | `wiki-sync/SKILL.md` and its documented scripts |
 
 ## Dependency Direction

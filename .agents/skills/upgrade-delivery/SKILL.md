@@ -1,9 +1,9 @@
 ---
-name: runtime-upgrade-delivery
+name: upgrade-delivery
 description: Coordinates guarded DEOS runtime-upgrade preparation, authorization verification, ministerial relay planning, and post-upgrade evidence without owning governance decisions or shared commands.
 ---
 
-# Runtime Upgrade Delivery
+# Upgrade Delivery
 
 Use this skill when preparing, checking, relaying, or verifying an authorized DEOS runtime upgrade.
 
