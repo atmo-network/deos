@@ -5,7 +5,7 @@ description: Guides AAA scheduler validation, stress evidence, benchmark interpr
 
 # AAA Delivery
 
-Use this skill when an AAA change needs validation scope selection, scheduler stress evidence, benchmark interpretation, or release-candidate handoff. The skill owns agent judgment; its script owns deterministic execution.
+Use this skill when an AAA change needs validation scope selection, scheduler stress evidence, benchmark interpretation, or release-candidate handoff. The skill owns agent judgment; shared root scripts own deterministic execution.
 
 ## Workflow Boundary
 

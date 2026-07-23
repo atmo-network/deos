@@ -14,9 +14,9 @@
 
 ### Harness evolution
 
-- [ ] `0.7.2 / Harness / Ownership inventory`: Classify every executable as a shared root implementation, agent-specific skill leaf, or deletion candidate; prove GitHub, CI, human, root-composition, and multi-skill consumers never depend on skill-local execution.
-- [ ] `0.7.2 / Harness / Declarative routing`: Give each owning project skill a compact changed-scope route matrix naming exact script leaves, intentional exclusions, escalation triggers, and external prerequisites; close only when agents can select package/test/benchmark/build/network branches without raw commands or a duplicate harness.
-- [ ] `0.7.2 / Harness / Alignment routing`: Keep shared `validate-local.sh` execution in root `/scripts`, move scope-selection judgment into alignment's declarative routes, and remove broad default compositions that run unrelated validation branches.
+- [ ] `0.7.2 / Harness / Ownership inventory`: Human-callable atoms, GitHub shared-script placement, and AAA gate ownership are now explicit and audited. Classify the remaining named/admin scripts and skill leaves as shared root implementations, agent-specific leaves, or deletion candidates; map their human, CI, root-composition, and multi-skill consumers.
+- [ ] `0.7.2 / Harness / Declarative routing`: Alignment and AAA delivery now declare compact routes, while `ci-local.sh` supports package/test-family scope and benchmarks support exact-extrinsic evidence. Complete route/exclusion/prerequisite matrices for the remaining domain workflow owners without raw commands or duplicate harnesses.
+- [ ] `0.7.2 / Harness / Alignment routing`: Alignment owns the changed-scope matrix and completion gate, and shared CI supports narrow package/test routes. Retain `validate-local.sh` in root `/scripts` but remove broad default compositions that run unrelated audit, client, build, or network branches.
 - [ ] `0.7.2 / Harness / Domain workflows`: Add skill ownership for benchmark interpretation and guarded runtime-upgrade/native-staking coordination while keeping every human/CI/multi-skill executable in root `/scripts` as the sole shared implementation.
 
 ### Slice 3 — Effective eligibility scheduling

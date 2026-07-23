@@ -47,7 +47,7 @@ Each numbered command is independently callable by a human or CI from any workin
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
 
-Project-local audit leaves are documented in `/.agents/skills/alignment/SKILL.md` and are normally reached through `./scripts/validate-local.sh --audit-only`.
+Project-local audit leaves and targeted routes are documented in `/.agents/skills/alignment/SKILL.md`. Use the diff-aware completion gate by default; reserve `./scripts/validate-local.sh --audit-only` for an explicitly broad audit pass.
 
 Commands executed through the shared script harness use compact output by default: successful test, build, lint, documentation, metadata, and benchmark steps print only their label, duration, and result. A failed step prints the last 80 lines and retains its complete output in a temporary log whose path appears in the error. Set `DEOS_VERBOSE=1` to restore live full output, or set `DEOS_FAILURE_TAIL_LINES=N` to change the failure excerpt without enabling verbose mode.
 

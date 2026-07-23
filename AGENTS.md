@@ -13,8 +13,7 @@
 - `Progressive Enhancement`: Keep the smallest correct baseline independently usable, then add capability, evidence, performance, and integration layers only when their contracts and prerequisites become explicit.
 - `Graceful Degradation`: When an optional tool, provider, adapter, or evidence layer is unavailable, fall back to an explicit narrower capability without weakening invariants, atomicity, safety, or truth classification; required layers fail closed instead of silently changing semantics.
 - `Test-Driven Evolution`: Treat context structure, links, terminology, claims, and open-work truth as testable infrastructure rather than optional prose hygiene.
-- `Context Optimization`: Evolution includes addition, consolidation, relocation, and deletion; growth alone does not count as improvement.
-- `Progressive Consolidation`: Move exploratory knowledge toward stable contracts as evidence accumulates, then retire parallel or superseded explanations.
+- `Context Optimization`: Evolution includes addition, consolidation, relocation, and deletion; move exploratory knowledge toward stable contracts as evidence accumulates, retire superseded explanations, and never treat growth alone as improvement.
 - `Cognitive Infrastructure`: Treat docs, scripts, skills, audits, and validation gates as part of the system because they determine which abstractions contributors reproduce.
 - `Completion Honesty`: A task is not done while validation fails, backlog state lies, completed work remains open, or an external gate is presented as locally verified.
 
@@ -52,7 +51,7 @@
 - `/docs`: Conceptual control plane containing specifications, contracts, architecture maps, strategy notes, and the canonical documentation index.
 - `/template`: Rust reference implementation containing the parachain runtime, pallets, primitives, weights, tests, and runtime-adjacent research.
 - `/web-client`: SvelteKit reference client for browser-facing DEOS and current TMCTOL flows.
-- `/scripts`: Operator/developer automation; numbered scripts are atomic leaves and named scripts are orchestrators or admin utilities.
+- `/scripts`: Shared human/CI/skill automation; numbered scripts are independent atoms, while named scripts are deterministic compositions or admin utilities.
 - `/simulator`: Historical TMCTOL hypothesis lab and authoritative mathematical reference for formulas, thresholds, conservation, floor/compression scenarios, and parameter behavior.
 - `/wiki`: Generated bilingual semantic projection of `/docs` for onboarding, frontend rendering, and agent navigation.
 - `/.agents/skills`: Repository-local agent workflow control plane; its README owns the skill graph map, each `SKILL.md` owns one domain contract, and project-specific audits belong in `alignment`.
@@ -127,6 +126,9 @@
 - `Liquid Staking`: Keep one staking pallet, `stXXX` receipts, and native `stNTVE`; do not add a parallel nomination-token tier without evidence.
 - `Native Security`: Native collator backing uses explicit locked `NTVE/stNTVE` LP custody rather than liquid receipt ownership.
 - `AAA Staking Portability`: Keep `Stake` and `Unstake` tasks generic; runtime adapters decide native, non-native, or local representation behavior.
+
+## 7A. Governance and Reward Contracts
+
 - `Governance Domains`: Model governance as explicit domain-scoped primary/protection track pairs rather than proposal-id conventions or actor-profile hacks.
 - `Governance Shape`: Prefer `GovernanceDomain + CadenceMode + ProposalPayloadKind`; add richer proposal classes only after measured pressure.
 - `Urgent Policy`: Fast-track eligibility defaults deny and must be opted in per domain/payload combination.
@@ -136,6 +138,9 @@
 - `Reward Sparsity`: Preserve sparse, touch-driven, one-epoch-lagged reward snapshots and explicit truncation signals.
 - `Reward Sources`: Keep reward distribution separable from origin so externally funded or treasury-budgeted pots remain possible.
 - `Unclaimed Rewards`: Treat leftovers as explicit runtime policy rather than accidental residue.
+
+## 7B. Fee and Security Contracts
+
 - `Liquidity Slippage`: Derive Liquidity Actor swap tolerance from current reserve depth and clamp it between explicit runtime bounds.
 - `Fee Collection`: Keep Axial Router trading fees on the Burn Actor path; collect 100% of transaction, AAA, governance-opening, and XCM-execution fees into the Fee Sink System AAA independently of actor execution liveness, and name the generic AAA boundary by collection rather than trading-route semantics.
 - `Fee Allocation Phases`: While collators remain permissioned, the Fee Sink distributes its available native balance 50/50 to staking ingress and liquidity provisioning; a future equal-thirds security/staking/liquidity plan requires permissionless collators and an explicit bounded security-reward contract, with indivisible remainder retained in Fee Sink for a later cycle.
@@ -193,20 +198,13 @@
 
 ## 11. Scripts, Skills, and Wiki
 
-- `Script Classes`: Root numbered scripts perform reusable atomic operations; root named scripts expose deterministic operator utilities or compositions that require no agent judgment.
-- `Human-Callable Atoms`: Every numbered root script runs independently from any working directory, documents inputs/outputs/side effects, validates its own prerequisites, and either completes one operation or fails with an exact unblocker; numbering communicates a common human sequence, never an invocation dependency.
-- `Skill Workflow Ownership`: Domain-specific agent strategy, mode selection, evidence interpretation, coordination, and handoff belong in project skills; co-located scripts remain agent-specific leaves rather than shared project automation.
-- `Shared Script Placement`: Any executable used by humans, GitHub Actions, CI, root compositions, or multiple skills belongs in root `/scripts`; skills and workflows call that public implementation instead of making root automation delegate into a skill directory.
-- `Script Skeleton`: Full named/admin implementations follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`; agent-specific skill leaves follow their owning skill contract and compose public root scripts when shared execution is required.
-- `Script Help`: Every script entrypoint exposes `--help` and accurately declares environment and behavior.
+- `Human-Callable Script Classes`: Root numbered scripts run independently from any working directory, document inputs/outputs/side effects, validate prerequisites, and perform one operation; numbering shows a common sequence, while named scripts provide deterministic compositions or admin utilities without agent judgment.
+- `Skill/Script Placement`: Skills own strategy, mode selection, evidence interpretation, coordination, and handoff; any executable used by humans, GitHub Actions, CI, root compositions, or multiple skills belongs in root `/scripts`, while co-located skill scripts remain agent-specific leaves.
+- `Script Entrypoint Contract`: Full named/admin implementations follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`; every entrypoint exposes honest `--help`, and agent-specific leaves compose public root scripts when shared execution is required.
 - `Compact Command Output`: Shared script-harness steps suppress successful child-command output by default, report concise timing, and retain full failure logs while printing a bounded tail; `DEOS_VERBOSE=1` restores live full output for diagnosis.
-- `Validation Entrypoints`: Run tests, Clippy, builds, benchmarks, formatting, and workspace checks through repository scripts whenever an entrypoint exists; when a needed mode is missing, extend the owning script first so repeated agent work strengthens shared tooling instead of bypassing it with raw Cargo or npm commands.
-- `Validation Routing`: Owning project skills declare the narrowest route from changed scope to existing script entrypoints, including intentional exclusions and escalation triggers; agents run that route rather than defaulting to full-workspace, full-client, build, benchmark, network, or release gates.
-- `No Shadow Harness`: Do not assemble ad hoc validation wrappers, command inventories, or parallel orchestration when a project skill/script route exists; improve the canonical route or leaf when it lacks necessary precision.
+- `Canonical Validation Routing`: Owning skills declare the narrowest changed-scope route, exclusions, and escalation triggers through repository scripts; never default to full gates or build a shadow harness/raw command inventory, and extend the canonical route when it lacks precision.
 - `Audit Ownership`: Project-specific audit leaves live in the repo-local `alignment` skill; root scripts may orchestrate but should not duplicate audit knowledge.
-- `Skill Portability`: Repo-local skills must remain independently portable and must not call sibling skill internals directly.
-- `Skill Domain DAG`: Treat project skills as an acyclic responsibility graph: delivery/orchestration skills route to documented capability contracts, capability skills own their leaves, and lower skills never depend on composition roots.
-- `Skill Split Gate`: Create a separate skill only when it gains a distinct truth owner, trigger, exclusion boundary, or reusable capability and measurably reduces interface/context pressure; reject folder theater, one-use wrappers, and decomposition that hides control flow.
+- `Skill Domain DAG`: Keep skills independently portable and acyclic: orchestration routes to documented capability contracts, never sibling internals; split only for a distinct owner, trigger, exclusion boundary, or reusable capability that reduces context/interface pressure, not for folder theater or file size.
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.
 - `Durable Ledgers`: Record reusable hallucinations, ambiguities, dead ends, and boundary drifts only; bare tool failures remain transient output.
 - `Wiki Role`: `/wiki` is a concise, provenance-aware learning lens over current project truth, not a release-note mirror or docs dump.
@@ -235,15 +233,10 @@
 - `Classify`: Identify whether the task primarily touches docs, template, web-client, scripts, simulator, wiki, or context.
 - `Locate Truth`: Read the owning specification, architecture doc, README, code, and tests before editing.
 - `Check Boundary`: Identify framework versus instance policy, trigger, storage/weight bound, truth surface, and rejected shortcut for non-trivial changes.
-- `Inspect First`: Read current implementation, call sites, tests, and git diff before mutation.
-- `Keep Scope`: Make targeted changes and exclude unrelated cleanup unless the task explicitly includes consolidation.
+- `Inspect and Scope`: Read implementation, call sites, tests, and git diff before mutation; make targeted changes and exclude unrelated cleanup unless the task explicitly includes consolidation.
 - `Sync Backlog`: Close, narrow, split, retarget, or gate the canonical open-work item as reality changes.
-- `Validate Locally`: Run focused tests, checks, formatting, and audits for the touched surface.
-- `Validate Rust`: Run targeted Cargo checks/tests and workspace Clippy with `-D warnings` before calling Rust work complete.
-- `Validate Math`: Run `node ./simulator/tests.js` whenever tokenomics, formulas, thresholds, or invariants change.
-- `Validate Client`: Run relevant web-client checks/builds when UI, adapters, read models, or client contracts change.
-- `Validate Scripts`: Run shell syntax, `--help`, and bounded smoke checks for touched entrypoints.
-- `Validate Wiki`: Run wiki trust/sync/consolidation checks for touched wiki surfaces.
+- `Validate Locally`: Run focused checks through the owning route; Rust completion needs targeted checks/tests plus workspace Clippy with `-D warnings`.
+- `Surface Validation`: Run simulator tests for math/invariant changes, relevant client checks for browser contracts, syntax/help/smoke checks for scripts, and trust/sync/consolidation checks for wiki changes.
 - `Sync Docs`: Update specifications only when contracts change and architecture docs only when shipped implementation truth changes.
 - `Sync Context`: Update `AGENTS.md` only for durable patterns, `BACKLOG.md` only for open work, and `CHANGELOG.md` only for completed outcomes.
 - `Completion Gate`: After repository changes and knowledge sync, run `./.agents/skills/alignment/scripts/completion-gate.sh`; a failing gate means not done.
