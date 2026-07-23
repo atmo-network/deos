@@ -671,7 +671,7 @@ fn paged_queue_limits_are_independent_runtime_controls() {
     assert_eq!(
       <Runtime as pallet_aaa::Config>::QueuePageSize::get(),
       64,
-      "64 is provisional until the 32/64/128 production-Wasm comparison"
+      "64 is the balanced production choice from the 32/64/128 production-Wasm comparison"
     );
     assert_eq!(
       <Runtime as pallet_aaa::Config>::MaxQueueEntriesScannedPerBlock::get(),

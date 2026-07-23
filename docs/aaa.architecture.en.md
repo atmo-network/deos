@@ -557,7 +557,7 @@ Selected configured bounds in the current DEOS reference runtime:
 
 - `MaxExecutionsPerBlock = 1,000` as a defense-in-depth count ceiling; complete-plan RefTime/ProofSize admission remains the primary limiter and no global 1,000-cycle reservation exists
 - `MaxActiveActors = 10,000` (compile-time hard cap checked against `ActiveAaaCount`)
-- `QueuePageSize = 64` remains the provisional active paged-FIFO granularity; production-Wasm page-operation and mixed multi-page scan evidence covers 32/64/128, while final selection still awaits cross-candidate complete-execution comparison
+- `QueuePageSize = 64` is the selected active paged-FIFO production granularity: 32/64/128 production-Wasm evidence covers single-page operations, 10,000-entry stale traversal, mixed multi-page consumption, and complete execution through the 1,000-attempt ceiling
 - `MaxQueueEntriesScannedPerBlock = 10,000`, independently bounded by physical queue capacity and not aliased to the execution ceiling
 - `ActiveActorLimit` (governance operational cap, `<= min(MaxActiveActors, MaxQueueLength)`)
 - `MaxWakeupBucketSize = 10,000` (temporal wakeup bucket bound, decoupled from run-queue semantics)
@@ -587,7 +587,15 @@ The reusable drain primitive snapshots an explicit cutoff, stops at the first li
 | 64 | `23,328,000 + 12,081,541n` | `3,092 + 2,561n` |
 | 128 | `23,257,000 + 12,397,562n` | `3,034 + 2,560n` |
 
-The mixed queue-only model makes 32 and 64 effectively close in per-entry RefTime while 128 regresses, whereas all-stale traversal favors larger pages and existing-page append favors smaller pages. These measurements still do not select page size or establish end-to-end scheduler throughput: actual admission/execution of 1,000 cheap actors and sustained 10,000-entry recovery remain open evidence.
+The mixed queue-only model makes 32 and 64 effectively close in per-entry RefTime while 128 regresses, whereas all-stale traversal favors larger pages and existing-page append favors smaller pages. The final cross-candidate complete-execution benchmark uses the same `50 x 20`, `n = 1..1,000` production-Wasm protocol:
+
+| Page entries | RefTime model | Estimated ProofSize model | Measured ProofSize model | Queue-page keys at 999 |
+| --- | --- | --- | --- | --- |
+| 32 | `90,306,000 + 64,246,015n` | `4,332 + 2,729n` | `875 + 254n` | 32 |
+| 64 | `91,075,000 + 64,544,609n` | `4,332 + 2,729n` | `873 + 253n` | 16 |
+| 128 | `89,188,000 + 64,448,091n` | `4,331 + 2,728n` | `881 + 253n` | 8 |
+
+Complete execution differs by less than 0.5% in per-actor RefTime and has effectively identical proof growth, so actor/program/funding work dominates page granularity. The reference runtime selects 64 as the balanced minimax choice: compared with 32 it halves page-key churn and improves all-stale traversal without materially changing complete execution; compared with 128 it avoids the larger page rewrite, the roughly 20% slower existing-page append, and the mixed-scan regression while retaining half of 32's page count. No throughput claim depends on this selection, and sustained recovery remains independently bounded by scan and WeightMeter controls.
 - The `50%` reserve provides `Weight::from_parts(1_000_000_000_000, 2_500_000)` and admits the guaranteed scheduler envelope (`1,061,855` proof bytes), reference genesis System AAA `0` cycle (`757,966`), and its close tail (`370,971`) together at `2,190,792` proof bytes. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work, not every optional ingress-drain, heavyweight wakeup-retry, or sweep-time terminal-close unit; saturated durable housekeeping therefore converges across blocks and may defer an actor cycle
 - Runtime binds `GuaranteedOnIdleWeight` directly to the 50% reserve. Genesis construction asserts the contract, create/reopen reject before fee collection or mutation, and both plan-update paths validate the prospective run/close pair; `ExecutionPlanExceedsOnIdleBudget` reports either-dimensional rejection
 - Every reference genesis actor fits the guaranteed scheduler envelope, its cycle, and close tail under that gate; a runtime regression checks the full set. Exact-reserve stress regressions prove mixed zero-amount staking/transfer FIFO carry-over with nonce spread `<= 1`, no starvation or failed steps, eventual drain of a maximum address-ingress batch while an XCM deposit trigger remains executable, and convergence of a maximum wakeup-retry prefix plus expired-actor cleanup while a non-empty close tail and live actors progress

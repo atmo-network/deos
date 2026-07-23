@@ -51,7 +51,7 @@ parameter_types! {
   /// Defense-in-depth count ceiling; RefTime and ProofSize admission remain primary.
   pub const AaaMaxExecutionsPerBlock: u32 = 1_000;
   pub const AaaMaxQueueLength: u32 = 10_000;
-  /// Provisional paged-FIFO candidate; production selection awaits 32/64/128 Wasm comparison.
+  /// Balanced production granularity selected from 32/64/128 production-Wasm evidence.
   pub const AaaQueuePageSize: u32 = 64;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const AaaMaxWakeupBucketSize: u32 = 10_000;
