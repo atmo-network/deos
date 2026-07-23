@@ -1067,6 +1067,38 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 			.saturating_add(T::DbWeight::get().reads(34))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
+	/// Storage: `AAA::WakeupBuckets` (r:14 w:14)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:10 w:10)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	fn scheduler_wakeup_cursor_insert() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `6167`
+		//  Estimated: `41807`
+		// Minimum execution time: 321_345_000 picoseconds.
+		Weight::from_parts(355_009_000, 0)
+			.saturating_add(Weight::from_parts(0, 41807))
+			.saturating_add(T::DbWeight::get().reads(25))
+			.saturating_add(T::DbWeight::get().writes(25))
+	}
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:18 w:10)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	/// Storage: `AAA::WakeupBuckets` (r:15 w:15)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
+	fn scheduler_wakeup_cursor_pop_min() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `10659`
+		//  Estimated: `56199`
+		// Minimum execution time: 430_578_000 picoseconds.
+		Weight::from_parts(477_234_000, 0)
+			.saturating_add(Weight::from_parts(0, 56199))
+			.saturating_add(T::DbWeight::get().reads(34))
+			.saturating_add(T::DbWeight::get().writes(26))
+	}
 	/// Storage: `AAA::QueueHead` (r:1 w:1)
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
 	/// Storage: `AAA::QueueTail` (r:1 w:0)

@@ -45,6 +45,8 @@ pub trait WeightInfo {
   fn scheduler_wakeup_drain_full_page() -> Weight;
   fn scheduler_wakeup_drain_dense_boundary() -> Weight;
   fn scheduler_wakeup_drain_stale_page() -> Weight;
+  fn scheduler_wakeup_cursor_insert() -> Weight;
+  fn scheduler_wakeup_cursor_pop_min() -> Weight;
   fn scheduler_paged_consume_preserve_page() -> Weight;
   fn scheduler_paged_consume_delete_page() -> Weight;
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight;
@@ -255,6 +257,14 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
 
   fn scheduler_wakeup_drain_stale_page() -> Weight {
     Weight::from_parts(1_500_000_000, 400_000).saturating_add(T::DbWeight::get().reads_writes(34, 2))
+  }
+
+  fn scheduler_wakeup_cursor_insert() -> Weight {
+    Weight::from_parts(2_000_000_000, 500_000).saturating_add(T::DbWeight::get().reads_writes(100, 100))
+  }
+
+  fn scheduler_wakeup_cursor_pop_min() -> Weight {
+    Weight::from_parts(2_000_000_000, 500_000).saturating_add(T::DbWeight::get().reads_writes(100, 100))
   }
 
   fn scheduler_paged_consume_preserve_page() -> Weight {
@@ -470,6 +480,8 @@ impl WeightInfo for () {
   fn scheduler_wakeup_drain_full_page() -> Weight { Weight::from_parts(2_000_000_000, 400_000) }
   fn scheduler_wakeup_drain_dense_boundary() -> Weight { Weight::from_parts(2_200_000_000, 450_000) }
   fn scheduler_wakeup_drain_stale_page() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
+  fn scheduler_wakeup_cursor_insert() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
+  fn scheduler_wakeup_cursor_pop_min() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
   fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_consume_delete_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {

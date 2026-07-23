@@ -373,7 +373,16 @@ Production-Wasm `50 x 20` drain evidence at the selected page size records fixed
 | Dense boundary | 33 | `258,137,000 / 88,983` | `36 / 36` |
 | Stale page | 32 | `148,275,000 / 85,761` | `34 / 2` |
 
-These fixed samples validate partial preservation, complete deletion, one-page boundary crossing, and stale-pointer filtering; they do not imply block throughput. Their pre-cursor checkpoint hashes are AAA weights `526684f27274f8ba8f8eee99379b0da1efe6adb134d2f4914bd49ac78a9a6eee` and compressed Wasm `66fc2a189bcc83ff77fedcb4cdebb3e1e563c479bafe728092d985f6b4337013`. Cursor insertion/removal benchmarks, refreshed hashes, and production activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
+These fixed drain samples validate partial preservation, complete deletion, one-page boundary crossing, and stale-pointer filtering; they do not imply block throughput. Their pre-cursor checkpoint hashes are AAA weights `526684f27274f8ba8f8eee99379b0da1efe6adb134d2f4914bd49ac78a9a6eee` and compressed Wasm `66fc2a189bcc83ff77fedcb4cdebb3e1e563c479bafe728092d985f6b4337013`.
+
+Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,000-block heap depth with only the pages and reverse-index buckets required by the traversed path:
+
+| Cursor case | RefTime / ProofSize | Reads / writes |
+| --- | ---: | ---: |
+| Insert and full sift-up | `355,009,000 / 41,807` | `25 / 25` |
+| Pop minimum and full repair | `477,234,000 / 56,199` | `34 / 26` |
+
+The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current checkpoint hashes are AAA weights `36b0c37127e6eb34255f011d4f03c4643c97b7067784cd433b419f92cb5f26e4` and compressed Wasm `8f2384de98e25ee72e78de971de843559bffcafde52c3a163b992b837bee5f40`. Transactional bucket lifecycle integration and production drain activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

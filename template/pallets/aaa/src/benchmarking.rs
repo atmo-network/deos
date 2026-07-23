@@ -963,6 +963,39 @@ mod benches {
     );
   }
 
+  fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
+    let page_size = T::WakeupPageSize::get();
+    let page_start = u32::try_from(page_id)
+      .expect("benchmark cursor page id fits u32")
+      .saturating_mul(page_size);
+    let mut page = WakeupCursorPageOf::<T>::default();
+    for slot in 0..len {
+      let index = page_start.saturating_add(slot);
+      let block: BlockNumberFor<T> = 1_000_000u32.saturating_add(index).into();
+      page
+        .try_push(block)
+        .expect("benchmark cursor page must fit configured bound");
+      WakeupBuckets::<T>::insert(
+        block,
+        WakeupBucketState {
+          head_page: 0,
+          tail_page: 0,
+          next_page_id: 1,
+          live_entries: 1,
+          cursor_index: Some(index),
+        },
+      );
+    }
+    WakeupCursorPages::<T>::insert(page_id, page);
+  }
+
+  fn add_wakeup_cursor_page(page_ids: &mut alloc::vec::Vec<WakeupPageId>, index: u32, size: u32) {
+    let page_id = u64::from(index / size);
+    if !page_ids.contains(&page_id) {
+      page_ids.push(page_id);
+    }
+  }
+
   fn prepare_saturated_address_actor<T: Config>(seed: u32) -> (AaaId, T::AccountId) {
     let owner: T::AccountId = account("ingress_owner", seed, 0);
     let schedule = Schedule {
@@ -1326,6 +1359,105 @@ mod benches {
       assert_eq!(stats.pages_deleted, 1);
     }
     assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_cursor_insert() {
+    let page_size = T::WakeupPageSize::get();
+    let max_active = T::MaxActiveActors::get();
+    assert!(
+      page_size > 0 && max_active > 1,
+      "benchmark requires bounded cursor depth"
+    );
+    let insert_index = max_active.saturating_sub(1);
+    let tail_page = u64::from(insert_index / page_size);
+    let tail_len = insert_index % page_size;
+    let mut page_ids = alloc::vec::Vec::new();
+    let mut current = insert_index;
+    loop {
+      add_wakeup_cursor_page(&mut page_ids, current, page_size);
+      if current == 0 {
+        break;
+      }
+      current = current.saturating_sub(1) / 2;
+    }
+    for page_id in page_ids {
+      let len = if page_id == tail_page {
+        tail_len
+      } else {
+        page_size
+      };
+      if len > 0 {
+        install_wakeup_cursor_page::<T>(page_id, len);
+      }
+    }
+    WakeupCursorLen::<T>::put(insert_index);
+    let inserted_block: BlockNumberFor<T> = 1u32.into();
+    WakeupBuckets::<T>::insert(
+      inserted_block,
+      WakeupBucketState {
+        head_page: 0,
+        tail_page: 0,
+        next_page_id: 1,
+        live_entries: 1,
+        cursor_index: None,
+      },
+    );
+    #[block]
+    {
+      assert!(Pallet::<T>::wakeup_cursor_insert(inserted_block));
+    }
+    assert_eq!(WakeupCursorLen::<T>::get(), max_active);
+    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(inserted_block));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_cursor_pop_min() {
+    let page_size = T::WakeupPageSize::get();
+    let cursor_len = T::MaxActiveActors::get();
+    assert!(
+      page_size > 0 && cursor_len > 1,
+      "benchmark requires bounded cursor depth"
+    );
+    let last_index = cursor_len.saturating_sub(1);
+    let tail_page = u64::from(last_index / page_size);
+    let tail_len = (last_index % page_size).saturating_add(1);
+    let mut page_ids = alloc::vec::Vec::new();
+    add_wakeup_cursor_page(&mut page_ids, last_index, page_size);
+    let mut current = 0u32;
+    loop {
+      add_wakeup_cursor_page(&mut page_ids, current, page_size);
+      let left = current.saturating_mul(2).saturating_add(1);
+      if left >= cursor_len {
+        break;
+      }
+      add_wakeup_cursor_page(&mut page_ids, left, page_size);
+      let right = left.saturating_add(1);
+      if right < cursor_len {
+        add_wakeup_cursor_page(&mut page_ids, right, page_size);
+      }
+      current = left;
+    }
+    for page_id in page_ids {
+      let len = if page_id == tail_page {
+        tail_len
+      } else {
+        page_size
+      };
+      install_wakeup_cursor_page::<T>(page_id, len);
+    }
+    WakeupCursorLen::<T>::put(cursor_len);
+    let expected_min: BlockNumberFor<T> = 1_000_000u32.into();
+    #[block]
+    {
+      assert_eq!(Pallet::<T>::wakeup_cursor_pop_min(), Some(expected_min));
+    }
+    assert_eq!(WakeupCursorLen::<T>::get(), last_index);
+    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_001u32.into()));
+    assert_eq!(
+      WakeupBuckets::<T>::get(expected_min).and_then(|bucket| bucket.cursor_index),
+      None
+    );
   }
 
   #[benchmark(pov_mode = Measured)]
