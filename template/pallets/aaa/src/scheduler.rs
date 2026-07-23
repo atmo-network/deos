@@ -68,9 +68,16 @@ impl<T: Config> Pallet<T> {
         .expect("queue emptiness was checked before admitted pop");
       queued_set.remove(&aaa_id);
       ActorQueueEpoch::<T>::remove(aaa_id);
-      let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+      let Some(hot) = ActorHot::<T>::get(aaa_id) else {
         continue;
       };
+      if hot.lifecycle.is_paused() || GlobalCircuitBreaker::<T>::get() {
+        continue;
+      }
+      let Some(program) = ActorProgram::<T>::get(aaa_id) else {
+        continue;
+      };
+      let instance = AaaInstances::<T>::compose(hot, program);
       let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, &cycle_meter) {
         AdmissionDecision::Admit(weight) => weight,
         AdmissionDecision::Closed(weight) => {
@@ -417,7 +424,9 @@ impl<T: Config> Pallet<T> {
     let now = frame_system::Pallet::<T>::block_number();
     let queue_epoch = QueueEpoch::<T>::get();
     ActorQueueEpoch::<T>::remove(aaa_id);
-    let instance = AaaInstances::<T>::get(aaa_id).expect("benchmark actor must exist");
+    let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
+    let program = ActorProgram::<T>::get(aaa_id).expect("benchmark actor program state must exist");
+    let instance = AaaInstances::<T>::compose(hot, program);
     let meter = WeightMeter::with_limit(Weight::zero());
     let AdmissionDecision::Defer(reason) = Self::apply_admission(aaa_id, &instance, &meter) else {
       panic!("benchmark actor must defer on an exhausted cycle budget");
@@ -1127,7 +1136,7 @@ impl<T: Config> Pallet<T> {
       .take(retry_limit as usize)
       .collect::<Vec<_>>();
     for aaa_id in &retry_ids {
-      if AaaInstances::<T>::contains_key(aaa_id) {
+      if AaaInstances::<T>::contains_key(*aaa_id) {
         let _ = Self::defer_wakeup(*aaa_id, now.saturating_add(One::one()));
       } else {
         WakeupRetryPending::<T>::remove(aaa_id);

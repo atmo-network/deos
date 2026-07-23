@@ -265,7 +265,8 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
     [
       "NextAaaId",
       "SweepCursor",
-      "AaaInstances",
+      "ActorHot",
+      "ActorProgram",
       "ActorFunding",
       "DormantAaaIdentities",
       "ActorIdentityCount",
@@ -315,7 +316,8 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
     [
       ("NextAaaId", false, false),
       ("SweepCursor", false, false),
-      ("AaaInstances", true, true),
+      ("ActorHot", true, true),
+      ("ActorProgram", true, true),
       ("ActorFunding", true, true),
       ("DormantAaaIdentities", true, true),
       ("ActorIdentityCount", false, false),
@@ -346,38 +348,39 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   let entries = &metadata.entries;
   assert_plain_storage_type::<u64>(&entries[0]);
   assert_plain_storage_type::<u64>(&entries[1]);
-  assert_map_storage_types::<u64, crate::AaaInstanceOf<Test>>(&entries[2]);
-  assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(&entries[3]);
-  assert_map_storage_types::<u64, crate::DormantAaaIdentityOf<Test>>(&entries[4]);
-  assert_plain_storage_type::<u32>(&entries[5]);
+  assert_map_storage_types::<u64, crate::ActorHotStateOf<Test>>(&entries[2]);
+  assert_map_storage_types::<u64, crate::ActorProgramStateOf<Test>>(&entries[3]);
+  assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(&entries[4]);
+  assert_map_storage_types::<u64, crate::DormantAaaIdentityOf<Test>>(&entries[5]);
   assert_plain_storage_type::<u32>(&entries[6]);
-  assert_map_storage_types::<u64, Mutability>(&entries[7]);
-  assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
-    &entries[8],
-  );
+  assert_plain_storage_type::<u32>(&entries[7]);
+  assert_map_storage_types::<u64, Mutability>(&entries[8]);
   assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
     &entries[9],
+  );
+  assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
+    &entries[10],
   );
   assert_map_storage_types::<
     MockBlockNumber,
     BoundedVec<u64, <Test as crate::Config>::MaxWakeupBucketSize>,
-  >(&entries[10]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[11]);
-  assert_map_storage_types::<u64, MockBlockNumber>(&entries[12]);
-  assert_plain_storage_type::<u64>(&entries[13]);
-  assert_map_storage_types::<u64, bool>(&entries[14]);
-  assert_plain_storage_type::<u64>(&entries[15]);
-  assert_map_storage_types::<u64, u64>(&entries[16]);
-  assert_map_storage_types::<AccountId, u8>(&entries[17]);
-  assert_map_storage_types::<AccountId, u64>(&entries[18]);
-  assert_plain_storage_type::<u32>(&entries[19]);
-  assert_plain_storage_type::<bool>(&entries[20]);
-  assert_map_storage_types::<u64, ()>(&entries[21]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[22]);
-  assert_plain_storage_type::<u32>(&entries[23]);
+  >(&entries[11]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[12]);
+  assert_map_storage_types::<u64, MockBlockNumber>(&entries[13]);
+  assert_plain_storage_type::<u64>(&entries[14]);
+  assert_map_storage_types::<u64, bool>(&entries[15]);
+  assert_plain_storage_type::<u64>(&entries[16]);
+  assert_map_storage_types::<u64, u64>(&entries[17]);
+  assert_map_storage_types::<AccountId, u8>(&entries[18]);
+  assert_map_storage_types::<AccountId, u64>(&entries[19]);
+  assert_plain_storage_type::<u32>(&entries[20]);
+  assert_plain_storage_type::<bool>(&entries[21]);
+  assert_map_storage_types::<u64, ()>(&entries[22]);
+  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[23]);
   assert_plain_storage_type::<u32>(&entries[24]);
   assert_plain_storage_type::<u32>(&entries[25]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[26]);
+  assert_plain_storage_type::<u32>(&entries[26]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[27]);
 }
 
 fn ordinary_transfer_to_aaa(
@@ -7743,6 +7746,24 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
 }
 
 #[test]
+fn manual_readiness_mutates_hot_state_without_rewriting_program() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let program_before = AAA::actor_program(aaa_id).expect("actor program exists");
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("actor hot state exists")
+        .manual_trigger_pending
+    );
+    assert_eq!(AAA::actor_program(aaa_id), Some(program_before));
+  });
+}
+
+#[test]
 fn funding_ingress_mutates_only_actor_funding_state() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -7757,6 +7778,8 @@ fn funding_ingress_mutates_only_actor_funding_state() {
       })),
     );
     let instance_before = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    let hot_before = AAA::actor_hot(aaa_id).expect("actor hot state exists");
+    let program_before = AAA::actor_program(aaa_id).expect("actor program exists");
     assert_ok!(ordinary_transfer_to_aaa(
       RuntimeOrigin::signed(ALICE),
       aaa_id,
@@ -7764,6 +7787,8 @@ fn funding_ingress_mutates_only_actor_funding_state() {
       100,
     ));
     assert_eq!(AAA::aaa_instances(aaa_id), Some(instance_before));
+    assert_eq!(AAA::actor_hot(aaa_id), Some(hot_before));
+    assert_eq!(AAA::actor_program(aaa_id), Some(program_before));
     assert_eq!(
       actor_funding(aaa_id)
         .funding_snapshots

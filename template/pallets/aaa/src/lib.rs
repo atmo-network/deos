@@ -314,6 +314,12 @@ pub mod pallet {
     BalanceOf<T>,
   >;
 
+  pub type ActorHotStateOf<T> =
+    ActorHotState<<T as frame_system::Config>::AccountId, BlockNumberFor<T>, BalanceOf<T>>;
+
+  pub type ActorProgramStateOf<T> =
+    ActorProgramState<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>>;
+
   pub type ActorFundingStateOf<T> =
     ActorFundingState<FundingSourcePolicyOf<T>, FundingSnapshotsOf<T>, FundingTrackedAssetsOf<T>>;
 
@@ -333,14 +339,133 @@ pub mod pallet {
   pub type SweepCursor<T: Config> = StorageValue<_, AaaId, ValueQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn aaa_instances)]
-  pub type AaaInstances<T: Config> =
-    StorageMap<_, Blake2_128Concat, AaaId, AaaInstanceOf<T>, OptionQuery>;
+  #[pallet::getter(fn actor_hot)]
+  pub type ActorHot<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorHotStateOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn actor_program)]
+  pub type ActorProgram<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorProgramStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn actor_funding)]
   pub type ActorFunding<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, ActorFundingStateOf<T>, OptionQuery>;
+
+  /// Rust compatibility facade over the canonical split active-actor stores.
+  /// This is not a storage item and does not recreate the retired monolithic value.
+  pub struct AaaInstances<T: Config>(core::marker::PhantomData<T>);
+
+  impl<T: Config> AaaInstances<T> {
+    pub(crate) fn compose(
+      hot: ActorHotStateOf<T>,
+      program: ActorProgramStateOf<T>,
+    ) -> AaaInstanceOf<T> {
+      AaaInstance {
+        sovereign_account: hot.sovereign_account,
+        owner: hot.owner,
+        actor_class: hot.actor_class,
+        mutability: hot.mutability,
+        lifecycle: hot.lifecycle,
+        schedule: program.schedule,
+        schedule_window: program.schedule_window,
+        execution_plan: program.execution_plan,
+        on_close_execution_plan: program.on_close_execution_plan,
+        cycle_nonce: hot.cycle_nonce,
+        auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
+        consecutive_failures: hot.consecutive_failures,
+        manual_trigger_pending: hot.manual_trigger_pending,
+        queue_ticket: hot.queue_ticket,
+        cycle_weight_upper: hot.cycle_weight_upper,
+        cycle_fee_upper: hot.cycle_fee_upper,
+        first_eligible_at: hot.first_eligible_at,
+        last_cycle_block: hot.last_cycle_block,
+      }
+    }
+
+    fn split(instance: AaaInstanceOf<T>) -> (ActorHotStateOf<T>, ActorProgramStateOf<T>) {
+      (
+        ActorHotState {
+          sovereign_account: instance.sovereign_account,
+          owner: instance.owner,
+          actor_class: instance.actor_class,
+          mutability: instance.mutability,
+          lifecycle: instance.lifecycle,
+          cycle_nonce: instance.cycle_nonce,
+          auto_close_at_cycle_nonce: instance.auto_close_at_cycle_nonce,
+          consecutive_failures: instance.consecutive_failures,
+          manual_trigger_pending: instance.manual_trigger_pending,
+          queue_ticket: instance.queue_ticket,
+          cycle_weight_upper: instance.cycle_weight_upper,
+          cycle_fee_upper: instance.cycle_fee_upper,
+          first_eligible_at: instance.first_eligible_at,
+          last_cycle_block: instance.last_cycle_block,
+        },
+        ActorProgramState {
+          schedule: instance.schedule,
+          schedule_window: instance.schedule_window,
+          execution_plan: instance.execution_plan,
+          on_close_execution_plan: instance.on_close_execution_plan,
+        },
+      )
+    }
+
+    pub fn get(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
+      Some(Self::compose(
+        ActorHot::<T>::get(aaa_id)?,
+        ActorProgram::<T>::get(aaa_id)?,
+      ))
+    }
+
+    pub fn contains_key(aaa_id: AaaId) -> bool {
+      ActorHot::<T>::contains_key(aaa_id) && ActorProgram::<T>::contains_key(aaa_id)
+    }
+
+    pub fn insert(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
+      let (hot, program) = Self::split(instance);
+      ActorHot::<T>::insert(aaa_id, hot);
+      ActorProgram::<T>::insert(aaa_id, program);
+    }
+
+    pub fn remove(aaa_id: AaaId) {
+      ActorHot::<T>::remove(aaa_id);
+      ActorProgram::<T>::remove(aaa_id);
+    }
+
+    pub fn iter_keys() -> impl Iterator<Item = AaaId> {
+      ActorHot::<T>::iter_keys()
+    }
+
+    pub fn iter() -> impl Iterator<Item = (AaaId, AaaInstanceOf<T>)> {
+      ActorHot::<T>::iter().filter_map(|(aaa_id, hot)| {
+        ActorProgram::<T>::get(aaa_id).map(|program| (aaa_id, Self::compose(hot, program)))
+      })
+    }
+
+    pub fn mutate<R>(aaa_id: AaaId, mutate: impl FnOnce(&mut Option<AaaInstanceOf<T>>) -> R) -> R {
+      let mut instance = Self::get(aaa_id);
+      let result = mutate(&mut instance);
+      match instance {
+        Some(instance) => Self::insert(aaa_id, instance),
+        None => Self::remove(aaa_id),
+      }
+      result
+    }
+
+    pub fn try_mutate<R, E>(
+      aaa_id: AaaId,
+      mutate: impl FnOnce(&mut Option<AaaInstanceOf<T>>) -> Result<R, E>,
+    ) -> Result<R, E> {
+      let mut instance = Self::get(aaa_id);
+      let result = mutate(&mut instance)?;
+      match instance {
+        Some(instance) => Self::insert(aaa_id, instance),
+        None => Self::remove(aaa_id),
+      }
+      Ok(result)
+    }
+  }
 
   #[pallet::storage]
   #[pallet::getter(fn dormant_aaa_identities)]
@@ -544,6 +669,7 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
+          queue_ticket: None,
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
@@ -998,7 +1124,7 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
@@ -1025,7 +1151,7 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
@@ -1049,7 +1175,7 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
         inst.manual_trigger_pending = true;
@@ -1120,26 +1246,31 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
       let first_eligible_at = Self::initial_eligible_at(
         aaa_id,
         &schedule,
         schedule_window,
         frame_system::Pallet::<T>::block_number(),
       );
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(
-          inst.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
-        );
-        inst.schedule = schedule;
-        inst.schedule_window = schedule_window;
-        if inst.cycle_nonce == 0 {
-          inst.first_eligible_at = first_eligible_at;
+      ActorProgram::<T>::mutate(aaa_id, |maybe| {
+        let program = maybe
+          .as_mut()
+          .expect("active actor program existence was prevalidated");
+        program.schedule = schedule;
+        program.schedule_window = schedule_window;
+      });
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        if let Some(hot) = maybe.as_mut()
+          && hot.cycle_nonce == 0
+        {
+          hot.first_eligible_at = first_eligible_at;
         }
-        Self::deposit_event(Event::ScheduleUpdated { aaa_id });
-        Ok(())
-      })?;
+      });
+      Self::deposit_event(Event::ScheduleUpdated { aaa_id });
       Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
@@ -1214,14 +1345,19 @@ pub mod pallet {
         .any(|batch| !batch.pending_amount.is_zero());
       let (cycle_weight_upper, cycle_fee_upper) =
         Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        let inst = maybe
+      ActorProgram::<T>::mutate(aaa_id, |maybe| {
+        maybe
           .as_mut()
-          .expect("active actor existence was prevalidated");
-        inst.execution_plan = execution_plan;
-        inst.cycle_weight_upper = cycle_weight_upper;
-        inst.cycle_fee_upper = cycle_fee_upper;
-        inst.consecutive_failures = 0;
+          .expect("active actor program existence was prevalidated")
+          .execution_plan = execution_plan;
+      });
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        let hot = maybe
+          .as_mut()
+          .expect("active actor hot-state existence was prevalidated");
+        hot.cycle_weight_upper = cycle_weight_upper;
+        hot.cycle_fee_upper = cycle_fee_upper;
+        hot.consecutive_failures = 0;
       });
       ActorFunding::<T>::insert(aaa_id, funding);
       Self::deposit_event(Event::ExecutionPlanUpdated { aaa_id });
@@ -1298,7 +1434,7 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
@@ -1327,7 +1463,7 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
@@ -1407,11 +1543,11 @@ pub mod pallet {
         .funding_snapshots
         .values()
         .any(|batch| !batch.pending_amount.is_zero());
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        let inst = maybe
+      ActorProgram::<T>::mutate(aaa_id, |maybe| {
+        maybe
           .as_mut()
-          .expect("active actor existence was prevalidated");
-        inst.on_close_execution_plan = on_close_execution_plan;
+          .expect("active actor program existence was prevalidated")
+          .on_close_execution_plan = on_close_execution_plan;
       });
       ActorFunding::<T>::insert(aaa_id, funding);
       Self::deposit_event(Event::OnCloseExecutionPlanUpdated { aaa_id });
@@ -1456,6 +1592,10 @@ pub mod pallet {
   }
 
   impl<T: Config> Pallet<T> {
+    pub fn aaa_instances(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
+      AaaInstances::<T>::get(aaa_id)
+    }
+
     pub fn weight_upper_bound(task: &TaskOf<T>) -> Weight {
       // Runtime owns upper-bound pricing via coarse task classes to reduce calibration churn
       match task {
@@ -1972,6 +2112,7 @@ pub mod pallet {
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
+          queue_ticket: None,
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
@@ -2120,6 +2261,7 @@ pub mod pallet {
         cycle_nonce: 0,
         consecutive_failures: 0,
         manual_trigger_pending: false,
+        queue_ticket: None,
         cycle_weight_upper,
         cycle_fee_upper,
         auto_close_at_cycle_nonce: None,
@@ -2625,6 +2767,20 @@ pub mod pallet {
         return Err(TryRuntimeError::Other(
           "ActorIdentityCount exceeds MaxActorIdentities",
         ));
+      }
+      for aaa_id in ActorHot::<T>::iter_keys() {
+        if !ActorProgram::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorHot entry has no matching ActorProgram entry",
+          ));
+        }
+      }
+      for aaa_id in ActorProgram::<T>::iter_keys() {
+        if !ActorHot::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorProgram entry has no matching ActorHot entry",
+          ));
+        }
       }
       let mut max_id: Option<AaaId> = None;
       for (aaa_id, instance) in AaaInstances::<T>::iter() {

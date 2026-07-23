@@ -135,17 +135,22 @@ impl<T: Config> Pallet<T> {
       .reads(1)
       .saturating_add(T::DbWeight::get().writes(1));
     let now = frame_system::Pallet::<T>::block_number();
-    let instance = match AaaInstances::<T>::get(aaa_id) {
-      Some(inst) => inst,
+    let hot = match ActorHot::<T>::get(aaa_id) {
+      Some(hot) => hot,
       None => return base_weight,
     };
+    let program = match ActorProgram::<T>::get(aaa_id) {
+      Some(program) => program,
+      None => return base_weight,
+    };
+    let instance = AaaInstances::<T>::compose(hot, program);
     if instance.cycle_nonce == u64::MAX {
       if instance.actor_class.aaa_type() == AaaType::User {
         if Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted).is_err() {
           Self::defer_failed_close(aaa_id);
         }
       } else {
-        AaaInstances::<T>::mutate(aaa_id, |maybe| {
+        ActorHot::<T>::mutate(aaa_id, |maybe| {
           if let Some(inst) = maybe.as_mut() {
             inst.lifecycle = ActiveLifecycle::Paused(PauseReason::CycleNonceExhausted);
           }
@@ -158,7 +163,7 @@ impl<T: Config> Pallet<T> {
       }
       return base_weight;
     }
-    let Some(cycle_nonce) = AaaInstances::<T>::mutate(aaa_id, |maybe| {
+    let Some(cycle_nonce) = ActorHot::<T>::mutate(aaa_id, |maybe| {
       let inst = maybe.as_mut()?;
       inst.cycle_nonce = inst.cycle_nonce.saturating_add(1);
       inst.manual_trigger_pending = false;
@@ -405,13 +410,13 @@ impl<T: Config> Pallet<T> {
       }
     }
     if !execution_plan_failed {
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
         if let Some(inst) = maybe.as_mut() {
           inst.consecutive_failures = 0;
         }
       });
     } else {
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
         if let Some(inst) = maybe.as_mut() {
           inst.consecutive_failures = inst.consecutive_failures.saturating_add(1);
         }
