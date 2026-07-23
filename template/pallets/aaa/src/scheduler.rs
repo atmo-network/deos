@@ -1058,6 +1058,76 @@ impl<T: Config> Pallet<T> {
     Self::wakeup_drain_weight_upper(1).saturating_add(Self::wakeup_retry_probe_weight_upper())
   }
 
+  pub fn wakeup_cursor_drain_unit_weight_upper(removes_bucket: bool) -> Weight {
+    let enqueue_or_reschedule = T::WeightInfo::scheduler_paged_append_new_page()
+      .saturating_add(T::WeightInfo::scheduler_wakeup_append_new_page())
+      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_insert());
+    let mut weight =
+      T::WeightInfo::scheduler_wakeup_drain_partial_page().saturating_add(enqueue_or_reschedule);
+    if removes_bucket {
+      weight = weight.saturating_add(T::WeightInfo::scheduler_wakeup_cursor_remove_exact());
+    }
+    weight
+  }
+
+  pub fn drain_overdue_wakeups_cursor(
+    now: BlockNumberFor<T>,
+    meter: &mut WeightMeter,
+  ) -> WakeupDrainStats {
+    let mut total = WakeupDrainStats::default();
+    let mut current_block = None;
+    let max_scans = T::MaxWakeupsPerBlock::get();
+    while total.entries_scanned < max_scans {
+      let block_cursor = if let Some(block) = current_block {
+        block
+      } else {
+        let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_pop_min();
+        if !meter.can_consume(cursor_weight) {
+          break;
+        }
+        meter.consume(cursor_weight);
+        let Some(block) = Self::wakeup_cursor_peek() else {
+          break;
+        };
+        if block > now {
+          break;
+        }
+        current_block = Some(block);
+        block
+      };
+      let base_weight = Self::wakeup_cursor_drain_unit_weight_upper(false);
+      if !meter.can_consume(base_weight) {
+        break;
+      }
+      let Some(bucket) = WakeupBuckets::<T>::get(block_cursor) else {
+        meter.consume(base_weight);
+        break;
+      };
+      let unit_weight = Self::wakeup_cursor_drain_unit_weight_upper(bucket.live_entries <= 1);
+      if !meter.can_consume(unit_weight) {
+        meter.consume(base_weight);
+        break;
+      }
+      meter.consume(unit_weight);
+      let (ready, stats) = Self::wakeup_substrate_drain_block(block_cursor, 1);
+      if stats.entries_scanned == 0 {
+        break;
+      }
+      total.entries_scanned = total.entries_scanned.saturating_add(stats.entries_scanned);
+      total.ready_entries = total.ready_entries.saturating_add(stats.ready_entries);
+      total.stale_entries = total.stale_entries.saturating_add(stats.stale_entries);
+      total.pages_touched = total.pages_touched.saturating_add(stats.pages_touched);
+      total.pages_deleted = total.pages_deleted.saturating_add(stats.pages_deleted);
+      for aaa_id in ready {
+        Self::enqueue(aaa_id);
+      }
+      if !WakeupBuckets::<T>::contains_key(block_cursor) {
+        current_block = None;
+      }
+    }
+    total
+  }
+
   fn drain_overdue_wakeups_paged(now: BlockNumberFor<T>, meter: &mut WeightMeter) {
     let cursor_weight = Self::wakeup_cursor_weight();
     if !meter.can_consume(cursor_weight) {

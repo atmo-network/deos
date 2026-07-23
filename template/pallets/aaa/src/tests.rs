@@ -18,7 +18,7 @@ use polkadot_sdk::frame_support::{
 use polkadot_sdk::{
   frame_system,
   sp_runtime::{DispatchError, Perbill, Weight},
-  sp_weights::WeightToFee,
+  sp_weights::{WeightMeter, WeightToFee},
 };
 use scale_info::{TypeDef, TypeInfo};
 
@@ -547,6 +547,103 @@ fn paged_wakeup_drain_discards_stale_only_bucket() {
     }));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn cursor_wakeup_drain_recovers_sparse_overdue_blocks_without_scanning_gaps() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let due = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_execution_plan(BOB, 1),
+    );
+    let future = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_execution_plan(BOB, 1),
+    );
+    assert!(AAA::wakeup_substrate_schedule(due, 10));
+    assert!(AAA::wakeup_substrate_schedule(future, 1_000_000));
+
+    let mut halted = WeightMeter::with_limit(Weight::zero());
+    assert_eq!(
+      AAA::drain_overdue_wakeups_cursor(100, &mut halted).entries_scanned,
+      0
+    );
+    assert!(
+      AAA::actor_hot(due)
+        .expect("due actor")
+        .queue_ticket
+        .is_none()
+    );
+
+    let mut ample = WeightMeter::with_limit(Weight::from_parts(u64::MAX, u64::MAX));
+    let stats = AAA::drain_overdue_wakeups_cursor(100, &mut ample);
+    assert_eq!(stats.entries_scanned, 1);
+    assert_eq!(stats.ready_entries, 1);
+    assert!(
+      AAA::actor_hot(due)
+        .expect("due actor")
+        .queue_ticket
+        .is_some()
+    );
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(1_000_000));
+    assert!(
+      AAA::actor_hot(future)
+        .expect("future actor")
+        .wakeup_pointer
+        .is_some()
+    );
+  });
+}
+
+#[test]
+fn cursor_wakeup_drain_halts_and_resumes_between_slot_units() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut actors = Vec::new();
+    for _ in 0..3 {
+      let aaa_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_execution_plan(BOB, 1),
+      );
+      assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+      actors.push(aaa_id);
+    }
+    let limit =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_pop_min()
+        .saturating_add(AAA::wakeup_cursor_drain_unit_weight_upper(false));
+    let mut one_slot = WeightMeter::with_limit(limit);
+    let first = AAA::drain_overdue_wakeups_cursor(10, &mut one_slot);
+    assert_eq!(first.entries_scanned, 1);
+    assert_eq!(first.ready_entries, 1);
+    assert_eq!(
+      AAA::wakeup_buckets(10)
+        .expect("partial bucket")
+        .live_entries,
+      2
+    );
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(10));
+
+    let mut resume = WeightMeter::with_limit(Weight::from_parts(u64::MAX, u64::MAX));
+    let second = AAA::drain_overdue_wakeups_cursor(10, &mut resume);
+    assert_eq!(second.entries_scanned, 2);
+    assert_eq!(second.ready_entries, 2);
+    assert!(AAA::wakeup_buckets(10).is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
+    assert!(actors.iter().all(|aaa_id| {
+      AAA::actor_hot(*aaa_id)
+        .expect("actor")
+        .queue_ticket
+        .is_some()
+    }));
   });
 }
 

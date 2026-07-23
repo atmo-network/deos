@@ -351,6 +351,7 @@ The replacement contract now has an inactive storage substrate without changing 
 - `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
 - Transactional replacement invalidates the prior exact slot, removes an emptied block from the cursor, creates the replacement bucket and cursor entry atomically, and rolls back on reverse-index mismatch; bounded neighboring-page work unlinks empty pages.
+- The inactive cursor-driven overdue worker peeks sparse blocks, stops before future minima, and processes one slot per admitted unit. It meters cursor lookup, page scan, queue append or reschedule, and possible full-depth cursor removal before mutation; partial progress keeps the same minimum for later resumption.
 - The inactive drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, discards stale slots, and removes an exhausted bucket from the cursor in the same transaction.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
 
@@ -383,7 +384,7 @@ Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,00
 | Pop minimum and full repair | `481,354,000 / 56,199` | `34 / 26` |
 | Exact removal and full repair | `434,350,000 / 55,767` | `33 / 25` |
 
-The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current integrated checkpoint hashes are AAA weights `3889259d7b36463f34e6b64ce162ab814964addb290f3dbf44e48b38e12bf88c` and compressed Wasm `b2493cad6a59b3aa3683a2c10ce514f78797a52889b207842536c99df3db23e6`. Production overdue-drain activation remains required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
+The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current integrated checkpoint hashes are AAA weights `3889259d7b36463f34e6b64ce162ab814964addb290f3dbf44e48b38e12bf88c` and compressed Wasm `00f6a4856bf56677c456c80b77d68744c5cf271eceea2571256551269d2560db`. Focused worker benchmarking and production activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 
