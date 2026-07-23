@@ -860,6 +860,8 @@ impl pallet_aaa::Config for Test {
   type MaxOwnerSlots = ConstU8<8>;
   type MaxExecutionsPerBlock = ConstU32<3>;
   type MaxQueueLength = ConstU32<1024>;
+  type QueuePageSize = ConstU32<32>;
+  type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxWakeupBucketSize = ConstU32<1024>;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSpilloverBlocks = ConstU32<8>;

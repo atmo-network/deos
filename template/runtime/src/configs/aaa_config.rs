@@ -50,6 +50,9 @@ parameter_types! {
 
   pub const AaaMaxExecutionsPerBlock: u32 = 48;
   pub const AaaMaxQueueLength: u32 = 10_000;
+  /// Provisional paged-FIFO candidate; production selection awaits 32/64/128 Wasm comparison.
+  pub const AaaQueuePageSize: u32 = 64;
+  pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const AaaMaxWakeupBucketSize: u32 = 10_000;
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
   pub const AaaMaxSpilloverBlocks: u32 = 8;
@@ -1255,6 +1258,8 @@ impl pallet_aaa::Config for Runtime {
   type MaxTimerJitterBlocks = AaaMaxTimerJitterBlocks;
   type MaxExecutionsPerBlock = AaaMaxExecutionsPerBlock;
   type MaxQueueLength = AaaMaxQueueLength;
+  type QueuePageSize = AaaQueuePageSize;
+  type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
   type MaxWakeupBucketSize = AaaMaxWakeupBucketSize;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
   type MaxSpilloverBlocks = AaaMaxSpilloverBlocks;

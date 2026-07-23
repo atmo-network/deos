@@ -272,6 +272,9 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       "ActorIdentityCount",
       "ActiveAaaCount",
       "ClosedSystemAaaIds",
+      "QueueHead",
+      "QueueTail",
+      "QueuePages",
       "CurrentQueue",
       "NextQueue",
       "WakeupIndex",
@@ -323,6 +326,9 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       ("ActorIdentityCount", false, false),
       ("ActiveAaaCount", false, false),
       ("ClosedSystemAaaIds", true, true),
+      ("QueueHead", false, false),
+      ("QueueTail", false, false),
+      ("QueuePages", true, true),
       ("CurrentQueue", false, false),
       ("NextQueue", false, false),
       ("WakeupIndex", false, true),
@@ -355,32 +361,35 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   assert_plain_storage_type::<u32>(&entries[6]);
   assert_plain_storage_type::<u32>(&entries[7]);
   assert_map_storage_types::<u64, Mutability>(&entries[8]);
+  assert_plain_storage_type::<u64>(&entries[9]);
+  assert_plain_storage_type::<u64>(&entries[10]);
+  assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[11]);
   assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
-    &entries[9],
+    &entries[12],
   );
   assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
-    &entries[10],
+    &entries[13],
   );
   assert_map_storage_types::<
     MockBlockNumber,
     BoundedVec<u64, <Test as crate::Config>::MaxWakeupBucketSize>,
-  >(&entries[11]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[12]);
-  assert_map_storage_types::<u64, MockBlockNumber>(&entries[13]);
-  assert_plain_storage_type::<u64>(&entries[14]);
-  assert_map_storage_types::<u64, bool>(&entries[15]);
-  assert_plain_storage_type::<u64>(&entries[16]);
-  assert_map_storage_types::<u64, u64>(&entries[17]);
-  assert_map_storage_types::<AccountId, u8>(&entries[18]);
-  assert_map_storage_types::<AccountId, u64>(&entries[19]);
-  assert_plain_storage_type::<u32>(&entries[20]);
-  assert_plain_storage_type::<bool>(&entries[21]);
-  assert_map_storage_types::<u64, ()>(&entries[22]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[23]);
-  assert_plain_storage_type::<u32>(&entries[24]);
-  assert_plain_storage_type::<u32>(&entries[25]);
-  assert_plain_storage_type::<u32>(&entries[26]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[27]);
+  >(&entries[14]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[15]);
+  assert_map_storage_types::<u64, MockBlockNumber>(&entries[16]);
+  assert_plain_storage_type::<u64>(&entries[17]);
+  assert_map_storage_types::<u64, bool>(&entries[18]);
+  assert_plain_storage_type::<u64>(&entries[19]);
+  assert_map_storage_types::<u64, u64>(&entries[20]);
+  assert_map_storage_types::<AccountId, u8>(&entries[21]);
+  assert_map_storage_types::<AccountId, u64>(&entries[22]);
+  assert_plain_storage_type::<u32>(&entries[23]);
+  assert_plain_storage_type::<bool>(&entries[24]);
+  assert_map_storage_types::<u64, ()>(&entries[25]);
+  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[26]);
+  assert_plain_storage_type::<u32>(&entries[27]);
+  assert_plain_storage_type::<u32>(&entries[28]);
+  assert_plain_storage_type::<u32>(&entries[29]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[30]);
 }
 
 fn ordinary_transfer_to_aaa(

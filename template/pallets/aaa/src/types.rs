@@ -2,6 +2,15 @@ use frame::prelude::*;
 use polkadot_sdk::sp_runtime::Perbill;
 
 pub type AaaId = u64;
+pub type QueueTicket = u64;
+pub type QueuePageId = u64;
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct QueueEntry {
+  pub aaa_id: AaaId,
+}
 pub const SYSTEM_OWNER_SLOT_SENTINEL: u8 = 0;
 
 #[derive(

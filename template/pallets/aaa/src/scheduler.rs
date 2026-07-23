@@ -71,7 +71,7 @@ impl<T: Config> Pallet<T> {
       let Some(hot) = ActorHot::<T>::get(aaa_id) else {
         continue;
       };
-      if hot.lifecycle.is_paused() || GlobalCircuitBreaker::<T>::get() {
+      if hot.lifecycle.is_paused() {
         continue;
       }
       let Some(program) = ActorProgram::<T>::get(aaa_id) else {

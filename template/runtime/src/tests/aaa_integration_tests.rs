@@ -666,6 +666,28 @@ fn min_user_balance_is_not_below_native_existential_deposit() {
 }
 
 #[test]
+fn paged_queue_limits_are_independent_runtime_controls() {
+  seeded_test_ext().execute_with(|| {
+    assert_eq!(
+      <Runtime as pallet_aaa::Config>::QueuePageSize::get(),
+      64,
+      "64 is provisional until the 32/64/128 production-Wasm comparison"
+    );
+    assert_eq!(
+      <Runtime as pallet_aaa::Config>::MaxQueueEntriesScannedPerBlock::get(),
+      10_000
+    );
+    assert_ne!(
+      <Runtime as pallet_aaa::Config>::MaxQueueEntriesScannedPerBlock::get(),
+      <Runtime as pallet_aaa::Config>::MaxExecutionsPerBlock::get(),
+      "physical inspection and successful execution must remain independent controls"
+    );
+    assert_eq!(AAA::queue_head(), 0);
+    assert_eq!(AAA::queue_tail(), 0);
+  });
+}
+
+#[test]
 fn queue_length_covers_active_actor_capacity() {
   seeded_test_ext().execute_with(|| {
     let queue_cap = <Runtime as pallet_aaa::Config>::MaxQueueLength::get();

@@ -393,8 +393,9 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
 - `ActorIdentityCount`: transactionally maintained O(1) cardinality across `ActorHot` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorProgram`, and `ActorFunding`
-- `CurrentQueue`: bounded run queue for current block
-- `NextQueue`: staged queue merged into active run queue on next `on_idle`
+- `QueueHead` / `QueueTail` / `QueuePages`: typed monotonic paged-FIFO substrate, currently empty and inactive while page-operation benchmarks and scheduler replacement land; page entries contain only `aaa_id`, with logical tickets derived from page/slot
+- `CurrentQueue`: bounded run queue for the still-active pre-paged scheduler
+- `NextQueue`: staged queue merged into the active pre-paged run queue on next `on_idle`
 - `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock`: time-ordered overdue wakeup layer; `WakeupRetryPending`: actor-keyed durable retry marker when the bounded spillover horizon is saturated
 - `QueueEpoch` / `ActorQueueEpoch`: deterministic queue dedup and epoch tracking
 - `ActiveActorLimit`: governance-configurable operational active cap
@@ -557,8 +558,10 @@ Additional runtime bindings:
 
 Selected configured bounds in the current DEOS reference runtime:
 
-- `MaxExecutionsPerBlock = 48`
+- `MaxExecutionsPerBlock = 48` until the paged scheduler replaces the active execution path; the accepted 0.7.2 reference value is 1,000
 - `MaxActiveActors = 10,000` (compile-time hard cap checked against `ActiveAaaCount`)
+- `QueuePageSize = 64` provisionally compiles the inactive paged-FIFO substrate; it is not the production selection until generated 32/64/128 comparison lands
+- `MaxQueueEntriesScannedPerBlock = 10,000`, independently bounded by physical queue capacity and not aliased to the execution ceiling
 - `ActiveActorLimit` (governance operational cap, `<= min(MaxActiveActors, MaxQueueLength)`)
 - `MaxWakeupBucketSize = 10,000` (temporal wakeup bucket bound, decoupled from run-queue semantics)
 - Runtime block-weight policy divides capacity equally between transaction dispatch and background execution: `50%` dispatch and `50%` guaranteed `on_idle` headroom; Operational extrinsics retain their priority/fee class but have no dedicated weight reserve until a concrete critical call justifies a measured allocation, and a runtime regression pins the partition plus `reserved = None`

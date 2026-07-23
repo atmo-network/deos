@@ -166,6 +166,12 @@ pub mod pallet {
     type MaxExecutionsPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxQueueLength: Get<u32>;
+    /// Physical I/O granularity for the monotonic active FIFO.
+    #[pallet::constant]
+    type QueuePageSize: Get<u32>;
+    /// Independent ceiling for physical queue-entry inspection per scheduler pass.
+    #[pallet::constant]
+    type MaxQueueEntriesScannedPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxWakeupBucketSize: Get<u32>;
     #[pallet::constant]
@@ -298,6 +304,8 @@ pub mod pallet {
 
   pub type FundingTrackedAssetsOf<T> =
     BoundedBTreeSet<<T as Config>::AssetId, <T as Config>::MaxFundingTrackedAssets>;
+
+  pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
 
   pub type IngressOverflowEventOf<T> = IngressOverflowEvent<
     AaaId,
@@ -483,6 +491,23 @@ pub mod pallet {
   #[pallet::storage]
   pub type ClosedSystemAaaIds<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, Mutability, OptionQuery>;
+
+  /// Canonical head of the monotonic paged FIFO. The queue migration does not
+  /// write this substrate until the old double-buffer scheduler is replaced.
+  #[pallet::storage]
+  #[pallet::getter(fn queue_head)]
+  pub type QueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  /// Next never-used ticket in the monotonic paged FIFO.
+  #[pallet::storage]
+  #[pallet::getter(fn queue_tail)]
+  pub type QueueTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  /// Bounded physical pages for the logical active FIFO.
+  #[pallet::storage]
+  #[pallet::getter(fn queue_pages)]
+  pub type QueuePages<T: Config> =
+    StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
 
   #[pallet::storage]
   pub type CurrentQueue<T: Config> =
@@ -764,6 +789,22 @@ pub mod pallet {
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn integrity_test() {
+      assert!(
+        T::QueuePageSize::get() > 0,
+        "QueuePageSize must be non-zero"
+      );
+      assert!(
+        T::QueuePageSize::get() < T::MaxQueueLength::get(),
+        "QueuePageSize must remain an intermediate I/O granularity"
+      );
+      assert!(
+        T::MaxQueueEntriesScannedPerBlock::get() > 0
+          && T::MaxQueueEntriesScannedPerBlock::get() <= T::MaxQueueLength::get(),
+        "queue scan ceiling must be independently bounded by physical capacity"
+      );
+    }
+
     #[cfg(feature = "try-runtime")]
     fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       Self::do_try_state()
@@ -2875,6 +2916,41 @@ pub mod pallet {
         return Err(TryRuntimeError::Other(
           "MaxQueueLength is below effective active actor limit",
         ));
+      }
+      let queue_head = QueueHead::<T>::get();
+      let queue_tail = QueueTail::<T>::get();
+      if queue_head > queue_tail {
+        return Err(TryRuntimeError::Other("QueueHead exceeds QueueTail"));
+      }
+      if queue_tail.saturating_sub(queue_head) > u64::from(queue_capacity) {
+        return Err(TryRuntimeError::Other(
+          "paged queue physical occupancy exceeds MaxQueueLength",
+        ));
+      }
+      let page_size = u64::from(T::QueuePageSize::get());
+      let queue_pages = QueuePages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only paged-queue invariant audit
+      for (page_id, page) in queue_pages {
+        if page.is_empty() || page.len() > T::QueuePageSize::get() as usize {
+          return Err(TryRuntimeError::Other(
+            "QueuePages entry has invalid length",
+          ));
+        }
+        let Some(page_start) = page_id.checked_mul(page_size) else {
+          return Err(TryRuntimeError::Other("QueuePage ticket range overflows"));
+        };
+        let Some(page_end) = page_start.checked_add(page.len() as u64) else {
+          return Err(TryRuntimeError::Other("QueuePage ticket range overflows"));
+        };
+        if page_end <= queue_head {
+          return Err(TryRuntimeError::Other(
+            "QueuePages contains a fully consumed page",
+          ));
+        }
+        if page_start >= queue_tail {
+          return Err(TryRuntimeError::Other(
+            "QueuePages contains a page beyond QueueTail",
+          ));
+        }
       }
       let next_id = NextAaaId::<T>::get();
       if let Some(max_aaa_id) = max_id {
