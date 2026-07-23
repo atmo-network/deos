@@ -5,6 +5,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 ONLY_CHECK="all"
 FIX_FORMAT=0
+TARGET_PACKAGE=""
+TEST_FILTER=""
+FEATURE_MODE="auto"
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
 if [[ "$SKIP_WASM_BUILD" == "1" ]]; then
     export SKIP_WASM_BUILD
@@ -23,6 +26,10 @@ Runs the local CI workflow: clippy, tests, docs, formatting check, and workspace
 
 Options:
   --only CHECK       Run one compact check: clippy, tests, docs, format, or check
+  --package NAME     Scope clippy, tests, docs, or check to one Cargo package
+  --test-filter NAME Scope --only tests to one Cargo test-name filter
+  --all-features     Enable all Cargo features (Clippy default)
+  --default-features Use package default features, including for Clippy
   --fix              Apply formatting; requires --only format
   -h, --help         Show this help message
 
@@ -52,6 +59,30 @@ parse_args() {
                 shift 2
                 continue
                 ;;
+            --package)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--package requires a package name"
+                    exit 2
+                fi
+                TARGET_PACKAGE="$2"
+                shift 2
+                continue
+                ;;
+            --test-filter)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--test-filter requires a test name"
+                    exit 2
+                fi
+                TEST_FILTER="$2"
+                shift 2
+                continue
+                ;;
+            --all-features)
+                FEATURE_MODE="all"
+                ;;
+            --default-features)
+                FEATURE_MODE="default"
+                ;;
             --fix)
                 FIX_FORMAT=1
                 ;;
@@ -69,6 +100,22 @@ parse_args() {
     done
     if (( FIX_FORMAT == 1 )) && [[ "$ONLY_CHECK" != "format" ]]; then
         log_error "--fix requires --only format"
+        exit 2
+    fi
+    if [[ -n "$TARGET_PACKAGE" && ! "$TARGET_PACKAGE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        log_error "--package accepts a Cargo package name"
+        exit 2
+    fi
+    if [[ -n "$TARGET_PACKAGE" && "$ONLY_CHECK" == "format" ]]; then
+        log_error "--package does not apply to formatting"
+        exit 2
+    fi
+    if [[ -n "$TEST_FILTER" && "$ONLY_CHECK" != "tests" ]]; then
+        log_error "--test-filter requires --only tests"
+        exit 2
+    fi
+    if [[ -n "$TEST_FILTER" && ! "$TEST_FILTER" =~ ^[A-Za-z0-9_:.-]+$ ]]; then
+        log_error "--test-filter contains unsupported characters"
         exit 2
     fi
 }
@@ -93,25 +140,49 @@ selected() {
     [[ "$ONLY_CHECK" == "all" || "$ONLY_CHECK" == "$1" ]]
 }
 
+cargo_scope_args() {
+    if [[ -n "$TARGET_PACKAGE" ]]; then
+        printf '%s' "--package '$TARGET_PACKAGE'"
+    else
+        printf '%s' "--workspace"
+    fi
+}
+
+cargo_feature_args() {
+    local check="$1"
+    if [[ "$FEATURE_MODE" == "all" || ( "$FEATURE_MODE" == "auto" && "$check" == "clippy" ) ]]; then
+        printf '%s' "--all-features"
+    fi
+}
+
 run_primary_checks() {
     phase_banner "Step 2: Primary checks"
+    local scope_args test_filter
+    scope_args="$(cargo_scope_args)"
+    test_filter="${TEST_FILTER:+ '$TEST_FILTER'}"
 
     if selected clippy; then
+        local feature_args
+        feature_args="$(cargo_feature_args clippy)"
         run_shell_step "Clippy (Linting)" \
             "30" \
-            "cargo clippy --all-targets --all-features --locked --workspace --quiet -- -D warnings"
+            "cargo clippy --all-targets $feature_args --locked $scope_args --quiet -- -D warnings"
     fi
 
     if selected tests; then
+        local feature_args
+        feature_args="$(cargo_feature_args tests)"
         run_shell_step "Tests" \
             "15" \
-            "cargo test --workspace"
+            "cargo test $feature_args $scope_args$test_filter"
     fi
 
     if selected docs; then
+        local feature_args
+        feature_args="$(cargo_feature_args docs)"
         run_shell_step "Documentation Build" \
             "15" \
-            "cargo doc --workspace --no-deps"
+            "cargo doc $feature_args $scope_args --no-deps"
     fi
 }
 
@@ -133,10 +204,13 @@ run_additional_checks() {
     fi
 
     if selected check; then
+        local scope_args feature_args
+        scope_args="$(cargo_scope_args)"
+        feature_args="$(cargo_feature_args check)"
         run_shell_step \
             "Basic workspace consistency" \
             "" \
-            "cd '$TEMPLATE_DIR' && cargo check --workspace --quiet"
+            "cd '$TEMPLATE_DIR' && cargo check $feature_args $scope_args --quiet"
     fi
 }
 
@@ -167,6 +241,24 @@ main() {
     print_summary
 }
 
+run_entrypoint() {
+    if [[ "${1:-}" == "--internal" ]]; then
+        shift
+        main "$@"
+        return
+    fi
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            main "$@"
+            return
+        fi
+    done
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    run_command_step "DEOS local CI" "" "$script_path" --internal "$@"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    run_entrypoint "$@"
 fi

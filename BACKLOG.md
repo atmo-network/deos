@@ -7,6 +7,7 @@
 ## Project Harness Evolution
 
 - [ ] `Harness / Ownership inventory`: Classify every root named script as a deterministic operator implementation, skill-owned compatibility bridge, or candidate for deletion; remove the ambiguous generic orchestrator category from the scripts entrypoint.
+- [ ] `Harness / Declarative routing`: Give each owning project skill a compact changed-scope route matrix naming exact script leaves, intentional exclusions, escalation triggers, and external prerequisites; close only when agents can select package/test/benchmark/build/network branches without raw commands or a duplicate harness.
 - [ ] `Harness / Alignment bridge`: Move the `validate-local.sh` implementation beside the alignment skill while preserving a thin root human/CI bridge and one authoritative option/help contract.
 - [ ] `Harness / Domain workflows`: Add project-skill ownership for benchmark interpretation and guarded runtime-upgrade/native-staking coordination where agent scope selection, evidence judgment, or approval boundaries exceed deterministic shell execution.
 
