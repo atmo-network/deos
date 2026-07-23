@@ -1,11 +1,11 @@
 ---
-name: runtime-benchmarking
-description: Selects, designs, interprets, and integrates FRAME runtime benchmarks without duplicating shared scripts or overstating production evidence.
+name: benchmarking
+description: Selects, designs, interprets, and integrates benchmarks without duplicating shared scripts or overstating evidence; the current DEOS route covers FRAME runtime measurement.
 ---
 
-# Runtime Benchmarking
+# Benchmarking
 
-Use this skill when a pallet/runtime change needs benchmark design, focused measurement, parameter comparison, generated-weight integration, or production-Wasm evidence.
+Use this skill when a DEOS change needs benchmark design, focused measurement, parameter comparison, generated-weight integration, or production evidence. The current executable route covers FRAME runtime benchmarking; frontend benchmarking remains out of scope until the project adopts an explicit measured need and shared command surface.
 
 ## Ownership Boundary
 

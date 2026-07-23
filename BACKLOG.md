@@ -15,9 +15,9 @@
 ### Harness evolution
 
 - [ ] `0.7.2 / Harness / Ownership inventory`: Human-callable atoms, GitHub shared-script placement, and AAA gate ownership are now explicit and audited. Classify the remaining named/admin scripts and skill leaves as shared root implementations, agent-specific leaves, or deletion candidates; map their human, CI, root-composition, and multi-skill consumers.
-- [ ] `0.7.2 / Harness / Declarative routing`: Alignment, AAA delivery, runtime benchmarking, and runtime-upgrade delivery now declare compact routes over shared root scripts. Complete the route/exclusion/prerequisite matrix for guarded native-staking coordination without raw commands or a duplicate harness.
+- [ ] `0.7.2 / Harness / Declarative routing`: Alignment, AAA delivery, benchmarking, and runtime-upgrade delivery now declare compact routes over shared root scripts. Complete the route/exclusion/prerequisite matrix for guarded native-staking coordination without raw commands or a duplicate harness.
 - [ ] `0.7.2 / Harness / Alignment routing`: Alignment owns the changed-scope matrix and completion gate, and shared CI supports narrow package/test routes. Retain `validate-local.sh` in root `/scripts` but remove broad default compositions that run unrelated audit, client, build, or network branches.
-- [ ] `0.7.2 / Harness / Domain workflows`: Runtime benchmarking owns measurement methodology, and runtime-upgrade delivery owns evidence sequencing plus the relay approval boundary; both reuse shared root scripts exclusively. Add equivalent skill ownership for guarded native-staking coordination without moving human/CI/multi-skill executables out of `/scripts`.
+- [ ] `0.7.2 / Harness / Domain workflows`: Benchmarking owns measurement methodology, and runtime-upgrade delivery owns evidence sequencing plus the relay approval boundary; both reuse shared root scripts exclusively. Add equivalent skill ownership for guarded native-staking coordination without moving human/CI/multi-skill executables out of `/scripts`.
 
 ### Slice 3 — Effective eligibility scheduling
 
