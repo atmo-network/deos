@@ -108,6 +108,8 @@ Local delivery slices should pass the repo-local completion gate before continui
 
 The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, Cargo checks, runtime unit tests for runtime-source changes, Markdown table/readability checks, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
 
+`auditor.sh` and `completion-gate.sh` use compact orchestration output by default: successful runs report only the step, duration, and result. Failures retain complete temporary logs and print a bounded tail; `DEOS_VERBOSE=1` restores the full nested protocol for diagnosis.
+
 Useful flags:
 
 ```bash

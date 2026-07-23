@@ -55,7 +55,9 @@ audit_shell_entrypoints() {
             continue
         fi
 
-        log_info "Checking ${script#$PROJECT_ROOT/}"
+        if [[ "$DEOS_VERBOSE" == "1" ]]; then
+            log_info "Checking ${script#$PROJECT_ROOT/}"
+        fi
         if ! bash -n "$script"; then
             log_error "Syntax check failed: $script"
             AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
@@ -82,7 +84,9 @@ audit_node_entrypoints() {
         return
     fi
     while IFS= read -r script; do
-        log_info "Checking ${script#$PROJECT_ROOT/}"
+        if [[ "$DEOS_VERBOSE" == "1" ]]; then
+            log_info "Checking ${script#$PROJECT_ROOT/}"
+        fi
         if ! node --check "$script" >/dev/null; then
             log_error "Syntax check failed: $script"
             AUDIT_FAILURES=$((AUDIT_FAILURES + 1))

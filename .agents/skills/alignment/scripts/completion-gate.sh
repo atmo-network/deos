@@ -35,6 +35,8 @@ Environment:
   RUN_CARGO_CHECK=auto|0|1
   RUN_RUNTIME_TESTS=auto|0|1
   REQUIRE_CONTEXT_SYNC=0|1
+  DEOS_VERBOSE=0|1
+  DEOS_FAILURE_TAIL_LINES=N
 EOF
 }
 
@@ -370,6 +372,24 @@ main() {
     log_success "Completion gate passed"
 }
 
+run_entrypoint() {
+    if [[ "${1:-}" == "--internal" ]]; then
+        shift
+        main "$@"
+        return
+    fi
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            main "$@"
+            return
+        fi
+    done
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    run_command_step "DEOS completion gate" "" "$script_path" --internal "$@"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    run_entrypoint "$@"
 fi
