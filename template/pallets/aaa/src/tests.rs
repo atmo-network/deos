@@ -541,11 +541,26 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
     assert!(AAA::wakeup_cursor_insert(blocks[0]));
     assert_eq!(AAA::wakeup_cursor_len(), count);
 
+    let removed = blocks[(count / 2) as usize];
+    assert!(AAA::wakeup_cursor_remove(removed));
+    assert!(!AAA::wakeup_cursor_remove(removed));
+    assert_eq!(AAA::wakeup_cursor_len(), count.saturating_sub(1));
+    assert_eq!(
+      AAA::wakeup_buckets(removed)
+        .expect("removed cursor bucket")
+        .cursor_index,
+      None
+    );
+    let expected: Vec<_> = blocks
+      .iter()
+      .copied()
+      .filter(|block| *block != removed)
+      .collect();
     let mut popped = Vec::new();
     while let Some(block) = AAA::wakeup_cursor_pop_min() {
       popped.push(block);
     }
-    assert_eq!(popped, blocks);
+    assert_eq!(popped, expected);
     assert_eq!(AAA::wakeup_cursor_len(), 0);
     assert!(AAA::wakeup_cursor_pages(0).is_none());
     assert!(AAA::wakeup_cursor_pages(1).is_none());

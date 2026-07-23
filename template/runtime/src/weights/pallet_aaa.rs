@@ -1093,11 +1093,27 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `10659`
 		//  Estimated: `56199`
-		// Minimum execution time: 430_578_000 picoseconds.
-		Weight::from_parts(477_234_000, 0)
+		// Minimum execution time: 437_982_000 picoseconds.
+		Weight::from_parts(481_354_000, 0)
 			.saturating_add(Weight::from_parts(0, 56199))
 			.saturating_add(T::DbWeight::get().reads(34))
 			.saturating_add(T::DbWeight::get().writes(26))
+	}
+	/// Storage: `AAA::WakeupBuckets` (r:14 w:14)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:18 w:10)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	fn scheduler_wakeup_cursor_remove_exact() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `10227`
+		//  Estimated: `55767`
+		// Minimum execution time: 405_365_000 picoseconds.
+		Weight::from_parts(434_350_000, 0)
+			.saturating_add(Weight::from_parts(0, 55767))
+			.saturating_add(T::DbWeight::get().reads(33))
+			.saturating_add(T::DbWeight::get().writes(25))
 	}
 	/// Storage: `AAA::QueueHead` (r:1 w:1)
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)

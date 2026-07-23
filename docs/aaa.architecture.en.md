@@ -380,9 +380,10 @@ Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,00
 | Cursor case | RefTime / ProofSize | Reads / writes |
 | --- | ---: | ---: |
 | Insert and full sift-up | `355,009,000 / 41,807` | `25 / 25` |
-| Pop minimum and full repair | `477,234,000 / 56,199` | `34 / 26` |
+| Pop minimum and full repair | `481,354,000 / 56,199` | `34 / 26` |
+| Exact removal and full repair | `434,350,000 / 55,767` | `33 / 25` |
 
-The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current checkpoint hashes are AAA weights `36b0c37127e6eb34255f011d4f03c4643c97b7067784cd433b419f92cb5f26e4` and compressed Wasm `8f2384de98e25ee72e78de971de843559bffcafde52c3a163b992b837bee5f40`. Transactional bucket lifecycle integration and production drain activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
+The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current checkpoint hashes are AAA weights `5e63378d95ffb8376a60bf849eafd921046edbf8f4cd3630f973d01d709b680e` and compressed Wasm `564b291cb5b72029155f470117d6df3279765c76d3a50f33235044e43bf69682`. Transactional bucket lifecycle integration and production drain activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

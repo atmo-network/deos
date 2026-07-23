@@ -728,36 +728,63 @@ impl<T: Config> Pallet<T> {
       .flatten()
   }
 
-  fn wakeup_cursor_pop_min_inner() -> Option<BlockNumberFor<T>> {
+  fn wakeup_cursor_remove_inner(block: BlockNumberFor<T>) -> bool {
+    let Some(index) = WakeupBuckets::<T>::get(block).and_then(|bucket| bucket.cursor_index) else {
+      return false;
+    };
     let len = WakeupCursorLen::<T>::get();
-    if len == 0 {
-      return None;
+    if index >= len || Self::wakeup_cursor_get(index) != Some(block) {
+      return false;
     }
-    let min_block = Self::wakeup_cursor_get(0)?;
     let last_index = len.saturating_sub(1);
-    let last_block = Self::wakeup_cursor_get(last_index)?;
+    let Some(last_block) = Self::wakeup_cursor_get(last_index) else {
+      return false;
+    };
     if !Self::wakeup_cursor_remove_tail(last_index) {
-      return None;
+      return false;
     }
-    WakeupBuckets::<T>::mutate(min_block, |maybe_bucket| {
+    WakeupBuckets::<T>::mutate(block, |maybe_bucket| {
       if let Some(bucket) = maybe_bucket {
         bucket.cursor_index = None;
       }
     });
     WakeupCursorLen::<T>::put(last_index);
-    if last_index == 0 {
-      return Some(min_block);
+    if index == last_index {
+      return true;
     }
-    if !Self::wakeup_cursor_set(0, last_block) {
-      return None;
+    if !Self::wakeup_cursor_set(index, last_block) {
+      return false;
     }
     WakeupBuckets::<T>::mutate(last_block, |maybe_bucket| {
       if let Some(bucket) = maybe_bucket {
-        bucket.cursor_index = Some(0);
+        bucket.cursor_index = Some(index);
       }
     });
 
-    let mut current = 0u32;
+    let mut current = index;
+    for _ in 0..Self::wakeup_cursor_height_bound() {
+      if current == 0 {
+        break;
+      }
+      let parent = current.saturating_sub(1) / 2;
+      let Some(parent_block) = Self::wakeup_cursor_get(parent) else {
+        return false;
+      };
+      let Some(current_block) = Self::wakeup_cursor_get(current) else {
+        return false;
+      };
+      if parent_block <= current_block {
+        break;
+      }
+      if !Self::wakeup_cursor_swap(parent, current) {
+        return false;
+      }
+      current = parent;
+    }
+    if current != index {
+      return true;
+    }
+
     for _ in 0..Self::wakeup_cursor_height_bound() {
       let left = current.saturating_mul(2).saturating_add(1);
       if left >= last_index {
@@ -765,18 +792,50 @@ impl<T: Config> Pallet<T> {
       }
       let right = left.saturating_add(1);
       let mut smallest = left;
-      if right < last_index && Self::wakeup_cursor_get(right)? < Self::wakeup_cursor_get(left)? {
-        smallest = right;
+      let Some(left_block) = Self::wakeup_cursor_get(left) else {
+        return false;
+      };
+      if right < last_index {
+        let Some(right_block) = Self::wakeup_cursor_get(right) else {
+          return false;
+        };
+        if right_block < left_block {
+          smallest = right;
+        }
       }
-      if Self::wakeup_cursor_get(current)? <= Self::wakeup_cursor_get(smallest)? {
+      let Some(current_block) = Self::wakeup_cursor_get(current) else {
+        return false;
+      };
+      let Some(smallest_block) = Self::wakeup_cursor_get(smallest) else {
+        return false;
+      };
+      if current_block <= smallest_block {
         break;
       }
       if !Self::wakeup_cursor_swap(current, smallest) {
-        return None;
+        return false;
       }
       current = smallest;
     }
-    Some(min_block)
+    true
+  }
+
+  pub fn wakeup_cursor_remove(block: BlockNumberFor<T>) -> bool {
+    let result: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if Self::wakeup_cursor_remove_inner(block) {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      } else {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          Error::<T>::AaaNotFound.into(),
+        ))
+      }
+    });
+    result.is_ok()
+  }
+
+  fn wakeup_cursor_pop_min_inner() -> Option<BlockNumberFor<T>> {
+    let min_block = Self::wakeup_cursor_get(0)?;
+    Self::wakeup_cursor_remove_inner(min_block).then_some(min_block)
   }
 
   pub fn wakeup_cursor_pop_min() -> Option<BlockNumberFor<T>> {
