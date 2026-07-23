@@ -16,7 +16,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 
 Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a skill owns a reusable method for **how work in one domain grows safely** through routing, evidence, gates, interpretation, and handoff.
 
-A delivery skill acts like cognitive scaffolding around an evolving subsystem. It may emerge after repeated implementation friction, improve as real failures expose missing guidance, and help later slices reproduce the stronger method without expanding every backlog item into procedural prose.
+Some delivery skills become implementation organs for an evolving feature: they maintain its feedback loop from repository reality through the next slice, evidence, gates, and plan reconciliation. They may emerge after repeated implementation friction, improve as real failures expose missing guidance, and help later slices reproduce the stronger method without expanding every backlog item into procedural prose. Capability skills remain reusable instruments rather than feature organs.
 
 Scaffolding must not become permanent by inertia. Consolidate, generalize, or delete a skill when the subsystem stabilizes, its method moves into deterministic tooling, or it no longer has a distinct reusable decision boundary. Keep implementation truth in code/docs, open outcomes in the backlog, and completed outcomes in the changelog.
 
