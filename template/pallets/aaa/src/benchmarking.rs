@@ -272,7 +272,7 @@ mod benches {
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_user_aaa");
-    assert_eq!(inst.owner_slot, expected_slot);
+    assert_eq!(inst.actor_class.owner_slot(), Some(expected_slot));
   }
 
   #[benchmark]
@@ -298,7 +298,7 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst =
       AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_user_aaa_at_slot");
-    assert_eq!(inst.owner_slot, requested_slot);
+    assert_eq!(inst.actor_class.owner_slot(), Some(requested_slot));
   }
 
   #[benchmark]
@@ -321,7 +321,7 @@ mod benches {
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_system_aaa");
-    assert_eq!(inst.owner_slot, SYSTEM_OWNER_SLOT_SENTINEL);
+    assert_eq!(inst.actor_class, ActorClass::System);
   }
 
   #[benchmark]
@@ -353,8 +353,7 @@ mod benches {
       Mutability::Mutable,
       system_program::<T>(schedule, execution_plan),
     );
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after reopen_system_aaa");
-    assert_eq!(inst.aaa_id, aaa_id);
+    assert!(AaaInstances::<T>::contains_key(aaa_id));
   }
 
   #[benchmark]
@@ -432,7 +431,7 @@ mod benches {
     #[extrinsic_call]
     pause_aaa(RawOrigin::Signed(caller), aaa_id);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after pause_aaa");
-    assert!(inst.is_paused);
+    assert!(inst.lifecycle.is_paused());
   }
 
   #[benchmark]
@@ -444,7 +443,7 @@ mod benches {
     #[extrinsic_call]
     resume_aaa(RawOrigin::Signed(caller), aaa_id);
     let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after resume_aaa");
-    assert!(!inst.is_paused);
+    assert!(!inst.lifecycle.is_paused());
   }
 
   #[benchmark]
@@ -538,9 +537,7 @@ mod benches {
             asset,
             FundingBatch {
               amount: One::one(),
-              block: 1u32.into(),
               pending_amount: One::one(),
-              pending_last_block: Some(1u32.into()),
             },
           )
           .expect("funding snapshot benchmark bound fits");
@@ -988,9 +985,7 @@ mod benches {
           T::NativeAssetId::get(),
           FundingBatch {
             amount: One::one(),
-            block: 1u32.into(),
             pending_amount: One::one(),
-            pending_last_block: Some(1u32.into()),
           },
         )
         .expect("tracked funding batch fits");
@@ -1011,120 +1006,6 @@ mod benches {
       );
     }
     (aaa_id, recipient)
-  }
-
-  fn setup_scan_only_manual_actors<T: Config>(
-    requested_n: u32,
-    clear_readiness: bool,
-  ) -> alloc::vec::Vec<AaaId> {
-    let existing_active = AaaInstances::<T>::iter_keys().count() as u32;
-    let available = T::MaxActiveActors::get().saturating_sub(existing_active);
-    let n = requested_n.min(available);
-    assert!(
-      n > 0,
-      "benchmark requires at least one available active slot"
-    );
-    let schedule = Schedule {
-      trigger: Trigger::Manual,
-      cooldown_blocks: 0,
-    };
-    let execution_plan = make_inert_execution_plan::<T>();
-    let mut aaa_ids: alloc::vec::Vec<AaaId> = alloc::vec::Vec::with_capacity(n as usize);
-    for i in 0..n {
-      let owner: T::AccountId = account("scan_owner", i, 0);
-      Pallet::<T>::create_system_aaa(
-        RawOrigin::Root.into(),
-        owner,
-        Mutability::Mutable,
-        system_program::<T>(schedule.clone(), execution_plan.clone()),
-      )
-      .expect("create_system_aaa must succeed");
-      let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-      aaa_ids.push(aaa_id);
-    }
-    if clear_readiness {
-      for &aaa_id in &aaa_ids {
-        AaaReadiness::<T>::remove(aaa_id);
-      }
-    }
-    aaa_ids
-  }
-
-  fn setup_scan_only_manual_sparse_actors<T: Config>(
-    requested_n: u32,
-    stride: u64,
-  ) -> alloc::vec::Vec<AaaId> {
-    let existing_active = AaaInstances::<T>::iter_keys().count() as u32;
-    let available = T::MaxActiveActors::get().saturating_sub(existing_active);
-    let n = requested_n.min(available);
-    let effective_stride = stride.max(2);
-    assert!(
-      n > 0,
-      "benchmark requires at least one available active slot"
-    );
-    let schedule = Schedule {
-      trigger: Trigger::Manual,
-      cooldown_blocks: 0,
-    };
-    let execution_plan = make_inert_execution_plan::<T>();
-    let mut aaa_ids: alloc::vec::Vec<AaaId> = alloc::vec::Vec::with_capacity(n as usize);
-    for i in 0..n {
-      let owner: T::AccountId = account("scan_sparse_owner", i, 0);
-      Pallet::<T>::create_system_aaa(
-        RawOrigin::Root.into(),
-        owner,
-        Mutability::Mutable,
-        system_program::<T>(schedule.clone(), execution_plan.clone()),
-      )
-      .expect("create_system_aaa must succeed");
-      let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-      aaa_ids.push(aaa_id);
-      let bumped_next = aaa_id.saturating_add(effective_stride);
-      NextAaaId::<T>::put(bumped_next);
-    }
-    aaa_ids
-  }
-
-  // Non-dispatch diagnostic benchmark for proof-size decomposition of scheduler scan path
-  #[benchmark]
-  fn scheduler_scan_hot_readiness(n: Linear<100, 1_000>) {
-    let aaa_ids = setup_scan_only_manual_actors::<T>(n, false);
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    #[block]
-    {
-      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    for aaa_id in aaa_ids.into_iter().take(4) {
-      assert!(AaaReadiness::<T>::contains_key(aaa_id));
-    }
-  }
-
-  // Non-dispatch diagnostic benchmark for fallback path when compact readiness state is missing
-  #[benchmark]
-  fn scheduler_scan_fallback_readiness(n: Linear<100, 1_000>) {
-    let aaa_ids = setup_scan_only_manual_actors::<T>(n, true);
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    #[block]
-    {
-      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    for aaa_id in aaa_ids.into_iter().take(4) {
-      assert!(!AaaReadiness::<T>::contains_key(aaa_id));
-    }
-  }
-
-  // Non-dispatch diagnostic benchmark for sparse-id topology in active actor set
-  #[benchmark]
-  fn scheduler_scan_sparse_hot_readiness(n: Linear<100, 1_000>) {
-    let aaa_ids = setup_scan_only_manual_sparse_actors::<T>(n, 16);
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    #[block]
-    {
-      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    for aaa_id in aaa_ids.into_iter().take(4) {
-      assert!(AaaReadiness::<T>::contains_key(aaa_id));
-    }
   }
 
   // Non-dispatch diagnostic benchmark proving cooldown-ineligible timers own no queue probe.
@@ -1384,9 +1265,7 @@ mod benches {
             asset,
             FundingBatch {
               amount: One::one(),
-              block: 1u32.into(),
               pending_amount: 2u32.into(),
-              pending_last_block: Some(2u32.into()),
             },
           )
           .expect("promotion benchmark bound fits");
@@ -1397,11 +1276,12 @@ mod benches {
       Pallet::<T>::promote_pending_funding(aaa_id);
     }
     let instance = AaaInstances::<T>::get(aaa_id).expect("benchmark actor exists");
-    assert!(instance.funding_snapshots.values().all(|batch| {
-      batch.amount == 2u32.into()
-        && batch.pending_amount.is_zero()
-        && batch.pending_last_block.is_none()
-    }));
+    assert!(
+      instance
+        .funding_snapshots
+        .values()
+        .all(|batch| batch.amount == 2u32.into() && batch.pending_amount.is_zero())
+    );
   }
 
   #[benchmark]

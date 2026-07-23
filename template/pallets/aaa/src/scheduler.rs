@@ -105,7 +105,7 @@ impl<T: Config> Pallet<T> {
         }
         AdmissionDecision::Skip => {
           if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
-            Self::preserve_skipped_readiness(&updated, now, &mut periodic_continuations);
+            Self::preserve_skipped_readiness(aaa_id, &updated, now, &mut periodic_continuations);
           }
           continue;
         }
@@ -114,7 +114,7 @@ impl<T: Config> Pallet<T> {
       cycle_meter.consume(cycle_weight_upper);
       executed = executed.saturating_add(1);
       if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
-        Self::schedule_next_timer_wakeup_local(&updated, now, &mut periodic_continuations);
+        Self::schedule_next_timer_wakeup_local(aaa_id, &updated, now, &mut periodic_continuations);
       }
     }
     while let Some(aaa_id) = run_queue.pop_front() {
@@ -178,7 +178,7 @@ impl<T: Config> Pallet<T> {
     };
     let now = frame_system::Pallet::<T>::block_number();
     match &instance.schedule.trigger {
-      Trigger::Timer { .. } => Self::schedule_next_timer_wakeup(&instance, now),
+      Trigger::Timer { .. } => Self::schedule_next_timer_wakeup(aaa_id, &instance, now),
       Trigger::Manual => {
         if instance.manual_trigger_pending {
           Self::enqueue(aaa_id);
@@ -525,6 +525,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn next_eligible_at(
+    aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
     include_timer: bool,
@@ -548,7 +549,7 @@ impl<T: Config> Pallet<T> {
     if include_timer && instance.cycle_nonce < u64::MAX {
       if let Trigger::Timer { every_blocks } = instance.schedule.trigger {
         let cadence: BlockNumberFor<T> = every_blocks.into();
-        let jitter = Self::timer_jitter_blocks(instance.aaa_id, every_blocks);
+        let jitter = Self::timer_jitter_blocks(aaa_id, every_blocks);
         eligible_at = eligible_at.max(
           attempt_anchor
             .saturating_add(cadence)
@@ -560,32 +561,34 @@ impl<T: Config> Pallet<T> {
   }
 
   fn preserve_skipped_readiness(
+    aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
     periodic_continuations: &mut Vec<AaaId>,
   ) {
-    if instance.is_paused {
+    if instance.lifecycle.is_paused() {
       return;
     }
     if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
-      Self::schedule_next_timer_wakeup_local(instance, now, periodic_continuations);
+      Self::schedule_next_timer_wakeup_local(aaa_id, instance, now, periodic_continuations);
       return;
     }
     let pending = instance.manual_trigger_pending
       || matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. })
-        && Self::evaluate_on_address_event(instance.aaa_id);
+        && Self::evaluate_on_address_event(aaa_id);
     if !pending {
       return;
     }
-    let eligibility_block = Self::next_eligible_at(instance, now, false);
+    let eligibility_block = Self::next_eligible_at(aaa_id, instance, now, false);
     if eligibility_block > now {
-      Self::defer_wakeup(instance.aaa_id, eligibility_block);
+      Self::defer_wakeup(aaa_id, eligibility_block);
     } else {
-      periodic_continuations.push(instance.aaa_id);
+      periodic_continuations.push(aaa_id);
     }
   }
 
   fn schedule_next_timer_wakeup_local(
+    aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
     periodic_continuations: &mut Vec<AaaId>,
@@ -593,23 +596,27 @@ impl<T: Config> Pallet<T> {
     let Trigger::Timer { .. } = instance.schedule.trigger else {
       return;
     };
-    let eligible_at = Self::next_eligible_at(instance, now, true);
+    let eligible_at = Self::next_eligible_at(aaa_id, instance, now, true);
     if eligible_at <= now.saturating_add(One::one()) {
-      periodic_continuations.push(instance.aaa_id);
+      periodic_continuations.push(aaa_id);
     } else {
-      Self::defer_wakeup(instance.aaa_id, eligible_at);
+      Self::defer_wakeup(aaa_id, eligible_at);
     }
   }
 
-  fn schedule_next_timer_wakeup(instance: &AaaInstanceOf<T>, now: BlockNumberFor<T>) {
+  fn schedule_next_timer_wakeup(
+    aaa_id: AaaId,
+    instance: &AaaInstanceOf<T>,
+    now: BlockNumberFor<T>,
+  ) {
     let Trigger::Timer { .. } = instance.schedule.trigger else {
       return;
     };
-    let eligible_at = Self::next_eligible_at(instance, now, true);
+    let eligible_at = Self::next_eligible_at(aaa_id, instance, now, true);
     if eligible_at <= now.saturating_add(One::one()) {
-      Self::enqueue(instance.aaa_id);
+      Self::enqueue(aaa_id);
     } else {
-      Self::defer_wakeup(instance.aaa_id, eligible_at);
+      Self::defer_wakeup(aaa_id, eligible_at);
     }
   }
 
@@ -630,7 +637,7 @@ impl<T: Config> Pallet<T> {
     if Self::is_window_expired(instance) {
       return Some(CloseReason::WindowExpired);
     }
-    if instance.is_paused {
+    if instance.lifecycle.is_paused() {
       return None;
     }
     Self::user_resource_close_reason(instance, false)
@@ -642,7 +649,7 @@ impl<T: Config> Pallet<T> {
     instance: &AaaInstanceOf<T>,
     include_fee_budget: bool,
   ) -> Option<CloseReason> {
-    if instance.aaa_type != AaaType::User {
+    if instance.actor_class.aaa_type() != AaaType::User {
       return None;
     }
     let native_balance = Self::user_native_balance(instance);
@@ -715,16 +722,16 @@ impl<T: Config> Pallet<T> {
     if Self::is_window_expired(instance) {
       return Self::close_within_budget(aaa_id, instance, CloseReason::WindowExpired, meter);
     }
-    if instance.is_paused {
+    if instance.lifecycle.is_paused() {
       return AdmissionDecision::Skip;
     }
-    if instance.aaa_type == AaaType::User && instance.cycle_nonce == u64::MAX {
+    if instance.actor_class.aaa_type() == AaaType::User && instance.cycle_nonce == u64::MAX {
       return Self::close_within_budget(aaa_id, instance, CloseReason::CycleNonceExhausted, meter);
     }
     if let Some(reason) = Self::pending_post_cycle_close_reason(instance) {
       return Self::close_within_budget(aaa_id, instance, reason, meter);
     }
-    if !Self::is_ready_for_execution(instance) {
+    if !Self::is_ready_for_execution(aaa_id, instance) {
       return AdmissionDecision::Skip;
     }
     if let Some(reason) = Self::user_resource_close_reason(instance, true) {
@@ -737,8 +744,8 @@ impl<T: Config> Pallet<T> {
     AdmissionDecision::Admit(cycle_weight_upper)
   }
 
-  fn is_ready_for_execution(instance: &AaaInstanceOf<T>) -> bool {
-    if instance.is_paused {
+  fn is_ready_for_execution(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
+    if instance.lifecycle.is_paused() {
       return false;
     }
     if GlobalCircuitBreaker::<T>::get() {
@@ -747,26 +754,26 @@ impl<T: Config> Pallet<T> {
     let now = frame_system::Pallet::<T>::block_number();
     let include_timer = !instance.manual_trigger_pending
       && matches!(instance.schedule.trigger, Trigger::Timer { .. });
-    if Self::next_eligible_at(instance, now, include_timer) > now {
+    if Self::next_eligible_at(aaa_id, instance, now, include_timer) > now {
       return false;
     }
-    Self::evaluate_trigger(instance)
+    Self::evaluate_trigger(aaa_id, instance)
   }
 
-  fn evaluate_trigger(instance: &AaaInstanceOf<T>) -> bool {
+  fn evaluate_trigger(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
     if instance.manual_trigger_pending {
       return true;
     }
     match instance.schedule.trigger {
       Trigger::Manual => false,
-      Trigger::Timer { .. } => Self::evaluate_timer(instance),
-      Trigger::OnAddressEvent { .. } => Self::evaluate_on_address_event(instance.aaa_id),
+      Trigger::Timer { .. } => Self::evaluate_timer(aaa_id, instance),
+      Trigger::OnAddressEvent { .. } => Self::evaluate_on_address_event(aaa_id),
     }
   }
 
-  fn evaluate_timer(instance: &AaaInstanceOf<T>) -> bool {
+  fn evaluate_timer(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
-    Self::next_eligible_at(instance, now, true) <= now
+    Self::next_eligible_at(aaa_id, instance, now, true) <= now
   }
 
   fn source_matches_filter(
@@ -913,6 +920,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn funding_event_authorized(
+    aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     provenance: Option<&FundingProvenance<T::AccountId>>,
   ) -> bool {
@@ -926,7 +934,7 @@ impl<T: Config> Pallet<T> {
         FundingProvenance::Signed(source) if allowed.contains(source)
       ),
       FundingSourcePolicy::RuntimePolicy => {
-        T::FundingAuthority::allows(instance.aaa_id, &instance.owner, provenance)
+        T::FundingAuthority::allows(aaa_id, &instance.owner, provenance)
       }
       FundingSourcePolicy::AnySource => true,
     })
@@ -942,7 +950,7 @@ impl<T: Config> Pallet<T> {
       return Ok(());
     };
     if Self::is_window_expired(&instance)
-      || !Self::funding_event_authorized(&instance, provenance)
+      || !Self::funding_event_authorized(aaa_id, &instance, provenance)
       || !instance.funding_tracked_assets.contains(&asset)
       || amount.is_zero()
     {
@@ -989,7 +997,6 @@ impl<T: Config> Pallet<T> {
     if Self::is_window_expired(&instance) {
       return Ok(());
     }
-    let now = frame_system::Pallet::<T>::block_number();
     let mut instance_modified = false;
     let mut inbox_matched = false;
     if apply_trigger
@@ -1005,20 +1012,11 @@ impl<T: Config> Pallet<T> {
       ) && Self::asset_matches_filter(asset_filter, asset)
       {
         inbox_matched = true;
-        AddressEventInbox::<T>::mutate(aaa_id, |maybe_entry| {
-          let entry = maybe_entry.get_or_insert_with(|| InboxState {
-            is_pending: false,
-            generation: 0,
-            last_event_block: now,
-          });
-          entry.is_pending = true;
-          entry.generation = entry.generation.saturating_add(1);
-          entry.last_event_block = now;
-        });
+        AddressEventInbox::<T>::insert(aaa_id, ());
       }
     }
     if apply_funding
-      && Self::funding_event_authorized(&instance, provenance)
+      && Self::funding_event_authorized(aaa_id, &instance, provenance)
       && instance.funding_tracked_assets.contains(&asset)
       && amount > Zero::zero()
     {
@@ -1028,7 +1026,6 @@ impl<T: Config> Pallet<T> {
           .checked_add(&amount)
           .ok_or(Error::<T>::FundingBatchOverflow)?;
         batch.pending_amount = pending_amount;
-        batch.pending_last_block = Some(now);
         instance_modified = true;
         Self::deposit_event(Event::FundingBatchPendingAccumulated {
           aaa_id,
@@ -1043,9 +1040,7 @@ impl<T: Config> Pallet<T> {
             asset,
             FundingBatch {
               amount,
-              block: now,
               pending_amount: Zero::zero(),
-              pending_last_block: None,
             },
           )
           .map_err(|_| Error::<T>::FundingBatchOverflow)?;
@@ -1059,7 +1054,6 @@ impl<T: Config> Pallet<T> {
     }
     if instance_modified {
       AaaInstances::<T>::insert(aaa_id, instance);
-      Self::sync_readiness_state(aaa_id);
     }
     if inbox_matched {
       Self::enqueue(aaa_id);
@@ -1068,9 +1062,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn evaluate_on_address_event(aaa_id: AaaId) -> bool {
-    AddressEventInbox::<T>::get(aaa_id)
-      .map(|entry| entry.is_pending)
-      .unwrap_or(false)
+    AddressEventInbox::<T>::contains_key(aaa_id)
   }
 
   pub(crate) fn consume_address_event(aaa_id: AaaId) {

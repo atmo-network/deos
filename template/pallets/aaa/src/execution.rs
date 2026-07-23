@@ -113,9 +113,6 @@ impl<T: Config> Pallet<T> {
           continue;
         }
         batch.amount = batch.pending_amount;
-        if let Some(block) = batch.pending_last_block.take() {
-          batch.block = block;
-        }
         batch.pending_amount = Zero::zero();
         promotions.push((asset, batch.amount));
       }
@@ -139,19 +136,16 @@ impl<T: Config> Pallet<T> {
       None => return base_weight,
     };
     if instance.cycle_nonce == u64::MAX {
-      if instance.aaa_type == AaaType::User {
+      if instance.actor_class.aaa_type() == AaaType::User {
         if Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted).is_err() {
           Self::defer_failed_close(aaa_id);
         }
       } else {
         AaaInstances::<T>::mutate(aaa_id, |maybe| {
           if let Some(inst) = maybe.as_mut() {
-            inst.is_paused = true;
-            inst.pause_reason = Some(PauseReason::CycleNonceExhausted);
-            inst.updated_at = now;
+            inst.lifecycle = ActiveLifecycle::Paused(PauseReason::CycleNonceExhausted);
           }
         });
-        Self::sync_readiness_state(aaa_id);
         // Ringless: no need to remove from ring - scheduler checks is_paused flag
         Self::deposit_event(Event::AaaPaused {
           aaa_id,
@@ -165,12 +159,10 @@ impl<T: Config> Pallet<T> {
       inst.cycle_nonce = inst.cycle_nonce.saturating_add(1);
       inst.manual_trigger_pending = false;
       inst.last_cycle_block = now;
-      inst.updated_at = now;
       Some(inst.cycle_nonce)
     }) else {
       return base_weight;
     };
-    Self::sync_readiness_state(aaa_id);
     if matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. }) {
       Self::consume_address_event(aaa_id);
     }
@@ -179,7 +171,7 @@ impl<T: Config> Pallet<T> {
       cycle_nonce,
     });
     let actor = instance.sovereign_account.clone();
-    let is_user = instance.aaa_type == AaaType::User;
+    let is_user = instance.actor_class.aaa_type() == AaaType::User;
     let execution_plan = &instance.execution_plan;
     let funding_snapshots = &instance.funding_snapshots;
     let mut executed_steps: u32 = 0;
@@ -289,7 +281,7 @@ impl<T: Config> Pallet<T> {
       let prepared_task = match Self::prepare_task(
         &step.task,
         &actor,
-        instance.aaa_type,
+        instance.actor_class.aaa_type(),
         reserved_fee_remaining,
         &trigger_balances,
         &trigger_share_balances,
@@ -432,7 +424,7 @@ impl<T: Config> Pallet<T> {
     }
     if execution_plan_failed {
       if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
-        if !inst.is_paused && Self::failure_limit_reached(inst.consecutive_failures) {
+        if !inst.lifecycle.is_paused() && Self::failure_limit_reached(inst.consecutive_failures) {
           if Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures).is_err() {
             Self::defer_failed_close(aaa_id);
           }
@@ -474,7 +466,7 @@ impl<T: Config> Pallet<T> {
     let actor = &instance.sovereign_account;
     let execution_plan = &instance.on_close_execution_plan;
     let funding_snapshots = &instance.funding_snapshots;
-    let is_user = instance.aaa_type == AaaType::User;
+    let is_user = instance.actor_class.aaa_type() == AaaType::User;
     let trigger_balances =
       Self::capture_trigger_balances(actor, execution_plan, reserved_fee_remaining);
     let trigger_share_balances = Self::capture_trigger_share_balances(actor, execution_plan);
@@ -556,7 +548,7 @@ impl<T: Config> Pallet<T> {
       let prepared_task = match Self::prepare_task(
         &step.task,
         actor,
-        instance.aaa_type,
+        instance.actor_class.aaa_type(),
         reserved_fee_remaining,
         &trigger_balances,
         &trigger_share_balances,
@@ -805,7 +797,7 @@ impl<T: Config> Pallet<T> {
     trigger_share_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
   ) -> Result<PreparedTaskOutcome<T>, DispatchError> {
@@ -1293,7 +1285,7 @@ impl<T: Config> Pallet<T> {
     trigger_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
     policy: AmountResolutionPolicy,
@@ -1369,7 +1361,7 @@ impl<T: Config> Pallet<T> {
     trigger_share_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
@@ -1414,7 +1406,7 @@ impl<T: Config> Pallet<T> {
     trigger_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
     policy: AmountResolutionPolicy,

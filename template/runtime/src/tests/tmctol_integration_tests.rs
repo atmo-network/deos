@@ -300,14 +300,11 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
     pallet_aaa::DormantAaaIdentities::<Runtime>::insert(
       aaa_id,
       pallet_aaa::DormantAaaIdentity {
-        aaa_id,
         sovereign_account: AAA::sovereign_account_id_system(aaa_id),
         owner: ALICE,
-        owner_slot: 0,
-        aaa_type: pallet_aaa::AaaType::System,
+        actor_class: pallet_aaa::ActorClass::System,
         mutability: pallet_aaa::Mutability::Mutable,
         created_at: 0,
-        updated_at: 0,
       },
     );
 
@@ -325,9 +322,9 @@ fn genesis_burning_manager_aaa_has_deterministic_sovereign_and_correct_state() {
     let instance = AAA::aaa_instances(aaa_id).expect("Burning Manager AAA must exist at genesis");
     let expected_sovereign = AAA::sovereign_account_id_system(aaa_id);
     assert_eq!(instance.sovereign_account, expected_sovereign);
-    assert_eq!(instance.aaa_type, pallet_aaa::AaaType::System);
+    assert_eq!(instance.actor_class, pallet_aaa::ActorClass::System);
     assert_eq!(instance.mutability, pallet_aaa::Mutability::Mutable);
-    assert!(!instance.is_paused);
+    assert_eq!(instance.lifecycle, pallet_aaa::ActiveLifecycle::Active);
     assert_eq!(instance.consecutive_failures, 0);
     assert!(!instance.manual_trigger_pending);
     assert_eq!(

@@ -916,8 +916,7 @@ fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle_until_cycle_nonce(aaa_id, 3);
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    assert!(!instance.is_paused);
-    assert_eq!(instance.pause_reason, None);
+    assert_eq!(instance.lifecycle, pallet_aaa::ActiveLifecycle::Active);
     fund_native_via_call(CHARLIE, aaa_id, 8_000_000_000_000);
     let updated = AAA::aaa_instances(aaa_id).expect("AAA exists");
     let batch = updated
@@ -926,7 +925,6 @@ fn percentage_of_last_funding_keeps_system_actor_active_on_exhaustion() {
       .expect("funding batch");
     assert_eq!(batch.amount, 10_000_000_000_000);
     assert_eq!(batch.pending_amount, 8_000_000_000_000);
-    assert_eq!(batch.pending_last_block, Some(3));
   });
 }
 
@@ -1875,9 +1873,7 @@ fn internal_asset_transfer_rolls_back_when_funding_pending_overflows() {
           AssetKind::Native,
           FundingBatch {
             amount: 1,
-            block: 1,
             pending_amount: u128::MAX,
-            pending_last_block: Some(1),
           },
         )
         .expect("funding batch fits");
@@ -1943,11 +1939,7 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
       pallet_aaa::CurrentQueue::<Runtime>::get().contains(&receiver_id),
       "an address event created during on_idle must survive in the next-block queue"
     );
-    assert!(
-      AAA::address_event_inbox(receiver_id)
-        .expect("receiver inbox exists")
-        .is_pending
-    );
+    assert!(AAA::address_event_inbox(receiver_id).is_some());
     System::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -2017,9 +2009,7 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
           AssetKind::Native,
           FundingBatch {
             amount: 1,
-            block: 1,
             pending_amount: u128::MAX,
-            pending_last_block: Some(1),
           },
         )
         .expect("funding batch fits");
@@ -2136,7 +2126,7 @@ fn producer_owned_asset_ingress_survives_adversarial_event_prefix() {
     assert!(RuntimeAddressEventIngressHook::submit_events_since(
       producer_start
     ));
-    assert!(AAA::address_event_inbox(aaa_id).is_some_and(|inbox| inbox.is_pending));
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
   });
 }
 
@@ -2245,8 +2235,7 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), target_id));
     run_idle_until_cycle_nonce(target_id, 3);
     let instance = AAA::aaa_instances(target_id).expect("AAA exists");
-    assert!(!instance.is_paused);
-    assert_eq!(instance.pause_reason, None);
+    assert_eq!(instance.lifecycle, pallet_aaa::ActiveLifecycle::Active);
     let target_sovereign = aaa_account(target_id);
     let refill_amount = 8_000_000_000_000u128;
     let sender_id = create_user(
@@ -2268,7 +2257,6 @@ fn transfer_ingress_updates_system_snapshot_without_pause_resume() {
       .expect("funding batch");
     assert_eq!(batch.amount, 10_000_000_000_000);
     assert_eq!(batch.pending_amount, refill_amount);
-    assert_eq!(batch.pending_last_block, Some(3));
     assert!(!has_aaa_event(|event| {
       matches!(event, Event::AaaResumed { aaa_id: id } if *id == target_id)
     }));
@@ -2394,9 +2382,7 @@ fn xcm_deposit_rejects_before_value_movement_when_funding_pending_overflows() {
           AssetKind::Native,
           FundingBatch {
             amount: 1,
-            block: 1,
             pending_amount: u128::MAX,
-            pending_last_block: Some(1),
           },
         )
         .expect("funding batch fits");
@@ -2615,7 +2601,7 @@ fn ingress_hook_drains_only_the_bounded_durable_overflow_prefix() {
       )
     );
     assert_eq!(AAA::ingress_overflow_len(), 10);
-    assert!(AAA::address_event_inbox(aaa_id).is_some_and(|inbox| inbox.is_pending));
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
   });
 }
 
@@ -2665,7 +2651,7 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
       .expect("funding remains stable at drain");
     assert_eq!(batch.amount, 5_000);
     assert_eq!(batch.pending_amount, 7_000);
-    assert!(AAA::address_event_inbox(aaa_id).is_some_and(|inbox| inbox.is_pending));
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
   });
 }
 
@@ -3279,9 +3265,7 @@ fn signed_fixed_transfer_is_rejected_before_dispatch_when_funding_pending_overfl
           AssetKind::Native,
           FundingBatch {
             amount: 1,
-            block: 1,
             pending_amount: u128::MAX,
-            pending_last_block: Some(1),
           },
         )
         .expect("funding batch fits");
@@ -3329,9 +3313,7 @@ fn signed_transfer_all_is_rejected_before_dispatch_when_funding_pending_overflow
           AssetKind::Native,
           FundingBatch {
             amount: 1,
-            block: 1,
             pending_amount: u128::MAX,
-            pending_last_block: Some(1),
           },
         )
         .expect("funding batch fits");
@@ -3380,7 +3362,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
     let matched_fee = balance_before_matched
       .saturating_sub(native_balance(&signer_account))
       .saturating_sub(transfer_amount);
-    assert!(AAA::address_event_inbox(aaa_id).is_some_and(|inbox| inbox.is_pending));
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
 
     let unmatched = RuntimeCall::Balances(
       polkadot_sdk::pallet_balances::Call::transfer_allow_death {
@@ -3402,9 +3384,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
     );
     assert!(notify_weight.saturating_sub(base_weight) != Weight::zero());
 
-    let generation = AAA::address_event_inbox(aaa_id)
-      .expect("matched event created inbox")
-      .generation;
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
     let untracked = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark {
       remark: b"untracked ingress call".to_vec(),
     });
@@ -3412,12 +3392,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       Executive::apply_extrinsic(signed_extrinsic(&signer, 2, untracked)),
       Ok(Ok(_))
     ));
-    assert_eq!(
-      AAA::address_event_inbox(aaa_id)
-        .expect("inbox remains")
-        .generation,
-      generation
-    );
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
 
     let failed = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
       dest: Address::Id(sovereign),
@@ -3435,12 +3410,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       Ok(Err(_))
     ));
     let failed_fee = balance_before_failed.saturating_sub(native_balance(&signer_account));
-    assert_eq!(
-      AAA::address_event_inbox(aaa_id)
-        .expect("failed producer does not submit ingress")
-        .generation,
-      generation
-    );
+    assert!(AAA::address_event_inbox(aaa_id).is_some());
     assert!(
       failed_fee < declared_failed_fee,
       "failed tracked calls must pay less than their declared envelope after post-dispatch refund"
@@ -3522,16 +3492,15 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_close_tail() {
       crate::MIN_ON_IDLE_RESERVE_RATIO * crate::MAXIMUM_BLOCK_WEIGHT
     );
     let mut actor_count = 0u32;
-    for instance in pallet_aaa::AaaInstances::<Runtime>::iter_values() {
+    for (aaa_id, instance) in pallet_aaa::AaaInstances::<Runtime>::iter() {
       let required = AAA::execution_plan_admission_weight_upper(
-        instance.aaa_type,
+        instance.actor_class.aaa_type(),
         &instance.execution_plan,
         &instance.on_close_execution_plan,
       );
       assert!(
         required.all_lte(reserve),
-        "aaa_id={}, required={required:?}, reserve={reserve:?}",
-        instance.aaa_id,
+        "aaa_id={aaa_id}, required={required:?}, reserve={reserve:?}",
       );
       actor_count = actor_count.saturating_add(1);
     }
@@ -3614,7 +3583,7 @@ fn system_aaa_count_is_not_limited_by_owner_slots() {
         transfer_execution_plan(BOB, AssetKind::Native, 1),
       );
       let inst = AAA::aaa_instances(aaa_id).expect("AAA exists");
-      assert_eq!(inst.owner_slot, 0);
+      assert_eq!(inst.actor_class, pallet_aaa::ActorClass::System);
       sovereign_accounts.push(inst.sovereign_account);
     }
     assert_eq!(AAA::owner_slot_mask(ALICE), 0);
@@ -3673,8 +3642,16 @@ fn owner_slot_reuses_freed_slot_after_close() {
       None,
       transfer_execution_plan(BOB, AssetKind::Native, 1),
     );
-    let slot0 = AAA::aaa_instances(id0).expect("id0 exists").owner_slot;
-    let slot1 = AAA::aaa_instances(id1).expect("id1 exists").owner_slot;
+    let slot0 = AAA::aaa_instances(id0)
+      .expect("id0 exists")
+      .actor_class
+      .owner_slot()
+      .expect("User actor has an owner slot");
+    let slot1 = AAA::aaa_instances(id1)
+      .expect("id1 exists")
+      .actor_class
+      .owner_slot()
+      .expect("User actor has an owner slot");
     assert_eq!(slot0, 0);
     assert_eq!(slot1, 1);
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), id0));
@@ -3684,7 +3661,11 @@ fn owner_slot_reuses_freed_slot_after_close() {
       None,
       transfer_execution_plan(BOB, AssetKind::Native, 1),
     );
-    let slot2 = AAA::aaa_instances(id2).expect("id2 exists").owner_slot;
+    let slot2 = AAA::aaa_instances(id2)
+      .expect("id2 exists")
+      .actor_class
+      .owner_slot()
+      .expect("User actor has an owner slot");
     assert_eq!(slot2, slot0);
   });
 }
@@ -3776,7 +3757,9 @@ fn user_dca_e2e_lifecycle_with_natural_close() {
     );
     let slot_new = AAA::aaa_instances(id_new)
       .expect("id_new exists")
-      .owner_slot;
+      .actor_class
+      .owner_slot()
+      .expect("User actor has an owner slot");
     assert_eq!(slot_new, 0);
   });
 }
@@ -4218,7 +4201,6 @@ fn clear_genesis_system_actors_for_stress_fixture() {
   let instances: alloc::vec::Vec<_> = pallet_aaa::AaaInstances::<Runtime>::iter().collect();
   for (aaa_id, instance) in instances {
     pallet_aaa::AaaInstances::<Runtime>::remove(aaa_id);
-    pallet_aaa::AaaReadiness::<Runtime>::remove(aaa_id);
     pallet_aaa::SovereignIndex::<Runtime>::remove(&instance.sovereign_account);
   }
   let dormant: alloc::vec::Vec<_> = pallet_aaa::DormantAaaIdentities::<Runtime>::iter().collect();
@@ -4685,103 +4667,6 @@ fn profile_scheduler_wallclock_matrix() {
       );
     });
   }
-}
-
-fn run_scheduler_profile_case(
-  total_actors: u64,
-  num_blocks: u32,
-  clear_readiness_before_run: bool,
-) -> (f64, u32) {
-  use std::time::Instant;
-  System::set_block_number(1);
-  close_genesis_system_actors();
-  let aaa_ids = setup_inert_actors(total_actors, 10_000u128);
-  if clear_readiness_before_run {
-    for &id in &aaa_ids {
-      pallet_aaa::AaaReadiness::<Runtime>::remove(id);
-    }
-  }
-  let started = Instant::now();
-  let diag = run_blocks_with_diagnostics(&aaa_ids, num_blocks, Weight::MAX);
-  let elapsed = started.elapsed();
-  let ms_per_block = (elapsed.as_secs_f64() * 1_000.0) / (num_blocks as f64);
-  let total_executions: u32 = diag.actor_cycle_counts.values().sum();
-  (ms_per_block, total_executions)
-}
-
-#[test]
-#[ignore]
-fn profile_readiness_hot_state_vs_fallback() {
-  use super::common::new_test_ext;
-  let actors = 10_000u64;
-  let blocks = 64u32;
-  let rounds = 3u32;
-  let mut hot_samples: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
-  let mut fallback_samples: alloc::vec::Vec<f64> = alloc::vec::Vec::new();
-  let mut expected_exec: Option<u32> = None;
-  for round in 0..rounds {
-    let run_hot_first = round % 2 == 0;
-    if run_hot_first {
-      let (hot_ms, hot_exec) =
-        new_test_ext().execute_with(|| run_scheduler_profile_case(actors, blocks, false));
-      let (fallback_ms, fallback_exec) =
-        new_test_ext().execute_with(|| run_scheduler_profile_case(actors, blocks, true));
-      hot_samples.push(hot_ms);
-      fallback_samples.push(fallback_ms);
-      assert_eq!(
-        hot_exec, fallback_exec,
-        "Readiness hot-state and fallback paths must preserve execution count semantics",
-      );
-      if let Some(expected) = expected_exec {
-        assert_eq!(
-          hot_exec, expected,
-          "Execution count must stay stable across rounds"
-        );
-      } else {
-        expected_exec = Some(hot_exec);
-      }
-    } else {
-      let (fallback_ms, fallback_exec) =
-        new_test_ext().execute_with(|| run_scheduler_profile_case(actors, blocks, true));
-      let (hot_ms, hot_exec) =
-        new_test_ext().execute_with(|| run_scheduler_profile_case(actors, blocks, false));
-      hot_samples.push(hot_ms);
-      fallback_samples.push(fallback_ms);
-      assert_eq!(
-        hot_exec, fallback_exec,
-        "Readiness hot-state and fallback paths must preserve execution count semantics",
-      );
-      if let Some(expected) = expected_exec {
-        assert_eq!(
-          hot_exec, expected,
-          "Execution count must stay stable across rounds"
-        );
-      } else {
-        expected_exec = Some(hot_exec);
-      }
-    }
-  }
-  let hot_avg = hot_samples.iter().sum::<f64>() / (hot_samples.len() as f64);
-  let fallback_avg = fallback_samples.iter().sum::<f64>() / (fallback_samples.len() as f64);
-  let delta_ms = fallback_avg - hot_avg;
-  let delta_pct = if hot_avg > 0.0 {
-    (delta_ms / hot_avg) * 100.0
-  } else {
-    0.0
-  };
-  println!(
-    "AAA readiness profile: actors={}, blocks={}, rounds={}, hot_samples={:?}, fallback_samples={:?}, hot_avg_ms_per_block={:.4}, fallback_avg_ms_per_block={:.4}, delta_ms={:.4}, delta_pct={:.2}%, executions={}",
-    actors,
-    blocks,
-    rounds,
-    hot_samples,
-    fallback_samples,
-    hot_avg,
-    fallback_avg,
-    delta_ms,
-    delta_pct,
-    expected_exec.unwrap_or(0),
-  );
 }
 
 #[test]

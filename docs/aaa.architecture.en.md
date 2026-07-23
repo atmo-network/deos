@@ -9,7 +9,7 @@
 >   - SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
 > - Sovereign derivation:
 >   - User AAA: `blake2_256(PalletId, owner, owner_slot)`
->   - System AAA: `blake2_256(PalletId, "system", aaa_id)`; storage/event `owner_slot` stays at compatibility sentinel `0` and never consumes `OwnerSlotMask`
+>   - System AAA: `blake2_256(PalletId, "system", aaa_id)`; `ActorClass::System` stores no owner slot, while the legacy creation-event field remains at compatibility sentinel `0` and never consumes `OwnerSlotMask`
 
 ## Executive Summary
 
@@ -89,7 +89,7 @@ This catalog is the full current runtime deterministic System address map, inclu
 2. `Execution safety`: explicit weight and fee admission gates before cycle start
 3. `Lifecycle correctness`: pause/close transitions are deterministic and reasoned (`FeeBudgetExhausted`, `BalanceExhausted`, `WindowExpired`, etc.)
 4. `Adapter isolation`: pallet never embeds DEX pricing logic or asset implementation specifics
-5. `Hot-state decomposition`: readiness checks use compact scheduler state to avoid full plan decode on scan path
+5. `Hot-state decomposition`: ActorHot remains the Slice 4 target for avoiding cold-plan decode; the retired synchronized readiness mirror must not return
 
 ### Runtime Role in DEOS
 
@@ -182,12 +182,12 @@ Current owner-slot representation is intentionally compact and runtime-shaped:
 
 In the shipped runtime, `AaaInstances` carries one compact state object per actor with these concrete field families:
 
-- Identity and ownership (`aaa_id`, actor class, sovereign account, owner, owner-slot sentinel/identity, mutability)
-- Lifecycle control (pause state/reason, optional auto-close target, schedule, schedule window)
+- Identity and ownership (`ActorClass::User { owner_slot } | System`, sovereign account, owner, mutability), making a System owner slot unrepresentable; `aaa_id` exists only as the storage-map key and is not duplicated inside active or dormant values
+- Lifecycle control (`ActiveLifecycle::Active | Paused(PauseReason)`, optional auto-close target, schedule, schedule window); the typed enum forbids contradictory pause boolean/reason combinations
 - Execution state (run plan, close plan, cycle nonce, last admitted cycle block, failure counter, manual-trigger flag)
 - Tracked funding state (tracked asset set plus per-asset funding snapshots)
 - Admission caches (`cycle_weight_upper`, `cycle_fee_upper`, plus close-tail derivation inputs)
-- Creation/update timestamps
+- Creation block retained only as the first delayed-timer anchor; the former `updated_at` field was removed because no ordering, admission, lifecycle, or read-model contract consumed it
 
 This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current runtime-shaped storage realization.
 
@@ -296,7 +296,7 @@ Scheduler execution is queue-first and deterministic:
 It uses two scheduler layers: an active run queue for work that can execute now, and a temporal wakeup layer for work that becomes eligible later. In the current stable line, that temporal layer is concretely represented by block-bucketed `WakeupIndex` bounded by `MaxWakeupBucketSize`; any future tree-backed or other ordered representation would now require an explicit spec/storage migration rather than being treated as a casual invisible swap.
 
 1. **Wakeup drain**: overdue timer actors are drained from `WakeupIndex` and admitted into the active run queue; the generated dense-due model meters cursor and bucket work for `0..=MaxWakeupsPerBlock`, while each actor additionally reserves the generated full spillover-retry bound. One pass scans at most `MaxWakeupsPerBlock` actor entries and the same number of block cursors; partial buckets, unadmitted buckets, and sparse-gap catch-up retain their cursor for later blocks
-2. **Ingress admission**: each matched producer event is applied independently to funding/inbox generation; the actor's readiness latch and queue membership remain bounded and may join the active run queue in the same `on_idle` pass
+2. **Ingress admission**: each matched producer event is applied independently to funding and the boolean inbox latch; the actor's readiness latch and queue membership remain bounded and may join the active run queue in the same `on_idle` pass
 3. **Run queue**: the active queue starts from `CurrentQueue` plus staged `NextQueue`; before an actor is popped, the scheduler reserves a two-dimensional probe bound covering instance/readiness inspection and worst-case bounded spillover bookkeeping, then separately admits the complete cycle or close tail; actors are executed up to `MaxExecutionsPerBlock` and weight budget
 4. **Carry-over staging**: before queue storage changes, the scheduler reserves the generated maximum queue-bootstrap model, measured with full 10,000-entry `CurrentQueue` and `NextQueue` inputs through decode/take, deduplication, carry-over, truncation, and epoch advance; insufficient budget leaves both queues untouched. Deferred, leftover, and execution-created late enqueues are then merged into bounded next-block `CurrentQueue`; `NextQueue` is taken only after those late entries are captured, so actor-to-actor ingress cannot disappear at epoch finalization. Carry-over does not rewrite epoch markers per actor: a next-block staged duplicate remains bounded by block-local dedup and disappears during deterministic queue seeding.
 5. **Epoch advance**: `QueueEpoch` advances after the carry-over queue is persisted
@@ -339,18 +339,14 @@ Implemented trigger variants:
 
 ### OnAddressEvent
 
-Inbox model uses per-AAA pending-latch state (`AddressEventInbox`):
-
-- `is_pending`
-- `generation`
-- `last_event_block`
+Inbox model uses `AddressEventInbox` key presence as the pending latch; the value is unit, so no redundant boolean, generation, or event-block metadata enters consensus state.
 
 Filter surface:
 
 - Source: `Any` / `OwnerOnly` / `Whitelist`
 - Asset: `Any` / `Whitelist`
 
-Each matched event increments generation and applies its funding decision independently. Multiple pending events share one readiness latch and one bounded actor-queue membership without coalescing event effects.
+Each matched event applies its funding decision independently. Multiple pending events share one readiness latch and one bounded actor-queue membership without coalescing value effects.
 When a cycle starts for an `OnAddressEvent` actor, the latch is consumed atomically.
 
 Runtime ingress shape in the shipped line:
@@ -378,7 +374,7 @@ Funding state follows typed provenance rather than a dedicated value-transfer ca
 
 - User AAA defaults to `OwnerOnly`; standard transfers from the verified owner or an explicitly configured signed allowlist may update tracked funding batches, while rejected and source-less deposits remain spendable balance-only donations.
 - System AAA defaults to `RuntimePolicy`; the reference runtime's launch matrix contains no authorized actor/source pairs and therefore denies signed, internal-protocol, and XCM funding provenance by default. Downstream runtimes must add explicit pairs to `FundingAuthority`; Mutable actors may instead opt into `AnySource`, which still never upgrades missing provenance.
-- The first accepted tracked transfer sets the batch `amount`/`block`; later accepted transfers accumulate `pending_amount`/`pending_last_block` without changing the armed amount. Producer preflight and transactional adapters reject `FundingBatchOverflow` before value movement, expired actors accept balance only, and successful cycle completion promotes pending funding.
+- The first accepted tracked transfer sets the batch `amount`; later accepted transfers checked-add into `pending_amount` without changing the armed amount. Funding timestamps were removed because promotion and amount resolution never consume them. Producer preflight and transactional adapters reject `FundingBatchOverflow` before value movement, expired actors accept balance only, and successful cycle completion promotes pending funding.
 - `FundingSourcePolicyUpdated`, `FundingBatchActivated`, `FundingBatchPendingAccumulated`, and `FundingBatchPromoted` expose bounded state transitions for indexers and operators.
 
 ### Manual
@@ -389,14 +385,13 @@ Funding state follows typed provenance rather than a dedicated value-transfer ca
 
 ## Storage Topology
 
-Primary storage in pallet implementation follows two ownership classes: Section 13's stable behavioral stores constrain compatibility, while derived readiness and bounded ingress machinery remain replaceable implementation state whose semantics come from the owning scheduler/ingress contract.
+Primary storage in pallet implementation follows two ownership classes: Section 13's stable behavioral stores constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state whose semantics come from the owning contracts. The former synchronized `AaaReadiness` mirror has been removed; until ActorHot decomposition lands, `AaaInstances` remains the single readiness source.
 
 - `NextAaaId`: monotonic AAA id allocator
-- `AaaInstances`: active/paused actor state: plan, lifecycle, and bounded `funding_snapshots[asset] = FundingBatch { amount, block, pending_amount, pending_last_block }` metadata
+- `AaaInstances`: active/paused actor state: plan, lifecycle, and bounded `funding_snapshots[asset] = FundingBatch { amount, pending_amount }` state
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
 - `ActorIdentityCount`: transactionally maintained O(1) cardinality across `AaaInstances` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `AaaInstances`
-- `AaaReadiness`: derived compact hot-state for scheduler readiness checks; implementation-owned rather than a stable public storage promise
 - `CurrentQueue`: bounded run queue for current block
 - `NextQueue`: staged queue merged into active run queue on next `on_idle`
 - `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock`: time-ordered overdue wakeup layer; `WakeupRetryPending`: actor-keyed durable retry marker when the bounded spillover horizon is saturated
@@ -424,7 +419,7 @@ The implementation separates identity-only dormancy from active execution:
 Created Dormant ⇄ Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed
 ```
 
-`activate_aaa` accepts typed `ProgramInput` and validates the schedule/window, run plan, explicit close plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and production idle envelope before moving a Mutable identity into `AaaInstances`; `ProgramInput::Dormant` is rejected on activation. `deactivate_aaa` clears queues, wakeups, readiness, inbox, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances. Active and dormant creation paths now normalize into the same typed internal program boundary, while the legacy creation/reopen metadata still supplies separate schedule/run-plan arguments and class-derived close/funding defaults. Converting that external metadata to `ProgramInput` remains open.
+`activate_aaa` accepts typed `ProgramInput` and validates the schedule/window, run plan, explicit close plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and production idle envelope before moving a Mutable identity into `AaaInstances`; `ProgramInput::Dormant` is rejected on activation. `deactivate_aaa` clears queues, wakeups, inbox, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances. Active and dormant creation paths now normalize into the same typed internal program boundary, while the legacy creation/reopen metadata still supplies separate schedule/run-plan arguments and class-derived close/funding defaults. Converting that external metadata to `ProgramInput` remains open.
 
 Runtime interpretation:
 
@@ -447,7 +442,7 @@ The current pallet already provides chain-native bounded reads for live actor an
 - `aaa_instances(aaa_id)` for known actor state, execution plans, lifecycle metadata, and cached bounds
 - `owner_slot_mask(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(aaa_id)` for System AAA addressing against the known runtime catalog
-- Bounded scheduler / readiness / breaker / ingress surfaces such as `AaaReadiness`, `CurrentQueue`, `NextQueue`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `AddressEventInbox`, `IdleStarvationBlocks`, and the ingress-overflow ring state
+- Bounded scheduler / readiness / breaker / ingress surfaces such as `CurrentQueue`, `NextQueue`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `AddressEventInbox`, `IdleStarvationBlocks`, and the ingress-overflow ring state
 - Live execution-side effects and bounded operational events
 
 These are the authoritative bounded surfaces for known-actor inspection, per-owner recovery, scheduler state, and current operator observability.
@@ -529,7 +524,7 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
 Additional runtime bindings:
 
 - `WeightToFee` conversion used for execution-fee charging
-- Runtime `WeightInfo` regenerated with frame omni bencher 0.22 / benchmark CLI 58 against the shipped identity/active counts, dormant lifecycle, queue-cleanup, wakeup-retry, sweep, funding-policy update, fixed hook bases, close-plan-update, User fee collection, saturated ingress-aware asset transfer, and User fee-bearing close-tail topology; dedicated lifecycle classes measure dormant System creation at `44,979,000` RefTime with seven reads/five writes and `13,311` proof bytes, activation at `41,416,000` RefTime with five reads/four writes and `13,311` proof bytes, and deactivation at `41,835,000` RefTime with five reads/nine writes and `81,487` proof bytes; generated storage annotations contain no retired active-list stores
+- Runtime `WeightInfo` regenerated with frame omni bencher 0.22 / benchmark CLI 58 against the shipped identity/active counts, dormant lifecycle, queue-cleanup, wakeup-retry, sweep, funding-policy update, fixed hook bases, close-plan-update, User fee collection, saturated ingress-aware asset transfer, and User fee-bearing close-tail topology; dedicated lifecycle classes measure dormant System creation at `45,817,000` RefTime with seven reads/five writes and `13,208` proof bytes, activation at `38,623,000` RefTime with five reads/three writes and `13,208` proof bytes, and deactivation at `39,182,000` RefTime with five reads/eight writes and `81,487` proof bytes; generated storage annotations contain no retired active-list stores
 - Explicit close dispatch admission takes the component-wise maximum of the compositional System/User bound and the parameterized measured User fee-bearing close-tail model
 - User cycle and close-tail admission adds two generated `fee_collection` envelopes per configured step for possible evaluation and execution charging; System admission adds neither envelope
 - `Transfer`/`Burn`/`Mint` bind the generated saturated `task_simple_asset_op` envelope, while `SplitTransfer` binds the generated `task_split_transfer(l)` model over `2..=8` independently notified recipients with full queue and nine-bucket spillover pressure
@@ -544,9 +539,9 @@ Additional runtime bindings:
 - Successful-cycle funding rotation has a generated `funding_batch_promotion(a)` class over `a = 1..10`; cycle admission always reserves the runtime maximum, with `18,925,114 + 2,424,049a` RefTime, one read/write, 13,311 charged proof bytes, and measured proof growth `901 + 46a`
 - Mutable plan replacement benchmarks a prepopulated `MaxFundingTrackedAssets` batch map and removes every stale entry in the measured call; the regenerated `update_execution_plan` envelope charges one read/write with 1,361 measured and 13,311 estimated proof bytes
 - Producer-owned transaction-extension ingress declares the generated full matched-notification envelope and refunds against a separate generated unmatched-event base; the base conservatively benchmarks the real negative recipient resolution together with a populated `SovereignIndex` proof witness, charging `15,575,000` RefTime, one database read, and 3,521 proof bytes, and refund tests retain that complete base after an unmatched successful call. The maximum measures `AnySource` authority evaluation, existing-batch checked accumulation, funding observability, inbox mutation, and nine saturated wakeup buckets at 17 reads, 15 writes, 726,071 measured proof bytes, and a charged 743,463-byte proof estimate
-- Compatibility ingress uses a generated one-read probe with 1,489 charged proof bytes before ring-length access, then a trigger-only durable-ring drain unit under saturated wakeup retry at 19 reads, 16 writes, 725,750 measured proof bytes, and a 743,463-byte charged proof estimate; enqueue-time funding reservation is paid synchronously by the originating producer, and the retired event-vector scan class no longer appears in production weights
+- Compatibility ingress uses a generated one-read probe with 1,489 charged proof bytes before ring-length access, then a trigger-only durable-ring drain unit under saturated wakeup retry at 18 reads, 16 writes, 725,664 measured proof bytes, and a 743,463-byte charged proof estimate; enqueue-time funding reservation is paid synchronously by the originating producer, and the retired event-vector scan class no longer appears in production weights
 - `scheduler_on_idle_base` charges three reads/two writes and 1,489 proof bytes before breaker/marker/starvation work; `scheduler_zombie_sweep_base` charges three reads and 3,490 proof bytes before cursor/retry-prefix access. Scheduler actor-probe admission then uses a generated worst-case model covering queue-marker cleanup, instance/readiness evaluation, exhausted-budget deferral, and saturated wakeup retry.
-- `update_funding_source_policy` has a dedicated generated one-read/one-write model with 13,311 charged proof bytes instead of reusing execution-plan update weight; all runtime-backed AAA task, ingress, scheduler-hook, probe, and dispatch classes use generated production measurements
+- `update_funding_source_policy` has a dedicated generated one-read/one-write model with 13,208 charged proof bytes instead of reusing execution-plan update weight; all runtime-backed AAA task, ingress, scheduler-hook, probe, and dispatch classes use generated production measurements
 - The pallet mock implements the complete runtime-benchmark helper surface, including opt-in ingress-aware asset operations isolated from ordinary pallet tests; this keeps standalone `runtime-benchmarks` compilation and its 281-test suite portable while production measurement remains runtime-owned
 - `FeeSink` account is the sovereign account of System AAA `aaa_id = 1` (`FEE_SINK_AAA_ID`)
 - `GenesisSystemAaas = TmctolGenesisSystemAaas`
@@ -662,7 +657,6 @@ Reproducible commands:
 cd template
 cargo test --release -p deos-runtime profile_scheduler_wallclock_matrix -- --ignored --nocapture
 cargo test --release -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture
-cargo test --release -p deos-runtime profile_readiness_hot_state_vs_fallback -- --ignored --nocapture
 cargo test --release -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored
 cargo test --release -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored
 ```
@@ -686,23 +680,6 @@ Observed results:
 - Full release gate passes the over-capacity fairness matrix, dense/sparse topology matrix, sparse long-run liveness, 10K queue stress, and occupancy profile
 - Every fairness/stress/profile test invoked by `scripts/aaa-release-gate.sh` asserts the documented starvation-free `nonce spread <= 3` oracle; the 10K occupancy profile now fails rather than merely prints when that bound regresses
 - Queue/wakeup occupancy profile (`10,000`, `418`): `min_cycle_nonce = 2`, `max_cycle_nonce = 3`, `spread = 1`, `max_wakeup_backlog = 9,024`, `max_wakeup_buckets = 19`, `max_current_queue_len = 10,000`
-
-Readiness hot-state impact check (`10,000 actors`, `64 blocks`):
-
-- Comparison profiler runs both modes (`AaaReadiness` hot-state vs fallback-to-instance reconstruction)
-- Output includes per-round samples and averaged `ms/block`
-- Execution counts are asserted equal across modes to protect semantic equivalence
-- Absolute deltas are environment-sensitive and should be treated as diagnostics, not fixed constants
-
-PoV proof-size decomposition benchmark (`scheduler_scan_*`, `n ∈ [100,1000]`):
-
-- Command (hot): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_scan_hot_readiness --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_scan_hot_readiness.rs`
-- Command (fallback): `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_scan_fallback_readiness --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_scan_fallback_readiness.rs`
-- At `n=1000` (estimated model):
-  - Hot-state path: proof-size `2,628,794`, ref-time `6,241,298,446 ps`
-  - Fallback path: proof-size `7,658,794`, ref-time `10,115,500,000 ps`
-  - Delta: proof-size `-65.68%`, ref-time `-38.30%`
-- Per-actor slope (estimated): proof-size `2537` vs `7567` bytes/read-actor, ref-time `5,986,707` vs `8,900,522` ps/read-actor (hot vs fallback)
 
 Temporal wakeup measurements (`scheduler_wakeup_*`):
 

@@ -182,9 +182,6 @@ verify_weight_file_contract() {
     local benchmark_file="$TEMPLATE_DIR/pallets/aaa/src/benchmarking.rs"
     local diagnostic_benchmarks=(
         "process_remove_liquidity_max_k"
-        "scheduler_scan_hot_readiness"
-        "scheduler_scan_fallback_readiness"
-        "scheduler_scan_sparse_hot_readiness"
         "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
         "close_aaa_on_close_execution_plan_complex"
@@ -240,9 +237,6 @@ run_pallet_benchmark() {
     if [[ "$pallet_name" == "pallet_aaa" ]]; then
         exclude_args=(
             --exclude-extrinsics "pallet_aaa::process_remove_liquidity_max_k"
-            --exclude-extrinsics "pallet_aaa::scheduler_scan_hot_readiness"
-            --exclude-extrinsics "pallet_aaa::scheduler_scan_fallback_readiness"
-            --exclude-extrinsics "pallet_aaa::scheduler_scan_sparse_hot_readiness"
             --exclude-extrinsics "pallet_aaa::scheduler_cooldown_ineligible_idle"
             --exclude-extrinsics "pallet_aaa::scheduler_wakeup_sparse_gap_recovery"
             --exclude-extrinsics "pallet_aaa::close_aaa_on_close_execution_plan_complex"

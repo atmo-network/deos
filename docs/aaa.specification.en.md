@@ -40,15 +40,16 @@ This specification MUST stay at or below **1280 lines** (formatting-preserving c
 - **Production-budget admission**: The embedding runtime MUST provide one gross two-dimensional `GuaranteedOnIdleWeight`. Genesis, create, reopen, and either plan update MUST compose the guaranteed scheduler envelope (`scheduler_admission_overhead`) + run cycle + close cycle/cleanup for the prospective plan pair and reject it with `ExecutionPlanExceedsOnIdleBudget` unless both RefTime and ProofSize fit. The envelope includes fixed hook/probe, bounded baseline zombie-scan, queue, wakeup-cursor, and actor-probe work rather than every optional compatibility-ingress drain, heavyweight wakeup-retry, or sweep-time terminal-close unit. Those durable housekeeping paths consume only complete units that fit and MAY defer actor work across blocks without losing the trigger, retry marker, or terminal condition. Admission happens before opening-fee collection or state mutation; bounded vector shape alone never implies production admissibility.
 
 ```rust
-enum ActorClass { UserMutable { owner_slot: u8 }, UserImmutable { owner_slot: u8 }, SystemMutable, SystemImmutable }
+enum ActorClass { User { owner_slot: u8 }, System }
+
+enum ActiveLifecycle { Active, Paused(PauseReason) }
 
 struct ActorIdentity<AccountId, BlockNumber> {
-    aaa_id: u64,
     class: ActorClass,
+    mutability: Mutability,
     sovereign_account: AccountId,
     owner: AccountId,
     created_at: BlockNumber,
-    updated_at: BlockNumber,
 }
 
 struct ActorHot<BlockNumber, Balance> {
@@ -72,10 +73,10 @@ struct ActorProgram {
 struct ActorFunding<AccountId, BlockNumber, Balance> {
     funding_source_policy: FundingSourcePolicy<AccountId>,
     funding_tracked_assets: BoundedBTreeSet<AssetId, MaxFundingTrackedAssets>,
-    funding_snapshots: BoundedBTreeMap<AssetId, FundingBatch<Balance, BlockNumber>, MaxFundingTrackedAssets>,
+    funding_snapshots: BoundedBTreeMap<AssetId, FundingBatch<Balance>, MaxFundingTrackedAssets>,
 }
 
-struct FundingBatch<Balance, BlockNumber> { amount: Balance, block: BlockNumber, pending_amount: Balance, pending_last_block: Option<BlockNumber> }
+struct FundingBatch<Balance> { amount: Balance, pending_amount: Balance }
 ```
 
 ### 2.2 Types and Mutability
@@ -173,16 +174,16 @@ Create/close transitions MUST synchronize actor identity/program stores and `Sov
 
 ### 2.5 Funding Batches
 
-The bounded per-asset `funding_snapshots` map is the canonical baseline for `PercentageOfLastFunding` resolution (Section 5.3). Each `FundingBatch` exposes the armed `amount`/`block` plus checked-add pending funding for the next successful operation; `funding_tracked_assets` bounds the map and producer work.
+The bounded per-asset `funding_snapshots` map is the canonical baseline for `PercentageOfLastFunding` resolution (Section 5.3). Each `FundingBatch` exposes the armed `amount` plus checked-add pending funding for the next successful operation; `funding_tracked_assets` bounds the map and producer work.
 Required behavior:
 
 1. **Execution-Plan Scanning**: On creation or either plan update, runtime MUST scan BOTH plans and populate `funding_tracked_assets` with each ordinary spent `AssetId` using `PercentageOfLastFunding` and each Unstake `StakingOps::share_asset(position_asset)` used by that mode; validation MUST reject Unstake last-funding resolution when the adapter returns `None`. Updates MUST fully recompute tracked assets and prune batch state no longer tracked.
 2. **Source Policy**: Each actor stores one bounded `FundingSourcePolicy`: `OwnerOnly`, `SignedAllowlist(BoundedSet<AccountId>)`, `RuntimePolicy`, or explicit `AnySource`. User AAA defaults to `OwnerOnly`; System AAA defaults to `RuntimePolicy`. `AnySource` accepts every verified producer provenance, not source-less ingress. Immutable actors fix policy at creation; Mutable actors may update it through the same class-specific control authority, without rewriting existing batches.
 3. **Verified Provenance**: Supported producers MUST supply runtime-verified provenance independently of trigger matching: signed ingress identifies the debited signer, internal-protocol ingress identifies a typed runtime source, and XCM ingress identifies its converted origin/location class. The pallet MUST evaluate stored policy: `OwnerOnly`/`SignedAllowlist` compare the verified debited signer, `SignedAllowlist` remains bounded, `AnySource` still requires provenance, and only `RuntimePolicy` delegates `(aaa_id, owner, provenance)` to the runtime `FundingAuthority`, which MUST default deny absent an explicit actor/source authorization. Actor class determines the default policy; missing, unverified, or policy-rejected provenance is balance-only.
 4. **Standard Funding Ingress**: The stable contract has no dedicated funding extrinsic. Every successful inbound transfer still credits sovereign balance; only a positive tracked transfer accepted by Items 2–3 may mutate `funding_snapshots`, while all other transfers remain balance-only donations. Funding authority and `OnAddressEvent` source/asset filters MUST be evaluated independently: neither acceptance nor rejection by one implies the result of the other.
-5. **Bootstrap and Accumulation**: The first authoritative transfer with no batch entry MUST set `amount` and `block` so initial funding needs no empty cycle. Once armed, later authoritative transfers MUST checked-add into `pending_amount`, record `pending_last_block`, and MUST NOT change `amount`/`block`; pending overflow MUST fail observably and transactionally roll back both the producer transfer and batch mutation rather than clamp or overwrite.
+5. **Bootstrap and Accumulation**: The first authoritative transfer with no batch entry MUST set `amount` so initial funding needs no empty cycle. Once armed, later authoritative transfers MUST checked-add into `pending_amount` and MUST NOT change `amount`; pending overflow MUST fail observably and transactionally roll back both the producer transfer and batch mutation rather than clamp or overwrite. Funding-event timestamps are not consensus state because promotion and amount resolution do not consume them.
 6. **Frozen Resolution**: Normal-cycle and close-tail `PercentageOfLastFunding` MUST resolve only from the batch `amount`. Close-only execution MUST ignore pending, MUST NOT promote it, and terminal deletion removes batch state while sovereign balances remain in place.
-7. **Successful Promotion**: After `CycleSummary` for a successful cycle as defined in Section 2.6, every nonzero `pending_amount` MUST replace `amount`, set `block = pending_last_block`, and clear pending atomically; assets without pending retain their armed values. `AbortCycle`, Weight deferral, pause, breaker deferral, and any path without an admitted successful cycle MUST preserve armed and pending state unchanged.
+7. **Successful Promotion**: After `CycleSummary` for a successful cycle as defined in Section 2.6, every nonzero `pending_amount` MUST replace `amount` and clear pending atomically; assets without pending retain their armed values. `AbortCycle`, Weight deferral, pause, breaker deferral, and any path without an admitted successful cycle MUST preserve armed and pending state unchanged.
 8. Funding-batch mutation remains valid while paused but MUST NOT imply automatic pause/resume; preflight and notification for expired or closed actors MUST remain balance-only. `FundingUnavailable` remains a deterministic non-terminal outcome covering absent/zero armed state and armed-amount overspend, while an armed value remains valid until successful promotion or plan pruning.
 9. `cycle_weight_upper` and `cycle_fee_upper` are run-plan cache fields that MUST be recomputed on create/update execution plan and MUST only affect admission/preflight efficiency, not functional execution semantics. Close-tail upper bounds (`close_cycle_weight_upper`, `close_cycle_fee_upper`) MUST also remain deterministically derivable from `on_close_execution_plan` on create/update, whether cached or recomputed, and MUST NOT alter functional task semantics.
 
@@ -600,12 +601,7 @@ A future probabilistic trigger requires a separate append-only trigger variant p
 ### 7.2 OnAddressEvent
 
 ```rust
-struct InboxState<BlockNumber> {
-    is_pending: bool,
-    generation: u64,
-    last_event_block: BlockNumber,
-}
-
+// AddressEventInbox contains aaa_id iff one signal is pending.
 enum SourceFilter<AccountId> {
     Any,
     OwnerOnly,
@@ -620,15 +616,15 @@ enum AssetFilter<AssetId> {
 
 Inbox model:
 
-1. `AddressEventInbox` is per-AAA pending-latch (not an event queue); multiple matched events coalesce into one pending signal.
-2. A matched inbound balance-increase event is semantically a trigger-message: it sets `is_pending = true`, increments `generation`, and updates `last_event_block`.
+1. `AddressEventInbox` is a per-AAA presence latch, not an event queue; multiple matched events coalesce into one pending signal without consensus-state generation or timestamp metadata.
+2. A matched inbound balance-increase event inserts the actor key idempotently; the key is removed only when the signal is consumed or actor lifecycle cleanup invalidates it.
 3. Coalescing is signal-level: one admitted cycle may consume balances accumulated from multiple matched events since the previous inbox consumption.
 
 Rules:
 
 - `SourceFilter::Whitelist` and `AssetFilter::Whitelist` MUST be non-empty and bounded by `MaxWhitelistSize`.
 - Events without a concrete source account identifier MUST match only `SourceFilter::Any`.
-- Scheduler readiness for this trigger MUST be `true` iff `is_pending == true`.
+- Scheduler readiness for this trigger MUST be `true` iff the actor key exists in `AddressEventInbox`.
 - When a cycle starts for an actor with `OnAddressEvent`, the inbox entry MUST be consumed atomically.
 - If a new matched event arrives after consumption, the actor MUST become ready again on subsequent scheduler passes.
 

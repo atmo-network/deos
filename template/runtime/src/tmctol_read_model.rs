@@ -75,8 +75,7 @@ impl TmctolReadModel {
     );
     let actor_identity_exists = pallet_aaa::AaaInstances::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(aaa_id);
-    let scheduler_state_exists = pallet_aaa::AaaReadiness::<Runtime>::contains_key(aaa_id)
-      || pallet_aaa::AddressEventInbox::<Runtime>::contains_key(aaa_id)
+    let scheduler_state_exists = pallet_aaa::AddressEventInbox::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::ScheduledWakeupBlock::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::WakeupRetryPending::<Runtime>::get(aaa_id)
       || pallet_aaa::ActorQueueEpoch::<Runtime>::contains_key(aaa_id)
@@ -266,8 +265,8 @@ impl TmctolReadModel {
             .any(|step| swap_match(&step.task));
         (
           true,
-          actor.aaa_type == AaaType::System,
-          actor.is_paused,
+          actor.actor_class.aaa_type() == AaaType::System,
+          actor.lifecycle.is_paused(),
           has_address_event_trigger,
           has_required_burn_step,
           has_required_swap_step,
@@ -338,7 +337,7 @@ impl TmctolReadModel {
       };
     };
 
-    let is_system = zap.aaa_type == AaaType::System;
+    let is_system = zap.actor_class.aaa_type() == AaaType::System;
     let has_address_event_trigger = matches!(zap.schedule.trigger, Trigger::OnAddressEvent { .. });
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;
@@ -426,7 +425,7 @@ impl TmctolReadModel {
       && split_targets_all_buckets
       && split_shares_sum_to_one
       && split_shares_match_policy;
-    let status = if !is_system || zap.is_paused || !has_address_event_trigger {
+    let status = if !is_system || zap.lifecycle.is_paused() || !has_address_event_trigger {
       GuaranteeStatus::Violated
     } else if structure_satisfied {
       GuaranteeStatus::Satisfied
@@ -440,7 +439,7 @@ impl TmctolReadModel {
       sovereign_account,
       actor_exists: true,
       is_system,
-      is_paused: zap.is_paused,
+      is_paused: zap.lifecycle.is_paused(),
       has_address_event_trigger,
       configured_foreign_asset,
       configured_lp_asset,

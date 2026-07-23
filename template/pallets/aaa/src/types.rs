@@ -445,6 +445,30 @@ pub enum AaaType {
 }
 
 #[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActorClass {
+  User { owner_slot: u8 },
+  System,
+}
+
+impl ActorClass {
+  pub fn aaa_type(self) -> AaaType {
+    match self {
+      Self::User { .. } => AaaType::User,
+      Self::System => AaaType::System,
+    }
+  }
+
+  pub fn owner_slot(self) -> Option<u8> {
+    match self {
+      Self::User { owner_slot } => Some(owner_slot),
+      Self::System => None,
+    }
+  }
+}
+
+#[derive(
   Clone,
   Copy,
   Debug,
@@ -469,6 +493,20 @@ pub enum Mutability {
 pub enum PauseReason {
   Manual,
   CycleNonceExhausted,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActiveLifecycle {
+  Active,
+  Paused(PauseReason),
+}
+
+impl ActiveLifecycle {
+  pub fn is_paused(self) -> bool {
+    matches!(self, Self::Paused(_))
+  }
 }
 
 #[derive(
@@ -836,11 +874,9 @@ pub struct ScheduleWindow<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct FundingBatch<Balance, BlockNumber> {
+pub struct FundingBatch<Balance> {
   pub amount: Balance,
-  pub block: BlockNumber,
   pub pending_amount: Balance,
-  pub pending_last_block: Option<BlockNumber>,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -915,14 +951,11 @@ pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub struct DormantAaaIdentity<AccountId, BlockNumber> {
-  pub aaa_id: AaaId,
   pub sovereign_account: AccountId,
   pub owner: AccountId,
-  pub owner_slot: u8,
-  pub aaa_type: AaaType,
+  pub actor_class: ActorClass,
   pub mutability: Mutability,
   pub created_at: BlockNumber,
-  pub updated_at: BlockNumber,
 }
 
 #[derive(
@@ -938,14 +971,11 @@ pub struct AaaInstance<
   FundingTrackedAssets,
   Balance,
 > {
-  pub aaa_id: AaaId,
   pub sovereign_account: AccountId,
   pub owner: AccountId,
-  pub owner_slot: u8,
-  pub aaa_type: AaaType,
+  pub actor_class: ActorClass,
   pub mutability: Mutability,
-  pub is_paused: bool,
-  pub pause_reason: Option<PauseReason>,
+  pub lifecycle: ActiveLifecycle,
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
@@ -960,50 +990,7 @@ pub struct AaaInstance<
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
   pub created_at: BlockNumber,
-  pub updated_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub enum ReadinessTrigger {
-  Timer { every_blocks: u32 },
-  OnAddressEvent,
-  Manual,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct AaaReadinessState<BlockNumber> {
-  pub aaa_type: AaaType,
-  pub is_paused: bool,
-  pub trigger: ReadinessTrigger,
-  pub cooldown_blocks: u32,
-  pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
-  pub manual_trigger_pending: bool,
-  pub cycle_nonce: u64,
-  pub last_cycle_block: BlockNumber,
-}
-
-#[derive(
-  Clone,
-  Copy,
-  Debug,
-  Default,
-  Decode,
-  DecodeWithMemTracking,
-  Encode,
-  Eq,
-  PartialEq,
-  TypeInfo,
-  MaxEncodedLen,
-)]
-pub struct InboxState<BlockNumber> {
-  pub is_pending: bool,
-  pub generation: u64,
-  pub last_event_block: BlockNumber,
 }
 
 #[derive(

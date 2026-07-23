@@ -78,6 +78,15 @@ function triggerRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function automationActorPaused(instance: unknown): boolean {
+  const actor = triggerRecord(instance);
+  const lifecycle = triggerRecord(actor?.lifecycle);
+  if (typeof lifecycle?.type === 'string') {
+    return lifecycle.type === 'Paused';
+  }
+  return actor?.is_paused === true;
+}
+
 function automationTriggerLabel(trigger?: {
   type: string;
   value?: unknown;
@@ -346,11 +355,6 @@ export class BlockchainAdapter implements Adapter {
               BigInt(actor.aaaId),
               { at: snapshot.at },
             );
-          const readiness =
-            await snapshot.typedApi.query.AAA.AaaReadiness.getValue(
-              BigInt(actor.aaaId),
-              { at: snapshot.at },
-            );
           const sovereignAccount =
             instance?.sovereign_account ??
             deriveSystemAaaSovereignAccount(actor.aaaId);
@@ -363,12 +367,9 @@ export class BlockchainAdapter implements Adapter {
             label: actor.label,
             role: actor.role,
             exists: instance != null,
-            paused: instance?.is_paused ?? false,
-            lastCycleBlock:
-              instance?.last_cycle_block ?? readiness?.last_cycle_block ?? null,
-            triggerLabel: automationTriggerLabel(
-              readiness?.trigger ?? instance?.schedule.trigger,
-            ),
+            paused: automationActorPaused(instance),
+            lastCycleBlock: instance?.last_cycle_block ?? null,
+            triggerLabel: automationTriggerLabel(instance?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,
           } satisfies AutomationActorSnapshot;
         }),

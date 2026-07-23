@@ -299,7 +299,6 @@ try {
   const pool = await api.view.Staking.native_staking_liquidity_pool({ at: block.hash });
   if (mode === "check") {
     const lpFarmerAaa = await api.query.AAA.AaaInstances.getValue(aaaId, { at: block.hash });
-    const lpFarmerReadiness = await api.query.AAA.AaaReadiness.getValue(aaaId, { at: block.hash });
     const checks = {
       nativeAssetExists: nativeAssetDetails != null,
       stakedAssetExists: stakedAssetDetails != null,
@@ -309,12 +308,12 @@ try {
       lpFarmerAaaExists: lpFarmerAaa != null,
     };
     const phase = checkPhase(checks);
-    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, aaaId: Number(aaaId), phase, recommendedAction: checkRecommendation(phase), checks, exchangeRate, pool, lpFarmerReadiness };
+    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, aaaId: Number(aaaId), phase, recommendedAction: checkRecommendation(phase), checks, exchangeRate, pool, lpFarmerAaa };
     if (jsonOutput) console.log(stringify(payload));
     else {
       console.log(`Phase: ${payload.phase}`);
       console.log(`Recommended action: ${payload.recommendedAction}`);
-      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, aaaId: payload.aaaId, checks, exchangeRate, pool, lpFarmerReadiness }));
+      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, aaaId: payload.aaaId, checks, exchangeRate, pool, lpFarmerAaa }));
     }
   } else {
     const operatorStakedBalance = await api.view.Assets.balance_of(operatorAddress, stakedNativeAssetId, { at: block.hash }) ?? 0n;
