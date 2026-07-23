@@ -177,7 +177,7 @@ mod benches {
   }
 
   fn seed_on_close_complexity_budget<T: Config>(aaa_id: AaaId, steps: u32, legs: u32) {
-    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+    let Some(instance) = Pallet::<T>::active_actor_snapshot(aaa_id) else {
       return;
     };
     let native = T::NativeAssetId::get();
@@ -217,7 +217,7 @@ mod benches {
   }
 
   fn seed_actor_for_cycle<T: Config>(aaa_id: AaaId) {
-    let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+    let Some(instance) = Pallet::<T>::active_actor_snapshot(aaa_id) else {
       return;
     };
     let reserve = cycle_fee_upper::<T>(&instance.execution_plan)
@@ -271,7 +271,8 @@ mod benches {
       user_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_user_aaa");
+    let inst =
+      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after create_user_aaa");
     assert_eq!(inst.actor_class.owner_slot(), Some(expected_slot));
   }
 
@@ -296,8 +297,8 @@ mod benches {
       user_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let inst =
-      AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_user_aaa_at_slot");
+    let inst = Pallet::<T>::active_actor_snapshot(aaa_id)
+      .expect("AAA must exist after create_user_aaa_at_slot");
     assert_eq!(inst.actor_class.owner_slot(), Some(requested_slot));
   }
 
@@ -320,7 +321,8 @@ mod benches {
       system_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after create_system_aaa");
+    let inst =
+      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after create_system_aaa");
     assert_eq!(inst.actor_class, ActorClass::System);
   }
 
@@ -353,7 +355,7 @@ mod benches {
       Mutability::Mutable,
       system_program::<T>(schedule, execution_plan),
     );
-    assert!(AaaInstances::<T>::contains_key(aaa_id));
+    assert!(Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   #[benchmark]
@@ -371,7 +373,7 @@ mod benches {
     }
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     assert!(DormantAaaIdentities::<T>::contains_key(aaa_id));
-    assert!(!AaaInstances::<T>::contains_key(aaa_id));
+    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   #[benchmark]
@@ -395,7 +397,7 @@ mod benches {
     );
     #[extrinsic_call]
     activate_aaa(RawOrigin::Signed(owner), aaa_id, program);
-    assert!(AaaInstances::<T>::contains_key(aaa_id));
+    assert!(Pallet::<T>::active_actor_exists(aaa_id));
     assert!(!DormantAaaIdentities::<T>::contains_key(aaa_id));
   }
 
@@ -420,7 +422,7 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     #[extrinsic_call]
     deactivate_aaa(RawOrigin::Signed(owner), aaa_id);
-    assert!(!AaaInstances::<T>::contains_key(aaa_id));
+    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
     assert!(DormantAaaIdentities::<T>::contains_key(aaa_id));
   }
 
@@ -430,7 +432,7 @@ mod benches {
     let aaa_id = bench_create_user::<T>(caller.clone());
     #[extrinsic_call]
     pause_aaa(RawOrigin::Signed(caller), aaa_id);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after pause_aaa");
+    let inst = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after pause_aaa");
     assert!(inst.lifecycle.is_paused());
   }
 
@@ -442,7 +444,7 @@ mod benches {
       .expect("pause_aaa must succeed in setup");
     #[extrinsic_call]
     resume_aaa(RawOrigin::Signed(caller), aaa_id);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after resume_aaa");
+    let inst = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after resume_aaa");
     assert!(!inst.lifecycle.is_paused());
   }
 
@@ -452,7 +454,8 @@ mod benches {
     let aaa_id = bench_create_user::<T>(caller.clone());
     #[extrinsic_call]
     manual_trigger(RawOrigin::Signed(caller), aaa_id);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after manual_trigger");
+    let inst =
+      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after manual_trigger");
     assert!(inst.manual_trigger_pending);
   }
 
@@ -483,7 +486,7 @@ mod benches {
     seed_on_close_complexity_budget::<T>(aaa_id, max_steps, max_legs);
     #[extrinsic_call]
     close_aaa(RawOrigin::Root, aaa_id);
-    assert!(AaaInstances::<T>::get(aaa_id).is_none());
+    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   #[benchmark]
@@ -496,7 +499,8 @@ mod benches {
     };
     #[extrinsic_call]
     update_schedule(RawOrigin::Signed(caller), aaa_id, new_schedule, None);
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after update_schedule");
+    let inst =
+      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after update_schedule");
     assert_eq!(inst.schedule.cooldown_blocks, 20);
   }
 
@@ -545,7 +549,8 @@ mod benches {
     let replacement = make_execution_plan::<T>(recipient);
     #[extrinsic_call]
     update_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after update_execution_plan");
+    let inst = Pallet::<T>::active_actor_snapshot(aaa_id)
+      .expect("AAA must exist after update_execution_plan");
     assert_eq!(inst.execution_plan, replacement);
     assert!(
       ActorFunding::<T>::get(aaa_id)
@@ -562,7 +567,8 @@ mod benches {
     let replacement = make_inert_execution_plan::<T>();
     #[extrinsic_call]
     update_on_close_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
-    let inst = AaaInstances::<T>::get(aaa_id).expect("AAA must exist after close-plan update");
+    let inst =
+      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after close-plan update");
     assert_eq!(inst.on_close_execution_plan, replacement);
   }
 
@@ -587,7 +593,7 @@ mod benches {
     let aaa_id = bench_create_user::<T>(caller.clone());
     #[extrinsic_call]
     permissionless_sweep(RawOrigin::Signed(caller), aaa_id);
-    assert!(AaaInstances::<T>::get(aaa_id).is_some());
+    assert!(Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   #[benchmark]
@@ -619,7 +625,7 @@ mod benches {
     #[extrinsic_call]
     permissionless_sweep_many(RawOrigin::Signed(caller), aaa_ids.clone());
     for aaa_id in aaa_ids {
-      assert!(AaaInstances::<T>::get(aaa_id).is_none());
+      assert!(!Pallet::<T>::active_actor_exists(aaa_id));
     }
     assert_eq!(expected_len, bounded_n as usize);
   }
@@ -655,7 +661,7 @@ mod benches {
       Pallet::<T>::close_aaa(RawOrigin::Root.into(), aaa_id)
         .expect("close_aaa must succeed in diagnostic benchmark");
     }
-    assert!(AaaInstances::<T>::get(aaa_id).is_none());
+    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   // Production close-tail admission benchmark; not a dispatchable call.
@@ -689,7 +695,7 @@ mod benches {
       Pallet::<T>::close_aaa(RawOrigin::Signed(owner).into(), aaa_id)
         .expect("close_aaa must succeed in user fee-bearing diagnostic benchmark");
     }
-    assert!(AaaInstances::<T>::get(aaa_id).is_none());
+    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   #[benchmark]
@@ -896,7 +902,7 @@ mod benches {
     )
     .expect("create_user_aaa must succeed in setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let actor = AaaInstances::<T>::get(aaa_id)
+    let actor = Pallet::<T>::active_actor_snapshot(aaa_id)
       .map(|instance| instance.sovereign_account)
       .expect("actor must exist after setup");
     seed_actor_for_cycle::<T>(aaa_id);
@@ -909,7 +915,8 @@ mod benches {
     {
       let _ = Pallet::<T>::on_idle(1u32.into(), Weight::MAX);
     }
-    let inst = AaaInstances::<T>::get(aaa_id).expect("actor must survive benchmark cycle");
+    let inst =
+      Pallet::<T>::active_actor_snapshot(aaa_id).expect("actor must survive benchmark cycle");
     assert_eq!(inst.cycle_nonce, 1);
     assert_eq!(inst.consecutive_failures, 0);
   }
@@ -1034,7 +1041,7 @@ mod benches {
     {
       let _ = Pallet::<T>::execute_cycle(Weight::MAX);
     }
-    let instance = AaaInstances::<T>::get(aaa_id).expect("AAA exists");
+    let instance = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA exists");
     assert_eq!(instance.cycle_nonce, 1);
     assert_eq!(
       ScheduledWakeupBlock::<T>::get(aaa_id),
@@ -1372,7 +1379,7 @@ mod benches {
   fn transaction_extension_ingress_base() {
     let owner: T::AccountId = whitelisted_caller();
     let populated_aaa_id = bench_create_user::<T>(owner);
-    let proof_witness = AaaInstances::<T>::get(populated_aaa_id)
+    let proof_witness = Pallet::<T>::active_actor_snapshot(populated_aaa_id)
       .expect("benchmark actor exists")
       .sovereign_account;
     let recipient: T::AccountId = account("unmatched_ingress_recipient", 0, 0);
@@ -1471,7 +1478,7 @@ mod benches {
   pub(super) fn setup_and_run_circular_chain<T: Config>(
     requested_n: u32,
   ) -> alloc::vec::Vec<T::AccountId> {
-    let existing_active = AaaInstances::<T>::iter_keys().count() as u32;
+    let existing_active = ActorHot::<T>::iter_keys().count() as u32;
     let available = T::MaxActiveActors::get().saturating_sub(existing_active);
     let n = requested_n.min(available);
     assert!(

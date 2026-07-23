@@ -3693,7 +3693,8 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_close_tail() {
       crate::MIN_ON_IDLE_RESERVE_RATIO * crate::MAXIMUM_BLOCK_WEIGHT
     );
     let mut actor_count = 0u32;
-    for (aaa_id, instance) in pallet_aaa::AaaInstances::<Runtime>::iter() {
+    for aaa_id in pallet_aaa::ActorHot::<Runtime>::iter_keys() {
+      let instance = AAA::aaa_instances(aaa_id).expect("split active actor exists");
       let required = AAA::execution_plan_admission_weight_upper(
         instance.actor_class.aaa_type(),
         &instance.execution_plan,
@@ -4171,7 +4172,7 @@ fn assert_core_stability(aaa_ids: &[u64], diag: &StressDiagnostics) {
     diag.total_failed_steps,
   );
   for &id in aaa_ids {
-    let inst = pallet_aaa::AaaInstances::<Runtime>::get(id).expect("actor must still exist");
+    let inst = AAA::aaa_instances(id).expect("actor must still exist");
     assert_eq!(
       inst.consecutive_failures, 0,
       "AAA {} has {} consecutive failures",
@@ -4231,7 +4232,7 @@ fn circular_chain_under_capacity_every_actor_every_block() {
     // Fairness: all chain actors must have identical cycle_nonce
     let nonces: alloc::vec::Vec<u64> = aaa_ids
       .iter()
-      .filter_map(|&id| pallet_aaa::AaaInstances::<Runtime>::get(id).map(|i| i.cycle_nonce))
+      .filter_map(|&id| AAA::aaa_instances(id).map(|i| i.cycle_nonce))
       .collect();
     let (min_n, max_n) = (*nonces.iter().min().unwrap(), *nonces.iter().max().unwrap());
     assert_eq!(
@@ -4257,7 +4258,7 @@ fn diagnose_over_capacity_first_blocks() {
     let initial_balance: u128 = 1_000_000 * crate::EXISTENTIAL_DEPOSIT;
     let (_aaa_ids, _sovereign_accounts) = setup_circular_chain(chain_len, initial_balance);
     println!("\n=== Initial state ===");
-    let active_count = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count();
+    let active_count = pallet_aaa::ActorHot::<Runtime>::iter_keys().count();
     println!("Active instances len: {}", active_count);
     for block in 2..=6 {
       System::set_block_number(block);
@@ -4298,7 +4299,7 @@ fn diagnose_over_capacity_first_blocks() {
     // After 5 blocks, check nonce of zero actors
     println!("\n=== After 5 blocks ===");
     for id in 2006..=2010 {
-      if let Some(inst) = pallet_aaa::AaaInstances::<Runtime>::get(id) {
+      if let Some(inst) = AAA::aaa_instances(id) {
         println!(
           "AAA {}: cycle_nonce={}, last_cycle_block={}",
           id, inst.cycle_nonce, inst.last_cycle_block
@@ -4309,7 +4310,7 @@ fn diagnose_over_capacity_first_blocks() {
       println!(
         "AAA {} present: {}",
         id,
-        pallet_aaa::AaaInstances::<Runtime>::contains_key(id)
+        pallet_aaa::ActorHot::<Runtime>::contains_key(id)
       );
     }
   });
@@ -4368,13 +4369,13 @@ fn circular_chain_respects_execution_ceiling_and_remains_fair() {
        zero_actors={:?}, active_actors_len={})",
       min_count,
       &zero_actors[..zero_actors.len().min(10)],
-      pallet_aaa::AaaInstances::<Runtime>::iter_keys().count(),
+      pallet_aaa::ActorHot::<Runtime>::iter_keys().count(),
     );
     // Fairness: examine cycle_nonce spread across chain actors.
     // With identical periodic actors, the queue scheduler should keep nonce spread minimal (≤ 2).
     let nonces: alloc::vec::Vec<u64> = aaa_ids
       .iter()
-      .filter_map(|&id| pallet_aaa::AaaInstances::<Runtime>::get(id).map(|i| i.cycle_nonce))
+      .filter_map(|&id| AAA::aaa_instances(id).map(|i| i.cycle_nonce))
       .collect();
     let min_nonce = *nonces.iter().min().unwrap();
     let max_nonce = *nonces.iter().max().unwrap();
@@ -4431,13 +4432,13 @@ fn run_fairness_matrix_case(total_actors: u64, num_blocks: u32) -> StressDiagnos
   System::set_block_number(1);
   close_genesis_system_actors();
   assert_eq!(
-    pallet_aaa::AaaInstances::<Runtime>::iter_keys().count(),
+    pallet_aaa::ActorHot::<Runtime>::iter_keys().count(),
     0,
     "Genesis actors must be removed for isolated fairness matrix",
   );
   let initial_balance = 10_000u128;
   let aaa_ids = setup_inert_actors(total_actors, initial_balance);
-  let active_count = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count() as u64;
+  let active_count = pallet_aaa::ActorHot::<Runtime>::iter_keys().count() as u64;
   assert_eq!(
     active_count, total_actors,
     "Scenario must start with exact actor count (expected={}, got={})",
@@ -5091,7 +5092,7 @@ fn stress_10k_actors_queue_scheduler() {
     for &id in &genesis_ids {
       let _ = AAA::pause_aaa(RuntimeOrigin::root(), id);
     }
-    let active_before = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count() as u64;
+    let active_before = pallet_aaa::ActorHot::<Runtime>::iter_keys().count() as u64;
     assert!(
       active_before < max_active,
       "Test precondition failed: active_before={} must be < max_active={}",
@@ -5101,7 +5102,7 @@ fn stress_10k_actors_queue_scheduler() {
     let actor_count = max_active - active_before;
     let aaa_ids = setup_inert_actors(actor_count, initial_balance);
     assert_eq!(aaa_ids.len(), actor_count as usize);
-    let active_after = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count() as u64;
+    let active_after = pallet_aaa::ActorHot::<Runtime>::iter_keys().count() as u64;
     assert_eq!(
       active_after, max_active,
       "ActiveActors must be saturated to max capacity",
@@ -5158,7 +5159,7 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
   seeded_test_ext().execute_with(|| {
     let min_balance = <Runtime as pallet_aaa::Config>::MinUserBalance::get();
     let actor_count = 96u32;
-    let baseline_active = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count();
+    let baseline_active = pallet_aaa::ActorHot::<Runtime>::iter_keys().count();
     let mut aaa_ids = Vec::new();
     for i in 0..actor_count {
       let mut owner_bytes = [0u8; 32];
@@ -5186,13 +5187,13 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
       );
       aaa_ids.push(aaa_id);
     }
-    let initial_active = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count();
+    let initial_active = pallet_aaa::ActorHot::<Runtime>::iter_keys().count();
     assert_eq!(initial_active, baseline_active + actor_count as usize);
     for block in 1..=32u32 {
       System::set_block_number(block);
       AAA::on_idle(block, Weight::MAX);
     }
-    let final_active = pallet_aaa::AaaInstances::<Runtime>::iter_keys().count();
+    let final_active = pallet_aaa::ActorHot::<Runtime>::iter_keys().count();
     let progressed = aaa_ids
       .iter()
       .filter(|id| {

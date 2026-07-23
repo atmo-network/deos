@@ -440,31 +440,6 @@ pub mod pallet {
     }
   }
 
-  /// Rust compatibility facade over the canonical split active-actor stores.
-  /// This is not a storage item and does not recreate the retired monolithic value.
-  pub struct AaaInstances<T: Config>(core::marker::PhantomData<T>);
-
-  impl<T: Config> AaaInstances<T> {
-    pub fn get(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
-      Pallet::<T>::active_actor_snapshot(aaa_id)
-    }
-
-    pub fn contains_key(aaa_id: AaaId) -> bool {
-      Pallet::<T>::active_actor_exists(aaa_id)
-    }
-
-    pub fn iter_keys() -> impl Iterator<Item = AaaId> {
-      ActorHot::<T>::iter_keys()
-    }
-
-    pub fn iter() -> impl Iterator<Item = (AaaId, AaaInstanceOf<T>)> {
-      ActorHot::<T>::iter().filter_map(|(aaa_id, hot)| {
-        ActorProgram::<T>::get(aaa_id)
-          .map(|program| (aaa_id, Pallet::<T>::compose_active_actor(hot, program)))
-      })
-    }
-  }
-
   #[pallet::storage]
   #[pallet::getter(fn dormant_aaa_identities)]
   pub type DormantAaaIdentities<T: Config> =

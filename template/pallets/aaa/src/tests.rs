@@ -1,11 +1,11 @@
 use crate::{
-  AaaInstances, AaaType, ActiveLifecycle, ActorClass, ActorHot, ActorProgram, AmountResolution,
-  AssetFilter, AssetFilterOf, CloseReason, Condition, DeferReason, Error, Event,
-  FundingSourcePolicy, IdleStarvationBlocks, Mutability, NextAaaId, OnCloseStepFailureKind,
-  OwnerSlotMask, PauseReason, ProgramInput, QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule,
-  ScheduleOf, ScheduleWindow, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SweepCursor, Task, TaskOf,
-  Trigger, adapters::AssetOps, mock::*, types::FundingBatch,
+  AaaType, ActiveLifecycle, ActorClass, ActorHot, ActorProgram, AmountResolution, AssetFilter,
+  AssetFilterOf, CloseReason, Condition, DeferReason, Error, Event, FundingSourcePolicy,
+  IdleStarvationBlocks, Mutability, NextAaaId, OnCloseStepFailureKind, OwnerSlotMask, PauseReason,
+  ProgramInput, QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow,
+  SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy,
+  StepOf, StepSkippedReason, SweepCursor, Task, TaskOf, Trigger, adapters::AssetOps, mock::*,
+  types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
 use polkadot_sdk::frame_support::{
@@ -385,7 +385,7 @@ fn ordinary_transfer_to_aaa(
   amount: u128,
 ) -> polkadot_sdk::sp_runtime::DispatchResult {
   let source = frame_system::ensure_signed(origin)?;
-  let instance = AaaInstances::<Test>::get(aaa_id).ok_or(Error::<Test>::AaaNotFound)?;
+  let instance = AAA::aaa_instances(aaa_id).ok_or(Error::<Test>::AaaNotFound)?;
   AAA::preflight_funding_event(
     aaa_id,
     asset,
@@ -1419,10 +1419,7 @@ fn create_atomicity_checkpoint_failure_rolls_back_all_state() {
     assert_eq!(SovereignIndex::<Test>::get(&expected_sovereign), None);
     assert_eq!(OwnerSlotMask::<Test>::get(ALICE), 0);
     assert_eq!(AAA::active_aaa_count(), active_before);
-    assert_eq!(
-      AaaInstances::<Test>::iter_keys().count() as u32,
-      active_before
-    );
+    assert_eq!(ActorHot::<Test>::iter_keys().count() as u32, active_before);
     assert_eq!(native_balance(&ALICE), owner_before);
     assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
   });
@@ -1472,7 +1469,7 @@ fn close_atomicity_checkpoint_failure_rolls_back_all_state() {
       SovereignIndex::<Test>::get(&instance_before.sovereign_account),
       Some(aaa_id)
     );
-    assert!(AaaInstances::<Test>::contains_key(aaa_id));
+    assert!(ActorHot::<Test>::contains_key(aaa_id));
     assert_eq!(AAA::active_aaa_count(), active_before);
     let owner_slot = instance_before
       .actor_class
@@ -3087,7 +3084,7 @@ fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
       .find_map(|(block, queue)| queue.contains(&aaa_id).then_some(block))
       .expect("timer wakeup should be scheduled");
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert!(crate::AaaInstances::<Test>::get(aaa_id).is_none());
+    assert!(AAA::aaa_instances(aaa_id).is_none());
     assert!(crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id).is_none());
     assert!(
       !crate::pallet::WakeupIndex::<Test>::get(scheduled_block).contains(&aaa_id),
@@ -7479,7 +7476,7 @@ fn timer_always_executes_on_interval() {
       frame_system::Pallet::<Test>::set_block_number(block);
       AAA::on_initialize(block);
       AAA::on_idle(block, Weight::MAX);
-      if let Some(inst) = crate::AaaInstances::<Test>::get(aaa_id) {
+      if let Some(inst) = AAA::aaa_instances(aaa_id) {
         if inst.cycle_nonce > last_cycle_nonce {
           execution_count += 1;
           last_cycle_nonce = inst.cycle_nonce;
@@ -7508,9 +7505,7 @@ fn timer_every_block_uses_queue_continuation_without_wakeup_index() {
         "every-block timers must not use WakeupIndex"
       );
     }
-    let cycle_nonce = crate::AaaInstances::<Test>::get(aaa_id)
-      .expect("AAA exists")
-      .cycle_nonce;
+    let cycle_nonce = AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce;
     assert!(
       cycle_nonce >= 5,
       "every-block timer should keep progressing"
@@ -7718,7 +7713,7 @@ fn user_dca_complete_lifecycle() {
       e,
       Event::AaaCreated { aaa_id: id, aaa_type: AaaType::User, .. } if *id == aaa_id
     )));
-    let instance = crate::AaaInstances::<Test>::get(aaa_id).expect("instance exists");
+    let instance = AAA::aaa_instances(aaa_id).expect("instance exists");
     assert_eq!(instance.owner, ALICE);
     // Step 2: Fund sovereign
     let actor = sovereign_account(aaa_id);
@@ -7760,12 +7755,12 @@ fn user_dca_complete_lifecycle() {
       frame_system::Pallet::<Test>::set_block_number(block);
       AAA::on_initialize(block);
       AAA::on_idle(block, Weight::MAX);
-      if crate::AaaInstances::<Test>::get(aaa_id).is_none() {
+      if AAA::aaa_instances(aaa_id).is_none() {
         break;
       }
     }
     assert!(
-      crate::AaaInstances::<Test>::get(aaa_id).is_none(),
+      AAA::aaa_instances(aaa_id).is_none(),
       "User AAA must be destroyed by sweep when native < MinUserBalance"
     );
   });
@@ -8220,14 +8215,14 @@ fn active_actors_set_maintains_integrity() {
         system_active_program(schedule.clone(), None, inert_plan.clone()),
       ));
     }
-    assert_eq!(AaaInstances::<Test>::iter_keys().count(), 3);
+    assert_eq!(ActorHot::<Test>::iter_keys().count(), 3);
     assert!(AAA::aaa_instances(0).is_some());
     assert!(AAA::aaa_instances(1).is_some());
     assert!(AAA::aaa_instances(2).is_some());
     let inst = AAA::aaa_instances(1).unwrap();
     let _ = Balances::deposit_creating(&inst.sovereign_account, 1_000_000);
     assert_ok!(AAA::close_aaa(RuntimeOrigin::root(), 1));
-    assert_eq!(AaaInstances::<Test>::iter_keys().count(), 2);
+    assert_eq!(ActorHot::<Test>::iter_keys().count(), 2);
     assert!(AAA::aaa_instances(0).is_some());
     assert!(AAA::aaa_instances(2).is_some());
     assert!(AAA::aaa_instances(1).is_none());
@@ -9298,8 +9293,8 @@ fn close_tail_does_not_start_normal_cycle() {
 #[cfg(test)]
 mod proptest_aaa {
   use crate::{
-    AaaInstances, AmountResolution, Mutability, Schedule, ScheduleOf, StepErrorPolicy, StepOf,
-    Task, Trigger, mock::*,
+    ActorHot, AmountResolution, Mutability, Schedule, ScheduleOf, StepErrorPolicy, StepOf, Task,
+    Trigger, mock::*,
   };
   use polkadot_sdk::frame_support::{BoundedVec, assert_ok, traits::Hooks};
   use polkadot_sdk::{frame_system, sp_runtime::Weight};
@@ -9417,13 +9412,13 @@ mod proptest_aaa {
             );
             actor_ids.push((aaa_id, owner));
           }
-          let after_create = AaaInstances::<Test>::iter_keys().count();
+          let after_create = ActorHot::<Test>::iter_keys().count();
           let close_count = closes.min(creates);
           for i in 0..close_count {
             let (aaa_id, owner) = actor_ids[i as usize];
             assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(owner), aaa_id));
           }
-          let after_close = AaaInstances::<Test>::iter_keys().count();
+          let after_close = ActorHot::<Test>::iter_keys().count();
           (after_create, after_close, (creates - close_count) as usize)
         });
       prop_assert_eq!(active_after_create, creates as usize);
