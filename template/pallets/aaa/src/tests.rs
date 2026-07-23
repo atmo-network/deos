@@ -2712,6 +2712,52 @@ fn defer_wakeup_deduplicates_repeated_manual_trigger_for_same_actor() {
 }
 
 #[test]
+fn first_eligible_at_is_the_canonical_initial_timer_anchor() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(7);
+    let aaa_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
+    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    assert_eq!(
+      crate::ScheduledWakeupBlock::<Test>::get(aaa_id),
+      Some(instance.first_eligible_at)
+    );
+    assert!(instance.first_eligible_at >= 27);
+  });
+}
+
+#[test]
+fn dormant_activation_anchors_first_eligibility_at_activation_time() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    assert_ok!(AAA::create_system_aaa(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      ProgramInput::Dormant,
+    ));
+    let aaa_id = 0;
+    frame_system::Pallet::<Test>::set_block_number(10);
+    assert_ok!(AAA::activate_aaa(
+      RuntimeOrigin::signed(ALICE),
+      aaa_id,
+      ProgramInput::Active {
+        schedule: timer_schedule(20),
+        schedule_window: None,
+        execution_plan: inert_execution_plan(),
+        on_close_execution_plan: BoundedVec::default(),
+        funding_source_policy: FundingSourcePolicy::AnySource,
+      },
+    ));
+    let instance = AAA::aaa_instances(aaa_id).expect("active AAA exists");
+    assert!(instance.first_eligible_at >= 30);
+    assert_eq!(
+      crate::ScheduledWakeupBlock::<Test>::get(aaa_id),
+      Some(instance.first_eligible_at)
+    );
+  });
+}
+
+#[test]
 fn early_reexecution_replaces_live_future_wakeup_instead_of_accumulating() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

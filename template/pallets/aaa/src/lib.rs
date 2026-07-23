@@ -317,8 +317,7 @@ pub mod pallet {
   pub type ActorFundingStateOf<T> =
     ActorFundingState<FundingSourcePolicyOf<T>, FundingSnapshotsOf<T>, FundingTrackedAssetsOf<T>>;
 
-  pub type DormantAaaIdentityOf<T> =
-    DormantAaaIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
+  pub type DormantAaaIdentityOf<T> = DormantAaaIdentity<<T as frame_system::Config>::AccountId>;
 
   #[pallet::pallet]
   #[pallet::storage_version(STORAGE_VERSION)]
@@ -530,6 +529,8 @@ pub mod pallet {
         .expect("genesis execution_plan must have valid funding-tracked assets");
         let (cycle_weight_upper, cycle_fee_upper) =
           Pallet::<T>::compute_cycle_bounds(AaaType::System, &execution_plan);
+        let first_eligible_at =
+          Pallet::<T>::initial_eligible_at(aaa_id, &schedule, schedule_window, Zero::zero());
         let instance = AaaInstance {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
@@ -546,7 +547,7 @@ pub mod pallet {
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
-          created_at: Zero::zero(),
+          first_eligible_at,
           last_cycle_block: Zero::zero(),
         };
         let active_count = Pallet::<T>::active_instance_count();
@@ -604,7 +605,6 @@ pub mod pallet {
           owner,
           actor_class: ActorClass::System,
           mutability: Mutability::Mutable,
-          created_at: Zero::zero(),
         };
         let identity_count = ActorIdentityCount::<T>::get();
         assert!(
@@ -1120,6 +1120,12 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      let first_eligible_at = Self::initial_eligible_at(
+        aaa_id,
+        &schedule,
+        schedule_window,
+        frame_system::Pallet::<T>::block_number(),
+      );
       AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
@@ -1128,6 +1134,9 @@ pub mod pallet {
         );
         inst.schedule = schedule;
         inst.schedule_window = schedule_window;
+        if inst.cycle_nonce == 0 {
+          inst.first_eligible_at = first_eligible_at;
+        }
         Self::deposit_event(Event::ScheduleUpdated { aaa_id });
         Ok(())
       })?;
@@ -1718,7 +1727,6 @@ pub mod pallet {
         Error::<T>::AaaIdOccupied
       );
       let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
-      let now = frame_system::Pallet::<T>::block_number();
       let mut created_identity: Option<DormantAaaIdentityOf<T>> = None;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         if aaa_type == AaaType::User {
@@ -1752,7 +1760,6 @@ pub mod pallet {
             AaaType::System => ActorClass::System,
           },
           mutability: Mutability::Mutable,
-          created_at: now,
         };
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         DormantAaaIdentities::<T>::insert(aaa_id, &identity);
@@ -1948,6 +1955,7 @@ pub mod pallet {
         };
         let (cycle_weight_upper, cycle_fee_upper) =
           Self::compute_cycle_bounds(aaa_type, &execution_plan);
+        let first_eligible_at = Self::initial_eligible_at(aaa_id, &schedule, schedule_window, now);
         let instance = AaaInstance {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
@@ -1967,7 +1975,7 @@ pub mod pallet {
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
-          created_at: now,
+          first_eligible_at,
           last_cycle_block: Zero::zero(),
         };
         created_owner_slot = Some(owner_slot);
@@ -2093,6 +2101,12 @@ pub mod pallet {
       );
       let (cycle_weight_upper, cycle_fee_upper) =
         Self::compute_cycle_bounds(aaa_type, &execution_plan);
+      let first_eligible_at = Self::initial_eligible_at(
+        aaa_id,
+        &schedule,
+        schedule_window,
+        frame_system::Pallet::<T>::block_number(),
+      );
       let instance = AaaInstance {
         sovereign_account: identity.sovereign_account,
         owner: identity.owner,
@@ -2109,7 +2123,7 @@ pub mod pallet {
         cycle_weight_upper,
         cycle_fee_upper,
         auto_close_at_cycle_nonce: None,
-        created_at: identity.created_at,
+        first_eligible_at,
         last_cycle_block: Zero::zero(),
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -2152,7 +2166,6 @@ pub mod pallet {
         owner: instance.owner,
         actor_class: instance.actor_class,
         mutability: instance.mutability,
-        created_at: instance.created_at,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         Self::remove_actor_from_queues(aaa_id);

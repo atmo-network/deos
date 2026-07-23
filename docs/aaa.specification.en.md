@@ -44,19 +44,20 @@ enum ActorClass { User { owner_slot: u8 }, System }
 
 enum ActiveLifecycle { Active, Paused(PauseReason) }
 
-struct ActorIdentity<AccountId, BlockNumber> {
+struct ActorIdentity<AccountId> {
     class: ActorClass,
     mutability: Mutability,
     sovereign_account: AccountId,
     owner: AccountId,
-    created_at: BlockNumber,
 }
 
 struct ActorHot<BlockNumber, Balance> {
     lifecycle: ActiveLifecycle,
     auto_close_at_cycle_nonce: Option<u64>,
     cycle_nonce: u64,
+    first_eligible_at: BlockNumber,
     last_cycle_block: BlockNumber,
+    queue_ticket: Option<QueueTicket>,
     consecutive_failures: u32,
     manual_trigger_pending: bool,
     cycle_weight_upper: Weight,

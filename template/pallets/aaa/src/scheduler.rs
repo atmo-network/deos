@@ -524,34 +524,57 @@ impl<T: Config> Pallet<T> {
     (raw % window).into()
   }
 
+  pub(crate) fn initial_eligible_at(
+    aaa_id: AaaId,
+    schedule: &ScheduleOf<T>,
+    schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
+    now: BlockNumberFor<T>,
+  ) -> BlockNumberFor<T> {
+    let mut eligible_at = schedule_window
+      .map(|window| now.max(window.start))
+      .unwrap_or(now);
+    if let Trigger::Timer { every_blocks } = schedule.trigger
+      && every_blocks > 1
+    {
+      eligible_at = eligible_at.max(
+        now
+          .saturating_add(every_blocks.into())
+          .saturating_add(Self::timer_jitter_blocks(aaa_id, every_blocks)),
+      );
+    }
+    eligible_at
+  }
+
   fn next_eligible_at(
     aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
     include_timer: bool,
   ) -> BlockNumberFor<T> {
-    let attempt_anchor = if instance.cycle_nonce > 0 {
-      instance.last_cycle_block
-    } else if matches!(instance.schedule.trigger, Trigger::Timer { every_blocks } if every_blocks <= 1)
-    {
-      Zero::zero()
-    } else {
-      instance.created_at
-    };
+    if instance.cycle_nonce == 0 {
+      if include_timer {
+        return now.max(instance.first_eligible_at);
+      }
+      return instance
+        .schedule_window
+        .map(|window| now.max(window.start))
+        .unwrap_or(now);
+    }
     let mut eligible_at = now;
     if let Some(window) = instance.schedule_window {
       eligible_at = eligible_at.max(window.start);
     }
-    if instance.cycle_nonce > 0 && instance.cycle_nonce < u64::MAX {
+    if instance.cycle_nonce < u64::MAX {
       let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
-      eligible_at = eligible_at.max(attempt_anchor.saturating_add(cooldown));
+      eligible_at = eligible_at.max(instance.last_cycle_block.saturating_add(cooldown));
     }
     if include_timer && instance.cycle_nonce < u64::MAX {
       if let Trigger::Timer { every_blocks } = instance.schedule.trigger {
         let cadence: BlockNumberFor<T> = every_blocks.into();
         let jitter = Self::timer_jitter_blocks(aaa_id, every_blocks);
         eligible_at = eligible_at.max(
-          attempt_anchor
+          instance
+            .last_cycle_block
             .saturating_add(cadence)
             .saturating_add(jitter),
         );

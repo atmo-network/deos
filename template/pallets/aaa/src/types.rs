@@ -950,12 +950,11 @@ pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct DormantAaaIdentity<AccountId, BlockNumber> {
+pub struct DormantAaaIdentity<AccountId> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
   pub mutability: Mutability,
-  pub created_at: BlockNumber,
 }
 
 #[derive(
@@ -977,7 +976,7 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub manual_trigger_pending: bool,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
-  pub created_at: BlockNumber,
+  pub first_eligible_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
 }
 

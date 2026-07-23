@@ -304,7 +304,6 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
         owner: ALICE,
         actor_class: pallet_aaa::ActorClass::System,
         mutability: pallet_aaa::Mutability::Mutable,
-        created_at: 0,
       },
     );
 
