@@ -66,7 +66,7 @@ Commands executed through the shared script harness use compact output by defaul
   Export native runtime metadata through the committed `deos-runtime` metadata example and optionally regenerate the web-client PAPI descriptors. This replaces the old ad hoc temporary-test metadata export workflow.
 
 - [bootstrap-native-staking-local.sh](./bootstrap-native-staking-local.sh)
-  Consolidated native staking bootstrap helper. `check` reads live readiness for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding. It never signs or submits transactions.
+  Consolidated native staking bootstrap helper. `check` reads live readiness for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding. It never signs or submits transactions. The [`staking-delivery` skill](../.agents/skills/staking-delivery/SKILL.md) owns readiness sequencing, authority boundaries, and activation handoff without duplicating this command.
 
 - [authorized-upgrade-local.sh](./authorized-upgrade-local.sh)
   Consolidated authorized runtime-upgrade helper. `check` verifies a local WASM hash against the chain's pending authorized hash and can emit offline call data; `apply` stays plan-only unless explicit `--submit` relays matching code bytes through `System.apply_authorized_upgrade { code }`. The [`upgrade-delivery` skill](../.agents/skills/upgrade-delivery/SKILL.md) owns evidence sequencing, approval boundaries, and post-upgrade handoff without duplicating this command.

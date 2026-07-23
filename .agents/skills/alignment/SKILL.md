@@ -73,6 +73,7 @@ Select additional leaves only when the touched contract requires them. Routing f
 | Benchmark code | `benchmarks.sh --check`, then one exact extrinsic or owning pallet | Other pallets and runtime release build | Production weights or Wasm accepted |
 | Runtime integration | Scoped `deos-runtime` tests, then completion gate | Full workspace, E2E, client | Runtime metadata/Wasm or network behavior changed |
 | Upgrade delivery | `upgrade-delivery` evidence ladder through shared root scripts | Live relay and publication | Explicit target, matching authorization, and relay approval exist |
+| Staking delivery | `staking-delivery` readiness ladder through the shared bootstrap script | Signing, funds, governance execution | Explicit target state and mutation approval exist |
 | Wiki only | Wiki trust/consolidation leaves | Client build and Cargo | Renderer/client contract changed |
 | Full release | `validate-local.sh --all` | Nothing | Explicit release acceptance only |
 
