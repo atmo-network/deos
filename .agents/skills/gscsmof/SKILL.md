@@ -1,6 +1,6 @@
 ---
 name: gscsmof
-description: Creates, evolves, consolidates, and retires bounded Skill-Meta-Organ-Features for epic feature delivery without becoming a shadow backlog or implementation owner.
+description: Creates, evolves, consolidates, and retires bounded Skill-Meta-Organ-Features for epic feature delivery without becoming a shadow backlog or implementation owner. Genesis Skill Creator of SMOFs.
 ---
 
 # GSCSMOF
@@ -21,19 +21,33 @@ A **SMOF** is a feature-specialist project organ for one evolving epic. It conne
 
 GSCSMOF never owns feature implementation, feature decisions, backlog priority, release approval, or validation semantics. It may invoke canonical validation while creating or evolving an organ. A SMOF never creates sibling organs, governs GSCSMOF, rewrites unrelated plans, or claims ownership of code/specification truth.
 
+## Protected Kernel
+
+GSCSMOF may evolve aggressively around its edges, but every mutation must preserve this kernel:
+
+1. **Creational identity**: GSCSMOF creates and gardens feature organs; it never becomes the organ for a feature.
+2. **Child autonomy**: Each SMOF owns its feature feedback loop; no child governs the parent or sibling organs.
+3. **Truth separation**: Host-project truth surfaces retain implementation, open-work, architecture, history, and execution ownership.
+4. **Standing local permission**: Parent presence authorizes proactive, reversible SMOF lifecycle edits without per-organ confirmation.
+5. **Bounded memory**: Organs promote or prune insight rather than accumulate a shadow project history.
+6. **Host adaptation**: GSCSMOF learns project conventions without absorbing project-specific policy into its portable kernel.
+7. **Safety continuity**: Local skill creation never expands into credentials, publication, accounts, or irreversible external action.
+
+A proposed parent mutation that blurs creator/child roles, centralizes feature knowledge in GSCSMOF, hardcodes one host's topology, or creates an independent planning system fails closed. Child organs may provide evidence about creation friction, but they do not directly rewrite the protected kernel.
+
 ## Canonical Truth Boundaries
 
-| Surface | Owns |
+| Truth role | Host-project owner to discover |
 | --- | --- |
-| `BACKLOG.md` | Open outcomes, gates, and next deliverable boundaries |
-| Specifications | Intended feature contract, invariants, and rationale |
-| Architecture documents | Shipped topology, bindings, operational watchpoints, and accepted evidence |
-| Code and tests | Executable behavior |
-| Root `/scripts` | Shared deterministic project execution |
-| Capability skills | Reusable cross-feature methods such as benchmarking or alignment |
-| SMOF `SKILL.md` | Feature-specific growth method, routing, gates, completion pull, and handoff |
-| SMOF `INSIGHTS.md` | Bounded pre-consolidation feature findings with provenance and destination |
-| `CHANGELOG.md` | Meaningful completed outcomes |
+| Open outcomes and gates | Canonical backlog, plan, roadmap, issue set, or equivalent |
+| Intended feature contract | Specifications, design records, or equivalent |
+| Shipped topology and accepted evidence | Architecture/operations documentation or equivalent |
+| Executable behavior | Code and tests |
+| Shared deterministic execution | Host command, script, task, CI, or tool layer |
+| Cross-feature method | Capability skills or equivalent reusable protocol layer |
+| Feature growth method | SMOF `SKILL.md` |
+| Pre-consolidation feature findings | Bounded SMOF `INSIGHTS.md` |
+| Completed outcomes | Changelog, release history, closed issue history, or equivalent |
 
 A SMOF links to these owners. It does not mirror their task lists, implementation maps, commands, generated numbers, or history.
 
@@ -50,6 +64,20 @@ This is proactive agent behavior, not a hidden process. GSCSMOF runs only while 
 GSCSMOF learns the local project shape before generating anything. It reads the project protocol, skill graph, canonical work surface, nearby successful skills, script ownership rules, naming style, and validation routes. It copies proven local patterns where they fit and changes shape when the epic's real constraints differ.
 
 The templates and heuristics below are defaults, not a universal framework. Project conventions outrank GSCSMOF preferences unless they would violate a higher safety or truth boundary.
+
+## Portability Contract
+
+GSCSMOF must remain useful when copied with its directory into another project:
+
+- It has no required sibling skill, executable, daemon, registry, provider, CI platform, issue tracker, or repository layout.
+- It discovers the host's instruction files, planning surface, documentation owners, skill/plugin location, shared command layer, validation route, and release history before acting.
+- Names such as `BACKLOG.md`, `/scripts`, `/.agents/skills`, and `CHANGELOG.md` are current-host examples, not portable assumptions.
+- It generates SMOFs in the host's existing extension/skill convention. If none exists, it uses the smallest local convention that makes the parent and children discoverable without inventing a second project control plane.
+- It references host capabilities through public contracts and never reaches into sibling internals.
+- It degrades to an explicit epic outcome when no canonical backlog exists and creates a planning surface only when host conventions permit it.
+- It carries no child feature knowledge when moved; only the creational method travels.
+
+Project-specific adapters, templates, examples, and validation commands belong in the host skill graph or generated child, not in GSCSMOF's protected kernel. Portability means semantic continuity under a new host, not identical filenames.
 
 ## Epic Qualification
 
@@ -80,11 +108,11 @@ Reuse is a compression preference, not a veto on creation. Never use numerical s
 When GSCSMOF selects a candidate, no additional creation confirmation is required:
 
 1. Choose a compact role-first name following nearby project conventions, often `<feature>-delivery`; avoid redundant prefixes.
-2. Create `/.agents/skills/<name>/SKILL.md` with valid `name` and concise `description` metadata.
+2. Create the child in the host's discovered skill location with valid identity and concise description metadata; in the current host this is `/.agents/skills/<name>/SKILL.md`.
 3. Define the locked epic scope, canonical work surface, trigger, owners, exclusions, evidence ladder, route, safety gates, handoff, and retirement condition.
-4. Reference shared root scripts and capability contracts instead of copying commands or sibling internals.
-5. Add the organ to `/.agents/skills/README.md` with its owner, exclusions, and public route.
-6. Narrow the canonical backlog only if creating the organ changes what remains; represent detailed feature guidance through links and feature-local insight rather than copied backlog items.
+4. Reference the host's shared command and capability contracts instead of copying commands or sibling internals.
+5. Register the organ through the host's canonical skill index or discovery mechanism; in the current host this is `/.agents/skills/README.md`.
+6. Narrow the canonical open-work surface only if creating the organ changes what remains; represent detailed feature guidance through links and feature-local insight rather than copied tasks.
 7. Add a bounded `INSIGHTS.md` only when the epic needs temporary feature-local working memory beyond the protocol itself.
 8. Run skill metadata, link, context, and completion validation.
 9. Report the created boundary, reuse decision, and validation evidence.
@@ -118,7 +146,7 @@ A SMOF may keep `INSIGHTS.md` as bounded pre-consolidation memory for useful fea
 
 Good entries capture a finding, its evidence/provenance, why it changes future delivery, and its intended destination or retirement condition. Suitable material includes unresolved design pressure, recurring implementation traps, cross-slice dependencies, falsified assumptions, evidence gaps, and decisions awaiting specification or architecture promotion.
 
-Do not store raw logs, command transcripts, commit diaries, copied tasks, current generated hashes, or stable facts already owned by code/docs. At each meaningful slice, promote mature truth to its owner, convert actionable outcomes into the canonical backlog, and delete stale or resolved insight. Keep the file small enough to read as one feature checkpoint.
+Do not store raw logs, command transcripts, commit diaries, copied tasks, current generated hashes, or stable facts already owned elsewhere. At each meaningful slice, promote mature truth to its host owner, convert actionable outcomes into the canonical open-work surface, and delete stale or resolved insight. Keep the file small enough to read as one feature checkpoint.
 
 ## Completion Pull
 
@@ -159,17 +187,31 @@ The SMOF may improve after a slice when a recurring ambiguity, dead end, unsafe 
 
 GSCSMOF makes local structural changes from evidence; it does not merge or delete organs merely from co-activation counts, age, file size, or speculative similarity.
 
+## Parent Evolution Protocol
+
+Before changing GSCSMOF itself:
+
+1. Ground the mutation in observed friction from creating, evolving, or retiring at least one organ, or in a concrete portability failure.
+2. Classify the change as portable creational method, host adapter, child-organ method, or feature knowledge.
+3. Keep only portable creational method in the parent; route the other classes to their owners.
+4. Recheck every protected-kernel invariant and creator/child direction.
+5. Read the result as if installed into a project with different filenames, tools, domains, and planning conventions.
+6. Prefer compression or replacement over accumulating another phase, registry, synchronization layer, or ontology.
+7. Validate the parent identity, host skill graph, links, and context after the mutation.
+
+A large rewrite is acceptable when it preserves the kernel and improves portability or generative usefulness. Small edits are not automatically safe: reject any mutation that gradually turns the parent into a feature coordinator, project manual, or universal workflow engine.
+
 ## Release and Retirement
 
 A release does not automatically preserve or destroy a SMOF. At epic completion:
 
-1. Move implementation truth to code/tests and owning docs.
-2. Move remaining work to `BACKLOG.md` and completed impact to `CHANGELOG.md` under project conventions.
+1. Move implementation truth to the host's code/tests and owning documentation.
+2. Move remaining work and completed impact to the host's canonical open-work and delivery-history surfaces.
 3. Move reusable cross-feature method into the owning capability skill only when genuine reuse exists.
 4. Keep the SMOF if the feature has an ongoing distinct delivery/operations loop.
 5. Otherwise remove it and update the project skill graph in the same change.
 
-Do not create parallel `.organs`, `wisdom`, sync ledgers, fractal knowledge trees, TTL deletion jobs, or shadow registries. The project skill graph and canonical ABC files already own those coordination boundaries.
+Do not create parallel organ registries, wisdom stores, sync ledgers, fractal knowledge trees, TTL jobs, or shadow planning systems when the host already has owners for those roles. Reuse the host control plane rather than requiring one preferred file topology.
 
 ## GSCSMOF Self-Boundary
 
@@ -179,11 +221,11 @@ GSCSMOF is a creator and gardener of implementation organs, not a super-organ ov
 
 Report:
 
-- epic and canonical work surface examined;
-- reuse candidates considered;
-- qualification decision and evidence;
-- organ created, refined, merged, or retired;
-- ownership and exclusion boundary;
-- graph/context files updated;
-- validation result;
-- unresolved human or external gate.
+- Epic and canonical work surface examined;
+- Reuse candidates considered;
+- Qualification decision and evidence;
+- Organ created, refined, merged, or retired;
+- Ownership and exclusion boundary;
+- Graph/context files updated;
+- Validation result;
+- Unresolved human or external gate.
