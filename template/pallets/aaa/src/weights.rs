@@ -41,6 +41,7 @@ pub trait WeightInfo {
   fn scheduler_paged_consume_preserve_page() -> Weight;
   fn scheduler_paged_consume_delete_page() -> Weight;
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight;
+  fn scheduler_paged_mixed_scan(entries: u32) -> Weight;
   fn scheduler_actor_probe() -> Weight;
   fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight;
   fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight;
@@ -239,6 +240,15 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       ))
   }
 
+  fn scheduler_paged_mixed_scan(entries: u32) -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(Weight::from_parts(40_000_000, 4_000).saturating_mul(entries.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(
+        4u64.saturating_add(u64::from(entries).saturating_mul(4)),
+        2u64.saturating_add(u64::from(entries).saturating_mul(2)),
+      ))
+  }
+
   fn scheduler_actor_probe() -> Weight {
     Weight::from_parts(1_600_000_000, 850_000)
       .saturating_add(T::DbWeight::get().reads_writes(18, 16))
@@ -422,6 +432,10 @@ impl WeightInfo for () {
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {
     Weight::from_parts(20_000_000, 4_000)
       .saturating_add(Weight::from_parts(20_000_000, 3_000).saturating_mul(entries.into()))
+  }
+  fn scheduler_paged_mixed_scan(entries: u32) -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(Weight::from_parts(40_000_000, 4_000).saturating_mul(entries.into()))
   }
   fn scheduler_actor_probe() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
   fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight {

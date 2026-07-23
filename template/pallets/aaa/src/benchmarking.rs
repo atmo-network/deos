@@ -1256,6 +1256,53 @@ mod benches {
     assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
   }
 
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_mixed_scan(n: Linear<1, 10_000>) {
+    let bounded = n.min(T::MaxQueueLength::get());
+    let page_size = T::QueuePageSize::get();
+    let template_id = bench_create_system_manual::<T>(38_000_000);
+    let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    let mut ticket = 0u64;
+    while ticket < u64::from(bounded) {
+      let page_id = ticket / u64::from(page_size);
+      let remaining = u64::from(bounded).saturating_sub(ticket);
+      let entries = remaining.min(u64::from(page_size));
+      let page = (0..entries)
+        .map(|offset| {
+          let logical_ticket = ticket.saturating_add(offset);
+          let aaa_id = 39_000_000u64.saturating_add(logical_ticket);
+          if logical_ticket % 2 == 1 {
+            let mut hot = hot_template.clone();
+            hot.queue_ticket = Some(logical_ticket);
+            ActorHot::<T>::insert(aaa_id, hot);
+          }
+          QueueEntry { aaa_id }
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      QueuePages::<T>::insert(
+        page_id,
+        BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
+          .expect("benchmark queue page must fit configured page size"),
+      );
+      ticket = ticket.saturating_add(entries);
+    }
+    ActorHot::<T>::remove(template_id);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(bounded));
+    let cutoff = u64::from(bounded);
+    #[block]
+    {
+      while QueueHead::<T>::get() < cutoff {
+        core::hint::black_box(Pallet::<T>::paged_drain_tombstones(cutoff, bounded));
+        if let Some((head, _)) = Pallet::<T>::paged_head_entry() {
+          assert!(Pallet::<T>::paged_consume_head(head));
+        }
+      }
+    }
+    assert!(QueueHead::<T>::get() >= cutoff);
+    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+  }
+
   // Runtime-backed hook benchmark for dense overdue wakeup admission.
   #[benchmark]
   fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {
