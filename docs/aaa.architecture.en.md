@@ -384,7 +384,15 @@ Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,00
 | Pop minimum and full repair | `481,354,000 / 56,199` | `34 / 26` |
 | Exact removal and full repair | `434,350,000 / 55,767` | `33 / 25` |
 
-The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current integrated checkpoint hashes are AAA weights `3889259d7b36463f34e6b64ce162ab814964addb290f3dbf44e48b38e12bf88c` and compressed Wasm `00f6a4856bf56677c456c80b77d68744c5cf271eceea2571256551269d2560db`. Focused worker benchmarking and production activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
+Integrated worker evidence uses the same production-Wasm route:
+
+| Worker case | RefTime / ProofSize | Reads / writes |
+| --- | ---: | ---: |
+| Partial one-slot progress | `51,474,000 / 4,285` | `8 / 5` |
+| Full-depth bucket removal | `500,351,000 / 56,563` | `39 / 30` |
+| Future-minimum stop | `11,734,000 / 3,906` | `2 / 0` |
+
+The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short. Current checkpoint hashes are AAA weights `5ea4520b82967a4414e9630c701cdec46fa6d9e5d01a5c1685d46c0b8b6baea2` and compressed Wasm `00f6a4856bf56677c456c80b77d68744c5cf271eceea2571256551269d2560db`. Production activation remains required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

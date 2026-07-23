@@ -1482,6 +1482,93 @@ mod benches {
   }
 
   #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_cursor_worker_partial() {
+    let wakeup_block: BlockNumberFor<T> = 10u32.into();
+    let first = bench_create_system_manual::<T>(34_100_000);
+    let second = bench_create_system_manual::<T>(34_100_001);
+    assert!(Pallet::<T>::wakeup_substrate_schedule(first, wakeup_block));
+    assert!(Pallet::<T>::wakeup_substrate_schedule(second, wakeup_block));
+    let limit = T::WeightInfo::scheduler_wakeup_cursor_pop_min()
+      .saturating_add(Pallet::<T>::wakeup_cursor_drain_unit_weight_upper(false));
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(limit);
+    #[block]
+    {
+      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(wakeup_block, &mut meter);
+      assert_eq!(stats.entries_scanned, 1);
+      assert_eq!(stats.ready_entries, 1);
+    }
+    assert_eq!(
+      WakeupBuckets::<T>::get(wakeup_block).map(|bucket| bucket.live_entries),
+      Some(1)
+    );
+    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(wakeup_block));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_cursor_worker_remove() {
+    let cursor_len = T::MaxActiveActors::get();
+    let wakeup_block = prepare_wakeup_cursor_repair::<T>(0);
+    let aaa_id = bench_create_system_manual::<T>(34_200_000);
+    let mut entries = WakeupPageEntriesOf::<T>::default();
+    entries
+      .try_push(Some(WakeupEntry { aaa_id }))
+      .expect("one wakeup entry fits");
+    WakeupPages::<T>::insert(
+      (wakeup_block, 0),
+      WakeupPage {
+        entries,
+        live_entries: 1,
+        scan_slot: 0,
+        previous_page: None,
+        next_page: None,
+      },
+    );
+    WakeupBuckets::<T>::mutate(wakeup_block, |maybe_bucket| {
+      let bucket = maybe_bucket.as_mut().expect("cursor bucket exists");
+      bucket.head_page = 0;
+      bucket.tail_page = 0;
+      bucket.next_page_id = 1;
+      bucket.live_entries = 1;
+    });
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot.as_mut().expect("actor hot state").wakeup_pointer = Some(WakeupPointer {
+        block: wakeup_block,
+        page_id: 0,
+        slot: 0,
+      });
+    });
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    #[block]
+    {
+      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(wakeup_block, &mut meter);
+      assert_eq!(stats.entries_scanned, 1);
+      assert_eq!(stats.ready_entries, 1);
+    }
+    assert_eq!(WakeupCursorLen::<T>::get(), cursor_len.saturating_sub(1));
+    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(1_000_001u32.into()));
+    assert!(WakeupBuckets::<T>::get(wakeup_block).is_none());
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_cursor_worker_future() {
+    let wakeup_block: BlockNumberFor<T> = 1_000_000u32.into();
+    let aaa_id = bench_create_system_manual::<T>(34_300_000);
+    assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(Weight::MAX);
+    #[block]
+    {
+      let stats = Pallet::<T>::drain_overdue_wakeups_cursor(10u32.into(), &mut meter);
+      assert_eq!(stats.entries_scanned, 0);
+    }
+    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(wakeup_block));
+    assert!(
+      ActorHot::<T>::get(aaa_id)
+        .and_then(|hot| hot.wakeup_pointer)
+        .is_some()
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_consume_preserve_page() {
     let first = bench_create_system_manual::<T>(35_000_000);
     let second = bench_create_system_manual::<T>(35_000_001);

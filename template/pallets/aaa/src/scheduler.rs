@@ -1081,7 +1081,7 @@ impl<T: Config> Pallet<T> {
       let block_cursor = if let Some(block) = current_block {
         block
       } else {
-        let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_pop_min();
+        let cursor_weight = T::WeightInfo::scheduler_wakeup_cursor_worker_future();
         if !meter.can_consume(cursor_weight) {
           break;
         }

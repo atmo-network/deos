@@ -618,7 +618,7 @@ fn cursor_wakeup_drain_halts_and_resumes_between_slot_units() {
       actors.push(aaa_id);
     }
     let limit =
-      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_pop_min()
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
         .saturating_add(AAA::wakeup_cursor_drain_unit_weight_upper(false));
     let mut one_slot = WeightMeter::with_limit(limit);
     let first = AAA::drain_overdue_wakeups_cursor(10, &mut one_slot);
@@ -644,6 +644,49 @@ fn cursor_wakeup_drain_halts_and_resumes_between_slot_units() {
         .queue_ticket
         .is_some()
     }));
+  });
+}
+
+#[test]
+fn cursor_wakeup_drain_stops_independently_on_reftime_and_proof_size() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_execution_plan(BOB, 1),
+    );
+    assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+    let required =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_wakeup_cursor_worker_future()
+        .saturating_add(AAA::wakeup_cursor_drain_unit_weight_upper(true));
+
+    let mut reftime_short = WeightMeter::with_limit(Weight::from_parts(
+      required.ref_time().saturating_sub(1),
+      u64::MAX,
+    ));
+    assert_eq!(
+      AAA::drain_overdue_wakeups_cursor(10, &mut reftime_short).entries_scanned,
+      0
+    );
+    assert!(AAA::actor_hot(aaa_id)
+      .expect("actor after RefTime stop")
+      .wakeup_pointer
+      .is_some());
+
+    let mut proof_short = WeightMeter::with_limit(Weight::from_parts(
+      u64::MAX,
+      required.proof_size().saturating_sub(1),
+    ));
+    assert_eq!(
+      AAA::drain_overdue_wakeups_cursor(10, &mut proof_short).entries_scanned,
+      0
+    );
+    assert!(AAA::actor_hot(aaa_id)
+      .expect("actor after ProofSize stop")
+      .wakeup_pointer
+      .is_some());
   });
 }
 

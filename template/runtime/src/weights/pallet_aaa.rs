@@ -1131,6 +1131,71 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 			.saturating_add(T::DbWeight::get().reads(33))
 			.saturating_add(T::DbWeight::get().writes(25))
 	}
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:0)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:1 w:0)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
+	/// Storage: `AAA::WakeupPages` (r:1 w:1)
+	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
+	/// Storage: `AAA::ActorHot` (r:1 w:1)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Storage: `AAA::QueueHead` (r:1 w:0)
+	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueueTail` (r:1 w:1)
+	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueuePages` (r:1 w:1)
+	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
+	fn scheduler_wakeup_cursor_worker_partial() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `820`
+		//  Estimated: `4285`
+		// Minimum execution time: 49_239_000 picoseconds.
+		Weight::from_parts(51_474_000, 0)
+			.saturating_add(Weight::from_parts(0, 4285))
+			.saturating_add(T::DbWeight::get().reads(8))
+			.saturating_add(T::DbWeight::get().writes(5))
+	}
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:18 w:10)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	/// Storage: `AAA::WakeupBuckets` (r:15 w:15)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
+	/// Storage: `AAA::WakeupPages` (r:1 w:1)
+	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
+	/// Storage: `AAA::ActorHot` (r:1 w:1)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Storage: `AAA::QueueHead` (r:1 w:0)
+	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueueTail` (r:1 w:1)
+	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
+	/// Storage: `AAA::QueuePages` (r:1 w:1)
+	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
+	fn scheduler_wakeup_cursor_worker_remove() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `11023`
+		//  Estimated: `56563`
+		// Minimum execution time: 471_227_000 picoseconds.
+		Weight::from_parts(500_351_000, 0)
+			.saturating_add(Weight::from_parts(0, 56563))
+			.saturating_add(T::DbWeight::get().reads(39))
+			.saturating_add(T::DbWeight::get().writes(30))
+	}
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:0)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:1 w:0)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	fn scheduler_wakeup_cursor_worker_future() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `441`
+		//  Estimated: `3906`
+		// Minimum execution time: 9_988_000 picoseconds.
+		Weight::from_parts(11_734_000, 0)
+			.saturating_add(Weight::from_parts(0, 3906))
+			.saturating_add(T::DbWeight::get().reads(2))
+	}
 	/// Storage: `AAA::QueueHead` (r:1 w:1)
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
 	/// Storage: `AAA::QueueTail` (r:1 w:0)
