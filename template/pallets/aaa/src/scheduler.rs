@@ -369,6 +369,9 @@ impl<T: Config> Pallet<T> {
     }
     WakeupPages::<T>::remove(key);
     if bucket.live_entries == 0 {
+      if !Self::wakeup_cursor_remove_inner(pointer.block) {
+        return None;
+      }
       WakeupBuckets::<T>::remove(pointer.block);
     } else {
       WakeupBuckets::<T>::insert(pointer.block, bucket);
@@ -377,7 +380,18 @@ impl<T: Config> Pallet<T> {
   }
 
   pub fn wakeup_substrate_invalidate(aaa_id: AaaId) -> Option<WakeupPointer<BlockNumberFor<T>>> {
-    Self::wakeup_substrate_invalidate_inner(aaa_id)
+    let result: Result<WakeupPointer<BlockNumberFor<T>>, DispatchError> =
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Self::wakeup_substrate_invalidate_inner(aaa_id) {
+          Some(pointer) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(pointer))
+          }
+          None => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaNotFound.into(),
+          )),
+        }
+      });
+    result.ok()
   }
 
   fn wakeup_substrate_schedule_inner(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
@@ -392,6 +406,9 @@ impl<T: Config> Pallet<T> {
     }
 
     let (page_id, slot) = if let Some(mut bucket) = WakeupBuckets::<T>::get(wakeup_block) {
+      if bucket.cursor_index.is_none() {
+        return false;
+      }
       let tail_key = (wakeup_block, bucket.tail_page);
       let Some(mut tail_page) = WakeupPages::<T>::get(tail_key) else {
         return false;
@@ -473,6 +490,9 @@ impl<T: Config> Pallet<T> {
           cursor_index: None,
         },
       );
+      if !Self::wakeup_cursor_insert_inner(wakeup_block) {
+        return false;
+      }
       (0, 0)
     };
     Self::set_wakeup_pointer(aaa_id, wakeup_block, page_id, slot)
@@ -514,25 +534,28 @@ impl<T: Config> Pallet<T> {
     result.is_ok()
   }
 
-  pub fn wakeup_substrate_drain_block(
+  fn wakeup_substrate_drain_block_inner(
     wakeup_block: BlockNumberFor<T>,
     max_entries_scanned: u32,
-  ) -> (BoundedVec<AaaId, T::MaxWakeupsPerBlock>, WakeupDrainStats) {
+  ) -> Option<(BoundedVec<AaaId, T::MaxWakeupsPerBlock>, WakeupDrainStats)> {
     let mut ready = BoundedVec::<AaaId, T::MaxWakeupsPerBlock>::default();
     let mut stats = WakeupDrainStats::default();
     let scan_limit = max_entries_scanned.min(T::MaxWakeupsPerBlock::get());
     if scan_limit == 0 {
-      return (ready, stats);
+      return Some((ready, stats));
     }
     let Some(mut bucket) = WakeupBuckets::<T>::get(wakeup_block) else {
-      return (ready, stats);
+      return Some((ready, stats));
     };
+    if bucket.cursor_index.is_none() {
+      return None;
+    }
     let mut page_id = bucket.head_page;
 
     while stats.entries_scanned < scan_limit {
       let key = (wakeup_block, page_id);
       let Some(mut page) = WakeupPages::<T>::get(key) else {
-        break;
+        return None;
       };
       stats.pages_touched = stats.pages_touched.saturating_add(1);
       let mut slot = page.scan_slot as usize;
@@ -565,7 +588,7 @@ impl<T: Config> Pallet<T> {
           stats.entries_scanned = stats.entries_scanned.saturating_sub(1);
           WakeupPages::<T>::insert(key, page);
           WakeupBuckets::<T>::insert(wakeup_block, bucket);
-          return (ready, stats);
+          return Some((ready, stats));
         }
         ActorHot::<T>::mutate(entry.aaa_id, |maybe_hot| {
           if let Some(hot) = maybe_hot
@@ -580,15 +603,18 @@ impl<T: Config> Pallet<T> {
       if page.live_entries > 0 {
         WakeupPages::<T>::insert(key, page);
         WakeupBuckets::<T>::insert(wakeup_block, bucket);
-        return (ready, stats);
+        return Some((ready, stats));
       }
 
       let next_page = page.next_page;
       WakeupPages::<T>::remove(key);
       stats.pages_deleted = stats.pages_deleted.saturating_add(1);
       let Some(next_page) = next_page else {
+        if !Self::wakeup_cursor_remove_inner(wakeup_block) {
+          return None;
+        }
         WakeupBuckets::<T>::remove(wakeup_block);
-        return (ready, stats);
+        return Some((ready, stats));
       };
       WakeupPages::<T>::mutate((wakeup_block, next_page), |maybe_next| {
         if let Some(next) = maybe_next {
@@ -599,7 +625,25 @@ impl<T: Config> Pallet<T> {
       WakeupBuckets::<T>::insert(wakeup_block, bucket);
       page_id = next_page;
     }
-    (ready, stats)
+    Some((ready, stats))
+  }
+
+  pub fn wakeup_substrate_drain_block(
+    wakeup_block: BlockNumberFor<T>,
+    max_entries_scanned: u32,
+  ) -> (BoundedVec<AaaId, T::MaxWakeupsPerBlock>, WakeupDrainStats) {
+    let result: Result<_, DispatchError> =
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Self::wakeup_substrate_drain_block_inner(wakeup_block, max_entries_scanned) {
+          Some(result) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(result))
+          }
+          None => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaNotFound.into(),
+          )),
+        }
+      });
+    result.unwrap_or_default()
   }
 
   fn wakeup_cursor_page_and_slot(index: WakeupCursorIndex) -> (WakeupPageId, usize) {

@@ -317,6 +317,8 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
       AAA::wakeup_buckets(10).expect("first bucket").live_entries,
       1
     );
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(10));
 
     assert!(AAA::wakeup_substrate_schedule(aaa_id, 20));
     let replacement = AAA::actor_hot(aaa_id)
@@ -329,6 +331,8 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
     );
     assert!(AAA::wakeup_buckets(10).is_none());
     assert!(AAA::wakeup_pages((10, 0)).is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(20));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
 
@@ -341,6 +345,42 @@ fn paged_wakeup_substrate_replaces_and_invalidates_exact_slots() {
     );
     assert!(AAA::wakeup_buckets(20).is_none());
     assert!(AAA::wakeup_pages((20, 0)).is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
+    assert_eq!(AAA::wakeup_cursor_peek(), None);
+  });
+}
+
+#[test]
+fn paged_wakeup_substrate_invalidation_rolls_back_on_cursor_mismatch() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      transfer_execution_plan(BOB, 1),
+    );
+    assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+    let pointer = AAA::actor_hot(aaa_id)
+      .expect("hot state")
+      .wakeup_pointer
+      .expect("wakeup pointer");
+    crate::pallet::WakeupBuckets::<Test>::mutate(10, |maybe_bucket| {
+      maybe_bucket.as_mut().expect("wakeup bucket").cursor_index = None;
+    });
+
+    assert_eq!(AAA::wakeup_substrate_invalidate(aaa_id), None);
+    assert_eq!(
+      AAA::actor_hot(aaa_id).expect("hot state").wakeup_pointer,
+      Some(pointer)
+    );
+    assert!(AAA::wakeup_page_entry_matches(pointer, aaa_id));
+    assert_eq!(
+      AAA::wakeup_buckets(10).expect("wakeup bucket").live_entries,
+      1
+    );
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(10));
   });
 }
 
@@ -458,6 +498,8 @@ fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
     assert!(AAA::wakeup_buckets(10).is_none());
     assert!(AAA::wakeup_pages((10, 1)).is_none());
     assert!(AAA::wakeup_pages((10, 2)).is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
+    assert_eq!(AAA::wakeup_cursor_peek(), None);
     assert!(actors.iter().all(|aaa_id| {
       AAA::actor_hot(*aaa_id)
         .expect("hot state")

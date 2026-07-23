@@ -350,8 +350,8 @@ The replacement contract now has an inactive storage substrate without changing 
 - Heap insertion and minimum removal use a `MaxActiveActors`-derived height bound, preserve contiguous cursor pages, and avoid scanning empty intermediate blocks; try-state reconciles page shape, uniqueness, ordering, and reverse indices.
 - `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
-- Transactional replacement invalidates the prior exact slot; bounded neighboring-page work unlinks empty pages.
-- The inactive drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, and discards stale slots.
+- Transactional replacement invalidates the prior exact slot, removes an emptied block from the cursor, creates the replacement bucket and cursor entry atomically, and rolls back on reverse-index mismatch; bounded neighboring-page work unlinks empty pages.
+- The inactive drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, discards stale slots, and removes an exhausted bucket from the cursor in the same transaction.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
 
 Production-Wasm `50 x 20` focused operation evidence compares candidate page sizes (`RefTime / estimated ProofSize`):
@@ -362,18 +362,18 @@ Production-Wasm `50 x 20` focused operation evidence compares candidate page siz
 | 64 | `39,042,000 / 5,286` | `41,486,000 / 5,258` | `40,858,000 / 6,646` | `59,017,000 / 10,623` |
 | 128 | `49,169,000 / 6,033` | `52,033,000 / 5,839` | `39,321,000 / 6,646` | `58,598,000 / 11,258` |
 
-The runtime selects `WakeupPageSize = 32`. It minimizes every page-size-sensitive operation and halves page-value rewrite granularity relative to 64; exact singleton replacement remains effectively page-size-neutral. Final generated production models charge four reads and three/four writes for insertion, and five reads/five writes for replacement or middle-page unlinking.
+The runtime selects `WakeupPageSize = 32`. It minimizes every page-size-sensitive operation and halves page-value rewrite granularity relative to 64. Integrated models charge four reads and three/four writes for append, seven reads/writes for cursor-coupled replacement, and five reads/writes for middle-page unlinking.
 
 Production-Wasm `50 x 20` drain evidence at the selected page size records fixed operation samples (`RefTime / estimated ProofSize`):
 
 | Drain case | Slots | RefTime / ProofSize | Reads / writes |
 | --- | ---: | ---: | ---: |
-| Partial head | 16 | `133,189,000 / 44,416` | `18 / 18` |
-| Full page | 32 | `237,045,000 / 86,273` | `34 / 34` |
-| Dense boundary | 33 | `258,137,000 / 88,983` | `36 / 36` |
-| Stale page | 32 | `148,275,000 / 85,761` | `34 / 2` |
+| Partial head | 16 | `144,295,000 / 44,482` | `18 / 18` |
+| Full page | 32 | `269,661,000 / 86,355` | `36 / 36` |
+| Dense boundary | 33 | `284,887,000 / 89,065` | `38 / 38` |
+| Stale page | 32 | `176,073,000 / 85,843` | `36 / 4` |
 
-These fixed drain samples validate partial preservation, complete deletion, one-page boundary crossing, and stale-pointer filtering; they do not imply block throughput. Their pre-cursor checkpoint hashes are AAA weights `526684f27274f8ba8f8eee99379b0da1efe6adb134d2f4914bd49ac78a9a6eee` and compressed Wasm `66fc2a189bcc83ff77fedcb4cdebb3e1e563c479bafe728092d985f6b4337013`.
+These fixed drain samples validate partial preservation, complete deletion, one-page boundary crossing, stale-pointer filtering, and transactional cursor removal for exhausted buckets; they do not imply block throughput.
 
 Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,000-block heap depth with only the pages and reverse-index buckets required by the traversed path:
 
@@ -383,7 +383,7 @@ Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,00
 | Pop minimum and full repair | `481,354,000 / 56,199` | `34 / 26` |
 | Exact removal and full repair | `434,350,000 / 55,767` | `33 / 25` |
 
-The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current checkpoint hashes are AAA weights `5e63378d95ffb8376a60bf849eafd921046edbf8f4cd3630f973d01d709b680e` and compressed Wasm `564b291cb5b72029155f470117d6df3279765c76d3a50f33235044e43bf69682`. Transactional bucket lifecycle integration and production drain activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
+The cursor measurements prove bounded worst-depth path cost, not whole-heap throughput. Current integrated checkpoint hashes are AAA weights `3889259d7b36463f34e6b64ce162ab814964addb290f3dbf44e48b38e12bf88c` and compressed Wasm `b2493cad6a59b3aa3683a2c10ce514f78797a52889b207842536c99df3db23e6`. Production overdue-drain activation remains required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

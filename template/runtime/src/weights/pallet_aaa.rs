@@ -936,36 +936,36 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
 	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::MinWakeupBlock` (r:1 w:0)
 	/// Proof: `AAA::MinWakeupBlock` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
 	fn scheduler_wakeup_append_existing_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1362`
-		//  Estimated: `4827`
-		// Minimum execution time: 32_337_000 picoseconds.
-		Weight::from_parts(37_785_000, 0)
-			.saturating_add(Weight::from_parts(0, 4827))
+		//  Measured:  `1428`
+		//  Estimated: `4893`
+		// Minimum execution time: 36_108_000 picoseconds.
+		Weight::from_parts(38_693_000, 0)
+			.saturating_add(Weight::from_parts(0, 4893))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
 	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:2)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::MinWakeupBlock` (r:1 w:0)
 	/// Proof: `AAA::MinWakeupBlock` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
 	fn scheduler_wakeup_append_new_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1405`
-		//  Estimated: `4870`
-		// Minimum execution time: 34_781_000 picoseconds.
-		Weight::from_parts(42_115_000, 0)
-			.saturating_add(Weight::from_parts(0, 4870))
+		//  Measured:  `1471`
+		//  Estimated: `4936`
+		// Minimum execution time: 37_715_000 picoseconds.
+		Weight::from_parts(41_766_000, 0)
+			.saturating_add(Weight::from_parts(0, 4936))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(4))
 	}
@@ -974,98 +974,114 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:1 w:2)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:2 w:2)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::MinWakeupBlock` (r:1 w:0)
 	/// Proof: `AAA::MinWakeupBlock` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_replace_exact() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `706`
-		//  Estimated: `6646`
-		// Minimum execution time: 37_576_000 picoseconds.
-		Weight::from_parts(39_950_000, 0)
-			.saturating_add(Weight::from_parts(0, 6646))
-			.saturating_add(T::DbWeight::get().reads(5))
-			.saturating_add(T::DbWeight::get().writes(5))
+		//  Measured:  `788`
+		//  Estimated: `6728`
+		// Minimum execution time: 63_208_000 picoseconds.
+		Weight::from_parts(65_861_000, 0)
+			.saturating_add(Weight::from_parts(0, 6728))
+			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
 	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:3 w:3)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	fn scheduler_wakeup_invalidate_middle_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1716`
-		//  Estimated: `10131`
-		// Minimum execution time: 39_251_000 picoseconds.
-		Weight::from_parts(45_188_000, 0)
-			.saturating_add(Weight::from_parts(0, 10131))
+		//  Measured:  `1782`
+		//  Estimated: `10197`
+		// Minimum execution time: 44_769_000 picoseconds.
+		Weight::from_parts(55_734_000, 0)
+			.saturating_add(Weight::from_parts(0, 10197))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:16 w:16)
 	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
 	fn scheduler_wakeup_drain_partial_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `3826`
-		//  Estimated: `44416`
-		// Minimum execution time: 124_459_000 picoseconds.
-		Weight::from_parts(133_189_000, 0)
-			.saturating_add(Weight::from_parts(0, 44416))
+		//  Measured:  `3892`
+		//  Estimated: `44482`
+		// Minimum execution time: 133_190_000 picoseconds.
+		Weight::from_parts(144_295_000, 0)
+			.saturating_add(Weight::from_parts(0, 44482))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(18))
 	}
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:32 w:32)
 	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_drain_full_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `6083`
-		//  Estimated: `86273`
-		// Minimum execution time: 219_445_000 picoseconds.
-		Weight::from_parts(237_045_000, 0)
-			.saturating_add(Weight::from_parts(0, 86273))
-			.saturating_add(T::DbWeight::get().reads(34))
-			.saturating_add(T::DbWeight::get().writes(34))
-	}
-	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
-	/// Storage: `AAA::WakeupPages` (r:2 w:2)
-	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
-	/// Storage: `AAA::ActorHot` (r:33 w:33)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
-	fn scheduler_wakeup_drain_dense_boundary() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `6318`
-		//  Estimated: `88983`
-		// Minimum execution time: 238_861_000 picoseconds.
-		Weight::from_parts(258_137_000, 0)
-			.saturating_add(Weight::from_parts(0, 88983))
+		//  Measured:  `6165`
+		//  Estimated: `86355`
+		// Minimum execution time: 247_662_000 picoseconds.
+		Weight::from_parts(269_661_000, 0)
+			.saturating_add(Weight::from_parts(0, 86355))
 			.saturating_add(T::DbWeight::get().reads(36))
 			.saturating_add(T::DbWeight::get().writes(36))
 	}
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(48), added: 2523, mode: `Measured`)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
+	/// Storage: `AAA::WakeupPages` (r:2 w:2)
+	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
+	/// Storage: `AAA::ActorHot` (r:33 w:33)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
+	fn scheduler_wakeup_drain_dense_boundary() -> Weight {
+		// Proof Size summary in bytes:
+		//  Measured:  `6400`
+		//  Estimated: `89065`
+		// Minimum execution time: 264_493_000 picoseconds.
+		Weight::from_parts(284_887_000, 0)
+			.saturating_add(Weight::from_parts(0, 89065))
+			.saturating_add(T::DbWeight::get().reads(38))
+			.saturating_add(T::DbWeight::get().writes(38))
+	}
+	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
+	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:32 w:0)
 	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
+	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
+	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_drain_stale_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `5571`
-		//  Estimated: `85761`
-		// Minimum execution time: 138_846_000 picoseconds.
-		Weight::from_parts(148_275_000, 0)
-			.saturating_add(Weight::from_parts(0, 85761))
-			.saturating_add(T::DbWeight::get().reads(34))
-			.saturating_add(T::DbWeight::get().writes(2))
+		//  Measured:  `5653`
+		//  Estimated: `85843`
+		// Minimum execution time: 160_079_000 picoseconds.
+		Weight::from_parts(176_073_000, 0)
+			.saturating_add(Weight::from_parts(0, 85843))
+			.saturating_add(T::DbWeight::get().reads(36))
+			.saturating_add(T::DbWeight::get().writes(4))
 	}
 	/// Storage: `AAA::WakeupBuckets` (r:14 w:14)
 	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
