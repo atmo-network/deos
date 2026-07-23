@@ -2952,6 +2952,36 @@ pub mod pallet {
           ));
         }
       }
+      let mut live_queue_tickets = alloc::collections::BTreeSet::new();
+      let hot_states = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only live-ticket invariant audit
+      for (aaa_id, hot) in hot_states {
+        let Some(ticket) = hot.queue_ticket else {
+          continue;
+        };
+        if ticket < queue_head || ticket >= queue_tail {
+          return Err(TryRuntimeError::Other(
+            "ActorHot owns an already-consumed or beyond-tail queue ticket",
+          ));
+        }
+        if !live_queue_tickets.insert(ticket) {
+          return Err(TryRuntimeError::Other(
+            "multiple actors own the same live queue ticket",
+          ));
+        }
+        let page_id = ticket / page_size;
+        let slot = (ticket % page_size) as usize;
+        let Some(entry) = QueuePages::<T>::get(page_id).and_then(|page| page.get(slot).copied())
+        else {
+          return Err(TryRuntimeError::Other(
+            "ActorHot live queue ticket does not resolve to a physical entry",
+          ));
+        };
+        if entry.aaa_id != aaa_id {
+          return Err(TryRuntimeError::Other(
+            "ActorHot live queue ticket resolves to a different actor",
+          ));
+        }
+      }
       let next_id = NextAaaId::<T>::get();
       if let Some(max_aaa_id) = max_id {
         if next_id <= max_aaa_id {

@@ -393,7 +393,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
 - `ActorIdentityCount`: transactionally maintained O(1) cardinality across `ActorHot` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorProgram`, and `ActorFunding`
-- `QueueHead` / `QueueTail` / `QueuePages`: typed monotonic paged-FIFO substrate, currently empty and inactive while page-operation benchmarks and scheduler replacement land; page entries contain only `aaa_id`, with logical tickets derived from page/slot
+- `QueueHead` / `QueueTail` / `QueuePages`: typed monotonic paged-FIFO substrate with append, exact-head peek/consume, actor-local live-ticket dedup/invalidation, tombstone preservation, full-page reclamation, and empty partial-tail alignment; the production scheduler has not switched yet. Page entries contain only `aaa_id`, with logical tickets derived from page/slot, so replacement tickets leave old entries physically distinguishable as tombstones without page rewrites.
 - `CurrentQueue`: bounded run queue for the still-active pre-paged scheduler
 - `NextQueue`: staged queue merged into the active pre-paged run queue on next `on_idle`
 - `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock`: time-ordered overdue wakeup layer; `WakeupRetryPending`: actor-keyed durable retry marker when the bounded spillover horizon is saturated

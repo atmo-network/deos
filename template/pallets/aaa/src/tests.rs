@@ -2,9 +2,10 @@ use crate::{
   AaaInstances, AaaType, ActiveLifecycle, ActorClass, AmountResolution, AssetFilter, AssetFilterOf,
   CloseReason, Condition, DeferReason, Error, Event, FundingSourcePolicy, IdleStarvationBlocks,
   Mutability, NextAaaId, OnCloseStepFailureKind, OwnerSlotMask, PauseReason, ProgramInput,
-  SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow, SourceFilter, SourceFilterOf,
-  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason,
-  SweepCursor, Task, TaskOf, Trigger, adapters::AssetOps, mock::*, types::FundingBatch,
+  QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow, SourceFilter,
+  SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf,
+  StepSkippedReason, SweepCursor, Task, TaskOf, Trigger, adapters::AssetOps, mock::*,
+  types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
 use polkadot_sdk::frame_support::{
@@ -2571,6 +2572,106 @@ fn enqueue_cap_defers_excess_to_next_block() {
     let deferred = crate::pallet::WakeupIndex::<Test>::get(2).len() as u32;
     assert_eq!(queued, cap);
     assert_eq!(deferred, total - cap);
+  });
+}
+
+#[test]
+fn paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+
+    assert!(AAA::paged_enqueue(aaa_id));
+    assert!(AAA::paged_enqueue(aaa_id));
+    assert_eq!(AAA::queue_head(), 0);
+    assert_eq!(AAA::queue_tail(), 1);
+    assert_eq!(
+      AAA::actor_hot(aaa_id).expect("hot state").queue_ticket,
+      Some(0)
+    );
+    assert_eq!(AAA::queue_pages(0).expect("head page").len(), 1);
+
+    assert_eq!(AAA::paged_invalidate(aaa_id), Some(0));
+    assert_eq!(
+      AAA::actor_hot(aaa_id).expect("hot state").queue_ticket,
+      None
+    );
+    assert_eq!(AAA::paged_head_entry(), Some((0, QueueEntry { aaa_id })));
+    assert!(AAA::paged_consume_head(0));
+    assert_eq!(AAA::queue_head(), 32);
+    assert_eq!(AAA::queue_tail(), 32);
+    assert!(AAA::queue_pages(0).is_none());
+  });
+}
+
+#[test]
+fn paged_queue_crosses_and_reclaims_page_boundaries_without_prefix_rewrites() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut actors = Vec::new();
+    for _ in 0..33 {
+      let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      assert!(AAA::paged_enqueue(aaa_id));
+      actors.push(aaa_id);
+    }
+    assert_eq!(AAA::queue_tail(), 33);
+    assert_eq!(AAA::queue_pages(0).expect("full first page").len(), 32);
+    assert_eq!(AAA::queue_pages(1).expect("partial second page").len(), 1);
+
+    for (ticket, aaa_id) in actors.iter().take(32).copied().enumerate() {
+      assert_eq!(
+        AAA::paged_head_entry(),
+        Some((ticket as u64, QueueEntry { aaa_id }))
+      );
+      assert!(AAA::paged_consume_head(ticket as u64));
+    }
+    assert_eq!(AAA::queue_head(), 32);
+    assert!(AAA::queue_pages(0).is_none());
+    assert_eq!(AAA::queue_pages(1).expect("remaining head page").len(), 1);
+
+    assert!(AAA::paged_consume_head(32));
+    assert_eq!(AAA::queue_head(), 64);
+    assert_eq!(AAA::queue_tail(), 64);
+    assert!(AAA::queue_pages(1).is_none());
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn paged_queue_replacement_ticket_leaves_old_entry_as_tombstone() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actor_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let actor_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    assert!(AAA::paged_enqueue(actor_a));
+    assert_eq!(AAA::paged_invalidate(actor_a), Some(0));
+    assert!(AAA::paged_enqueue(actor_b));
+    assert!(AAA::paged_enqueue(actor_a));
+
+    assert_eq!(
+      AAA::actor_hot(actor_a).expect("actor A hot").queue_ticket,
+      Some(2)
+    );
+    assert_eq!(
+      AAA::actor_hot(actor_b).expect("actor B hot").queue_ticket,
+      Some(1)
+    );
+    assert_eq!(
+      AAA::paged_head_entry(),
+      Some((0, QueueEntry { aaa_id: actor_a }))
+    );
+    assert!(AAA::paged_consume_head(0));
+    assert_eq!(
+      AAA::actor_hot(actor_a).expect("actor A hot").queue_ticket,
+      Some(2)
+    );
+    assert_eq!(
+      AAA::paged_head_entry(),
+      Some((1, QueueEntry { aaa_id: actor_b }))
+    );
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 

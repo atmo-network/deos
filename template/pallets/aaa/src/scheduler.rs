@@ -179,6 +179,112 @@ impl<T: Config> Pallet<T> {
     ));
   }
 
+  fn queue_page_size() -> u64 {
+    u64::from(T::QueuePageSize::get())
+  }
+
+  fn queue_page_and_slot(ticket: QueueTicket) -> (QueuePageId, usize) {
+    let page_size = Self::queue_page_size();
+    ((ticket / page_size), (ticket % page_size) as usize)
+  }
+
+  /// Append one actor to the inactive paged-FIFO substrate.
+  ///
+  /// The active scheduler switches to this primitive only after its page
+  /// operation weights and cutoff flow replace the double-buffer queue.
+  pub fn paged_enqueue(aaa_id: AaaId) -> bool {
+    let Some(hot) = ActorHot::<T>::get(aaa_id) else {
+      return false;
+    };
+    if hot.queue_ticket.is_some() {
+      return true;
+    }
+    let head = QueueHead::<T>::get();
+    let tail = QueueTail::<T>::get();
+    if tail < head || tail.saturating_sub(head) >= u64::from(T::MaxQueueLength::get()) {
+      return false;
+    }
+    let Some(next_tail) = tail.checked_add(1) else {
+      return false;
+    };
+    let (page_id, slot) = Self::queue_page_and_slot(tail);
+    let mut page = QueuePages::<T>::get(page_id).unwrap_or_default();
+    if page.len() != slot || page.try_push(QueueEntry { aaa_id }).is_err() {
+      return false;
+    }
+    QueuePages::<T>::insert(page_id, page);
+    QueueTail::<T>::put(next_tail);
+    ActorHot::<T>::mutate(aaa_id, |maybe| {
+      if let Some(hot) = maybe.as_mut() {
+        hot.queue_ticket = Some(tail);
+      }
+    });
+    true
+  }
+
+  pub fn paged_invalidate(aaa_id: AaaId) -> Option<QueueTicket> {
+    ActorHot::<T>::mutate(aaa_id, |maybe| {
+      maybe.as_mut().and_then(|hot| hot.queue_ticket.take())
+    })
+  }
+
+  pub fn paged_head_entry() -> Option<(QueueTicket, QueueEntry)> {
+    let head = QueueHead::<T>::get();
+    if head >= QueueTail::<T>::get() {
+      return None;
+    }
+    let (page_id, slot) = Self::queue_page_and_slot(head);
+    QueuePages::<T>::get(page_id)
+      .and_then(|page| page.get(slot).copied())
+      .map(|entry| (head, entry))
+  }
+
+  /// Commit physical consumption only after the scheduler has decided that the
+  /// current head may advance. Matching live membership clears actor-local state;
+  /// mismatches remain distinguishable tombstones.
+  pub fn paged_consume_head(ticket: QueueTicket) -> bool {
+    let head = QueueHead::<T>::get();
+    let tail = QueueTail::<T>::get();
+    if ticket != head || head >= tail {
+      return false;
+    }
+    let Some((_, entry)) = Self::paged_head_entry() else {
+      return false;
+    };
+    let Some(next_head) = head.checked_add(1) else {
+      return false;
+    };
+    let page_size = Self::queue_page_size();
+    let (page_id, _) = Self::queue_page_and_slot(head);
+    if next_head == tail {
+      let remainder = next_head % page_size;
+      let aligned = if remainder == 0 {
+        next_head
+      } else {
+        let Some(aligned) = next_head.checked_add(page_size.saturating_sub(remainder)) else {
+          return false;
+        };
+        aligned
+      };
+      QueuePages::<T>::remove(page_id);
+      QueueHead::<T>::put(aligned);
+      QueueTail::<T>::put(aligned);
+    } else {
+      QueueHead::<T>::put(next_head);
+      if next_head % page_size == 0 {
+        QueuePages::<T>::remove(page_id);
+      }
+    }
+    ActorHot::<T>::mutate(entry.aaa_id, |maybe| {
+      if let Some(hot) = maybe.as_mut()
+        && hot.queue_ticket == Some(ticket)
+      {
+        hot.queue_ticket = None;
+      }
+    });
+    true
+  }
+
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) {
     let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
       return;
