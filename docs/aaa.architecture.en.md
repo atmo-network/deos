@@ -281,7 +281,7 @@ Deferral/terminal paths:
 - rolled-back scheduler or post-cycle close → `CycleDeferred(CloseTransitionFailed)`, charged close-attempt weight, durable requeue, and deterministic retry of the stored terminal reason before readiness or another normal cycle; sweep-time rollback emits the same deferral, retains the cursor before that actor, and stops the pass for same-candidate retry next block
 - Pre-cycle close precedence is deterministic: `WindowExpired` > `BalanceExhausted` > `FeeBudgetExhausted`
 - User fee shortfall at admission → terminal `FeeBudgetExhausted` close
-- Shipped cycle success means completion without an `AbortCycle`: skip-only and even all-failed-`ContinueNextStep` runs reset `consecutive_failures` and may satisfy auto-close, while an abort increments failure state and cannot auto-close; pallet coverage pins these sequences together with weight-defer, probability-miss, and direct close-only event boundaries
+- Shipped cycle success means completion without an `AbortCycle`: skip-only and even all-failed-`ContinueNextStep` runs reset `consecutive_failures` and may satisfy auto-close, while an abort increments failure state and cannot auto-close; pallet coverage pins these sequences together with weight-defer and direct close-only event boundaries
 - Post-failure close is inclusive at `consecutive_failures >= MaxConsecutiveFailures`; the admitted cycle emits its authoritative `CycleSummary` before close-tail events and `AaaClosed`, matching the existing post-success `AutoCloseNonceReached` ordering
 - All close paths now use the same fully admitted `on_close_execution_plan` model: explicit `close_aaa`, lifecycle touchpoints, scheduler-triggered closes, auto-close, and sweep closure all execute the close tail instead of silently falling back to fee-free best effort
 - Automatic close paths reserve the close-plan bound plus a terminal-cleanup bound ahead of time where the scheduler can predict closure (`AutoCloseNonceReached`, failure-threshold paths) and defer closure when either `on_idle` Weight dimension cannot admit the complete unit; cleanup covers bounded scans and rewrites of both run queues and one reverse-indexed full wakeup bucket plus actor/readiness/cardinality state, reverse indexes, tombstone/checkpoint, and terminal event
@@ -334,20 +334,15 @@ Recovery is governance-operated (circuit breaker or parameter adjustment); no em
 
 Implemented trigger variants:
 
-- `Timer { every_blocks, probability }`
+- `Timer { every_blocks }`
 - `OnAddressEvent { source_filter, asset_filter }`
 - `Manual`
 
 ### Timer
 
-- Deterministic cadence with optional probabilistic gate; delayed timers derive actor-stable jitter from `Blake2_256(aaa_id)`, and schedule validation includes the maximum reachable jitter (`window - 1`) within `MaxExecutionDelayBlocks`
-- An ordinary sampled probability miss is a silent readiness miss, not a deferred-cycle outcome; strict financial entropy disappearance emits bounded per-attempt `SecureEntropyUnavailable { aaa_id }` observability without incrementing nonce/failure state or executing the plan
-- Non-strict entropy fallback chain in implementation:
-  1. `EntropyProvider::entropy(subject)`
-  2. `parent_hash`
-  3. previous block hash
-- Current runtime posture: no dedicated external secure entropy provider is wired after local VRF retirement, so probabilistic timers rely on this fallback chain unless a future relay-beacon adapter supplies external entropy; TMCTOL does **not** currently accept the visible epoch-scale relay randomness items as that replacement and stays on previous-block-hash fallback until a real per-block protocol beacon exists
-- If such a per-block relay beacon appears later, the preferred ingestion topology is still a custom parachain-system `ConsensusHook` wrapper that reads the relay proof once per block, materializes a compact relay snapshot into pallet storage, and lets AAA's runtime `EntropyProvider` derive subject-specific entropy from that snapshot later in the block
+- Timer readiness is deterministic cadence only; AAA exposes no probability field, entropy provider, secure/insecure branch, hash fallback, probability event, or probability error.
+- Delayed timers derive actor-stable anti-storm jitter from `Blake2_256(aaa_id)`, and schedule validation includes the maximum reachable jitter (`window - 1`) within `MaxExecutionDelayBlocks`.
+- Any future probabilistic execution requires a separate append-only trigger variant and a concrete financially secure runtime entropy contract rather than an optional field on `Timer`.
 
 ### OnAddressEvent
 
@@ -442,7 +437,7 @@ Runtime interpretation:
 
 Creation and Mutable System reopen inject the canonical `[Noop]` close plan. Mutable actors can replace it through `update_on_close_execution_plan`; Immutable User/System creation intentionally fixes `[Noop]` for actor lifetime, and pallet coverage asserts both the injected shape and rejected update paths. User actors cannot admit `Mint` in either the normal plan or close plan. System Immutable actors are hard protocol anchors at the control boundary: no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, close, or reopen them. Mandatory runtime-owned terminal transitions remain distinct from that control guard, so an Immutable actor reaching the consecutive-failure threshold executes its close tail and leaves an Immutable tombstone that governance cannot reopen; only a runtime upgrade can restore or alter that anchor.
 
-Scheduler hygiene follows the bounded liveness matrix in the specification: execution-created late enqueues merge into next-block queue state; Manual and AddressEvent latches deferred by cooldown or a future schedule window receive a wakeup at their earliest eligibility; resume re-primes pending non-timer actors after a paused queue pop; delayed probability misses re-arm timers; and closed/missing stale queue or wakeup entries are ignored deterministically. Pallet regressions cover paused-pop-resume, cooldown, and pre-window orderings, while runtime integration `asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter` proves actor-to-actor ingress remains queued across the `on_idle` boundary.
+Scheduler hygiene follows the bounded liveness matrix in the specification: execution-created late enqueues merge into next-block queue state; Manual and AddressEvent latches deferred by cooldown or a future schedule window receive a wakeup at their earliest eligibility; resume re-primes pending non-timer actors after a paused queue pop; deterministic delayed timers re-arm after execution; and closed/missing stale queue or wakeup entries are ignored deterministically. Pallet regressions cover paused-pop-resume, cooldown, and pre-window orderings, while runtime integration `asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter` proves actor-to-actor ingress remains queued across the `on_idle` boundary.
 
 ## AAA Read-Model Contract
 
@@ -575,7 +570,6 @@ Selected configured bounds in the current DEOS reference runtime:
 - `MaxAutoCloseNonceHorizon = 10,000`
 - `MinUserBalance = max(5 * ED, ED)` (guarded)
 - `MaxExecutionDelayBlocks = 52,560,000` (10y @ 6s)
-- `RequireSecureEntropyForProbabilisticTasks = false` (runtime currently allows probabilistic timers to fall back to previous-block-hash sampling while the project stays on a trusted collator set; if a future per-block relay beacon ever becomes acceptable, the preferred ingress path is a weight-accounted `ConsensusHook` snapshot rather than per-timer proof reconstruction)
 
 These values enforce bounded execution and predictable scheduler behavior under load.
 

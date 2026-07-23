@@ -166,7 +166,7 @@ Required behavior:
 4. **Standard Funding Ingress**: The stable contract has no dedicated funding extrinsic. Every successful inbound transfer still credits sovereign balance; only a positive tracked transfer accepted by Items 2–3 may mutate `funding_snapshots`, while all other transfers remain balance-only donations. Funding authority and `OnAddressEvent` source/asset filters MUST be evaluated independently: neither acceptance nor rejection by one implies the result of the other.
 5. **Bootstrap and Accumulation**: The first authoritative transfer with no batch entry MUST set `amount` and `block` so initial funding needs no empty cycle. Once armed, later authoritative transfers MUST checked-add into `pending_amount`, record `pending_last_block`, and MUST NOT change `amount`/`block`; pending overflow MUST fail observably and transactionally roll back both the producer transfer and batch mutation rather than clamp or overwrite.
 6. **Frozen Resolution**: Normal-cycle and close-tail `PercentageOfLastFunding` MUST resolve only from the batch `amount`. Close-only execution MUST ignore pending, MUST NOT promote it, and terminal deletion removes batch state while sovereign balances remain in place.
-7. **Successful Promotion**: After `CycleSummary` for a successful cycle as defined in Section 2.6, every nonzero `pending_amount` MUST replace `amount`, set `block = pending_last_block`, and clear pending atomically; assets without pending retain their armed values. `AbortCycle`, Weight deferral, probability miss, pause, breaker deferral, and any path without an admitted successful cycle MUST preserve armed and pending state unchanged.
+7. **Successful Promotion**: After `CycleSummary` for a successful cycle as defined in Section 2.6, every nonzero `pending_amount` MUST replace `amount`, set `block = pending_last_block`, and clear pending atomically; assets without pending retain their armed values. `AbortCycle`, Weight deferral, pause, breaker deferral, and any path without an admitted successful cycle MUST preserve armed and pending state unchanged.
 8. Funding-batch mutation remains valid while paused but MUST NOT imply automatic pause/resume; preflight and notification for expired or closed actors MUST remain balance-only. `FundingUnavailable` remains a deterministic non-terminal outcome covering absent/zero armed state and armed-amount overspend, while an armed value remains valid until successful promotion or plan pruning.
 9. `cycle_weight_upper` and `cycle_fee_upper` are run-plan cache fields that MUST be recomputed on create/update execution plan and MUST only affect admission/preflight efficiency, not functional execution semantics. Close-tail upper bounds (`close_cycle_weight_upper`, `close_cycle_fee_upper`) MUST also remain deterministically derivable from `on_close_execution_plan` on create/update, whether cached or recomputed, and MUST NOT alter functional task semantics.
 
@@ -547,11 +547,11 @@ Each task MUST define: validation rules, deterministic error surface, determinis
 
 ## 7. Triggers
 
-### 7.1 Timer and Entropy
+### 7.1 Deterministic Timer
 
 ```rust
 enum Trigger<AccountId, AssetId> {
-    Timer { every_blocks: u32, probability: Option<Perbill> },
+    Timer { every_blocks: u32 },
     OnAddressEvent {
         source_filter: SourceFilter<AccountId>,
         asset_filter: AssetFilter<AssetId>,
@@ -573,19 +573,16 @@ Schedule cooldown rules:
 
 Timer rules:
 
-1. `every_blocks` MUST satisfy `0 < every_blocks <= MaxExecutionDelayBlocks`; otherwise fail with `ExecutionDelayTooLong`
-2. `probability: None` means deterministic cadence; `Some(p)` enables probabilistic gate
-3. Cadence `every_blocks <= 1` MUST use queue self-continuation (`NextQueue`) and MUST NOT use `WakeupIndex`
-4. Cadence `every_blocks > 1` MUST schedule through the deterministic time-ordered wakeup index (`WakeupIndex`)
+1. `every_blocks` MUST satisfy `0 < every_blocks <= MaxExecutionDelayBlocks`; otherwise fail with `ExecutionDelayTooLong`.
+2. Timer cadence is deterministic and exposes no probability or entropy input.
+3. Cadence `every_blocks <= 1` MUST use queue self-continuation (`NextQueue`) and MUST NOT use `WakeupIndex`.
+4. Cadence `every_blocks > 1` MUST schedule through the deterministic time-ordered wakeup index (`WakeupIndex`).
 5. Deterministic anti-storm jitter SHOULD be applied for delayed timers (`every_blocks > 1`):
    `jitter_window = min(every_blocks / 4, MaxTimerJitterBlocks)`
    `jitter = Blake2_256(aaa_id) % jitter_window` when `jitter_window > 0`, else `0`; validation MUST require `every_blocks + max(jitter_window - 1, 0) <= MaxExecutionDelayBlocks`
-   `target_block = current_block + every_blocks + jitter`
-6. If `RequireSecureEntropyForProbabilisticTasks=true`, schedules with `0 < p < 1` and any task other than `Noop` MUST require `EntropyProvider::is_secure_for_financial_probability()` or fail with `InsecureEntropyProvider` at admission time
-7. Those same strict financial schedules MUST use `EntropyProvider::secure_entropy_for_financial_probability(subject)` at execution time and MUST NOT fall back to block hashes; if secure entropy is unavailable, emit one `SecureEntropyUnavailable` event for that bounded readiness attempt and do not execute the cycle
-8. For non-strict probability sampling, the entropy fallback chain is deterministic: external provider `(aaa_id, current_block)` → `parent_hash` → `block_hash(current_block - 1)`; `block_hash(current_block)` is forbidden in runtime dispatch
-9. Probability sampling occurs only after cadence/cooldown readiness is met; an ordinary sampled probability miss emits no event, leaves nonce/manual/failure state unchanged, and MUST re-arm delayed timers
-10. Final sampled entropy MUST be domain-separated with resolved entropy hash, `aaa_id`, and `cycle_nonce`; off-chain nondeterministic entropy is forbidden
+   `target_block = current_block + every_blocks + jitter`.
+
+A future probabilistic trigger requires a separate append-only trigger variant plus a concrete deterministic, financially secure runtime entropy contract; it MUST NOT reintroduce optional probability into `Timer` or hash-fallback sampling.
 
 ### 7.2 OnAddressEvent
 
@@ -694,7 +691,6 @@ Each block MUST use a two-dimensional weight meter to admit bounded ingress, wak
 
 - Queue carry-over: deferred, leftover, and execution-created late enqueues persist in deterministic FIFO order and MUST be revalidated at pop
 - Timer due: delayed wakeup moves to active queue; actor wakeup pointer clears when drained
-- Timer probability miss: no cycle/event/failure; delayed timers MUST re-arm, every-block timers use continuation
 - AddressEvent matched: set/keep inbox latch; enqueue best effort; overflow MUST NOT clear the latch
 - Manual trigger: set flag and enqueue/schedule; deferral preserves flag until admitted cycle start
 - Queue/wakeup full: spill deterministically; if no bucket fits, emit drop and retain source latch when any
@@ -831,7 +827,6 @@ OnCloseExecutionPlanUpdated { aaa_id }
 OnCloseStepFailed { aaa_id, step_index, kind: OnCloseStepFailureKind, error: DispatchError }
 OnCloseStepSkipped { aaa_id, step_index, reason: StepSkippedReason }
 ScheduleUpdated { aaa_id }
-SecureEntropyUnavailable { aaa_id }
 SplitTransferExecuted { aaa_id, asset, total, distributed, retained, legs: u32, effective_legs: u32 }
 StakeExecuted { aaa_id, asset, amount }
 StepFailed { aaa_id, cycle_nonce, step_index, error: DispatchError }
@@ -851,7 +846,7 @@ Indexer-facing correlation key is `(aaa_id, cycle_nonce)`.
 Event ordering:
 
 1. **Admitted cycle**: `CycleStarted` → zero or more step-level events (`StepSkipped` / `StepFailed` / task events) → `CycleSummary`; this ordering covers skip-only, all-failed-`ContinueNextStep`, and `AbortCycle` runs, while only the success predicate in Section 2.6 controls failure reset and auto-close eligibility.
-2. **No admitted cycle**: weight rejection or a rolled-back scheduler close emits `CycleDeferred` without `CycleStarted`/`CycleSummary`; an ordinary probability miss emits no cycle/defer event; direct close-only execution emits only the close-tail sequence below.
+2. **No admitted cycle**: weight rejection or a rolled-back scheduler close emits `CycleDeferred` without `CycleStarted`/`CycleSummary`; direct close-only execution emits only the close-tail sequence below.
 3. **Terminal close with admitted close tail**: when closure follows an admitted successful normal cycle, that cycle MUST first end with `CycleSummary`; then zero or more close-tail task / `OnCloseStepSkipped` / `OnCloseStepFailed` events → `OnCloseExecutionPlanSummary` → `AaaClosed`. Direct close-only execution starts at the close-tail sequence and MUST NOT emit `CycleStarted`/`CycleSummary`.
 
 Frontends SHOULD derive per-cycle step-status bitmask from `StepSkipped`/`StepFailed` events. `CycleSummary` is authoritative when present.
@@ -965,7 +960,6 @@ enum Error {
     FundingBatchOverflow,
     GlobalCircuitBreakerActive,
     ImmutableAaa,
-    InsecureEntropyProvider,
     InsufficientBalance,
     InsufficientFee,
     InvalidAmountResolution,
@@ -1022,8 +1016,8 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 1. AAA admits each housekeeping, queue, wakeup, close, and cycle operation against both remaining Weight dimensions, and runtime enforces `MinOnIdleReservePct` dispatchable headroom (Section 8.4; Section 9.2)
 2. All loops and queues remain bounded by explicit `Max*` constants and no bounded operation executes unmetered (Section 1 item 2)
 3. Slot allocation and active-occupancy mutations are synchronous and race-safe (Section 1 item 8; Section 2.3)
-4. Determinism holds for equal state/context, including entropy fallback order (Section 1 item 1; Section 7.1)
-5. Current-block hash is never used as entropy in runtime execution (Section 1 item 10; Section 7.1 item 8)
+4. Determinism holds for equal state/context, including deterministic timer jitter (Section 1 item 1; Section 7.1)
+5. AAA exposes no probability or entropy input in `Timer`, configuration, errors, events, or embedding obligations (Section 7.1)
 6. Adapters are deterministic and their runtime-derived upper bounds cover canonical iteration, quote search, storage proof, fee collection, and fixed rounding in both Weight dimensions (Section 3.2; Section 3.5)
 7. No recurring rent accrual or touch-based rent debit exists (Section 4.2)
 8. `create_user_aaa` charges non-refundable `AaaCreationFee` through one atomic runtime `FeeCollector` transaction (Section 1 item 5; Section 4.4)
@@ -1066,7 +1060,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 - `MaxConditionsPerStep`: 4; condition bound per step
 - `MaxConsecutiveFailures`: 10; terminal threshold; `MaxAutoCloseNonceHorizon`: reference default 10,000; current-relative future-target bound
 - `MaxExecutionDelayBlocks`: 10 years in blocks; maximum first-execution deferral
-- `MaxTimerJitterBlocks`: 32–128; deterministic timer jitter cap; `RequireSecureEntropyForProbabilisticTasks`: runtime boolean, reference default `false` under the documented trusted-collator fallback posture
+- `MaxTimerJitterBlocks`: 32–128; deterministic timer jitter cap
 - `MaxExecutionsPerBlock`: 16–64; global per-block admitted execution cap
 - `MaxFundingTrackedAssets`: 3–10; assets tracked by `PercentageOfLastFunding` per AAA
 - `MaxIdleStarvationBlocks`: 10–50; admitted-base execution-budget exhaustion threshold before starvation event

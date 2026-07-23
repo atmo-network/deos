@@ -532,28 +532,6 @@ fn aaa_fee_collector_routes_the_full_amount_to_fee_sink() {
 }
 
 #[test]
-fn runtime_policy_allows_probabilistic_financial_timer_without_secure_entropy_provider() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: Some(Perbill::from_percent(50)),
-      },
-      cooldown_blocks: 0,
-    };
-    assert_ok!(AAA::create_system_aaa(
-      RuntimeOrigin::root(),
-      ALICE,
-      Mutability::Mutable,
-      schedule,
-      None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
-    ));
-  });
-}
-
-#[test]
 fn permissionless_sweep_many_batches_lifecycle_evaluation() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -1733,10 +1711,7 @@ fn timer_horizon_validation_includes_runtime_jitter_bound() {
       <<Runtime as pallet_aaa::Config>::MaxTimerJitterBlocks as Get<u32>>::get().saturating_sub(1);
     let largest_valid_cadence = max_delay.saturating_sub(max_jitter);
     let schedule = |every_blocks| Schedule {
-      trigger: Trigger::Timer {
-        every_blocks,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks },
       cooldown_blocks: 0,
     };
     assert_ok!(AAA::create_user_aaa(
@@ -2873,10 +2848,7 @@ fn scheduler_fifo_order_is_deterministic_across_actor_types() {
       seeded_test_ext().execute_with(|| {
         System::set_block_number(1);
         let schedule = Schedule {
-          trigger: Trigger::Timer {
-            every_blocks: 1,
-            probability: None,
-          },
+          trigger: Trigger::Timer { every_blocks: 1 },
           cooldown_blocks: 0,
         };
         let execution_plan =
@@ -3702,10 +3674,7 @@ fn user_dca_e2e_lifecycle_with_natural_close() {
     let create_fee = <Runtime as pallet_aaa::Config>::AaaCreationFee::get();
     let initial_alice_balance = Balances::free_balance(&ALICE);
     let schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 5,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks: 5 },
       cooldown_blocks: 0,
     };
     let foreign = AssetKind::Local(ASSET_A);
@@ -3801,10 +3770,7 @@ fn setup_noop_actors(n: u64, initial_balance: u128) -> alloc::vec::Vec<u64> {
       ALICE,
       Mutability::Mutable,
       Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -3833,10 +3799,7 @@ fn setup_noop_actors_sparse(n: u64, initial_balance: u128, stride: u64) -> alloc
       ALICE,
       Mutability::Mutable,
       Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -3873,10 +3836,7 @@ fn setup_circular_chain(
       ALICE,
       Mutability::Mutable,
       Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -4843,10 +4803,7 @@ fn genesis_sparse_id_space_all_actors_execute_every_block() {
       ALICE,
       Mutability::Mutable,
       Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -4936,10 +4893,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
       ALICE,
       Mutability::Mutable,
       Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -4961,10 +4915,7 @@ fn execution_order_lower_id_executes_before_higher_id() {
       ALICE,
       Mutability::Mutable,
       Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -5155,10 +5106,7 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
         min_balance.saturating_mul(20),
       );
       let schedule = Schedule {
-        trigger: Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
+        trigger: Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       };
       let aaa_id = create_user(

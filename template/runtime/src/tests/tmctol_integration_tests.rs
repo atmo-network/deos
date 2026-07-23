@@ -115,10 +115,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
       RuntimeOrigin::root(),
       aaa_ids::TREASURY_B_AAA_ID,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 10,
-          probability: None,
-        },
+        trigger: pallet_aaa::Trigger::Timer { every_blocks: 10 },
         cooldown_blocks: 5,
       },
       None,
@@ -1215,10 +1212,7 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
       RuntimeOrigin::root(),
       treasury_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
+        trigger: pallet_aaa::Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -1570,10 +1564,7 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       RuntimeOrigin::root(),
       zm_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
+        trigger: pallet_aaa::Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -1687,10 +1678,7 @@ fn treasury_b_buyback_burns_bldr() {
       RuntimeOrigin::root(),
       treasury_b_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 10,
-          probability: None,
-        },
+        trigger: pallet_aaa::Trigger::Timer { every_blocks: 10 },
         cooldown_blocks: 5,
       },
       None,

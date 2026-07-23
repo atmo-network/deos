@@ -1,6 +1,5 @@
 use super::pallet::*;
-use super::types::Task as AaaTask;
-use super::{AssetOps, EntropyProvider, FundingAuthority, weights::WeightInfo};
+use super::{AssetOps, FundingAuthority, weights::WeightInfo};
 use alloc::{
   collections::{BTreeSet, VecDeque},
   vec::Vec,
@@ -752,77 +751,15 @@ impl<T: Config> Pallet<T> {
     }
     match instance.schedule.trigger {
       Trigger::Manual => false,
-      Trigger::Timer {
-        every_blocks,
-        probability,
-      } => Self::evaluate_timer(instance, every_blocks, probability),
+      Trigger::Timer { every_blocks } => Self::evaluate_timer(instance, every_blocks),
       Trigger::OnAddressEvent { .. } => Self::evaluate_on_address_event(instance.aaa_id),
     }
   }
 
-  fn evaluate_timer(
-    instance: &AaaInstanceOf<T>,
-    every_blocks: u32,
-    probability: Option<Perbill>,
-  ) -> bool {
+  fn evaluate_timer(instance: &AaaInstanceOf<T>, every_blocks: u32) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
     let cadence: BlockNumberFor<T> = every_blocks.into();
-    if now.saturating_sub(instance.last_cycle_block) < cadence {
-      return false;
-    }
-    let Some(probability) = probability else {
-      return true;
-    };
-    if probability == Perbill::one() {
-      return true;
-    }
-    if probability.is_zero() {
-      return false;
-    }
-    let strict_financial_entropy = Self::requires_strict_probability_entropy(instance);
-    let Some(entropy_hash) =
-      Self::resolve_timer_entropy(now, instance.aaa_id, strict_financial_entropy)
-    else {
-      if strict_financial_entropy {
-        Self::deposit_event(Event::SecureEntropyUnavailable {
-          aaa_id: instance.aaa_id,
-        });
-      }
-      return false;
-    };
-    let seed = Self::mix_seed(entropy_hash.as_ref(), instance.aaa_id, instance.cycle_nonce);
-    (seed % 1_000_000_000) < u64::from(probability.deconstruct())
-  }
-
-  fn resolve_timer_entropy(
-    now: BlockNumberFor<T>,
-    aaa_id: AaaId,
-    strict_financial_entropy: bool,
-  ) -> Option<T::Hash> {
-    let subject = (aaa_id, now).encode();
-    if strict_financial_entropy {
-      return T::EntropyProvider::secure_entropy_for_financial_probability(&subject);
-    }
-    if let Some(external_entropy_hash) = T::EntropyProvider::entropy(&subject) {
-      return Some(external_entropy_hash);
-    }
-    let parent_hash = frame_system::Pallet::<T>::parent_hash();
-    if parent_hash != T::Hash::default() {
-      return Some(parent_hash);
-    }
-    let previous_hash = frame_system::Pallet::<T>::block_hash(now.saturating_sub(One::one()));
-    if previous_hash != T::Hash::default() {
-      return Some(previous_hash);
-    }
-    Some(T::Hash::default())
-  }
-
-  fn requires_strict_probability_entropy(instance: &AaaInstanceOf<T>) -> bool {
-    T::RequireSecureEntropyForProbabilisticTasks::get()
-      && instance
-        .execution_plan
-        .iter()
-        .any(|step| !matches!(step.task, AaaTask::Noop))
+    now.saturating_sub(instance.last_cycle_block) >= cadence
   }
 
   fn source_matches_filter(
@@ -1131,18 +1068,6 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn consume_address_event(aaa_id: AaaId) {
     AddressEventInbox::<T>::remove(aaa_id);
-  }
-
-  fn mix_seed(hash_bytes: &[u8], aaa_id: AaaId, cycle_nonce: u64) -> u64 {
-    let mut acc: u64 = aaa_id.wrapping_mul(0x517cc1b727220a95);
-    acc = acc.wrapping_add(cycle_nonce.wrapping_mul(0x9e3779b97f4a7c15));
-    for (i, &byte) in hash_bytes.iter().take(8).enumerate() {
-      acc ^= (byte as u64) << (i * 8);
-    }
-    acc ^= acc >> 33;
-    acc = acc.wrapping_mul(0xff51afd7ed558ccd);
-    acc ^= acc >> 33;
-    acc
   }
 
   pub(crate) fn execute_zombie_sweep(remaining_weight: Weight) -> Weight {

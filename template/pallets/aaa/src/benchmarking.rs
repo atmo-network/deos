@@ -628,10 +628,7 @@ mod benches {
     let payer: T::AccountId = whitelisted_caller();
     let owner: T::AccountId = account("fee-sink-owner", 0, 0);
     let schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks: 1 },
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_aaa(
@@ -1343,10 +1340,7 @@ mod benches {
     let initial_balance = T::MinUserBalance::get().saturating_mul(1_000_000u32.into());
     let native = T::NativeAssetId::get();
     let schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks: 1 },
       cooldown_blocks: 0,
     };
     let mut sovereigns: alloc::vec::Vec<T::AccountId> = alloc::vec::Vec::with_capacity(n as usize);

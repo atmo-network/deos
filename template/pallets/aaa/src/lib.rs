@@ -66,16 +66,6 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
   fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight;
 }
 
-pub trait EntropyProvider<Hash> {
-  fn entropy(subject: &[u8]) -> Option<Hash>;
-  fn secure_entropy_for_financial_probability(subject: &[u8]) -> Option<Hash> {
-    Self::entropy(subject)
-  }
-  fn is_secure_for_financial_probability() -> bool {
-    false
-  }
-}
-
 pub trait AtomicityHook {
   fn on_create_checkpoint(_aaa_id: u64) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
     Ok(())
@@ -112,19 +102,11 @@ impl<BlockNumber> AddressEventIngressHook<BlockNumber> for () {
   }
 }
 
-pub struct NoEntropyProvider;
-
-impl<Hash> EntropyProvider<Hash> for NoEntropyProvider {
-  fn entropy(_subject: &[u8]) -> Option<Hash> {
-    None
-  }
-}
-
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider, FeeCollector,
-    FundingAuthority, LiquidityDonationOps, TaskWeightInfo, WeightInfo,
+    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, FeeCollector, FundingAuthority,
+    LiquidityDonationOps, TaskWeightInfo, WeightInfo,
   };
   use crate::adapters::StakingOps as _;
   use frame::prelude::*;
@@ -228,12 +210,6 @@ pub mod pallet {
     type WeightToFee: polkadot_sdk::sp_weights::WeightToFee<Balance = Self::Balance>;
     /// Runtime-bound upper weights for every AAA task variant
     type TaskWeightInfo: TaskWeightInfo;
-    /// If true, probabilistic timer schedules with economically sensitive tasks
-    /// require a secure external entropy provider
-    #[pallet::constant]
-    type RequireSecureEntropyForProbabilisticTasks: Get<bool>;
-    /// Optional external entropy hook for timer probability sampling
-    type EntropyProvider: EntropyProvider<Self::Hash>;
     /// Testable atomicity checkpoints for create/close lifecycle paths
     type AtomicityHook: AtomicityHook;
 
@@ -512,8 +488,6 @@ pub mod pallet {
           mutability == Mutability::Mutable || schedule_window.is_none(),
           "genesis System Immutable AAA must be perpetual"
         );
-        Pallet::<T>::validate_probability_entropy_policy(&schedule, &execution_plan)
-          .expect("genesis probabilistic financial actor requires secure entropy provider");
         let on_close_execution_plan = Pallet::<T>::default_on_close_execution_plan();
         Pallet::<T>::ensure_execution_plans_fit_idle_budget(
           AaaType::System,
@@ -791,9 +765,6 @@ pub mod pallet {
       alive: u32,
       missing: u32,
     },
-    SecureEntropyUnavailable {
-      aaa_id: AaaId,
-    },
     IdleStarvationDetected {
       consecutive_blocks: u32,
     },
@@ -833,7 +804,6 @@ pub mod pallet {
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
     ImmutableAaa,
-    InsecureEntropyProvider,
     InsufficientBalance,
     InsufficientFee,
     InvalidAmountResolution,
@@ -1093,7 +1063,6 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      Self::validate_probability_entropy_policy(&schedule, &snapshot.execution_plan)?;
       AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
@@ -1143,7 +1112,6 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      Self::validate_probability_entropy_policy(&snapshot.schedule, &execution_plan)?;
       Self::ensure_execution_plans_fit_idle_budget(
         snapshot.aaa_type,
         &execution_plan,
@@ -1722,7 +1690,6 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
-      Self::validate_probability_entropy_policy(&schedule, &execution_plan)?;
       let active_count = Self::active_instance_count();
       ensure!(
         active_count < Self::effective_active_actor_limit(),
@@ -1845,43 +1812,6 @@ pub mod pallet {
       execution_plan
         .iter()
         .any(|step| matches!(step.task, AaaTask::Mint { .. }))
-    }
-
-    fn task_is_economically_sensitive(task: &TaskOf<T>) -> bool {
-      !matches!(task, AaaTask::Noop)
-    }
-
-    fn has_probabilistic_timer(schedule: &ScheduleOf<T>) -> bool {
-      match &schedule.trigger {
-        Trigger::Timer {
-          probability: Some(probability),
-          ..
-        } => !probability.is_zero() && *probability < Perbill::one(),
-        _ => false,
-      }
-    }
-
-    fn validate_probability_entropy_policy(
-      schedule: &ScheduleOf<T>,
-      execution_plan: &ExecutionPlanOf<T>,
-    ) -> DispatchResult {
-      if !T::RequireSecureEntropyForProbabilisticTasks::get() {
-        return Ok(());
-      }
-      if !Self::has_probabilistic_timer(schedule) {
-        return Ok(());
-      }
-      let has_financial_step = execution_plan
-        .iter()
-        .any(|step| Self::task_is_economically_sensitive(&step.task));
-      if !has_financial_step {
-        return Ok(());
-      }
-      ensure!(
-        T::EntropyProvider::is_secure_for_financial_probability(),
-        Error::<T>::InsecureEntropyProvider
-      );
-      Ok(())
     }
 
     fn validate_schedule(schedule: &ScheduleOf<T>) -> DispatchResult {
@@ -2109,12 +2039,8 @@ pub mod pallet {
 
     fn readiness_trigger_from_schedule(schedule: &ScheduleOf<T>) -> ReadinessTrigger {
       match &schedule.trigger {
-        Trigger::Timer {
-          every_blocks,
-          probability,
-        } => ReadinessTrigger::Timer {
+        Trigger::Timer { every_blocks } => ReadinessTrigger::Timer {
           every_blocks: *every_blocks,
-          probability: *probability,
         },
         Trigger::OnAddressEvent { .. } => ReadinessTrigger::OnAddressEvent,
         Trigger::Manual => ReadinessTrigger::Manual,

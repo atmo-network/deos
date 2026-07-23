@@ -26,7 +26,6 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `TaskWeightInfo`: Runtime-derived worst-case task classes covering adapter, event, RefTime, and ProofSize costs; simple and split transfers must include synchronous address-event ingress under saturated bounded state, while `WeightInfo::fee_collection` separately prices each possible User fee debit.
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
-- `EntropyProvider`: Deterministic entropy source and explicit secure/insecure posture for probabilistic schedules.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
 - Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/sweep bounds, and fee constants.
 
@@ -40,14 +39,13 @@ A runtime may bind no-op implementations for capabilities it does not expose:
 - No staking means `Stake` and `Unstake` fail through the staking adapter.
 - No liquidity-donation support means `DonateLiquidity` fails through `LiquidityDonationOps`.
 - No runtime-authorized funding pairs means `FundingAuthority = ()`, which safely denies every `RuntimePolicy` provenance.
-- No secure entropy means financial probabilistic schedules must be rejected when `RequireSecureEntropyForProbabilisticTasks` is enabled, or use the documented deterministic fallback posture when it is disabled.
 
 No-op adapters are valid only when user-facing plan builders and runtime docs make the unsupported task surface clear. They must not panic, loop, or depend on off-chain nondeterminism.
 
 ## 3. Ownership Boundary
 
 - `AAA owns`: Actor ids, sovereign account derivation, owner slots, queue/wakeup scheduling, lifecycle transitions, fee reservation, amount resolution, task admission, task-scoped atomicity, step error policy, and bounded events.
-- `Runtime owns`: Asset ledgers, caller-aware DEX pricing, staking topology/share mapping, liquidity-donation policy, atomic fee-collection policy and sink depositability, entropy, ingress producers, governance origins, genesis System AAA definitions, and task weight calibration.
+- `Runtime owns`: Asset ledgers, caller-aware DEX pricing, staking topology/share mapping, liquidity-donation policy, atomic fee-collection policy and sink depositability, ingress producers, governance origins, genesis System AAA definitions, and task weight calibration.
 - `UI owns`: Plan authoring affordances, dry-run/simulation UX, unsupported-task hiding, user recovery flows, per-cycle timeline rendering, and warnings around `ContinueNextStep` after mutating tasks.
 - `Docs own`: The separation between portable task-language patterns and a concrete runtime's System AAA topology.
 
@@ -78,7 +76,6 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 - `DEX amount safety`: Exact-in quotes must match caller fees and executable route selection; exact-out receives a policy-derived maximum input that preserves minimum balance and future fee reserve.
 - `Staking amount safety`: Unstake current/trigger/all modes resolve through adapter shares; last-funding mode requires an adapter-mapped transferable share asset.
 - `Ingress triggers`: Every supported producer must enter through `AddressEventIngress` / fallible `notify_address_event*`, a weight-charging post-dispatch extension, or the bounded producer-owned overflow queue. The producer must run `preflight_funding_event` before value movement, propagate notification failure in the same transaction, and treat rejected durable enqueue as rollback; runtime event-vector scanning cannot own durability because a capped prefix cannot retain an unscanned tail.
-- `Entropy`: AAA samples only deterministic runtime-provided entropy or documented fallback inputs. Secure financial probability is a runtime capability gate, not an AAA-owned randomness scheme.
 - `Hook admission`: `on_idle` must reserve its generated fixed base before any storage access; compatibility ingress must reserve its generated one-read probe before reading queue state and a complete drain unit per event. `GuaranteedOnIdleWeight` must equal genuinely reserved gross headroom, and every prospective run/close plan pair must fit it after the guaranteed `scheduler_admission_overhead` envelope in both Weight dimensions. Optional ingress drain, heavyweight wakeup-retry, and sweep-time terminal-close units consume only available headroom and may defer actor execution, so their durable queues/markers/conditions and deterministic cross-block convergence form part of the embedding contract.
 - `Task weight class`: The runtime must classify every task with a deterministic upper bound. Admission may be conservative; it must not underprice execution.
 - `Core task admission`: Extend the portable `Task` enum only for a reusable economic primitive that existing composition plus an adapter cannot express without violating atomicity or custody. The change must ship bounded typed parameters, amount/funding/donation semantics, adapter ownership, events/errors/rollback behavior, generated two-dimensional weights, production-budget evidence, semantic tests, and an explicit SCALE/schema-version decision together; runtime topology and product policy stay in adapters and actor graphs.

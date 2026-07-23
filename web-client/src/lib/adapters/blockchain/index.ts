@@ -89,10 +89,9 @@ function automationTriggerLabel(trigger?: {
     case 'Timer': {
       const timer = triggerRecord(trigger.value);
       const everyBlocks = timer?.every_blocks;
-      const probability = timer?.probability;
       const timerLabel =
         typeof everyBlocks === 'number' ? everyBlocks : 'unknown';
-      return probability ? `Timer/${timerLabel} + p` : `Timer/${timerLabel}`;
+      return `Timer/${timerLabel}`;
     }
     case 'OnAddressEvent':
       return 'Address event';

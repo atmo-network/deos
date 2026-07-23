@@ -617,7 +617,6 @@ impl<AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq for AssetFilter<AssetId, MaxWhi
 pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
   Timer {
     every_blocks: u32,
-    probability: Option<Perbill>,
   },
   OnAddressEvent {
     source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
@@ -631,12 +630,8 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
 {
   fn clone(&self) -> Self {
     match self {
-      Self::Timer {
-        every_blocks,
-        probability,
-      } => Self::Timer {
+      Self::Timer { every_blocks } => Self::Timer {
         every_blocks: *every_blocks,
-        probability: *probability,
       },
       Self::OnAddressEvent {
         source_filter,
@@ -655,13 +650,9 @@ impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: G
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Timer {
-        every_blocks,
-        probability,
-      } => f
+      Self::Timer { every_blocks } => f
         .debug_struct("Timer")
         .field("every_blocks", every_blocks)
-        .field("probability", probability)
         .finish(),
       Self::OnAddressEvent {
         source_filter,
@@ -684,13 +675,11 @@ impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> Parti
       (
         Self::Timer {
           every_blocks: left_every_blocks,
-          probability: left_probability,
         },
         Self::Timer {
           every_blocks: right_every_blocks,
-          probability: right_probability,
         },
-      ) => left_every_blocks == right_every_blocks && left_probability == right_probability,
+      ) => left_every_blocks == right_every_blocks,
       (
         Self::OnAddressEvent {
           source_filter: left_source_filter,
@@ -955,10 +944,7 @@ pub struct AaaInstance<
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub enum ReadinessTrigger {
-  Timer {
-    every_blocks: u32,
-    probability: Option<Perbill>,
-  },
+  Timer { every_blocks: u32 },
   OnAddressEvent,
   Manual,
 }

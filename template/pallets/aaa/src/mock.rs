@@ -142,8 +142,6 @@ thread_local! {
   static DONATED_LIQUIDITY: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset, TestAsset), (Balance, Balance)>> =
     RefCell::new(alloc::collections::BTreeMap::new());
 
-  static MOCK_ENTROPY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
-  static REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS: RefCell<bool> = RefCell::new(false);
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
@@ -187,8 +185,6 @@ pub fn reset_mock_adapters() {
   STAKED.with(|b| b.borrow_mut().clear());
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
-  MOCK_ENTROPY.with(|e| *e.borrow_mut() = None);
-  REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow_mut() = false);
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
@@ -865,13 +861,6 @@ impl Get<u32> for TestMaxSweepPerBlock {
   }
 }
 
-pub struct TestRequireSecureEntropyForProbabilisticTasks;
-impl Get<bool> for TestRequireSecureEntropyForProbabilisticTasks {
-  fn get() -> bool {
-    REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow())
-  }
-}
-
 pub struct MockFundingAuthority;
 
 impl crate::adapters::FundingAuthority<AccountId> for MockFundingAuthority {
@@ -921,8 +910,6 @@ impl pallet_aaa::Config for Test {
   type AaaCreationFee = TestAaaCreationFee;
   type WeightToFee = TestWeightToFee;
   type TaskWeightInfo = ();
-  type RequireSecureEntropyForProbabilisticTasks = TestRequireSecureEntropyForProbabilisticTasks;
-  type EntropyProvider = SwitchableEntropyProvider;
   type AtomicityHook = MockAtomicityHook;
   type AddressEventIngressHook = ();
   type FeeSink = TestFeeSink;
@@ -967,16 +954,6 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   ext
 }
 
-// --- Switchable EntropyProvider for timer probability tests ---
-
-pub fn set_mock_entropy(value: Option<[u8; 32]>) {
-  MOCK_ENTROPY.with(|e| *e.borrow_mut() = value);
-}
-
-pub fn set_require_secure_entropy_for_probabilistic_tasks(value: bool) {
-  REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow_mut() = value);
-}
-
 pub fn set_fail_create_checkpoint(value: bool) {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = value);
 }
@@ -987,21 +964,6 @@ pub fn set_fail_close_checkpoint(value: bool) {
 
 pub fn set_fail_fee_sink_transfer(value: bool) {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = value);
-}
-
-pub struct SwitchableEntropyProvider;
-
-impl crate::EntropyProvider<polkadot_sdk::sp_core::H256> for SwitchableEntropyProvider {
-  fn entropy(_subject: &[u8]) -> Option<polkadot_sdk::sp_core::H256> {
-    MOCK_ENTROPY.with(|e| {
-      e.borrow()
-        .map(|bytes| polkadot_sdk::sp_core::H256::from_slice(&bytes))
-    })
-  }
-
-  fn is_secure_for_financial_probability() -> bool {
-    MOCK_ENTROPY.with(|e| e.borrow().is_some())
-  }
 }
 
 pub struct MockAtomicityHook;

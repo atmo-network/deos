@@ -72,13 +72,6 @@ parameter_types! {
   /// Maximum number of active AAA instances. Bounds the BTreeSet storage.
   /// Set to 10,000 for production use cases with high automation density.
   pub const AaaMaxActiveActors: u32 = 10_000;
-  /// Current simplified policy: probabilistic timers may fall back to deterministic previous-block
-  /// hash sampling while the runtime stays on a trusted collator set. A relay-beacon replacement
-  /// is only acceptable if a future parachain-consumable per-block protocol beacon exists;
-  /// existing epoch-scale relay randomness items are not treated as that replacement. Secure
-  /// external entropy remains a future upgrade, not a launch requirement.
-  pub const AaaRequireSecureEntropyForProbabilisticTasks: bool = false;
-
   // --- Economic parameters ---
 
   /// Per-step flat evaluation fee
@@ -594,7 +587,6 @@ impl
     let burn_schedule = Schedule {
       trigger: Trigger::Timer {
         every_blocks: ecosystem::params::BURNING_MANAGER_POLL_BLOCKS,
-        probability: None,
       },
       cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
     };
@@ -608,10 +600,7 @@ impl
     // Timer-driven Phase 1 fan-out: distributes accumulated native fees/rewards
     // into staking-pool yield and native LP-donation ingress channels.
     let fee_sink_schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks: 1 },
       cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
     };
     let fee_sink_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> =
@@ -621,10 +610,7 @@ impl
     // Timer-driven skeleton; real LP provisioning steps are added by governance
     // after TMC curves and pools are created (LP token IDs are pool-specific).
     let liquidity_actor_schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks: 1 },
       cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
     };
     let liquidity_actor_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> = alloc::vec![Step {
@@ -733,10 +719,7 @@ impl
         governance.clone(),
         Mutability::Mutable,
         Schedule {
-          trigger: Trigger::Timer {
-            every_blocks: 1,
-            probability: None,
-          },
+          trigger: Trigger::Timer { every_blocks: 1 },
           cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
         },
         None,
@@ -793,10 +776,7 @@ impl
 
 fn noop_timer_schedule() -> pallet_aaa::ScheduleOf<Runtime> {
   pallet_aaa::Schedule {
-    trigger: pallet_aaa::Trigger::Timer {
-      every_blocks: 1,
-      probability: None,
-    },
+    trigger: pallet_aaa::Trigger::Timer { every_blocks: 1 },
     cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
   }
 }
@@ -1375,7 +1355,6 @@ impl pallet_aaa::Config for Runtime {
   type AddressEventIngressHook = RuntimeAddressEventIngressHook;
   type AtomicityHook = ();
   type ConditionReadFee = AaaConditionReadFee;
-  type EntropyProvider = pallet_aaa::NoEntropyProvider;
   type FeeSink = AaaFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
   type GenesisSystemAaas = TmctolGenesisSystemAaas;
@@ -1406,7 +1385,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxWhitelistSize = AaaMaxWhitelistSize;
   type MinUserBalance = AaaMinUserBalanceGuard;
   type MinWindowLength = AaaMinWindowLength;
-  type RequireSecureEntropyForProbabilisticTasks = AaaRequireSecureEntropyForProbabilisticTasks;
   type StepBaseFee = AaaStepBaseFee;
   type WeightInfo = crate::weights::pallet_aaa::SubstrateWeight<Runtime>;
   type WeightToFee = crate::WeightToFee;

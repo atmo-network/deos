@@ -69,7 +69,7 @@ fn assert_variant_contract<T: TypeInfo>(expected: &[(&str, u8)]) {
 }
 
 #[test]
-fn aaa_0_7_1_candidate_scale_variant_indices_are_explicit() {
+fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
   assert_variant_contract::<RuntimeTask>(&[
     ("Transfer", 0),
     ("SplitTransfer", 1),
@@ -175,12 +175,11 @@ fn aaa_0_7_1_candidate_scale_variant_indices_are_explicit() {
     ("GlobalCircuitBreakerSet", 30),
     ("ManualTriggerSet", 31),
     ("SweepBatchProcessed", 32),
-    ("SecureEntropyUnavailable", 33),
-    ("IdleStarvationDetected", 34),
-    ("FundingSourcePolicyUpdated", 35),
-    ("FundingBatchActivated", 36),
-    ("FundingBatchPendingAccumulated", 37),
-    ("FundingBatchPromoted", 38),
+    ("IdleStarvationDetected", 33),
+    ("FundingSourcePolicyUpdated", 34),
+    ("FundingBatchActivated", 35),
+    ("FundingBatchPendingAccumulated", 36),
+    ("FundingBatchPromoted", 37),
   ]);
   assert_variant_contract::<Error<Test>>(&[
     ("AaaIdOverflow", 0),
@@ -196,30 +195,29 @@ fn aaa_0_7_1_candidate_scale_variant_indices_are_explicit() {
     ("ExecutionDelayTooLong", 10),
     ("GlobalCircuitBreakerActive", 11),
     ("ImmutableAaa", 12),
-    ("InsecureEntropyProvider", 13),
-    ("InsufficientBalance", 14),
-    ("InsufficientFee", 15),
-    ("InvalidAmountResolution", 16),
-    ("InvalidAutoCloseNonce", 17),
-    ("InvalidScheduleWindow", 18),
-    ("InvalidSplitTransfer", 19),
-    ("InvalidTriggerConfiguration", 20),
-    ("MintNotAllowedForUserAaa", 21),
-    ("NotGovernance", 22),
-    ("NotOwner", 23),
-    ("NotPaused", 24),
-    ("OwnerSlotCapacityExceeded", 25),
-    ("OwnerSlotOccupied", 26),
-    ("InvalidOwnerSlot", 27),
-    ("AaaIdOccupied", 28),
-    ("SystemAaaNotClosed", 29),
-    ("ExecutionPlanTooLong", 30),
-    ("SnapshotUnavailable", 31),
-    ("FundingBatchOverflow", 32),
-    ("SovereignAccountCollision", 33),
-    ("AutoCloseNonceHorizonExceeded", 34),
-    ("AutoCloseNonceOverflow", 35),
-    ("AutoCloseNonceIncrementZero", 36),
+    ("InsufficientBalance", 13),
+    ("InsufficientFee", 14),
+    ("InvalidAmountResolution", 15),
+    ("InvalidAutoCloseNonce", 16),
+    ("InvalidScheduleWindow", 17),
+    ("InvalidSplitTransfer", 18),
+    ("InvalidTriggerConfiguration", 19),
+    ("MintNotAllowedForUserAaa", 20),
+    ("NotGovernance", 21),
+    ("NotOwner", 22),
+    ("NotPaused", 23),
+    ("OwnerSlotCapacityExceeded", 24),
+    ("OwnerSlotOccupied", 25),
+    ("InvalidOwnerSlot", 26),
+    ("AaaIdOccupied", 27),
+    ("SystemAaaNotClosed", 28),
+    ("ExecutionPlanTooLong", 29),
+    ("SnapshotUnavailable", 30),
+    ("FundingBatchOverflow", 31),
+    ("SovereignAccountCollision", 32),
+    ("AutoCloseNonceHorizonExceeded", 33),
+    ("AutoCloseNonceOverflow", 34),
+    ("AutoCloseNonceIncrementZero", 35),
   ]);
   assert_variant_contract::<crate::Call<Test>>(&[
     ("create_user_aaa", 0),
@@ -244,7 +242,7 @@ fn aaa_0_7_1_candidate_scale_variant_indices_are_explicit() {
 }
 
 #[test]
-fn aaa_0_7_1_candidate_storage_schema_is_explicit() {
+fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   let storage_info = AAA::storage_info();
   assert!(storage_info.iter().all(|entry| entry.pallet_name == b"AAA"));
   let actual: alloc::vec::Vec<_> = storage_info
@@ -404,12 +402,9 @@ fn on_address_event_schedule(
   }
 }
 
-fn timer_schedule(every_blocks: u32, probability: Option<Perbill>) -> RuntimeSchedule {
+fn timer_schedule(every_blocks: u32) -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::Timer {
-      every_blocks,
-      probability,
-    },
+    trigger: Trigger::Timer { every_blocks },
     cooldown_blocks: 0,
   }
 }
@@ -815,10 +810,7 @@ fn readiness_state_is_initialized_and_kept_in_sync() {
     let paused = crate::AaaReadiness::<Test>::get(aaa_id).expect("state after pause");
     assert!(paused.is_paused);
     let timer_schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 3,
-        probability: Some(Perbill::from_percent(50)),
-      },
+      trigger: Trigger::Timer { every_blocks: 3 },
       cooldown_blocks: 2,
     };
     assert_ok!(AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
@@ -833,10 +825,7 @@ fn readiness_state_is_initialized_and_kept_in_sync() {
     assert_eq!(after_update.cooldown_blocks, 2);
     assert_eq!(
       after_update.trigger,
-      ReadinessTrigger::Timer {
-        every_blocks: 3,
-        probability: Some(Perbill::from_percent(50)),
-      }
+      ReadinessTrigger::Timer { every_blocks: 3 }
     );
   });
 }
@@ -1392,7 +1381,7 @@ fn create_rejects_timer_delay_above_max() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let max_delay = TestMaxExecutionDelayBlocks::get() as u32;
-    let schedule = timer_schedule(max_delay.saturating_add(1), None);
+    let schedule = timer_schedule(max_delay.saturating_add(1));
     assert_noop!(
       AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
@@ -2163,7 +2152,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_with_close_tail
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Immutable,
-      timer_schedule(1, None),
+      timer_schedule(1),
       None,
       execution_plan_with_step(failing_step),
     ));
@@ -2203,7 +2192,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_with_close_tail
         aaa_id,
         ALICE,
         Mutability::Mutable,
-        timer_schedule(1, None),
+        timer_schedule(1),
         None,
         transfer_execution_plan(BOB, 1),
       ),
@@ -2235,7 +2224,7 @@ fn system_class_not_starved_by_many_user_actors() {
       let user_id = create_user_with(
         owner,
         Mutability::Mutable,
-        timer_schedule(1, None),
+        timer_schedule(1),
         None,
         execution_plan_with_step(make_step(Task::Noop)),
       );
@@ -2243,7 +2232,7 @@ fn system_class_not_starved_by_many_user_actors() {
     }
     let system_id = create_system_with(
       ALICE,
-      timer_schedule(1, None),
+      timer_schedule(1),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     );
@@ -2302,7 +2291,7 @@ fn scheduler_falls_back_to_non_empty_class_when_preferred_queue_is_empty() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let system_id = create_system_with(
       ALICE,
-      timer_schedule(1, None),
+      timer_schedule(1),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     );
@@ -2623,7 +2612,7 @@ fn early_reexecution_replaces_live_future_wakeup_instead_of_accumulating() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(
       ALICE,
-      timer_schedule(20, None),
+      timer_schedule(20),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     );
@@ -2737,7 +2726,7 @@ fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(
       ALICE,
-      timer_schedule(20, None),
+      timer_schedule(20),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     );
@@ -2773,7 +2762,7 @@ fn repeated_timer_close_churn_leaves_no_long_horizon_wakeup_entries() {
     for _ in 0..total {
       let aaa_id = create_system_with(
         ALICE,
-        timer_schedule(4_000, None),
+        timer_schedule(4_000),
         None,
         execution_plan_with_step(make_step(Task::Noop)),
       );
@@ -5162,7 +5151,7 @@ fn governance_can_manage_system_aaa_control_surface() {
         .manual_trigger_pending
     );
 
-    let updated_schedule = timer_schedule(3, None);
+    let updated_schedule = timer_schedule(3);
     assert_ok!(AAA::update_schedule(
       RuntimeOrigin::root(),
       aaa_id,
@@ -7303,94 +7292,12 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
   });
 }
 
-// --- Timer Probability Tests ---
+// --- Deterministic Timer Tests ---
 
 #[test]
-fn timer_probability_one_always_executes() {
+fn timer_always_executes_on_interval() {
   new_test_ext().execute_with(|| {
-    let schedule = timer_schedule(1, Some(Perbill::one()));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-    fund_native(aaa_id, 1000);
-    let bob_before = native_balance(&BOB);
-    let mut cycle_nonces_before = 0u64;
-    for block in 2..12 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      AAA::on_initialize(block);
-      AAA::on_idle(block, Weight::MAX);
-      if let Some(inst) = crate::AaaInstances::<Test>::get(aaa_id) {
-        cycle_nonces_before = inst.cycle_nonce;
-      }
-    }
-    // With probability=100% and cadence=1, should execute in every block
-    // Minus 1 because cycle_nonce starts at 0
-    assert!(
-      cycle_nonces_before >= 8,
-      "probability=100% should execute on most blocks, got {} cycles",
-      cycle_nonces_before
-    );
-    assert!(native_balance(&BOB) > bob_before);
-  });
-}
-
-#[test]
-fn timer_probability_zero_never_executes() {
-  new_test_ext().execute_with(|| {
-    let schedule = timer_schedule(1, Some(Perbill::zero()));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-    fund_native(aaa_id, 1000);
-    for block in 2..12 {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      AAA::on_initialize(block);
-      AAA::on_idle(block, Weight::MAX);
-    }
-    assert!(
-      !has_aaa_event(|e| matches!(
-        e,
-        Event::TransferExecuted { aaa_id: id, .. } if *id == aaa_id
-      )),
-      "probability=0% should never execute"
-    );
-  });
-}
-
-#[test]
-fn timer_probability_miss_is_readiness_miss_not_deferral() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_system_with(
-      ALICE,
-      timer_schedule(2, Some(Perbill::zero())),
-      None,
-      execution_plan_with_step(make_step(Task::Noop)),
-    );
-    let first_wakeup =
-      crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id).expect("wakeup scheduled");
-    frame_system::Pallet::<Test>::set_block_number(first_wakeup);
-    AAA::on_initialize(first_wakeup);
-    frame_system::Pallet::<Test>::reset_events();
-    AAA::on_idle(first_wakeup, Weight::MAX);
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    assert_eq!(instance.cycle_nonce, 0);
-    assert!(!instance.manual_trigger_pending);
-    assert!(!has_aaa_event(|event| matches!(
-      event,
-      Event::CycleDeferred { aaa_id: id, .. }
-        | Event::CycleStarted { aaa_id: id, .. }
-        | Event::CycleSummary { aaa_id: id, .. }
-        if *id == aaa_id
-    )));
-    let next_wakeup =
-      crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id).expect("rescheduled wakeup");
-    assert!(next_wakeup > first_wakeup);
-  });
-}
-
-#[test]
-fn timer_without_probability_always_executes_on_interval() {
-  new_test_ext().execute_with(|| {
-    let schedule = timer_schedule(5, None);
+    let schedule = timer_schedule(5);
     let execution_plan = transfer_execution_plan(BOB, 10);
     let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
     fund_native(aaa_id, 1000);
@@ -7410,7 +7317,7 @@ fn timer_without_probability_always_executes_on_interval() {
     }
     assert!(
       execution_count >= 2,
-      "timer without probability should execute every 5 blocks, got {} executions",
+      "timer should execute every 5 blocks, got {} executions",
       execution_count
     );
   });
@@ -7422,7 +7329,7 @@ fn timer_every_block_uses_queue_continuation_without_wakeup_index() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(
       ALICE,
-      timer_schedule(1, None),
+      timer_schedule(1),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     );
@@ -7452,7 +7359,7 @@ fn timer_wakeup_uses_deterministic_jitter_for_delayed_cadence() {
     let cadence = 20u32;
     let aaa_id = create_system_with(
       ALICE,
-      timer_schedule(cadence, None),
+      timer_schedule(cadence),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     );
@@ -7491,7 +7398,7 @@ fn timer_validation_includes_worst_case_deterministic_jitter() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      timer_schedule(largest_valid_cadence, None),
+      timer_schedule(largest_valid_cadence),
       None,
       execution_plan_with_step(make_step(Task::Noop)),
     ));
@@ -7500,278 +7407,11 @@ fn timer_validation_includes_worst_case_deterministic_jitter() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        timer_schedule(largest_valid_cadence.saturating_add(1), None),
+        timer_schedule(largest_valid_cadence.saturating_add(1)),
         None,
         execution_plan_with_step(make_step(Task::Noop)),
       ),
       Error::<Test>::ExecutionDelayTooLong
-    );
-  });
-}
-
-#[test]
-fn probabilistic_financial_schedule_rejected_without_secure_entropy_provider() {
-  new_test_ext().execute_with(|| {
-    set_require_secure_entropy_for_probabilistic_tasks(true);
-    set_mock_entropy(None);
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    assert_noop!(
-      AAA::create_system_aaa(
-        RuntimeOrigin::root(),
-        ALICE,
-        Mutability::Mutable,
-        schedule,
-        None,
-        execution_plan,
-      ),
-      Error::<Test>::InsecureEntropyProvider
-    );
-  });
-}
-
-#[test]
-fn probabilistic_financial_schedule_allows_secure_entropy_provider() {
-  new_test_ext().execute_with(|| {
-    set_require_secure_entropy_for_probabilistic_tasks(true);
-    set_mock_entropy(Some([0x11; 32]));
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    assert_ok!(AAA::create_system_aaa(
-      RuntimeOrigin::root(),
-      ALICE,
-      Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
-    ));
-  });
-}
-
-#[test]
-fn probabilistic_noop_schedule_is_allowed_without_secure_entropy_provider() {
-  new_test_ext().execute_with(|| {
-    set_require_secure_entropy_for_probabilistic_tasks(true);
-    set_mock_entropy(None);
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = execution_plan_with_step(make_step(Task::Noop));
-    assert_ok!(AAA::create_system_aaa(
-      RuntimeOrigin::root(),
-      ALICE,
-      Mutability::Mutable,
-      schedule,
-      None,
-      execution_plan,
-    ));
-  });
-}
-
-#[test]
-fn update_schedule_rejects_probabilistic_finance_without_secure_entropy() {
-  new_test_ext().execute_with(|| {
-    set_require_secure_entropy_for_probabilistic_tasks(true);
-    set_mock_entropy(Some([0x22; 32]));
-    let aaa_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      transfer_execution_plan(BOB, 10),
-    );
-    set_mock_entropy(None);
-    let probabilistic = timer_schedule(1, Some(Perbill::from_percent(50)));
-    assert_noop!(
-      AAA::update_schedule(RuntimeOrigin::signed(ALICE), aaa_id, probabilistic, None),
-      Error::<Test>::InsecureEntropyProvider
-    );
-  });
-}
-
-#[test]
-fn update_execution_plan_rejects_probabilistic_finance_without_secure_entropy() {
-  new_test_ext().execute_with(|| {
-    set_require_secure_entropy_for_probabilistic_tasks(true);
-    set_mock_entropy(Some([0x33; 32]));
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let aaa_id = create_system_with(
-      ALICE,
-      schedule,
-      None,
-      execution_plan_with_step(make_step(Task::Noop)),
-    );
-    set_mock_entropy(None);
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    assert_noop!(
-      AAA::update_execution_plan(RuntimeOrigin::signed(ALICE), aaa_id, execution_plan),
-      Error::<Test>::InsecureEntropyProvider
-    );
-  });
-}
-
-#[test]
-fn probabilistic_financial_timer_skips_when_secure_entropy_disappears_before_execution() {
-  new_test_ext().execute_with(|| {
-    set_require_secure_entropy_for_probabilistic_tasks(true);
-    set_mock_entropy(Some([0x44; 32]));
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-    fund_native(aaa_id, 10_000);
-    set_mock_entropy(None);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    AAA::on_initialize(2);
-    AAA::on_idle(2, Weight::MAX);
-    let cycle_nonce = crate::AaaInstances::<Test>::get(aaa_id)
-      .map(|inst| inst.cycle_nonce)
-      .unwrap_or(0);
-    assert_eq!(cycle_nonce, 0);
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::SecureEntropyUnavailable { aaa_id: id } if *id == aaa_id
-    )));
-  });
-}
-
-#[test]
-fn timer_probability_different_entropy_gives_different_outcomes() {
-  // Verify that changing entropy actually changes the probability gate outcome
-  let mut any_true = false;
-  let mut any_false = false;
-  for seed_byte in 0u8..20 {
-    new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      let mut entropy = [0u8; 32];
-      entropy[0] = seed_byte;
-      set_mock_entropy(Some(entropy));
-      let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-      let execution_plan = transfer_execution_plan(BOB, 10);
-      let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-      fund_native(aaa_id, 10000);
-      frame_system::Pallet::<Test>::set_block_number(2);
-      AAA::on_initialize(2);
-      AAA::on_idle(2, Weight::MAX);
-      let executed = crate::AaaInstances::<Test>::get(aaa_id)
-        .map(|inst| inst.cycle_nonce > 0)
-        .unwrap_or(false);
-      if executed {
-        any_true = true;
-      } else {
-        any_false = true;
-      }
-    });
-    if any_true && any_false {
-      break;
-    }
-  }
-  assert!(
-    any_true && any_false,
-    "50% probability with varying entropy must produce both outcomes"
-  );
-}
-
-// --- Entropy Fallback Chain Tests ---
-
-#[test]
-fn entropy_external_overrides_block_hash() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    // Set a specific external entropy
-    let mut known_entropy = [0xABu8; 32];
-    known_entropy[0] = 0xFF;
-    set_mock_entropy(Some(known_entropy));
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-    fund_native(aaa_id, 10000);
-    // Record outcome with external entropy
-    frame_system::Pallet::<Test>::set_block_number(2);
-    AAA::on_initialize(2);
-    AAA::on_idle(2, Weight::MAX);
-    let nonce_with_entropy = crate::AaaInstances::<Test>::get(aaa_id)
-      .map(|inst| inst.cycle_nonce)
-      .unwrap_or(0);
-    // Now clear external entropy — fallback should yield different seed
-    set_mock_entropy(None);
-    // We cannot re-run the same actor (already executed), so just verify
-    // the external entropy was consumed by confirming the actor ran
-    // (with 0xAB... entropy the mix_seed produces a deterministic outcome)
-    assert!(
-      nonce_with_entropy <= 1,
-      "Actor should have executed at most once"
-    );
-  });
-}
-
-#[test]
-fn entropy_none_falls_back_to_block_hash() {
-  // With SwitchableEntropyProvider returning None, behavior matches NoEntropyProvider:
-  // falls back to parent_hash → previous_hash → default
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    set_mock_entropy(None);
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-    fund_native(aaa_id, 10000);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    AAA::on_initialize(2);
-    AAA::on_idle(2, Weight::MAX);
-    let nonce_no_entropy = crate::AaaInstances::<Test>::get(aaa_id)
-      .map(|inst| inst.cycle_nonce)
-      .unwrap_or(0);
-    // Run same scenario again in fresh ext — must produce same outcome (deterministic fallback)
-    let nonce_repeat = new_test_ext().execute_with(|| {
-      frame_system::Pallet::<Test>::set_block_number(1);
-      set_mock_entropy(None);
-      let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-      let execution_plan = transfer_execution_plan(BOB, 10);
-      let aaa_id2 = create_system_with(ALICE, schedule, None, execution_plan);
-      fund_native(aaa_id2, 10000);
-      frame_system::Pallet::<Test>::set_block_number(2);
-      AAA::on_initialize(2);
-      AAA::on_idle(2, Weight::MAX);
-      crate::AaaInstances::<Test>::get(aaa_id2)
-        .map(|inst| inst.cycle_nonce)
-        .unwrap_or(0)
-    });
-    assert_eq!(
-      nonce_no_entropy, nonce_repeat,
-      "No external entropy must produce identical deterministic fallback"
-    );
-  });
-}
-
-#[test]
-fn entropy_change_between_blocks_varies_outcome() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let schedule = timer_schedule(1, Some(Perbill::from_percent(50)));
-    let execution_plan = transfer_execution_plan(BOB, 10);
-    let aaa_id = create_system_with(ALICE, schedule, None, execution_plan);
-    fund_native(aaa_id, 100_000);
-    let mut outcomes = alloc::vec::Vec::new();
-    for block in 2..22 {
-      let mut entropy = [0u8; 32];
-      entropy[0] = block as u8;
-      entropy[1] = (block * 37) as u8;
-      set_mock_entropy(Some(entropy));
-      let nonce_before = crate::AaaInstances::<Test>::get(aaa_id)
-        .map(|inst| inst.cycle_nonce)
-        .unwrap_or(0);
-      frame_system::Pallet::<Test>::set_block_number(block);
-      AAA::on_initialize(block);
-      AAA::on_idle(block, Weight::MAX);
-      let nonce_after = crate::AaaInstances::<Test>::get(aaa_id)
-        .map(|inst| inst.cycle_nonce)
-        .unwrap_or(0);
-      outcomes.push(nonce_after > nonce_before);
-    }
-    let executed = outcomes.iter().filter(|&&v| v).count();
-    let skipped = outcomes.iter().filter(|&&v| !v).count();
-    assert!(
-      executed >= 3 && skipped >= 3,
-      "Varying entropy with 50% probability should produce mix of outcomes: {} executed, {} skipped",
-      executed,
-      skipped
     );
   });
 }
@@ -7783,7 +7423,7 @@ fn user_dca_complete_lifecycle() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     // Step 1: Create User AAA with Timer trigger
-    let schedule = timer_schedule(5, None);
+    let schedule = timer_schedule(5);
     let foreign = TestAsset::Local(1);
     set_asset_balance(&ALICE, foreign, 10_000);
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
@@ -7870,7 +7510,7 @@ fn user_dca_swap_then_cold_storage_transfer() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let cold_wallet: AccountId = 9999;
-    let schedule = timer_schedule(5, None);
+    let schedule = timer_schedule(5);
     let foreign = TestAsset::Local(1);
     // Seed mock AMM pool for swap
     setup_pool(foreign, TestAsset::Native, 10_000, 10_000);
@@ -7935,7 +7575,7 @@ fn user_copybook_savings() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let savings: AccountId = 8888;
-    let schedule = timer_schedule(10, None);
+    let schedule = timer_schedule(10);
     // Transfer 5% of current native balance to savings
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
       conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
@@ -7971,7 +7611,7 @@ fn user_portfolio_rebalancer_both_directions() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign = TestAsset::Local(1);
-    let schedule = timer_schedule(5, None);
+    let schedule = timer_schedule(5);
     // Step 0: If native > 5000 (spendable), transfer 20% native to BOB
     // Step 1: If spendable native < 500 AND foreign > 500, transfer 50% foreign to CHARLIE
     // cycle_fee_upper for 2 steps ≈ 2*(1+100) = 202
@@ -8197,7 +7837,7 @@ fn scheduler_ignores_sparse_id_gaps() {
   // Both must execute in the first block.
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let schedule = timer_schedule(1, None);
+    let schedule = timer_schedule(1);
     let execution_plan: crate::ExecutionPlanOf<Test> =
       alloc::vec![make_step(Task::Noop)].try_into().expect("fits");
     assert_ok!(AAA::create_system_aaa(
@@ -8254,7 +7894,7 @@ fn scheduler_ignores_sparse_id_gaps() {
 fn active_actors_set_maintains_integrity() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let schedule = timer_schedule(1, None);
+    let schedule = timer_schedule(1);
     let noop_execution_plan: crate::ExecutionPlanOf<Test> =
       alloc::vec![make_step(Task::Noop)].try_into().expect("fits");
     for _ in 0..3 {
@@ -9254,7 +8894,7 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
       Mutability::Immutable
     );
     assert_noop!(
-      AAA::update_schedule(RuntimeOrigin::root(), aaa_id, timer_schedule(1, None), None),
+      AAA::update_schedule(RuntimeOrigin::root(), aaa_id, timer_schedule(1), None),
       Error::<Test>::ImmutableAaa
     );
     assert_noop!(
@@ -9392,10 +9032,7 @@ mod proptest_aaa {
 
   fn timer_schedule_pt(every_blocks: u32) -> RuntimeSchedule {
     Schedule {
-      trigger: Trigger::Timer {
-        every_blocks,
-        probability: None,
-      },
+      trigger: Trigger::Timer { every_blocks },
       cooldown_blocks: 0,
     }
   }

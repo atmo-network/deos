@@ -36,7 +36,7 @@ Readiness and execution must stay deterministic and bounded:
 
 - Future eligibility goes through the wakeup layer rather than ad hoc scans
 - Hot-path execution happens only under configured per-block limits
-- Probability misses are readiness misses, not partial cycle outcomes
+- Timer readiness uses deterministic cadence and bounded actor-stable jitter; AAA exposes no probability or entropy contract
 - `on_idle` does useful work only with remaining block budget
 
 ## Runtime-as-Config rule
