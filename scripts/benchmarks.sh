@@ -54,6 +54,8 @@ Examples:
 
 Environment:
   INCLUDE_EXTRA_BENCHMARKS=0|1
+  DEOS_VERBOSE=0|1              Stream full command and benchmark output (default: 0)
+  DEOS_FAILURE_TAIL_LINES=N     Failure excerpt length in compact mode (default: 80)
 EOF2
     exit 0
 }
@@ -283,14 +285,19 @@ run_pallet_benchmark() {
             bencher_args+=(--template "$template_file")
         fi
 
-        frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}" 2>&1
+        run_command_step \
+            "Generate $pallet_name weights" \
+            "" \
+            frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}"
     else
         log_warning "Running benchmark tests (dry run without weight generation)"
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
             log_warning "--extra requires frame-omni-bencher for actual extra-benchmark execution; cargo fallback remains compile-only"
         fi
-        cd "$TEMPLATE_DIR"
-        cargo test --release --features runtime-benchmarks -p deos-runtime -- "benchmark" --nocapture 2>&1 || true
+        run_shell_step \
+            "Compile benchmark tests" \
+            "" \
+            "cd '$TEMPLATE_DIR' && cargo test --release --features runtime-benchmarks -p deos-runtime -- benchmark --nocapture" || true
         log_warning "Weight files NOT updated (frame-omni-bencher required for weight generation)"
         return 0
     fi

@@ -45,6 +45,8 @@ This directory is intentionally split into two classes:
 
 Project-local audit leaves are documented in `/.agents/skills/alignment/SKILL.md` and are normally reached through `./scripts/validate-local.sh --audit-only`.
 
+Commands executed through the shared script harness use compact output by default: successful test, build, lint, documentation, metadata, and benchmark steps print only their label, duration, and result. A failed step prints the last 80 lines and retains its complete output in a temporary log whose path appears in the error. Set `DEOS_VERBOSE=1` to restore live full output, or set `DEOS_FAILURE_TAIL_LINES=N` to change the failure excerpt without enabling verbose mode.
+
 - [benchmarks.sh](./benchmarks.sh)
   Run pallet benchmarking flows and weight generation helpers. Supports `--extra` to include AAA circular-chain diagnostics outside the default production-weight set.
 

@@ -86,13 +86,10 @@ run_additional_checks() {
         log_warning "Code formatting issues found (run 'cargo fmt' to fix)"
     fi
 
-    log_info "Checking basic workspace consistency"
-    if cargo check --workspace --quiet; then
-        log_success "Workspace check passed"
-    else
-        log_error "Workspace check failed"
-        exit 1
-    fi
+    run_shell_step \
+        "Basic workspace consistency" \
+        "" \
+        "cd '$TEMPLATE_DIR' && cargo check --workspace --quiet"
 }
 
 print_summary() {
