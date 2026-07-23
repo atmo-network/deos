@@ -7,6 +7,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 | `alignment` | Changed-scope validation routing, DEOS audits, completion gate, durable failure memory | Subsystem implementation policy; release publication | `alignment/SKILL.md`; `alignment/scripts/completion-gate.sh` |
 | `aaa-delivery` | AAA validation profile selection, stress/occupancy evidence policy, benchmark handoff | AAA runtime semantics; shared gate execution | `aaa-delivery/SKILL.md`; shared `scripts/aaa-release-gate.sh` implementation |
 | `domain-dag` | Generic ownership/DAG review and validator | DEOS subsystem policy; workflow-specific delivery gates | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
+| `runtime-benchmarking` | FRAME benchmark design, evidence classification, interpretation, and generated-weight handoff | Runtime semantics; shared command execution; scheduler stress; release publication | `runtime-benchmarking/SKILL.md`; shared `scripts/benchmarks.sh` and `scripts/03-build-runtime.sh` implementations |
 | `wiki-sync` | Generated wiki projection, provenance, trust, and consolidation workflow | Source specification ownership; browser implementation | `wiki-sync/SKILL.md` and its documented scripts |
 
 ## Dependency Direction

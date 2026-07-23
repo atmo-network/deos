@@ -52,7 +52,7 @@ Project-local audit leaves and targeted routes are documented in `/.agents/skill
 Commands executed through the shared script harness use compact output by default: successful test, build, lint, documentation, metadata, and benchmark steps print only their label, duration, and result. A failed step prints the last 80 lines and retains its complete output in a temporary log whose path appears in the error. Set `DEOS_VERBOSE=1` to restore live full output, or set `DEOS_FAILURE_TAIL_LINES=N` to change the failure excerpt without enabling verbose mode.
 
 - [benchmarks.sh](./benchmarks.sh)
-  Run pallet benchmarking flows and weight generation helpers. Supports `--extra` for AAA diagnostics, `--extrinsic NAME --output FILE` for focused evidence that must not replace complete production weights, and `--skip-build` when reusing a freshly built benchmark runtime.
+  Run pallet benchmarking flows and weight generation helpers. Supports `--extra` for AAA diagnostics, `--extrinsic NAME --output FILE` for focused evidence that must not replace complete production weights, and `--skip-build` when reusing a freshly built benchmark runtime. The [`runtime-benchmarking` skill](../.agents/skills/runtime-benchmarking/SKILL.md) owns case selection, evidence interpretation, weight handoff, and claim boundaries without duplicating this command surface.
 
 - [ci-local.sh](./ci-local.sh)
   Reproduce local CI or select one compact check with `--only`; narrow Cargo work further with `--package NAME`, `--test-filter NAME`, and explicit feature mode. Apply Rust formatting with `--only format --fix`. Agents should prefer this entrypoint over raw Cargo commands.

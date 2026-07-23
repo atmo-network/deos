@@ -1,15 +1,16 @@
 ---
 name: aaa-delivery
-description: Guides AAA scheduler validation, stress evidence, benchmark interpretation, release gating, and delivery handoff.
+description: Guides AAA scheduler validation, stress evidence application, release gating, and delivery handoff.
 ---
 
 # AAA Delivery
 
-Use this skill when an AAA change needs validation scope selection, scheduler stress evidence, benchmark interpretation, or release-candidate handoff. The skill owns agent judgment; shared root scripts own deterministic execution.
+Use this skill when an AAA change needs validation scope selection, scheduler stress evidence application, or release-candidate handoff. The skill owns AAA delivery judgment; shared root scripts own deterministic execution.
 
 ## Workflow Boundary
 
 - Inspect the AAA specification, architecture, backlog slice, changed code, generated weights, and runtime configuration before selecting a gate.
+- Route benchmark design, evidence classification, production-weight integration, and claim limits through [`runtime-benchmarking`](../runtime-benchmarking/SKILL.md); this skill owns the AAA-specific stress profile and release consequence.
 - Use `--quick` for bounded implementation slices that still need AAA-specific Clippy and pallet tests.
 - Use the full gate for scheduler stress acceptance, release preparation, or changes to queue/wakeup capacity, fairness, liveness, or guaranteed `on_idle` admission.
 - Keep the 10,000-entry occupancy profile enabled unless the touched contract cannot affect scheduler storage topology and the handoff states that reason explicitly.

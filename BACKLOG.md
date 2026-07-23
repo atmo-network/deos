@@ -15,9 +15,9 @@
 ### Harness evolution
 
 - [ ] `0.7.2 / Harness / Ownership inventory`: Human-callable atoms, GitHub shared-script placement, and AAA gate ownership are now explicit and audited. Classify the remaining named/admin scripts and skill leaves as shared root implementations, agent-specific leaves, or deletion candidates; map their human, CI, root-composition, and multi-skill consumers.
-- [ ] `0.7.2 / Harness / Declarative routing`: Alignment and AAA delivery now declare compact routes, while `ci-local.sh` supports package/test-family scope and benchmarks support exact-extrinsic evidence. Complete route/exclusion/prerequisite matrices for the remaining domain workflow owners without raw commands or duplicate harnesses.
+- [ ] `0.7.2 / Harness / Declarative routing`: Alignment, AAA delivery, and runtime benchmarking now declare compact routes, while shared CI supports package/test-family scope and benchmarks support exact-extrinsic evidence. Complete route/exclusion/prerequisite matrices for guarded runtime-upgrade and native-staking workflow owners without raw commands or duplicate harnesses.
 - [ ] `0.7.2 / Harness / Alignment routing`: Alignment owns the changed-scope matrix and completion gate, and shared CI supports narrow package/test routes. Retain `validate-local.sh` in root `/scripts` but remove broad default compositions that run unrelated audit, client, build, or network branches.
-- [ ] `0.7.2 / Harness / Domain workflows`: Add skill ownership for benchmark interpretation and guarded runtime-upgrade/native-staking coordination while keeping every human/CI/multi-skill executable in root `/scripts` as the sole shared implementation.
+- [ ] `0.7.2 / Harness / Domain workflows`: Runtime benchmarking now owns case design, evidence classification, interpretation, generated-weight handoff, and claim limits while shared root scripts remain the sole execution surface. Add equivalent skill ownership for guarded runtime-upgrade and native-staking coordination without moving human/CI/multi-skill executables out of `/scripts`.
 
 ### Slice 3 — Effective eligibility scheduling
 
