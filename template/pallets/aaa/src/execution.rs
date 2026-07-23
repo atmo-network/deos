@@ -166,15 +166,12 @@ impl<T: Config> Pallet<T> {
     let Some(cycle_nonce) = ActorHot::<T>::mutate(aaa_id, |maybe| {
       let inst = maybe.as_mut()?;
       inst.cycle_nonce = inst.cycle_nonce.saturating_add(1);
-      inst.manual_trigger_pending = false;
+      inst.pending_signal = false;
       inst.last_cycle_block = now;
       Some(inst.cycle_nonce)
     }) else {
       return base_weight;
     };
-    if matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. }) {
-      Self::consume_address_event(aaa_id);
-    }
     Self::deposit_event(Event::CycleStarted {
       aaa_id,
       cycle_nonce,

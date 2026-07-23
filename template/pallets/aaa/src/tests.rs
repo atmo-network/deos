@@ -286,7 +286,6 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       "SovereignIndex",
       "ActiveActorLimit",
       "GlobalCircuitBreaker",
-      "AddressEventInbox",
       "IngressOverflowSlots",
       "IngressOverflowHead",
       "IngressOverflowLen",
@@ -336,7 +335,6 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
       ("GlobalCircuitBreaker", false, false),
-      ("AddressEventInbox", true, true),
       ("IngressOverflowSlots", true, true),
       ("IngressOverflowHead", false, false),
       ("IngressOverflowLen", false, false),
@@ -370,12 +368,11 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   assert_map_storage_types::<AccountId, u64>(&entries[18]);
   assert_plain_storage_type::<u32>(&entries[19]);
   assert_plain_storage_type::<bool>(&entries[20]);
-  assert_map_storage_types::<u64, ()>(&entries[21]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[22]);
+  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[21]);
+  assert_plain_storage_type::<u32>(&entries[22]);
   assert_plain_storage_type::<u32>(&entries[23]);
   assert_plain_storage_type::<u32>(&entries[24]);
-  assert_plain_storage_type::<u32>(&entries[25]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[26]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[25]);
 }
 
 fn ordinary_transfer_to_aaa(
@@ -724,7 +721,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_eq!(AAA::actor_identity_count(), 1);
     assert_eq!(AAA::active_aaa_count(), 0);
     assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert!(!crate::AddressEventInbox::<Test>::contains_key(aaa_id));
     assert!(!crate::ScheduledWakeupBlock::<Test>::contains_key(aaa_id));
     assert!(!crate::WakeupRetryPending::<Test>::get(aaa_id));
     System::reset_events();
@@ -793,7 +789,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_eq!(AAA::actor_identity_count(), 1);
     assert_eq!(AAA::active_aaa_count(), 0);
     assert_eq!(native_balance(&identity.sovereign_account), preserved);
-    assert!(!crate::AddressEventInbox::<Test>::contains_key(aaa_id));
     assert!(!crate::ScheduledWakeupBlock::<Test>::contains_key(aaa_id));
     assert!(!crate::WakeupRetryPending::<Test>::get(aaa_id));
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
@@ -2001,7 +1996,7 @@ fn address_event_waits_through_cooldown_without_second_signal() {
       &ALICE
     ));
     run_idle(Weight::MAX);
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
     assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(6));
     frame_system::Pallet::<Test>::set_block_number(6);
     run_idle(Weight::MAX);
@@ -2009,7 +2004,7 @@ fn address_event_waits_through_cooldown_without_second_signal() {
       AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
       2
     );
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
   });
 }
 
@@ -3049,7 +3044,7 @@ fn wakeup_retry_ignores_sparse_historical_id_distance() {
         } if *id == aaa_id
       )
     }));
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
     assert!(crate::pallet::WakeupRetryPending::<Test>::get(aaa_id));
     NextAaaId::<Test>::put(10_000_000);
     SweepCursor::<Test>::put(0);
@@ -3070,7 +3065,7 @@ fn wakeup_retry_ignores_sparse_historical_id_distance() {
     frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(10));
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
     assert_eq!(crate::pallet::WakeupScheduleDrops::<Test>::get(), 1);
   });
 }
@@ -3176,7 +3171,7 @@ fn expired_ingress_remains_balance_only_and_policy_touch_closes() {
     ));
     assert_eq!(native_balance(&actor), balance_before.saturating_add(1_000));
     assert!(actor_funding(aaa_id).funding_snapshots.is_empty());
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
     let overflow_len = AAA::ingress_overflow_len();
     assert!(AAA::queue_address_event(
       aaa_id,
@@ -4959,7 +4954,7 @@ fn direct_notification_reports_funding_overflow_without_partial_inbox_mutation()
         .pending_amount,
       u128::MAX
     );
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
   });
 }
 
@@ -7993,7 +7988,7 @@ fn manual_readiness_mutates_hot_state_without_rewriting_program() {
     assert!(
       AAA::actor_hot(aaa_id)
         .expect("actor hot state exists")
-        .manual_trigger_pending
+        .pending_signal
     );
     assert_eq!(AAA::actor_program(aaa_id), Some(program_before));
   });

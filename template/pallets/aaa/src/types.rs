@@ -986,7 +986,7 @@ pub struct ActorHotState<AccountId, BlockNumber, Balance> {
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
-  pub manual_trigger_pending: bool,
+  pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
   pub last_user_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,

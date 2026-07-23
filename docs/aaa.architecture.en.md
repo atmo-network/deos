@@ -338,7 +338,7 @@ Implemented trigger variants:
 
 ### OnAddressEvent
 
-Inbox model uses `AddressEventInbox` key presence as the pending latch; the value is unit, so no redundant boolean, generation, or event-block metadata enters consensus state.
+Manual and AddressEvent ingress share `ActorHot.pending_signal` as one canonical readiness latch, so no parallel inbox key, source tag, generation, or event-block metadata enters consensus state.
 
 Filter surface:
 
@@ -352,7 +352,7 @@ Runtime ingress shape in the shipped line:
 
 - Ingress producers go through a runtime-configured adapter interface (`AddressEventIngress` or equivalent)
 - That adapter path ultimately invokes `notify_address_event*`
-- Producers do not mutate `AddressEventInbox` or funding snapshots directly
+- Producers do not mutate `ActorHot.pending_signal` or funding snapshots directly
 - Producer scope includes transfer/mint ingress paths (asset adapters, TMC distribution, router fee routing, XCM/mint where configured)
 
 Ingress matrix (current runtime):
@@ -378,7 +378,7 @@ Funding state follows typed provenance rather than a dedicated value-transfer ca
 
 ### Manual
 
-`manual_trigger` sets `manual_trigger_pending = true` only for eligible unpaused actors: paused calls fail with `AaaPaused`, and System Immutable calls fail with `ImmutableAaa`. It is cleared when a cycle starts and preserved across deferrals.
+`manual_trigger` sets the shared `ActorHot.pending_signal` latch only for eligible unpaused actors: paused calls fail with `AaaPaused`, and System Immutable calls fail with `ImmutableAaa`. The latch clears when a cycle starts and survives deferrals.
 
 ---
 
@@ -399,7 +399,6 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `OwnerSlotMask`: user owner-slot occupancy bitmask; System AAA never consumes it
 - `SovereignIndex`: reverse index from sovereign account to active or dormant `aaa_id`; custody-only accounts intentionally have no entry
 - `ClosedSystemAaaIds`: closed System AAA id tombstones retaining the actor's mutability; only tombstones recorded as Mutable permit governance reopen
-- `AddressEventInbox`: event-trigger pending latch per actor
 - `IngressOverflowHead/Len/Slots`: implementation-owned bounded O(1) carry-over ring for over-cap ingress
 - `LastIngressIngestBlock`: implementation-owned once-per-block durable-ring drain coordination; producer adapters own concrete event-position uniqueness
 - `GlobalCircuitBreaker`: global scheduler halt flag
@@ -418,7 +417,7 @@ The implementation separates identity-only dormancy from active execution:
 Created Dormant ⇄ Active → Ready → Admitted → Running → Completed/Deferred/Failed → TerminalPending → Closing → Closed
 ```
 
-`activate_aaa` accepts typed `ProgramInput` and validates the schedule/window, run plan, explicit close plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and production idle envelope before creating matching `ActorHot`, `ActorProgram`, and `ActorFunding` entries for a Mutable identity; `ProgramInput::Dormant` is rejected on activation. `deactivate_aaa` clears queues, wakeups, inbox, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances. Active and dormant creation paths now normalize into the same typed internal program boundary, while the legacy creation/reopen metadata still supplies separate schedule/run-plan arguments and class-derived close/funding defaults. Converting that external metadata to `ProgramInput` remains open.
+`activate_aaa` accepts typed `ProgramInput` and validates the schedule/window, run plan, explicit close plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and production idle envelope before creating matching `ActorHot`, `ActorProgram`, and `ActorFunding` entries for a Mutable identity; `ProgramInput::Dormant` is rejected on activation. `deactivate_aaa` clears queues, wakeups, pending signal, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances. Active and dormant creation paths now normalize into the same typed internal program boundary, while the legacy creation/reopen metadata still supplies separate schedule/run-plan arguments and class-derived close/funding defaults. Converting that external metadata to `ProgramInput` remains open.
 
 Runtime interpretation:
 
@@ -443,7 +442,7 @@ The current pallet already provides chain-native bounded reads for live actor an
 - `actor_funding(aaa_id)` for funding policy, tracked assets, batches, and pending indication
 - `owner_slot_mask(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(aaa_id)` for System AAA addressing against the known runtime catalog
-- Bounded scheduler / readiness / breaker / ingress surfaces such as `QueueHead`, `QueueTail`, `QueuePages`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `AddressEventInbox`, `IdleStarvationBlocks`, and the ingress-overflow ring state
+- Bounded scheduler / readiness / breaker / ingress surfaces such as `ActorHot.pending_signal`, `QueueHead`, `QueueTail`, `QueuePages`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `IdleStarvationBlocks`, and the ingress-overflow ring state
 - Live execution-side effects and bounded operational events
 
 These are the authoritative bounded surfaces for known-actor inspection, per-owner recovery, scheduler state, and current operator observability.
@@ -541,7 +540,7 @@ Additional runtime bindings:
 - Successful-cycle funding rotation has a generated `funding_batch_promotion(a)` class over `a = 1..10`; cycle admission always reserves the runtime maximum, with `19,103,200 + 2,393,403a` RefTime, one read/write, 4,426 charged proof bytes, and measured proof growth `463 + 37a`
 - Mutable plan replacement benchmarks a prepopulated `MaxFundingTrackedAssets` batch map and removes every stale entry in the measured call; the regenerated `update_execution_plan` envelope charges three reads/three writes across hot, program, and funding ownership with 1,340 measured and 12,141 estimated proof bytes
 - Producer-owned transaction-extension ingress declares the generated full matched-notification envelope and refunds against a separate generated unmatched-event base; the base conservatively benchmarks the real negative recipient resolution together with a populated `SovereignIndex` proof witness, charging `14,737,000` RefTime, one database read, and 3,521 proof bytes, and refund tests retain that complete base after an unmatched successful call. The maximum measures `AnySource` authority evaluation, existing-batch checked accumulation, funding observability, inbox mutation, and nine saturated wakeup buckets at 18 reads, 14 writes, 725,713 measured proof bytes, and a charged 743,463-byte proof estimate
-- Compatibility ingress uses a generated one-read probe with 1,489 charged proof bytes before ring-length access, then a trigger-only durable-ring drain unit under saturated wakeup retry at 19 reads, 16 writes, 725,605 measured proof bytes, and a 743,463-byte charged proof estimate; enqueue-time funding reservation is paid synchronously by the originating producer, and the retired event-vector scan class no longer appears in production weights
+- Compatibility ingress uses a generated one-read probe with 1,489 charged proof bytes before ring-length access, then a trigger-only durable-ring drain unit under saturated wakeup retry at 18 reads, 15 writes, 721,538 measured proof bytes, and a 743,463-byte charged proof estimate; folding readiness into `ActorHot.pending_signal` removes the separate inbox write while enqueue-time funding reservation remains paid synchronously by the originating producer, and the retired event-vector scan class no longer appears in production weights
 - `scheduler_on_idle_base` charges five reads/two writes and 1,493 proof bytes before breaker/queue-occupancy/marker/starvation work; `scheduler_zombie_sweep_base` charges three reads and 3,490 proof bytes before cursor/retry-prefix access. Scheduler actor-probe admission then uses a generated model covering hot/program reads, breaker/readiness evaluation, and exhausted-budget deferral; paged scan and consume weights remain separate generated units.
 - The production-Wasm `50 x 20` `scheduler_paged_execute_cheap(n)` benchmark executes complete minimal one-step System cycles through the live paged scheduler for `n = 1..1,000`. Its generated model is `91,075,000 + 64,544,609n` RefTime, `4,332 + 2,729n` estimated ProofSize, `6 + 3n` reads, and `4 + 2n` writes; measured proof is `873 + 253n`. The 999-point sample completed in about 64.7 ms on the benchmark host. This establishes the full execution cost curve and supports a 1,000 defense-in-depth count ceiling, but does not promise 1,000 executions in a reference block: the scheduler still admits each complete cached cycle bound against the available two-dimensional `WeightMeter`, and runtime stress verifies only that the guaranteed reserve exceeds the retired 48-attempt ceiling.
 - `update_funding_source_policy` has a dedicated generated three-read/one-write model with 12,141 charged proof bytes and 970 measured proof bytes instead of reusing execution-plan update weight; all runtime-backed AAA task, ingress, scheduler-hook, probe, and dispatch classes use generated production measurements

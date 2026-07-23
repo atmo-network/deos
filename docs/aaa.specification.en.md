@@ -59,7 +59,7 @@ struct ActorHot<BlockNumber, Balance> {
     last_cycle_block: BlockNumber,
     queue_ticket: Option<QueueTicket>,
     consecutive_failures: u32,
-    manual_trigger_pending: bool,
+    pending_signal: bool,
     cycle_weight_upper: Weight,
     cycle_fee_upper: Balance,
 }
@@ -585,7 +585,7 @@ Schedule cooldown rules:
 3. One canonical saturating calculation MUST derive effective eligibility as the maximum of applicable `last_cycle_block + cooldown_blocks`, timer-cadence-plus-jitter, and `schedule_window.start` terms; cooldown is omitted before the first admitted cycle, while first delayed-timer eligibility anchors to actor creation and an every-block timer is immediately eligible.
 4. `last_cycle_block` MUST be updated at admitted cycle start (`CycleStarted`) and therefore records the admitted-run clock rather than completion or pre-admission deferral.
 5. A pending Manual or AddressEvent signal MUST omit the timer term even when Manual explicitly triggers a Timer actor; cooldown and window terms still gate admission.
-6. `manual_trigger` MAY set `manual_trigger_pending`, but cooldown MUST still gate admission.
+6. `manual_trigger` MAY set `pending_signal`, but cooldown MUST still gate admission.
 
 Timer rules:
 
@@ -603,7 +603,7 @@ A future probabilistic trigger requires a separate append-only trigger variant p
 ### 7.2 OnAddressEvent
 
 ```rust
-// AddressEventInbox contains aaa_id iff one signal is pending.
+// ActorHot.pending_signal is the canonical coalesced readiness latch.
 enum SourceFilter<AccountId> {
     Any,
     OwnerOnly,
@@ -616,18 +616,18 @@ enum AssetFilter<AssetId> {
 }
 ```
 
-Inbox model:
+Signal model:
 
-1. `AddressEventInbox` is a per-AAA presence latch, not an event queue; multiple matched events coalesce into one pending signal without consensus-state generation or timestamp metadata.
-2. A matched inbound balance-increase event inserts the actor key idempotently; the key is removed only when the signal is consumed or actor lifecycle cleanup invalidates it.
-3. Coalescing is signal-level: one admitted cycle may consume balances accumulated from multiple matched events since the previous inbox consumption.
+1. `ActorHot.pending_signal` is one per-AAA readiness latch shared by Manual and AddressEvent ingress; multiple matched events coalesce without a separate storage key, generation, or timestamp metadata.
+2. A matched inbound balance-increase event sets the latch only on `false -> true`; an admitted cycle clears it atomically, while lifecycle cleanup removes it with `ActorHot`.
+3. Coalescing is signal-level: one admitted cycle may consume balances accumulated from multiple matched events since the previous signal consumption.
 
 Rules:
 
 - `SourceFilter::Whitelist` and `AssetFilter::Whitelist` MUST be non-empty and bounded by `MaxWhitelistSize`.
 - Events without a concrete source account identifier MUST match only `SourceFilter::Any`.
-- Scheduler readiness for this trigger MUST be `true` iff the actor key exists in `AddressEventInbox`.
-- When a cycle starts for an actor with `OnAddressEvent`, the inbox entry MUST be consumed atomically.
+- Scheduler readiness for this trigger MUST be `true` iff `ActorHot.pending_signal` is true.
+- When any signalled cycle starts, `pending_signal` MUST be cleared atomically.
 - If a new matched event arrives after consumption, the actor MUST become ready again on subsequent scheduler passes.
 
 Ingress contract:
@@ -635,8 +635,8 @@ Ingress contract:
 1. Runtime ingress to `OnAddressEvent` MUST go through a runtime-configured adapter interface (`AddressEventIngress` or equivalent) that ultimately invokes `notify_address_event*`.
 2. Ingress strategy SHOULD be submit-first: producer paths with explicit hook points (AAA asset ops, TMC/router routing paths, XCM transactor paths) SHOULD submit directly through the adapter at successful transfer/mint completion; generic top-level calls without pallet callbacks MAY use a weight-charging post-dispatch transaction extension as their producer-owned hook.
 3. Runtime event-vector scanning MUST NOT serve as a supported producer ingress path because a bounded prefix cannot retain events beyond the scan cap; generic top-level calls without pallet callbacks MUST use the producer-owned transaction extension or another weighted submit adapter.
-4. Producer paths MUST NOT mutate `AddressEventInbox` or `funding_snapshots` directly.
-5. Source and asset filters MUST be evaluated in the same state transition as the inbox update.
+4. Producer paths MUST NOT mutate `ActorHot.pending_signal` or funding snapshots directly.
+5. Source and asset filters MUST be evaluated in the same state transition as the signal update.
 6. Source invariant: when a concrete sender is available, ingress MUST preserve it exactly; `source = None` is valid only for inherently source-less paths.
 7. Ingress identity invariant: runtime MUST process each producer event position exactly once without content-based coalescing; distinct same-block transfers with identical actor, asset, amount, and provenance MUST remain distinct. Accepted durable enqueue MUST reserve/apply funding exactly once, while its later drain delivers only the trigger/inbox effect and MUST NOT replay funding.
 8. Funding-batch behavior for inbound ingress is normative (Section 2.5) and MUST remain independent from trigger-filter matching.
@@ -647,11 +647,11 @@ Ingress contract:
 
 `manual_trigger` bypasses schedule timing only. It MUST NOT bypass admission or fee checks.
 
-1. Calling `manual_trigger` on an eligible unpaused actor MUST set `manual_trigger_pending = true` and perform a bounded enqueue/schedule request; calling it on a paused actor MUST fail with `AaaPaused`; calling it on System Immutable AAA MUST fail with `ImmutableAaa`.
-2. `manual_trigger_pending` MUST be cleared exactly when a cycle is admitted and `CycleStarted` is emitted.
-3. Deferrals MUST NOT clear `manual_trigger_pending`.
-4. If the actor closes before admission, the flag is removed with actor state deletion.
-5. If the actor is paused after the flag is set, `manual_trigger_pending` MUST persist across `pause_aaa` / `resume_aaa`; resume MUST re-enqueue a pending actor, and cooldown/window misses MUST schedule its earliest bounded eligibility without requiring another external signal.
+1. Calling `manual_trigger` on an eligible unpaused actor MUST set `ActorHot.pending_signal = true` and perform a bounded enqueue/schedule request; calling it on a paused actor MUST fail with `AaaPaused`; calling it on System Immutable AAA MUST fail with `ImmutableAaa`.
+2. `pending_signal` MUST be cleared exactly when a cycle is admitted and `CycleStarted` is emitted.
+3. Deferrals MUST NOT clear `pending_signal`.
+4. If the actor closes before admission, the latch is removed with actor state deletion.
+5. If the actor is paused after the latch is set, `pending_signal` MUST persist across `pause_aaa` / `resume_aaa`; resume MUST re-enqueue a pending actor, and cooldown/window misses MUST schedule its earliest bounded eligibility without requiring another external signal.
 
 ### 7.4 Schedule Window
 
@@ -712,7 +712,7 @@ Each block MUST use a two-dimensional `WeightMeter` to admit ingress, wakeup, qu
 
 - Queue carry-over: deferred, leftover, and execution-created late enqueues persist in deterministic FIFO order and MUST be revalidated at pop. A ready live head that fails admission only because the remaining block budget cannot fit its complete unit MUST retain its queue position and become the first candidate next block; carry-over MUST NOT move it behind a later entry or assign it a new FIFO identity.
 - Timer due: delayed wakeup moves to active queue; actor wakeup pointer clears when drained
-- AddressEvent matched: set/keep inbox latch; enqueue best effort; overflow MUST NOT clear the latch
+- AddressEvent matched: set/keep `ActorHot.pending_signal`; enqueue best effort; overflow MUST NOT clear the latch
 - Manual trigger: set flag and enqueue/schedule; deferral preserves flag until admitted cycle start
 - Queue/wakeup full: spill deterministically; if no bucket fits, emit drop and retain source latch when any
 - Paused/cooldown/pre-window actor: pop preserves manual/inbox latches and MUST retain or schedule one future eligibility entry; resume re-enqueues pending non-timer signals
@@ -1037,7 +1037,7 @@ This section defines the stable storage surface. Actor cardinality/capacity, imm
 - `ScheduledWakeupBlock` (`Map<Blake2_128Concat(AaaId), BlockNumber>`) / `WakeupRetryPending` (`Map<Blake2_128Concat(AaaId), bool>`): canonical single-entry wakeup pointer and durable saturation-retry marker per actor
 - `WakeupScheduleDrops` (`u64`): counter of wakeups that could not be scheduled
 - `ActorHot.queue_ticket` (`Option<QueueTicket>`): sole live queue membership and lazy-invalidation marker
-- `AddressEventInbox` (`Map<Blake2_128Concat(AaaId), InboxState>`): `OnAddressEvent` pending latch
+- `ActorHot.pending_signal` (`bool`): canonical Manual/AddressEvent readiness latch
 - `OwnerSlotMask` (`Map<Blake2_128Concat(AccountId), u8>`) / `SovereignIndex` (`Map<Blake2_128Concat(AccountId), AaaId>`): User-slot occupancy and active-or-dormant sovereign guard
 - `ActiveActorLimit` (`u32`): governance-controlled operational cap constrained by hard and queue bounds; stored `0` resolves to the bounded runtime default for compatibility
 - `SweepCursor` (`AaaId`): zombie sweep cursor
@@ -1060,7 +1060,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 9. First eligible execution is bounded by `MaxExecutionDelayBlocks` (Section 1 item 11; Section 7.4)
 10. `reserved_fee_remaining` is transient, and `FeeNativeAsset` spend paths use `spendable_fee_native` (Section 2.1 native-asset terminology; Section 4.3)
 11. Weight deferrals preserve `cycle_nonce`, `consecutive_failures`, and `last_cycle_block`; User fee insufficiency at cycle admission is terminal (Section 2.6 items 1, 3, 5, 6, 7; Section 4.1)
-12. `manual_trigger_pending` clears on admitted cycle start, persists across deferrals/pause/resume, and always retains one bounded path to future eligibility (Section 7.3; Section 8.3)
+12. `ActorHot.pending_signal` clears on admitted cycle start, persists across deferrals/pause/resume, and always retains one bounded path to future eligibility (Section 7.3; Section 8.3)
 13. `SplitTransfer` preserves amount conservation, rejects `sum(share_i) > 100%`, and skips ED-unsafe legs deterministically (Section 6.2)
 14. Amount resolution never silently clamps and resolves through `Skipped` or `FundingUnavailable` when needed (Section 1 item 9; Section 5.3)
 15. `OnAddressEvent` updates occur only through producer-owned adapter paths; each concrete event position is processed once, identical transfers remain distinct, expired ingress remains balance-only, typed funding authority gates mutation, checked overflow rolls back the originating producer, and only successful cycles promote pending batches (Section 2.5; Section 7.2)

@@ -321,7 +321,7 @@ impl<T: Config> Pallet<T> {
         }
       }
       Trigger::OnAddressEvent { .. } => {
-        if Self::evaluate_on_address_event(aaa_id) || instance.manual_trigger_pending {
+        if instance.manual_trigger_pending {
           Self::enqueue(aaa_id);
         }
       }
@@ -613,9 +613,7 @@ impl<T: Config> Pallet<T> {
       Self::schedule_next_timer_wakeup_local(aaa_id, instance, now, periodic_continuations);
       return;
     }
-    let pending = instance.manual_trigger_pending
-      || matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. })
-        && Self::evaluate_on_address_event(aaa_id);
+    let pending = instance.manual_trigger_pending;
     if !pending {
       return;
     }
@@ -807,7 +805,7 @@ impl<T: Config> Pallet<T> {
     match instance.schedule.trigger {
       Trigger::Manual => false,
       Trigger::Timer { .. } => Self::evaluate_timer(aaa_id, instance),
-      Trigger::OnAddressEvent { .. } => Self::evaluate_on_address_event(aaa_id),
+      Trigger::OnAddressEvent { .. } => false,
     }
   }
 
@@ -1054,7 +1052,13 @@ impl<T: Config> Pallet<T> {
       ) && Self::asset_matches_filter(asset_filter, asset)
       {
         inbox_matched = true;
-        AddressEventInbox::<T>::insert(aaa_id, ());
+        if !instance.manual_trigger_pending {
+          ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+            if let Some(hot) = maybe_hot {
+              hot.pending_signal = true;
+            }
+          });
+        }
       }
     }
     if apply_funding && amount > Zero::zero() {
@@ -1099,14 +1103,6 @@ impl<T: Config> Pallet<T> {
       Self::enqueue(aaa_id);
     }
     Ok(())
-  }
-
-  fn evaluate_on_address_event(aaa_id: AaaId) -> bool {
-    AddressEventInbox::<T>::contains_key(aaa_id)
-  }
-
-  pub(crate) fn consume_address_event(aaa_id: AaaId) {
-    AddressEventInbox::<T>::remove(aaa_id);
   }
 
   pub(crate) fn execute_zombie_sweep(remaining_weight: Weight) -> Weight {

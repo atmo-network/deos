@@ -377,7 +377,7 @@ pub mod pallet {
         cycle_nonce: hot.cycle_nonce,
         auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
         consecutive_failures: hot.consecutive_failures,
-        manual_trigger_pending: hot.manual_trigger_pending,
+        manual_trigger_pending: hot.pending_signal,
         queue_ticket: hot.queue_ticket,
         last_user_queue_mutation_block: hot.last_user_queue_mutation_block,
         cycle_weight_upper: hot.cycle_weight_upper,
@@ -392,6 +392,10 @@ pub mod pallet {
         ActorHot::<T>::get(aaa_id)?,
         ActorProgram::<T>::get(aaa_id)?,
       ))
+    }
+
+    pub fn pending_signal(aaa_id: AaaId) -> bool {
+      ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal)
     }
 
     pub(crate) fn active_actor_exists(aaa_id: AaaId) -> bool {
@@ -411,7 +415,7 @@ pub mod pallet {
           cycle_nonce: instance.cycle_nonce,
           auto_close_at_cycle_nonce: instance.auto_close_at_cycle_nonce,
           consecutive_failures: instance.consecutive_failures,
-          manual_trigger_pending: instance.manual_trigger_pending,
+          pending_signal: instance.manual_trigger_pending,
           queue_ticket: instance.queue_ticket,
           last_user_queue_mutation_block: instance.last_user_queue_mutation_block,
           cycle_weight_upper: instance.cycle_weight_upper,
@@ -513,10 +517,6 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn global_circuit_breaker)]
   pub type GlobalCircuitBreaker<T> = StorageValue<_, bool, ValueQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn address_event_inbox)]
-  pub type AddressEventInbox<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, (), OptionQuery>;
 
   #[pallet::storage]
   pub type IngressOverflowSlots<T: Config> =
@@ -1195,13 +1195,15 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
-        inst.manual_trigger_pending = true;
+      ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::AaaPaused);
+      if !snapshot.manual_trigger_pending {
+        ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+          let hot = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+          hot.pending_signal = true;
+          Ok(())
+        })?;
         Self::deposit_event(Event::ManualTriggerSet { aaa_id });
-        Ok(())
-      })?;
+      }
       Self::enqueue(aaa_id);
       Ok(())
     }
@@ -2333,7 +2335,6 @@ pub mod pallet {
           Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
         }
         WakeupRetryPending::<T>::remove(aaa_id);
-        AddressEventInbox::<T>::remove(aaa_id);
         Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);
         DormantAaaIdentities::<T>::insert(aaa_id, identity);
@@ -2867,7 +2868,6 @@ pub mod pallet {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         if Self::active_actor_exists(aaa_id)
           || ActorFunding::<T>::contains_key(aaa_id)
-          || AddressEventInbox::<T>::contains_key(aaa_id)
           || ScheduledWakeupBlock::<T>::contains_key(aaa_id)
           || WakeupRetryPending::<T>::get(aaa_id)
         {

@@ -1998,7 +1998,7 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
         .is_some(),
       "an address event created during on_idle must survive as next-block work"
     );
-    assert!(AAA::address_event_inbox(receiver_id).is_some());
+    assert!(AAA::pending_signal(receiver_id));
     System::set_block_number(2);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -2356,7 +2356,7 @@ fn producer_owned_asset_ingress_survives_adversarial_event_prefix() {
     assert!(RuntimeAddressEventIngressHook::submit_events_since(
       producer_start
     ));
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
   });
 }
 
@@ -2826,7 +2826,7 @@ fn ingress_hook_drains_only_the_bounded_durable_overflow_prefix() {
       )
     );
     assert_eq!(AAA::ingress_overflow_len(), 10);
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
   });
 }
 
@@ -2865,7 +2865,7 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
       .expect("funding reserved at enqueue");
     assert_eq!(batch.amount, 5_000);
     assert_eq!(batch.pending_amount, 7_000);
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::pending_signal(aaa_id));
     assert_eq!(AAA::drain_address_event_overflow(2), 2);
     let drained = actor_funding(aaa_id);
     let batch = drained
@@ -2874,7 +2874,7 @@ fn durable_overflow_reserves_funding_at_enqueue_and_defers_only_trigger_delivery
       .expect("funding remains stable at drain");
     assert_eq!(batch.amount, 5_000);
     assert_eq!(batch.pending_amount, 7_000);
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
   });
 }
 
@@ -2903,7 +2903,7 @@ fn ingress_hook_does_not_start_a_unit_when_proof_budget_is_exhausted() {
     );
     assert_eq!(consumed, Weight::zero());
     assert_eq!(AAA::ingress_overflow_len(), 1);
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::pending_signal(aaa_id));
   });
 }
 
@@ -2930,7 +2930,7 @@ fn proof_exhausted_ingress_pressure_triggers_starvation_without_drain() {
     }
 
     assert_eq!(AAA::ingress_overflow_len(), 1);
-    assert!(AAA::address_event_inbox(aaa_id).is_none());
+    assert!(!AAA::pending_signal(aaa_id));
     assert_eq!(IdleStarvationBlocks::<Runtime>::get(), threshold);
     assert!(has_aaa_event(|event| matches!(
       event,
@@ -3566,7 +3566,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
     let matched_fee = balance_before_matched
       .saturating_sub(native_balance(&signer_account))
       .saturating_sub(transfer_amount);
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
     let unmatched = RuntimeCall::Balances(
       polkadot_sdk::pallet_balances::Call::transfer_allow_death {
         dest: Address::Id(BOB),
@@ -3586,7 +3586,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       "successful tracked calls without an AAA recipient must refund the unused notification envelope"
     );
     assert!(notify_weight.saturating_sub(base_weight) != Weight::zero());
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
     let untracked = RuntimeCall::System(polkadot_sdk::frame_system::Call::remark {
       remark: b"untracked ingress call".to_vec(),
     });
@@ -3594,7 +3594,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       Executive::apply_extrinsic(signed_extrinsic(&signer, 2, untracked)),
       Ok(Ok(_))
     ));
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
     let failed = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
       dest: Address::Id(sovereign),
       value: u128::MAX,
@@ -3611,7 +3611,7 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       Ok(Err(_))
     ));
     let failed_fee = balance_before_failed.saturating_sub(native_balance(&signer_account));
-    assert!(AAA::address_event_inbox(aaa_id).is_some());
+    assert!(AAA::pending_signal(aaa_id));
     assert!(
       failed_fee < declared_failed_fee,
       "failed tracked calls must pay less than their declared envelope after post-dispatch refund"

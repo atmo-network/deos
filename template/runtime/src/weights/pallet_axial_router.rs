@@ -66,17 +66,15 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_axial_router::WeightInfo for 
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `MaxEncodedLen`)
 	/// Storage: `AxialRouter::EmaLastUpdate` (r:1 w:1)
 	/// Proof: `AxialRouter::EmaLastUpdate` (`max_values`: None, `max_size`: Some(46), added: 2521, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::AddressEventInbox` (r:0 w:1)
-	/// Proof: `AAA::AddressEventInbox` (`max_values`: None, `max_size`: Some(24), added: 2499, mode: `MaxEncodedLen`)
 	fn swap() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2392`
 		//  Estimated: `12141`
-		// Minimum execution time: 283_351_000 picoseconds.
-		Weight::from_parts(305_002_000, 0)
+		// Minimum execution time: 283_770_000 picoseconds.
+		Weight::from_parts(300_113_000, 0)
 			.saturating_add(Weight::from_parts(0, 12141))
 			.saturating_add(T::DbWeight::get().reads(17))
-			.saturating_add(T::DbWeight::get().writes(12))
+			.saturating_add(T::DbWeight::get().writes(11))
 	}
 	/// Storage: `AxialRouter::TrackedAssets` (r:1 w:1)
 	/// Proof: `AxialRouter::TrackedAssets` (`max_values`: Some(1), `max_size`: Some(322), added: 817, mode: `MaxEncodedLen`)
@@ -84,8 +82,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_axial_router::WeightInfo for 
 		// Proof Size summary in bytes:
 		//  Measured:  `34`
 		//  Estimated: `1807`
-		// Minimum execution time: 11_384_000 picoseconds.
-		Weight::from_parts(13_270_000, 0)
+		// Minimum execution time: 11_733_000 picoseconds.
+		Weight::from_parts(13_410_000, 0)
 			.saturating_add(Weight::from_parts(0, 1807))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -96,8 +94,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_axial_router::WeightInfo for 
 		// Proof Size summary in bytes:
 		//  Measured:  `34`
 		//  Estimated: `1489`
-		// Minimum execution time: 10_337_000 picoseconds.
-		Weight::from_parts(12_222_000, 0)
+		// Minimum execution time: 10_546_000 picoseconds.
+		Weight::from_parts(12_432_000, 0)
 			.saturating_add(Weight::from_parts(0, 1489))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))

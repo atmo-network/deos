@@ -1089,7 +1089,7 @@ mod benches {
       maybe_hot
         .as_mut()
         .expect("benchmark actor hot state must exist")
-        .manual_trigger_pending = true;
+        .pending_signal = true;
     });
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     #[block]
@@ -1284,7 +1284,7 @@ mod benches {
       let mut hot = hot_template.clone();
       hot.cycle_nonce = 0;
       hot.last_cycle_block = Zero::zero();
-      hot.manual_trigger_pending = true;
+      hot.pending_signal = true;
       hot.queue_ticket = None;
       ActorHot::<T>::insert(aaa_id, hot);
       ActorProgram::<T>::insert(aaa_id, program_template.clone());
@@ -1406,7 +1406,7 @@ mod benches {
     {
       assert!(T::BenchmarkHelper::run_address_event_ingress(&recipient));
     }
-    assert!(AddressEventInbox::<T>::contains_key(aaa_id));
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
     assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
   }
 
@@ -1469,7 +1469,7 @@ mod benches {
       let _ = Pallet::<T>::drain_address_event_overflow(1);
     }
     assert_eq!(IngressOverflowLen::<T>::get(), 0);
-    assert!(AddressEventInbox::<T>::contains_key(aaa_id));
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
     assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
   }
 
