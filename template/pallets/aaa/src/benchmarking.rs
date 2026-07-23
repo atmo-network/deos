@@ -1127,6 +1127,51 @@ mod benches {
     }
   }
 
+  // Non-dispatch diagnostic benchmark proving cooldown-ineligible timers own no queue probe.
+  #[benchmark]
+  fn scheduler_cooldown_ineligible_idle() {
+    let owner: T::AccountId = whitelisted_caller();
+    let schedule = Schedule {
+      trigger: Trigger::Timer { every_blocks: 1 },
+      cooldown_blocks: 10,
+    };
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner.clone(),
+      Mutability::Mutable,
+      system_program::<T>(schedule, make_inert_execution_plan::<T>()),
+    )
+    .expect("System timer creation must succeed");
+    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), aaa_id)
+      .expect("manual trigger must succeed");
+    let first_block: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(first_block);
+    let _ = Pallet::<T>::on_idle(first_block, Weight::MAX);
+    let expected_wakeup: BlockNumberFor<T> = 11u32.into();
+    assert_eq!(
+      ScheduledWakeupBlock::<T>::get(aaa_id),
+      Some(expected_wakeup)
+    );
+    assert!(!CurrentQueue::<T>::get().contains(&aaa_id));
+    assert!(!NextQueue::<T>::get().contains(&aaa_id));
+
+    let now: BlockNumberFor<T> = 2u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    #[block]
+    {
+      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
+    }
+    let instance = AaaInstances::<T>::get(aaa_id).expect("AAA exists");
+    assert_eq!(instance.cycle_nonce, 1);
+    assert_eq!(
+      ScheduledWakeupBlock::<T>::get(aaa_id),
+      Some(expected_wakeup)
+    );
+    assert!(!CurrentQueue::<T>::get().contains(&aaa_id));
+    assert!(!NextQueue::<T>::get().contains(&aaa_id));
+  }
+
   #[benchmark]
   fn scheduler_on_idle_base() {
     let now: BlockNumberFor<T> = 1u32.into();

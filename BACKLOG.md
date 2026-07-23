@@ -12,12 +12,7 @@
 
 ### Slice 3 — Effective eligibility scheduling
 
-- [ ] `0.7.2 / S3 / Mechanism`: Define one canonical effective-eligibility calculation for external signals and timers: `next_eligible_at = max(last_attempt_block + timer_interval, last_attempt_block + cooldown_blocks, schedule_window.start)`, with non-applicable terms omitted and saturating bounded arithmetic used consistently.
-- [ ] `0.7.2 / S3 / Queue choice`: Compare the canonical result with the current block after pause/breaker/window/terminal checks; use immediate next-block queue continuation only when genuinely eligible next block and otherwise persist exactly one temporal wakeup. A timer with `every_blocks = 1` and `cooldown_blocks = 10` must receive one wakeup at the tenth eligible block rather than nine negative queue probes.
-- [ ] `0.7.2 / S3 / Attempt clock`: Rename or redefine current `last_cycle_block` as the admitted-run clock if necessary, pin first-run behavior, update it on every admitted run, and distinguish pure pre-admission weight deferral from admission.
 - [ ] `0.7.2 / S3 / Dependencies`: Define the eligibility contract after Slice 2 lifecycle states, expose it to Slices 5–6, and bind its final storage/queue implementation only after the paged queue and wakeup substrate exists; this intentional contract-first ordering avoids implementing effective scheduling twice. `0.7.3` Continuation retries must later reuse the primitive rather than create a second retry scheduler.
-- [ ] `0.7.2 / S3 / Removals`: Remove repeated cooldown/window negative probes, timer-specific local queue-continuation branches that bypass effective eligibility, and duplicated eligibility arithmetic in resume, signal preservation, and timer rearming.
-- [ ] `0.7.2 / S3 / Evidence`: Cover every ordering of timer interval, cooldown, window start, pending signal, pause/resume, breaker recovery, and first versus later attempt; add a regression for `every=1/cooldown=10` and production scheduler benchmarks showing that cooldown-ineligible actors disappear from the active queue until one due wakeup.
 - [ ] `0.7.2 / S3 / Exit`: Timer cadence, cooldown, pre-window delay, and signal preservation converge through one scheduling primitive, with no readiness loss and no premature queueing.
 
 ### Slice 4 — AAA storage decomposition

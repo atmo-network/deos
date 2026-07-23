@@ -579,21 +579,21 @@ Schedule cooldown rules:
 
 1. `cooldown_blocks` MUST apply to all trigger classes (`Timer`, `OnAddressEvent`, `Manual`) after the first admitted cycle.
 2. The first admission, identified by stored `cycle_nonce == 0` before its admission increment, MUST NOT be blocked by cooldown.
-3. Readiness MUST fail when `current_block - last_cycle_block < cooldown_blocks`.
-4. `last_cycle_block` MUST be updated at admitted cycle start (`CycleStarted`) and therefore cooldown is anchored to admission, not completion.
-5. For `Timer`, effective inter-cycle gap is `max(every_blocks, cooldown_blocks)`.
+3. One canonical saturating calculation MUST derive effective eligibility as the maximum of applicable `last_cycle_block + cooldown_blocks`, timer-cadence-plus-jitter, and `schedule_window.start` terms; cooldown is omitted before the first admitted cycle, while first delayed-timer eligibility anchors to actor creation and an every-block timer is immediately eligible.
+4. `last_cycle_block` MUST be updated at admitted cycle start (`CycleStarted`) and therefore records the admitted-run clock rather than completion or pre-admission deferral.
+5. A pending Manual or AddressEvent signal MUST omit the timer term even when Manual explicitly triggers a Timer actor; cooldown and window terms still gate admission.
 6. `manual_trigger` MAY set `manual_trigger_pending`, but cooldown MUST still gate admission.
 
 Timer rules:
 
 1. `every_blocks` MUST satisfy `0 < every_blocks <= MaxExecutionDelayBlocks`; otherwise fail with `ExecutionDelayTooLong`.
 2. Timer cadence is deterministic and exposes no probability or entropy input.
-3. Cadence `every_blocks <= 1` MUST use queue self-continuation (`NextQueue`) and MUST NOT use `WakeupIndex`.
-4. Cadence `every_blocks > 1` MUST schedule through the deterministic time-ordered wakeup index (`WakeupIndex`).
+3. Effective timer eligibility at or before the next block MUST use queue self-continuation (`NextQueue`); later eligibility MUST persist exactly one `WakeupIndex` entry, including `every_blocks = 1` when cooldown or window delay dominates.
+4. Timer rearming, skipped-readiness preservation, and readiness checks MUST use the same effective-eligibility calculation rather than independent cadence/cooldown/window branches.
 5. Deterministic anti-storm jitter SHOULD be applied for delayed timers (`every_blocks > 1`):
    `jitter_window = min(every_blocks / 4, MaxTimerJitterBlocks)`
    `jitter = Blake2_256(aaa_id) % jitter_window` when `jitter_window > 0`, else `0`; validation MUST require `every_blocks + max(jitter_window - 1, 0) <= MaxExecutionDelayBlocks`
-   `target_block = current_block + every_blocks + jitter`.
+   `timer_eligible_at = admitted_run_anchor + every_blocks + jitter`.
 
 A future probabilistic trigger requires a separate append-only trigger variant plus a concrete deterministic, financially secure runtime entropy contract; it MUST NOT reintroduce optional probability into `Timer` or hash-fallback sampling.
 

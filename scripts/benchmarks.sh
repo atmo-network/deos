@@ -185,6 +185,7 @@ verify_weight_file_contract() {
         "scheduler_scan_hot_readiness"
         "scheduler_scan_fallback_readiness"
         "scheduler_scan_sparse_hot_readiness"
+        "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
         "close_aaa_on_close_execution_plan_complex"
     )
@@ -242,6 +243,7 @@ run_pallet_benchmark() {
             --exclude-extrinsics "pallet_aaa::scheduler_scan_hot_readiness"
             --exclude-extrinsics "pallet_aaa::scheduler_scan_fallback_readiness"
             --exclude-extrinsics "pallet_aaa::scheduler_scan_sparse_hot_readiness"
+            --exclude-extrinsics "pallet_aaa::scheduler_cooldown_ineligible_idle"
             --exclude-extrinsics "pallet_aaa::scheduler_wakeup_sparse_gap_recovery"
             --exclude-extrinsics "pallet_aaa::close_aaa_on_close_execution_plan_complex"
         )

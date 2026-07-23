@@ -7399,6 +7399,105 @@ fn timer_every_block_uses_queue_continuation_without_wakeup_index() {
 }
 
 #[test]
+fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let schedule = Schedule {
+      trigger: Trigger::Timer { every_blocks: 1 },
+      cooldown_blocks: 10,
+    };
+    let aaa_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      1
+    );
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(11));
+    assert!(!crate::CurrentQueue::<Test>::get().contains(&aaa_id));
+    assert!(!crate::NextQueue::<Test>::get().contains(&aaa_id));
+
+    for block in 2..=10 {
+      frame_system::Pallet::<Test>::set_block_number(block);
+      run_idle(Weight::MAX);
+      assert_eq!(
+        AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+        1
+      );
+      assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(11));
+    }
+    frame_system::Pallet::<Test>::set_block_number(11);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      2
+    );
+  });
+}
+
+#[test]
+fn timer_eligibility_uses_maximum_of_cadence_cooldown_and_window() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let schedule = Schedule {
+      trigger: Trigger::Timer { every_blocks: 4 },
+      cooldown_blocks: 10,
+    };
+    let aaa_id = create_system_with(
+      ALICE,
+      schedule,
+      Some(ScheduleWindow {
+        start: 15,
+        end: 115,
+      }),
+      inert_execution_plan(),
+    );
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(15));
+    frame_system::Pallet::<Test>::set_block_number(15);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      1
+    );
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(25));
+  });
+}
+
+#[test]
+fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let schedule = Schedule {
+      trigger: Trigger::Timer { every_blocks: 1 },
+      cooldown_blocks: 5,
+    };
+    let aaa_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(6));
+    assert_ok!(AAA::pause_aaa(RuntimeOrigin::root(), aaa_id));
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      1
+    );
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), None);
+    assert!(!crate::CurrentQueue::<Test>::get().contains(&aaa_id));
+    assert!(!crate::NextQueue::<Test>::get().contains(&aaa_id));
+
+    frame_system::Pallet::<Test>::set_block_number(7);
+    assert_ok!(AAA::resume_aaa(RuntimeOrigin::root(), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      2
+    );
+  });
+}
+
+#[test]
 fn timer_wakeup_uses_deterministic_jitter_for_delayed_cadence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

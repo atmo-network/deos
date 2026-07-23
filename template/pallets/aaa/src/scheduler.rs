@@ -524,20 +524,39 @@ impl<T: Config> Pallet<T> {
     (raw % window).into()
   }
 
-  fn next_timer_wakeup_block(
+  fn next_eligible_at(
     instance: &AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
-    every_blocks: u32,
+    include_timer: bool,
   ) -> BlockNumberFor<T> {
-    let cadence: BlockNumberFor<T> = every_blocks.into();
-    let jitter = Self::timer_jitter_blocks(instance.aaa_id, every_blocks);
-    let mut wakeup_block = now.saturating_add(cadence).saturating_add(jitter);
+    let attempt_anchor = if instance.cycle_nonce > 0 {
+      instance.last_cycle_block
+    } else if matches!(instance.schedule.trigger, Trigger::Timer { every_blocks } if every_blocks <= 1)
+    {
+      Zero::zero()
+    } else {
+      instance.created_at
+    };
+    let mut eligible_at = now;
     if let Some(window) = instance.schedule_window {
-      if wakeup_block < window.start {
-        wakeup_block = window.start;
+      eligible_at = eligible_at.max(window.start);
+    }
+    if instance.cycle_nonce > 0 && instance.cycle_nonce < u64::MAX {
+      let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
+      eligible_at = eligible_at.max(attempt_anchor.saturating_add(cooldown));
+    }
+    if include_timer && instance.cycle_nonce < u64::MAX {
+      if let Trigger::Timer { every_blocks } = instance.schedule.trigger {
+        let cadence: BlockNumberFor<T> = every_blocks.into();
+        let jitter = Self::timer_jitter_blocks(instance.aaa_id, every_blocks);
+        eligible_at = eligible_at.max(
+          attempt_anchor
+            .saturating_add(cadence)
+            .saturating_add(jitter),
+        );
       }
     }
-    wakeup_block
+    eligible_at
   }
 
   fn preserve_skipped_readiness(
@@ -545,6 +564,9 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     periodic_continuations: &mut Vec<AaaId>,
   ) {
+    if instance.is_paused {
+      return;
+    }
     if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
       Self::schedule_next_timer_wakeup_local(instance, now, periodic_continuations);
       return;
@@ -552,17 +574,10 @@ impl<T: Config> Pallet<T> {
     let pending = instance.manual_trigger_pending
       || matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. })
         && Self::evaluate_on_address_event(instance.aaa_id);
-    if instance.is_paused || !pending {
+    if !pending {
       return;
     }
-    let mut eligibility_block = now;
-    if let Some(window) = instance.schedule_window {
-      eligibility_block = eligibility_block.max(window.start);
-    }
-    if instance.cycle_nonce > 0 && instance.cycle_nonce < u64::MAX {
-      let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
-      eligibility_block = eligibility_block.max(instance.last_cycle_block.saturating_add(cooldown));
-    }
+    let eligibility_block = Self::next_eligible_at(instance, now, false);
     if eligibility_block > now {
       Self::defer_wakeup(instance.aaa_id, eligibility_block);
     } else {
@@ -575,27 +590,27 @@ impl<T: Config> Pallet<T> {
     now: BlockNumberFor<T>,
     periodic_continuations: &mut Vec<AaaId>,
   ) {
-    let Trigger::Timer { every_blocks, .. } = instance.schedule.trigger else {
+    let Trigger::Timer { .. } = instance.schedule.trigger else {
       return;
     };
-    if every_blocks <= 1 {
+    let eligible_at = Self::next_eligible_at(instance, now, true);
+    if eligible_at <= now.saturating_add(One::one()) {
       periodic_continuations.push(instance.aaa_id);
-      return;
+    } else {
+      Self::defer_wakeup(instance.aaa_id, eligible_at);
     }
-    let wakeup_block = Self::next_timer_wakeup_block(instance, now, every_blocks);
-    Self::defer_wakeup(instance.aaa_id, wakeup_block);
   }
 
   fn schedule_next_timer_wakeup(instance: &AaaInstanceOf<T>, now: BlockNumberFor<T>) {
-    let Trigger::Timer { every_blocks, .. } = instance.schedule.trigger else {
+    let Trigger::Timer { .. } = instance.schedule.trigger else {
       return;
     };
-    if every_blocks <= 1 {
+    let eligible_at = Self::next_eligible_at(instance, now, true);
+    if eligible_at <= now.saturating_add(One::one()) {
       Self::enqueue(instance.aaa_id);
-      return;
+    } else {
+      Self::defer_wakeup(instance.aaa_id, eligible_at);
     }
-    let wakeup_block = Self::next_timer_wakeup_block(instance, now, every_blocks);
-    Self::defer_wakeup(instance.aaa_id, wakeup_block);
   }
 
   pub(crate) fn is_window_expired(instance: &AaaInstanceOf<T>) -> bool {
@@ -729,18 +744,11 @@ impl<T: Config> Pallet<T> {
     if GlobalCircuitBreaker::<T>::get() {
       return false;
     }
-    if let Some(window) = instance.schedule_window {
-      let now = frame_system::Pallet::<T>::block_number();
-      if now < window.start {
-        return false;
-      }
-    }
-    if instance.cycle_nonce > 0 && instance.cycle_nonce < u64::MAX {
-      let now = frame_system::Pallet::<T>::block_number();
-      let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
-      if now.saturating_sub(instance.last_cycle_block) < cooldown {
-        return false;
-      }
+    let now = frame_system::Pallet::<T>::block_number();
+    let include_timer = !instance.manual_trigger_pending
+      && matches!(instance.schedule.trigger, Trigger::Timer { .. });
+    if Self::next_eligible_at(instance, now, include_timer) > now {
+      return false;
     }
     Self::evaluate_trigger(instance)
   }
@@ -751,15 +759,14 @@ impl<T: Config> Pallet<T> {
     }
     match instance.schedule.trigger {
       Trigger::Manual => false,
-      Trigger::Timer { every_blocks } => Self::evaluate_timer(instance, every_blocks),
+      Trigger::Timer { .. } => Self::evaluate_timer(instance),
       Trigger::OnAddressEvent { .. } => Self::evaluate_on_address_event(instance.aaa_id),
     }
   }
 
-  fn evaluate_timer(instance: &AaaInstanceOf<T>, every_blocks: u32) -> bool {
+  fn evaluate_timer(instance: &AaaInstanceOf<T>) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
-    let cadence: BlockNumberFor<T> = every_blocks.into();
-    now.saturating_sub(instance.last_cycle_block) >= cadence
+    Self::next_eligible_at(instance, now, true) <= now
   }
 
   fn source_matches_filter(
