@@ -1141,6 +1141,103 @@ mod benches {
   }
 
   #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_append_existing_page() {
+    let page_size = T::WakeupPageSize::get();
+    assert!(
+      page_size >= 2,
+      "benchmark requires a non-trivial wakeup page"
+    );
+    let wakeup_block = 100u32.into();
+    for i in 0..page_size.saturating_sub(1) {
+      let aaa_id = bench_create_system_manual::<T>(41_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    let aaa_id = bench_create_system_manual::<T>(42_000_000);
+    #[block]
+    {
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    let pointer = ActorHot::<T>::get(aaa_id)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("benchmark wakeup pointer must exist");
+    assert_eq!((pointer.page_id, pointer.slot), (0, page_size - 1));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_append_new_page() {
+    let page_size = T::WakeupPageSize::get();
+    let wakeup_block = 100u32.into();
+    for i in 0..page_size {
+      let aaa_id = bench_create_system_manual::<T>(43_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    let aaa_id = bench_create_system_manual::<T>(44_000_000);
+    #[block]
+    {
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    let pointer = ActorHot::<T>::get(aaa_id)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("benchmark wakeup pointer must exist");
+    assert_eq!((pointer.page_id, pointer.slot), (1, 0));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_replace_exact() {
+    let aaa_id = bench_create_system_manual::<T>(45_000_000);
+    let old_block = 100u32.into();
+    let replacement_block = 200u32.into();
+    assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, old_block));
+    #[block]
+    {
+      assert!(Pallet::<T>::wakeup_substrate_schedule(
+        aaa_id,
+        replacement_block
+      ));
+    }
+    let pointer = ActorHot::<T>::get(aaa_id)
+      .and_then(|hot| hot.wakeup_pointer)
+      .expect("replacement wakeup pointer must exist");
+    assert_eq!(
+      (pointer.block, pointer.page_id, pointer.slot),
+      (replacement_block, 0, 0)
+    );
+    assert!(!WakeupBuckets::<T>::contains_key(old_block));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_invalidate_middle_page() {
+    let page_size = T::WakeupPageSize::get();
+    let wakeup_block = 100u32.into();
+    let count = page_size.saturating_mul(2).saturating_add(1);
+    let mut actors = alloc::vec::Vec::with_capacity(count as usize);
+    for i in 0..count {
+      let aaa_id = bench_create_system_manual::<T>(46_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+      actors.push(aaa_id);
+    }
+    let middle_start = page_size as usize;
+    let middle_end = middle_start.saturating_add(page_size as usize);
+    for aaa_id in &actors[middle_start..middle_end.saturating_sub(1)] {
+      assert!(Pallet::<T>::wakeup_substrate_invalidate(*aaa_id).is_some());
+    }
+    let aaa_id = actors[middle_end - 1];
+    #[block]
+    {
+      assert!(Pallet::<T>::wakeup_substrate_invalidate(aaa_id).is_some());
+    }
+    assert!(!WakeupPages::<T>::contains_key((wakeup_block, 1)));
+    assert_eq!(
+      WakeupPages::<T>::get((wakeup_block, 0)).and_then(|page| page.next_page),
+      Some(2)
+    );
+    assert_eq!(
+      WakeupPages::<T>::get((wakeup_block, 2)).and_then(|page| page.previous_page),
+      Some(0)
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_consume_preserve_page() {
     let first = bench_create_system_manual::<T>(35_000_000);
     let second = bench_create_system_manual::<T>(35_000_001);

@@ -4,6 +4,7 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 ONLY_CHECK="all"
+FIX_FORMAT=0
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
 if [[ "$SKIP_WASM_BUILD" == "1" ]]; then
     export SKIP_WASM_BUILD
@@ -22,6 +23,7 @@ Runs the local CI workflow: clippy, tests, docs, formatting check, and workspace
 
 Options:
   --only CHECK       Run one compact check: clippy, tests, docs, format, or check
+  --fix              Apply formatting; requires --only format
   -h, --help         Show this help message
 
 Environment:
@@ -50,6 +52,9 @@ parse_args() {
                 shift 2
                 continue
                 ;;
+            --fix)
+                FIX_FORMAT=1
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -62,6 +67,10 @@ parse_args() {
         esac
         shift
     done
+    if (( FIX_FORMAT == 1 )) && [[ "$ONLY_CHECK" != "format" ]]; then
+        log_error "--fix requires --only format"
+        exit 2
+    fi
 }
 
 check_prerequisites() {
@@ -110,10 +119,17 @@ run_additional_checks() {
     phase_banner "Step 3: Additional checks"
 
     if selected format; then
-        run_shell_step \
-            "Code formatting" \
-            "" \
-            "cd '$TEMPLATE_DIR' && cargo fmt -- --check"
+        if (( FIX_FORMAT == 1 )); then
+            run_shell_step \
+                "Apply code formatting" \
+                "" \
+                "cd '$TEMPLATE_DIR' && cargo fmt"
+        else
+            run_shell_step \
+                "Code formatting" \
+                "" \
+                "cd '$TEMPLATE_DIR' && cargo fmt -- --check"
+        fi
     fi
 
     if selected check; then

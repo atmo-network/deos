@@ -53,8 +53,8 @@ parameter_types! {
   pub const AaaMaxQueueLength: u32 = 10_000;
   /// Balanced production granularity selected from 32/64/128 production-Wasm evidence.
   pub const AaaQueuePageSize: u32 = 64;
-  /// Provisional temporal page granularity; production selection remains benchmark-gated.
-  pub const AaaWakeupPageSize: u32 = 64;
+  /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
+  pub const AaaWakeupPageSize: u32 = 32;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const AaaMaxWakeupBucketSize: u32 = 10_000;
   pub const AaaMaxWakeupsPerBlock: u32 = 512;

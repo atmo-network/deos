@@ -351,7 +351,15 @@ The replacement contract now has an inactive storage substrate without changing 
 - Transactional replacement invalidates the prior exact slot; bounded neighboring-page work unlinks empty pages.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
 
-`WakeupPageSize = 64` remains provisional. Production-Wasm operation and page-size evidence must select the final value before this substrate replaces `WakeupIndex` and `ScheduledWakeupBlock`.
+Production-Wasm `50 x 20` focused operation evidence compares candidate page sizes (`RefTime / estimated ProofSize`):
+
+| Page entries | Append existing | Append new | Exact replacement | Unlink middle |
+| --- | --- | --- | --- | --- |
+| 32 | `37,645,000 / 4,827` | `39,112,000 / 4,870` | `40,508,000 / 6,646` | `50,147,000 / 10,131` |
+| 64 | `39,042,000 / 5,286` | `41,486,000 / 5,258` | `40,858,000 / 6,646` | `59,017,000 / 10,623` |
+| 128 | `49,169,000 / 6,033` | `52,033,000 / 5,839` | `39,321,000 / 6,646` | `58,598,000 / 11,258` |
+
+The runtime selects `WakeupPageSize = 32`. It minimizes every page-size-sensitive operation and halves page-value rewrite granularity relative to 64; exact singleton replacement remains effectively page-size-neutral. Final generated production models charge four reads and three/four writes for insertion, and five reads/five writes for replacement or middle-page unlinking. Drain evidence remains required before this substrate replaces `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

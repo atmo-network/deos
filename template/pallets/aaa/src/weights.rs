@@ -37,6 +37,10 @@ pub trait WeightInfo {
   fn scheduler_zombie_sweep_base() -> Weight;
   fn scheduler_paged_append_existing_page() -> Weight;
   fn scheduler_paged_append_new_page() -> Weight;
+  fn scheduler_wakeup_append_existing_page() -> Weight;
+  fn scheduler_wakeup_append_new_page() -> Weight;
+  fn scheduler_wakeup_replace_exact() -> Weight;
+  fn scheduler_wakeup_invalidate_middle_page() -> Weight;
   fn scheduler_paged_consume_preserve_page() -> Weight;
   fn scheduler_paged_consume_delete_page() -> Weight;
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight;
@@ -215,6 +219,22 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
 
   fn scheduler_paged_append_new_page() -> Weight {
     Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 3))
+  }
+
+  fn scheduler_wakeup_append_existing_page() -> Weight {
+    Weight::from_parts(100_000_000, 32_000).saturating_add(T::DbWeight::get().reads_writes(3, 3))
+  }
+
+  fn scheduler_wakeup_append_new_page() -> Weight {
+    Weight::from_parts(120_000_000, 48_000).saturating_add(T::DbWeight::get().reads_writes(4, 4))
+  }
+
+  fn scheduler_wakeup_replace_exact() -> Weight {
+    Weight::from_parts(160_000_000, 64_000).saturating_add(T::DbWeight::get().reads_writes(5, 6))
+  }
+
+  fn scheduler_wakeup_invalidate_middle_page() -> Weight {
+    Weight::from_parts(140_000_000, 64_000).saturating_add(T::DbWeight::get().reads_writes(5, 5))
   }
 
   fn scheduler_paged_consume_preserve_page() -> Weight {
@@ -422,6 +442,10 @@ impl WeightInfo for () {
   fn scheduler_zombie_sweep_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
+  fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }
+  fn scheduler_wakeup_append_new_page() -> Weight { Weight::from_parts(120_000_000, 48_000) }
+  fn scheduler_wakeup_replace_exact() -> Weight { Weight::from_parts(160_000_000, 64_000) }
+  fn scheduler_wakeup_invalidate_middle_page() -> Weight { Weight::from_parts(140_000_000, 64_000) }
   fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_consume_delete_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {

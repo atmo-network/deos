@@ -25,6 +25,9 @@ PALLETS=(
 BENCHER_MODE=""
 ACTION=""
 TARGET_PALLET=""
+EXTRINSIC_PATTERN="*"
+OUTPUT_OVERRIDE=""
+SKIP_BUILD=0
 
 usage() {
     cat <<EOF2
@@ -39,6 +42,10 @@ Options:
   --list          List available pallets
   --check         Only verify benchmarks compile (no execution)
   --extra         Include AAA circular-chain diagnostic benchmarks excluded from production weights
+  --extrinsic NAME
+                  Benchmark one extrinsic (requires one PALLET_NAME)
+  --output FILE   Write generated weights to FILE (requires --extrinsic)
+  --skip-build    Reuse an already-built benchmark runtime
   -h, --help      Show this help message
 
 Arguments:
@@ -50,6 +57,7 @@ Examples:
   $(basename "$0") pallet_axial_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
   $(basename "$0") --extra pallet_aaa         # Include AAA circular-chain diagnostics
+  $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_aaa
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
 Environment:
@@ -90,6 +98,18 @@ parse_args() {
                 INCLUDE_EXTRA_BENCHMARKS=1
                 shift
                 ;;
+            --extrinsic)
+                EXTRINSIC_PATTERN="$2"
+                shift 2
+                ;;
+            --output)
+                OUTPUT_OVERRIDE="$2"
+                shift 2
+                ;;
+            --skip-build)
+                SKIP_BUILD=1
+                shift
+                ;;
             -h|--help)
                 usage
                 ;;
@@ -99,6 +119,19 @@ parse_args() {
                 ;;
         esac
     done
+
+    if [[ "$EXTRINSIC_PATTERN" == *'*'* && "$EXTRINSIC_PATTERN" != "*" ]]; then
+        log_error "--extrinsic accepts one exact NAME, not a glob"
+        exit 2
+    fi
+    if [[ "$EXTRINSIC_PATTERN" != "*" && -z "$TARGET_PALLET" ]]; then
+        log_error "--extrinsic requires one PALLET_NAME"
+        exit 2
+    fi
+    if [[ -n "$OUTPUT_OVERRIDE" && "$EXTRINSIC_PATTERN" == "*" ]]; then
+        log_error "--output requires --extrinsic"
+        exit 2
+    fi
 }
 
 check_prerequisites() {
@@ -203,6 +236,10 @@ verify_weight_file_contract() {
         "scheduler_actor_probe"
         "scheduler_paged_append_existing_page"
         "scheduler_paged_append_new_page"
+        "scheduler_wakeup_append_existing_page"
+        "scheduler_wakeup_append_new_page"
+        "scheduler_wakeup_replace_exact"
+        "scheduler_wakeup_invalidate_middle_page"
         "scheduler_paged_consume_preserve_page"
         "scheduler_paged_consume_delete_page"
         "scheduler_paged_tombstone_drain"
@@ -238,7 +275,7 @@ verify_weight_file_contract() {
 
 run_pallet_benchmark() {
     local pallet_name="$1"
-    local output_file="$WEIGHTS_DIR/${pallet_name}.rs"
+    local output_file="${OUTPUT_OVERRIDE:-$WEIGHTS_DIR/${pallet_name}.rs}"
     local exclude_args=()
 
     if [[ "$pallet_name" == "pallet_aaa" ]]; then
@@ -269,7 +306,7 @@ run_pallet_benchmark() {
         local bencher_args=(
             --runtime "$runtime_wasm"
             --pallet "$pallet_name"
-            --extrinsic "*"
+            --extrinsic "$EXTRINSIC_PATTERN"
             "${exclude_args[@]}"
             --steps "$STEPS"
             --repeat "$REPEAT"
@@ -304,7 +341,9 @@ run_pallet_benchmark() {
 
     if [[ -f "$output_file" ]]; then
         normalize_weight_file "$output_file"
-        verify_weight_file_contract "$pallet_name" "$output_file"
+        if [[ "$EXTRINSIC_PATTERN" == "*" ]]; then
+            verify_weight_file_contract "$pallet_name" "$output_file"
+        fi
         log_success "$pallet_name -> $output_file"
     else
         log_error "Weight file not generated for $pallet_name"
@@ -390,7 +429,7 @@ main() {
 
     check_prerequisites
 
-    if [[ "$BENCHER_MODE" == "omni" ]]; then
+    if [[ "$BENCHER_MODE" == "omni" && "$SKIP_BUILD" != "1" ]]; then
         build_benchmarks
     fi
 
