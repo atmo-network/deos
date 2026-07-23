@@ -12,6 +12,14 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 | `staking-delivery` | Native-staking bootstrap sequence, readiness interpretation, authority boundary, and activation handoff | Staking/AAA semantics; signing; funds; shared commands | `staking-delivery/SKILL.md`; shared `scripts/bootstrap-native-staking-local.sh` implementation |
 | `wiki-sync` | Generated wiki projection, provenance, trust, and consolidation workflow | Source specification ownership; browser implementation | `wiki-sync/SKILL.md` and its documented scripts |
 
+## Cognitive Scaffolding
+
+Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a skill owns a reusable method for **how work in one domain grows safely** through routing, evidence, gates, interpretation, and handoff.
+
+A delivery skill acts like cognitive scaffolding around an evolving subsystem. It may emerge after repeated implementation friction, improve as real failures expose missing guidance, and help later slices reproduce the stronger method without expanding every backlog item into procedural prose.
+
+Scaffolding must not become permanent by inertia. Consolidate, generalize, or delete a skill when the subsystem stabilizes, its method moves into deterministic tooling, or it no longer has a distinct reusable decision boundary. Keep implementation truth in code/docs, open outcomes in the backlog, and completed outcomes in the changelog.
+
 ## Dependency Direction
 
 ```text

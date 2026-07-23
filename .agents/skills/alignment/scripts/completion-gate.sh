@@ -346,11 +346,11 @@ run_knowledge_sync() {
         log_warning "Context sync gate disabled"
         return 0
     fi
-    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/.*/SKILL\.md$)'; then
+    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/README\.md$|\.agents/skills/.*/SKILL\.md$)'; then
         log_success "Context files were updated in this pass"
         return 0
     fi
-    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, docs/, or a touched SKILL.md before the next loop"
+    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, docs/, the project skill graph, or a touched SKILL.md before the next loop"
     exit 1
 }
 
