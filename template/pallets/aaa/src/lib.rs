@@ -309,6 +309,7 @@ pub mod pallet {
   pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
   pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
+  pub type WakeupCursorPageOf<T> = BoundedVec<BlockNumberFor<T>, <T as Config>::WakeupPageSize>;
 
   pub type IngressOverflowEventOf<T> = IngressOverflowEvent<
     AaaId,
@@ -499,6 +500,17 @@ pub mod pallet {
   #[pallet::getter(fn wakeup_buckets)]
   pub type WakeupBuckets<T: Config> =
     StorageMap<_, Blake2_128Concat, BlockNumberFor<T>, WakeupBucketState, OptionQuery>;
+
+  /// Paged binary min-heap of distinct wakeup blocks for sparse due discovery.
+  #[pallet::storage]
+  #[pallet::getter(fn wakeup_cursor_pages)]
+  pub type WakeupCursorPages<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupPageId, WakeupCursorPageOf<T>, OptionQuery>;
+
+  /// Logical length of the paged sparse-wakeup cursor heap.
+  #[pallet::storage]
+  #[pallet::getter(fn wakeup_cursor_len)]
+  pub type WakeupCursorLen<T> = StorageValue<_, WakeupCursorIndex, ValueQuery>;
 
   #[pallet::storage]
   pub type WakeupIndex<T: Config> = StorageMap<
@@ -3083,6 +3095,7 @@ pub mod pallet {
           "WakeupPages count exceeds active actor count",
         ));
       }
+      let cursor_len = WakeupCursorLen::<T>::get();
       let wakeup_buckets = WakeupBuckets::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor-bounded bucket audit
       for (block, bucket) in wakeup_buckets {
         if wakeup_live_by_block.get(&block).copied() != Some(bucket.live_entries) {
@@ -3096,6 +3109,66 @@ pub mod pallet {
           return Err(TryRuntimeError::Other(
             "WakeupBucket head or tail page is missing",
           ));
+        }
+        if let Some(index) = bucket.cursor_index
+          && (index >= cursor_len || Self::wakeup_cursor_get(index) != Some(block))
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket cursor reverse index does not resolve",
+          ));
+        }
+      }
+      if cursor_len > T::MaxActiveActors::get() || cursor_len > active_count {
+        return Err(TryRuntimeError::Other(
+          "WakeupCursorLen exceeds active actor capacity",
+        ));
+      }
+      let cursor_page_size = T::WakeupPageSize::get();
+      let expected_cursor_pages = cursor_len.div_ceil(cursor_page_size);
+      let actual_cursor_pages = WakeupCursorPages::<T>::iter().count() as u32; // deos-bypass: bounded-iter — try-state-only MaxActiveActors cursor-page audit
+      if actual_cursor_pages != expected_cursor_pages {
+        return Err(TryRuntimeError::Other(
+          "WakeupCursorPages count disagrees with cursor length",
+        ));
+      }
+      for page_id in 0..expected_cursor_pages {
+        let Some(page) = WakeupCursorPages::<T>::get(u64::from(page_id)) else {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursorPages has a gap in logical page order",
+          ));
+        };
+        let consumed = page_id.saturating_mul(cursor_page_size);
+        let expected_len = cursor_len.saturating_sub(consumed).min(cursor_page_size) as usize;
+        if page.len() != expected_len {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursorPage length disagrees with logical position",
+          ));
+        }
+      }
+      let mut cursor_blocks = alloc::collections::BTreeSet::new();
+      for index in 0..cursor_len {
+        let Some(block) = Self::wakeup_cursor_get(index) else {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursor index does not resolve to a page entry",
+          ));
+        };
+        if !cursor_blocks.insert(block) {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursor contains a duplicate block",
+          ));
+        }
+        if WakeupBuckets::<T>::get(block).and_then(|bucket| bucket.cursor_index) != Some(index) {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursor block has no matching bucket reverse index",
+          ));
+        }
+        if index > 0 {
+          let parent = index.saturating_sub(1) / 2;
+          if Self::wakeup_cursor_get(parent).is_none_or(|parent_block| parent_block > block) {
+            return Err(TryRuntimeError::Other(
+              "WakeupCursor violates min-heap ordering",
+            ));
+          }
         }
       }
       let mut live_wakeup_pointers = alloc::collections::BTreeSet::new();

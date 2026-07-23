@@ -6,6 +6,7 @@ pub type QueueTicket = u64;
 pub type QueuePageId = u64;
 pub type WakeupPageId = u64;
 pub type WakeupSlot = u32;
+pub type WakeupCursorIndex = u32;
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -42,6 +43,7 @@ pub struct WakeupBucketState {
   pub tail_page: WakeupPageId,
   pub next_page_id: WakeupPageId,
   pub live_entries: u32,
+  pub cursor_index: Option<WakeupCursorIndex>,
 }
 
 #[derive(

@@ -346,6 +346,8 @@ The temporal wakeup layer is a scheduler responsibility, not just a storage map:
 The replacement contract now has an inactive storage substrate without changing the production drain path:
 
 - `WakeupPages<(block, page_id)>` and per-block `WakeupBuckets` own the paged topology.
+- `WakeupCursorPages` plus `WakeupCursorLen` provide an inactive paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
+- Heap insertion and minimum removal use a `MaxActiveActors`-derived height bound, preserve contiguous cursor pages, and avoid scanning empty intermediate blocks; try-state reconciles page shape, uniqueness, ordering, and reverse indices.
 - `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
 - Transactional replacement invalidates the prior exact slot; bounded neighboring-page work unlinks empty pages.
@@ -371,7 +373,7 @@ Production-Wasm `50 x 20` drain evidence at the selected page size records fixed
 | Dense boundary | 33 | `258,137,000 / 88,983` | `36 / 36` |
 | Stale page | 32 | `148,275,000 / 85,761` | `34 / 2` |
 
-These fixed samples validate partial preservation, complete deletion, one-page boundary crossing, and stale-pointer filtering; they do not imply block throughput. The generated AAA weights hash is `526684f27274f8ba8f8eee99379b0da1efe6adb134d2f4914bd49ac78a9a6eee`, and the production compressed-Wasm hash is `66fc2a189bcc83ff77fedcb4cdebb3e1e563c479bafe728092d985f6b4337013`. Ordered cursor and activation evidence remain required before this substrate replaces `WakeupIndex` and `ScheduledWakeupBlock`.
+These fixed samples validate partial preservation, complete deletion, one-page boundary crossing, and stale-pointer filtering; they do not imply block throughput. Their pre-cursor checkpoint hashes are AAA weights `526684f27274f8ba8f8eee99379b0da1efe6adb134d2f4914bd49ac78a9a6eee` and compressed Wasm `66fc2a189bcc83ff77fedcb4cdebb3e1e563c479bafe728092d985f6b4337013`. Cursor insertion/removal benchmarks, refreshed hashes, and production activation remain required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

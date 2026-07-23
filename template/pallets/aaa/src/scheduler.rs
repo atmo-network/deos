@@ -470,6 +470,7 @@ impl<T: Config> Pallet<T> {
           tail_page: 0,
           next_page_id: 1,
           live_entries: 1,
+          cursor_index: None,
         },
       );
       (0, 0)
@@ -599,6 +600,198 @@ impl<T: Config> Pallet<T> {
       page_id = next_page;
     }
     (ready, stats)
+  }
+
+  fn wakeup_cursor_page_and_slot(index: WakeupCursorIndex) -> (WakeupPageId, usize) {
+    let page_size = T::WakeupPageSize::get().max(1);
+    (u64::from(index / page_size), (index % page_size) as usize)
+  }
+
+  pub(crate) fn wakeup_cursor_get(index: WakeupCursorIndex) -> Option<BlockNumberFor<T>> {
+    let (page_id, slot) = Self::wakeup_cursor_page_and_slot(index);
+    WakeupCursorPages::<T>::get(page_id).and_then(|page| page.get(slot).copied())
+  }
+
+  fn wakeup_cursor_set(index: WakeupCursorIndex, block: BlockNumberFor<T>) -> bool {
+    let (page_id, slot) = Self::wakeup_cursor_page_and_slot(index);
+    let mut page = WakeupCursorPages::<T>::get(page_id).unwrap_or_default();
+    if slot < page.len() {
+      page[slot] = block;
+    } else if slot == page.len() {
+      if page.try_push(block).is_err() {
+        return false;
+      }
+    } else {
+      return false;
+    }
+    WakeupCursorPages::<T>::insert(page_id, page);
+    true
+  }
+
+  fn wakeup_cursor_remove_tail(index: WakeupCursorIndex) -> bool {
+    let (page_id, slot) = Self::wakeup_cursor_page_and_slot(index);
+    let Some(mut page) = WakeupCursorPages::<T>::get(page_id) else {
+      return false;
+    };
+    if slot.saturating_add(1) != page.len() {
+      return false;
+    }
+    page.pop();
+    if page.is_empty() {
+      WakeupCursorPages::<T>::remove(page_id);
+    } else {
+      WakeupCursorPages::<T>::insert(page_id, page);
+    }
+    true
+  }
+
+  fn wakeup_cursor_swap(left: WakeupCursorIndex, right: WakeupCursorIndex) -> bool {
+    let Some(left_block) = Self::wakeup_cursor_get(left) else {
+      return false;
+    };
+    let Some(right_block) = Self::wakeup_cursor_get(right) else {
+      return false;
+    };
+    if !Self::wakeup_cursor_set(left, right_block) || !Self::wakeup_cursor_set(right, left_block) {
+      return false;
+    }
+    WakeupBuckets::<T>::mutate(right_block, |maybe_bucket| {
+      if let Some(bucket) = maybe_bucket {
+        bucket.cursor_index = Some(left);
+      }
+    });
+    WakeupBuckets::<T>::mutate(left_block, |maybe_bucket| {
+      if let Some(bucket) = maybe_bucket {
+        bucket.cursor_index = Some(right);
+      }
+    });
+    true
+  }
+
+  fn wakeup_cursor_height_bound() -> u32 {
+    u32::BITS.saturating_sub(T::MaxActiveActors::get().max(1).leading_zeros())
+  }
+
+  fn wakeup_cursor_insert_inner(block: BlockNumberFor<T>) -> bool {
+    let Some(mut bucket) = WakeupBuckets::<T>::get(block) else {
+      return false;
+    };
+    if let Some(index) = bucket.cursor_index {
+      return Self::wakeup_cursor_get(index) == Some(block);
+    }
+    let len = WakeupCursorLen::<T>::get();
+    if len >= T::MaxActiveActors::get() || !Self::wakeup_cursor_set(len, block) {
+      return false;
+    }
+    bucket.cursor_index = Some(len);
+    WakeupBuckets::<T>::insert(block, bucket);
+    WakeupCursorLen::<T>::put(len.saturating_add(1));
+    let mut current = len;
+    for _ in 0..Self::wakeup_cursor_height_bound() {
+      if current == 0 {
+        break;
+      }
+      let parent = current.saturating_sub(1) / 2;
+      let Some(parent_block) = Self::wakeup_cursor_get(parent) else {
+        return false;
+      };
+      let Some(current_block) = Self::wakeup_cursor_get(current) else {
+        return false;
+      };
+      if parent_block <= current_block {
+        break;
+      }
+      if !Self::wakeup_cursor_swap(parent, current) {
+        return false;
+      }
+      current = parent;
+    }
+    true
+  }
+
+  pub fn wakeup_cursor_insert(block: BlockNumberFor<T>) -> bool {
+    let result: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if Self::wakeup_cursor_insert_inner(block) {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      } else {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          Error::<T>::AaaNotFound.into(),
+        ))
+      }
+    });
+    result.is_ok()
+  }
+
+  pub fn wakeup_cursor_peek() -> Option<BlockNumberFor<T>> {
+    (WakeupCursorLen::<T>::get() > 0)
+      .then(|| Self::wakeup_cursor_get(0))
+      .flatten()
+  }
+
+  fn wakeup_cursor_pop_min_inner() -> Option<BlockNumberFor<T>> {
+    let len = WakeupCursorLen::<T>::get();
+    if len == 0 {
+      return None;
+    }
+    let min_block = Self::wakeup_cursor_get(0)?;
+    let last_index = len.saturating_sub(1);
+    let last_block = Self::wakeup_cursor_get(last_index)?;
+    if !Self::wakeup_cursor_remove_tail(last_index) {
+      return None;
+    }
+    WakeupBuckets::<T>::mutate(min_block, |maybe_bucket| {
+      if let Some(bucket) = maybe_bucket {
+        bucket.cursor_index = None;
+      }
+    });
+    WakeupCursorLen::<T>::put(last_index);
+    if last_index == 0 {
+      return Some(min_block);
+    }
+    if !Self::wakeup_cursor_set(0, last_block) {
+      return None;
+    }
+    WakeupBuckets::<T>::mutate(last_block, |maybe_bucket| {
+      if let Some(bucket) = maybe_bucket {
+        bucket.cursor_index = Some(0);
+      }
+    });
+
+    let mut current = 0u32;
+    for _ in 0..Self::wakeup_cursor_height_bound() {
+      let left = current.saturating_mul(2).saturating_add(1);
+      if left >= last_index {
+        break;
+      }
+      let right = left.saturating_add(1);
+      let mut smallest = left;
+      if right < last_index && Self::wakeup_cursor_get(right)? < Self::wakeup_cursor_get(left)? {
+        smallest = right;
+      }
+      if Self::wakeup_cursor_get(current)? <= Self::wakeup_cursor_get(smallest)? {
+        break;
+      }
+      if !Self::wakeup_cursor_swap(current, smallest) {
+        return None;
+      }
+      current = smallest;
+    }
+    Some(min_block)
+  }
+
+  pub fn wakeup_cursor_pop_min() -> Option<BlockNumberFor<T>> {
+    let result: Result<BlockNumberFor<T>, DispatchError> =
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        match Self::wakeup_cursor_pop_min_inner() {
+          Some(block) => {
+            polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(block))
+          }
+          None => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaNotFound.into(),
+          )),
+        }
+      });
+    result.ok()
   }
 
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) {
