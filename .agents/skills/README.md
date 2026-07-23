@@ -15,7 +15,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 
 ## Cognitive Scaffolding
 
-Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a skill owns a reusable method for **how work in one domain grows safely** through routing, evidence, gates, interpretation, and handoff.
+Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a skill owns a reusable method for **how work in one domain grows safely** through routing, evidence, gates, interpretation, and handoff. A SMOF may additionally keep bounded pre-consolidation feature insight under the `gscsmof` contract, but it must promote, reconcile, or prune that memory instead of cloning open work.
 
 Some delivery skills become implementation organs for an evolving feature: they maintain its feedback loop from repository reality through the next slice, evidence, gates, and plan reconciliation. They may emerge after repeated implementation friction, improve as real failures expose missing guidance, and help later slices reproduce the stronger method without expanding every backlog item into procedural prose. Capability skills remain reusable instruments rather than feature organs.
 

@@ -7,17 +7,17 @@ description: Creates, evolves, consolidates, and retires bounded Skill-Meta-Orga
 
 GSCSMOF is the **Genesis Skill Creator of Skill-Meta-Organ-Features**. Its presence grants standing project permission to create and evolve feature-specific implementation organs when new or substantially reshaped epics appear across validated slices, sessions, or agents.
 
-A **SMOF** is a project skill that maintains the reusable delivery method for one evolving epic. It connects repository reality to slice selection, evidence, gates, plan reconciliation, and handoff. It does not replace the feature, its implementation, or its canonical truth surfaces.
+A **SMOF** is a feature-specialist project organ for one evolving epic. It connects repository reality to a richer feature working model, slice selection, intermediate insights, evidence, gates, plan reconciliation, completion pressure, and handoff. It acts as an expanded operational lens over the canonical backlog without replacing the feature, implementation, or truth surfaces.
 
 ## Responsibility Split
 
 | GSCSMOF owns | A generated SMOF owns |
 | --- | --- |
-| Decide whether an epic has earned an implementation organ | Maintain the feature-specific delivery feedback loop |
+| Decide whether an epic has earned an implementation organ | Maintain the feature-specific delivery feedback loop and completion pull |
 | Search for a reusable existing skill before creating one | Route changed feature scope to canonical scripts and checks |
 | Generate the smallest valid SMOF contract | Preserve feature-specific gates, exclusions, and evidence interpretation |
 | Enforce naming, ownership, DAG direction, and truth boundaries | Reconcile its method when real implementation friction exposes a reusable lesson |
-| Review organs for merge, generalization, or retirement | Hand off plan transitions without copying plan contents |
+| Review organs for merge, generalization, or retirement | Hand off plan transitions and bounded useful insights without cloning the backlog |
 
 GSCSMOF never owns feature implementation, feature decisions, backlog priority, release approval, or validation semantics. It may invoke canonical validation while creating or evolving an organ. A SMOF never creates sibling organs, governs GSCSMOF, rewrites unrelated plans, or claims ownership of code/specification truth.
 
@@ -31,16 +31,19 @@ GSCSMOF never owns feature implementation, feature decisions, backlog priority, 
 | Code and tests | Executable behavior |
 | Root `/scripts` | Shared deterministic project execution |
 | Capability skills | Reusable cross-feature methods such as benchmarking or alignment |
-| SMOF | Feature-specific growth method, routing, gates, and handoff |
+| SMOF `SKILL.md` | Feature-specific growth method, routing, gates, completion pull, and handoff |
+| SMOF `INSIGHTS.md` | Bounded pre-consolidation feature findings with provenance and destination |
 | `CHANGELOG.md` | Meaningful completed outcomes |
 
 A SMOF links to these owners. It does not mirror their task lists, implementation maps, commands, generated numbers, or history.
 
 ## Activation Contract
 
-Keeping GSCSMOF in the repository is an explicit standing opt-in. During normal repository work, an agent may proactively detect an epic and create, refine, merge, or retire its SMOF without requesting separate confirmation for each local, reversible skill edit. If maintainers do not want this behavior, they should remove GSCSMOF from the repository; its description and this contract make the permission discoverable.
+Keeping GSCSMOF in the repository is an explicit standing opt-in to a proactive protocol. Whenever an agent receives or discovers a high-level EPIC Feature task, it should evaluate whether the feature needs a SMOF before deep implementation. The agent may create, refine, merge, or retire that organ automatically without a separate request or confirmation for each local, reversible skill edit.
 
-Presence grants creation authority, not a hidden process. GSCSMOF acts when an agent is already working with repository context; it does not pretend to run a daemon or periodic watcher. External publication, credentials, accounts, and irreversible actions retain their normal approval gates.
+The user does not need to say “create a skill.” Epic-level intent is the trigger. If evidence is incomplete but a multi-slice feature organ would cheaply improve continuity, GSCSMOF may create a minimal SMOF and let repository reality evolve it. If maintainers do not want proactive organ creation, they should remove GSCSMOF; its presence is the permission.
+
+This is proactive agent behavior, not a hidden process. GSCSMOF runs only while an agent is handling repository work; it does not claim a daemon, timer, watcher, or independent execution channel. External publication, credentials, accounts, and irreversible actions retain their normal approval gates.
 
 ## Project Adaptation
 
@@ -52,10 +55,10 @@ The templates and heuristics below are defaults, not a universal framework. Proj
 
 Treat these as positive signals rather than a rigid checklist:
 
-- The project or user names an EPIC Feature or repository reality reveals one coherent multi-slice outcome.
+- The project or user names an EPIC Feature, high-level feature outcome, release-sized capability, or repository reality reveals one coherent multi-slice objective.
 - Work will likely cross sessions, agents, subsystems, or independently validated slices.
 - The epic has feature-specific routing, evidence, safety, sequencing, or handoff pressure.
-- An organ would compress repeated reasoning and keep procedural detail out of the backlog.
+- An organ would preserve useful intermediate insight, compress repeated reasoning, and keep procedural detail out of the backlog.
 - Existing skills do not already provide a clear home for the same feedback loop.
 
 GSCSMOF may create a minimal SMOF early and let evidence grow it. It should usually skip a clearly one-shot patch, an idea with no actionable scope, temporary telemetry, or folder symmetry, but uncertainty alone does not require user confirmation. Cheap retirement keeps early creation reversible.
@@ -81,9 +84,10 @@ When GSCSMOF selects a candidate, no additional creation confirmation is require
 3. Define the locked epic scope, canonical work surface, trigger, owners, exclusions, evidence ladder, route, safety gates, handoff, and retirement condition.
 4. Reference shared root scripts and capability contracts instead of copying commands or sibling internals.
 5. Add the organ to `/.agents/skills/README.md` with its owner, exclusions, and public route.
-6. Narrow the canonical backlog only if creating the organ changes what remains; never duplicate backlog items in the SMOF.
-7. Run skill metadata, link, context, and completion validation.
-8. Report the created boundary, reuse decision, and validation evidence.
+6. Narrow the canonical backlog only if creating the organ changes what remains; represent detailed feature guidance through links and feature-local insight rather than copied backlog items.
+7. Add a bounded `INSIGHTS.md` only when the epic needs temporary feature-local working memory beyond the protocol itself.
+8. Run skill metadata, link, context, and completion validation.
+9. Report the created boundary, reuse decision, and validation evidence.
 
 ### Minimal SMOF Shape
 
@@ -108,17 +112,38 @@ Canonical work surface: <link or exact scope>
 
 Adapt this shape to the project and epic. Add sections only when real constraints require them; copied feature documentation or a large static checklist has failed compression.
 
+## Feature Working Memory
+
+A SMOF may keep `INSIGHTS.md` as bounded pre-consolidation memory for useful feature-local findings that have not yet earned a stable owner. This makes the organ richer than a backlog item without turning it into another backlog.
+
+Good entries capture a finding, its evidence/provenance, why it changes future delivery, and its intended destination or retirement condition. Suitable material includes unresolved design pressure, recurring implementation traps, cross-slice dependencies, falsified assumptions, evidence gaps, and decisions awaiting specification or architecture promotion.
+
+Do not store raw logs, command transcripts, commit diaries, copied tasks, current generated hashes, or stable facts already owned by code/docs. At each meaningful slice, promote mature truth to its owner, convert actionable outcomes into the canonical backlog, and delete stale or resolved insight. Keep the file small enough to read as one feature checkpoint.
+
+## Completion Pull
+
+A SMOF should actively pull its epic toward completion:
+
+- Keep the epic's objective stop conditions and highest-value remaining slice visible.
+- At relevant checkpoints, report what closed, what remains, and the exact next actionable or gated transition.
+- When continuation intent permits, prefer advancing the unfinished epic over unrelated available polish.
+- Ask the user to resume or unblock the feature when a human decision or external gate is the only remaining path.
+- Recognize completion, consolidate durable knowledge, and stop generating momentum when the objective closes.
+
+Completion pull never overrides a user's latest direction, manufactures urgency, or continues through approval and safety gates.
+
 ## SMOF Operating Contract
 
 A generated SMOF should guide this loop:
 
 ```text
 verified repository reality
-  → reconcile the canonical epic plan
-    → select one bounded high-value slice
-      → route to owned implementation and shared validation
-        → interpret evidence and gates
-          → hand off and refine only reusable method
+  → refresh and prune the feature working model
+    → reconcile the canonical epic plan
+      → select one bounded high-value slice
+        → route to owned implementation and shared validation
+          → interpret evidence and gates
+            → promote useful insight and pull toward completion
 ```
 
 The SMOF may improve after a slice when a recurring ambiguity, dead end, unsafe shortcut, missing route, or evidence mistake changes future delivery. It must not absorb raw logs, commit diaries, completed task lists, current hashes, or facts already owned elsewhere.
