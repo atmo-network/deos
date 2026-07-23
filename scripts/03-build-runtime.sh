@@ -11,6 +11,15 @@ Builds the current DEOS reference runtime (`deos-runtime`) WASM artifact in rele
 
 Options:
   -h, --help        Show this help message
+
+Inputs:
+  Locked template Cargo workspace and repository-pinned Rust toolchain.
+
+Outputs:
+  target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm.
+
+Side effects:
+  Installs the pinned WASM target when absent and updates Cargo build artifacts.
 EOF
 }
 

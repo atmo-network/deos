@@ -8,7 +8,8 @@ usage() {
 Usage: audit-script-entrypoints.sh [OPTIONS]
 
 Checks repository shell/Node entrypoints for syntax validity, --help availability,
-shared shell-step status propagation, declared root-to-skill bridges, skill
+independent human-callable atomic-script contracts, shared shell-step status
+propagation, declared root-to-skill bridges, skill
 name/directory identity, and compact metadata shape. Also enforces that project-specific audit leaves live in the
 alignment skill, not in the root operator scripts directory.
 
@@ -98,6 +99,31 @@ audit_node_entrypoints() {
             AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
         fi
     done < <(find "$PROJECT_ROOT/web-client/scripts" -maxdepth 1 -type f -name '*.mjs' | sort)
+}
+
+audit_atomic_script_independence() {
+    local atom other heading help_output
+    local atoms=("$ROOT_SCRIPT_DIR"/[0-9][0-9]-*.sh)
+    for atom in "${atoms[@]}"; do
+        if ! help_output="$(cd /tmp && bash "$atom" --help)"; then
+            log_error "Atomic script help must work outside the repository cwd: ${atom#$PROJECT_ROOT/}"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            continue
+        fi
+        for heading in Inputs Outputs "Side effects"; do
+            if ! grep -q "^${heading}:" <<<"$help_output"; then
+                log_error "Atomic script help lacks '${heading}': ${atom#$PROJECT_ROOT/}"
+                AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            fi
+        done
+        for other in "${atoms[@]}"; do
+            [[ "$atom" == "$other" ]] && continue
+            if grep -Fq "$(basename "$other")" "$atom"; then
+                log_error "Atomic script references another numbered script: ${atom#$PROJECT_ROOT/} -> $(basename "$other")"
+                AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+            fi
+        done
+    done
 }
 
 audit_audit_leaf_ownership() {
@@ -192,6 +218,7 @@ audit_entrypoints() {
     AUDIT_FAILURES=0
     audit_shell_entrypoints
     audit_node_entrypoints
+    audit_atomic_script_independence
     audit_audit_leaf_ownership
     audit_shell_step_status_propagation
     audit_skill_bridges

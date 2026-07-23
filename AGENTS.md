@@ -194,6 +194,7 @@
 ## 11. Scripts, Skills, and Wiki
 
 - `Script Classes`: Root numbered scripts perform reusable atomic operations; root named scripts expose deterministic operator utilities or compositions that require no agent judgment.
+- `Human-Callable Atoms`: Every numbered root script runs independently from any working directory, documents inputs/outputs/side effects, validates its own prerequisites, and either completes one operation or fails with an exact unblocker; numbering communicates a common human sequence, never an invocation dependency.
 - `Skill Workflow Ownership`: Domain-specific agent strategy, mode selection, evidence interpretation, coordination, and handoff belong in project skills with co-located script leaves where useful; do not encode those decisions only in root shell orchestration or README prose.
 - `Root Script Bridges`: Keep a root named entrypoint only when humans or CI need a stable command; when a skill owns the workflow, the root script must remain a thin compatibility bridge to the co-located implementation.
 - `Script Skeleton`: Full named/admin implementations follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`; thin skill bridges only resolve the repository root and delegate arguments unchanged.

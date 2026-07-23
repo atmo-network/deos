@@ -22,6 +22,15 @@ Environment:
   BLOCK_TARGET=100
   BLOCK_TIMEOUT_SEC=900
   BLOCK_STALL_TIMEOUT_SEC=60
+
+Inputs:
+  Reachable local collator RPC and the locked template test workspace.
+
+Outputs:
+  Pass/fail evidence for block stability and runtime-facing E2E scenarios.
+
+Side effects:
+  Waits for live blocks and may submit test-only state transitions to the local chain.
 EOF2
 }
 

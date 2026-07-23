@@ -11,7 +11,9 @@ This directory contains deterministic command surfaces, not agent strategy:
 - `Full named/admin implementations` follow `usage -> parse_args -> check_prerequisites/plan -> main`; thin bridges only resolve the repository root and delegate.
 - `All entrypoints` expose `--help` and keep declared environment/behavior contracts honest.
 
-## Atomic Scripts
+## Human-Callable Atomic Scripts
+
+Each numbered command is independently callable by a human or CI from any working directory. Its `--help` declares inputs, outputs, side effects, and configurable environment. The command checks its own prerequisites and never invokes another numbered command. Numbers show the common local-network sequence only; they do not create a hidden requirement to run earlier scripts.
 
 - [01-download-binaries.sh](./01-download-binaries.sh)
   Download local Polkadot SDK binaries into `./bin`. The current default release tag is `polkadot-stable2606` (node v1.24.0).
