@@ -193,6 +193,7 @@
 - `Script Skeleton`: Named/admin entrypoints follow `usage -> parse_args -> check_prerequisites/plan -> main` on `_common.sh`.
 - `Script Help`: Every script entrypoint exposes `--help` and accurately declares environment and behavior.
 - `Compact Command Output`: Shared script-harness steps suppress successful child-command output by default, report concise timing, and retain full failure logs while printing a bounded tail; `DEOS_VERBOSE=1` restores live full output for diagnosis.
+- `Validation Entrypoints`: Run tests, Clippy, builds, benchmarks, formatting, and workspace checks through repository scripts whenever an entrypoint exists; when a needed mode is missing, extend the owning script first so repeated agent work strengthens shared tooling instead of bypassing it with raw Cargo or npm commands.
 - `Audit Ownership`: Project-specific audit leaves live in the repo-local `alignment` skill; root scripts may orchestrate but should not duplicate audit knowledge.
 - `Skill Portability`: Repo-local skills must remain independently portable and must not call sibling skill internals directly.
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.

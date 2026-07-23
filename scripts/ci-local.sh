@@ -3,6 +3,7 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+ONLY_CHECK="all"
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
 if [[ "$SKIP_WASM_BUILD" == "1" ]]; then
     export SKIP_WASM_BUILD
@@ -20,16 +21,35 @@ Usage: ci-local.sh [OPTIONS]
 Runs the local CI workflow: clippy, tests, docs, formatting check, and workspace check.
 
 Options:
-  -h, --help        Show this help message
+  --only CHECK       Run one compact check: clippy, tests, docs, format, or check
+  -h, --help         Show this help message
 
 Environment:
   SKIP_WASM_BUILD=0|1
+  DEOS_VERBOSE=0|1
+  DEOS_FAILURE_TAIL_LINES=N
 EOF
 }
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --only)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--only requires a check name"
+                    exit 2
+                fi
+                ONLY_CHECK="$2"
+                case "$ONLY_CHECK" in
+                    clippy|tests|docs|format|check) ;;
+                    *)
+                        log_error "Unsupported check: $ONLY_CHECK"
+                        exit 2
+                        ;;
+                esac
+                shift 2
+                continue
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -60,36 +80,48 @@ check_prerequisites() {
     log_success "Prerequisites checked"
 }
 
+selected() {
+    [[ "$ONLY_CHECK" == "all" || "$ONLY_CHECK" == "$1" ]]
+}
+
 run_primary_checks() {
     phase_banner "Step 2: Primary checks"
 
-    run_shell_step "Clippy (Linting)" \
-        "30" \
-        "cargo clippy --all-targets --all-features --locked --workspace --quiet -- -D warnings"
+    if selected clippy; then
+        run_shell_step "Clippy (Linting)" \
+            "30" \
+            "cargo clippy --all-targets --all-features --locked --workspace --quiet -- -D warnings"
+    fi
 
-    run_shell_step "Tests" \
-        "15" \
-        "cargo test --workspace"
+    if selected tests; then
+        run_shell_step "Tests" \
+            "15" \
+            "cargo test --workspace"
+    fi
 
-    run_shell_step "Documentation Build" \
-        "15" \
-        "cargo doc --workspace --no-deps"
+    if selected docs; then
+        run_shell_step "Documentation Build" \
+            "15" \
+            "cargo doc --workspace --no-deps"
+    fi
 }
 
 run_additional_checks() {
     phase_banner "Step 3: Additional checks"
 
-    log_info "Checking code formatting"
-    if cargo fmt -- --check; then
-        log_success "Code formatting is correct"
-    else
-        log_warning "Code formatting issues found (run 'cargo fmt' to fix)"
+    if selected format; then
+        run_shell_step \
+            "Code formatting" \
+            "" \
+            "cd '$TEMPLATE_DIR' && cargo fmt -- --check"
     fi
 
-    run_shell_step \
-        "Basic workspace consistency" \
-        "" \
-        "cd '$TEMPLATE_DIR' && cargo check --workspace --quiet"
+    if selected check; then
+        run_shell_step \
+            "Basic workspace consistency" \
+            "" \
+            "cd '$TEMPLATE_DIR' && cargo check --workspace --quiet"
+    fi
 }
 
 print_summary() {
@@ -97,16 +129,17 @@ print_summary() {
     local test_file_count
     local doc_file_count
 
-    workspace_members=$(grep -c 'members.*=' Cargo.toml || echo 'N/A')
-    test_file_count=$(find . -name '*.rs' -exec grep -l '#\[test\]' {} ';' | wc -l)
-    doc_file_count=$(find target/doc -name '*.html' 2>/dev/null | wc -l)
-
     phase_banner "Summary"
-    log_success "Local CI workflow completed successfully"
-    log_info "Project statistics"
-    echo "  Workspace members: $workspace_members"
-    echo "  Test files: $test_file_count"
-    echo "  Documentation: $doc_file_count HTML files generated"
+    log_success "Local CI workflow completed successfully (selection: $ONLY_CHECK)"
+    if [[ "$ONLY_CHECK" == "all" ]]; then
+        workspace_members=$(grep -c 'members.*=' Cargo.toml || echo 'N/A')
+        test_file_count=$(find . -name '*.rs' -exec grep -l '#\[test\]' {} ';' | wc -l)
+        doc_file_count=$(find target/doc -name '*.html' 2>/dev/null | wc -l)
+        log_info "Project statistics"
+        echo "  Workspace members: $workspace_members"
+        echo "  Test files: $test_file_count"
+        echo "  Documentation: $doc_file_count HTML files generated"
+    fi
 }
 
 main() {

@@ -51,7 +51,7 @@ Commands executed through the shared script harness use compact output by defaul
   Run pallet benchmarking flows and weight generation helpers. Supports `--extra` to include AAA circular-chain diagnostics outside the default production-weight set.
 
 - [ci-local.sh](./ci-local.sh)
-  Reproduce the local CI workflow.
+  Reproduce the local CI workflow, or run one compact validation class with `--only clippy|tests|docs|format|check`. Agents should prefer this entrypoint over raw Cargo validation commands.
 
 ## Admin Utilities
 
