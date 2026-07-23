@@ -55,7 +55,7 @@
 - `/scripts`: Operator/developer automation; numbered scripts are atomic leaves and named scripts are orchestrators or admin utilities.
 - `/simulator`: Historical TMCTOL hypothesis lab and authoritative mathematical reference for formulas, thresholds, conservation, floor/compression scenarios, and parameter behavior.
 - `/wiki`: Generated bilingual semantic projection of `/docs` for onboarding, frontend rendering, and agent navigation.
-- `/.agents/skills`: Repository-local cognitive and validation infrastructure; project-specific audits belong in the `alignment` skill.
+- `/.agents/skills`: Repository-local agent workflow control plane; its README owns the skill graph map, each `SKILL.md` owns one domain contract, and project-specific audits belong in `alignment`.
 - `Support Priority`: Routine stabilization starts with `/docs`, then `/template`, `/web-client`, and `/scripts`; consult `/simulator` whenever tokenomics or invariant math moves.
 - `Core Entry`: Start system-wide architecture work with `docs/core.architecture.en.md`.
 - `Runtime Entry`: Start Rust workspace work with `template/README.md` and the owning pallet/runtime docs.
@@ -204,6 +204,8 @@
 - `No Shadow Harness`: Do not assemble ad hoc validation wrappers, command inventories, or parallel orchestration when a project skill/script route exists; improve the canonical route or leaf when it lacks necessary precision.
 - `Audit Ownership`: Project-specific audit leaves live in the repo-local `alignment` skill; root scripts may orchestrate but should not duplicate audit knowledge.
 - `Skill Portability`: Repo-local skills must remain independently portable and must not call sibling skill internals directly.
+- `Skill Domain DAG`: Treat project skills as an acyclic responsibility graph: delivery/orchestration skills route to documented capability contracts, capability skills own their leaves, and lower skills never depend on composition roots.
+- `Skill Split Gate`: Create a separate skill only when it gains a distinct truth owner, trigger, exclusion boundary, or reusable capability and measurably reduces interface/context pressure; reject folder theater, one-use wrappers, and decomposition that hides control flow.
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.
 - `Durable Ledgers`: Record reusable hallucinations, ambiguities, dead ends, and boundary drifts only; bare tool failures remain transient output.
 - `Wiki Role`: `/wiki` is a concise, provenance-aware learning lens over current project truth, not a release-note mirror or docs dump.

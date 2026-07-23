@@ -8,8 +8,8 @@ usage() {
 Usage: audit-script-entrypoints.sh [OPTIONS]
 
 Checks repository shell/Node entrypoints for syntax validity, --help availability,
-shared shell-step status propagation, declared root-to-skill bridges, and compact
-skill metadata shape. Also enforces that project-specific audit leaves live in the
+shared shell-step status propagation, declared root-to-skill bridges, skill
+name/directory identity, and compact metadata shape. Also enforces that project-specific audit leaves live in the
 alignment skill, not in the root operator scripts directory.
 
 Options:
@@ -161,7 +161,13 @@ audit_skill_metadata_descriptions() {
         return
     fi
     while IFS= read -r skill_file; do
-        local file_matches
+        local file_matches declared_name directory_name
+        declared_name="$(awk -F': *' '/^name:/ { print $2; exit }' "$skill_file")"
+        directory_name="$(basename "$(dirname "$skill_file")")"
+        if [[ "$declared_name" != "$directory_name" ]]; then
+            log_error "Skill name must match its owning directory: ${skill_file#$PROJECT_ROOT/} declares '$declared_name'"
+            AUDIT_FAILURES=$((AUDIT_FAILURES + 1))
+        fi
         file_matches="$(awk -v file="$skill_file" '
             NR == 1 && $0 == "---" { in_frontmatter = 1; next }
             in_frontmatter && $0 == "---" { exit }
