@@ -41,6 +41,10 @@ pub trait WeightInfo {
   fn scheduler_wakeup_append_new_page() -> Weight;
   fn scheduler_wakeup_replace_exact() -> Weight;
   fn scheduler_wakeup_invalidate_middle_page() -> Weight;
+  fn scheduler_wakeup_drain_partial_page() -> Weight;
+  fn scheduler_wakeup_drain_full_page() -> Weight;
+  fn scheduler_wakeup_drain_dense_boundary() -> Weight;
+  fn scheduler_wakeup_drain_stale_page() -> Weight;
   fn scheduler_paged_consume_preserve_page() -> Weight;
   fn scheduler_paged_consume_delete_page() -> Weight;
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight;
@@ -235,6 +239,22 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
 
   fn scheduler_wakeup_invalidate_middle_page() -> Weight {
     Weight::from_parts(140_000_000, 64_000).saturating_add(T::DbWeight::get().reads_writes(5, 5))
+  }
+
+  fn scheduler_wakeup_drain_partial_page() -> Weight {
+    Weight::from_parts(1_000_000_000, 200_000).saturating_add(T::DbWeight::get().reads_writes(18, 18))
+  }
+
+  fn scheduler_wakeup_drain_full_page() -> Weight {
+    Weight::from_parts(2_000_000_000, 400_000).saturating_add(T::DbWeight::get().reads_writes(34, 34))
+  }
+
+  fn scheduler_wakeup_drain_dense_boundary() -> Weight {
+    Weight::from_parts(2_200_000_000, 450_000).saturating_add(T::DbWeight::get().reads_writes(36, 37))
+  }
+
+  fn scheduler_wakeup_drain_stale_page() -> Weight {
+    Weight::from_parts(1_500_000_000, 400_000).saturating_add(T::DbWeight::get().reads_writes(34, 2))
   }
 
   fn scheduler_paged_consume_preserve_page() -> Weight {
@@ -446,6 +466,10 @@ impl WeightInfo for () {
   fn scheduler_wakeup_append_new_page() -> Weight { Weight::from_parts(120_000_000, 48_000) }
   fn scheduler_wakeup_replace_exact() -> Weight { Weight::from_parts(160_000_000, 64_000) }
   fn scheduler_wakeup_invalidate_middle_page() -> Weight { Weight::from_parts(140_000_000, 64_000) }
+  fn scheduler_wakeup_drain_partial_page() -> Weight { Weight::from_parts(1_000_000_000, 200_000) }
+  fn scheduler_wakeup_drain_full_page() -> Weight { Weight::from_parts(2_000_000_000, 400_000) }
+  fn scheduler_wakeup_drain_dense_boundary() -> Weight { Weight::from_parts(2_200_000_000, 450_000) }
+  fn scheduler_wakeup_drain_stale_page() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
   fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_consume_delete_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {

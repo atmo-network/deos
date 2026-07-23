@@ -360,7 +360,18 @@ Production-Wasm `50 x 20` focused operation evidence compares candidate page siz
 | 64 | `39,042,000 / 5,286` | `41,486,000 / 5,258` | `40,858,000 / 6,646` | `59,017,000 / 10,623` |
 | 128 | `49,169,000 / 6,033` | `52,033,000 / 5,839` | `39,321,000 / 6,646` | `58,598,000 / 11,258` |
 
-The runtime selects `WakeupPageSize = 32`. It minimizes every page-size-sensitive operation and halves page-value rewrite granularity relative to 64; exact singleton replacement remains effectively page-size-neutral. Final generated production models charge four reads and three/four writes for insertion, and five reads/five writes for replacement or middle-page unlinking. Drain evidence remains required before this substrate replaces `WakeupIndex` and `ScheduledWakeupBlock`.
+The runtime selects `WakeupPageSize = 32`. It minimizes every page-size-sensitive operation and halves page-value rewrite granularity relative to 64; exact singleton replacement remains effectively page-size-neutral. Final generated production models charge four reads and three/four writes for insertion, and five reads/five writes for replacement or middle-page unlinking.
+
+Production-Wasm `50 x 20` drain evidence at the selected page size records fixed operation samples (`RefTime / estimated ProofSize`):
+
+| Drain case | Slots | RefTime / ProofSize | Reads / writes |
+| --- | ---: | ---: | ---: |
+| Partial head | 16 | `133,189,000 / 44,416` | `18 / 18` |
+| Full page | 32 | `237,045,000 / 86,273` | `34 / 34` |
+| Dense boundary | 33 | `258,137,000 / 88,983` | `36 / 36` |
+| Stale page | 32 | `148,275,000 / 85,761` | `34 / 2` |
+
+These fixed samples validate partial preservation, complete deletion, one-page boundary crossing, and stale-pointer filtering; they do not imply block throughput. The generated AAA weights hash is `526684f27274f8ba8f8eee99379b0da1efe6adb134d2f4914bd49ac78a9a6eee`, and the production compressed-Wasm hash is `66fc2a189bcc83ff77fedcb4cdebb3e1e563c479bafe728092d985f6b4337013`. Ordered cursor and activation evidence remain required before this substrate replaces `WakeupIndex` and `ScheduledWakeupBlock`.
 
 ### Starvation Safeguard
 

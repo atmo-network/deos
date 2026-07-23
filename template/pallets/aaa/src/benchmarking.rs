@@ -1238,6 +1238,97 @@ mod benches {
   }
 
   #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_drain_partial_page() {
+    let page_size = T::WakeupPageSize::get();
+    assert!(page_size >= 2, "benchmark requires a partial page");
+    let wakeup_block = 100u32.into();
+    for i in 0..page_size {
+      let aaa_id = bench_create_system_manual::<T>(47_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    let scan_limit = page_size / 2;
+    #[block]
+    {
+      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, scan_limit);
+      assert_eq!(ready.len(), scan_limit as usize);
+      assert_eq!(stats.entries_scanned, scan_limit);
+      assert_eq!(stats.pages_deleted, 0);
+    }
+    assert_eq!(
+      WakeupPages::<T>::get((wakeup_block, 0)).map(|page| page.scan_slot),
+      Some(scan_limit)
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_drain_full_page() {
+    let page_size = T::WakeupPageSize::get();
+    let wakeup_block = 100u32.into();
+    for i in 0..page_size {
+      let aaa_id = bench_create_system_manual::<T>(48_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    #[block]
+    {
+      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, page_size);
+      assert_eq!(ready.len(), page_size as usize);
+      assert_eq!(stats.entries_scanned, page_size);
+      assert_eq!(stats.pages_deleted, 1);
+    }
+    assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
+    assert!(!WakeupPages::<T>::contains_key((wakeup_block, 0)));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_drain_dense_boundary() {
+    let page_size = T::WakeupPageSize::get();
+    let count = page_size.saturating_add(1);
+    assert!(
+      count <= T::MaxWakeupsPerBlock::get(),
+      "benchmark requires one boundary-crossing drain"
+    );
+    let wakeup_block = 100u32.into();
+    for i in 0..count {
+      let aaa_id = bench_create_system_manual::<T>(49_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+    }
+    #[block]
+    {
+      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, count);
+      assert_eq!(ready.len(), count as usize);
+      assert_eq!(stats.entries_scanned, count);
+      assert_eq!(stats.pages_touched, 2);
+      assert_eq!(stats.pages_deleted, 2);
+    }
+    assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_wakeup_drain_stale_page() {
+    let page_size = T::WakeupPageSize::get();
+    let wakeup_block = 100u32.into();
+    for i in 0..page_size {
+      let aaa_id = bench_create_system_manual::<T>(50_000_000u32.saturating_add(i));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, wakeup_block));
+      ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+        maybe_hot
+          .as_mut()
+          .expect("benchmark actor hot state must exist")
+          .wakeup_pointer = None;
+      });
+    }
+    #[block]
+    {
+      let (ready, stats) = Pallet::<T>::wakeup_substrate_drain_block(wakeup_block, page_size);
+      assert!(ready.is_empty());
+      assert_eq!(stats.entries_scanned, page_size);
+      assert_eq!(stats.stale_entries, page_size);
+      assert_eq!(stats.pages_deleted, 1);
+    }
+    assert!(!WakeupBuckets::<T>::contains_key(wakeup_block));
+  }
+
+  #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_consume_preserve_page() {
     let first = bench_create_system_manual::<T>(35_000_000);
     let second = bench_create_system_manual::<T>(35_000_001);
