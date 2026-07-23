@@ -393,21 +393,14 @@ pub mod pallet {
         ActorProgram::<T>::get(aaa_id)?,
       ))
     }
-  }
 
-  /// Rust compatibility facade over the canonical split active-actor stores.
-  /// This is not a storage item and does not recreate the retired monolithic value.
-  pub struct AaaInstances<T: Config>(core::marker::PhantomData<T>);
-
-  impl<T: Config> AaaInstances<T> {
-    pub(crate) fn compose(
-      hot: ActorHotStateOf<T>,
-      program: ActorProgramStateOf<T>,
-    ) -> AaaInstanceOf<T> {
-      Pallet::<T>::compose_active_actor(hot, program)
+    pub(crate) fn active_actor_exists(aaa_id: AaaId) -> bool {
+      ActorHot::<T>::contains_key(aaa_id) && ActorProgram::<T>::contains_key(aaa_id)
     }
 
-    fn split(instance: AaaInstanceOf<T>) -> (ActorHotStateOf<T>, ActorProgramStateOf<T>) {
+    fn split_active_actor(
+      instance: AaaInstanceOf<T>,
+    ) -> (ActorHotStateOf<T>, ActorProgramStateOf<T>) {
       (
         ActorHotState {
           sovereign_account: instance.sovereign_account,
@@ -435,23 +428,29 @@ pub mod pallet {
       )
     }
 
+    pub(crate) fn insert_active_actor(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
+      let (hot, program) = Self::split_active_actor(instance);
+      ActorHot::<T>::insert(aaa_id, hot);
+      ActorProgram::<T>::insert(aaa_id, program);
+    }
+
+    pub(crate) fn remove_active_actor(aaa_id: AaaId) {
+      ActorHot::<T>::remove(aaa_id);
+      ActorProgram::<T>::remove(aaa_id);
+    }
+  }
+
+  /// Rust compatibility facade over the canonical split active-actor stores.
+  /// This is not a storage item and does not recreate the retired monolithic value.
+  pub struct AaaInstances<T: Config>(core::marker::PhantomData<T>);
+
+  impl<T: Config> AaaInstances<T> {
     pub fn get(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
       Pallet::<T>::active_actor_snapshot(aaa_id)
     }
 
     pub fn contains_key(aaa_id: AaaId) -> bool {
-      ActorHot::<T>::contains_key(aaa_id) && ActorProgram::<T>::contains_key(aaa_id)
-    }
-
-    pub(crate) fn insert(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
-      let (hot, program) = Self::split(instance);
-      ActorHot::<T>::insert(aaa_id, hot);
-      ActorProgram::<T>::insert(aaa_id, program);
-    }
-
-    pub(crate) fn remove(aaa_id: AaaId) {
-      ActorHot::<T>::remove(aaa_id);
-      ActorProgram::<T>::remove(aaa_id);
+      Pallet::<T>::active_actor_exists(aaa_id)
     }
 
     pub fn iter_keys() -> impl Iterator<Item = AaaId> {
@@ -460,7 +459,8 @@ pub mod pallet {
 
     pub fn iter() -> impl Iterator<Item = (AaaId, AaaInstanceOf<T>)> {
       ActorHot::<T>::iter().filter_map(|(aaa_id, hot)| {
-        ActorProgram::<T>::get(aaa_id).map(|program| (aaa_id, Self::compose(hot, program)))
+        ActorProgram::<T>::get(aaa_id)
+          .map(|program| (aaa_id, Pallet::<T>::compose_active_actor(hot, program)))
       })
     }
   }
@@ -621,7 +621,7 @@ pub mod pallet {
         T::GenesisSystemAaas::system_aaas()
       {
         assert!(
-          !AaaInstances::<T>::contains_key(aaa_id),
+          !Pallet::<T>::active_actor_exists(aaa_id),
           "duplicate genesis System AAA id: {aaa_id}"
         );
         let next_id = aaa_id
@@ -685,7 +685,7 @@ pub mod pallet {
         );
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        AaaInstances::<T>::insert(aaa_id, instance);
+        Pallet::<T>::insert_active_actor(aaa_id, instance);
         ActorFunding::<T>::insert(
           aaa_id,
           ActorFundingState {
@@ -713,7 +713,7 @@ pub mod pallet {
       }
       for (aaa_id, owner) in T::GenesisSystemAaas::dormant_system_aaas() {
         assert!(
-          !AaaInstances::<T>::contains_key(aaa_id)
+          !Pallet::<T>::active_actor_exists(aaa_id)
             && !DormantAaaIdentities::<T>::contains_key(aaa_id),
           "duplicate genesis System AAA id: {aaa_id}"
         );
@@ -750,7 +750,7 @@ pub mod pallet {
       }
       for aaa_id in T::GenesisSystemAaas::system_custody_accounts() {
         assert!(
-          !AaaInstances::<T>::contains_key(aaa_id)
+          !Pallet::<T>::active_actor_exists(aaa_id)
             && !DormantAaaIdentities::<T>::contains_key(aaa_id),
           "genesis custody account collides with actor identity: {aaa_id}"
         );
@@ -1138,7 +1138,7 @@ pub mod pallet {
       T::SystemOrigin::ensure_origin(origin)?;
       ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
       ensure!(
-        !AaaInstances::<T>::contains_key(aaa_id),
+        !Self::active_actor_exists(aaa_id),
         Error::<T>::AaaIdOccupied
       );
       let closed_mutability =
@@ -1153,7 +1153,7 @@ pub mod pallet {
     #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1185,7 +1185,7 @@ pub mod pallet {
     #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1214,7 +1214,7 @@ pub mod pallet {
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1241,7 +1241,7 @@ pub mod pallet {
       aaa_id: AaaId,
       policy: FundingSourcePolicyOf<T>,
     ) -> DispatchResult {
-      let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
       Self::ensure_not_system_immutable(&instance)?;
       if Self::is_window_expired(&instance) {
@@ -1263,7 +1263,7 @@ pub mod pallet {
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      if let Some(instance) = AaaInstances::<T>::get(aaa_id) {
+      if let Some(instance) = Self::active_actor_snapshot(aaa_id) {
         Self::ensure_control_origin(origin, &instance)?;
         Self::ensure_not_system_immutable(&instance)?;
         return Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated);
@@ -1285,7 +1285,7 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1346,7 +1346,7 @@ pub mod pallet {
     ) -> DispatchResult {
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
       Self::validate_execution_plan_shape(&execution_plan)?;
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1447,7 +1447,7 @@ pub mod pallet {
       let mut alive = 0u32;
       let mut missing = 0u32;
       for aaa_id in aaa_ids.iter().copied() {
-        let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+        let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
           missing = missing.saturating_add(1);
           continue;
         };
@@ -1474,7 +1474,7 @@ pub mod pallet {
       aaa_id: AaaId,
       target: Option<u64>,
     ) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
@@ -1503,7 +1503,7 @@ pub mod pallet {
       by: u64,
     ) -> DispatchResult {
       ensure!(by > 0, Error::<T>::AutoCloseNonceIncrementZero);
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
@@ -1546,7 +1546,7 @@ pub mod pallet {
         Error::<T>::EmptyExecutionPlan
       );
       Self::validate_execution_plan_shape(&on_close_execution_plan)?;
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1607,7 +1607,7 @@ pub mod pallet {
       program: ProgramInputOf<T>,
     ) -> DispatchResult {
       let identity = DormantAaaIdentities::<T>::get(aaa_id).ok_or_else(|| {
-        if AaaInstances::<T>::contains_key(aaa_id) {
+        if Self::active_actor_exists(aaa_id) {
           Error::<T>::AaaAlreadyActive
         } else {
           Error::<T>::AaaNotFound
@@ -1620,7 +1620,7 @@ pub mod pallet {
     #[pallet::call_index(22)]
     #[pallet::weight(T::WeightInfo::deactivate_aaa())]
     pub fn deactivate_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let instance = AaaInstances::<T>::get(aaa_id).ok_or_else(|| {
+      let instance = Self::active_actor_snapshot(aaa_id).ok_or_else(|| {
         if DormantAaaIdentities::<T>::contains_key(aaa_id) {
           Error::<T>::AaaDormant
         } else {
@@ -1638,7 +1638,7 @@ pub mod pallet {
 
   impl<T: Config> Pallet<T> {
     pub fn aaa_instances(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
-      AaaInstances::<T>::get(aaa_id)
+      Self::active_actor_snapshot(aaa_id)
     }
 
     pub fn weight_upper_bound(task: &TaskOf<T>) -> Weight {
@@ -1907,8 +1907,7 @@ pub mod pallet {
       let current_next_id = NextAaaId::<T>::get();
       let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
       ensure!(
-        !AaaInstances::<T>::contains_key(aaa_id)
-          && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+        !Self::active_actor_exists(aaa_id) && !DormantAaaIdentities::<T>::contains_key(aaa_id),
         Error::<T>::AaaIdOccupied
       );
       let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
@@ -2106,8 +2105,7 @@ pub mod pallet {
       let current_next_id = NextAaaId::<T>::get();
       let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
       ensure!(
-        !AaaInstances::<T>::contains_key(aaa_id)
-          && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+        !Self::active_actor_exists(aaa_id) && !DormantAaaIdentities::<T>::contains_key(aaa_id),
         Error::<T>::AaaIdOccupied
       );
       let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
@@ -2168,7 +2166,7 @@ pub mod pallet {
         created_owner_slot = Some(owner_slot);
         created_sovereign_account = Some(sovereign_account.clone());
         SovereignIndex::<T>::insert(sovereign_account.clone(), aaa_id);
-        AaaInstances::<T>::insert(aaa_id, instance);
+        Self::insert_active_actor(aaa_id, instance);
         ActorFunding::<T>::insert(
           aaa_id,
           ActorFundingState {
@@ -2316,15 +2314,13 @@ pub mod pallet {
         last_cycle_block: Zero::zero(),
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        if !DormantAaaIdentities::<T>::contains_key(aaa_id)
-          || AaaInstances::<T>::contains_key(aaa_id)
-        {
+        if !DormantAaaIdentities::<T>::contains_key(aaa_id) || Self::active_actor_exists(aaa_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
             Error::<T>::AaaAlreadyActive.into(),
           ));
         }
         DormantAaaIdentities::<T>::remove(aaa_id);
-        AaaInstances::<T>::insert(aaa_id, instance);
+        Self::insert_active_actor(aaa_id, instance);
         ActorFunding::<T>::insert(
           aaa_id,
           ActorFundingState {
@@ -2363,7 +2359,7 @@ pub mod pallet {
         }
         WakeupRetryPending::<T>::remove(aaa_id);
         AddressEventInbox::<T>::remove(aaa_id);
-        AaaInstances::<T>::remove(aaa_id);
+        Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);
         DormantAaaIdentities::<T>::insert(aaa_id, identity);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2667,7 +2663,7 @@ pub mod pallet {
           Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
         }
         WakeupRetryPending::<T>::remove(aaa_id);
-        AaaInstances::<T>::remove(aaa_id);
+        Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
@@ -2802,16 +2798,16 @@ pub mod pallet {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
       let limit = Self::effective_active_actor_limit();
       let active_count = Self::active_instance_count();
-      let actual_active_count = AaaInstances::<T>::iter_keys().count() as u32;
+      let actual_active_count = ActorHot::<T>::iter_keys().count() as u32;
       let valid_owner_mask = Self::valid_owner_mask();
       if active_count != actual_active_count {
         return Err(TryRuntimeError::Other(
-          "ActiveAaaCount does not match AaaInstances cardinality",
+          "ActiveAaaCount does not match ActorHot cardinality",
         ));
       }
       if active_count > limit {
         return Err(TryRuntimeError::Other(
-          "AaaInstances count exceeds effective active actor limit",
+          "ActorHot count exceeds effective active actor limit",
         ));
       }
       let dormant_count = DormantAaaIdentities::<T>::iter_keys().count() as u32;
@@ -2841,11 +2837,16 @@ pub mod pallet {
         }
       }
       let mut max_id: Option<AaaId> = None;
-      for (aaa_id, instance) in AaaInstances::<T>::iter() {
+      let active_actors = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
+      for (aaa_id, hot) in active_actors {
+        let program = ActorProgram::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
+          "ActorHot entry has no matching ActorProgram entry",
+        ))?;
+        let instance = Self::compose_active_actor(hot, program);
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
           return Err(TryRuntimeError::Other(
-            "AaaInstances entry has no matching ActorFunding entry",
+            "ActorHot entry has no matching ActorFunding entry",
           ));
         };
         let has_pending_funding = funding
@@ -2880,16 +2881,16 @@ pub mod pallet {
         }
       }
       for aaa_id in ActorFunding::<T>::iter_keys() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
+        if !Self::active_actor_exists(aaa_id) {
           return Err(TryRuntimeError::Other(
-            "ActorFunding entry has no matching AaaInstances entry",
+            "ActorFunding entry has no matching split active actor",
           ));
         }
       }
       let dormant_identities = DormantAaaIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
       for (aaa_id, identity) in dormant_identities {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
-        if AaaInstances::<T>::contains_key(aaa_id)
+        if Self::active_actor_exists(aaa_id)
           || ActorFunding::<T>::contains_key(aaa_id)
           || AddressEventInbox::<T>::contains_key(aaa_id)
           || ScheduledWakeupBlock::<T>::contains_key(aaa_id)
@@ -3007,16 +3008,14 @@ pub mod pallet {
         }
       }
       for aaa_id in ClosedSystemAaaIds::<T>::iter_keys() {
-        if AaaInstances::<T>::contains_key(aaa_id)
-          || DormantAaaIdentities::<T>::contains_key(aaa_id)
-        {
+        if Self::active_actor_exists(aaa_id) || DormantAaaIdentities::<T>::contains_key(aaa_id) {
           return Err(TryRuntimeError::Other(
             "ClosedSystemAaaIds contains an occupied aaa_id",
           ));
         }
       }
       for aaa_id in WakeupRetryPending::<T>::iter_keys() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
+        if !Self::active_actor_exists(aaa_id) {
           return Err(TryRuntimeError::Other(
             "WakeupRetryPending contains missing aaa_id",
           ));
@@ -3024,7 +3023,7 @@ pub mod pallet {
       }
       let min_wakeup = MinWakeupBlock::<T>::get();
       for (aaa_id, block) in ScheduledWakeupBlock::<T>::iter() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
+        if !Self::active_actor_exists(aaa_id) {
           return Err(TryRuntimeError::Other(
             "ScheduledWakeupBlock contains missing aaa_id",
           ));
@@ -3057,7 +3056,7 @@ pub mod pallet {
             ));
           }
           if let Some(live_block) = ScheduledWakeupBlock::<T>::get(aaa_id) {
-            if live_block == block && !AaaInstances::<T>::contains_key(aaa_id) {
+            if live_block == block && !Self::active_actor_exists(aaa_id) {
               return Err(TryRuntimeError::Other(
                 "WakeupIndex contains live wakeup for missing aaa_id",
               ));
