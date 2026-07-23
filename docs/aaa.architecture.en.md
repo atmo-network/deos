@@ -349,6 +349,7 @@ The replacement contract now has an inactive storage substrate without changing 
 - `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
 - Transactional replacement invalidates the prior exact slot; bounded neighboring-page work unlinks empty pages.
+- The inactive drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, and discards stale slots.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
 
 Production-Wasm `50 x 20` focused operation evidence compares candidate page sizes (`RefTime / estimated ProofSize`):

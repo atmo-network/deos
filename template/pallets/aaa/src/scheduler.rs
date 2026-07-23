@@ -513,6 +513,94 @@ impl<T: Config> Pallet<T> {
     result.is_ok()
   }
 
+  pub fn wakeup_substrate_drain_block(
+    wakeup_block: BlockNumberFor<T>,
+    max_entries_scanned: u32,
+  ) -> (BoundedVec<AaaId, T::MaxWakeupsPerBlock>, WakeupDrainStats) {
+    let mut ready = BoundedVec::<AaaId, T::MaxWakeupsPerBlock>::default();
+    let mut stats = WakeupDrainStats::default();
+    let scan_limit = max_entries_scanned.min(T::MaxWakeupsPerBlock::get());
+    if scan_limit == 0 {
+      return (ready, stats);
+    }
+    let Some(mut bucket) = WakeupBuckets::<T>::get(wakeup_block) else {
+      return (ready, stats);
+    };
+    let mut page_id = bucket.head_page;
+
+    while stats.entries_scanned < scan_limit {
+      let key = (wakeup_block, page_id);
+      let Some(mut page) = WakeupPages::<T>::get(key) else {
+        break;
+      };
+      stats.pages_touched = stats.pages_touched.saturating_add(1);
+      let mut slot = page.scan_slot as usize;
+      while slot < page.entries.len() && stats.entries_scanned < scan_limit {
+        let entry = page.entries[slot].take();
+        page.scan_slot = (slot as WakeupSlot).saturating_add(1);
+        stats.entries_scanned = stats.entries_scanned.saturating_add(1);
+        slot = slot.saturating_add(1);
+        let Some(entry) = entry else {
+          continue;
+        };
+        page.live_entries = page.live_entries.saturating_sub(1);
+        bucket.live_entries = bucket.live_entries.saturating_sub(1);
+        let pointer = WakeupPointer {
+          block: wakeup_block,
+          page_id,
+          slot: (slot - 1) as WakeupSlot,
+        };
+        let is_live =
+          ActorHot::<T>::get(entry.aaa_id).and_then(|hot| hot.wakeup_pointer) == Some(pointer);
+        if !is_live {
+          stats.stale_entries = stats.stale_entries.saturating_add(1);
+          continue;
+        }
+        if ready.try_push(entry.aaa_id).is_err() {
+          page.entries[slot - 1] = Some(entry);
+          page.live_entries = page.live_entries.saturating_add(1);
+          bucket.live_entries = bucket.live_entries.saturating_add(1);
+          page.scan_slot = (slot - 1) as WakeupSlot;
+          stats.entries_scanned = stats.entries_scanned.saturating_sub(1);
+          WakeupPages::<T>::insert(key, page);
+          WakeupBuckets::<T>::insert(wakeup_block, bucket);
+          return (ready, stats);
+        }
+        ActorHot::<T>::mutate(entry.aaa_id, |maybe_hot| {
+          if let Some(hot) = maybe_hot
+            && hot.wakeup_pointer == Some(pointer)
+          {
+            hot.wakeup_pointer = None;
+          }
+        });
+        stats.ready_entries = stats.ready_entries.saturating_add(1);
+      }
+
+      if page.live_entries > 0 {
+        WakeupPages::<T>::insert(key, page);
+        WakeupBuckets::<T>::insert(wakeup_block, bucket);
+        return (ready, stats);
+      }
+
+      let next_page = page.next_page;
+      WakeupPages::<T>::remove(key);
+      stats.pages_deleted = stats.pages_deleted.saturating_add(1);
+      let Some(next_page) = next_page else {
+        WakeupBuckets::<T>::remove(wakeup_block);
+        return (ready, stats);
+      };
+      WakeupPages::<T>::mutate((wakeup_block, next_page), |maybe_next| {
+        if let Some(next) = maybe_next {
+          next.previous_page = None;
+        }
+      });
+      bucket.head_page = next_page;
+      WakeupBuckets::<T>::insert(wakeup_block, bucket);
+      page_id = next_page;
+    }
+    (ready, stats)
+  }
+
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) {
     let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
       return;

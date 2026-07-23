@@ -408,6 +408,106 @@ fn paged_wakeup_substrate_links_and_unlinks_middle_pages() {
 }
 
 #[test]
+fn paged_wakeup_drain_preserves_partial_progress_and_crosses_page_boundaries() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let page_size: u32 = <Test as crate::Config>::WakeupPageSize::get();
+    let count = page_size.saturating_mul(2).saturating_add(1);
+    let mut actors = Vec::new();
+    for _ in 0..count {
+      let aaa_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_execution_plan(BOB, 1),
+      );
+      assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+      actors.push(aaa_id);
+    }
+
+    let first_limit = page_size / 2;
+    let (first, first_stats) = AAA::wakeup_substrate_drain_block(10, first_limit);
+    assert_eq!(first.as_slice(), &actors[..first_limit as usize]);
+    assert_eq!(first_stats.entries_scanned, first_limit);
+    assert_eq!(first_stats.ready_entries, first_limit);
+    assert_eq!(first_stats.pages_touched, 1);
+    assert_eq!(first_stats.pages_deleted, 0);
+    let head = AAA::wakeup_pages((10, 0)).expect("partially drained head");
+    assert_eq!(head.scan_slot, first_limit);
+    assert_eq!(head.live_entries, page_size - first_limit);
+
+    let (second, second_stats) = AAA::wakeup_substrate_drain_block(10, page_size);
+    let second_end = first_limit.saturating_add(page_size) as usize;
+    assert_eq!(second.as_slice(), &actors[first_limit as usize..second_end]);
+    assert_eq!(second_stats.entries_scanned, page_size);
+    assert_eq!(second_stats.ready_entries, page_size);
+    assert_eq!(second_stats.pages_touched, 2);
+    assert_eq!(second_stats.pages_deleted, 1);
+    let bucket = AAA::wakeup_buckets(10).expect("remaining wakeup bucket");
+    assert_eq!(bucket.head_page, 1);
+    let head = AAA::wakeup_pages((10, 1)).expect("second partial head");
+    assert_eq!(head.previous_page, None);
+    assert_eq!(head.scan_slot, first_limit);
+
+    let (final_ready, final_stats) = AAA::wakeup_substrate_drain_block(10, u32::MAX);
+    assert_eq!(final_ready.as_slice(), &actors[second_end..]);
+    assert_eq!(final_stats.ready_entries, count - first_limit - page_size);
+    assert_eq!(final_stats.pages_touched, 2);
+    assert_eq!(final_stats.pages_deleted, 2);
+    assert!(AAA::wakeup_buckets(10).is_none());
+    assert!(AAA::wakeup_pages((10, 1)).is_none());
+    assert!(AAA::wakeup_pages((10, 2)).is_none());
+    assert!(actors.iter().all(|aaa_id| {
+      AAA::actor_hot(*aaa_id)
+        .expect("hot state")
+        .wakeup_pointer
+        .is_none()
+    }));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn paged_wakeup_drain_discards_stale_only_bucket() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut actors = Vec::new();
+    for _ in 0..3 {
+      let aaa_id = create_system_with(
+        ALICE,
+        manual_schedule(),
+        None,
+        transfer_execution_plan(BOB, 1),
+      );
+      assert!(AAA::wakeup_substrate_schedule(aaa_id, 10));
+      ActorHot::<Test>::mutate(aaa_id, |maybe_hot| {
+        maybe_hot.as_mut().expect("hot state").wakeup_pointer = None;
+      });
+      actors.push(aaa_id);
+    }
+
+    let (ready, stats) = AAA::wakeup_substrate_drain_block(10, 3);
+    assert!(ready.is_empty());
+    assert_eq!(stats.entries_scanned, 3);
+    assert_eq!(stats.ready_entries, 0);
+    assert_eq!(stats.stale_entries, 3);
+    assert_eq!(stats.pages_touched, 1);
+    assert_eq!(stats.pages_deleted, 1);
+    assert!(AAA::wakeup_buckets(10).is_none());
+    assert!(AAA::wakeup_pages((10, 0)).is_none());
+    assert!(actors.iter().all(|aaa_id| {
+      AAA::actor_hot(*aaa_id)
+        .expect("hot state")
+        .wakeup_pointer
+        .is_none()
+    }));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
 fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   let storage_info = AAA::storage_info();
   assert!(storage_info.iter().all(|entry| entry.pallet_name == b"AAA"));

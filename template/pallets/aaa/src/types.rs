@@ -58,6 +58,15 @@ pub struct QueueDrainStats {
   pub pages_touched: u32,
   pub pages_deleted: u32,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WakeupDrainStats {
+  pub entries_scanned: u32,
+  pub ready_entries: u32,
+  pub stale_entries: u32,
+  pub pages_touched: u32,
+  pub pages_deleted: u32,
+}
 pub const SYSTEM_OWNER_SLOT_SENTINEL: u8 = 0;
 
 #[derive(

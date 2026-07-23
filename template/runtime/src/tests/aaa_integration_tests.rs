@@ -4464,7 +4464,8 @@ fn run_fairness_matrix_case(total_actors: u64, num_blocks: u32) -> StressDiagnos
     total_actors,
     num_blocks,
   );
-  let numerator = (num_blocks as u64).saturating_mul(budget);
+  let per_block_capacity = budget.min(total_actors);
+  let numerator = (num_blocks as u64).saturating_mul(per_block_capacity);
   let floor_avg = numerator / total_actors;
   let ceil_avg = numerator.div_ceil(total_actors);
   let lower = floor_avg.saturating_sub(1);
@@ -5086,12 +5087,21 @@ fn stress_10k_actors_queue_scheduler() {
     let num_blocks = 500u32;
     let initial_balance: u128 = 1_000 * crate::EXISTENTIAL_DEPOSIT;
     let max_active = <Runtime as pallet_aaa::Config>::MaxActiveActors::get() as u64;
-    // Pause genesis actors to keep them non-ready while still occupying active-set slots.
-    // This validates queue fairness with mixed ready/non-ready actors at full capacity.
+    // Retain paused active genesis actors to validate mixed ready/non-ready fairness.
+    // Remove dormant genesis identities so the identity cap does not prevent saturating
+    // the independently asserted active-actor cap.
     let genesis_ids: alloc::vec::Vec<u64> = alloc::vec![0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
     for &id in &genesis_ids {
       let _ = AAA::pause_aaa(RuntimeOrigin::root(), id);
     }
+    let dormant: alloc::vec::Vec<_> = pallet_aaa::DormantAaaIdentities::<Runtime>::iter().collect();
+    for (aaa_id, identity) in &dormant {
+      pallet_aaa::DormantAaaIdentities::<Runtime>::remove(aaa_id);
+      pallet_aaa::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
+    }
+    pallet_aaa::ActorIdentityCount::<Runtime>::mutate(|count| {
+      *count = count.saturating_sub(dormant.len() as u32);
+    });
     let active_before = pallet_aaa::ActorHot::<Runtime>::iter_keys().count() as u64;
     assert!(
       active_before < max_active,
