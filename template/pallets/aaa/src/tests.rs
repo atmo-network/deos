@@ -228,6 +228,7 @@ fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
     ("AutoCloseNonceHorizonExceeded", 37),
     ("AutoCloseNonceOverflow", 38),
     ("AutoCloseNonceIncrementZero", 39),
+    ("QueueMutationRateLimited", 40),
   ]);
   assert_variant_contract::<crate::Call<Test>>(&[
     ("create_user_aaa", 0),
@@ -987,6 +988,7 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       trigger: Trigger::Timer { every_blocks: 3 },
       cooldown_blocks: 2,
     };
+    frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     assert_ok!(AAA::update_schedule(
       RuntimeOrigin::signed(ALICE),
@@ -1811,6 +1813,7 @@ fn manual_trigger_persists_across_pause_resume() {
         .expect("AAA exists")
         .manual_trigger_pending
     );
+    frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     assert!(
       AAA::aaa_instances(aaa_id)
@@ -1821,6 +1824,47 @@ fn manual_trigger_persists_across_pause_resume() {
     let inst = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert!(!inst.manual_trigger_pending);
     assert_eq!(inst.cycle_nonce, 1);
+  });
+}
+
+#[test]
+fn user_pause_resume_churn_is_limited_to_one_queue_mutation_per_block() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_eq!(AAA::queue_tail(), 1);
+    assert_ok!(AAA::pause_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("paused actor")
+        .queue_ticket
+        .is_none()
+    );
+    assert_noop!(
+      AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id),
+      Error::<Test>::QueueMutationRateLimited
+    );
+    assert_eq!(AAA::queue_tail(), 1, "rate-limited resume must not append");
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_eq!(AAA::queue_tail(), 2);
+    assert_noop!(
+      AAA::pause_aaa(RuntimeOrigin::signed(ALICE), aaa_id),
+      Error::<Test>::QueueMutationRateLimited
+    );
+    assert_eq!(
+      AAA::queue_tail(),
+      2,
+      "rate-limited pause must not create a tombstone"
+    );
   });
 }
 
@@ -1842,6 +1886,7 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
     let paused = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert!(paused.manual_trigger_pending);
     assert_eq!(paused.cycle_nonce, 0);
+    frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
     let resumed = AAA::aaa_instances(aaa_id).expect("AAA exists");

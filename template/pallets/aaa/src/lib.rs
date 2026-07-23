@@ -383,6 +383,7 @@ pub mod pallet {
         consecutive_failures: hot.consecutive_failures,
         manual_trigger_pending: hot.manual_trigger_pending,
         queue_ticket: hot.queue_ticket,
+        last_user_queue_mutation_block: hot.last_user_queue_mutation_block,
         cycle_weight_upper: hot.cycle_weight_upper,
         cycle_fee_upper: hot.cycle_fee_upper,
         first_eligible_at: hot.first_eligible_at,
@@ -403,6 +404,7 @@ pub mod pallet {
           consecutive_failures: instance.consecutive_failures,
           manual_trigger_pending: instance.manual_trigger_pending,
           queue_ticket: instance.queue_ticket,
+          last_user_queue_mutation_block: instance.last_user_queue_mutation_block,
           cycle_weight_upper: instance.cycle_weight_upper,
           cycle_fee_upper: instance.cycle_fee_upper,
           first_eligible_at: instance.first_eligible_at,
@@ -679,6 +681,7 @@ pub mod pallet {
           consecutive_failures: 0,
           manual_trigger_pending: false,
           queue_ticket: None,
+          last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
@@ -1090,6 +1093,7 @@ pub mod pallet {
     AutoCloseNonceHorizonExceeded,
     AutoCloseNonceOverflow,
     AutoCloseNonceIncrementZero,
+    QueueMutationRateLimited,
   }
 
   #[pallet::call]
@@ -1165,6 +1169,8 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      let now = frame_system::Pallet::<T>::block_number();
+      Self::ensure_user_queue_mutation_allowed(&snapshot, now)?;
       ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
@@ -1173,7 +1179,10 @@ pub mod pallet {
         );
         ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
         inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
-        // Ringless: no need to remove from ring - scheduler checks is_paused flag
+        inst.queue_ticket = None;
+        if matches!(inst.actor_class, ActorClass::User { .. }) {
+          inst.last_user_queue_mutation_block = Some(now);
+        }
         Self::deposit_event(Event::AaaPaused {
           aaa_id,
           reason: PauseReason::Manual,
@@ -1192,6 +1201,8 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      let now = frame_system::Pallet::<T>::block_number();
+      Self::ensure_user_queue_mutation_allowed(&snapshot, now)?;
       ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
@@ -1200,6 +1211,9 @@ pub mod pallet {
         );
         ensure!(inst.lifecycle.is_paused(), Error::<T>::NotPaused);
         inst.lifecycle = ActiveLifecycle::Active;
+        if matches!(inst.actor_class, ActorClass::User { .. }) {
+          inst.last_user_queue_mutation_block = Some(now);
+        }
         Self::deposit_event(Event::AaaResumed { aaa_id });
         Ok(())
       })?;
@@ -2154,6 +2168,7 @@ pub mod pallet {
           consecutive_failures: 0,
           manual_trigger_pending: false,
           queue_ticket: None,
+          last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
           auto_close_at_cycle_nonce: None,
@@ -2303,6 +2318,7 @@ pub mod pallet {
         consecutive_failures: 0,
         manual_trigger_pending: false,
         queue_ticket: None,
+        last_user_queue_mutation_block: None,
         cycle_weight_upper,
         cycle_fee_upper,
         auto_close_at_cycle_nonce: None,
@@ -2602,6 +2618,19 @@ pub mod pallet {
         identity.actor_class.aaa_type() == AaaType::System,
         Error::<T>::NotGovernance
       );
+      Ok(())
+    }
+
+    fn ensure_user_queue_mutation_allowed(
+      instance: &AaaInstanceOf<T>,
+      now: BlockNumberFor<T>,
+    ) -> DispatchResult {
+      if matches!(instance.actor_class, ActorClass::User { .. }) {
+        ensure!(
+          instance.last_user_queue_mutation_block != Some(now),
+          Error::<T>::QueueMutationRateLimited
+        );
+      }
       Ok(())
     }
 

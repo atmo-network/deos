@@ -182,7 +182,7 @@ Current owner-slot representation is intentionally compact and runtime-shaped:
 
 The shipped runtime stores each active actor across three canonical values:
 
-- `ActorHot`: identity/ownership, typed lifecycle, cycle nonce, canonical `first_eligible_at`, last admitted cycle block, failure counter, manual-trigger flag, reserved queue ticket, auto-close target, and cached cycle weight/fee bounds
+- `ActorHot`: identity/ownership, typed lifecycle, cycle nonce, canonical `first_eligible_at`, last admitted cycle block, failure counter, manual-trigger flag, live queue ticket, optional last User queue-mutation block, auto-close target, and cached cycle weight/fee bounds
 - `ActorProgram`: trigger/cooldown schedule, optional execution window, run plan, and close plan
 - `ActorFunding`: funding policy, tracked assets, bounded armed/pending batches, and canonical pending indication
 
@@ -387,7 +387,7 @@ Funding state follows typed provenance rather than a dedicated value-transfer ca
 Primary storage follows explicit owners. Section 13's stable behavioral stores constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state. No synchronized readiness mirror remains.
 
 - `NextAaaId`: monotonic AAA id allocator
-- `ActorHot`: active/paused identity, lifecycle, counters, pending readiness, eligibility anchors, reserved queue ticket, and compact admission bounds; the reference runtime maximum encoded value is 164 bytes
+- `ActorHot`: active/paused identity, lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, optional User queue-mutation block guard, and compact admission bounds; the reference runtime maximum encoded value is 169 bytes
 - `ActorProgram`: active schedule/window plus bounded run/close plans; the reference runtime maximum encoded value is 8,676 bytes
 - `ActorFunding`: active-only funding-source policy, bounded tracked-asset set, `funding_snapshots[asset] = FundingBatch { amount, pending_amount }`, and canonical `has_pending_funding`; ingress, promotion, and policy mutation touch this store without rewriting hot/program state, promotion skips batch traversal when false, and try-state reconciles the indication against every bounded batch
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
@@ -526,7 +526,7 @@ Additional runtime bindings:
 
 - `WeightToFee` conversion used for execution-fee charging
 - Frozen pre-paged scheduler baseline at `6ec457c`: generated `scheduler_queue_bootstrap(n)` for the physical `CurrentQueue`/`NextQueue` pair charges a core model of `10,965,000 + 273,852n` RefTime plus two reads/three writes and `1,827 + 16n` ProofSize for `n = 0..10,000`; the generated maximum-value metadata records 80,002 encoded bytes for each queue. Core-model points before database-weight addition are `(n=32: 19,728,264 / 2,339)`, `(64: 28,491,528 / 2,851)`, `(128: 46,018,056 / 3,875)`, and `(10,000: 2,749,485,000 / 161,827)` as `RefTime / ProofSize`. The baseline generated-weight hash is `448f2fe1bee9d59bbdfd4cd1a85a6f20b0f90045e862f86984d2752941075b9d`; the production compressed-Wasm hash is `947ddc39ecb1e83ec32d8b1b1200865850d622aaa8def8ad43b5d15342c3e992`. These values establish comparison evidence, not the accepted 0.7.2 representation.
-- Split-store production metadata replaces the former 8,807-byte maximum `AaaInstances` value (11,282-byte per-key proof estimate) with a 164-byte maximum `ActorHot` value (2,639-byte estimate) and an independently loaded 8,676-byte maximum `ActorProgram` value (11,151-byte estimate). This proves physical decode/proof separation; it does not by itself claim end-to-end scheduler throughput improvement.
+- Split-store production metadata replaces the former 8,807-byte maximum `AaaInstances` value (11,282-byte per-key proof estimate) with a 169-byte maximum `ActorHot` value (2,644-byte estimate), including the optional User queue-mutation block guard, and an independently loaded 8,676-byte maximum `ActorProgram` value (11,151-byte estimate). This proves physical decode/proof separation; it does not by itself claim end-to-end scheduler throughput improvement.
 - Runtime `WeightInfo` regenerated with frame omni bencher 0.22 / benchmark CLI 58 against the shipped identity/active counts, dormant lifecycle, queue-cleanup, wakeup-retry, sweep, funding-policy update, fixed hook bases, close-plan-update, User fee collection, saturated ingress-aware asset transfer, and User fee-bearing close-tail topology; dedicated lifecycle classes measure dormant System creation at `45,816,000` RefTime with seven reads/five writes and 999 measured/3,629 charged proof bytes, activation at `46,725,000` RefTime with five reads/five writes and 697 measured/3,629 charged proof bytes, and deactivation at `49,658,000` RefTime with six reads/ten writes and 1,041 measured/81,487 charged proof bytes; generated storage annotations contain no retired active-list stores
 - Explicit close dispatch admission takes the component-wise maximum of the compositional System/User bound and the parameterized measured User fee-bearing close-tail model
 - User cycle and close-tail admission adds two generated `fee_collection` envelopes per configured step for possible evaluation and execution charging; System admission adds neither envelope
