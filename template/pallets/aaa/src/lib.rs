@@ -805,7 +805,22 @@ pub mod pallet {
         return Weight::zero();
       }
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      let ingress_limit = remaining_weight.saturating_sub(base_weight);
+      let after_base = remaining_weight.saturating_sub(base_weight);
+      let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
+      let queue_occupancy = QueueTail::<T>::get().saturating_sub(QueueHead::<T>::get());
+      let saturated_cleanup_weight = if queue_occupancy >= u64::from(T::MaxQueueLength::get())
+        && queue_cleanup_weight.all_lte(after_base)
+      {
+        let stats = Self::paged_drain_tombstones(QueueTail::<T>::get(), 1);
+        if stats.entries_scanned > 0 {
+          queue_cleanup_weight
+        } else {
+          Weight::zero()
+        }
+      } else {
+        Weight::zero()
+      };
+      let ingress_limit = after_base.saturating_sub(saturated_cleanup_weight);
       let ingress_weight = if LastIngressIngestBlock::<T>::get() == Some(now) {
         Weight::zero()
       } else {
@@ -818,6 +833,7 @@ pub mod pallet {
       let remaining_after_housekeeping = remaining_after_ingress.saturating_sub(sweep_weight);
       Self::update_idle_starvation_state(breaker_active, remaining_after_housekeeping);
       let housekeeping_weight = base_weight
+        .saturating_add(saturated_cleanup_weight)
         .saturating_add(ingress_weight)
         .saturating_add(sweep_weight);
       if breaker_active {

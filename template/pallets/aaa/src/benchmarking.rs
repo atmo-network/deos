@@ -1060,6 +1060,8 @@ mod benches {
     #[block]
     {
       let breaker_active = GlobalCircuitBreaker::<T>::get();
+      core::hint::black_box(QueueHead::<T>::get());
+      core::hint::black_box(QueueTail::<T>::get());
       let _ = LastIngressIngestBlock::<T>::get();
       LastIngressIngestBlock::<T>::put(now);
       Pallet::<T>::update_idle_starvation_state(breaker_active, Weight::zero());

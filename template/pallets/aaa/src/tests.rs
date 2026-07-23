@@ -2710,6 +2710,66 @@ fn paged_tombstone_drain_is_scan_bounded_and_reclaims_multiple_pages() {
 }
 
 #[test]
+fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_work() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let page_size = <<Test as crate::Config>::QueuePageSize as Get<u32>>::get();
+    let capacity = <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get();
+    for page_id in 0..capacity.div_ceil(page_size) {
+      let first_ticket = page_id.saturating_mul(page_size);
+      let len = page_size.min(capacity.saturating_sub(first_ticket));
+      let entries = (0..len)
+        .map(|offset| QueueEntry {
+          aaa_id: 10_000_000u64
+            .saturating_add(u64::from(first_ticket))
+            .saturating_add(u64::from(offset)),
+        })
+        .collect::<Vec<_>>();
+      crate::pallet::QueuePages::<Test>::insert(
+        u64::from(page_id),
+        BoundedVec::try_from(entries).expect("saturated queue page fits"),
+      );
+    }
+    crate::pallet::QueueHead::<Test>::put(0);
+    crate::pallet::QueueTail::<Test>::put(u64::from(capacity));
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(2));
+    assert_ok!(AAA::set_global_circuit_breaker(RuntimeOrigin::root(), true));
+    let cleanup_budget =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
+        .saturating_add(
+        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(
+          1,
+        ),
+      );
+    AAA::on_idle(1, cleanup_budget);
+    assert_eq!(
+      AAA::queue_head(),
+      1,
+      "saturated stale head must make progress before ingress"
+    );
+    assert_eq!(AAA::queue_tail(), u64::from(capacity));
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(AAA::set_global_circuit_breaker(
+      RuntimeOrigin::root(),
+      false
+    ));
+    AAA::on_idle(2, Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("deferred actor survives")
+        .cycle_nonce,
+      1
+    );
+    assert_eq!(AAA::queue_head(), AAA::queue_tail());
+    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), None);
+  });
+}
+
+#[test]
 fn paged_tombstone_drain_stops_at_live_head_and_honors_cutoff() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
