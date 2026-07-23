@@ -13,7 +13,7 @@ The current kernel/runtime slice provides:
 
 - User and system AAA creation with deterministic sovereign accounts
 - Bounded execution plans over adapter-driven tasks (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, etc.)
-- Double-buffer scheduler state (`CurrentQueue`, `NextQueue`) plus time-ordered wakeup storage
+- Monotonic paged FIFO scheduler state (`QueueHead`, `QueueTail`, bounded `QueuePages`) plus time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with starvation observability
 - Fee admission, lifecycle controls, pause/resume, and admitted close-tail execution plans

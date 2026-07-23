@@ -179,8 +179,6 @@ pub mod pallet {
     #[pallet::constant]
     type MaxSpilloverBlocks: Get<u32>;
     #[pallet::constant]
-    type MaxQueueInsertionsPerBlock: Get<u32>;
-    #[pallet::constant]
     type MaxSweepPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxWhitelistSize: Get<u32>;
@@ -492,8 +490,7 @@ pub mod pallet {
   pub type ClosedSystemAaaIds<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, Mutability, OptionQuery>;
 
-  /// Canonical head of the monotonic paged FIFO. The queue migration does not
-  /// write this substrate until the old double-buffer scheduler is replaced.
+  /// Canonical head of the active monotonic paged FIFO.
   #[pallet::storage]
   #[pallet::getter(fn queue_head)]
   pub type QueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
@@ -508,13 +505,6 @@ pub mod pallet {
   #[pallet::getter(fn queue_pages)]
   pub type QueuePages<T: Config> =
     StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
-
-  #[pallet::storage]
-  pub type CurrentQueue<T: Config> =
-    StorageValue<_, BoundedVec<AaaId, T::MaxQueueLength>, ValueQuery>;
-
-  #[pallet::storage]
-  pub type NextQueue<T: Config> = StorageValue<_, BoundedVec<AaaId, T::MaxQueueLength>, ValueQuery>;
 
   #[pallet::storage]
   pub type WakeupIndex<T: Config> = StorageMap<
@@ -537,12 +527,6 @@ pub mod pallet {
 
   #[pallet::storage]
   pub type WakeupRetryPending<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, bool, ValueQuery>;
-
-  #[pallet::storage]
-  pub type QueueEpoch<T: Config> = StorageValue<_, u64, ValueQuery>;
-
-  #[pallet::storage]
-  pub type ActorQueueEpoch<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, u64, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn owner_slot_mask)]
@@ -2875,7 +2859,6 @@ pub mod pallet {
           || AddressEventInbox::<T>::contains_key(aaa_id)
           || ScheduledWakeupBlock::<T>::contains_key(aaa_id)
           || WakeupRetryPending::<T>::get(aaa_id)
-          || ActorQueueEpoch::<T>::contains_key(aaa_id)
         {
           return Err(TryRuntimeError::Other(
             "Dormant identity owns active scheduler or inbox state",
@@ -2996,74 +2979,6 @@ pub mod pallet {
             "ClosedSystemAaaIds contains an occupied aaa_id",
           ));
         }
-      }
-      let queue_epoch = QueueEpoch::<T>::get();
-      let next_marker = queue_epoch.saturating_add(1);
-      let mut current_seen = alloc::collections::BTreeSet::new();
-      for aaa_id in CurrentQueue::<T>::get().iter().copied() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "CurrentQueue contains missing aaa_id",
-          ));
-        }
-        if !current_seen.insert(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "CurrentQueue contains duplicate aaa_id",
-          ));
-        }
-        let marker = ActorQueueEpoch::<T>::get(aaa_id);
-        if marker != queue_epoch && marker != next_marker {
-          return Err(TryRuntimeError::Other(
-            "CurrentQueue entry is missing ActorQueueEpoch marker",
-          ));
-        }
-      }
-      let mut next_seen = alloc::collections::BTreeSet::new();
-      for aaa_id in NextQueue::<T>::get().iter().copied() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other("NextQueue contains missing aaa_id"));
-        }
-        if !next_seen.insert(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "NextQueue contains duplicate aaa_id",
-          ));
-        }
-        if ActorQueueEpoch::<T>::get(aaa_id) != next_marker {
-          return Err(TryRuntimeError::Other(
-            "NextQueue entry is missing ActorQueueEpoch marker",
-          ));
-        }
-      }
-      for (aaa_id, marker) in ActorQueueEpoch::<T>::iter() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorQueueEpoch contains missing aaa_id",
-          ));
-        }
-        if marker == queue_epoch {
-          if !current_seen.contains(&aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "ActorQueueEpoch current marker has no matching CurrentQueue entry",
-            ));
-          }
-          if next_seen.contains(&aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "ActorQueueEpoch current marker conflicts with NextQueue membership",
-            ));
-          }
-          continue;
-        }
-        if marker == next_marker {
-          if !next_seen.contains(&aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "ActorQueueEpoch next marker has no matching NextQueue entry",
-            ));
-          }
-          continue;
-        }
-        return Err(TryRuntimeError::Other(
-          "ActorQueueEpoch marker is not aligned with QueueEpoch",
-        ));
       }
       for aaa_id in WakeupRetryPending::<T>::iter_keys() {
         if !AaaInstances::<T>::contains_key(aaa_id) {

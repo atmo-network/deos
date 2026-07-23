@@ -276,15 +276,11 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       "QueueHead",
       "QueueTail",
       "QueuePages",
-      "CurrentQueue",
-      "NextQueue",
       "WakeupIndex",
       "MinWakeupBlock",
       "ScheduledWakeupBlock",
       "WakeupScheduleDrops",
       "WakeupRetryPending",
-      "QueueEpoch",
-      "ActorQueueEpoch",
       "OwnerSlotMask",
       "SovereignIndex",
       "ActiveActorLimit",
@@ -330,15 +326,11 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       ("QueueHead", false, false),
       ("QueueTail", false, false),
       ("QueuePages", true, true),
-      ("CurrentQueue", false, false),
-      ("NextQueue", false, false),
       ("WakeupIndex", false, true),
       ("MinWakeupBlock", true, false),
       ("ScheduledWakeupBlock", true, true),
       ("WakeupScheduleDrops", false, false),
       ("WakeupRetryPending", false, true),
-      ("QueueEpoch", false, false),
-      ("ActorQueueEpoch", false, true),
       ("OwnerSlotMask", false, true),
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
@@ -365,32 +357,24 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   assert_plain_storage_type::<u64>(&entries[9]);
   assert_plain_storage_type::<u64>(&entries[10]);
   assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[11]);
-  assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
-    &entries[12],
-  );
-  assert_plain_storage_type::<BoundedVec<u64, <Test as crate::Config>::MaxQueueLength>>(
-    &entries[13],
-  );
   assert_map_storage_types::<
     MockBlockNumber,
     BoundedVec<u64, <Test as crate::Config>::MaxWakeupBucketSize>,
-  >(&entries[14]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[15]);
-  assert_map_storage_types::<u64, MockBlockNumber>(&entries[16]);
-  assert_plain_storage_type::<u64>(&entries[17]);
-  assert_map_storage_types::<u64, bool>(&entries[18]);
-  assert_plain_storage_type::<u64>(&entries[19]);
-  assert_map_storage_types::<u64, u64>(&entries[20]);
-  assert_map_storage_types::<AccountId, u8>(&entries[21]);
-  assert_map_storage_types::<AccountId, u64>(&entries[22]);
+  >(&entries[12]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[13]);
+  assert_map_storage_types::<u64, MockBlockNumber>(&entries[14]);
+  assert_plain_storage_type::<u64>(&entries[15]);
+  assert_map_storage_types::<u64, bool>(&entries[16]);
+  assert_map_storage_types::<AccountId, u8>(&entries[17]);
+  assert_map_storage_types::<AccountId, u64>(&entries[18]);
+  assert_plain_storage_type::<u32>(&entries[19]);
+  assert_plain_storage_type::<bool>(&entries[20]);
+  assert_map_storage_types::<u64, ()>(&entries[21]);
+  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[22]);
   assert_plain_storage_type::<u32>(&entries[23]);
-  assert_plain_storage_type::<bool>(&entries[24]);
-  assert_map_storage_types::<u64, ()>(&entries[25]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[26]);
-  assert_plain_storage_type::<u32>(&entries[27]);
-  assert_plain_storage_type::<u32>(&entries[28]);
-  assert_plain_storage_type::<u32>(&entries[29]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[30]);
+  assert_plain_storage_type::<u32>(&entries[24]);
+  assert_plain_storage_type::<u32>(&entries[25]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[26]);
 }
 
 fn ordinary_transfer_to_aaa(
@@ -742,8 +726,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert!(!crate::AddressEventInbox::<Test>::contains_key(aaa_id));
     assert!(!crate::ScheduledWakeupBlock::<Test>::contains_key(aaa_id));
     assert!(!crate::WakeupRetryPending::<Test>::get(aaa_id));
-    assert!(!crate::CurrentQueue::<Test>::get().contains(&aaa_id));
-    assert!(!crate::NextQueue::<Test>::get().contains(&aaa_id));
     System::reset_events();
     for block in 2..=5 {
       System::set_block_number(block);
@@ -813,8 +795,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert!(!crate::AddressEventInbox::<Test>::contains_key(aaa_id));
     assert!(!crate::ScheduledWakeupBlock::<Test>::contains_key(aaa_id));
     assert!(!crate::WakeupRetryPending::<Test>::get(aaa_id));
-    assert!(!crate::CurrentQueue::<Test>::get().contains(&aaa_id));
-    assert!(!crate::NextQueue::<Test>::get().contains(&aaa_id));
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     assert!(AAA::dormant_aaa_identities(aaa_id).is_none());
     assert_eq!(AAA::actor_identity_count(), 0);
@@ -2579,7 +2559,7 @@ fn wakeup_drain_caps_sparse_block_scan_per_idle_pass() {
 fn paged_enqueue_coalesces_without_a_per_block_insertion_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let total = <<Test as crate::Config>::MaxQueueInsertionsPerBlock as Get<u32>>::get() + 7;
+    let total = <<Test as crate::Config>::QueuePageSize as Get<u32>>::get() + 7;
     for _ in 0..total {
       let id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
       assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), id));
@@ -2971,7 +2951,6 @@ fn wakeup_retry_ignores_sparse_historical_id_distance() {
     assert!(crate::pallet::WakeupRetryPending::<Test>::get(aaa_id));
     NextAaaId::<Test>::put(10_000_000);
     SweepCursor::<Test>::put(0);
-    crate::pallet::NextQueue::<Test>::kill();
     crate::pallet::QueueHead::<Test>::put(0);
     crate::pallet::QueueTail::<Test>::put(0);
     for block in 2..=10 {
@@ -3013,8 +2992,7 @@ fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
     assert!(!crate::pallet::WakeupIndex::<Test>::get(scheduled_block).contains(&aaa_id));
-    assert!(crate::pallet::CurrentQueue::<Test>::get().is_empty());
-    assert!(crate::pallet::NextQueue::<Test>::get().is_empty());
+    assert_eq!(AAA::queue_head(), AAA::queue_tail());
     assert!(!has_aaa_event(|event| {
       matches!(event, Event::CycleStarted { aaa_id: id, .. } if *id == aaa_id)
     }));
@@ -3045,8 +3023,7 @@ fn repeated_timer_close_churn_leaves_no_long_horizon_wakeup_entries() {
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
     assert!(crate::pallet::WakeupIndex::<Test>::iter().next().is_none());
-    assert!(crate::pallet::CurrentQueue::<Test>::get().is_empty());
-    assert!(crate::pallet::NextQueue::<Test>::get().is_empty());
+    assert_eq!(AAA::queue_head(), AAA::queue_tail());
     assert!(!has_aaa_event(|event| matches!(
       event,
       Event::CycleStarted { .. }
@@ -3350,8 +3327,7 @@ fn permissionless_sweep_is_lifecycle_touchpoint_only_under_breaker() {
     ));
     let instance = AAA::aaa_instances(aaa_id).expect("system AAA remains alive");
     assert_eq!(instance.cycle_nonce, 0);
-    assert!(crate::pallet::CurrentQueue::<Test>::get().is_empty());
-    assert!(crate::pallet::NextQueue::<Test>::get().is_empty());
+    assert_eq!(AAA::queue_head(), AAA::queue_tail());
   });
 }
 
@@ -7441,8 +7417,12 @@ fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
       1
     );
     assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(11));
-    assert!(!crate::CurrentQueue::<Test>::get().contains(&aaa_id));
-    assert!(!crate::NextQueue::<Test>::get().contains(&aaa_id));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("timer actor")
+        .queue_ticket
+        .is_none()
+    );
     for block in 2..=10 {
       frame_system::Pallet::<Test>::set_block_number(block);
       run_idle(Weight::MAX);
@@ -7509,8 +7489,12 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
       1
     );
     assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), None);
-    assert!(!crate::CurrentQueue::<Test>::get().contains(&aaa_id));
-    assert!(!crate::NextQueue::<Test>::get().contains(&aaa_id));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("paused actor")
+        .queue_ticket
+        .is_none()
+    );
     frame_system::Pallet::<Test>::set_block_number(7);
     assert_ok!(AAA::resume_aaa(RuntimeOrigin::root(), aaa_id));
     run_idle(Weight::MAX);
@@ -8612,9 +8596,7 @@ fn close_admission_bound_includes_cleanup_in_both_weight_dimensions() {
     assert!(cleanup_weight.ref_time() > 0);
     assert!(cleanup_weight.proof_size() > 0);
     assert!(
-      cleanup_weight.all_gte(<() as crate::WeightInfo>::scheduler_queue_bootstrap(
-        <Test as crate::Config>::MaxWakeupBucketSize::get(),
-      ))
+      cleanup_weight.all_gte(<() as crate::WeightInfo>::scheduler_paged_consume_preserve_page())
     );
     assert_eq!(admitted_weight, plan_weight.saturating_add(cleanup_weight));
     assert!(dispatch_weight.all_gte(admitted_weight));

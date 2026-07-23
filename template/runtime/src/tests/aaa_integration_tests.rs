@@ -3222,18 +3222,14 @@ fn compatibility_ingress_admission_uses_generated_runtime_weights() {
 }
 
 #[test]
-fn scheduler_queue_admission_uses_generated_runtime_weight() {
+fn scheduler_paged_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
-    let queue_len = <Runtime as pallet_aaa::Config>::MaxQueueLength::get();
-    let generated =
-      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_queue_bootstrap(
-        queue_len,
-      );
-    assert_eq!(AAA::queue_bootstrap_weight_upper(queue_len), generated);
-    assert!(
-      generated.proof_size() >= 401u64.saturating_add(16u64.saturating_mul(u64::from(queue_len))),
-      "generated queue bootstrap weight must cover the measured two-queue proof model",
-    );
+    let scan = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_paged_tombstone_drain(1);
+    let consume = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page();
+    let probe = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_probe();
+    assert!(scan.ref_time() > 0 && scan.proof_size() > 0);
+    assert!(consume.ref_time() > 0 && consume.proof_size() > 0);
+    assert_eq!(AAA::scheduler_actor_probe_weight_upper(), probe);
   });
 }
 
@@ -4048,7 +4044,7 @@ struct StressDiagnostics {
 }
 
 struct QueuePressureDiagnostics {
-  max_current_queue_len: u32,
+  max_queue_occupancy: u32,
   max_wakeup_backlog: u32,
   max_wakeup_buckets: u32,
 }
@@ -4076,7 +4072,7 @@ fn run_blocks_with_queue_diagnostics(
     max_per_block: 0,
   };
   let mut queue_diag = QueuePressureDiagnostics {
-    max_current_queue_len: 0,
+    max_queue_occupancy: 0,
     max_wakeup_backlog: 0,
     max_wakeup_buckets: 0,
   };
@@ -4106,7 +4102,7 @@ fn run_blocks_with_queue_diagnostics(
         _ => {}
       }
     }
-    let current_queue_len = AAA::queue_tail()
+    let queue_occupancy = AAA::queue_tail()
       .saturating_sub(AAA::queue_head())
       .min(u64::from(u32::MAX)) as u32;
     let mut wakeup_backlog = 0u32;
@@ -4115,7 +4111,7 @@ fn run_blocks_with_queue_diagnostics(
       wakeup_backlog = wakeup_backlog.saturating_add(queued.len() as u32);
       wakeup_buckets = wakeup_buckets.saturating_add(1);
     }
-    queue_diag.max_current_queue_len = queue_diag.max_current_queue_len.max(current_queue_len);
+    queue_diag.max_queue_occupancy = queue_diag.max_queue_occupancy.max(queue_occupancy);
     queue_diag.max_wakeup_backlog = queue_diag.max_wakeup_backlog.max(wakeup_backlog);
     queue_diag.max_wakeup_buckets = queue_diag.max_wakeup_buckets.max(wakeup_buckets);
     diag.min_per_block = diag.min_per_block.min(block_executions);
@@ -4378,12 +4374,12 @@ fn clear_genesis_system_actors_for_stress_fixture() {
     pallet_aaa::DormantAaaIdentities::<Runtime>::remove(aaa_id);
     pallet_aaa::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
   }
-  let _ = pallet_aaa::ActorQueueEpoch::<Runtime>::clear(u32::MAX, None);
   let _ = pallet_aaa::ScheduledWakeupBlock::<Runtime>::clear(u32::MAX, None);
   let _ = pallet_aaa::WakeupRetryPending::<Runtime>::clear(u32::MAX, None);
   let _ = pallet_aaa::WakeupIndex::<Runtime>::clear(u32::MAX, None);
-  pallet_aaa::CurrentQueue::<Runtime>::kill();
-  pallet_aaa::NextQueue::<Runtime>::kill();
+  let _ = pallet_aaa::QueuePages::<Runtime>::clear(u32::MAX, None);
+  pallet_aaa::QueueHead::<Runtime>::put(0);
+  pallet_aaa::QueueTail::<Runtime>::put(0);
   pallet_aaa::MinWakeupBlock::<Runtime>::kill();
   pallet_aaa::ActiveAaaCount::<Runtime>::put(0);
   pallet_aaa::ActorIdentityCount::<Runtime>::put(0);
@@ -4582,7 +4578,7 @@ fn reference_idle_budget_carries_mixed_admitted_tasks_without_starvation() {
       "reference budget must force work across blocks"
     );
     assert!(
-      queue_diag.max_current_queue_len > 0 || queue_diag.max_wakeup_backlog > 0,
+      queue_diag.max_queue_occupancy > 0 || queue_diag.max_wakeup_backlog > 0,
       "budget-limited work must remain durably queued"
     );
   });
@@ -4789,13 +4785,13 @@ fn profile_scheduler_queue_wakeup_occupancy_10k() {
     let max_count = *diag.actor_cycle_counts.values().max().unwrap_or(&0);
     let spread = max_count.saturating_sub(min_count);
     println!(
-      "AAA queue profile: actors={}, blocks={}, min_cycle_nonce={}, max_cycle_nonce={}, spread={}, max_current_queue_len={}, max_wakeup_backlog={}, max_wakeup_buckets={}",
+      "AAA queue profile: actors={}, blocks={}, min_cycle_nonce={}, max_cycle_nonce={}, spread={}, max_queue_occupancy={}, max_wakeup_backlog={}, max_wakeup_buckets={}",
       actors,
       blocks,
       min_count,
       max_count,
       spread,
-      queue_diag.max_current_queue_len,
+      queue_diag.max_queue_occupancy,
       queue_diag.max_wakeup_backlog,
       queue_diag.max_wakeup_buckets,
     );

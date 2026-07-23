@@ -1034,9 +1034,6 @@ mod benches {
       ScheduledWakeupBlock::<T>::get(aaa_id),
       Some(expected_wakeup)
     );
-    assert!(!CurrentQueue::<T>::get().contains(&aaa_id));
-    assert!(!NextQueue::<T>::get().contains(&aaa_id));
-
     let now: BlockNumberFor<T> = 2u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     #[block]
@@ -1049,8 +1046,7 @@ mod benches {
       ScheduledWakeupBlock::<T>::get(aaa_id),
       Some(expected_wakeup)
     );
-    assert!(!CurrentQueue::<T>::get().contains(&aaa_id));
-    assert!(!NextQueue::<T>::get().contains(&aaa_id));
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.queue_ticket.is_none()));
   }
 
   #[benchmark]
@@ -1097,42 +1093,6 @@ mod benches {
     {
       Pallet::<T>::benchmark_scheduler_actor_probe(aaa_id);
     }
-  }
-
-  // Runtime-backed hook benchmark for bounded current/staged queue bootstrap and carry-over.
-  #[benchmark(pov_mode = Measured)]
-  fn scheduler_queue_bootstrap(n: Linear<0, 10_000>) {
-    let bounded = n.min(T::MaxQueueLength::get());
-    let current_ids: alloc::vec::Vec<AaaId> =
-      (30_000_000..30_000_000u64.saturating_add(u64::from(bounded))).collect();
-    let staged_ids: alloc::vec::Vec<AaaId> =
-      (40_000_000..40_000_000u64.saturating_add(u64::from(bounded))).collect();
-    CurrentQueue::<T>::put(
-      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(current_ids)
-        .expect("current queue preload must fit benchmark bounds"),
-    );
-    NextQueue::<T>::put(
-      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(staged_ids)
-        .expect("staged queue preload must fit benchmark bounds"),
-    );
-    let previous_epoch = QueueEpoch::<T>::get();
-    #[block]
-    {
-      let current = CurrentQueue::<T>::take().into_inner();
-      let staged = NextQueue::<T>::take().into_inner();
-      let (mut run_queue, mut queued_set) = Pallet::<T>::merge_queue_state(current, staged);
-      let mut carried = alloc::vec::Vec::with_capacity(run_queue.len());
-      while let Some(aaa_id) = run_queue.pop_front() {
-        queued_set.remove(&aaa_id);
-        carried.push(aaa_id);
-      }
-      CurrentQueue::<T>::put(BoundedVec::<AaaId, T::MaxQueueLength>::truncate_from(
-        carried,
-      ));
-      QueueEpoch::<T>::put(previous_epoch.saturating_add(1));
-    }
-    assert_eq!(QueueEpoch::<T>::get(), previous_epoch.saturating_add(1));
-    assert!(CurrentQueue::<T>::decode_len().unwrap_or(0) <= T::MaxQueueLength::get() as usize);
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1297,8 +1257,6 @@ mod benches {
       .min(T::MaxWakeupBucketSize::get());
     let due_block: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(due_block);
-    CurrentQueue::<T>::kill();
-    NextQueue::<T>::kill();
     fill_wakeup_bucket::<T>(due_block, due, 9_000_000);
     for i in 0..due {
       ScheduledWakeupBlock::<T>::insert(9_000_000u64.saturating_add(u64::from(i)), due_block);

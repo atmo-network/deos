@@ -591,7 +591,7 @@ Timer rules:
 
 1. `every_blocks` MUST satisfy `0 < every_blocks <= MaxExecutionDelayBlocks`; otherwise fail with `ExecutionDelayTooLong`.
 2. Timer cadence is deterministic and exposes no probability or entropy input.
-3. Effective timer eligibility at or before the next block MUST use queue self-continuation (`NextQueue`); later eligibility MUST persist exactly one `WakeupIndex` entry, including `every_blocks = 1` when cooldown or window delay dominates.
+3. Effective timer eligibility at or before the next block MUST use one live paged-FIFO ticket beyond the current block cutoff; later eligibility MUST persist exactly one `WakeupIndex` entry, including `every_blocks = 1` when cooldown or window delay dominates.
 4. Timer rearming, skipped-readiness preservation, and readiness checks MUST use the same effective-eligibility calculation rather than independent cadence/cooldown/window branches.
 5. Deterministic anti-storm jitter SHOULD be applied for delayed timers (`every_blocks > 1`):
    `jitter_window = min(every_blocks / 4, MaxTimerJitterBlocks)`
@@ -1092,7 +1092,6 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 - `MaxQueueLength`: 1,024–16,384; maximum unconsumed physical occupancy including tombstones
 - `QueuePageSize`: production-Wasm-selected bounded page size; page size is I/O granularity and MUST NOT cap per-block traversal
 - `MaxWakeupBucketSize`: 1,024–16,384; one-block `WakeupIndex` bucket bound
-- `MaxQueueInsertionsPerBlock`: 64–1,024; per-block enqueue cap before deferred wakeup
 - `MaxSpilloverBlocks`: runtime-configurable bounded wakeup spillover horizon; reference default `8`
 - `MaxWakeupsPerBlock`: 64–1,024; bounded overdue wakeup-drain throughput
 - `MaxConditionsPerStep`: 4; condition bound per step

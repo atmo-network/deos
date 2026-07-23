@@ -56,7 +56,6 @@ parameter_types! {
   pub const AaaMaxWakeupBucketSize: u32 = 10_000;
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
   pub const AaaMaxSpilloverBlocks: u32 = 8;
-  pub const AaaMaxQueueInsertionsPerBlock: u32 = 512;
   pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
   pub const AaaMaxIngressOverflowQueue: u32 = 8192;
   pub AaaGuaranteedOnIdleWeight: Weight =
@@ -1263,7 +1262,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxWakeupBucketSize = AaaMaxWakeupBucketSize;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
   type MaxSpilloverBlocks = AaaMaxSpilloverBlocks;
-  type MaxQueueInsertionsPerBlock = AaaMaxQueueInsertionsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
   type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;

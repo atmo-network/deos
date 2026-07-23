@@ -865,7 +865,6 @@ impl pallet_aaa::Config for Test {
   type MaxWakeupBucketSize = ConstU32<1024>;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSpilloverBlocks = ConstU32<8>;
-  type MaxQueueInsertionsPerBlock = ConstU32<64>;
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;
   type MaxSplitTransferLegs = ConstU32<8>;

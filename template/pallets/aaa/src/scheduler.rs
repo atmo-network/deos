@@ -1,9 +1,6 @@
 use super::pallet::*;
 use super::{AssetOps, FundingAuthority, weights::WeightInfo};
-use alloc::{
-  collections::{BTreeSet, VecDeque},
-  vec::Vec,
-};
+use alloc::vec::Vec;
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::traits::{One, Saturating, Zero};
 use polkadot_sdk::sp_weights::WeightMeter;
@@ -129,23 +126,6 @@ impl<T: Config> Pallet<T> {
       Self::enqueue(aaa_id);
     }
     cycle_meter.consumed()
-  }
-
-  pub(crate) fn merge_queue_state(
-    current: Vec<AaaId>,
-    staged: Vec<AaaId>,
-  ) -> (VecDeque<AaaId>, BTreeSet<AaaId>) {
-    let mut run_queue: VecDeque<AaaId> = current.into();
-    let mut queued_set: BTreeSet<AaaId> = BTreeSet::new();
-    for aaa_id in &run_queue {
-      queued_set.insert(*aaa_id);
-    }
-    for aaa_id in staged {
-      if queued_set.insert(aaa_id) {
-        run_queue.push_back(aaa_id);
-      }
-    }
-    (run_queue, queued_set)
   }
 
   pub(crate) fn enqueue(aaa_id: AaaId) {
@@ -436,10 +416,6 @@ impl<T: Config> Pallet<T> {
       .saturating_add(Self::scheduler_probe_weight_upper())
   }
 
-  pub fn queue_bootstrap_weight_upper(queue_len: u32) -> Weight {
-    T::WeightInfo::scheduler_queue_bootstrap(queue_len)
-  }
-
   /// Upper-bounds terminal state deletion after the close plan has run.
   ///
   /// Actor-local queue invalidation is O(1). The generated wakeup-bucket scan
@@ -447,9 +423,8 @@ impl<T: Config> Pallet<T> {
   /// pointer/retry state, actor cardinality, reverse indexes, checkpoint, and event.
   pub(crate) fn close_cleanup_weight_upper() -> Weight {
     T::WeightInfo::scheduler_paged_consume_preserve_page()
-      .saturating_add(Self::queue_bootstrap_weight_upper(
-        T::MaxWakeupBucketSize::get(),
-      ))
+      .saturating_add(Weight::from_parts(3_000_000_000, 170_000))
+      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
       .saturating_add(Weight::from_parts(10_000_000, 32_768))
       .saturating_add(T::DbWeight::get().reads_writes(9, 12))
   }

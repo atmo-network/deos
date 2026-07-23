@@ -78,9 +78,7 @@ impl TmctolReadModel {
     let scheduler_state_exists = pallet_aaa::AddressEventInbox::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::ScheduledWakeupBlock::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::WakeupRetryPending::<Runtime>::get(aaa_id)
-      || pallet_aaa::ActorQueueEpoch::<Runtime>::contains_key(aaa_id)
-      || pallet_aaa::CurrentQueue::<Runtime>::get().contains(&aaa_id)
-      || pallet_aaa::NextQueue::<Runtime>::get().contains(&aaa_id);
+      || pallet_aaa::ActorHot::<Runtime>::get(aaa_id).is_some_and(|hot| hot.queue_ticket.is_some());
     let status = if is_custody_only && !actor_identity_exists && !scheduler_state_exists {
       GuaranteeStatus::Satisfied
     } else {

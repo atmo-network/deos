@@ -237,19 +237,19 @@ Block N:
     - Admit the generated fixed hook base in both Weight dimensions
     - Drain bounded producer-owned address ingress
     - Run bounded wakeup-retry and zombie-sweep housekeeping
-    - Bootstrap CurrentQueue + NextQueue and drain due wakeups
+    - Drain due wakeups, snapshot the paged-FIFO tail cutoff, and scan from QueueHead
     - Process actors in deterministic FIFO order up to MaxExecutionsPerBlock:
         1. Reserve the complete actor-probe bound
         2. Apply trigger, cooldown, breaker, window, fee, and lifecycle gates
         3. Admit the complete cycle and any predictable close tail
         4. Execute the bounded plan through runtime adapters
-        5. Persist deferred and late-enqueued work for the next block
+        5. Leave weight-deferred head work in place and append late work beyond the cutoff
 ```
 
 #### Key Properties
 
 - `Budget-capped`: Every housekeeping, queue, cycle, and close unit starts only after two-dimensional admission against the remaining `on_idle` budget.
-- `Deterministic FIFO fairness`: Current and staged queues preserve bounded FIFO carry-over without class-weight knobs; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
+- `Deterministic FIFO fairness`: Monotonic tickets preserve bounded FIFO carry-over without class-weight knobs or queue reconstruction; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
 - `Starvation observability`: After the fixed hook base is admitted, exhaustion of either post-housekeeping Weight dimension advances `IdleStarvationBlocks`; recovery remains governance-operated and never dispatches emergency work in `on_initialize`.
 - `Deferred requeue`: Actors that cannot execute because of insufficient weight retain a bounded path to future eligibility; User fee insufficiency remains terminal (`FeeBudgetExhausted`).
 

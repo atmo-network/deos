@@ -35,7 +35,6 @@ pub trait WeightInfo {
   fn task_dex_exact_out() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
   fn scheduler_zombie_sweep_base() -> Weight;
-  fn scheduler_queue_bootstrap(queue_len: u32) -> Weight;
   fn scheduler_paged_append_existing_page() -> Weight;
   fn scheduler_paged_append_new_page() -> Weight;
   fn scheduler_paged_consume_preserve_page() -> Weight;
@@ -207,12 +206,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
 
   fn scheduler_zombie_sweep_base() -> Weight {
     Weight::from_parts(15_000_000, 4_000).saturating_add(T::DbWeight::get().reads(3))
-  }
-
-  fn scheduler_queue_bootstrap(queue_len: u32) -> Weight {
-    Weight::from_parts(50_000_000, 170_000)
-      .saturating_add(Weight::from_parts(100_000, 16).saturating_mul(queue_len.into()))
-      .saturating_add(T::DbWeight::get().reads_writes(6, 6))
   }
 
   fn scheduler_paged_append_existing_page() -> Weight {
@@ -421,10 +414,6 @@ impl WeightInfo for () {
   fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
   fn scheduler_on_idle_base() -> Weight { Weight::from_parts(20_000_000, 8_000) }
   fn scheduler_zombie_sweep_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
-  fn scheduler_queue_bootstrap(queue_len: u32) -> Weight {
-    Weight::from_parts(50_000_000, 170_000)
-      .saturating_add(Weight::from_parts(100_000, 16).saturating_mul(queue_len.into()))
-  }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
