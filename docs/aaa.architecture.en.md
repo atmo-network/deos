@@ -288,7 +288,7 @@ Lifecycle lease-by-cycles is supported via `auto_close_at_cycle_nonce`: after a 
 
 The generic pallet collects opening, condition-evaluation, execution, and close-tail fees through one runtime-supplied `FeeCollector`. Every executable User step charges the execution fee derived from its task weight, while condition/resolution/funding skips release that reserved execution fee. `TmctolFeeCollector` atomically transfers each full charge into the Fee Sink System AAA; authorship and downstream allocation do not participate in collection. Collection failure returns to the owning create or execution path without partial debit. Pallet regressions cover opening-, evaluation-, and execution-fee failures, while runtime integration proves the payer debit and Fee Sink credit remain equal to the full collected amount.
 
-### Queue Execution Model (Bounded Double Buffer)
+### Queue Execution Model (Monotonic Paged FIFO)
 
 Scheduler execution is queue-first and deterministic:
 
@@ -296,11 +296,11 @@ It uses two scheduler layers: an active run queue for work that can execute now,
 
 1. **Wakeup drain**: overdue timer actors are drained from `WakeupIndex` and admitted into the active run queue; the generated dense-due model meters cursor and bucket work for `0..=MaxWakeupsPerBlock`, while each actor additionally reserves the generated full spillover-retry bound. One pass scans at most `MaxWakeupsPerBlock` actor entries and the same number of block cursors; partial buckets, unadmitted buckets, and sparse-gap catch-up retain their cursor for later blocks
 2. **Ingress admission**: each matched producer event is applied independently to funding and the boolean inbox latch; the actor's readiness latch and queue membership remain bounded and may join the active run queue in the same `on_idle` pass
-3. **Run queue**: the active queue starts from `CurrentQueue` plus staged `NextQueue`; before an actor is popped, the scheduler reserves a two-dimensional probe bound covering instance/readiness inspection and worst-case bounded spillover bookkeeping, then separately admits the complete cycle or close tail; actors are executed up to `MaxExecutionsPerBlock` and weight budget
-4. **Carry-over staging**: before queue storage changes, the scheduler reserves the generated maximum queue-bootstrap model, measured with full 10,000-entry `CurrentQueue` and `NextQueue` inputs through decode/take, deduplication, carry-over, truncation, and epoch advance; insufficient budget leaves both queues untouched. Deferred, leftover, and execution-created late enqueues are then merged into bounded next-block `CurrentQueue`; `NextQueue` is taken only after those late entries are captured, so actor-to-actor ingress cannot disappear at epoch finalization. Carry-over does not rewrite epoch markers per actor: a next-block staged duplicate remains bounded by block-local dedup and disappears during deterministic queue seeding.
-5. **Epoch advance**: `QueueEpoch` advances after the carry-over queue is persisted
+3. **Block-start cutoff**: after already-due wakeups materialize, the scheduler snapshots `QueueTail`; every later append receives a ticket at or beyond that cutoff and cannot execute in the current block
+4. **Paged scan and admission**: the scheduler advances `QueueHead` across stale tickets under the independent scan ceiling and two-dimensional `WeightMeter`, stops at the first live ticket that cannot be admitted, and consumes a live ticket only after admission succeeds or a terminal/skip transition owns progress
+5. **Execution ceiling**: admitted actors execute in FIFO order up to `MaxExecutionsPerBlock`; `last_cycle_block` prevents a second scheduler invocation or circular/self-enqueue graph from executing one actor twice in the same block, while untouched suffix entries remain physically in place without reconstruction
 
-`ActorQueueEpoch` provides deterministic dedup semantics and prevents duplicate queue entries across same-epoch enqueue attempts. Ingress, wakeup draining, queue housekeeping, actor probes, normal cycles, predictive and admission-time terminal closes, and automatic zombie sweeps use two-dimensional `WeightMeter` fit checks. The close admission bound composes close-plan execution with worst-case bounded queue scans and complete terminal state cleanup.
+`ActorHot.queue_ticket` is the sole live-membership marker. Replacement, close, pause, and cancellation use actor-local invalidation; stale page entries drain lazily. Ingress, wakeup draining, paged queue operations, actor probes, normal cycles, predictive and admission-time terminal closes, and automatic zombie sweeps use two-dimensional `WeightMeter` fit checks. The close admission bound now composes actor-local queue invalidation with bounded wakeup cleanup and complete terminal state deletion rather than queue-wide scans.
 
 ### Temporal Wakeup Layer
 
@@ -393,11 +393,10 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
 - `ActorIdentityCount`: transactionally maintained O(1) cardinality across `ActorHot` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorProgram`, and `ActorFunding`
-- `QueueHead` / `QueueTail` / `QueuePages`: typed monotonic paged-FIFO substrate with append, exact-head peek/consume, actor-local live-ticket dedup/invalidation, tombstone preservation, full-page reclamation, and empty partial-tail alignment; the production scheduler has not switched yet. Page entries contain only `aaa_id`, with logical tickets derived from page/slot, so replacement tickets leave old entries physically distinguishable as tombstones without page rewrites.
-- `CurrentQueue`: bounded run queue for the still-active pre-paged scheduler
-- `NextQueue`: staged queue merged into the active pre-paged run queue on next `on_idle`
+- `QueueHead` / `QueueTail` / `QueuePages`: active monotonic paged FIFO with append, block-start cutoff, exact-head admission/consume, actor-local live-ticket dedup/invalidation, tombstone draining, full-page reclamation, and empty partial-tail alignment. Page entries contain only `aaa_id`, with logical tickets derived from page/slot, so replacement tickets leave old entries physically distinguishable as tombstones without page rewrites.
+- `CurrentQueue` / `NextQueue`: inactive fresh-genesis compatibility prefixes retained only until the next deletion/metadata cleanup slice; production enqueue and execution no longer read or write them
 - `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock`: time-ordered overdue wakeup layer; `WakeupRetryPending`: actor-keyed durable retry marker when the bounded spillover horizon is saturated
-- `QueueEpoch` / `ActorQueueEpoch`: deterministic queue dedup and epoch tracking
+- `QueueEpoch` / `ActorQueueEpoch`: inactive compatibility prefixes pending deletion; `ActorHot.queue_ticket` now owns deduplication
 - `ActiveActorLimit`: governance-configurable operational active cap
 - `OwnerSlotMask`: user owner-slot occupancy bitmask; System AAA never consumes it
 - `SovereignIndex`: reverse index from sovereign account to active or dormant `aaa_id`; custody-only accounts intentionally have no entry
@@ -446,7 +445,7 @@ The current pallet already provides chain-native bounded reads for live actor an
 - `actor_funding(aaa_id)` for funding policy, tracked assets, batches, and pending indication
 - `owner_slot_mask(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(aaa_id)` for System AAA addressing against the known runtime catalog
-- Bounded scheduler / readiness / breaker / ingress surfaces such as `CurrentQueue`, `NextQueue`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `AddressEventInbox`, `IdleStarvationBlocks`, and the ingress-overflow ring state
+- Bounded scheduler / readiness / breaker / ingress surfaces such as `QueueHead`, `QueueTail`, `QueuePages`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `AddressEventInbox`, `IdleStarvationBlocks`, and the ingress-overflow ring state
 - Live execution-side effects and bounded operational events
 
 These are the authoritative bounded surfaces for known-actor inspection, per-owner recovery, scheduler state, and current operator observability.
@@ -670,7 +669,7 @@ Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, fund
 
 Current runtime exposes enough state/events to treat queue pressure as an operational signal rather than an inferred guess:
 
-- Queue pressure: `CurrentQueue`, `NextQueue`, `ActiveActorLimit`
+- Queue pressure: `QueueHead`, `QueueTail`, bounded `QueuePages`, and `ActiveActorLimit`
 - Wakeup backlog: `WakeupIndex`, `MinWakeupBlock`, `WakeupRescheduled`, `WakeupScheduleDropped`, `WakeupScheduleDrops`
 - Deferred-cycle rate: `CycleDeferred`
 - Starvation signal: `IdleStarvationDetected`

@@ -2031,10 +2031,6 @@ fn manual_trigger_is_preserved_on_proof_size_defer() {
       asset: TestAsset::Native,
       amount: AmountResolution::Fixed(10),
     };
-    let proof_limit = AAA::scheduler_admission_overhead()
-      .proof_size()
-      .saturating_add(AAA::weight_upper_bound(&task).proof_size())
-      .saturating_sub(1);
     let aaa_id = create_system_with(
       ALICE,
       manual_schedule(),
@@ -2042,7 +2038,18 @@ fn manual_trigger_is_preserved_on_proof_size_defer() {
       execution_plan_with_step(make_step(task)),
     );
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    run_idle(Weight::from_parts(u64::MAX, proof_limit));
+    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    let queue_weight = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1)
+      .saturating_add(AAA::scheduler_actor_probe_weight_upper())
+      .saturating_add(
+        <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
+          .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page()),
+      );
+    let proof_limit = queue_weight
+      .proof_size()
+      .saturating_add(instance.cycle_weight_upper.proof_size())
+      .saturating_sub(1);
+    AAA::execute_cycle(Weight::from_parts(u64::MAX, proof_limit));
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert!(instance.manual_trigger_pending);
     assert_eq!(instance.cycle_nonce, 0);
@@ -2064,16 +2071,26 @@ fn queued_actor_is_preserved_when_proof_budget_cannot_admit_probe() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    run_idle(Weight::from_parts(
+    let scan_weight =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(
+        1,
+      );
+    AAA::execute_cycle(Weight::from_parts(
       u64::MAX,
-      AAA::scheduler_admission_overhead()
+      scan_weight
         .proof_size()
+        .saturating_add(AAA::scheduler_actor_probe_weight_upper().proof_size())
         .saturating_sub(1),
     ));
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert!(instance.manual_trigger_pending);
     assert_eq!(instance.cycle_nonce, 0);
-    assert!(crate::pallet::CurrentQueue::<Test>::get().contains(&aaa_id));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("queued actor")
+        .queue_ticket
+        .is_some()
+    );
   });
 }
 
@@ -2559,19 +2576,19 @@ fn wakeup_drain_caps_sparse_block_scan_per_idle_pass() {
 }
 
 #[test]
-fn enqueue_cap_defers_excess_to_next_block() {
+fn paged_enqueue_coalesces_without_a_per_block_insertion_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let cap: u32 = <Test as crate::Config>::MaxQueueInsertionsPerBlock::get();
-    let total = cap + 7;
+    let total = <<Test as crate::Config>::MaxQueueInsertionsPerBlock as Get<u32>>::get() + 7;
     for _ in 0..total {
       let id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
       assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), id));
     }
-    let queued = crate::pallet::NextQueue::<Test>::get().len() as u32;
-    let deferred = crate::pallet::WakeupIndex::<Test>::get(2).len() as u32;
-    assert_eq!(queued, cap);
-    assert_eq!(deferred, total - cap);
+    assert_eq!(
+      AAA::queue_tail().saturating_sub(AAA::queue_head()),
+      u64::from(total)
+    );
+    assert!(crate::pallet::WakeupIndex::<Test>::get(2).is_empty());
   });
 }
 
@@ -2751,25 +2768,7 @@ fn paged_tombstone_drain_stops_at_live_head_and_honors_cutoff() {
 }
 
 #[test]
-fn actor_queue_epoch_deduplicates_same_block_enqueue_attempts() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    crate::Pallet::<Test>::enqueue(aaa_id);
-    crate::Pallet::<Test>::enqueue(aaa_id);
-    crate::Pallet::<Test>::enqueue(aaa_id);
-    let queued = crate::pallet::NextQueue::<Test>::get();
-    assert_eq!(queued.len(), 1);
-    assert_eq!(queued.iter().filter(|id| **id == aaa_id).count(), 1);
-    assert_eq!(
-      crate::pallet::ActorQueueEpoch::<Test>::get(aaa_id),
-      crate::pallet::QueueEpoch::<Test>::get().saturating_add(1)
-    );
-  });
-}
-
-#[test]
-fn carry_over_queue_keeps_unique_entries_and_clears_epoch_markers_after_progress() {
+fn paged_scheduler_preserves_the_unexecuted_fifo_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let max_exec: u32 = <Test as crate::Config>::MaxExecutionsPerBlock::get();
@@ -2782,62 +2781,14 @@ fn carry_over_queue_keeps_unique_entries_and_clears_epoch_markers_after_progress
     }
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    let carried = crate::pallet::CurrentQueue::<Test>::get();
-    assert_eq!(carried.len() as u32, total - max_exec);
-    let carried_unique = carried.iter().copied().collect::<BTreeSet<_>>();
-    assert_eq!(carried_unique.len(), carried.len());
-    let epoch_after_first_pass = crate::pallet::QueueEpoch::<Test>::get();
-    for aaa_id in carried.iter().copied() {
-      assert_eq!(
-        crate::pallet::ActorQueueEpoch::<Test>::get(aaa_id),
-        epoch_after_first_pass
-      );
-    }
-    #[cfg(feature = "try-runtime")]
-    assert_ok!(crate::Pallet::<Test>::do_try_state());
+    assert_eq!(AAA::queue_tail().saturating_sub(AAA::queue_head()), 2);
+    assert_eq!(
+      AAA::paged_head_entry().map(|(_, entry)| entry.aaa_id),
+      Some(ids[max_exec as usize])
+    );
     frame_system::Pallet::<Test>::set_block_number(3);
     run_idle(Weight::MAX);
-    assert!(crate::pallet::CurrentQueue::<Test>::get().is_empty());
-    assert!(crate::pallet::NextQueue::<Test>::get().is_empty());
-    for aaa_id in ids {
-      assert_eq!(crate::pallet::ActorQueueEpoch::<Test>::get(aaa_id), 0);
-    }
-  });
-}
-
-#[test]
-fn carry_over_backlog_does_not_consume_enqueue_cap() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let max_exec: u32 = <Test as crate::Config>::MaxExecutionsPerBlock::get();
-    let enqueue_cap: u32 = <Test as crate::Config>::MaxQueueInsertionsPerBlock::get();
-    let total = max_exec + enqueue_cap + 5;
-    let mut ids = Vec::new();
-    for _ in 0..total {
-      let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-      crate::pallet::AaaInstances::<Test>::mutate(aaa_id, |maybe_instance| {
-        maybe_instance
-          .as_mut()
-          .expect("instance must exist")
-          .manual_trigger_pending = true;
-      });
-      ids.push(aaa_id);
-    }
-    crate::pallet::CurrentQueue::<Test>::put(
-      BoundedVec::<u64, <Test as crate::Config>::MaxQueueLength>::try_from(ids)
-        .expect("current queue preload must fit"),
-    );
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-    assert_eq!(
-      crate::pallet::CurrentQueue::<Test>::get().len() as u32,
-      total - max_exec,
-      "already-admitted backlog must survive one pass without spilling into wakeup defer buckets"
-    );
-    let deferred: u32 = crate::pallet::WakeupIndex::<Test>::iter()
-      .map(|(_, queued)| queued.len() as u32)
-      .sum();
-    assert_eq!(deferred, 0, "carry-over must not consume enqueue cap");
+    assert_eq!(AAA::queue_head(), AAA::queue_tail());
   });
 }
 
@@ -2845,14 +2796,11 @@ fn carry_over_backlog_does_not_consume_enqueue_cap() {
 fn defer_wakeup_spills_to_later_block_when_requested_bucket_is_full() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let cap: u32 = <Test as crate::Config>::MaxQueueInsertionsPerBlock::get();
     let max_bucket: u32 = <Test as crate::Config>::MaxWakeupBucketSize::get();
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let cap_ids: Vec<u64> = (1_000_000..1_000_000 + u64::from(cap)).collect();
-    crate::pallet::NextQueue::<Test>::put(
-      BoundedVec::<u64, <Test as crate::Config>::MaxQueueLength>::try_from(cap_ids)
-        .expect("cap preload must fit"),
-    );
+    crate::pallet::QueueTail::<Test>::put(u64::from(
+      <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
+    ));
     let full_ids: Vec<u64> = (2_000_000..2_000_000 + u64::from(max_bucket)).collect();
     crate::pallet::WakeupIndex::<Test>::insert(
       2,
@@ -2880,13 +2828,10 @@ fn defer_wakeup_spills_to_later_block_when_requested_bucket_is_full() {
 fn defer_wakeup_deduplicates_repeated_manual_trigger_for_same_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let cap: u32 = <Test as crate::Config>::MaxQueueInsertionsPerBlock::get();
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let cap_ids: Vec<u64> = (3_000_000..3_000_000 + u64::from(cap)).collect();
-    crate::pallet::NextQueue::<Test>::put(
-      BoundedVec::<u64, <Test as crate::Config>::MaxQueueLength>::try_from(cap_ids)
-        .expect("cap preload must fit"),
-    );
+    crate::pallet::QueueTail::<Test>::put(u64::from(
+      <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
+    ));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     let queued = crate::pallet::WakeupIndex::<Test>::get(2);
@@ -2985,7 +2930,6 @@ fn early_reexecution_replaces_live_future_wakeup_instead_of_accumulating() {
 fn wakeup_retry_ignores_sparse_historical_id_distance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let cap: u32 = <Test as crate::Config>::MaxQueueInsertionsPerBlock::get();
     let max_bucket: u32 = <Test as crate::Config>::MaxWakeupBucketSize::get();
     let aaa_id = create_user_with(
       ALICE,
@@ -2995,11 +2939,9 @@ fn wakeup_retry_ignores_sparse_historical_id_distance() {
       transfer_execution_plan(BOB, 10),
     );
     fund_native(aaa_id, 1_000);
-    let cap_ids: Vec<u64> = (4_000_000..4_000_000 + u64::from(cap)).collect();
-    crate::pallet::NextQueue::<Test>::put(
-      BoundedVec::<u64, <Test as crate::Config>::MaxQueueLength>::try_from(cap_ids)
-        .expect("cap preload must fit"),
-    );
+    crate::pallet::QueueTail::<Test>::put(u64::from(
+      <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
+    ));
     let full_ids: Vec<u64> = (5_000_000..5_000_000 + u64::from(max_bucket)).collect();
     for block in 2..=10 {
       crate::pallet::WakeupIndex::<Test>::insert(
@@ -3030,6 +2972,8 @@ fn wakeup_retry_ignores_sparse_historical_id_distance() {
     NextAaaId::<Test>::put(10_000_000);
     SweepCursor::<Test>::put(0);
     crate::pallet::NextQueue::<Test>::kill();
+    crate::pallet::QueueHead::<Test>::put(0);
+    crate::pallet::QueueTail::<Test>::put(0);
     for block in 2..=10 {
       crate::pallet::WakeupIndex::<Test>::remove(block);
     }
@@ -3745,6 +3689,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     let after_first = AAA::aaa_instances(continue_id).expect("successful actor remains active");
     assert_eq!(after_first.cycle_nonce, 1);
     assert_eq!(after_first.consecutive_failures, 0);
+    frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(AAA::manual_trigger(
       RuntimeOrigin::signed(ALICE),
       continue_id
@@ -4510,7 +4455,12 @@ fn scheduler_close_failure_is_charged_deferred_and_retried() {
     let consumed = AAA::execute_cycle(Weight::MAX);
     assert!(consumed.ref_time() > 0 || consumed.proof_size() > 0);
     assert!(AAA::aaa_instances(aaa_id).is_some());
-    assert!(crate::CurrentQueue::<Test>::get().contains(&aaa_id));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("deferred actor")
+        .queue_ticket
+        .is_some()
+    );
     assert!(has_aaa_event(|event| matches!(
       event,
       Event::CycleDeferred {
@@ -4617,7 +4567,12 @@ fn post_cycle_close_failure_is_deferred_requeued_and_retried() {
     assert!(consumed.ref_time() > 0 || consumed.proof_size() > 0);
     let retained = AAA::aaa_instances(aaa_id).expect("failed close must retain actor");
     assert_eq!(retained.cycle_nonce, 1);
-    assert!(crate::CurrentQueue::<Test>::get().contains(&aaa_id));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("deferred actor")
+        .queue_ticket
+        .is_some()
+    );
     assert!(has_aaa_event(|event| matches!(
       event,
       Event::CycleSummary { aaa_id: id, .. } if *id == aaa_id
@@ -8352,6 +8307,7 @@ fn auto_close_threshold_reached_closes_actor_after_successful_cycle() {
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
     assert!(AAA::aaa_instances(aaa_id).is_some());
+    frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
     assert!(AAA::aaa_instances(aaa_id).is_none());

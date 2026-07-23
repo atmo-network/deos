@@ -995,13 +995,8 @@ mod benches {
         )
         .expect("tracked funding batch fits");
     });
-    let next_queue_fill = T::MaxQueueInsertionsPerBlock::get().min(T::MaxQueueLength::get());
-    let next_queue_ids: alloc::vec::Vec<AaaId> =
-      (20_000_000..20_000_000u64.saturating_add(u64::from(next_queue_fill))).collect();
-    NextQueue::<T>::put(
-      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(next_queue_ids)
-        .expect("next queue preload must fit benchmark bounds"),
-    );
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
     for offset in 0..=T::MaxSpilloverBlocks::get() {
       let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
       fill_wakeup_bucket::<T>(
@@ -1098,19 +1093,10 @@ mod benches {
         .manual_trigger_pending = true;
     });
     frame_system::Pallet::<T>::set_block_number(1u32.into());
-    for offset in 0..=T::MaxSpilloverBlocks::get() {
-      let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
-      fill_wakeup_bucket::<T>(
-        block,
-        T::MaxWakeupBucketSize::get(),
-        50_000_000 + u64::from(offset) * 100_000,
-      );
-    }
     #[block]
     {
       Pallet::<T>::benchmark_scheduler_actor_probe(aaa_id);
     }
-    assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
   }
 
   // Runtime-backed hook benchmark for bounded current/staged queue bootstrap and carry-over.
@@ -1347,13 +1333,8 @@ mod benches {
     let aaa_id = bench_create_system_manual::<T>(b);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     let blocked_buckets = b.min(9);
-    let next_queue_fill = T::MaxQueueInsertionsPerBlock::get().min(T::MaxQueueLength::get());
-    let next_queue_ids: alloc::vec::Vec<AaaId> =
-      (20_000_000..20_000_000u64.saturating_add(u64::from(next_queue_fill))).collect();
-    NextQueue::<T>::put(
-      BoundedVec::<AaaId, T::MaxQueueLength>::try_from(next_queue_ids)
-        .expect("next queue preload must fit benchmark bounds"),
-    );
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
     for offset in 0..blocked_buckets {
       let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
       fill_wakeup_bucket::<T>(

@@ -1955,8 +1955,11 @@ fn asset_ops_transfer_notifies_on_address_event_via_runtime_ingress_adapter() {
       0
     );
     assert!(
-      pallet_aaa::CurrentQueue::<Runtime>::get().contains(&receiver_id),
-      "an address event created during on_idle must survive in the next-block queue"
+      AAA::actor_hot(receiver_id)
+        .expect("receiver hot state")
+        .queue_ticket
+        .is_some(),
+      "an address event created during on_idle must survive as next-block work"
     );
     assert!(AAA::address_event_inbox(receiver_id).is_some());
     System::set_block_number(2);
@@ -2047,8 +2050,27 @@ fn actor_self_reenqueue_during_execution_waits_until_next_block() {
       1
     );
     assert!(
-      pallet_aaa::CurrentQueue::<Runtime>::get().contains(&aaa_id),
+      AAA::actor_hot(aaa_id)
+        .expect("actor hot state")
+        .queue_ticket
+        .is_some(),
       "self-enqueue created by execution must survive only as next-block work"
+    );
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor exists after repeated same-block scheduler call")
+        .cycle_nonce,
+      1,
+      "re-entering the scheduler in one block must not execute the actor twice"
+    );
+    System::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor exists in the next block")
+        .cycle_nonce,
+      2
     );
   });
 }
@@ -2100,7 +2122,10 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
       1
     );
     assert!(
-      pallet_aaa::CurrentQueue::<Runtime>::get().contains(&actor_a),
+      AAA::actor_hot(actor_a)
+        .expect("actor A hot state")
+        .queue_ticket
+        .is_some(),
       "B triggering already-executed A must create next-block work"
     );
     System::set_block_number(2);
@@ -4081,7 +4106,9 @@ fn run_blocks_with_queue_diagnostics(
         _ => {}
       }
     }
-    let current_queue_len = pallet_aaa::CurrentQueue::<Runtime>::get().len() as u32;
+    let current_queue_len = AAA::queue_tail()
+      .saturating_sub(AAA::queue_head())
+      .min(u64::from(u32::MAX)) as u32;
     let mut wakeup_backlog = 0u32;
     let mut wakeup_buckets = 0u32;
     for (_, queued) in pallet_aaa::WakeupIndex::<Runtime>::iter() {

@@ -2771,13 +2771,11 @@ pub mod pallet {
     }
 
     pub(crate) fn remove_actor_from_queues(aaa_id: AaaId) {
-      CurrentQueue::<T>::mutate(|queue| {
-        queue.retain(|id| *id != aaa_id);
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        if let Some(hot) = maybe.as_mut() {
+          hot.queue_ticket = None;
+        }
       });
-      NextQueue::<T>::mutate(|queue| {
-        queue.retain(|id| *id != aaa_id);
-      });
-      ActorQueueEpoch::<T>::remove(aaa_id);
     }
 
     #[cfg(feature = "try-runtime")]

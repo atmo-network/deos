@@ -21,66 +21,78 @@ impl<T: Config> Pallet<T> {
     if remaining_weight.is_zero() {
       return Weight::zero();
     }
-    // Two-layer scheduler: overdue temporal wakeups are first admitted into the
-    // active run queue, then execution proceeds from the merged run-queue state.
     let mut cycle_meter = WeightMeter::with_limit(remaining_weight);
-    let queue_storage_weight = Self::queue_storage_weight_upper();
-    if !cycle_meter.can_consume(queue_storage_weight) {
-      return Weight::zero();
-    }
-    cycle_meter.consume(queue_storage_weight);
-    let current = CurrentQueue::<T>::get().into_inner();
-    let staged = NextQueue::<T>::get().into_inner();
-    let queue_units = current
-      .len()
-      .saturating_add(staged.len())
-      .saturating_add(T::MaxQueueInsertionsPerBlock::get() as usize) as u64;
-    let queue_work_weight = Self::queue_item_weight_upper().saturating_mul(queue_units);
-    if !cycle_meter.can_consume(queue_work_weight) {
-      return cycle_meter.consumed();
-    }
-    cycle_meter.consume(queue_work_weight);
     let now = frame_system::Pallet::<T>::block_number();
-    let queue_epoch = QueueEpoch::<T>::get();
-    CurrentQueue::<T>::kill();
-    NextQueue::<T>::kill();
-    let (mut run_queue, mut queued_set) = Self::merge_queue_state(current, staged);
-    let mut next_queue: VecDeque<AaaId> = VecDeque::new();
-    let mut queue_insertions = 0u32;
-    let mut periodic_continuations: Vec<AaaId> = Vec::new();
-    Self::drain_overdue_wakeups(
-      now,
-      &mut run_queue,
-      &mut queued_set,
-      &mut queue_insertions,
-      &mut cycle_meter,
-    );
+    // Materialize already-due temporal readiness before taking the block-start
+    // run-queue snapshot. Every later append, including actor self-enqueue during
+    // execution, receives a ticket at or beyond this cutoff and waits one block.
+    Self::drain_overdue_wakeups_paged(now, &mut cycle_meter);
+    let cutoff = QueueTail::<T>::get();
+
     let max_executions = T::MaxExecutionsPerBlock::get();
-    let probe_weight = Self::scheduler_probe_weight_upper();
+    let max_scanned = T::MaxQueueEntriesScannedPerBlock::get();
+    let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
+    let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
+      .max(T::WeightInfo::scheduler_paged_consume_delete_page());
+    let probe_weight = Self::scheduler_probe_weight_upper().saturating_add(consume_weight);
     let mut executed = 0u32;
-    while executed < max_executions {
-      if run_queue.is_empty() || !cycle_meter.can_consume(probe_weight) {
+    let mut scanned = 0u32;
+    let mut periodic_continuations: Vec<AaaId> = Vec::new();
+
+    while executed < max_executions && scanned < max_scanned {
+      if QueueHead::<T>::get() >= cutoff || !cycle_meter.can_consume(scan_weight) {
         break;
       }
-      cycle_meter.consume(probe_weight);
-      let aaa_id = run_queue
-        .pop_front()
-        .expect("queue emptiness was checked before admitted pop");
-      queued_set.remove(&aaa_id);
-      ActorQueueEpoch::<T>::remove(aaa_id);
-      let Some(hot) = ActorHot::<T>::get(aaa_id) else {
+      let before = QueueHead::<T>::get();
+      let drain = Self::paged_drain_tombstones(cutoff, 1);
+      if drain.entries_scanned == 0 {
+        break;
+      }
+      cycle_meter.consume(scan_weight);
+      scanned = scanned.saturating_add(drain.entries_scanned);
+      if QueueHead::<T>::get() != before {
+        continue;
+      }
+
+      let Some((ticket, entry)) = Self::paged_head_entry() else {
+        break;
+      };
+      if ticket >= cutoff || !cycle_meter.can_consume(probe_weight) {
+        break;
+      }
+      let Some(hot) = ActorHot::<T>::get(entry.aaa_id) else {
         continue;
       };
+      if hot.queue_ticket != Some(ticket) {
+        continue;
+      }
+      cycle_meter.consume(probe_weight);
+      let aaa_id = entry.aaa_id;
+      if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
+        break;
+      }
       if hot.lifecycle.is_paused() {
+        if !Self::paged_consume_head(ticket) {
+          break;
+        }
         continue;
       }
       let Some(program) = ActorProgram::<T>::get(aaa_id) else {
+        if !Self::paged_consume_head(ticket) {
+          break;
+        }
         continue;
       };
       let instance = AaaInstances::<T>::compose(hot, program);
       let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, &cycle_meter) {
-        AdmissionDecision::Admit(weight) => weight,
+        AdmissionDecision::Admit(weight) => {
+          if !Self::paged_consume_head(ticket) {
+            break;
+          }
+          weight
+        }
         AdmissionDecision::Closed(weight) => {
+          let _ = Self::paged_consume_head(ticket);
           cycle_meter.consume(weight);
           continue;
         }
@@ -90,27 +102,16 @@ impl<T: Config> Pallet<T> {
             aaa_id,
             reason: DeferReason::CloseTransitionFailed,
           });
-          Self::enqueue_block_local(
-            aaa_id,
-            now,
-            queue_epoch,
-            &mut next_queue,
-            &mut queue_insertions,
-          );
-          continue;
+          break;
         }
         AdmissionDecision::Defer(reason) => {
           Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
-          Self::enqueue_block_local(
-            aaa_id,
-            now,
-            queue_epoch,
-            &mut next_queue,
-            &mut queue_insertions,
-          );
-          continue;
+          break;
         }
         AdmissionDecision::Skip => {
+          if !Self::paged_consume_head(ticket) {
+            break;
+          }
           if let Some(updated) = AaaInstances::<T>::get(aaa_id) {
             Self::preserve_skipped_readiness(aaa_id, &updated, now, &mut periodic_continuations);
           }
@@ -124,24 +125,9 @@ impl<T: Config> Pallet<T> {
         Self::schedule_next_timer_wakeup_local(aaa_id, &updated, now, &mut periodic_continuations);
       }
     }
-    while let Some(aaa_id) = run_queue.pop_front() {
-      queued_set.remove(&aaa_id);
-      Self::carry_over_block_local(aaa_id, now, queue_epoch, &mut next_queue);
+    for aaa_id in periodic_continuations {
+      Self::enqueue(aaa_id);
     }
-    Self::merge_late_enqueues(now, queue_epoch, &mut next_queue, &mut queue_insertions);
-    for aaa_id in periodic_continuations.into_iter() {
-      Self::enqueue_block_local(
-        aaa_id,
-        now,
-        queue_epoch,
-        &mut next_queue,
-        &mut queue_insertions,
-      );
-    }
-    CurrentQueue::<T>::put(BoundedVec::<AaaId, T::MaxQueueLength>::truncate_from(
-      next_queue.into_iter().collect::<Vec<AaaId>>(),
-    ));
-    QueueEpoch::<T>::put(queue_epoch.saturating_add(1));
     cycle_meter.consumed()
   }
 
@@ -163,20 +149,10 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn enqueue(aaa_id: AaaId) {
-    let now = frame_system::Pallet::<T>::block_number();
-    let queue_epoch = QueueEpoch::<T>::get();
-    let mut next_queue: VecDeque<AaaId> = NextQueue::<T>::take().into_inner().into();
-    let mut queue_insertions = next_queue.len() as u32;
-    Self::enqueue_block_local(
-      aaa_id,
-      now,
-      queue_epoch,
-      &mut next_queue,
-      &mut queue_insertions,
-    );
-    NextQueue::<T>::put(BoundedVec::<AaaId, T::MaxQueueLength>::truncate_from(
-      next_queue.into_iter().collect::<Vec<AaaId>>(),
-    ));
+    if !Self::paged_enqueue(aaa_id) {
+      let next_block = frame_system::Pallet::<T>::block_number().saturating_add(One::one());
+      Self::defer_wakeup(aaa_id, next_block);
+    }
   }
 
   fn queue_page_size() -> u64 {
@@ -372,97 +348,6 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn enqueue_block_local(
-    aaa_id: AaaId,
-    now: BlockNumberFor<T>,
-    queue_epoch: u64,
-    next_queue: &mut VecDeque<AaaId>,
-    queue_insertions: &mut u32,
-  ) {
-    let marker = queue_epoch.saturating_add(1);
-    if ActorQueueEpoch::<T>::get(aaa_id) == marker {
-      return;
-    }
-    if *queue_insertions >= T::MaxQueueInsertionsPerBlock::get() {
-      let next_block = now.saturating_add(One::one());
-      Self::defer_wakeup(aaa_id, next_block);
-      return;
-    }
-    if next_queue.len() >= T::MaxQueueLength::get() as usize {
-      let next_block = now.saturating_add(One::one());
-      Self::defer_wakeup(aaa_id, next_block);
-      return;
-    }
-    next_queue.push_back(aaa_id);
-    ActorQueueEpoch::<T>::insert(aaa_id, marker);
-    *queue_insertions = queue_insertions.saturating_add(1);
-  }
-
-  fn merge_late_enqueues(
-    now: BlockNumberFor<T>,
-    queue_epoch: u64,
-    next_queue: &mut VecDeque<AaaId>,
-    queue_insertions: &mut u32,
-  ) {
-    let marker = queue_epoch.saturating_add(1);
-    for aaa_id in NextQueue::<T>::take().into_inner() {
-      if next_queue.contains(&aaa_id) {
-        continue;
-      }
-      if *queue_insertions >= T::MaxQueueInsertionsPerBlock::get()
-        || next_queue.len() >= T::MaxQueueLength::get() as usize
-      {
-        Self::defer_wakeup(aaa_id, now.saturating_add(One::one()));
-        continue;
-      }
-      next_queue.push_back(aaa_id);
-      ActorQueueEpoch::<T>::insert(aaa_id, marker);
-      *queue_insertions = queue_insertions.saturating_add(1);
-    }
-  }
-
-  fn carry_over_block_local(
-    aaa_id: AaaId,
-    now: BlockNumberFor<T>,
-    _queue_epoch: u64,
-    next_queue: &mut VecDeque<AaaId>,
-  ) {
-    if next_queue.len() >= T::MaxQueueLength::get() as usize {
-      let next_block = now.saturating_add(One::one());
-      Self::defer_wakeup(aaa_id, next_block);
-      return;
-    }
-    // Already-admitted backlog carries forward without a fresh epoch-marker write.
-    // A concurrent next-block enqueue may stage one duplicate, but queue seeding
-    // deterministically removes it before execution and block-local dedup bounds it.
-    next_queue.push_back(aaa_id);
-  }
-
-  fn enqueue_run_queue(
-    aaa_id: AaaId,
-    now: BlockNumberFor<T>,
-    run_queue: &mut VecDeque<AaaId>,
-    queued_set: &mut BTreeSet<AaaId>,
-    queue_insertions: &mut u32,
-  ) {
-    if queued_set.contains(&aaa_id) {
-      return;
-    }
-    if *queue_insertions >= T::MaxQueueInsertionsPerBlock::get() {
-      let next_block = now.saturating_add(One::one());
-      Self::defer_wakeup(aaa_id, next_block);
-      return;
-    }
-    if run_queue.len() >= T::MaxQueueLength::get() as usize {
-      let next_block = now.saturating_add(One::one());
-      Self::defer_wakeup(aaa_id, next_block);
-      return;
-    }
-    run_queue.push_back(aaa_id);
-    queued_set.insert(aaa_id);
-    *queue_insertions = queue_insertions.saturating_add(1);
-  }
-
   fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
     // Temporal wakeup layer: place future eligibility into bounded block buckets.
     let previous_block = ScheduledWakeupBlock::<T>::get(aaa_id);
@@ -538,10 +423,14 @@ impl<T: Config> Pallet<T> {
           .saturating_add(T::DbWeight::get().writes(1))
           .saturating_mul(u64::from(T::MaxSweepPerBlock::get())),
       )
-      .saturating_add(Self::queue_storage_weight_upper())
+      .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(1))
       .saturating_add(
-        Self::queue_item_weight_upper()
-          .saturating_mul(u64::from(T::MaxQueueInsertionsPerBlock::get()).saturating_add(1)),
+        T::WeightInfo::scheduler_paged_consume_preserve_page()
+          .max(T::WeightInfo::scheduler_paged_consume_delete_page()),
+      )
+      .saturating_add(
+        T::WeightInfo::scheduler_paged_append_existing_page()
+          .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
       .saturating_add(Self::wakeup_cursor_weight())
       .saturating_add(Self::scheduler_probe_weight_upper())
@@ -551,24 +440,13 @@ impl<T: Config> Pallet<T> {
     T::WeightInfo::scheduler_queue_bootstrap(queue_len)
   }
 
-  fn queue_storage_weight_upper() -> Weight {
-    Self::queue_bootstrap_weight_upper(T::MaxQueueLength::get())
-  }
-
-  fn queue_item_weight_upper() -> Weight {
-    Weight::zero()
-  }
-
   /// Upper-bounds terminal state deletion after the close plan has run.
   ///
-  /// Queue removal decodes, scans, and rewrites both bounded queue stores. The
-  /// generated wakeup-bucket scan proxy covers removal from one full future bucket.
-  /// The fixed tail covers wakeup pointer/retry state, actor/readiness/cardinality
-  /// state, owner/system reverse indexes, tombstone, checkpoint, and terminal event.
+  /// Actor-local queue invalidation is O(1). The generated wakeup-bucket scan
+  /// proxy covers removal from one full future bucket, while the fixed tail covers
+  /// pointer/retry state, actor cardinality, reverse indexes, checkpoint, and event.
   pub(crate) fn close_cleanup_weight_upper() -> Weight {
-    let queue_items = u64::from(T::MaxQueueLength::get()).saturating_mul(2);
-    Self::queue_storage_weight_upper()
-      .saturating_add(Self::queue_item_weight_upper().saturating_mul(queue_items))
+    T::WeightInfo::scheduler_paged_consume_preserve_page()
       .saturating_add(Self::queue_bootstrap_weight_upper(
         T::MaxWakeupBucketSize::get(),
       ))
@@ -594,9 +472,6 @@ impl<T: Config> Pallet<T> {
 
   #[cfg(feature = "runtime-benchmarks")]
   pub(crate) fn benchmark_scheduler_actor_probe(aaa_id: AaaId) {
-    let now = frame_system::Pallet::<T>::block_number();
-    let queue_epoch = QueueEpoch::<T>::get();
-    ActorQueueEpoch::<T>::remove(aaa_id);
     let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
     let program = ActorProgram::<T>::get(aaa_id).expect("benchmark actor program state must exist");
     let instance = AaaInstances::<T>::compose(hot, program);
@@ -605,15 +480,6 @@ impl<T: Config> Pallet<T> {
       panic!("benchmark actor must defer on an exhausted cycle budget");
     };
     Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
-    let mut next_queue = VecDeque::new();
-    let mut queue_insertions = T::MaxQueueInsertionsPerBlock::get();
-    Self::enqueue_block_local(
-      aaa_id,
-      now,
-      queue_epoch,
-      &mut next_queue,
-      &mut queue_insertions,
-    );
   }
 
   pub fn wakeup_drain_weight_upper(wakeups: u32) -> Weight {
@@ -628,13 +494,7 @@ impl<T: Config> Pallet<T> {
     Self::wakeup_drain_weight_upper(1).saturating_add(Self::wakeup_retry_probe_weight_upper())
   }
 
-  fn drain_overdue_wakeups(
-    now: BlockNumberFor<T>,
-    run_queue: &mut VecDeque<AaaId>,
-    queued_set: &mut BTreeSet<AaaId>,
-    queue_insertions: &mut u32,
-    meter: &mut WeightMeter,
-  ) {
+  fn drain_overdue_wakeups_paged(now: BlockNumberFor<T>, meter: &mut WeightMeter) {
     let cursor_weight = Self::wakeup_cursor_weight();
     if !meter.can_consume(cursor_weight) {
       return;
@@ -676,7 +536,7 @@ impl<T: Config> Pallet<T> {
           continue;
         }
         ScheduledWakeupBlock::<T>::remove(aaa_id);
-        Self::enqueue_run_queue(aaa_id, now, run_queue, queued_set, queue_insertions);
+        Self::enqueue(aaa_id);
       }
       if index < actors.len() {
         WakeupIndex::<T>::insert(

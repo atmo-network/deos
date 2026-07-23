@@ -149,7 +149,7 @@
         "template/pallets/aaa/src/scheduler.rs::enqueue"
       ],
       "falsification_tests": [
-        "template/pallets/aaa/src/tests.rs::actor_queue_epoch_deduplicates_same_block_enqueue_attempts"
+        "template/pallets/aaa/src/tests.rs::paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation"
       ]
     },
     {
