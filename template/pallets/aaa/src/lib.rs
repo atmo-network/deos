@@ -32,9 +32,8 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
   fn setup_donate_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
-  fn setup_remove_liquidity_max_k(
+  fn setup_remove_liquidity(
     owner: &AccountId,
-    max_scan: u32,
   ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
   fn setup_stake(
     owner: &AccountId,
@@ -83,7 +82,7 @@ pub mod pallet {
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{PalletId, traits::EnsureOrigin},
-    sp_runtime::traits::{CheckedAdd, One, Zero},
+    sp_runtime::traits::{CheckedAdd, One, SaturatedConversion, Saturating, Zero},
     sp_weights::WeightToFee as _,
   };
 
@@ -152,8 +151,6 @@ pub mod pallet {
     type MaxWhitelistSize: Get<u32>;
     #[pallet::constant]
     type MaxSplitTransferLegs: Get<u32>;
-    #[pallet::constant]
-    type MaxAdapterScan: Get<u32>;
     #[pallet::constant]
     type MaxExecutionDelayBlocks: Get<BlockNumberFor<Self>>;
     #[pallet::constant]
@@ -337,6 +334,9 @@ pub mod pallet {
         last_user_queue_mutation_block: hot.last_user_queue_mutation_block,
         cycle_weight_upper: hot.cycle_weight_upper,
         cycle_fee_upper: hot.cycle_fee_upper,
+        funding_tracked_count: hot.funding_tracked_count,
+        pending_funding_count: hot.pending_funding_count,
+        has_pending_funding: hot.has_pending_funding,
         first_eligible_at: hot.first_eligible_at,
         last_cycle_block: hot.last_cycle_block,
       }
@@ -379,6 +379,9 @@ pub mod pallet {
           last_user_queue_mutation_block: instance.last_user_queue_mutation_block,
           cycle_weight_upper: instance.cycle_weight_upper,
           cycle_fee_upper: instance.cycle_fee_upper,
+          funding_tracked_count: instance.funding_tracked_count,
+          pending_funding_count: instance.pending_funding_count,
+          has_pending_funding: instance.has_pending_funding,
           first_eligible_at: instance.first_eligible_at,
           last_cycle_block: instance.last_cycle_block,
         },
@@ -483,8 +486,9 @@ pub mod pallet {
   pub type GlobalCircuitBreaker<T> = StorageValue<_, bool, ValueQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn idle_starvation_blocks)]
-  pub type IdleStarvationBlocks<T: Config> = StorageValue<_, u32, ValueQuery>;
+  #[pallet::getter(fn idle_starvation_state)]
+  pub type IdleStarvationState<T: Config> =
+    StorageValue<_, IdleStarvationPhase<BlockNumberFor<T>>, ValueQuery>;
 
   /// Provides runtime-specific System AAA instances to initialize at genesis.
   ///
@@ -589,6 +593,9 @@ pub mod pallet {
           last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
+          funding_tracked_count: funding_tracked_assets.len() as u32,
+          pending_funding_count: 0,
+          has_pending_funding: false,
           auto_close_at_cycle_nonce: None,
           first_eligible_at,
           last_cycle_block: Zero::zero(),
@@ -607,7 +614,6 @@ pub mod pallet {
             funding_source_policy: FundingSourcePolicy::RuntimePolicy,
             funding_snapshots: Default::default(),
             funding_tracked_assets,
-            has_pending_funding: false,
           },
         );
         ActiveAaaCount::<T>::put(
@@ -707,7 +713,7 @@ pub mod pallet {
       T::DbWeight::get().reads(1)
     }
 
-    fn on_idle(_now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
+    fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
       let base_weight = T::WeightInfo::scheduler_on_idle_base();
       if !base_weight.all_lte(remaining_weight) {
         return Weight::zero();
@@ -729,7 +735,7 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_housekeeping = after_base.saturating_sub(saturated_cleanup_weight);
-      Self::update_idle_starvation_state(breaker_active, remaining_after_housekeeping);
+      Self::update_idle_starvation_state(now, breaker_active, remaining_after_housekeeping);
       let housekeeping_weight = base_weight.saturating_add(saturated_cleanup_weight);
       if breaker_active {
         return housekeeping_weight;
@@ -891,6 +897,9 @@ pub mod pallet {
       missing: u32,
     },
     IdleStarvationDetected {
+      consecutive_blocks: u32,
+    },
+    IdleStarvationRecovered {
       consecutive_blocks: u32,
     },
     FundingSourcePolicyUpdated {
@@ -1257,10 +1266,13 @@ pub mod pallet {
       funding
         .funding_snapshots
         .retain(|asset, _| new_tracked.contains(asset));
-      funding.has_pending_funding = funding
+      let pending_funding_count = funding
         .funding_snapshots
         .values()
-        .any(|batch| !batch.pending_amount.is_zero());
+        .filter(|batch| !batch.pending_amount.is_zero())
+        .count() as u32;
+      let has_pending_funding = pending_funding_count > 0;
+      let funding_tracked_count = new_tracked.len() as u32;
       let (cycle_weight_upper, cycle_fee_upper) =
         Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
       ActorProgram::<T>::mutate(aaa_id, |maybe| {
@@ -1275,6 +1287,9 @@ pub mod pallet {
           .expect("active actor hot-state existence was prevalidated");
         hot.cycle_weight_upper = cycle_weight_upper;
         hot.cycle_fee_upper = cycle_fee_upper;
+        hot.funding_tracked_count = funding_tracked_count;
+        hot.pending_funding_count = pending_funding_count;
+        hot.has_pending_funding = has_pending_funding;
         hot.consecutive_failures = 0;
       });
       ActorFunding::<T>::insert(aaa_id, funding);
@@ -1450,9 +1465,9 @@ pub mod pallet {
     pub fn weight_upper_bound(task: &TaskOf<T>) -> Weight {
       // Runtime owns upper-bound pricing via coarse task classes to reduce calibration churn
       match task {
-        AaaTask::Transfer { .. } | AaaTask::Burn { .. } | AaaTask::Mint { .. } => {
-          T::TaskWeightInfo::simple_asset_op()
-        }
+        AaaTask::Transfer { .. } => T::TaskWeightInfo::transfer(),
+        AaaTask::Burn { .. } => T::TaskWeightInfo::burn(),
+        AaaTask::Mint { .. } => T::TaskWeightInfo::mint(),
         AaaTask::SplitTransfer { legs, .. } => T::TaskWeightInfo::split_transfer(legs.len() as u32),
         AaaTask::SwapExactIn { .. } => T::TaskWeightInfo::dex_exact_in(),
         AaaTask::SwapExactOut { .. } => T::TaskWeightInfo::dex_exact_out(),
@@ -1473,11 +1488,8 @@ pub mod pallet {
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
     ) -> Weight {
-      let mut upper = Weight::from_parts(5_000_000, 1000)
-        .saturating_add(T::DbWeight::get().reads_writes(2, 2))
-        .saturating_add(T::WeightInfo::funding_batch_promotion(
-          T::MaxFundingTrackedAssets::get(),
-        ));
+      let mut upper =
+        Weight::from_parts(5_000_000, 1000).saturating_add(T::DbWeight::get().reads_writes(2, 2));
       for step in execution_plan.iter() {
         let step_overhead = Weight::from_parts(1_000_000, 128);
         let condition_overhead =
@@ -1487,7 +1499,7 @@ pub mod pallet {
           .saturating_add(condition_overhead)
           .saturating_add(Self::weight_upper_bound(&step.task));
         if aaa_type == AaaType::User {
-          upper = upper.saturating_add(T::WeightInfo::fee_collection().saturating_mul(2));
+          upper = upper.saturating_add(T::WeightInfo::fee_collection());
         }
       }
       upper
@@ -1521,7 +1533,13 @@ pub mod pallet {
     }
 
     pub(crate) fn cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
-      instance.cycle_weight_upper
+      let mut upper = instance.cycle_weight_upper;
+      if instance.has_pending_funding && instance.pending_funding_count > 0 {
+        upper = upper.saturating_add(T::WeightInfo::funding_batch_promotion(
+          instance.pending_funding_count,
+        ));
+      }
+      upper
     }
 
     pub(crate) fn cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
@@ -1538,8 +1556,17 @@ pub mod pallet {
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
     ) -> Weight {
+      let funding_count = Self::derive_funding_tracked_assets(execution_plan)
+        .map(|assets| assets.len() as u32)
+        .unwrap_or_else(|_| T::MaxFundingTrackedAssets::get());
+      let promotion = if funding_count == 0 {
+        Weight::zero()
+      } else {
+        T::WeightInfo::funding_batch_promotion(funding_count)
+      };
       Self::scheduler_admission_overhead()
         .saturating_add(Self::compute_cycle_weight_upper(aaa_type, execution_plan))
+        .saturating_add(promotion)
         .saturating_add(Self::close_cleanup_weight_upper())
     }
 
@@ -1882,6 +1909,9 @@ pub mod pallet {
           last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
+          funding_tracked_count: funding_tracked_assets.len() as u32,
+          pending_funding_count: 0,
+          has_pending_funding: false,
           auto_close_at_cycle_nonce: None,
           first_eligible_at,
           last_cycle_block: Zero::zero(),
@@ -1896,7 +1926,6 @@ pub mod pallet {
             funding_source_policy,
             funding_snapshots: Default::default(),
             funding_tracked_assets,
-            has_pending_funding: false,
           },
         );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2015,6 +2044,9 @@ pub mod pallet {
         last_user_queue_mutation_block: None,
         cycle_weight_upper,
         cycle_fee_upper,
+        funding_tracked_count: funding_tracked_assets.len() as u32,
+        pending_funding_count: 0,
+        has_pending_funding: false,
         auto_close_at_cycle_nonce: None,
         first_eligible_at,
         last_cycle_block: Zero::zero(),
@@ -2033,7 +2065,6 @@ pub mod pallet {
             funding_source_policy,
             funding_snapshots: Default::default(),
             funding_tracked_assets,
-            has_pending_funding: false,
           },
         );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2433,29 +2464,53 @@ pub mod pallet {
     }
 
     pub(crate) fn update_idle_starvation_state(
+      now: BlockNumberFor<T>,
       breaker_active: bool,
       remaining_execution_budget: Weight,
     ) {
+      let state = IdleStarvationState::<T>::get();
       let exhausted =
         remaining_execution_budget.ref_time() == 0 || remaining_execution_budget.proof_size() == 0;
-      if !breaker_active && exhausted {
-        let previous = IdleStarvationBlocks::<T>::get();
-        let current = previous.saturating_add(1);
-        IdleStarvationBlocks::<T>::put(current);
-        let threshold = T::MaxIdleStarvationBlocks::get();
-        let crossed_threshold = if threshold == 0 {
-          previous == 0
-        } else {
-          previous < threshold && current >= threshold
-        };
-        if crossed_threshold {
-          Self::deposit_event(Event::IdleStarvationDetected {
-            consecutive_blocks: current,
+      if breaker_active || !exhausted {
+        if let IdleStarvationPhase::Alerted { since } = state {
+          Self::deposit_event(Event::IdleStarvationRecovered {
+            consecutive_blocks: now.saturating_sub(since).saturated_into(),
           });
+        }
+        if !matches!(state, IdleStarvationPhase::Healthy) {
+          IdleStarvationState::<T>::kill();
         }
         return;
       }
-      IdleStarvationBlocks::<T>::put(0);
+      match state {
+        IdleStarvationPhase::Healthy => {
+          if T::MaxIdleStarvationBlocks::get() <= 1 {
+            IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { since: now });
+            Self::deposit_event(Event::IdleStarvationDetected {
+              consecutive_blocks: 1,
+            });
+          } else {
+            IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { since: now });
+          }
+        }
+        IdleStarvationPhase::Starving { since } => {
+          let duration = Self::starvation_duration(now, since);
+          if duration >= T::MaxIdleStarvationBlocks::get() {
+            IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { since });
+            Self::deposit_event(Event::IdleStarvationDetected {
+              consecutive_blocks: duration,
+            });
+          }
+        }
+        IdleStarvationPhase::Alerted { .. } => {}
+      }
+    }
+
+    fn starvation_duration(now: BlockNumberFor<T>, since: BlockNumberFor<T>) -> u32 {
+      now
+        .saturating_sub(since)
+        .saturating_add(One::one())
+        .saturated_into()
     }
 
     // --- Active Actors Set Operations ---
@@ -2540,13 +2595,17 @@ pub mod pallet {
             "ActorHot entry has no matching ActorFunding entry",
           ));
         };
-        let has_pending_funding = funding
+        let pending_funding_count = funding
           .funding_snapshots
           .values()
-          .any(|batch| !batch.pending_amount.is_zero());
-        if funding.has_pending_funding != has_pending_funding {
+          .filter(|batch| !batch.pending_amount.is_zero())
+          .count() as u32;
+        if instance.funding_tracked_count != funding.funding_tracked_assets.len() as u32
+          || instance.pending_funding_count != pending_funding_count
+          || instance.has_pending_funding != (pending_funding_count > 0)
+        {
           return Err(TryRuntimeError::Other(
-            "ActorFunding pending indication disagrees with funding batches",
+            "ActorHot funding indications disagree with ActorFunding",
           ));
         }
         match SovereignIndex::<T>::get(&instance.sovereign_account) {

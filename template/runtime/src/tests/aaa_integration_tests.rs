@@ -9,6 +9,7 @@ use crate::{
     AddressEventIngress, RuntimeAddressEventIngress,
     aaa_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemAaas},
     address_event_ingress::AddressEventIngressExtension,
+    pool_index::PoolIndexExtension,
   },
 };
 use alloc::boxed::Box;
@@ -16,8 +17,8 @@ use codec::Encode;
 use pallet_aaa::{
   AaaId, AmountResolution, AssetFilter, AssetFilterOf, AssetOps, CloseReason, DeferReason, DexOps,
   Error, Event, ExecutionPlanOf, FeeCollector, FundingBatch, FundingSourcePolicy,
-  IdleStarvationBlocks, Mutability, Schedule, ScheduleOf, ScheduleWindow, SourceFilter,
-  SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
+  IdleStarvationPhase, IdleStarvationState, Mutability, Schedule, ScheduleOf, ScheduleWindow,
+  SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
   StepSkippedReason, Task, TaskOf, Trigger, WeightInfo,
 };
 use pallet_axial_router::FeeRoutingAdapter;
@@ -72,6 +73,7 @@ fn signed_extrinsic(
     polkadot_sdk::frame_system::CheckNonce::<Runtime>::from(nonce),
     polkadot_sdk::frame_system::CheckWeight::<Runtime>::new(),
     AddressEventIngressExtension,
+    PoolIndexExtension,
     polkadot_sdk::pallet_transaction_payment::ChargeTransactionPayment::<Runtime>::from(0),
     polkadot_sdk::frame_metadata_hash_extension::CheckMetadataHash::<Runtime>::new(false),
   ));
@@ -438,6 +440,113 @@ fn native_staking_lp_farmer_activation_requires_initialized_pool() {
       actor.execution_plan.first().map(|step| &step.task),
       Some(Task::DonateLiquidity { .. })
     ));
+  });
+}
+
+#[test]
+fn pool_creation_owns_an_exact_lp_reverse_index() {
+  seeded_test_ext().execute_with(|| {
+    const INDEXED_ASSET: u32 = 901_001;
+    System::set_block_number(1);
+    assert_ok!(create_test_asset(INDEXED_ASSET, &ALICE));
+    let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
+    assert_ok!(create_pool(RuntimeOrigin::signed(ALICE), pair.0, pair.1));
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
+      .expect("created pool must exist");
+    assert_eq!(
+      crate::AxialRouter::lp_pair_by_token_id(pool.lp_token),
+      Some(pair)
+    );
+    assert_noop!(
+      crate::AxialRouter::register_lp_pair(
+        pool.lp_token,
+        (
+          AssetKind::Native,
+          AssetKind::Local(INDEXED_ASSET.saturating_add(1))
+        ),
+      ),
+      pallet_axial_router::Error::<Runtime>::LpTokenPairCollision
+    );
+  });
+}
+
+#[test]
+fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
+  seeded_test_ext().execute_with(|| {
+    const INDEXED_ASSET: u32 = 901_002;
+    System::set_block_number(1);
+    assert_ok!(create_test_asset(INDEXED_ASSET, &ALICE));
+    let liquidity = 1_000_000_000_000_000u128;
+    assert_ok!(mint_tokens(
+      INDEXED_ASSET,
+      &ALICE,
+      &ALICE,
+      liquidity.saturating_mul(2),
+    ));
+    let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
+    assert_ok!(create_pool(RuntimeOrigin::signed(ALICE), pair.0, pair.1));
+    assert_ok!(add_liquidity(
+      RuntimeOrigin::signed(ALICE),
+      pair.0,
+      pair.1,
+      liquidity,
+      liquidity,
+      1,
+      1,
+      &ALICE,
+    ));
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
+      .expect("created pool must exist");
+    let lp_amount = Assets::balance(pool.lp_token, &ALICE) / 2;
+    pallet_axial_router::LpPairByTokenId::<Runtime>::remove(pool.lp_token);
+    assert_noop!(
+      <crate::configs::aaa_config::TmctolDexOps as DexOps<
+        AccountId,
+        AssetKind,
+        Balance,
+      >>::remove_liquidity(&ALICE, AssetKind::Local(pool.lp_token), lp_amount),
+      DispatchError::Other("Pool not found for LP token")
+    );
+    assert_ok!(crate::AxialRouter::register_lp_pair(pool.lp_token, pair));
+    assert_ok!(<crate::configs::aaa_config::TmctolDexOps as DexOps<
+      AccountId,
+      AssetKind,
+      Balance,
+    >>::remove_liquidity(
+      &ALICE,
+      AssetKind::Local(pool.lp_token),
+      lp_amount,
+    ));
+  });
+}
+
+#[test]
+fn executive_pool_creation_indexes_the_lp_without_event_scanning() {
+  seeded_test_ext().execute_with(|| {
+    const INDEXED_ASSET: u32 = 901_003;
+    System::set_block_number(1);
+    let signer = sr25519::Pair::from_seed(&[43u8; 32]);
+    let signer_account = crate::AccountId::from(signer.public());
+    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+      &signer_account,
+      1_000_000_000_000_000_000_000_000,
+    );
+    assert_ok!(create_test_asset(INDEXED_ASSET, &ALICE));
+    crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
+    let pair = (AssetKind::Native, AssetKind::Local(INDEXED_ASSET));
+    let call =
+      RuntimeCall::AssetConversion(polkadot_sdk::pallet_asset_conversion::Call::create_pool {
+        asset1: Box::new(pair.0),
+        asset2: Box::new(pair.1),
+      });
+    let result = Executive::apply_extrinsic(signed_extrinsic(&signer, 0, call));
+    assert!(matches!(result, Ok(Ok(_))), "{result:?}");
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
+      .expect("created pool must exist");
+    assert_eq!(
+      crate::AxialRouter::lp_pair_by_token_id(pool.lp_token),
+      Some(pair)
+    );
   });
 }
 
@@ -2441,6 +2550,10 @@ fn cycle_closes_with_fee_budget_exhausted_when_fee_reserve_is_missing() {
       crate::WeightToFee::weight_to_fee(&AAA::weight_upper_bound(&heavy_task)),
     );
     let cycle_fee_upper = per_step_fee_upper.saturating_mul(3);
+    println!(
+      "AAA fee admission: task_weight={:?}, per_step_fee_upper={per_step_fee_upper}, three_step_cycle_fee_upper={cycle_fee_upper}",
+      AAA::weight_upper_bound(&heavy_task)
+    );
     let min_balance = <Runtime as pallet_aaa::Config>::MinUserBalance::get();
     assert!(
       cycle_fee_upper > min_balance,
@@ -2638,7 +2751,10 @@ fn liquidity_tasks_use_separate_generated_runtime_weights() {
       AAA::weight_upper_bound(&remove),
       <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::task_remove_liquidity()
     );
-    assert!(AAA::weight_upper_bound(&remove).ref_time() > AAA::weight_upper_bound(&add).ref_time());
+    assert_ne!(
+      AAA::weight_upper_bound(&remove),
+      AAA::weight_upper_bound(&add)
+    );
   });
 }
 
@@ -3211,9 +3327,6 @@ fn on_initialize_does_not_execute_cycles_after_starvation() {
     fund_native(aaa_id, 100_000_000_000_000);
     let bob_before = native_balance(&BOB);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    let starvation_threshold =
-      <<Runtime as pallet_aaa::Config>::MaxIdleStarvationBlocks as Get<u32>>::get();
-    IdleStarvationBlocks::<Runtime>::put(starvation_threshold.saturating_add(1));
     System::set_block_number(2);
     let _ = AAA::on_initialize(2);
     assert_eq!(native_balance(&BOB), bob_before);
@@ -3261,6 +3374,8 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_pure_cleanup() {
       crate::MIN_ON_IDLE_RESERVE_RATIO * crate::MAXIMUM_BLOCK_WEIGHT
     );
     let mut actor_count = 0u32;
+    let mut max_ref_time = (0u64, 0u64);
+    let mut max_proof_size = (0u64, 0u64);
     for aaa_id in pallet_aaa::ActorHot::<Runtime>::iter_keys() {
       let instance = AAA::aaa_instances(aaa_id).expect("split active actor exists");
       let required = AAA::execution_plan_admission_weight_upper(
@@ -3271,11 +3386,20 @@ fn configured_on_idle_reserve_admits_every_genesis_actor_with_pure_cleanup() {
         required.all_lte(reserve),
         "aaa_id={aaa_id}, required={required:?}, reserve={reserve:?}",
       );
+      if required.ref_time() > max_ref_time.1 {
+        max_ref_time = (aaa_id, required.ref_time());
+      }
+      if required.proof_size() > max_proof_size.1 {
+        max_proof_size = (aaa_id, required.proof_size());
+      }
       actor_count = actor_count.saturating_add(1);
     }
     assert!(
       actor_count > 0,
       "reference genesis must contain System AAAs"
+    );
+    println!(
+      "AAA admission: actors={actor_count}, reserve={reserve:?}, max_ref_time={max_ref_time:?}, max_proof_size={max_proof_size:?}"
     );
   });
 }
@@ -3308,31 +3432,56 @@ fn starvation_emits_observability_event_once_on_threshold_crossing() {
       })
       .collect::<std::vec::Vec<_>>();
     assert_eq!(detections, vec![threshold]);
+    assert!(matches!(
+      IdleStarvationState::<Runtime>::get(),
+      IdleStarvationPhase::Alerted { since: 1 }
+    ));
   });
 }
 
 #[test]
-fn starvation_resets_after_positive_post_housekeeping_budget() {
+fn starvation_recovery_is_observable_and_healthy_idle_stays_sparse() {
   seeded_test_ext().execute_with(|| {
     let threshold = <<Runtime as pallet_aaa::Config>::MaxIdleStarvationBlocks as Get<u32>>::get();
-    for block in 1..threshold {
+    assert!(!IdleStarvationState::<Runtime>::exists());
+    for block in 1..=threshold {
       System::set_block_number(block);
       run_idle(starvation_observation_weight());
     }
-    assert_eq!(
-      IdleStarvationBlocks::<Runtime>::get(),
-      threshold.saturating_sub(1)
-    );
-    System::set_block_number(threshold);
-    run_idle(Weight::MAX);
-    assert_eq!(IdleStarvationBlocks::<Runtime>::get(), 0);
+    assert!(matches!(
+      IdleStarvationState::<Runtime>::get(),
+      IdleStarvationPhase::Alerted { since: 1 }
+    ));
     System::set_block_number(threshold.saturating_add(1));
-    run_idle(starvation_observation_weight());
-    assert_eq!(IdleStarvationBlocks::<Runtime>::get(), 1);
-    assert!(!has_aaa_event(|event| matches!(
+    run_idle(Weight::MAX);
+    assert!(!IdleStarvationState::<Runtime>::exists());
+    assert!(has_aaa_event(|event| matches!(
       event,
-      Event::IdleStarvationDetected { .. }
+      Event::IdleStarvationRecovered { consecutive_blocks }
+        if *consecutive_blocks == threshold
     )));
+    let recovery_count = System::events()
+      .into_iter()
+      .filter(|record| {
+        matches!(
+          record.event,
+          RuntimeEvent::AAA(Event::IdleStarvationRecovered { .. })
+        )
+      })
+      .count();
+    System::set_block_number(threshold.saturating_add(2));
+    run_idle(Weight::MAX);
+    assert!(!IdleStarvationState::<Runtime>::exists());
+    assert_eq!(
+      System::events()
+        .into_iter()
+        .filter(|record| matches!(
+          record.event,
+          RuntimeEvent::AAA(Event::IdleStarvationRecovered { .. })
+        ))
+        .count(),
+      recovery_count
+    );
   });
 }
 

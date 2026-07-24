@@ -1,8 +1,9 @@
 pub mod aaa_config;
 pub mod address_event_ingress;
-mod assets_config;
+pub(crate) mod assets_config;
 pub mod axial_router_config;
 pub mod governance_config;
+pub mod pool_index;
 pub mod preimage_config;
 pub mod staking_config;
 mod tmc_config;

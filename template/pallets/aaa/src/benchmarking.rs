@@ -568,8 +568,8 @@ mod benches {
   }
 
   #[benchmark]
-  fn task_simple_asset_op() {
-    let caller: T::AccountId = whitelisted_caller();
+  fn task_transfer() {
+    let caller: T::AccountId = account("transfer-caller", 0, 0);
     let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
     let native = T::NativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
@@ -580,6 +580,37 @@ mod benches {
     {
       T::AssetOps::transfer(&caller, &recipient, native, amount)
         .expect("ingress-aware transfer must succeed");
+    }
+    assert!(ActorHot::<T>::get(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
+  }
+
+  #[benchmark]
+  fn task_burn() {
+    let caller: T::AccountId = account("burn-caller", 0, 0);
+    let native = T::NativeAssetId::get();
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    T::AssetOps::mint(&caller, native, amount.saturating_mul(2u32.into()))
+      .expect("burn benchmark caller must be funded");
+    let before = T::AssetOps::balance(&caller, native);
+    #[block]
+    {
+      T::AssetOps::burn(&caller, native, amount).expect("burn must succeed");
+    }
+    assert_eq!(
+      T::AssetOps::balance(&caller, native),
+      before.saturating_sub(amount)
+    );
+  }
+
+  #[benchmark]
+  fn task_mint() {
+    let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    let native = T::NativeAssetId::get();
+    let amount = T::MinUserBalance::get().saturating_add(One::one());
+    T::BenchmarkHelper::enable_asset_ops_ingress();
+    #[block]
+    {
+      T::AssetOps::mint(&recipient, native, amount).expect("ingress-aware mint must succeed");
     }
     assert!(ActorHot::<T>::get(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
   }
@@ -654,10 +685,8 @@ mod benches {
   #[benchmark]
   fn task_remove_liquidity() {
     let caller: T::AccountId = whitelisted_caller();
-    let max_scan = T::MaxAdapterScan::get();
-    assert!(max_scan > 0, "MaxAdapterScan must be greater than zero");
-    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity_max_k(&caller, max_scan)
-      .expect("benchmark helper must prepare remove-liquidity worst-case state");
+    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity(&caller)
+      .expect("benchmark helper must prepare indexed remove-liquidity state");
     #[block]
     {
       T::DexOps::remove_liquidity(&caller, lp_asset, lp_amount)
@@ -723,13 +752,11 @@ mod benches {
 
   // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
   #[benchmark]
-  fn process_remove_liquidity_max_k() {
+  fn process_remove_liquidity_indexed() {
     let caller: T::AccountId = whitelisted_caller();
     ensure_creation_balance::<T>(&caller);
-    let max_scan = T::MaxAdapterScan::get();
-    assert!(max_scan > 0, "MaxAdapterScan must be greater than zero");
-    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity_max_k(&caller, max_scan)
-      .expect("benchmark helper must prepare remove-liquidity worst-case state");
+    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity(&caller)
+      .expect("benchmark helper must prepare indexed remove-liquidity state");
     let schedule = Schedule {
       trigger: Trigger::Manual,
       cooldown_blocks: 10,
@@ -942,18 +969,35 @@ mod benches {
 
   #[benchmark]
   fn scheduler_on_idle_base() {
-    let now: BlockNumberFor<T> = 1u32.into();
+    let threshold = T::MaxIdleStarvationBlocks::get().max(1);
+    let now: BlockNumberFor<T> = threshold.into();
     frame_system::Pallet::<T>::set_block_number(now);
     GlobalCircuitBreaker::<T>::put(false);
-    let threshold = T::MaxIdleStarvationBlocks::get();
-    IdleStarvationBlocks::<T>::put(threshold.saturating_sub(1));
+    IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { since: 1u32.into() });
     #[block]
     {
       let breaker_active = GlobalCircuitBreaker::<T>::get();
       core::hint::black_box(QueueHead::<T>::get());
       core::hint::black_box(QueueTail::<T>::get());
-      Pallet::<T>::update_idle_starvation_state(breaker_active, Weight::zero());
+      Pallet::<T>::update_idle_starvation_state(now, breaker_active, Weight::zero());
     }
+  }
+
+  // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
+  #[benchmark]
+  fn scheduler_on_idle_healthy_empty() {
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    GlobalCircuitBreaker::<T>::put(false);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    WakeupCursorLen::<T>::put(0);
+    IdleStarvationState::<T>::kill();
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::on_idle(now, Weight::MAX));
+    }
+    assert!(!IdleStarvationState::<T>::exists());
   }
 
   #[benchmark]
@@ -1608,7 +1652,6 @@ mod benches {
     let assets = T::BenchmarkHelper::funding_assets(a);
     ActorFunding::<T>::mutate(aaa_id, |maybe| {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
-      funding.has_pending_funding = true;
       for asset in assets {
         funding
           .funding_snapshots
@@ -1621,6 +1664,11 @@ mod benches {
           )
           .expect("promotion benchmark bound fits");
       }
+    });
+    ActorHot::<T>::mutate(aaa_id, |maybe| {
+      let hot = maybe.as_mut().expect("benchmark actor hot state exists");
+      hot.pending_funding_count = a;
+      hot.has_pending_funding = true;
     });
     #[block]
     {

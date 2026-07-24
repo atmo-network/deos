@@ -144,8 +144,10 @@ thread_local! {
 
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
+  static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
+  static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
@@ -185,8 +187,10 @@ pub fn reset_mock_adapters() {
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
+  FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+  FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
@@ -207,6 +211,7 @@ impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
     native_asset: TestAsset,
     amount: Balance,
   ) -> DispatchResult {
+    FEE_COLLECTIONS.with(|collections| collections.borrow_mut().push(amount));
     MockAssetOps::transfer(payer, fee_sink, native_asset, amount)
   }
 }
@@ -220,6 +225,9 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     asset: TestAsset,
     amount: Balance,
   ) -> Result<(), DispatchError> {
+    if FAIL_TRANSFER_TO.with(|target| *target.borrow() == Some(*to)) {
+      return Err(DispatchError::Other("MockTransferTargetFailed"));
+    }
     match asset {
       TestAsset::Native => {
         if *to == TestFeeSink::get() && FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow()) {
@@ -366,6 +374,10 @@ pub fn donated_liquidity(
       .copied()
       .unwrap_or((0, 0))
   })
+}
+
+pub fn set_fail_transfer_to(target: Option<AccountId>) {
+  FAIL_TRANSFER_TO.with(|value| *value.borrow_mut() = target);
 }
 
 pub fn set_fail_dex_after_input_transfer(value: bool) {
@@ -710,10 +722,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     Ok(())
   }
 
-  fn setup_remove_liquidity_max_k(
-    owner: &AccountId,
-    _max_scan: u32,
-  ) -> Result<(TestAsset, Balance), DispatchError> {
+  fn setup_remove_liquidity(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
     let lp_asset = TestAsset::Local(1);
     let lp_amount = 1_000_000u128;
     MockAssetOps::mint(owner, lp_asset, lp_amount)?;
@@ -859,7 +868,6 @@ impl pallet_aaa::Config for Test {
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;
   type MaxSplitTransferLegs = ConstU32<8>;
-  type MaxAdapterScan = ConstU32<64>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = ConstU32<64>;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
@@ -916,6 +924,14 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
 
 pub fn set_fail_create_checkpoint(value: bool) {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn fee_collections() -> alloc::vec::Vec<Balance> {
+  FEE_COLLECTIONS.with(|collections| collections.borrow().clone())
+}
+
+pub fn clear_fee_collections() {
+  FEE_COLLECTIONS.with(|collections| collections.borrow_mut().clear());
 }
 
 pub fn set_fail_fee_sink_transfer(value: bool) {

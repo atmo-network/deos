@@ -22,7 +22,9 @@ pub trait WeightInfo {
   fn manual_trigger() -> Weight;
   fn close_aaa() -> Weight;
   fn fee_collection() -> Weight;
-  fn task_simple_asset_op() -> Weight;
+  fn task_transfer() -> Weight;
+  fn task_burn() -> Weight;
+  fn task_mint() -> Weight;
   fn task_split_transfer(legs: u32) -> Weight;
   fn xcm_asset_deposit() -> Weight;
   fn task_add_liquidity() -> Weight;
@@ -69,7 +71,9 @@ pub trait WeightInfo {
 }
 
 pub trait TaskWeightInfo {
-  fn simple_asset_op() -> Weight;
+  fn transfer() -> Weight;
+  fn burn() -> Weight;
+  fn mint() -> Weight;
   fn split_transfer(legs: u32) -> Weight;
   fn dex_exact_in() -> Weight;
   fn dex_exact_out() -> Weight;
@@ -142,13 +146,26 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn fee_collection() -> Weight {
-    Weight::from_parts(100_000_000, 16_000)
-      .saturating_add(T::DbWeight::get().reads_writes(6, 4))
+    Weight::from_parts(112_097_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(6))
+      .saturating_add(T::DbWeight::get().writes(1))
   }
 
-  fn task_simple_asset_op() -> Weight {
-    Weight::from_parts(1_500_000_000, 800_000)
-      .saturating_add(T::DbWeight::get().reads_writes(20, 18))
+  fn task_transfer() -> Weight {
+    Weight::from_parts(159_800_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(12))
+      .saturating_add(T::DbWeight::get().writes(8))
+  }
+
+  fn task_burn() -> Weight {
+    Weight::from_parts(23_397_000, 3_593)
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn task_mint() -> Weight {
+    Weight::from_parts(105_812_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(10))
+      .saturating_add(T::DbWeight::get().writes(6))
   }
 
   fn task_split_transfer(legs: u32) -> Weight {
@@ -177,8 +194,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn task_remove_liquidity() -> Weight {
-    Weight::from_parts(300_000_000, 24_000)
-      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+    Weight::from_parts(178_587_000, 8_817)
+      .saturating_add(T::DbWeight::get().reads(8))
+      .saturating_add(T::DbWeight::get().writes(6))
   }
 
   fn task_stake() -> Weight {
@@ -202,7 +220,7 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn scheduler_on_idle_base() -> Weight {
-    Weight::from_parts(15_435_000, 1_493)
+    Weight::from_parts(15_645_000, 1_493)
       .saturating_add(T::DbWeight::get().reads(4))
       .saturating_add(T::DbWeight::get().writes(1))
   }
@@ -323,9 +341,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn funding_batch_promotion(assets: u32) -> Weight {
-    Weight::from_parts(20_000_000, 12_000)
-      .saturating_add(Weight::from_parts(2_000_000, 256).saturating_mul(assets.into()))
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+    Weight::from_parts(24_907_138, 4_425)
+      .saturating_add(Weight::from_parts(2_349_643, 0).saturating_mul(assets.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
   }
 
   fn update_funding_source_policy() -> Weight {
@@ -377,8 +395,16 @@ pub struct SubstrateTaskWeightInfo<T>(PhantomData<T>);
 impl<T: polkadot_sdk::frame_system::Config + crate::Config> TaskWeightInfo
   for SubstrateTaskWeightInfo<T>
 {
-  fn simple_asset_op() -> Weight {
-    <T as crate::Config>::WeightInfo::task_simple_asset_op()
+  fn transfer() -> Weight {
+    <T as crate::Config>::WeightInfo::task_transfer()
+  }
+
+  fn burn() -> Weight {
+    <T as crate::Config>::WeightInfo::task_burn()
+  }
+
+  fn mint() -> Weight {
+    <T as crate::Config>::WeightInfo::task_mint()
   }
 
   fn split_transfer(legs: u32) -> Weight {
@@ -426,8 +452,10 @@ impl WeightInfo for () {
   fn resume_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
   fn close_aaa() -> Weight { Weight::from_parts(66_420_000, 8_120) }
-  fn fee_collection() -> Weight { Weight::from_parts(100_000_000, 16_000) }
-  fn task_simple_asset_op() -> Weight { Weight::from_parts(1_500_000_000, 800_000) }
+  fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
+  fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
+  fn task_burn() -> Weight { Weight::from_parts(23_397_000, 3_593) }
+  fn task_mint() -> Weight { Weight::from_parts(105_812_000, 8_120) }
   fn task_split_transfer(legs: u32) -> Weight {
     Weight::from_parts(50_000_000, 4_000)
       .saturating_add(Weight::from_parts(1_500_000_000, 800_000).saturating_mul(legs.min(8).into()))
@@ -435,12 +463,12 @@ impl WeightInfo for () {
   fn xcm_asset_deposit() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
   fn task_add_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
   fn task_donate_liquidity() -> Weight { Weight::from_parts(600_000_000, 48_000) }
-  fn task_remove_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
+  fn task_remove_liquidity() -> Weight { Weight::from_parts(178_587_000, 8_817) }
   fn task_stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn task_unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
-  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(15_435_000, 1_493) }
+  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(15_645_000, 1_493) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }
@@ -476,8 +504,8 @@ impl WeightInfo for () {
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(85_208_000, 12_141) }
   fn funding_batch_promotion(assets: u32) -> Weight {
-    Weight::from_parts(20_000_000, 12_000)
-      .saturating_add(Weight::from_parts(2_000_000, 256).saturating_mul(assets.into()))
+    Weight::from_parts(24_907_138, 4_425)
+      .saturating_add(Weight::from_parts(2_349_643, 0).saturating_mul(assets.into()))
   }
   fn update_funding_source_policy() -> Weight { Weight::from_parts(50_000_000, 15_000) }
   fn update_schedule() -> Weight { Weight::from_parts(12_000_000, 900) }
@@ -495,7 +523,9 @@ impl WeightInfo for () {
 }
 
 impl TaskWeightInfo for () {
-  fn simple_asset_op() -> Weight { <() as WeightInfo>::task_simple_asset_op() }
+  fn transfer() -> Weight { <() as WeightInfo>::task_transfer() }
+  fn burn() -> Weight { <() as WeightInfo>::task_burn() }
+  fn mint() -> Weight { <() as WeightInfo>::task_mint() }
   fn split_transfer(legs: u32) -> Weight { <() as WeightInfo>::task_split_transfer(legs) }
   fn dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }

@@ -9,6 +9,30 @@ pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
 
 #[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub enum IdleStarvationPhase<BlockNumber> {
+  #[default]
+  Healthy,
+  Starving {
+    since: BlockNumber,
+  },
+  Alerted {
+    since: BlockNumber,
+  },
+}
+
+#[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub struct WakeupPointer<BlockNumber> {
@@ -1030,6 +1054,9 @@ pub struct ActorHotState<AccountId, BlockNumber, Balance> {
   pub last_user_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
+  pub funding_tracked_count: u32,
+  pub pending_funding_count: u32,
+  pub has_pending_funding: bool,
   pub first_eligible_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
 }
@@ -1063,6 +1090,9 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub last_user_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
+  pub funding_tracked_count: u32,
+  pub pending_funding_count: u32,
+  pub has_pending_funding: bool,
   pub first_eligible_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
 }
@@ -1074,7 +1104,6 @@ pub struct ActorFundingState<FundingPolicy, FundingSnapshots, FundingTrackedAsse
   pub funding_source_policy: FundingPolicy,
   pub funding_snapshots: FundingSnapshots,
   pub funding_tracked_assets: FundingTrackedAssets,
-  pub has_pending_funding: bool,
 }
 
 #[derive(

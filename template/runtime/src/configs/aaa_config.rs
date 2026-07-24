@@ -37,7 +37,6 @@ parameter_types! {
   pub const AaaMaxFundingTrackedAssets: u32 = 10;
   pub const AaaMaxConditionsPerStep: u32 = 4;
   pub const AaaMaxSplitTransferLegs: u32 = 8;
-  pub const AaaMaxPoolScan: u32 = 64;
 
   // --- Trigger and schedule bounds ---
 
@@ -441,6 +440,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
         Box::new(asset_b),
       )?;
     }
+    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
     let lp_before = Self::lp_balance(who, asset_a, asset_b);
     AssetConversion::add_liquidity(
       RuntimeOrigin::signed(who.clone()),
@@ -467,8 +467,8 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       AssetKind::Local(id) => id,
       _ => return Err(DispatchError::Other("LP asset must be Local")),
     };
-    let (asset_a, asset_b) =
-      Self::pool_pair_for_lp(lp_id).ok_or(DispatchError::Other("Pool not found for LP token"))?;
+    let (asset_a, asset_b) = crate::AxialRouter::lp_pair_by_token_id(lp_id)
+      .ok_or(DispatchError::Other("Pool not found for LP token"))?;
     let before_a = TmctolAssetOps::balance(who, asset_a);
     let before_b = TmctolAssetOps::balance(who, asset_b);
     AssetConversion::remove_liquidity(
@@ -505,20 +505,6 @@ impl TmctolDexOps {
       pool_info.lp_token,
       who,
     )
-  }
-
-  fn pool_pair_for_lp(lp_token_id: u32) -> Option<(AssetKind, AssetKind)> {
-    let mut scanned = 0u32;
-    for (pool_key, pool_info) in pallet_asset_conversion::Pools::<Runtime>::iter() {
-      if scanned >= <Runtime as pallet_aaa::Config>::MaxAdapterScan::get() {
-        break;
-      }
-      scanned = scanned.saturating_add(1);
-      if pool_info.lp_token == lp_token_id {
-        return Some(pool_key);
-      }
-    }
-    None
   }
 }
 
@@ -1245,7 +1231,6 @@ impl pallet_aaa::Config for Runtime {
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = AaaMaxActiveActors;
   type MaxActorIdentities = AaaMaxActiveActors;
-  type MaxAdapterScan = AaaMaxPoolScan;
   type MaxConditionsPerStep = AaaMaxConditionsPerStep;
   type MaxConsecutiveFailures = AaaMaxConsecutiveFailures;
   type MaxAutoCloseNonceHorizon = AaaMaxAutoCloseNonceHorizon;
@@ -1360,6 +1345,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       alloc::boxed::Box::new(asset_a),
       alloc::boxed::Box::new(asset_b),
     )?;
+    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
     let pool_id =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
         .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
@@ -1388,23 +1374,18 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
     Ok((asset_a, asset_b, liquidity / 10))
   }
 
-  fn setup_remove_liquidity_max_k(
-    owner: &AccountId,
-    max_scan: u32,
-  ) -> Result<(AssetKind, Balance), DispatchError> {
-    if max_scan == 0 {
-      return Err(DispatchError::Other("MaxAdapterScanZero"));
-    }
+  fn setup_remove_liquidity(owner: &AccountId) -> Result<(AssetKind, Balance), DispatchError> {
+    let pool_count = 1u32;
     let lp_namespace_start = primitives::assets::TYPE_LP | 1;
     let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
     if current_next_lp < lp_namespace_start {
       pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
     }
     let liquidity = 1_000_000_000_000u128;
-    let native_seed = liquidity.saturating_mul(max_scan.saturating_add(1) as u128);
+    let native_seed = liquidity.saturating_mul(pool_count.saturating_add(1) as u128);
     let _ = <Balances as Currency<AccountId>>::deposit_creating(owner, native_seed);
     let mut target_lp: Option<(AssetKind, Balance)> = None;
-    for i in 0..max_scan {
+    for i in 0..pool_count {
       let local_asset_id = 100_000u32.saturating_add(i);
       if Self::ensure_local_asset(local_asset_id, owner).is_err() {
         return Err(DispatchError::Other("EnsureLocalAssetFailed"));
@@ -1429,6 +1410,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       {
         return Err(DispatchError::Other("CreatePoolForBenchmarkFailed"));
       }
+      super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
       let pool_account =
         <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset_a, &asset_b)
           .map_err(|_| DispatchError::Other("PoolAddressUnavailable"))?;
@@ -1465,7 +1447,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       {
         return Err(DispatchError::Other("AddLiquidityForBenchmarkFailed"));
       }
-      if i.saturating_add(1) == max_scan {
+      if i.saturating_add(1) == pool_count {
         let lp_amount = <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(
           pool_info.lp_token,
           owner,
@@ -1513,7 +1495,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
   fn setup_swap_exact_in(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, Balance), DispatchError> {
-    let _ = Self::setup_remove_liquidity_max_k(owner, 1)?;
+    let _ = Self::setup_remove_liquidity(owner)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
       &BurningManagerAccount::get(),
       EXISTENTIAL_DEPOSIT,
@@ -1524,7 +1506,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
   fn setup_swap_exact_out(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
-    let _ = Self::setup_remove_liquidity_max_k(owner, 1)?;
+    let _ = Self::setup_remove_liquidity(owner)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
       &BurningManagerAccount::get(),
       EXISTENTIAL_DEPOSIT,

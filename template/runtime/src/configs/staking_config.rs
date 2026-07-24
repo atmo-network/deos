@@ -533,6 +533,7 @@ impl pallet_staking::BenchmarkHelper<AccountId, AssetId, Balance>
       Box::new(base_asset),
       Box::new(staked_asset),
     );
+    crate::configs::assets_config::register_pool_lp_pair(base_asset, staked_asset)?;
     crate::AssetConversion::add_liquidity(
       crate::RuntimeOrigin::signed(account.clone()),
       Box::new(base_asset),

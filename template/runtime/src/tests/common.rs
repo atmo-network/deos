@@ -261,7 +261,8 @@ pub fn create_pool(
   asset2: crate::configs::AssetKind,
 ) -> DispatchResult {
   crate::configs::AssetConversionAdapter::ensure_lp_asset_namespace();
-  crate::AssetConversion::create_pool(origin, Box::new(asset1), Box::new(asset2))
+  crate::AssetConversion::create_pool(origin, Box::new(asset1), Box::new(asset2))?;
+  crate::configs::assets_config::register_pool_lp_pair(asset1, asset2)
 }
 
 /// Helper to add liquidity to an existing pool
@@ -330,6 +331,8 @@ pub fn ensure_asset_conversion_pool(asset1: AssetKind, asset2: AssetKind) {
       ..
     }) = &error
     {
+      crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
+        .expect("existing pool must be indexed");
       return;
     }
     if let DispatchError::Module(ModuleError {
@@ -338,6 +341,8 @@ pub fn ensure_asset_conversion_pool(asset1: AssetKind, asset2: AssetKind) {
       ..
     }) = &error
     {
+      crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
+        .expect("existing pool must be indexed");
       return;
     }
     // Handle AssetConversion pallet "PoolExists" error (index 13)
@@ -347,10 +352,14 @@ pub fn ensure_asset_conversion_pool(asset1: AssetKind, asset2: AssetKind) {
       ..
     }) = &error
     {
+      crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
+        .expect("existing pool must be indexed");
       return;
     }
     panic!("Unexpected AssetConversion pool creation error: {error:?}");
   }
+  crate::configs::assets_config::register_pool_lp_pair(canonical_asset1, canonical_asset2)
+    .expect("created pool must be indexed");
 }
 
 /// Creates BLDR protocol token and funds BLDR domain AAA sovereigns with ED.

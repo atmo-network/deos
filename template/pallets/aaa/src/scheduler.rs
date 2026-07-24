@@ -116,7 +116,7 @@ impl<T: Config> Pallet<T> {
           continue;
         }
       };
-      let _actual = Self::execute_single_cycle(aaa_id);
+      let _actual = Self::execute_single_cycle(aaa_id, instance, now);
       cycle_meter.consume(cycle_weight_upper);
       executed = executed.saturating_add(1);
       if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
@@ -1527,13 +1527,14 @@ impl<T: Config> Pallet<T> {
       if Self::funding_event_authorized(aaa_id, &instance, &funding, provenance)
         && funding.funding_tracked_assets.contains(&asset)
       {
+        let mut new_pending_asset = false;
         if let Some(batch) = funding.funding_snapshots.get_mut(&asset) {
+          new_pending_asset = batch.pending_amount.is_zero();
           let pending_amount = batch
             .pending_amount
             .checked_add(&amount)
             .ok_or(Error::<T>::FundingBatchOverflow)?;
           batch.pending_amount = pending_amount;
-          funding.has_pending_funding = true;
           Self::deposit_event(Event::FundingBatchPendingAccumulated {
             aaa_id,
             asset,
@@ -1558,6 +1559,17 @@ impl<T: Config> Pallet<T> {
           });
         }
         ActorFunding::<T>::insert(aaa_id, funding);
+        if new_pending_asset {
+          ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+            if let Some(hot) = maybe_hot {
+              hot.pending_funding_count = hot
+                .pending_funding_count
+                .checked_add(1)
+                .expect("pending funding count is bounded by tracked assets");
+              hot.has_pending_funding = true;
+            }
+          });
+        }
       }
     }
     if signal_matched {

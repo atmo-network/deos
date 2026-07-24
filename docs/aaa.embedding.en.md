@@ -23,11 +23,11 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `LiquidityDonationOps`: Pair-scoped liquidity donation when the runtime wants donation without LP receipt minting.
 - `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
-- `TaskWeightInfo`: Runtime-derived worst-case task classes covering adapter, event, RefTime, and ProofSize costs; simple and split transfers must include synchronous address-event ingress under saturated bounded state, while `WeightInfo::fee_collection` separately prices each possible User fee debit.
+- `TaskWeightInfo`: Runtime-derived worst-case task classes covering adapter, event, RefTime, and ProofSize costs. Transfer, Mint, and split fanout must include possible synchronous address-event ingress; Burn must remain independently priced without transfer-ingress proof. `WeightInfo::fee_collection` prices one possible User fee debit per attempted step.
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
-- Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, and fee constants.
+- Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxIdleStarvationBlocks`, and fee constants.
 
 The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no program or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
 
@@ -71,16 +71,17 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 
 ## 6. Boundary Contracts
 
-- `Fee admission`: AAA reserves fee-native spend capacity and sends every opening/per-step charge through one atomic `FeeCollector` call; collection transfers the full amount into `FeeSink`, while downstream allocation remains outside the generic pallet.
+- `Fee admission`: AAA reserves fee-native spend capacity and invokes atomic `FeeCollector` at most once per attempted User step after read-only evaluation/preparation. Non-executable outcomes charge evaluation-only; executable outcomes charge evaluation plus upper-bound execution fee together. Collection transfers the full amount into `FeeSink`, while downstream allocation remains outside the generic pallet.
 - `Fee conversion`: AAA asks `WeightToFee` for deterministic upper-bound pricing; runtime task bounds must include adapter and routing work in both Weight dimensions.
-- `DEX amount safety`: Exact-in quotes must match caller fees and executable route selection; exact-out receives a policy-derived maximum input that preserves minimum balance and future fee reserve.
+- `DEX amount safety`: Exact-in quotes must match caller fees and executable route selection; exact-out receives a policy-derived maximum input that preserves minimum balance and future fee reserve. A host runtime that resolves `RemoveLiquidity` from an LP token must own an O(1) reverse pair index or an equivalently bounded generated lookup outside generic AAA and update it on every supported pool-creation path.
 - `Staking amount safety`: Unstake current/trigger/all modes resolve through adapter shares; last-funding mode requires an adapter-mapped transferable share asset.
 - `Ingress triggers`: Every supported producer must call fallible `notify_address_event*` through an explicit adapter, a bounded weight-charging transaction-extension candidate, or an equivalent originating-path resolver. The producer must run `preflight_funding_event` before value movement and propagate notification failure in the same transaction. Runtime event scanning and deferred compatibility ingress storage are unsupported.
 - `Hook admission`: `on_idle` must reserve its generated fixed base before storage access. `GuaranteedOnIdleWeight` must equal genuinely reserved gross headroom, and every prospective run plus measured pure cleanup must fit after `scheduler_admission_overhead` in both Weight dimensions. Temporal and explicit repair units consume only available headroom and may defer actor execution, so exact actor-local markers and cross-block convergence form part of the embedding contract.
+- `Starvation observability`: `IdleStarvationState` is `Healthy`, `Starving { since }`, or `Alerted { since }`. Duration derives from block number; unchanged Healthy/starving/alerted blocks perform no telemetry write. Threshold detection and alerted recovery emit once, while breaker activation clears non-Healthy state once without creating an execution fallback.
 - `Task weight class`: The runtime must classify every task with a deterministic upper bound. Admission may be conservative; it must not underprice execution.
 - `Core task admission`: Extend the portable `Task` enum only for a reusable economic primitive that existing composition plus an adapter cannot express without violating atomicity or custody. The change must ship bounded typed parameters, amount/funding/donation semantics, adapter ownership, events/errors/rollback behavior, generated two-dimensional weights, production-budget evidence, semantic tests, and an explicit SCALE/schema-version decision together; runtime topology and product policy stay in adapters and actor graphs.
 - `Compatibility/versioning`: `0.7.x` is a fresh-genesis pre-launch line. After AAA `1.0`, existing public enum discriminants and dispatch indices are append-only; encoded argument or storage-layout changes require the owning major/migration contract, while additive host adapters and weight recalibration follow package/runtime version policy. A Cargo version never substitutes for pallet `StorageVersion`, runtime `spec_version`, or a bounded live-chain migration.
-- `Read model`: Known actor state, owner-slot recovery, scheduler state, and bounded events are canonical on-chain surfaces. Fleet dashboards, long histories, timelines, rankings, and analytics are external indexed/materialized views.
+- `Read model`: Known actor state, owner-slot recovery, scheduler state, current `IdleStarvationState`, and bounded events are canonical on-chain surfaces. Historical starvation duration, fleet dashboards, long timelines, rankings, and analytics are indexed/materialized views reconstructed from detection/recovery events.
 
 ## 7. Task-Scoped Atomicity Contract
 
@@ -116,6 +117,7 @@ A runtime embedding AAA should add local tests for any adapter that mutates more
 - Fee collection failure rolls back the payer debit and leaves Fee Sink unchanged.
 - Funding overflow fails before or transactionally rolls back signed, internal-protocol, and XCM value movement; expired actors receive balance without readiness or funding-batch mutation.
 - Exact-out never debits above the AAA-provided capacity, and Unstake dynamic modes resolve against shares rather than the base asset.
+- Healthy empty `on_idle` leaves no starvation-state key or recovery event; first starvation, one-time alert, prolonged alert, breaker clearing, and one-time recovery match the transition contract.
 
 ## 9. Non-Goals
 

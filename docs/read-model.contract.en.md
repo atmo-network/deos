@@ -134,7 +134,7 @@ Each subsystem below uses the same two buckets:
 - Bounded readiness, queue, wakeup, and overflow surfaces
 - Account ownership/control slots
 - Live balances and execution-side effects
-- Bounded operational telemetry surfaces already exposed as storage/events when they are part of runtime observability
+- Current sparse `IdleStarvationState` and bounded detection/recovery events when scheduler observability changes phase
 
 #### Indexed / Materialized View
 
@@ -142,6 +142,7 @@ Each subsystem below uses the same two buckets:
 - Per-step timeline replay across many cycles
 - Fleet dashboards, rankings, and operator analytics
 - Archived run logs beyond bounded on-chain observability
+- Historical starvation intervals, duration trends, and alert/recovery timelines reconstructed from runtime events
 
 ### Staking
 

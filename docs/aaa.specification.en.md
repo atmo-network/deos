@@ -301,7 +301,7 @@ Requirements:
 - State-independent for fixed params and bounded by configured `Max*`.
 - A new core `Task` variant MUST represent a reusable economic primitive rather than runtime topology or product policy; prove that existing task composition plus an adapter cannot preserve the required atomicity/custody contract; define typed bounded parameters, amount-resolution and funding/donation sensitivity, adapter ownership, events/errors/`StepErrorPolicy` behavior, task-scoped rollback, a generated two-dimensional worst-case bound, production-budget admission evidence, semantic tests, and explicit SCALE discriminant/schema-version impact before merge. Runtime-specific behavior that fails this gate belongs in an adapter or actor graph, not the core enum.
 - Always `>=` actual execution in both Weight dimensions, including adapter calls, storage proofs, fee collection, and emitted events.
-- Full-cycle admission uses the sum of step bounds plus evaluation/execution fee-collection and cycle/lifecycle overhead.
+- Full-cycle admission uses the sum of step bounds plus one possible fee-collection envelope per User step and cycle/lifecycle overhead.
 - Task-level `weight_upper_bound` MUST include worst-case event emission cost for events produced by successful task execution.
 - Runtime admission accounting MUST include deterministic step/cycle overhead for non-task events (`CycleStarted`, `StepSkipped`, `StepFailed`, `CycleSummary`, and lifecycle events emitted on terminal transitions).
 
@@ -309,12 +309,17 @@ Runtime SHOULD classify tasks by materially distinct worst-case work rather than
 
 | Bucket | Tasks |
 | --- | --- |
-| `SimpleAssetOp` | `Transfer`, `Burn`, `Mint` |
+| `TransferIngress` | `Transfer`, including possible direct ingress |
+| `Burn` | `Burn`, without transfer-ingress proof |
+| `MintIngress` | System-only `Mint`, including possible direct ingress |
 | `DexExactIn` | `SwapExactIn` |
 | `DexExactOut` | `SwapExactOut`, including bounded quote search |
-| `DexLiquidity` | `AddLiquidity`, `RemoveLiquidity`, `DonateLiquidity` |
-| `Staking` | `Stake`, `Unstake` with runtime adapter bounds |
-| `Fanout` | `SplitTransfer` (parameterized by `legs`) |
+| `AddLiquidity` | `AddLiquidity`, including possible pool creation |
+| `RemoveLiquidity` | `RemoveLiquidity`, including LP-pair resolution |
+| `DonateLiquidity` | `DonateLiquidity` |
+| `Stake` | `Stake` |
+| `Unstake` | `Unstake`, including share resolution |
+| `Fanout` | `SplitTransfer` parameterized by `legs` and ingress-capable recipients |
 
 ---
 
@@ -329,7 +334,7 @@ Execution MUST follow this order:
 1. **MinUserBalance Gate**
 2. **Pre-flight Fee Admission** (`cycle_fee_upper`)
 3. **Cycle Start / Fee Reservation**
-4. For each step: charge evaluation fee → evaluate conditions → resolve task amount → if executable, charge execution fee → dispatch task.
+4. For each step: evaluate conditions and prepare the task read-only → determine evaluation-only or combined evaluation/execution fee → invoke `FeeCollector` at most once → dispatch only a successfully charged executable task.
 
 For User AAA, insufficient pre-flight fee budget yields immediate `AaaClosed(FeeBudgetExhausted)`.
 
@@ -338,9 +343,17 @@ Per-step formulas:
 - `eval_fee = StepBaseFee + ConditionReadFee × conditions.len()`
 - `exec_fee_upper = WeightToFee(weight_upper_bound(task, params))`
 - `cycle_fee_upper = Σ(eval_fee_i + exec_fee_upper_i)`
-  Execution fee is charged once a step becomes executable, even if dispatch later fails; steps resolved to `Skipped` or `FundingUnavailable` do not incur execution fee, and their unused execution-fee reservation MUST be released before resolving later steps.
 
-`StepBaseFee` and `ConditionReadFee` are charged before task dispatch and MUST be calibrated to economically cover non-executable paths (`StepSkipped`, `StepFailed`) that still consume reads/writes and emit events.
+| Step outcome after read-only evaluation/preparation | Single `FeeCollector` amount | Task dispatch |
+| --- | --- | --- |
+| Condition false/error | `eval_fee` | No |
+| Resolution skip/error | `eval_fee` | No |
+| Funding unavailable | `eval_fee` | No |
+| Executable | `eval_fee + exec_fee_upper` | Yes, only after collection succeeds |
+| Collection failure | One attempted amount selected above; atomic debit rolls back | No |
+| Adapter failure after collection | Combined fee remains charged; task-local effects roll back | Attempted once |
+
+Unused execution-fee reservation for every non-executable outcome MUST be released before later-step amount resolution. `StepBaseFee` and `ConditionReadFee` MUST cover non-executable paths that still consume reads/writes and emit events. `ContinueNextStep` and `AbortCycle` apply only after the fee outcome has been determined and MUST NOT cause a second collection.
 
 ### 4.2 No-Rent Policy
 
@@ -357,7 +370,7 @@ During cycle execution, runtime MUST keep `reserved_fee_remaining` and compute f
 Reservation rules:
 
 1. On admitted cycle start, initialize `reserved_fee_remaining = cycle_fee_upper`.
-2. Every successful evaluation/execution fee charge MUST decrement `reserved_fee_remaining` by the charged amount.
+2. Each step MUST release its complete reserved envelope before later-step resolution; its sole successful `FeeCollector` call charges either evaluation-only or combined evaluation/execution fee as determined above.
 3. All `FeeNativeAsset` spend paths MUST resolve amounts from `spendable_fee_native`, never from `balance()` alone.
 4. On cycle exit, unspent reserve is released by discarding the transient context; charged fees are NOT refunded.
 5. Post-dispatch fee refund by actual consumed task weight is deliberately out of scope: AAA charges deterministic upper-bound execution fees per executable step for predictable admission economics.
@@ -733,9 +746,9 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 
 1. The paged minimum cursor MUST expose the earliest distinct wakeup block without scanning sparse gaps. One `on_idle` call processes at most `MaxWakeupsPerBlock` slots, preserves a partial bucket at the same minimum, and stops before a future minimum or an inadmissible RefTime/ProofSize unit.
 2. Scheduled execution MUST roll over through queue carry-over while temporal placement remains exact. Closing an actor MUST use `ActorHot.wakeup_pointer` to invalidate its exact page slot and transactionally repair or remove empty page, bucket, and cursor topology.
-3. After the fixed hook base has been admitted, `IdleStarvationBlocks` MUST increment only when the breaker is inactive and either Weight dimension of the remaining `on_idle` budget after bounded housekeeping is zero; a budget too small for the base performs no telemetry work.
-4. `IdleStarvationBlocks` MUST reset to zero as soon as both post-housekeeping Weight dimensions remain positive, including blocks where no actor is ready.
-5. `IdleStarvationDetected` MUST emit exactly once on threshold crossing and MUST NOT repeat on every subsequent starved block.
+3. After the fixed hook base has been admitted, `IdleStarvationState` MUST transition from `Healthy` to `Starving { since }` only when the breaker is inactive and either post-housekeeping Weight dimension is zero; a budget too small for the base performs no telemetry work.
+4. Duration MUST derive from the current block and `since`; intermediate starving blocks MUST NOT rewrite unchanged state. Threshold crossing MUST transition once to `Alerted { since }` and emit `IdleStarvationDetected` once.
+5. Positive two-dimensional budget or an intentional breaker MUST clear non-Healthy state once. Recovery from `Alerted` MUST emit `IdleStarvationRecovered` once; Healthy blocks MUST NOT rewrite state or emit recovery.
 6. Starvation telemetry is observability-only; it MUST NOT trigger emergency cycle execution or any alternate scheduler path.
 
 ---
@@ -754,7 +767,7 @@ Because actors are never globally polled, the protocol relies on the Bounded Dou
 - With breaker inactive: execute only fully admitted cycles using the remaining two-dimensional budget after housekeeping.
 - With breaker active: skip cycle execution and run only fully metered housekeeping.
 - MAY perform bounded lazy readiness transitions only after reserving their complete weight.
-- MUST run the `IdleStarvationBlocks` state machine from Section 8.6 after bounded housekeeping determines the remaining execution budget.
+- MUST run the `IdleStarvationState` transition machine from Section 8.6 after bounded housekeeping determines the remaining execution budget.
 - MUST NOT contain unbounded or unmetered loops.
 
 ---
@@ -834,6 +847,7 @@ FundingBatchPromoted { aaa_id, asset, amount }
 FundingSourcePolicyUpdated { aaa_id }
 GlobalCircuitBreakerSet { paused: bool }
 IdleStarvationDetected { consecutive_blocks: u32 }
+IdleStarvationRecovered { consecutive_blocks: u32 }
 LiquidityAdded { aaa_id, asset_a, asset_b, lp_minted }
 LiquidityRemoved { aaa_id, lp_asset, amount_a, amount_b }
 LiquidityDonated { aaa_id, asset_a, asset_b, amount, amount_a, amount_b }
@@ -1023,7 +1037,7 @@ This section defines the stable storage surface. Actor cardinality/capacity, imm
 - `ActorHot.pending_signal` (`bool`): canonical Manual/AddressEvent readiness latch
 - `OwnerSlotMask` (`Map<Blake2_128Concat(AccountId), u8>`) / `SovereignIndex` (`Map<Blake2_128Concat(AccountId), AaaId>`): User-slot occupancy and active-or-dormant sovereign guard
 - `ActiveActorLimit` (`u32`): governance-controlled operational cap constrained by hard and queue bounds; stored `0` resolves to the bounded runtime default for compatibility
-- `GlobalCircuitBreaker` (`bool`) / `IdleStarvationBlocks` (`u32`): scheduler halt and breaker-inactive zero-budget observability
+- `GlobalCircuitBreaker` (`bool`) / `IdleStarvationState` (`Healthy | Starving { since } | Alerted { since }`): scheduler halt and sparse breaker-inactive zero-budget transition state
 
 ---
 
@@ -1059,7 +1073,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 26. Event-driven queueing uses one actor-local live ticket plus the block-start tail cutoff to enforce `executions(A, B) <= 1`; execution-created late enqueues persist beyond the cutoff (Section 8.1; Section 8.3)
 27. Governance updates of `ActiveActorLimit` fail fast when `new_limit > MaxQueueLength`; the default/effective operational cap remains queue-bounded to avoid scheduler actor-loss under full activation (Section 10.2; Section 15)
 28. Timer scheduling is hybrid and deterministic: immediately eligible cadence uses queue continuation, later eligibility uses exact paged wakeups, and bounded jitter reduces synchronized wakeup bursts (Section 7.1 items 3, 4, 5; Section 8.1 item 3)
-29. `IdleStarvationBlocks` increments only when a breaker-inactive post-housekeeping budget exhausts either Weight dimension, resets when both remain positive, and emits `IdleStarvationDetected` on threshold crossing only (Section 8.6 items 3, 4, 5; Section 9.2)
+29. `IdleStarvationState` writes only on first starvation, alert crossing, and clearing; duration derives from `since`, detection and alerted recovery each emit once, and Healthy blocks remain write-free (Section 8.6 items 3, 4, 5; Section 9.2)
 30. Dormant identities and custody-only accounts own no executable program, scheduler/readiness/funding state, recurring reads/writes, fee work, or cycle events; activate/deactivate transitions preserve identity, slots, and balances atomically (Section 2.4)
 
 ---

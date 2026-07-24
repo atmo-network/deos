@@ -217,7 +217,7 @@ Each step is independently reversible and governance-gated. No implicit cross-pa
 
 - `Fail-fast over silent drift`: AAA step errors are handled by explicit `on_error` policy (`ContinueNextStep` / `AbortCycle`). No silent state corruption.
 - `Idempotent operations`: Execution-plan steps are stateless — each execution starts from current on-chain balances, not accumulated state.
-- `Observable automation`: Every cycle emits `CycleStarted` / `StepFailed` / `CycleSummary` events. Silent stalls are detectable via `IdleStarvationBlocks` counter.
+- `Observable automation`: Every cycle emits `CycleStarted` / `StepFailed` / `CycleSummary` events. Silent stalls are detectable through sparse `IdleStarvationState` transitions and detection/recovery events.
 - `Bounded execution`: AAA scheduler uses budget-cap admission with `cycle_weight_upper_bound`. No unbounded loops.
 
 ## 4. Deterministic Execution via AAA Scheduler
@@ -250,7 +250,7 @@ Block N:
 
 - `Budget-capped`: Every housekeeping, queue, cycle, and close unit starts only after two-dimensional admission against the remaining `on_idle` budget.
 - `Deterministic FIFO fairness`: Monotonic tickets preserve bounded FIFO carry-over without class-weight knobs or queue reconstruction; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
-- `Starvation observability`: After the fixed hook base is admitted, exhaustion of either post-housekeeping Weight dimension advances `IdleStarvationBlocks`; recovery remains governance-operated and never dispatches emergency work in `on_initialize`.
+- `Starvation observability`: After the fixed hook base is admitted, exhaustion of either post-housekeeping Weight dimension transitions sparse `IdleStarvationState`; detection and recovery remain observability-only and never dispatch emergency work in `on_initialize`.
 - `Deferred requeue`: Actors that cannot execute because of insufficient weight retain a bounded path to future eligibility; User fee insufficiency remains terminal (`FeeBudgetExhausted`).
 
 ### 4.2 Resilience: Backpressure via Cooldown

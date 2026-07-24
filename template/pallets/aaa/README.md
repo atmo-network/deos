@@ -15,7 +15,7 @@ The current kernel/runtime slice provides:
 - Bounded execution plans over adapter-driven tasks (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, etc.)
 - Monotonic paged FIFO scheduler state (`QueueHead`, `QueueTail`, bounded `QueuePages`) plus time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
-- Bounded `on_idle` execution with starvation observability
+- Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, and entropy
 - Genesis provisioning of System actors through runtime configuration

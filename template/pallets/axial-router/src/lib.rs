@@ -246,6 +246,12 @@ pub mod pallet {
   pub type TrackedAssets<T: Config> =
     StorageValue<_, BoundedVec<AssetKind, T::MaxTrackedAssets>, ValueQuery>;
 
+  /// Reverse index from an Asset Conversion LP token to its canonical pool pair.
+  #[pallet::storage]
+  #[pallet::getter(fn lp_pair_by_token_id)]
+  pub type LpPairByTokenId<T: Config> =
+    StorageMap<_, Twox64Concat, u32, (AssetKind, AssetKind), OptionQuery>;
+
   /// Current router fee (can be updated by governance)
   #[pallet::storage]
   #[pallet::getter(fn router_fee)]
@@ -330,6 +336,8 @@ pub mod pallet {
     MaxTrackedAssetsExceeded,
     /// Router fee exceeds the configured governance mutation bound
     RouterFeeTooHigh,
+    /// An LP token is already indexed to a different pool pair
+    LpTokenPairCollision,
   }
 
   #[pallet::call]
@@ -387,6 +395,15 @@ pub mod pallet {
         Ok(())
       })?;
       Self::deposit_event(Event::TrackedAssetAdded { asset });
+      Ok(())
+    }
+
+    pub fn register_lp_pair(lp_token_id: u32, pair: (AssetKind, AssetKind)) -> DispatchResult {
+      if let Some(existing) = LpPairByTokenId::<T>::get(lp_token_id) {
+        ensure!(existing == pair, Error::<T>::LpTokenPairCollision);
+        return Ok(());
+      }
+      LpPairByTokenId::<T>::insert(lp_token_id, pair);
       Ok(())
     }
 

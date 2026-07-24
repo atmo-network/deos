@@ -216,7 +216,8 @@ verify_weight_file_contract() {
 
     local benchmark_file="$TEMPLATE_DIR/pallets/aaa/src/benchmarking.rs"
     local diagnostic_benchmarks=(
-        "process_remove_liquidity_max_k"
+        "process_remove_liquidity_indexed"
+        "scheduler_on_idle_healthy_empty"
         "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
         "close_aaa_system_pure"
@@ -284,21 +285,33 @@ run_pallet_benchmark() {
     local exclude_args=()
 
     if [[ "$pallet_name" == "pallet_aaa" ]]; then
-        exclude_args=(
-            --exclude-extrinsics "pallet_aaa::process_remove_liquidity_max_k"
-            --exclude-extrinsics "pallet_aaa::scheduler_cooldown_ineligible_idle"
-            --exclude-extrinsics "pallet_aaa::scheduler_wakeup_sparse_gap_recovery"
-            --exclude-extrinsics "pallet_aaa::close_aaa_system_pure"
+        local diagnostic_benchmarks=(
+            "process_remove_liquidity_indexed"
+            "scheduler_on_idle_healthy_empty"
+            "scheduler_cooldown_ineligible_idle"
+            "scheduler_wakeup_sparse_gap_recovery"
+            "close_aaa_system_pure"
         )
+        local benchmark
+        for benchmark in "${diagnostic_benchmarks[@]}"; do
+            if [[ "$EXTRINSIC_PATTERN" != "$benchmark" ]]; then
+                exclude_args+=(--exclude-extrinsics "pallet_aaa::${benchmark}")
+            fi
+        done
 
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" != "1" ]]; then
-            exclude_args+=(
-                --exclude-extrinsics "pallet_aaa::circular_chain_stress"
-                --exclude-extrinsics "pallet_aaa::circular_chain_stress_100k"
-                --exclude-extrinsics "pallet_aaa::circular_chain_100"
-                --exclude-extrinsics "pallet_aaa::circular_chain_1000"
-                --exclude-extrinsics "pallet_aaa::circular_chain_10000"
+            local stress_benchmarks=(
+                "circular_chain_stress"
+                "circular_chain_stress_100k"
+                "circular_chain_100"
+                "circular_chain_1000"
+                "circular_chain_10000"
             )
+            for benchmark in "${stress_benchmarks[@]}"; do
+                if [[ "$EXTRINSIC_PATTERN" != "$benchmark" ]]; then
+                    exclude_args+=(--exclude-extrinsics "pallet_aaa::${benchmark}")
+                fi
+            done
         fi
     fi
 
