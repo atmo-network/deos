@@ -11,8 +11,8 @@ Checks repository-owned Markdown table rows for compact readable syntax:
 exactly one padding space inside every cell boundary, exactly three delimiter
 hyphens, and only optional alignment colons.
 
-With no file arguments, audits every tracked or unignored untracked Markdown
-file in the repository.
+With no file arguments, audits every existing tracked or unignored untracked
+Markdown file in the repository; paths deleted by the current diff are ignored.
 
 Options:
   -h, --help  Show this help message
@@ -44,7 +44,12 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_commands git awk
     if (( ${#FILES[@]} == 0 )); then
-        mapfile -d '' FILES < <(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard -z -- '*.md')
+        local candidates=()
+        mapfile -d '' candidates < <(git -C "$PROJECT_ROOT" ls-files -co --exclude-standard -z -- '*.md')
+        local candidate
+        for candidate in "${candidates[@]}"; do
+            [[ -f "$PROJECT_ROOT/$candidate" ]] && FILES+=("$candidate")
+        done
     fi
     local file
     for file in "${FILES[@]}"; do

@@ -90,16 +90,16 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 
 ## Validate
 
-Fast repository audit:
-
-```bash
-./scripts/validate-local.sh --audit-only
-```
-
-Full changed-scope completion gate:
+Default changed-scope completion gate:
 
 ```bash
 ./.agents/skills/alignment/scripts/completion-gate.sh
+```
+
+Select narrower or escalated routes through the [Project Skill Graph](./.agents/skills/README.md) and [`alignment` route matrix](./.agents/skills/alignment/SKILL.md). Run the broad local audit only when that complete surface is intended:
+
+```bash
+./scripts/validate-local.sh --audit-only
 ```
 
 When tokenomics, formulas, thresholds, or invariants change:

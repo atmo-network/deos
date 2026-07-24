@@ -16,6 +16,15 @@ Options:
 
 Environment:
   ZOMBIENET_CONFIG=template/zombienet.toml
+
+Inputs:
+  Existing Zombienet config, template/chain_spec.json, and node binaries on PATH.
+
+Outputs:
+  Foreground local Zombienet process and its runtime logs.
+
+Side effects:
+  Starts local relay/parachain processes and creates Zombienet temporary state.
 EOF
 }
 

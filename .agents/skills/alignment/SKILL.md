@@ -56,13 +56,28 @@ Use the helper only when the lesson meets that bar:
 
 Project-specific audit leaves live here because they encode DEOS coordination memory. `/scripts` may orchestrate them, but durable project-audit knowledge should stay in this skill layer.
 
-Routine fast path:
+Default changed-scope route:
 
 ```bash
-./scripts/validate-local.sh --audit-only
+./.agents/skills/alignment/scripts/completion-gate.sh
 ```
 
-Network-backed dependency posture is opt-in:
+Select additional leaves only when the touched contract requires them. Routing follows progressive enhancement and graceful degradation: begin with the smallest sufficient canonical route, escalate through declared layers, and represent unavailable optional evidence as an explicit narrower result. Never replace a missing required layer with a weaker semantic claim.
+
+| Changed scope | Targeted route | Excluded by default | Escalation trigger |
+| --- | --- | --- | --- |
+| Docs or context | Completion gate | Cargo, simulator, client, network | Owning code/math/wiki also changed |
+| One Rust package | `ci-local.sh --only CHECK --package NAME` for each required check | Other packages, Wasm, network | Cross-package/runtime boundary changed |
+| One Rust test family | Add `--test-filter NAME` to scoped tests | Unrelated tests | Shared state or integration behavior changed |
+| AAA scheduler slice | `aaa-release-gate.sh --quick`, then completion gate | Full stress and occupancy profile | Capacity, fairness, liveness, or release gate changed |
+| Benchmark code | `benchmarks.sh --check`, then one exact extrinsic or owning pallet | Other pallets and runtime release build | Production weights or Wasm accepted |
+| Runtime integration | Scoped `deos-runtime` tests, then completion gate | Full workspace, E2E, client | Runtime metadata/Wasm or network behavior changed |
+| Upgrade delivery | `upgrade-delivery` evidence ladder through shared root scripts | Live relay and publication | Explicit target, matching authorization, and relay approval exist |
+| Staking delivery | `staking-delivery` readiness ladder through the shared bootstrap script | Signing, funds, governance execution | Explicit target state and mutation approval exist |
+| Wiki only | Wiki trust/consolidation leaves | Client build and Cargo | Renderer/client contract changed |
+| Full release | `validate-local.sh --all` | Nothing | Explicit release acceptance only |
+
+Network-backed dependency posture remains opt-in:
 
 ```bash
 ./scripts/validate-local.sh --audit-only --dependency-audit
@@ -74,7 +89,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover architecture drift, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
+Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
 
 ### Intensive Evolution Rule
 
@@ -106,7 +121,9 @@ Local delivery slices should pass the repo-local completion gate before continui
 ./.agents/skills/alignment/scripts/completion-gate.sh
 ```
 
-The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, cargo check, runtime unit tests for runtime-source changes, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
+The gate runs the smallest meaningful changed-scope set: architecture audit, shell syntax, simulator, Cargo checks, runtime unit tests for runtime-source changes, Markdown table/readability checks, wiki trust, release-line audit, and knowledge sync as applicable. It is a project validation entrypoint, not a dependency on any one operator's local execution-loop skill.
+
+`auditor.sh` and `completion-gate.sh` use compact orchestration output by default: successful runs report only the step, duration, and result. Failures retain complete temporary logs and print a bounded tail; `DEOS_VERBOSE=1` restores the full nested protocol for diagnosis.
 
 Useful flags:
 

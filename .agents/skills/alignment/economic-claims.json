@@ -139,17 +139,17 @@
     {
       "id": "aaa-queue-dedup",
       "doc": "docs/aaa.architecture.en.md",
-      "claim": "ActorQueueEpoch prevents duplicate queue entries across same-epoch enqueue attempts.",
+      "claim": "ActorHot.queue_ticket prevents duplicate live queue entries across repeated enqueue attempts.",
       "status": "shipped invariant",
       "proof_kind": "invariant",
       "tautology_risk": "low",
       "falsification_note": "Removing same-epoch queue dedup causes repeated enqueue attempts for one actor to produce more than one runnable queue entry.",
       "code_anchors": [
-        "template/pallets/aaa/src/lib.rs::ActorQueueEpoch",
-        "template/pallets/aaa/src/scheduler.rs::enqueue"
+        "template/pallets/aaa/src/types.rs::ActorHot",
+        "template/pallets/aaa/src/scheduler.rs::paged_enqueue"
       ],
       "falsification_tests": [
-        "template/pallets/aaa/src/tests.rs::actor_queue_epoch_deduplicates_same_block_enqueue_attempts"
+        "template/pallets/aaa/src/tests.rs::paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation"
       ]
     },
     {

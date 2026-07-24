@@ -37,7 +37,7 @@ confidence: 0.85
 
 TMCTOL uses treasury-owned-liquidity buckets to separate economic intents and preserve reserve provenance. The current reference topology distinguishes immutable Bucket A custody from optional B/C/D unwind and treasury lanes.
 
-Activation status matters: Bucket A is an immutable custody sink, while Bucket B, C, D and their paired treasury actors start as `Noop`. Any later unwind or treasury behavior requires an explicit bounded plan after pool and treasury readiness; balance thresholds do not activate these lanes automatically.
+Activation status matters: Bucket A is an immutable custody-only sink, while Bucket B, C, D and their paired treasury roles start as dormant System identities without programs. Any later unwind or treasury behavior requires explicit activation with a bounded plan after pool and treasury readiness; balance thresholds do not activate these lanes automatically.
 
 ## Bucket A: Immediate Liquidity
 
@@ -56,7 +56,7 @@ Bucket A holds the resulting LP; it does not itself add liquidity or execute a f
 
 ## Optional Buckets B, C, and D
 
-Buckets B, C, and D preserve separate policy lanes, but the current genesis configuration assigns each a timer schedule with a `Noop` execution plan. Their paired Treasury B/C/D actors also start as `Noop`; Bucket D remains the explicitly dormant reserve.
+Buckets B, C, and D preserve separate policy lanes, but the current genesis configuration keeps each identity dormant and outside scheduler enrollment. Their paired Treasury B/C/D identities also start dormant; Bucket D remains the explicitly dormant reserve.
 
 The architecture provides a production-admissible two-actor unwind family. The Bucket transfers a configured LP percentage; the corresponding Treasury removes all preservable balance of that configured system LP asset in its own cycle, so both underlying assets are born directly in Treasury custody. Treasury does not filter the LP sender: pairing names the reference lane rather than an ingress permission. This capability does not imply genesis activation:
 
@@ -71,7 +71,7 @@ No current contract defines automatic threshold-driven wakeups for C or D.
 
 ## Why Paired Treasuries Matter
 
-Each non-immediate bucket has a distinct paired treasury account in the reference topology. Those lanes keep provenance and policy intent visible even while their actors remain `Noop`:
+Each non-immediate bucket has a distinct paired treasury account in the reference topology. Those lanes keep provenance and policy intent visible even while their System identities remain dormant:
 
 ```text
 Bucket B -> Treasury B lane

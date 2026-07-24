@@ -142,13 +142,12 @@ thread_local! {
   static DONATED_LIQUIDITY: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset, TestAsset), (Balance, Balance)>> =
     RefCell::new(alloc::collections::BTreeMap::new());
 
-  static MOCK_ENTROPY: RefCell<Option<[u8; 32]>> = RefCell::new(None);
-  static REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS: RefCell<bool> = RefCell::new(false);
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
+  static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
-  static FAIL_CLOSE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
+  static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
@@ -187,12 +186,11 @@ pub fn reset_mock_adapters() {
   STAKED.with(|b| b.borrow_mut().clear());
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
-  MOCK_ENTROPY.with(|e| *e.borrow_mut() = None);
-  REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow_mut() = false);
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
+  FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
-  FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
+  FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
@@ -213,6 +211,7 @@ impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
     native_asset: TestAsset,
     amount: Balance,
   ) -> DispatchResult {
+    FEE_COLLECTIONS.with(|collections| collections.borrow_mut().push(amount));
     MockAssetOps::transfer(payer, fee_sink, native_asset, amount)
   }
 }
@@ -226,6 +225,9 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     asset: TestAsset,
     amount: Balance,
   ) -> Result<(), DispatchError> {
+    if FAIL_TRANSFER_TO.with(|target| *target.borrow() == Some(*to)) {
+      return Err(DispatchError::Other("MockTransferTargetFailed"));
+    }
     match asset {
       TestAsset::Native => {
         if *to == TestFeeSink::get() && FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow()) {
@@ -351,20 +353,6 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     }
     amount >= Self::minimum_balance(asset)
   }
-
-  fn total_issuance(asset: TestAsset) -> Balance {
-    match asset {
-      TestAsset::Native => {
-        use polkadot_sdk::frame_support::traits::Currency;
-        <Balances as Currency<AccountId>>::total_issuance()
-      }
-      _ => {
-        let minted = MINTED.with(|m| m.borrow().get(&asset).copied().unwrap_or(0));
-        let burned = BURNED.with(|b| b.borrow().get(&asset).copied().unwrap_or(0));
-        minted.saturating_sub(burned)
-      }
-    }
-  }
 }
 
 pub fn staked_balance(who: AccountId, asset: TestAsset) -> Balance {
@@ -386,6 +374,10 @@ pub fn donated_liquidity(
       .copied()
       .unwrap_or((0, 0))
   })
+}
+
+pub fn set_fail_transfer_to(target: Option<AccountId>) {
+  FAIL_TRANSFER_TO.with(|value| *value.borrow_mut() = target);
 }
 
 pub fn set_fail_dex_after_input_transfer(value: bool) {
@@ -481,23 +473,6 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
   ) -> Result<(Balance, Balance), DispatchError> {
     let half = lp_amount / 2;
     Ok((half, half))
-  }
-
-  fn get_pool_reserves(asset_a: TestAsset, asset_b: TestAsset) -> Option<(Balance, Balance)> {
-    let key = if asset_a <= asset_b {
-      (asset_a, asset_b)
-    } else {
-      (asset_b, asset_a)
-    };
-    POOL_RESERVES.with(|p| {
-      let map = p.borrow();
-      let (ra, rb) = map.get(&key).copied()?;
-      if asset_a <= asset_b {
-        Some((ra, rb))
-      } else {
-        Some((rb, ra))
-      }
-    })
   }
 }
 
@@ -711,7 +686,11 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     Ok(())
   }
 
-  fn run_address_event_ingress(recipient: &AccountId) -> bool {
+  fn run_address_event_ingress(
+    recipient: &AccountId,
+    _source: &AccountId,
+    _amount: Balance,
+  ) -> bool {
     let event = BENCHMARK_INGRESS.with(|pending| *pending.borrow());
     let Some((event_recipient, source, amount)) = event else {
       return false;
@@ -743,19 +722,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     Ok(())
   }
 
-  fn clear_address_event_ingress_events() {
-    BENCHMARK_INGRESS.with(|event| *event.borrow_mut() = None);
-  }
-
-  fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight {
-    let _ = crate::Pallet::<Test>::drain_address_event_overflow(1);
-    polkadot_sdk::sp_weights::Weight::zero()
-  }
-
-  fn setup_remove_liquidity_max_k(
-    owner: &AccountId,
-    _max_scan: u32,
-  ) -> Result<(TestAsset, Balance), DispatchError> {
+  fn setup_remove_liquidity(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
     let lp_asset = TestAsset::Local(1);
     let lp_amount = 1_000_000u128;
     MockAssetOps::mint(owner, lp_asset, lp_amount)?;
@@ -865,13 +832,6 @@ impl Get<u32> for TestMaxSweepPerBlock {
   }
 }
 
-pub struct TestRequireSecureEntropyForProbabilisticTasks;
-impl Get<bool> for TestRequireSecureEntropyForProbabilisticTasks {
-  fn get() -> bool {
-    REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow())
-  }
-}
-
 pub struct MockFundingAuthority;
 
 impl crate::adapters::FundingAuthority<AccountId> for MockFundingAuthority {
@@ -897,34 +857,29 @@ impl pallet_aaa::Config for Test {
   type MaxUserExecutionPlanSteps = ConstU32<3>;
   type MaxSystemExecutionPlanSteps = ConstU32<10>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxIngressOverflowQueue = ConstU32<256>;
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<8>;
   type MaxExecutionsPerBlock = ConstU32<3>;
   type MaxQueueLength = ConstU32<1024>;
-  type MaxWakeupBucketSize = ConstU32<1024>;
+  type QueuePageSize = ConstU32<32>;
+  type WakeupPageSize = ConstU32<32>;
+  type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxWakeupsPerBlock = ConstU32<64>;
-  type MaxSpilloverBlocks = ConstU32<8>;
-  type MaxQueueInsertionsPerBlock = ConstU32<64>;
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;
   type MaxSplitTransferLegs = ConstU32<8>;
-  type MaxAdapterScan = ConstU32<64>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = ConstU32<64>;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
   type GuaranteedOnIdleWeight = TestGuaranteedOnIdleWeight;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
   type MaxActiveActors = ConstU32<10_000>;
+  type MaxActorIdentities = ConstU32<10_000>;
   type StepBaseFee = TestStepBaseFee;
   type ConditionReadFee = TestConditionReadFee;
   type AaaCreationFee = TestAaaCreationFee;
   type WeightToFee = TestWeightToFee;
   type TaskWeightInfo = ();
-  type RequireSecureEntropyForProbabilisticTasks = TestRequireSecureEntropyForProbabilisticTasks;
-  type EntropyProvider = SwitchableEntropyProvider;
-  type AtomicityHook = MockAtomicityHook;
-  type AddressEventIngressHook = ();
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
@@ -967,59 +922,26 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   ext
 }
 
-// --- Switchable EntropyProvider for timer probability tests ---
-
-pub fn set_mock_entropy(value: Option<[u8; 32]>) {
-  MOCK_ENTROPY.with(|e| *e.borrow_mut() = value);
-}
-
-pub fn set_require_secure_entropy_for_probabilistic_tasks(value: bool) {
-  REQUIRE_SECURE_ENTROPY_FOR_PROBABILISTIC_TASKS.with(|v| *v.borrow_mut() = value);
-}
-
 pub fn set_fail_create_checkpoint(value: bool) {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = value);
 }
 
-pub fn set_fail_close_checkpoint(value: bool) {
-  FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = value);
+pub fn fee_collections() -> alloc::vec::Vec<Balance> {
+  FEE_COLLECTIONS.with(|collections| collections.borrow().clone())
+}
+
+pub fn clear_fee_collections() {
+  FEE_COLLECTIONS.with(|collections| collections.borrow_mut().clear());
 }
 
 pub fn set_fail_fee_sink_transfer(value: bool) {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = value);
 }
 
-pub struct SwitchableEntropyProvider;
-
-impl crate::EntropyProvider<polkadot_sdk::sp_core::H256> for SwitchableEntropyProvider {
-  fn entropy(_subject: &[u8]) -> Option<polkadot_sdk::sp_core::H256> {
-    MOCK_ENTROPY.with(|e| {
-      e.borrow()
-        .map(|bytes| polkadot_sdk::sp_core::H256::from_slice(&bytes))
-    })
+pub(crate) fn create_atomicity_checkpoint(_aaa_id: u64) -> DispatchResult {
+  let should_fail = FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow());
+  if should_fail {
+    return Err(DispatchError::Other("AtomicityCreateCheckpointFailed"));
   }
-
-  fn is_secure_for_financial_probability() -> bool {
-    MOCK_ENTROPY.with(|e| e.borrow().is_some())
-  }
-}
-
-pub struct MockAtomicityHook;
-
-impl crate::AtomicityHook for MockAtomicityHook {
-  fn on_create_checkpoint(_aaa_id: u64) -> DispatchResult {
-    let should_fail = FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow());
-    if should_fail {
-      return Err(DispatchError::Other("AtomicityCreateCheckpointFailed"));
-    }
-    Ok(())
-  }
-
-  fn on_close_checkpoint(_aaa_id: u64) -> DispatchResult {
-    let should_fail = FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow());
-    if should_fail {
-      return Err(DispatchError::Other("AtomicityCloseCheckpointFailed"));
-    }
-    Ok(())
-  }
+  Ok(())
 }

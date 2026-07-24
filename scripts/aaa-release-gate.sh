@@ -11,17 +11,19 @@ usage() {
     cat <<'EOF'
 Usage: aaa-release-gate.sh [OPTIONS]
 
-Runs the documented AAA scheduler release gate against deos-runtime.
+Runs the AAA scheduler release gate against deos-runtime and the independent embedding runtime.
 
 Options:
   --skip-occupancy-profile   Skip the 10k occupancy diagnostics profile
-  --quick                    Run only fast checks (clippy + light tests)
+  --quick                    Run only fast checks (Clippy + light tests)
   -h, --help                 Show this help message
 
 Environment:
   CARGO_PROFILE=release|dev
   INCLUDE_OCCUPANCY_PROFILE=0|1
   QUICK_MODE=0|1
+  DEOS_VERBOSE=0|1
+  DEOS_FAILURE_TAIL_LINES=N
 EOF
 }
 
@@ -56,22 +58,32 @@ check_prerequisites() {
     log_success "Release gate prerequisites checked"
 }
 
-main() {
-    parse_args "$@"
-    phase_banner "DEOS AAA release gate"
-    check_prerequisites
-
-    log_info "Starting AAA scheduler release gate"
-    log_info "Cargo profile: $CARGO_PROFILE"
-    log_info "Quick mode: $QUICK_MODE"
-
+run_gate() {
     if [[ "$QUICK_MODE" == "1" ]]; then
-        log_info "Quick mode enabled - running only fast checks"
-        run_shell_step "AAA quick gate: clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p deos-runtime --all-targets -- -D warnings"
-        run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-aaa --lib"
-        log_success "AAA quick gate completed successfully"
-        exit 0
+        run_shell_step "AAA quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p deos-runtime -p aaa-embedding-runtime --all-targets -- -D warnings"
+        run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-aaa --lib && cargo test -q -p aaa-embedding-runtime --lib"
+        return
     fi
+
+    run_shell_step \
+        "AAA gate: independent embedding default profile" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p aaa-embedding-runtime --locked --lib"
+
+    run_shell_step \
+        "AAA gate: independent embedding DEX profile" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p aaa-embedding-runtime --locked --lib --features dex-fixture"
+
+    run_shell_step \
+        "AAA gate: independent embedding try-runtime profile" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p aaa-embedding-runtime --locked --lib --features try-runtime"
+
+    run_shell_step \
+        "AAA gate: independent embedding no-std contract" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo check --$CARGO_PROFILE -p aaa-embedding-runtime --locked --no-default-features"
 
     run_shell_step \
         "AAA gate: over-capacity fairness matrix" \
@@ -93,6 +105,11 @@ main() {
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked stress_10k_actors_queue_scheduler -- --ignored --nocapture"
 
+    run_shell_step \
+        "AAA gate: 10k dense wakeup convergence" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked checkpoint_a_s6_dense_10k_wakeups_converge_without_drops -- --ignored --nocapture"
+
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" == "1" ]]; then
         run_shell_step \
             "AAA gate: 10k queue/wakeup occupancy profile" \
@@ -101,10 +118,36 @@ main() {
     else
         log_warning "Skipping occupancy profile"
     fi
+}
 
+main() {
+    parse_args "$@"
+    phase_banner "DEOS AAA release gate"
+    check_prerequisites
+    log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | occupancy: $INCLUDE_OCCUPANCY_PROFILE"
+    run_gate
+    phase_banner "Summary"
     log_success "AAA scheduler release gate completed successfully"
 }
 
+run_entrypoint() {
+    if [[ "${1:-}" == "--internal" ]]; then
+        shift
+        main "$@"
+        return
+    fi
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            main "$@"
+            return
+        fi
+    done
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    run_command_step "DEOS AAA release gate" "" "$script_path" --internal "$@"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    run_entrypoint "$@"
 fi

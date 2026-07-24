@@ -69,6 +69,15 @@ pub trait MintOutputResolver<AccountId> {
 }
 
 pub trait MintDistributionHook<AccountId> {
+  fn before_collateral_transfer(
+    _source: &AccountId,
+    _asset: AssetKind,
+    _account: &AccountId,
+    _amount: Balance,
+  ) -> Result<(), DispatchError> {
+    Ok(())
+  }
+
   fn before_user_mint(
     _minted_asset: AssetKind,
     _account: &AccountId,
@@ -78,9 +87,22 @@ pub trait MintDistributionHook<AccountId> {
   }
 
   fn before_sink_mint(
+    _source: &AccountId,
     _minted_asset: AssetKind,
     _account: &AccountId,
     _amount: Balance,
+  ) -> Result<(), DispatchError> {
+    Ok(())
+  }
+
+  fn after_distribution(
+    _source: &AccountId,
+    _collateral_asset: AssetKind,
+    _collateral_account: &AccountId,
+    _collateral_amount: Balance,
+    _minted_asset: AssetKind,
+    _minted_account: &AccountId,
+    _minted_amount: Balance,
   ) -> Result<(), DispatchError> {
     Ok(())
   }
@@ -446,6 +468,12 @@ pub mod pallet {
       Self::ensure_asset_exists(foreign_asset)?;
       let mint_amount = Self::calculate_total_mint(token_asset, foreign_amount)?;
       let outputs = T::MintOutputResolver::output_accounts(token_asset);
+      T::MintDistributionHook::before_collateral_transfer(
+        who,
+        foreign_asset,
+        &outputs.collateral,
+        foreign_amount,
+      )?;
       match foreign_asset {
         AssetKind::Native => {
           T::Currency::transfer(
@@ -471,17 +499,36 @@ pub mod pallet {
         AssetKind::Native => {
           T::MintDistributionHook::before_user_mint(token_asset, recipient, user_allocation)?;
           T::Currency::mint_into(recipient, user_allocation)?;
-          T::MintDistributionHook::before_sink_mint(token_asset, &outputs.minted, zap_allocation)?;
+          T::MintDistributionHook::before_sink_mint(
+            who,
+            token_asset,
+            &outputs.minted,
+            zap_allocation,
+          )?;
           T::Currency::mint_into(&outputs.minted, zap_allocation)?;
           TotalNativeMinted::<T>::mutate(|acc| *acc = acc.saturating_add(mint_amount));
         }
         AssetKind::Local(id) | AssetKind::Foreign(id) => {
           T::MintDistributionHook::before_user_mint(token_asset, recipient, user_allocation)?;
           T::Assets::mint_into(id, recipient, user_allocation)?;
-          T::MintDistributionHook::before_sink_mint(token_asset, &outputs.minted, zap_allocation)?;
+          T::MintDistributionHook::before_sink_mint(
+            who,
+            token_asset,
+            &outputs.minted,
+            zap_allocation,
+          )?;
           T::Assets::mint_into(id, &outputs.minted, zap_allocation)?;
         }
       }
+      T::MintDistributionHook::after_distribution(
+        who,
+        foreign_asset,
+        &outputs.collateral,
+        foreign_amount,
+        token_asset,
+        &outputs.minted,
+        zap_allocation,
+      )?;
       Self::deposit_event(Event::ZapAllocationDistributed {
         token_asset,
         user_allocation,

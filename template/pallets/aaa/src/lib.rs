@@ -32,9 +32,8 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
   fn setup_donate_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
-  fn setup_remove_liquidity_max_k(
+  fn setup_remove_liquidity(
     owner: &AccountId,
-    max_scan: u32,
   ) -> Result<(AssetId, Balance), polkadot_sdk::sp_runtime::DispatchError>;
   fn setup_stake(
     owner: &AccountId,
@@ -55,37 +54,14 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
     source: &AccountId,
     amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult;
-  fn run_address_event_ingress(recipient: &AccountId) -> bool;
+  fn run_address_event_ingress(recipient: &AccountId, source: &AccountId, amount: Balance) -> bool;
   fn setup_xcm_asset_deposit() -> polkadot_sdk::sp_runtime::DispatchResult;
   fn run_xcm_asset_deposit(
     recipient: &AccountId,
     source: &AccountId,
     amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult;
-  fn clear_address_event_ingress_events();
-  fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight;
 }
-
-pub trait EntropyProvider<Hash> {
-  fn entropy(subject: &[u8]) -> Option<Hash>;
-  fn secure_entropy_for_financial_probability(subject: &[u8]) -> Option<Hash> {
-    Self::entropy(subject)
-  }
-  fn is_secure_for_financial_probability() -> bool {
-    false
-  }
-}
-
-pub trait AtomicityHook {
-  fn on_create_checkpoint(_aaa_id: u64) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-    Ok(())
-  }
-  fn on_close_checkpoint(_aaa_id: u64) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-    Ok(())
-  }
-}
-
-impl AtomicityHook for () {}
 
 pub trait FeeCollector<AccountId, AssetId, Balance> {
   fn collect_fee(
@@ -96,41 +72,17 @@ pub trait FeeCollector<AccountId, AssetId, Balance> {
   ) -> polkadot_sdk::frame_support::dispatch::DispatchResult;
 }
 
-pub trait AddressEventIngressHook<BlockNumber> {
-  fn ingest(
-    _now: BlockNumber,
-    _remaining_weight: polkadot_sdk::frame_support::weights::Weight,
-  ) -> polkadot_sdk::frame_support::weights::Weight;
-}
-
-impl<BlockNumber> AddressEventIngressHook<BlockNumber> for () {
-  fn ingest(
-    _now: BlockNumber,
-    _remaining_weight: polkadot_sdk::frame_support::weights::Weight,
-  ) -> polkadot_sdk::frame_support::weights::Weight {
-    polkadot_sdk::frame_support::weights::Weight::zero()
-  }
-}
-
-pub struct NoEntropyProvider;
-
-impl<Hash> EntropyProvider<Hash> for NoEntropyProvider {
-  fn entropy(_subject: &[u8]) -> Option<Hash> {
-    None
-  }
-}
-
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, EntropyProvider, FeeCollector,
-    FundingAuthority, LiquidityDonationOps, TaskWeightInfo, WeightInfo,
+    AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps, TaskWeightInfo,
+    WeightInfo,
   };
   use crate::adapters::StakingOps as _;
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{PalletId, traits::EnsureOrigin},
-    sp_runtime::traits::Zero,
+    sp_runtime::traits::{CheckedAdd, One, SaturatedConversion, Saturating, Zero},
     sp_weights::WeightToFee as _,
   };
 
@@ -175,8 +127,6 @@ pub mod pallet {
     #[pallet::constant]
     type MaxFundingTrackedAssets: Get<u32>;
     #[pallet::constant]
-    type MaxIngressOverflowQueue: Get<u32>;
-    #[pallet::constant]
     type MaxConditionsPerStep: Get<u32>;
     #[pallet::constant]
     type MaxOwnerSlots: Get<u8>;
@@ -184,22 +134,23 @@ pub mod pallet {
     type MaxExecutionsPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxQueueLength: Get<u32>;
+    /// Physical I/O granularity for the monotonic active FIFO.
     #[pallet::constant]
-    type MaxWakeupBucketSize: Get<u32>;
+    type QueuePageSize: Get<u32>;
+    /// Physical I/O granularity for the paged temporal wakeup index.
+    #[pallet::constant]
+    type WakeupPageSize: Get<u32>;
+    /// Independent ceiling for physical queue-entry inspection per scheduler pass.
+    #[pallet::constant]
+    type MaxQueueEntriesScannedPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxWakeupsPerBlock: Get<u32>;
-    #[pallet::constant]
-    type MaxSpilloverBlocks: Get<u32>;
-    #[pallet::constant]
-    type MaxQueueInsertionsPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxSweepPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxWhitelistSize: Get<u32>;
     #[pallet::constant]
     type MaxSplitTransferLegs: Get<u32>;
-    #[pallet::constant]
-    type MaxAdapterScan: Get<u32>;
     #[pallet::constant]
     type MaxExecutionDelayBlocks: Get<BlockNumberFor<Self>>;
     #[pallet::constant]
@@ -215,6 +166,9 @@ pub mod pallet {
     /// Set to 10,000 for production use cases.
     #[pallet::constant]
     type MaxActiveActors: Get<u32>;
+    /// Hard cap across active and dormant actor identities.
+    #[pallet::constant]
+    type MaxActorIdentities: Get<u32>;
 
     /// Per-step flat evaluation cost
     #[pallet::constant]
@@ -228,17 +182,6 @@ pub mod pallet {
     type WeightToFee: polkadot_sdk::sp_weights::WeightToFee<Balance = Self::Balance>;
     /// Runtime-bound upper weights for every AAA task variant
     type TaskWeightInfo: TaskWeightInfo;
-    /// If true, probabilistic timer schedules with economically sensitive tasks
-    /// require a secure external entropy provider
-    #[pallet::constant]
-    type RequireSecureEntropyForProbabilisticTasks: Get<bool>;
-    /// Optional external entropy hook for timer probability sampling
-    type EntropyProvider: EntropyProvider<Self::Hash>;
-    /// Testable atomicity checkpoints for create/close lifecycle paths
-    type AtomicityHook: AtomicityHook;
-
-    /// Runtime ingress hook for address-event notifications
-    type AddressEventIngressHook: AddressEventIngressHook<BlockNumberFor<Self>>;
 
     type FeeSink: Get<Self::AccountId>;
     type FeeCollector: FeeCollector<Self::AccountId, Self::AssetId, Self::Balance>;
@@ -308,34 +251,41 @@ pub mod pallet {
   pub type FundingSourcePolicyOf<T> =
     FundingSourcePolicy<<T as frame_system::Config>::AccountId, <T as Config>::MaxWhitelistSize>;
 
+  pub type ProgramInputOf<T> =
+    ProgramInput<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>, FundingSourcePolicyOf<T>>;
+
   pub type FundingSnapshotsOf<T> = BoundedBTreeMap<
     <T as Config>::AssetId,
-    FundingBatch<<T as Config>::Balance, BlockNumberFor<T>>,
+    FundingBatch<<T as Config>::Balance>,
     <T as Config>::MaxFundingTrackedAssets,
   >;
 
   pub type FundingTrackedAssetsOf<T> =
     BoundedBTreeSet<<T as Config>::AssetId, <T as Config>::MaxFundingTrackedAssets>;
 
-  pub type IngressOverflowEventOf<T> = IngressOverflowEvent<
-    AaaId,
-    <T as Config>::AssetId,
-    <T as Config>::Balance,
-    <T as frame_system::Config>::AccountId,
-  >;
+  pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
+  pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
+  pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
+  pub type WakeupCursorPageOf<T> = BoundedVec<BlockNumberFor<T>, <T as Config>::WakeupPageSize>;
 
   pub type AaaInstanceOf<T> = AaaInstance<
     <T as frame_system::Config>::AccountId,
     BlockNumberFor<T>,
     ScheduleOf<T>,
     ExecutionPlanOf<T>,
-    FundingSourcePolicyOf<T>,
-    FundingSnapshotsOf<T>,
-    FundingTrackedAssetsOf<T>,
     BalanceOf<T>,
   >;
 
-  pub type AaaReadinessStateOf<T> = AaaReadinessState<BlockNumberFor<T>>;
+  pub type ActorHotStateOf<T> =
+    ActorHotState<<T as frame_system::Config>::AccountId, BlockNumberFor<T>, BalanceOf<T>>;
+
+  pub type ActorProgramStateOf<T> =
+    ActorProgramState<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>>;
+
+  pub type ActorFundingStateOf<T> =
+    ActorFundingState<FundingSourcePolicyOf<T>, FundingSnapshotsOf<T>, FundingTrackedAssetsOf<T>>;
+
+  pub type DormantAaaIdentityOf<T> = DormantAaaIdentity<<T as frame_system::Config>::AccountId>;
 
   #[pallet::pallet]
   #[pallet::storage_version(STORAGE_VERSION)]
@@ -348,12 +298,121 @@ pub mod pallet {
   pub type NextAaaId<T> = StorageValue<_, AaaId, ValueQuery>;
 
   #[pallet::storage]
-  pub type SweepCursor<T: Config> = StorageValue<_, AaaId, ValueQuery>;
+  #[pallet::getter(fn actor_hot)]
+  pub type ActorHot<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorHotStateOf<T>, OptionQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn aaa_instances)]
-  pub type AaaInstances<T: Config> =
-    StorageMap<_, Blake2_128Concat, AaaId, AaaInstanceOf<T>, OptionQuery>;
+  #[pallet::getter(fn actor_program)]
+  pub type ActorProgram<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorProgramStateOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn actor_funding)]
+  pub type ActorFunding<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorFundingStateOf<T>, OptionQuery>;
+
+  impl<T: Config> Pallet<T> {
+    pub(crate) fn compose_active_actor(
+      hot: ActorHotStateOf<T>,
+      program: ActorProgramStateOf<T>,
+    ) -> AaaInstanceOf<T> {
+      AaaInstance {
+        sovereign_account: hot.sovereign_account,
+        owner: hot.owner,
+        actor_class: hot.actor_class,
+        mutability: hot.mutability,
+        lifecycle: hot.lifecycle,
+        schedule: program.schedule,
+        schedule_window: program.schedule_window,
+        execution_plan: program.execution_plan,
+        cycle_nonce: hot.cycle_nonce,
+        auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
+        consecutive_failures: hot.consecutive_failures,
+        manual_trigger_pending: hot.pending_signal,
+        queue_ticket: hot.queue_ticket,
+        last_user_queue_mutation_block: hot.last_user_queue_mutation_block,
+        cycle_weight_upper: hot.cycle_weight_upper,
+        cycle_fee_upper: hot.cycle_fee_upper,
+        funding_tracked_count: hot.funding_tracked_count,
+        pending_funding_count: hot.pending_funding_count,
+        has_pending_funding: hot.has_pending_funding,
+        first_eligible_at: hot.first_eligible_at,
+        last_cycle_block: hot.last_cycle_block,
+      }
+    }
+
+    pub(crate) fn active_actor_snapshot(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
+      Some(Self::compose_active_actor(
+        ActorHot::<T>::get(aaa_id)?,
+        ActorProgram::<T>::get(aaa_id)?,
+      ))
+    }
+
+    pub fn pending_signal(aaa_id: AaaId) -> bool {
+      ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal)
+    }
+
+    pub(crate) fn active_actor_exists(aaa_id: AaaId) -> bool {
+      ActorHot::<T>::contains_key(aaa_id) && ActorProgram::<T>::contains_key(aaa_id)
+    }
+
+    fn split_active_actor(
+      instance: AaaInstanceOf<T>,
+    ) -> (ActorHotStateOf<T>, ActorProgramStateOf<T>) {
+      (
+        ActorHotState {
+          sovereign_account: instance.sovereign_account,
+          owner: instance.owner,
+          actor_class: instance.actor_class,
+          mutability: instance.mutability,
+          lifecycle: instance.lifecycle,
+          cycle_nonce: instance.cycle_nonce,
+          auto_close_at_cycle_nonce: instance.auto_close_at_cycle_nonce,
+          consecutive_failures: instance.consecutive_failures,
+          pending_signal: instance.manual_trigger_pending,
+          queue_ticket: instance.queue_ticket,
+          wakeup_pointer: None,
+          terminal_at: instance
+            .schedule_window
+            .map(|window| window.end.saturating_add(One::one())),
+          last_user_queue_mutation_block: instance.last_user_queue_mutation_block,
+          cycle_weight_upper: instance.cycle_weight_upper,
+          cycle_fee_upper: instance.cycle_fee_upper,
+          funding_tracked_count: instance.funding_tracked_count,
+          pending_funding_count: instance.pending_funding_count,
+          has_pending_funding: instance.has_pending_funding,
+          first_eligible_at: instance.first_eligible_at,
+          last_cycle_block: instance.last_cycle_block,
+        },
+        ActorProgramState {
+          schedule: instance.schedule,
+          schedule_window: instance.schedule_window,
+          execution_plan: instance.execution_plan,
+        },
+      )
+    }
+
+    pub(crate) fn insert_active_actor(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
+      let (hot, program) = Self::split_active_actor(instance);
+      ActorHot::<T>::insert(aaa_id, hot);
+      ActorProgram::<T>::insert(aaa_id, program);
+    }
+
+    pub(crate) fn remove_active_actor(aaa_id: AaaId) {
+      ActorHot::<T>::remove(aaa_id);
+      ActorProgram::<T>::remove(aaa_id);
+    }
+  }
+
+  #[pallet::storage]
+  #[pallet::getter(fn dormant_aaa_identities)]
+  pub type DormantAaaIdentities<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, DormantAaaIdentityOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn actor_identity_count)]
+  pub type ActorIdentityCount<T> = StorageValue<_, u32, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn active_aaa_count)]
@@ -363,44 +422,49 @@ pub mod pallet {
   pub type ClosedSystemAaaIds<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, Mutability, OptionQuery>;
 
+  /// Canonical head of the active monotonic paged FIFO.
   #[pallet::storage]
-  pub type CurrentQueue<T: Config> =
-    StorageValue<_, BoundedVec<AaaId, T::MaxQueueLength>, ValueQuery>;
+  #[pallet::getter(fn queue_head)]
+  pub type QueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
 
+  /// Next never-used ticket in the monotonic paged FIFO.
   #[pallet::storage]
-  pub type NextQueue<T: Config> = StorageValue<_, BoundedVec<AaaId, T::MaxQueueLength>, ValueQuery>;
+  #[pallet::getter(fn queue_tail)]
+  pub type QueueTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
 
+  /// Bounded physical pages for the logical active FIFO.
   #[pallet::storage]
-  pub type WakeupIndex<T: Config> = StorageMap<
+  #[pallet::getter(fn queue_pages)]
+  pub type QueuePages<T: Config> =
+    StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
+
+  /// Fixed-size pages for the next temporal wakeup substrate.
+  #[pallet::storage]
+  #[pallet::getter(fn wakeup_pages)]
+  pub type WakeupPages<T: Config> = StorageMap<
     _,
     Blake2_128Concat,
-    BlockNumberFor<T>,
-    BoundedVec<AaaId, T::MaxWakeupBucketSize>,
-    ValueQuery,
+    (BlockNumberFor<T>, WakeupPageId),
+    WakeupPageOf<T>,
+    OptionQuery,
   >;
 
+  /// Small per-block ownership and allocation metadata for temporal pages.
   #[pallet::storage]
-  pub type MinWakeupBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
+  #[pallet::getter(fn wakeup_buckets)]
+  pub type WakeupBuckets<T: Config> =
+    StorageMap<_, Blake2_128Concat, BlockNumberFor<T>, WakeupBucketState, OptionQuery>;
 
+  /// Paged binary min-heap of distinct wakeup blocks for sparse due discovery.
   #[pallet::storage]
-  pub type ScheduledWakeupBlock<T: Config> =
-    StorageMap<_, Blake2_128Concat, AaaId, BlockNumberFor<T>, OptionQuery>;
+  #[pallet::getter(fn wakeup_cursor_pages)]
+  pub type WakeupCursorPages<T: Config> =
+    StorageMap<_, Blake2_128Concat, WakeupPageId, WakeupCursorPageOf<T>, OptionQuery>;
 
+  /// Logical length of the paged sparse-wakeup cursor heap.
   #[pallet::storage]
-  pub type WakeupScheduleDrops<T: Config> = StorageValue<_, u64, ValueQuery>;
-
-  #[pallet::storage]
-  pub type WakeupRetryPending<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, bool, ValueQuery>;
-
-  #[pallet::storage]
-  pub type QueueEpoch<T: Config> = StorageValue<_, u64, ValueQuery>;
-
-  #[pallet::storage]
-  pub type ActorQueueEpoch<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, u64, ValueQuery>;
-
-  #[pallet::storage]
-  pub type AaaReadiness<T: Config> =
-    StorageMap<_, Blake2_128Concat, AaaId, AaaReadinessStateOf<T>, OptionQuery>;
+  #[pallet::getter(fn wakeup_cursor_len)]
+  pub type WakeupCursorLen<T> = StorageValue<_, WakeupCursorIndex, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn owner_slot_mask)]
@@ -422,28 +486,9 @@ pub mod pallet {
   pub type GlobalCircuitBreaker<T> = StorageValue<_, bool, ValueQuery>;
 
   #[pallet::storage]
-  #[pallet::getter(fn address_event_inbox)]
-  pub type AddressEventInbox<T: Config> =
-    StorageMap<_, Blake2_128Concat, AaaId, InboxState<BlockNumberFor<T>>, OptionQuery>;
-
-  #[pallet::storage]
-  pub type IngressOverflowSlots<T: Config> =
-    StorageMap<_, Blake2_128Concat, u32, IngressOverflowEventOf<T>, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn ingress_overflow_head)]
-  pub type IngressOverflowHead<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn ingress_overflow_len)]
-  pub type IngressOverflowLen<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn idle_starvation_blocks)]
-  pub type IdleStarvationBlocks<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  pub type LastIngressIngestBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
+  #[pallet::getter(fn idle_starvation_state)]
+  pub type IdleStarvationState<T: Config> =
+    StorageValue<_, IdleStarvationPhase<BlockNumberFor<T>>, ValueQuery>;
 
   /// Provides runtime-specific System AAA instances to initialize at genesis.
   ///
@@ -458,6 +503,16 @@ pub mod pallet {
       Option<ScheduleWindow>,
       ExecutionPlan,
     )>;
+
+    fn dormant_system_aaas() -> alloc::vec::Vec<(AaaId, AccountId)> {
+      alloc::vec::Vec::new()
+    }
+
+    /// Runtime-declared deterministic custody accounts that need a provider at genesis
+    /// but own no generic AAA identity, program, or scheduler state.
+    fn system_custody_accounts() -> alloc::vec::Vec<AaaId> {
+      alloc::vec::Vec::new()
+    }
   }
 
   /// Default no-op implementation: no System AAA created at genesis.
@@ -494,7 +549,7 @@ pub mod pallet {
         T::GenesisSystemAaas::system_aaas()
       {
         assert!(
-          !AaaInstances::<T>::contains_key(aaa_id),
+          !Pallet::<T>::active_actor_exists(aaa_id),
           "duplicate genesis System AAA id: {aaa_id}"
         );
         let next_id = aaa_id
@@ -512,48 +567,37 @@ pub mod pallet {
           mutability == Mutability::Mutable || schedule_window.is_none(),
           "genesis System Immutable AAA must be perpetual"
         );
-        Pallet::<T>::validate_probability_entropy_policy(&schedule, &execution_plan)
-          .expect("genesis probabilistic financial actor requires secure entropy provider");
-        let on_close_execution_plan = Pallet::<T>::default_on_close_execution_plan();
-        Pallet::<T>::ensure_execution_plans_fit_idle_budget(
-          AaaType::System,
-          &execution_plan,
-          &on_close_execution_plan,
-        )
-        .unwrap_or_else(|_| {
-          panic!("genesis System AAA {aaa_id} exceeds the guaranteed on_idle budget")
-        });
-        let funding_tracked_assets = Pallet::<T>::derive_combined_funding_tracked_assets(
-          &execution_plan,
-          &on_close_execution_plan,
-        )
-        .expect("genesis execution_plan must have valid funding-tracked assets");
+        Pallet::<T>::ensure_execution_plan_fits_idle_budget(AaaType::System, &execution_plan)
+          .unwrap_or_else(|_| {
+            panic!("genesis System AAA {aaa_id} exceeds the guaranteed on_idle budget")
+          });
+        let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&execution_plan)
+          .expect("genesis execution_plan must have valid funding-tracked assets");
         let (cycle_weight_upper, cycle_fee_upper) =
           Pallet::<T>::compute_cycle_bounds(AaaType::System, &execution_plan);
+        let first_eligible_at =
+          Pallet::<T>::initial_eligible_at(aaa_id, &schedule, schedule_window, Zero::zero());
         let instance = AaaInstance {
-          aaa_id,
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
-          owner_slot: SYSTEM_OWNER_SLOT_SENTINEL,
-          aaa_type: AaaType::System,
+          actor_class: ActorClass::System,
           mutability,
-          is_paused: false,
-          pause_reason: None,
+          lifecycle: ActiveLifecycle::Active,
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
-          funding_source_policy: FundingSourcePolicy::RuntimePolicy,
-          funding_snapshots: Default::default(),
-          funding_tracked_assets,
+          queue_ticket: None,
+          last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
+          funding_tracked_count: funding_tracked_assets.len() as u32,
+          pending_funding_count: 0,
+          has_pending_funding: false,
           auto_close_at_cycle_nonce: None,
-          created_at: Zero::zero(),
-          updated_at: Zero::zero(),
+          first_eligible_at,
           last_cycle_block: Zero::zero(),
         };
         let active_count = Pallet::<T>::active_instance_count();
@@ -561,23 +605,104 @@ pub mod pallet {
           active_count < T::MaxActiveActors::get(),
           "genesis active actor capacity exceeded at aaa_id={aaa_id}"
         );
-        let readiness = Pallet::<T>::readiness_state_from_instance(&instance);
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        AaaInstances::<T>::insert(aaa_id, instance);
+        Pallet::<T>::insert_active_actor(aaa_id, instance);
+        ActorFunding::<T>::insert(
+          aaa_id,
+          ActorFundingState {
+            funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+            funding_snapshots: Default::default(),
+            funding_tracked_assets,
+          },
+        );
         ActiveAaaCount::<T>::put(
           active_count
             .checked_add(1)
             .expect("genesis active actor count must not overflow"),
         );
-        AaaReadiness::<T>::insert(aaa_id, readiness);
+        ActorIdentityCount::<T>::put(
+          ActorIdentityCount::<T>::get()
+            .checked_add(1)
+            .expect("genesis actor identity count must not overflow"),
+        );
+        assert!(
+          ActorIdentityCount::<T>::get() <= T::MaxActorIdentities::get(),
+          "genesis actor identity capacity exceeded at aaa_id={aaa_id}"
+        );
         Pallet::<T>::prime_actor_schedule(aaa_id);
+      }
+      for (aaa_id, owner) in T::GenesisSystemAaas::dormant_system_aaas() {
+        assert!(
+          !Pallet::<T>::active_actor_exists(aaa_id)
+            && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+          "duplicate genesis System AAA id: {aaa_id}"
+        );
+        let next_id = aaa_id
+          .checked_add(1)
+          .expect("genesis AAA id must not overflow u64");
+        if NextAaaId::<T>::get() < next_id {
+          NextAaaId::<T>::put(next_id);
+        }
+        let sovereign_account = Pallet::<T>::sovereign_account_id_system(aaa_id);
+        assert!(
+          !SovereignIndex::<T>::contains_key(&sovereign_account),
+          "genesis System AAA sovereign collision at aaa_id={aaa_id}"
+        );
+        let identity = DormantAaaIdentity {
+          sovereign_account: sovereign_account.clone(),
+          owner,
+          actor_class: ActorClass::System,
+          mutability: Mutability::Mutable,
+        };
+        let identity_count = ActorIdentityCount::<T>::get();
+        assert!(
+          identity_count < T::MaxActorIdentities::get(),
+          "genesis actor identity capacity exceeded at aaa_id={aaa_id}"
+        );
+        SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
+        frame_system::Pallet::<T>::inc_providers(&sovereign_account);
+        DormantAaaIdentities::<T>::insert(aaa_id, identity);
+        ActorIdentityCount::<T>::put(
+          identity_count
+            .checked_add(1)
+            .expect("genesis actor identity count must not overflow"),
+        );
+      }
+      for aaa_id in T::GenesisSystemAaas::system_custody_accounts() {
+        assert!(
+          !Pallet::<T>::active_actor_exists(aaa_id)
+            && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+          "genesis custody account collides with actor identity: {aaa_id}"
+        );
+        let sovereign_account = Pallet::<T>::sovereign_account_id_system(aaa_id);
+        assert!(
+          !SovereignIndex::<T>::contains_key(&sovereign_account),
+          "genesis custody account has generic sovereign index: {aaa_id}"
+        );
+        frame_system::Pallet::<T>::inc_providers(&sovereign_account);
       }
     }
   }
 
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
+    fn integrity_test() {
+      assert!(
+        T::QueuePageSize::get() > 0,
+        "QueuePageSize must be non-zero"
+      );
+      assert!(
+        T::QueuePageSize::get() < T::MaxQueueLength::get(),
+        "QueuePageSize must remain an intermediate I/O granularity"
+      );
+      assert!(
+        T::MaxQueueEntriesScannedPerBlock::get() > 0
+          && T::MaxQueueEntriesScannedPerBlock::get() <= T::MaxQueueLength::get(),
+        "queue scan ceiling must be independently bounded by physical capacity"
+      );
+    }
+
     #[cfg(feature = "try-runtime")]
     fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       Self::do_try_state()
@@ -594,21 +719,24 @@ pub mod pallet {
         return Weight::zero();
       }
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      let ingress_limit = remaining_weight.saturating_sub(base_weight);
-      let ingress_weight = if LastIngressIngestBlock::<T>::get() == Some(now) {
-        Weight::zero()
+      let after_base = remaining_weight.saturating_sub(base_weight);
+      let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
+      let queue_occupancy = QueueTail::<T>::get().saturating_sub(QueueHead::<T>::get());
+      let saturated_cleanup_weight = if queue_occupancy >= u64::from(T::MaxQueueLength::get())
+        && queue_cleanup_weight.all_lte(after_base)
+      {
+        let stats = Self::paged_drain_tombstones(QueueTail::<T>::get(), 1);
+        if stats.entries_scanned > 0 {
+          queue_cleanup_weight
+        } else {
+          Weight::zero()
+        }
       } else {
-        let hook_weight = T::AddressEventIngressHook::ingest(now, ingress_limit);
-        LastIngressIngestBlock::<T>::put(now);
-        hook_weight
+        Weight::zero()
       };
-      let remaining_after_ingress = ingress_limit.saturating_sub(ingress_weight);
-      let sweep_weight = Self::execute_zombie_sweep(remaining_after_ingress);
-      let remaining_after_housekeeping = remaining_after_ingress.saturating_sub(sweep_weight);
-      Self::update_idle_starvation_state(breaker_active, remaining_after_housekeeping);
-      let housekeeping_weight = base_weight
-        .saturating_add(ingress_weight)
-        .saturating_add(sweep_weight);
+      let remaining_after_housekeeping = after_base.saturating_sub(saturated_cleanup_weight);
+      Self::update_idle_starvation_state(now, breaker_active, remaining_after_housekeeping);
+      let housekeeping_weight = base_weight.saturating_add(saturated_cleanup_weight);
       if breaker_active {
         return housekeeping_weight;
       }
@@ -628,6 +756,12 @@ pub mod pallet {
       mutability: Mutability,
       sovereign_account: T::AccountId,
     },
+    AaaActivated {
+      aaa_id: AaaId,
+    },
+    AaaDeactivated {
+      aaa_id: AaaId,
+    },
     AaaPaused {
       aaa_id: AaaId,
       reason: PauseReason,
@@ -642,15 +776,6 @@ pub mod pallet {
     CycleDeferred {
       aaa_id: AaaId,
       reason: DeferReason,
-    },
-    WakeupRescheduled {
-      aaa_id: AaaId,
-      requested_block: BlockNumberFor<T>,
-      scheduled_block: BlockNumberFor<T>,
-    },
-    WakeupScheduleDropped {
-      aaa_id: AaaId,
-      requested_block: BlockNumberFor<T>,
     },
     CycleStarted {
       aaa_id: AaaId,
@@ -745,26 +870,6 @@ pub mod pallet {
     ExecutionPlanUpdated {
       aaa_id: AaaId,
     },
-    OnCloseExecutionPlanUpdated {
-      aaa_id: AaaId,
-    },
-    OnCloseStepFailed {
-      aaa_id: AaaId,
-      step_index: u32,
-      kind: OnCloseStepFailureKind,
-      error: DispatchError,
-    },
-    OnCloseStepSkipped {
-      aaa_id: AaaId,
-      step_index: u32,
-      reason: StepSkippedReason,
-    },
-    OnCloseExecutionPlanSummary {
-      aaa_id: AaaId,
-      executed_steps: u32,
-      skipped_steps: u32,
-      failed_steps: u32,
-    },
     AutoCloseNonceSet {
       aaa_id: AaaId,
       target: Option<u64>,
@@ -791,10 +896,10 @@ pub mod pallet {
       alive: u32,
       missing: u32,
     },
-    SecureEntropyUnavailable {
-      aaa_id: AaaId,
-    },
     IdleStarvationDetected {
+      consecutive_blocks: u32,
+    },
+    IdleStarvationRecovered {
       consecutive_blocks: u32,
     },
     FundingSourcePolicyUpdated {
@@ -824,6 +929,10 @@ pub mod pallet {
     AaaNotFound,
     ActiveAaaCapacityExceeded,
     ActiveAaaCountInvariant,
+    ActorIdentityCapacityExceeded,
+    ActorIdentityCountInvariant,
+    AaaAlreadyActive,
+    AaaDormant,
     ActiveAaaLimitExceedsQueueCapacity,
     ActiveAaaLimitTooHigh,
     ActiveAaaLimitTooLow,
@@ -833,7 +942,6 @@ pub mod pallet {
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
     ImmutableAaa,
-    InsecureEntropyProvider,
     InsufficientBalance,
     InsufficientFee,
     InvalidAmountResolution,
@@ -857,6 +965,7 @@ pub mod pallet {
     AutoCloseNonceHorizonExceeded,
     AutoCloseNonceOverflow,
     AutoCloseNonceIncrementZero,
+    QueueMutationRateLimited,
   }
 
   #[pallet::call]
@@ -866,19 +975,10 @@ pub mod pallet {
     pub fn create_user_aaa(
       origin: OriginFor<T>,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       let owner = ensure_signed(origin)?;
-      Self::do_create_user_aaa(
-        owner,
-        mutability,
-        None,
-        schedule,
-        schedule_window,
-        execution_plan,
-      )
+      Self::do_create_user_aaa(owner, mutability, None, program)
     }
 
     #[pallet::call_index(1)]
@@ -887,40 +987,25 @@ pub mod pallet {
       origin: OriginFor<T>,
       owner_slot: u8,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       let owner = ensure_signed(origin)?;
-      Self::do_create_user_aaa(
-        owner,
-        mutability,
-        Some(owner_slot),
-        schedule,
-        schedule_window,
-        execution_plan,
-      )
+      Self::do_create_user_aaa(owner, mutability, Some(owner_slot), program)
     }
 
     #[pallet::call_index(2)]
-    #[pallet::weight(T::WeightInfo::create_system_aaa())]
+    #[pallet::weight(match &program {
+      ProgramInput::Dormant => T::WeightInfo::create_dormant_system_aaa(),
+      ProgramInput::Active { .. } => T::WeightInfo::create_system_aaa(),
+    })]
     pub fn create_system_aaa(
       origin: OriginFor<T>,
       owner: T::AccountId,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
-      Self::do_create_system_aaa(
-        owner,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        None,
-      )
+      Self::do_create_system_aaa(owner, mutability, program, None)
     }
 
     #[pallet::call_index(3)]
@@ -930,14 +1015,12 @@ pub mod pallet {
       aaa_id: AaaId,
       owner: T::AccountId,
       mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
       T::SystemOrigin::ensure_origin(origin)?;
       ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
       ensure!(
-        !AaaInstances::<T>::contains_key(aaa_id),
+        !Self::active_actor_exists(aaa_id),
         Error::<T>::AaaIdOccupied
       );
       let closed_mutability =
@@ -946,69 +1029,67 @@ pub mod pallet {
         closed_mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      Self::do_create_system_aaa(
-        owner,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        Some(aaa_id),
-      )
+      Self::do_create_system_aaa(owner, mutability, program, Some(aaa_id))
     }
 
     #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      let now = frame_system::Pallet::<T>::block_number();
+      Self::ensure_user_queue_mutation_allowed(&snapshot, now)?;
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
           Error::<T>::ImmutableAaa
         );
-        ensure!(!inst.is_paused, Error::<T>::AaaPaused);
-        inst.is_paused = true;
-        inst.pause_reason = Some(PauseReason::Manual);
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
-        // Ringless: no need to remove from ring - scheduler checks is_paused flag
+        ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
+        inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+        inst.queue_ticket = None;
+        if matches!(inst.actor_class, ActorClass::User { .. }) {
+          inst.last_user_queue_mutation_block = Some(now);
+        }
         Self::deposit_event(Event::AaaPaused {
           aaa_id,
           reason: PauseReason::Manual,
         });
         Ok(())
       })?;
-      Self::sync_readiness_state(aaa_id);
+      Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
 
     #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      let now = frame_system::Pallet::<T>::block_number();
+      Self::ensure_user_queue_mutation_allowed(&snapshot, now)?;
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
           Error::<T>::ImmutableAaa
         );
-        ensure!(inst.is_paused, Error::<T>::NotPaused);
-        inst.is_paused = false;
-        inst.pause_reason = None;
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
+        ensure!(inst.lifecycle.is_paused(), Error::<T>::NotPaused);
+        inst.lifecycle = ActiveLifecycle::Active;
+        if matches!(inst.actor_class, ActorClass::User { .. }) {
+          inst.last_user_queue_mutation_block = Some(now);
+        }
         Self::deposit_event(Event::AaaResumed { aaa_id });
         Ok(())
       })?;
-      Self::sync_readiness_state(aaa_id);
       Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
@@ -1016,21 +1097,21 @@ pub mod pallet {
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(!inst.is_paused, Error::<T>::AaaPaused);
-        inst.manual_trigger_pending = true;
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
+      ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::AaaPaused);
+      if !snapshot.manual_trigger_pending {
+        ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+          let hot = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+          hot.pending_signal = true;
+          Ok(())
+        })?;
         Self::deposit_event(Event::ManualTriggerSet { aaa_id });
-        Ok(())
-      })?;
-      Self::sync_readiness_state(aaa_id);
+      }
       Self::enqueue(aaa_id);
       Ok(())
     }
@@ -1045,7 +1126,7 @@ pub mod pallet {
       aaa_id: AaaId,
       policy: FundingSourcePolicyOf<T>,
     ) -> DispatchResult {
-      let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
       Self::ensure_not_system_immutable(&instance)?;
       if Self::is_window_expired(&instance) {
@@ -1055,13 +1136,11 @@ pub mod pallet {
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      let now = frame_system::Pallet::<T>::block_number();
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        if let Some(inst) = maybe.as_mut() {
-          inst.funding_source_policy = policy;
-          inst.updated_at = now;
-        }
-      });
+      ActorFunding::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+        let funding = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+        funding.funding_source_policy = policy;
+        Ok(())
+      })?;
       Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
       Ok(())
     }
@@ -1069,10 +1148,14 @@ pub mod pallet {
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let instance = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
-      Self::ensure_control_origin(origin, &instance)?;
-      Self::ensure_not_system_immutable(&instance)?;
-      Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated)
+      if let Some(instance) = Self::active_actor_snapshot(aaa_id) {
+        Self::ensure_control_origin(origin, &instance)?;
+        Self::ensure_not_system_immutable(&instance)?;
+        return Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated);
+      }
+      let identity = DormantAaaIdentities::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      Self::ensure_dormant_control_origin(origin, &identity)?;
+      Self::close_dormant_actor(aaa_id, &identity, CloseReason::OwnerInitiated)
     }
 
     #[pallet::call_index(9)]
@@ -1087,26 +1170,38 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      Self::validate_probability_entropy_policy(&schedule, &snapshot.execution_plan)?;
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(
-          inst.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
-        );
-        inst.schedule = schedule;
-        inst.schedule_window = schedule_window;
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
-        Self::deposit_event(Event::ScheduleUpdated { aaa_id });
-        Ok(())
-      })?;
-      Self::sync_readiness_state(aaa_id);
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      let first_eligible_at = Self::initial_eligible_at(
+        aaa_id,
+        &schedule,
+        schedule_window,
+        frame_system::Pallet::<T>::block_number(),
+      );
+      ActorProgram::<T>::mutate(aaa_id, |maybe| {
+        let program = maybe
+          .as_mut()
+          .expect("active actor program existence was prevalidated");
+        program.schedule = schedule;
+        program.schedule_window = schedule_window;
+      });
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        if let Some(hot) = maybe.as_mut() {
+          if hot.cycle_nonce == 0 {
+            hot.first_eligible_at = first_eligible_at;
+          }
+          hot.terminal_at = schedule_window.map(|window| window.end.saturating_add(One::one()));
+        }
+      });
+      Self::deposit_event(Event::ScheduleUpdated { aaa_id });
       Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
@@ -1137,62 +1232,69 @@ pub mod pallet {
     ) -> DispatchResult {
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
       Self::validate_execution_plan_shape(&execution_plan)?;
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      Self::validate_probability_entropy_policy(&snapshot.schedule, &execution_plan)?;
-      Self::ensure_execution_plans_fit_idle_budget(
-        snapshot.aaa_type,
+      Self::ensure_execution_plan_fits_idle_budget(
+        snapshot.actor_class.aaa_type(),
         &execution_plan,
-        &snapshot.on_close_execution_plan,
       )?;
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+      ensure!(
+        snapshot.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      let max_steps = match snapshot.actor_class.aaa_type() {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if snapshot.actor_class.aaa_type() == AaaType::User {
         ensure!(
-          inst.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
+          !Self::execution_plan_contains_mint(&execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
         );
-        let max_steps = match inst.aaa_type {
-          AaaType::User => T::MaxUserExecutionPlanSteps::get(),
-          AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
-        };
-        ensure!(
-          (execution_plan.len() as u32) <= max_steps,
-          Error::<T>::ExecutionPlanTooLong
-        );
-        if inst.aaa_type == AaaType::User {
-          ensure!(
-            !Self::execution_plan_contains_mint(&execution_plan),
-            Error::<T>::MintNotAllowedForUserAaa
-          );
-        }
-        let new_tracked = Self::derive_combined_funding_tracked_assets(
-          &execution_plan,
-          &inst.on_close_execution_plan,
-        )?;
-        inst.funding_tracked_assets = new_tracked.clone();
-        let mut stale_keys = alloc::vec::Vec::new();
-        for key in inst.funding_snapshots.keys() {
-          if !new_tracked.contains(key) {
-            stale_keys.push(*key);
-          }
-        }
-        for key in stale_keys {
-          let _ = inst.funding_snapshots.remove(&key);
-        }
-        let (cycle_weight_upper, cycle_fee_upper) =
-          Self::compute_cycle_bounds(inst.aaa_type, &execution_plan);
-        inst.execution_plan = execution_plan;
-        inst.cycle_weight_upper = cycle_weight_upper;
-        inst.cycle_fee_upper = cycle_fee_upper;
-        inst.consecutive_failures = 0;
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
-        Self::deposit_event(Event::ExecutionPlanUpdated { aaa_id });
-        Ok(())
-      })
+      }
+      let new_tracked = Self::derive_funding_tracked_assets(&execution_plan)?;
+      let mut funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      funding.funding_tracked_assets = new_tracked.clone();
+      funding
+        .funding_snapshots
+        .retain(|asset, _| new_tracked.contains(asset));
+      let pending_funding_count = funding
+        .funding_snapshots
+        .values()
+        .filter(|batch| !batch.pending_amount.is_zero())
+        .count() as u32;
+      let has_pending_funding = pending_funding_count > 0;
+      let funding_tracked_count = new_tracked.len() as u32;
+      let (cycle_weight_upper, cycle_fee_upper) =
+        Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
+      ActorProgram::<T>::mutate(aaa_id, |maybe| {
+        maybe
+          .as_mut()
+          .expect("active actor program existence was prevalidated")
+          .execution_plan = execution_plan;
+      });
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        let hot = maybe
+          .as_mut()
+          .expect("active actor hot-state existence was prevalidated");
+        hot.cycle_weight_upper = cycle_weight_upper;
+        hot.cycle_fee_upper = cycle_fee_upper;
+        hot.funding_tracked_count = funding_tracked_count;
+        hot.pending_funding_count = pending_funding_count;
+        hot.has_pending_funding = has_pending_funding;
+        hot.consecutive_failures = 0;
+      });
+      ActorFunding::<T>::insert(aaa_id, funding);
+      Self::deposit_event(Event::ExecutionPlanUpdated { aaa_id });
+      Ok(())
     }
 
     #[pallet::call_index(13)]
@@ -1233,7 +1335,7 @@ pub mod pallet {
       let mut alive = 0u32;
       let mut missing = 0u32;
       for aaa_id in aaa_ids.iter().copied() {
-        let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
+        let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
           missing = missing.saturating_add(1);
           continue;
         };
@@ -1260,12 +1362,12 @@ pub mod pallet {
       aaa_id: AaaId,
       target: Option<u64>,
     ) -> DispatchResult {
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
@@ -1275,11 +1377,9 @@ pub mod pallet {
           Self::ensure_auto_close_target(inst.cycle_nonce, target_nonce)?;
         }
         inst.auto_close_at_cycle_nonce = target;
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
         Self::deposit_event(Event::AutoCloseNonceSet { aaa_id, target });
         Ok(())
       })?;
-      Self::sync_readiness_state(aaa_id);
       Ok(())
     }
 
@@ -1291,12 +1391,12 @@ pub mod pallet {
       by: u64,
     ) -> DispatchResult {
       ensure!(by > 0, Error::<T>::AutoCloseNonceIncrementZero);
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
         let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
         ensure!(
           inst.mutability == Mutability::Mutable,
@@ -1309,7 +1409,6 @@ pub mod pallet {
           .ok_or(Error::<T>::AutoCloseNonceOverflow)?;
         Self::ensure_auto_close_target(inst.cycle_nonce, new_target)?;
         inst.auto_close_at_cycle_nonce = Some(new_target);
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
         Self::deposit_event(Event::AutoCloseNonceIncremented {
           aaa_id,
           old_target,
@@ -1318,157 +1417,79 @@ pub mod pallet {
         });
         Ok(())
       })?;
-      Self::sync_readiness_state(aaa_id);
       Ok(())
     }
 
-    #[pallet::call_index(17)]
-    #[pallet::weight(
-      T::WeightInfo::update_on_close_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper())
-    )]
-    pub fn update_on_close_execution_plan(
+    #[pallet::call_index(21)]
+    #[pallet::weight(T::WeightInfo::activate_aaa())]
+    pub fn activate_aaa(
       origin: OriginFor<T>,
       aaa_id: AaaId,
-      on_close_execution_plan: ExecutionPlanOf<T>,
+      program: ProgramInputOf<T>,
     ) -> DispatchResult {
-      ensure!(
-        !on_close_execution_plan.is_empty(),
-        Error::<T>::EmptyExecutionPlan
-      );
-      Self::validate_execution_plan_shape(&on_close_execution_plan)?;
-      let snapshot = AaaInstances::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
-      Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::is_window_expired(&snapshot) {
-        return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
-      }
-      Self::ensure_execution_plans_fit_idle_budget(
-        snapshot.aaa_type,
-        &snapshot.execution_plan,
-        &on_close_execution_plan,
-      )?;
-      AaaInstances::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(
-          inst.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
-        );
-        let max_steps = match inst.aaa_type {
-          AaaType::User => T::MaxUserExecutionPlanSteps::get(),
-          AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
-        };
-        ensure!(
-          (on_close_execution_plan.len() as u32) <= max_steps,
-          Error::<T>::ExecutionPlanTooLong
-        );
-        if inst.aaa_type == AaaType::User {
-          ensure!(
-            !Self::execution_plan_contains_mint(&on_close_execution_plan),
-            Error::<T>::MintNotAllowedForUserAaa
-          );
+      let identity = DormantAaaIdentities::<T>::get(aaa_id).ok_or_else(|| {
+        if Self::active_actor_exists(aaa_id) {
+          Error::<T>::AaaAlreadyActive
+        } else {
+          Error::<T>::AaaNotFound
         }
-        let new_tracked = Self::derive_combined_funding_tracked_assets(
-          &inst.execution_plan,
-          &on_close_execution_plan,
-        )?;
-        inst.funding_tracked_assets = new_tracked.clone();
-        let mut stale_keys = alloc::vec::Vec::new();
-        for key in inst.funding_snapshots.keys() {
-          if !new_tracked.contains(key) {
-            stale_keys.push(*key);
-          }
-        }
-        for key in stale_keys {
-          let _ = inst.funding_snapshots.remove(&key);
-        }
-        inst.on_close_execution_plan = on_close_execution_plan;
-        inst.updated_at = frame_system::Pallet::<T>::block_number();
-        Self::deposit_event(Event::OnCloseExecutionPlanUpdated { aaa_id });
-        Ok(())
       })?;
-      Self::sync_readiness_state(aaa_id);
-      Ok(())
+      Self::ensure_dormant_control_origin(origin, &identity)?;
+      Self::do_activate_aaa(aaa_id, identity, program)
+    }
+
+    #[pallet::call_index(22)]
+    #[pallet::weight(T::WeightInfo::deactivate_aaa())]
+    pub fn deactivate_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
+      let instance = Self::active_actor_snapshot(aaa_id).ok_or_else(|| {
+        if DormantAaaIdentities::<T>::contains_key(aaa_id) {
+          Error::<T>::AaaDormant
+        } else {
+          Error::<T>::AaaNotFound
+        }
+      })?;
+      Self::ensure_control_origin(origin, &instance)?;
+      ensure!(
+        instance.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      Self::do_deactivate_aaa(aaa_id, instance)
     }
   }
 
   impl<T: Config> Pallet<T> {
+    pub fn aaa_instances(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
+      Self::active_actor_snapshot(aaa_id)
+    }
+
     pub fn weight_upper_bound(task: &TaskOf<T>) -> Weight {
       // Runtime owns upper-bound pricing via coarse task classes to reduce calibration churn
       match task {
-        AaaTask::Transfer { .. } | AaaTask::Burn { .. } | AaaTask::Mint { .. } => {
-          T::TaskWeightInfo::simple_asset_op()
-        }
+        AaaTask::Transfer { .. } => T::TaskWeightInfo::transfer(),
+        AaaTask::Burn { .. } => T::TaskWeightInfo::burn(),
+        AaaTask::Mint { .. } => T::TaskWeightInfo::mint(),
         AaaTask::SplitTransfer { legs, .. } => T::TaskWeightInfo::split_transfer(legs.len() as u32),
         AaaTask::SwapExactIn { .. } => T::TaskWeightInfo::dex_exact_in(),
         AaaTask::SwapExactOut { .. } => T::TaskWeightInfo::dex_exact_out(),
         AaaTask::AddLiquidity { .. } => T::TaskWeightInfo::add_liquidity(),
         AaaTask::RemoveLiquidity { .. } => T::TaskWeightInfo::remove_liquidity(),
-        AaaTask::Noop => T::TaskWeightInfo::noop(),
         AaaTask::Stake { .. } => T::TaskWeightInfo::stake(),
         AaaTask::DonateLiquidity { .. } => T::TaskWeightInfo::donate_liquidity(),
         AaaTask::Unstake { .. } => T::TaskWeightInfo::unstake(),
       }
     }
 
-    fn componentwise_max_weight(left: Weight, right: Weight) -> Weight {
-      Weight::from_parts(
-        left.ref_time().max(right.ref_time()),
-        left.proof_size().max(right.proof_size()),
-      )
-    }
-
-    fn maximum_task_weight_upper() -> Weight {
-      let candidates = [
-        T::TaskWeightInfo::simple_asset_op(),
-        T::TaskWeightInfo::split_transfer(T::MaxSplitTransferLegs::get()),
-        T::TaskWeightInfo::dex_exact_in(),
-        T::TaskWeightInfo::dex_exact_out(),
-        T::TaskWeightInfo::add_liquidity(),
-        T::TaskWeightInfo::donate_liquidity(),
-        T::TaskWeightInfo::remove_liquidity(),
-        T::TaskWeightInfo::stake(),
-        T::TaskWeightInfo::unstake(),
-        T::TaskWeightInfo::noop(),
-      ];
-      candidates
-        .into_iter()
-        .fold(Weight::zero(), Self::componentwise_max_weight)
-    }
-
-    fn maximum_close_plan_weight_upper() -> Weight {
-      let max_steps =
-        T::MaxUserExecutionPlanSteps::get().max(T::MaxSystemExecutionPlanSteps::get());
-      let per_step = Weight::from_parts(1_000_000, 128)
-        .saturating_add(
-          Weight::from_parts(500_000, 64).saturating_mul(u64::from(T::MaxConditionsPerStep::get())),
-        )
-        .saturating_add(Self::maximum_task_weight_upper());
-      Weight::from_parts(5_000_000, 1000)
-        .saturating_add(T::DbWeight::get().reads_writes(2, 2))
-        .saturating_add(per_step.saturating_mul(u64::from(max_steps)))
-    }
-
-    /// Conservative FRAME dispatch weight for any explicit or lifecycle-touch close.
+    /// Conservative FRAME dispatch weight for explicit or lifecycle-touch pure cleanup.
     pub fn close_dispatch_weight_upper() -> Weight {
-      let compositional = T::WeightInfo::close_aaa()
-        .saturating_add(Self::maximum_close_plan_weight_upper())
-        .saturating_add(Self::close_cleanup_weight_upper());
-      let measured_user_tail = T::WeightInfo::close_aaa_user_fee_bearing_tail(
-        T::MaxUserExecutionPlanSteps::get(),
-        T::MaxSplitTransferLegs::get(),
-      );
-      Self::componentwise_max_weight(compositional, measured_user_tail)
+      Self::close_cleanup_weight_upper()
     }
 
     pub(crate) fn compute_cycle_weight_upper(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
     ) -> Weight {
-      let mut upper = Weight::from_parts(5_000_000, 1000)
-        .saturating_add(T::DbWeight::get().reads_writes(2, 2))
-        .saturating_add(T::WeightInfo::funding_batch_promotion(
-          T::MaxFundingTrackedAssets::get(),
-        ));
+      let mut upper =
+        Weight::from_parts(5_000_000, 1000).saturating_add(T::DbWeight::get().reads_writes(2, 2));
       for step in execution_plan.iter() {
         let step_overhead = Weight::from_parts(1_000_000, 128);
         let condition_overhead =
@@ -1478,7 +1499,7 @@ pub mod pallet {
           .saturating_add(condition_overhead)
           .saturating_add(Self::weight_upper_bound(&step.task));
         if aaa_type == AaaType::User {
-          upper = upper.saturating_add(T::WeightInfo::fee_collection().saturating_mul(2));
+          upper = upper.saturating_add(T::WeightInfo::fee_collection());
         }
       }
       upper
@@ -1512,62 +1533,53 @@ pub mod pallet {
     }
 
     pub(crate) fn cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
-      instance.cycle_weight_upper
+      let mut upper = instance.cycle_weight_upper;
+      if instance.has_pending_funding && instance.pending_funding_count > 0 {
+        upper = upper.saturating_add(T::WeightInfo::funding_batch_promotion(
+          instance.pending_funding_count,
+        ));
+      }
+      upper
     }
 
     pub(crate) fn cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
       instance.cycle_fee_upper
     }
 
-    pub(crate) fn close_cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
-      Self::compute_cycle_weight_upper(instance.aaa_type, &instance.on_close_execution_plan)
-        .saturating_add(Self::close_cleanup_weight_upper())
+    pub(crate) fn close_cycle_weight_upper_bound(_instance: &AaaInstanceOf<T>) -> Weight {
+      Self::close_cleanup_weight_upper()
     }
 
-    pub(crate) fn close_cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
-      Self::compute_cycle_fee_upper(instance.aaa_type, &instance.on_close_execution_plan)
-    }
-
-    /// Upper-bounds one prospective run/close pair after the baseline scheduler envelope.
-    /// Independently metered durable housekeeping may defer this pair across blocks.
+    /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
+    /// envelope. Independently metered durable housekeeping may defer this work across blocks.
     pub fn execution_plan_admission_weight_upper(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
-      on_close_execution_plan: &ExecutionPlanOf<T>,
     ) -> Weight {
+      let funding_count = Self::derive_funding_tracked_assets(execution_plan)
+        .map(|assets| assets.len() as u32)
+        .unwrap_or_else(|_| T::MaxFundingTrackedAssets::get());
+      let promotion = if funding_count == 0 {
+        Weight::zero()
+      } else {
+        T::WeightInfo::funding_batch_promotion(funding_count)
+      };
       Self::scheduler_admission_overhead()
         .saturating_add(Self::compute_cycle_weight_upper(aaa_type, execution_plan))
-        .saturating_add(Self::compute_cycle_weight_upper(
-          aaa_type,
-          on_close_execution_plan,
-        ))
+        .saturating_add(promotion)
         .saturating_add(Self::close_cleanup_weight_upper())
     }
 
-    fn ensure_execution_plans_fit_idle_budget(
+    fn ensure_execution_plan_fits_idle_budget(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
-      on_close_execution_plan: &ExecutionPlanOf<T>,
     ) -> DispatchResult {
       ensure!(
-        Self::execution_plan_admission_weight_upper(
-          aaa_type,
-          execution_plan,
-          on_close_execution_plan,
-        )
-        .all_lte(T::GuaranteedOnIdleWeight::get()),
+        Self::execution_plan_admission_weight_upper(aaa_type, execution_plan)
+          .all_lte(T::GuaranteedOnIdleWeight::get()),
         Error::<T>::ExecutionPlanExceedsOnIdleBudget
       );
       Ok(())
-    }
-
-    pub(crate) fn default_on_close_execution_plan() -> ExecutionPlanOf<T> {
-      BoundedVec::try_from(alloc::vec![Step {
-        conditions: BoundedVec::default(),
-        task: AaaTask::Noop,
-        on_error: StepErrorPolicy::ContinueNextStep,
-      }])
-      .expect("default on-close execution_plan must fit")
     }
 
     fn valid_owner_mask() -> u8 {
@@ -1642,69 +1654,154 @@ pub mod pallet {
       Ok((SYSTEM_OWNER_SLOT_SENTINEL, sovereign_account))
     }
 
-    fn do_create_user_aaa(
+    fn do_create_dormant_aaa(
       owner: T::AccountId,
-      mutability: Mutability,
-      preferred_slot: Option<u8>,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
-    ) -> DispatchResult {
-      ensure!(
-        !GlobalCircuitBreaker::<T>::get(),
-        Error::<T>::GlobalCircuitBreakerActive
-      );
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      ensure!(
-        (execution_plan.len() as u32) <= T::MaxUserExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
-      );
-      ensure!(
-        !Self::execution_plan_contains_mint(&execution_plan),
-        Error::<T>::MintNotAllowedForUserAaa
-      );
-      Self::do_create_aaa(
-        owner,
-        AaaType::User,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        preferred_slot,
-        None,
-      )
-    }
-
-    fn do_create_system_aaa(
-      owner: T::AccountId,
-      mutability: Mutability,
-      schedule: ScheduleOf<T>,
-      schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
-      execution_plan: ExecutionPlanOf<T>,
+      aaa_type: AaaType,
+      preferred_user_slot: Option<u8>,
       requested_aaa_id: Option<AaaId>,
     ) -> DispatchResult {
       ensure!(
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
-      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      if mutability == Mutability::Immutable {
-        ensure!(schedule_window.is_none(), Error::<T>::InvalidScheduleWindow);
-      }
       ensure!(
-        (execution_plan.len() as u32) <= T::MaxSystemExecutionPlanSteps::get(),
-        Error::<T>::ExecutionPlanTooLong
+        ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
+        Error::<T>::ActorIdentityCapacityExceeded
       );
-      Self::do_create_aaa(
+      let current_next_id = NextAaaId::<T>::get();
+      let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
+      ensure!(
+        !Self::active_actor_exists(aaa_id) && !DormantAaaIdentities::<T>::contains_key(aaa_id),
+        Error::<T>::AaaIdOccupied
+      );
+      let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
+      let mut created_identity: Option<DormantAaaIdentityOf<T>> = None;
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if aaa_type == AaaType::User {
+          if let Err(error) = Self::charge_creation_fee(&owner) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+        }
+        let (owner_slot, sovereign_account) = match aaa_type {
+          AaaType::User => match Self::allocate_owner_slot(&owner, preferred_user_slot) {
+            Ok(result) => result,
+            Err(error) => {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                error.into(),
+              ));
+            }
+          },
+          AaaType::System => match Self::allocate_system_sovereign(aaa_id) {
+            Ok(result) => result,
+            Err(error) => {
+              return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+                error.into(),
+              ));
+            }
+          },
+        };
+        let identity = DormantAaaIdentity {
+          sovereign_account: sovereign_account.clone(),
+          owner: owner.clone(),
+          actor_class: match aaa_type {
+            AaaType::User => ActorClass::User { owner_slot },
+            AaaType::System => ActorClass::System,
+          },
+          mutability: Mutability::Mutable,
+        };
+        SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
+        DormantAaaIdentities::<T>::insert(aaa_id, &identity);
+        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if aaa_type == AaaType::System && requested_aaa_id.is_some() {
+          ClosedSystemAaaIds::<T>::remove(aaa_id);
+        }
+        if current_next_id < next_id {
+          NextAaaId::<T>::put(next_id);
+        }
+        frame_system::Pallet::<T>::inc_providers(&sovereign_account);
+        created_identity = Some(identity);
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      let identity = created_identity.expect("atomic dormant create always sets identity");
+      Self::deposit_event(Event::AaaCreated {
+        aaa_id,
         owner,
-        AaaType::System,
-        mutability,
-        schedule,
-        schedule_window,
-        execution_plan,
-        None,
-        requested_aaa_id,
-      )
+        owner_slot: identity
+          .actor_class
+          .owner_slot()
+          .unwrap_or(SYSTEM_OWNER_SLOT_SENTINEL),
+        aaa_type,
+        mutability: Mutability::Mutable,
+        sovereign_account: identity.sovereign_account,
+      });
+      Ok(())
+    }
+
+    fn do_create_user_aaa(
+      owner: T::AccountId,
+      mutability: Mutability,
+      preferred_slot: Option<u8>,
+      program: ProgramInputOf<T>,
+    ) -> DispatchResult {
+      match program {
+        ProgramInput::Dormant => {
+          ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
+          Self::do_create_dormant_aaa(owner, AaaType::User, preferred_slot, None)
+        }
+        ProgramInput::Active {
+          schedule,
+          schedule_window,
+          execution_plan,
+          funding_source_policy,
+        } => Self::do_create_aaa(
+          owner,
+          AaaType::User,
+          mutability,
+          schedule,
+          schedule_window,
+          execution_plan,
+          funding_source_policy,
+          preferred_slot,
+          None,
+        ),
+      }
+    }
+
+    fn do_create_system_aaa(
+      owner: T::AccountId,
+      mutability: Mutability,
+      program: ProgramInputOf<T>,
+      requested_aaa_id: Option<AaaId>,
+    ) -> DispatchResult {
+      match program {
+        ProgramInput::Dormant => {
+          ensure!(mutability == Mutability::Mutable, Error::<T>::ImmutableAaa);
+          Self::do_create_dormant_aaa(owner, AaaType::System, None, requested_aaa_id)
+        }
+        ProgramInput::Active {
+          schedule,
+          schedule_window,
+          execution_plan,
+          funding_source_policy,
+        } => Self::do_create_aaa(
+          owner,
+          AaaType::System,
+          mutability,
+          schedule,
+          schedule_window,
+          execution_plan,
+          funding_source_policy,
+          None,
+          requested_aaa_id,
+        ),
+      }
     }
 
     fn do_create_aaa(
@@ -1714,32 +1811,52 @@ pub mod pallet {
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
+      funding_source_policy: FundingSourcePolicyOf<T>,
       preferred_user_slot: Option<u8>,
       requested_aaa_id: Option<AaaId>,
     ) -> DispatchResult {
+      ensure!(
+        !GlobalCircuitBreaker::<T>::get(),
+        Error::<T>::GlobalCircuitBreakerActive
+      );
+      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      let max_steps = match aaa_type {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if aaa_type == AaaType::User {
+        ensure!(
+          !Self::execution_plan_contains_mint(&execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
+        );
+      }
+      if aaa_type == AaaType::System && mutability == Mutability::Immutable {
+        ensure!(schedule_window.is_none(), Error::<T>::InvalidScheduleWindow);
+      }
       Self::validate_schedule(&schedule)?;
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
-      Self::validate_probability_entropy_policy(&schedule, &execution_plan)?;
       let active_count = Self::active_instance_count();
       ensure!(
         active_count < Self::effective_active_actor_limit(),
         Error::<T>::ActiveAaaCapacityExceeded
       );
-      let on_close_execution_plan = Self::default_on_close_execution_plan();
-      Self::ensure_execution_plans_fit_idle_budget(
-        aaa_type,
-        &execution_plan,
-        &on_close_execution_plan,
-      )?;
-      let funding_tracked_assets =
-        Self::derive_combined_funding_tracked_assets(&execution_plan, &on_close_execution_plan)?;
+      ensure!(
+        ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
+        Error::<T>::ActorIdentityCapacityExceeded
+      );
+      Self::ensure_execution_plan_fits_idle_budget(aaa_type, &execution_plan)?;
+      let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
       let current_next_id = NextAaaId::<T>::get();
       let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
       ensure!(
-        !AaaInstances::<T>::contains_key(aaa_id),
+        !Self::active_actor_exists(aaa_id) && !DormantAaaIdentities::<T>::contains_key(aaa_id),
         Error::<T>::AaaIdOccupied
       );
       let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
@@ -1772,40 +1889,45 @@ pub mod pallet {
         };
         let (cycle_weight_upper, cycle_fee_upper) =
           Self::compute_cycle_bounds(aaa_type, &execution_plan);
+        let first_eligible_at = Self::initial_eligible_at(aaa_id, &schedule, schedule_window, now);
         let instance = AaaInstance {
-          aaa_id,
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
-          owner_slot,
-          aaa_type,
+          actor_class: match aaa_type {
+            AaaType::User => ActorClass::User { owner_slot },
+            AaaType::System => ActorClass::System,
+          },
           mutability,
-          is_paused: false,
-          pause_reason: None,
+          lifecycle: ActiveLifecycle::Active,
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
-          funding_source_policy: match aaa_type {
-            AaaType::User => FundingSourcePolicy::OwnerOnly,
-            AaaType::System => FundingSourcePolicy::RuntimePolicy,
-          },
-          funding_snapshots: Default::default(),
-          funding_tracked_assets,
+          queue_ticket: None,
+          last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
+          funding_tracked_count: funding_tracked_assets.len() as u32,
+          pending_funding_count: 0,
+          has_pending_funding: false,
           auto_close_at_cycle_nonce: None,
-          created_at: now,
-          updated_at: now,
+          first_eligible_at,
           last_cycle_block: Zero::zero(),
         };
-        let readiness = Self::readiness_state_from_instance(&instance);
         created_owner_slot = Some(owner_slot);
         created_sovereign_account = Some(sovereign_account.clone());
         SovereignIndex::<T>::insert(sovereign_account.clone(), aaa_id);
-        AaaInstances::<T>::insert(aaa_id, instance);
+        Self::insert_active_actor(aaa_id, instance);
+        ActorFunding::<T>::insert(
+          aaa_id,
+          ActorFundingState {
+            funding_source_policy,
+            funding_snapshots: Default::default(),
+            funding_tracked_assets,
+          },
+        );
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
             .checked_add(1)
@@ -1814,14 +1936,22 @@ pub mod pallet {
         }) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
-        AaaReadiness::<T>::insert(aaa_id, readiness);
+        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         if aaa_type == AaaType::System && requested_aaa_id.is_some() {
           ClosedSystemAaaIds::<T>::remove(aaa_id);
         }
         if current_next_id < next_id {
           NextAaaId::<T>::put(next_id);
         }
-        if let Err(error) = T::AtomicityHook::on_create_checkpoint(aaa_id) {
+        #[cfg(test)]
+        if let Err(error) = crate::mock::create_atomicity_checkpoint(aaa_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
@@ -1841,47 +1971,154 @@ pub mod pallet {
       Ok(())
     }
 
+    fn do_activate_aaa(
+      aaa_id: AaaId,
+      identity: DormantAaaIdentityOf<T>,
+      program: ProgramInputOf<T>,
+    ) -> DispatchResult {
+      let ProgramInput::Active {
+        schedule,
+        schedule_window,
+        execution_plan,
+        funding_source_policy,
+      } = program
+      else {
+        return Err(Error::<T>::EmptyExecutionPlan.into());
+      };
+      ensure!(
+        !GlobalCircuitBreaker::<T>::get(),
+        Error::<T>::GlobalCircuitBreakerActive
+      );
+      ensure!(
+        identity.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      let aaa_type = identity.actor_class.aaa_type();
+      ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
+      let max_steps = match aaa_type {
+        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
+        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
+      };
+      ensure!(
+        (execution_plan.len() as u32) <= max_steps,
+        Error::<T>::ExecutionPlanTooLong
+      );
+      if aaa_type == AaaType::User {
+        ensure!(
+          !Self::execution_plan_contains_mint(&execution_plan),
+          Error::<T>::MintNotAllowedForUserAaa
+        );
+      }
+      Self::validate_schedule(&schedule)?;
+      if let Some(ref window) = schedule_window {
+        Self::validate_schedule_window(window)?;
+      }
+      Self::validate_execution_plan_shape(&execution_plan)?;
+      Self::ensure_execution_plan_fits_idle_budget(aaa_type, &execution_plan)?;
+      let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
+      ensure!(
+        Self::active_instance_count() < Self::effective_active_actor_limit(),
+        Error::<T>::ActiveAaaCapacityExceeded
+      );
+      let (cycle_weight_upper, cycle_fee_upper) =
+        Self::compute_cycle_bounds(aaa_type, &execution_plan);
+      let first_eligible_at = Self::initial_eligible_at(
+        aaa_id,
+        &schedule,
+        schedule_window,
+        frame_system::Pallet::<T>::block_number(),
+      );
+      let instance = AaaInstance {
+        sovereign_account: identity.sovereign_account,
+        owner: identity.owner,
+        actor_class: identity.actor_class,
+        mutability: identity.mutability,
+        lifecycle: ActiveLifecycle::Active,
+        schedule,
+        schedule_window,
+        execution_plan,
+        cycle_nonce: 0,
+        consecutive_failures: 0,
+        manual_trigger_pending: false,
+        queue_ticket: None,
+        last_user_queue_mutation_block: None,
+        cycle_weight_upper,
+        cycle_fee_upper,
+        funding_tracked_count: funding_tracked_assets.len() as u32,
+        pending_funding_count: 0,
+        has_pending_funding: false,
+        auto_close_at_cycle_nonce: None,
+        first_eligible_at,
+        last_cycle_block: Zero::zero(),
+      };
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if !DormantAaaIdentities::<T>::contains_key(aaa_id) || Self::active_actor_exists(aaa_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaAlreadyActive.into(),
+          ));
+        }
+        DormantAaaIdentities::<T>::remove(aaa_id);
+        Self::insert_active_actor(aaa_id, instance);
+        ActorFunding::<T>::insert(
+          aaa_id,
+          ActorFundingState {
+            funding_source_policy,
+            funding_snapshots: Default::default(),
+            funding_tracked_assets,
+          },
+        );
+        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_add(1)
+            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      Self::deposit_event(Event::AaaActivated { aaa_id });
+      Self::prime_actor_schedule(aaa_id);
+      Ok(())
+    }
+
+    fn do_deactivate_aaa(aaa_id: AaaId, instance: AaaInstanceOf<T>) -> DispatchResult {
+      let identity = DormantAaaIdentity {
+        sovereign_account: instance.sovereign_account,
+        owner: instance.owner,
+        actor_class: instance.actor_class,
+        mutability: instance.mutability,
+      };
+      polkadot_sdk::frame_support::storage::with_transaction(|| {
+        Self::remove_actor_from_queues(aaa_id);
+        if ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
+          && Self::wakeup_substrate_invalidate(aaa_id).is_none()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaNotFound.into(),
+          ));
+        }
+        Self::remove_active_actor(aaa_id);
+        ActorFunding::<T>::remove(aaa_id);
+        DormantAaaIdentities::<T>::insert(aaa_id, identity);
+        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
+          *count = count
+            .checked_sub(1)
+            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
+          Ok(())
+        }) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      })?;
+      Self::deposit_event(Event::AaaDeactivated { aaa_id });
+      Ok(())
+    }
+
     fn execution_plan_contains_mint(execution_plan: &ExecutionPlanOf<T>) -> bool {
       execution_plan
         .iter()
         .any(|step| matches!(step.task, AaaTask::Mint { .. }))
-    }
-
-    fn task_is_economically_sensitive(task: &TaskOf<T>) -> bool {
-      !matches!(task, AaaTask::Noop)
-    }
-
-    fn has_probabilistic_timer(schedule: &ScheduleOf<T>) -> bool {
-      match &schedule.trigger {
-        Trigger::Timer {
-          probability: Some(probability),
-          ..
-        } => !probability.is_zero() && *probability < Perbill::one(),
-        _ => false,
-      }
-    }
-
-    fn validate_probability_entropy_policy(
-      schedule: &ScheduleOf<T>,
-      execution_plan: &ExecutionPlanOf<T>,
-    ) -> DispatchResult {
-      if !T::RequireSecureEntropyForProbabilisticTasks::get() {
-        return Ok(());
-      }
-      if !Self::has_probabilistic_timer(schedule) {
-        return Ok(());
-      }
-      let has_financial_step = execution_plan
-        .iter()
-        .any(|step| Self::task_is_economically_sensitive(&step.task));
-      if !has_financial_step {
-        return Ok(());
-      }
-      ensure!(
-        T::EntropyProvider::is_secure_for_financial_probability(),
-        Error::<T>::InsecureEntropyProvider
-      );
-      Ok(())
     }
 
     fn validate_schedule(schedule: &ScheduleOf<T>) -> DispatchResult {
@@ -1940,6 +2177,10 @@ pub mod pallet {
     fn validate_schedule_window(window: &ScheduleWindow<BlockNumberFor<T>>) -> DispatchResult {
       ensure!(window.end > window.start, Error::<T>::InvalidScheduleWindow);
       ensure!(
+        window.end.checked_add(&One::one()).is_some(),
+        Error::<T>::InvalidScheduleWindow
+      );
+      ensure!(
         window.end.saturating_sub(window.start) >= T::MinWindowLength::get(),
         Error::<T>::InvalidScheduleWindow
       );
@@ -1967,7 +2208,6 @@ pub mod pallet {
           AaaTask::SwapExactIn { .. }
           | AaaTask::SwapExactOut { .. }
           | AaaTask::AddLiquidity { .. }
-          | AaaTask::Noop
           | AaaTask::Stake { .. }
           | AaaTask::DonateLiquidity { .. }
           | AaaTask::Unstake { .. } => {}
@@ -2037,30 +2277,9 @@ pub mod pallet {
               check_amount(shares, share_asset);
             }
           }
-          AaaTask::Noop => {}
         }
       }
 
-      BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::ExecutionPlanTooLong.into())
-    }
-
-    fn derive_combined_funding_tracked_assets(
-      execution_plan: &ExecutionPlanOf<T>,
-      on_close_execution_plan: &ExecutionPlanOf<T>,
-    ) -> Result<BoundedBTreeSet<T::AssetId, T::MaxFundingTrackedAssets>, DispatchError> {
-      let mut tracked = alloc::collections::BTreeSet::new();
-      for asset in Self::derive_funding_tracked_assets(execution_plan)?
-        .iter()
-        .copied()
-      {
-        tracked.insert(asset);
-      }
-      for asset in Self::derive_funding_tracked_assets(on_close_execution_plan)?
-        .iter()
-        .copied()
-      {
-        tracked.insert(asset);
-      }
       BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::ExecutionPlanTooLong.into())
     }
 
@@ -2088,9 +2307,39 @@ pub mod pallet {
 
     fn ensure_not_system_immutable(instance: &AaaInstanceOf<T>) -> DispatchResult {
       ensure!(
-        !(instance.aaa_type == AaaType::System && instance.mutability == Mutability::Immutable),
+        !(instance.actor_class.aaa_type() == AaaType::System
+          && instance.mutability == Mutability::Immutable),
         Error::<T>::ImmutableAaa
       );
+      Ok(())
+    }
+
+    fn ensure_dormant_control_origin(
+      origin: OriginFor<T>,
+      identity: &DormantAaaIdentityOf<T>,
+    ) -> DispatchResult {
+      if let Ok(who) = ensure_signed(origin.clone()) {
+        ensure!(who == identity.owner, Error::<T>::NotOwner);
+        return Ok(());
+      }
+      T::SystemOrigin::ensure_origin(origin)?;
+      ensure!(
+        identity.actor_class.aaa_type() == AaaType::System,
+        Error::<T>::NotGovernance
+      );
+      Ok(())
+    }
+
+    fn ensure_user_queue_mutation_allowed(
+      instance: &AaaInstanceOf<T>,
+      now: BlockNumberFor<T>,
+    ) -> DispatchResult {
+      if matches!(instance.actor_class, ActorClass::User { .. }) {
+        ensure!(
+          instance.last_user_queue_mutation_block != Some(now),
+          Error::<T>::QueueMutationRateLimited
+        );
+      }
       Ok(())
     }
 
@@ -2101,47 +2350,10 @@ pub mod pallet {
       }
       T::SystemOrigin::ensure_origin(origin)?;
       ensure!(
-        instance.aaa_type == AaaType::System,
+        instance.actor_class.aaa_type() == AaaType::System,
         Error::<T>::NotGovernance
       );
       Ok(())
-    }
-
-    fn readiness_trigger_from_schedule(schedule: &ScheduleOf<T>) -> ReadinessTrigger {
-      match &schedule.trigger {
-        Trigger::Timer {
-          every_blocks,
-          probability,
-        } => ReadinessTrigger::Timer {
-          every_blocks: *every_blocks,
-          probability: *probability,
-        },
-        Trigger::OnAddressEvent { .. } => ReadinessTrigger::OnAddressEvent,
-        Trigger::Manual => ReadinessTrigger::Manual,
-      }
-    }
-
-    pub(crate) fn readiness_state_from_instance(
-      instance: &AaaInstanceOf<T>,
-    ) -> AaaReadinessStateOf<T> {
-      AaaReadinessState {
-        aaa_type: instance.aaa_type,
-        is_paused: instance.is_paused,
-        trigger: Self::readiness_trigger_from_schedule(&instance.schedule),
-        cooldown_blocks: instance.schedule.cooldown_blocks,
-        schedule_window: instance.schedule_window,
-        manual_trigger_pending: instance.manual_trigger_pending,
-        cycle_nonce: instance.cycle_nonce,
-        last_cycle_block: instance.last_cycle_block,
-      }
-    }
-
-    pub(crate) fn sync_readiness_state(aaa_id: AaaId) {
-      let Some(instance) = AaaInstances::<T>::get(aaa_id) else {
-        AaaReadiness::<T>::remove(aaa_id);
-        return;
-      };
-      AaaReadiness::<T>::insert(aaa_id, Self::readiness_state_from_instance(&instance));
     }
 
     fn remove_owner_slot_binding(owner: &T::AccountId, owner_slot: u8, sovereign: &T::AccountId) {
@@ -2166,76 +2378,139 @@ pub mod pallet {
       instance: &AaaInstanceOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
-      polkadot_sdk::frame_support::storage::with_transaction(|| {
-        let reserved_fee_remaining = Self::admit_on_close_execution_plan(instance);
-        Self::execute_on_close_execution_plan(aaa_id, instance, reserved_fee_remaining);
-        Self::remove_actor_from_queues(aaa_id);
-        if let Some(wakeup_block) = ScheduledWakeupBlock::<T>::take(aaa_id) {
-          Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
+      ensure!(
+        Self::active_actor_snapshot(aaa_id).as_ref() == Some(instance),
+        Error::<T>::AaaNotFound
+      );
+      ensure!(
+        ActorFunding::<T>::contains_key(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      ensure!(
+        ActiveAaaCount::<T>::get() > 0,
+        Error::<T>::ActiveAaaCountInvariant
+      );
+      ensure!(
+        ActorIdentityCount::<T>::get() > 0,
+        Error::<T>::ActorIdentityCountInvariant
+      );
+      ensure!(
+        SovereignIndex::<T>::get(&instance.sovereign_account) == Some(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      if let ActorClass::User { owner_slot } = instance.actor_class {
+        ensure!(
+          OwnerSlotMask::<T>::get(&instance.owner) & (1u8 << owner_slot) != 0,
+          Error::<T>::InvalidOwnerSlot
+        );
+      }
+
+      // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as soon as
+      // hot state disappears. Terminal cleanup therefore performs no shared-container scan.
+      Self::remove_active_actor(aaa_id);
+      ActorFunding::<T>::remove(aaa_id);
+      ActiveAaaCount::<T>::mutate(|count| *count -= 1);
+      ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+      match instance.actor_class {
+        ActorClass::User { owner_slot } => {
+          Self::remove_owner_slot_binding(&instance.owner, owner_slot, &instance.sovereign_account)
         }
-        WakeupRetryPending::<T>::remove(aaa_id);
-        AaaInstances::<T>::remove(aaa_id);
-        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
-          *count = count
-            .checked_sub(1)
-            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
-          Ok(())
-        }) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        ActorClass::System => {
+          SovereignIndex::<T>::remove(&instance.sovereign_account);
+          ClosedSystemAaaIds::<T>::insert(aaa_id, instance.mutability);
         }
-        AaaReadiness::<T>::remove(aaa_id);
-        match instance.aaa_type {
-          AaaType::User => Self::remove_owner_slot_binding(
-            &instance.owner,
-            instance.owner_slot,
-            &instance.sovereign_account,
-          ),
-          AaaType::System => {
-            SovereignIndex::<T>::remove(&instance.sovereign_account);
-            ClosedSystemAaaIds::<T>::insert(aaa_id, instance.mutability);
-          }
-        }
-        if let Err(error) = T::AtomicityHook::on_close_checkpoint(aaa_id) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
+      }
       Self::deposit_event(Event::AaaClosed { aaa_id, reason });
       Ok(())
     }
 
-    fn admit_on_close_execution_plan(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
-      if instance.aaa_type != AaaType::User {
-        return Zero::zero();
+    fn close_dormant_actor(
+      aaa_id: AaaId,
+      identity: &DormantAaaIdentityOf<T>,
+      reason: CloseReason,
+    ) -> DispatchResult {
+      ensure!(
+        DormantAaaIdentities::<T>::get(aaa_id).as_ref() == Some(identity),
+        Error::<T>::AaaNotFound
+      );
+      ensure!(
+        ActorIdentityCount::<T>::get() > 0,
+        Error::<T>::ActorIdentityCountInvariant
+      );
+      ensure!(
+        SovereignIndex::<T>::get(&identity.sovereign_account) == Some(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      if let ActorClass::User { owner_slot } = identity.actor_class {
+        ensure!(
+          OwnerSlotMask::<T>::get(&identity.owner) & (1u8 << owner_slot) != 0,
+          Error::<T>::InvalidOwnerSlot
+        );
       }
-      let close_cycle_fee_upper = Self::close_cycle_fee_upper_bound(instance);
-      Self::user_native_balance(instance).min(close_cycle_fee_upper)
+
+      DormantAaaIdentities::<T>::remove(aaa_id);
+      ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+      match identity.actor_class {
+        ActorClass::User { owner_slot } => {
+          Self::remove_owner_slot_binding(&identity.owner, owner_slot, &identity.sovereign_account)
+        }
+        ActorClass::System => {
+          SovereignIndex::<T>::remove(&identity.sovereign_account);
+          ClosedSystemAaaIds::<T>::insert(aaa_id, identity.mutability);
+        }
+      }
+      Self::deposit_event(Event::AaaClosed { aaa_id, reason });
+      Ok(())
     }
 
     pub(crate) fn update_idle_starvation_state(
+      now: BlockNumberFor<T>,
       breaker_active: bool,
       remaining_execution_budget: Weight,
     ) {
+      let state = IdleStarvationState::<T>::get();
       let exhausted =
         remaining_execution_budget.ref_time() == 0 || remaining_execution_budget.proof_size() == 0;
-      if !breaker_active && exhausted {
-        let previous = IdleStarvationBlocks::<T>::get();
-        let current = previous.saturating_add(1);
-        IdleStarvationBlocks::<T>::put(current);
-        let threshold = T::MaxIdleStarvationBlocks::get();
-        let crossed_threshold = if threshold == 0 {
-          previous == 0
-        } else {
-          previous < threshold && current >= threshold
-        };
-        if crossed_threshold {
-          Self::deposit_event(Event::IdleStarvationDetected {
-            consecutive_blocks: current,
+      if breaker_active || !exhausted {
+        if let IdleStarvationPhase::Alerted { since } = state {
+          Self::deposit_event(Event::IdleStarvationRecovered {
+            consecutive_blocks: now.saturating_sub(since).saturated_into(),
           });
+        }
+        if !matches!(state, IdleStarvationPhase::Healthy) {
+          IdleStarvationState::<T>::kill();
         }
         return;
       }
-      IdleStarvationBlocks::<T>::put(0);
+      match state {
+        IdleStarvationPhase::Healthy => {
+          if T::MaxIdleStarvationBlocks::get() <= 1 {
+            IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { since: now });
+            Self::deposit_event(Event::IdleStarvationDetected {
+              consecutive_blocks: 1,
+            });
+          } else {
+            IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { since: now });
+          }
+        }
+        IdleStarvationPhase::Starving { since } => {
+          let duration = Self::starvation_duration(now, since);
+          if duration >= T::MaxIdleStarvationBlocks::get() {
+            IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { since });
+            Self::deposit_event(Event::IdleStarvationDetected {
+              consecutive_blocks: duration,
+            });
+          }
+        }
+        IdleStarvationPhase::Alerted { .. } => {}
+      }
+    }
+
+    fn starvation_duration(now: BlockNumberFor<T>, since: BlockNumberFor<T>) -> u32 {
+      now
+        .saturating_sub(since)
+        .saturating_add(One::one())
+        .saturated_into()
     }
 
     // --- Active Actors Set Operations ---
@@ -2257,13 +2532,11 @@ pub mod pallet {
     }
 
     pub(crate) fn remove_actor_from_queues(aaa_id: AaaId) {
-      CurrentQueue::<T>::mutate(|queue| {
-        queue.retain(|id| *id != aaa_id);
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        if let Some(hot) = maybe.as_mut() {
+          hot.queue_ticket = None;
+        }
       });
-      NextQueue::<T>::mutate(|queue| {
-        queue.retain(|id| *id != aaa_id);
-      });
-      ActorQueueEpoch::<T>::remove(aaa_id);
     }
 
     #[cfg(feature = "try-runtime")]
@@ -2271,24 +2544,68 @@ pub mod pallet {
       use polkadot_sdk::sp_runtime::TryRuntimeError;
       let limit = Self::effective_active_actor_limit();
       let active_count = Self::active_instance_count();
-      let actual_active_count = AaaInstances::<T>::iter_keys().count() as u32;
+      let actual_active_count = ActorHot::<T>::iter_keys().count() as u32;
       let valid_owner_mask = Self::valid_owner_mask();
       if active_count != actual_active_count {
         return Err(TryRuntimeError::Other(
-          "ActiveAaaCount does not match AaaInstances cardinality",
+          "ActiveAaaCount does not match ActorHot cardinality",
         ));
       }
       if active_count > limit {
         return Err(TryRuntimeError::Other(
-          "AaaInstances count exceeds effective active actor limit",
+          "ActorHot count exceeds effective active actor limit",
         ));
       }
-      let mut max_id: Option<AaaId> = None;
-      for (aaa_id, instance) in AaaInstances::<T>::iter() {
-        max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
-        if !AaaReadiness::<T>::contains_key(aaa_id) {
+      let dormant_count = DormantAaaIdentities::<T>::iter_keys().count() as u32;
+      let identity_count = ActorIdentityCount::<T>::get();
+      if identity_count != active_count.saturating_add(dormant_count) {
+        return Err(TryRuntimeError::Other(
+          "ActorIdentityCount does not match active plus dormant cardinality",
+        ));
+      }
+      if identity_count > T::MaxActorIdentities::get() {
+        return Err(TryRuntimeError::Other(
+          "ActorIdentityCount exceeds MaxActorIdentities",
+        ));
+      }
+      for aaa_id in ActorHot::<T>::iter_keys() {
+        if !ActorProgram::<T>::contains_key(aaa_id) {
           return Err(TryRuntimeError::Other(
-            "AaaInstances entry has no matching AaaReadiness entry",
+            "ActorHot entry has no matching ActorProgram entry",
+          ));
+        }
+      }
+      for aaa_id in ActorProgram::<T>::iter_keys() {
+        if !ActorHot::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorProgram entry has no matching ActorHot entry",
+          ));
+        }
+      }
+      let mut max_id: Option<AaaId> = None;
+      let active_actors = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
+      for (aaa_id, hot) in active_actors {
+        let program = ActorProgram::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
+          "ActorHot entry has no matching ActorProgram entry",
+        ))?;
+        let instance = Self::compose_active_actor(hot, program);
+        max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
+        let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
+          return Err(TryRuntimeError::Other(
+            "ActorHot entry has no matching ActorFunding entry",
+          ));
+        };
+        let pending_funding_count = funding
+          .funding_snapshots
+          .values()
+          .filter(|batch| !batch.pending_amount.is_zero())
+          .count() as u32;
+        if instance.funding_tracked_count != funding.funding_tracked_assets.len() as u32
+          || instance.pending_funding_count != pending_funding_count
+          || instance.has_pending_funding != (pending_funding_count > 0)
+        {
+          return Err(TryRuntimeError::Other(
+            "ActorHot funding indications disagree with ActorFunding",
           ));
         }
         match SovereignIndex::<T>::get(&instance.sovereign_account) {
@@ -2299,27 +2616,61 @@ pub mod pallet {
             ));
           }
         }
-        match instance.aaa_type {
-          AaaType::User => {
-            if instance.owner_slot >= T::MaxOwnerSlots::get() {
+        if let ActorClass::User { owner_slot } = instance.actor_class {
+          if owner_slot >= T::MaxOwnerSlots::get() {
+            return Err(TryRuntimeError::Other(
+              "User AAA owner_slot exceeds MaxOwnerSlots",
+            ));
+          }
+          let owner_mask = OwnerSlotMask::<T>::get(&instance.owner) & valid_owner_mask;
+          if (owner_mask & (1u8 << owner_slot)) == 0 {
+            return Err(TryRuntimeError::Other(
+              "User AAA owner_slot is missing from OwnerSlotMask",
+            ));
+          }
+        }
+      }
+      for aaa_id in ActorFunding::<T>::iter_keys() {
+        if !Self::active_actor_exists(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorFunding entry has no matching split active actor",
+          ));
+        }
+      }
+      let dormant_identities = DormantAaaIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
+      for (aaa_id, identity) in dormant_identities {
+        max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
+        if Self::active_actor_exists(aaa_id) || ActorFunding::<T>::contains_key(aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "Dormant identity owns active scheduler or readiness state",
+          ));
+        }
+        match SovereignIndex::<T>::get(&identity.sovereign_account) {
+          Some(mapped_id) if mapped_id == aaa_id => {}
+          _ => {
+            return Err(TryRuntimeError::Other(
+              "Dormant SovereignIndex does not map sovereign_account back to aaa_id",
+            ));
+          }
+        }
+        match identity.actor_class {
+          ActorClass::User { owner_slot } => {
+            if owner_slot >= T::MaxOwnerSlots::get() {
               return Err(TryRuntimeError::Other(
-                "User AAA owner_slot exceeds MaxOwnerSlots",
+                "Dormant User AAA owner_slot exceeds MaxOwnerSlots",
               ));
             }
-            let owner_mask = OwnerSlotMask::<T>::get(&instance.owner) & valid_owner_mask;
-            if (owner_mask & (1u8 << instance.owner_slot)) == 0 {
+            let owner_mask = OwnerSlotMask::<T>::get(&identity.owner) & valid_owner_mask;
+            if (owner_mask & (1u8 << owner_slot)) == 0 {
               return Err(TryRuntimeError::Other(
-                "User AAA owner_slot is missing from OwnerSlotMask",
+                "Dormant User AAA owner_slot is missing from OwnerSlotMask",
               ));
             }
           }
-          AaaType::System => {
-            if instance.owner_slot != SYSTEM_OWNER_SLOT_SENTINEL {
-              return Err(TryRuntimeError::Other(
-                "System AAA owner_slot is not the compatibility sentinel",
-              ));
-            }
+          ActorClass::System if identity.mutability != Mutability::Mutable => {
+            return Err(TryRuntimeError::Other("Dormant System AAA must be Mutable"));
           }
+          ActorClass::System => {}
         }
       }
       let queue_capacity = T::MaxQueueLength::get();
@@ -2327,6 +2678,250 @@ pub mod pallet {
         return Err(TryRuntimeError::Other(
           "MaxQueueLength is below effective active actor limit",
         ));
+      }
+      let queue_head = QueueHead::<T>::get();
+      let queue_tail = QueueTail::<T>::get();
+      if queue_head > queue_tail {
+        return Err(TryRuntimeError::Other("QueueHead exceeds QueueTail"));
+      }
+      if queue_tail.saturating_sub(queue_head) > u64::from(queue_capacity) {
+        return Err(TryRuntimeError::Other(
+          "paged queue physical occupancy exceeds MaxQueueLength",
+        ));
+      }
+      let page_size = u64::from(T::QueuePageSize::get());
+      let queue_pages = QueuePages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only paged-queue invariant audit
+      for (page_id, page) in queue_pages {
+        if page.is_empty() || page.len() > T::QueuePageSize::get() as usize {
+          return Err(TryRuntimeError::Other(
+            "QueuePages entry has invalid length",
+          ));
+        }
+        let Some(page_start) = page_id.checked_mul(page_size) else {
+          return Err(TryRuntimeError::Other("QueuePage ticket range overflows"));
+        };
+        let Some(page_end) = page_start.checked_add(page.len() as u64) else {
+          return Err(TryRuntimeError::Other("QueuePage ticket range overflows"));
+        };
+        if page_end <= queue_head {
+          return Err(TryRuntimeError::Other(
+            "QueuePages contains a fully consumed page",
+          ));
+        }
+        if page_start >= queue_tail {
+          return Err(TryRuntimeError::Other(
+            "QueuePages contains a page beyond QueueTail",
+          ));
+        }
+      }
+      let mut live_queue_tickets = alloc::collections::BTreeSet::new();
+      let hot_states = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only live-ticket invariant audit
+      for (aaa_id, hot) in hot_states {
+        let Some(ticket) = hot.queue_ticket else {
+          continue;
+        };
+        if ticket < queue_head || ticket >= queue_tail {
+          return Err(TryRuntimeError::Other(
+            "ActorHot owns an already-consumed or beyond-tail queue ticket",
+          ));
+        }
+        if !live_queue_tickets.insert(ticket) {
+          return Err(TryRuntimeError::Other(
+            "multiple actors own the same live queue ticket",
+          ));
+        }
+        let page_id = ticket / page_size;
+        let slot = (ticket % page_size) as usize;
+        let Some(entry) = QueuePages::<T>::get(page_id).and_then(|page| page.get(slot).copied())
+        else {
+          return Err(TryRuntimeError::Other(
+            "ActorHot live queue ticket does not resolve to a physical entry",
+          ));
+        };
+        if entry.aaa_id != aaa_id {
+          return Err(TryRuntimeError::Other(
+            "ActorHot live queue ticket resolves to a different actor",
+          ));
+        }
+      }
+      if T::WakeupPageSize::get() == 0 {
+        return Err(TryRuntimeError::Other("WakeupPageSize must be non-zero"));
+      }
+      let mut wakeup_live_by_block = alloc::collections::BTreeMap::new();
+      let mut wakeup_page_count = 0u32;
+      let wakeup_pages = WakeupPages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only paged-wakeup invariant audit
+      for ((block, page_id), page) in wakeup_pages {
+        wakeup_page_count = wakeup_page_count.saturating_add(1);
+        if page.entries.is_empty() || page.entries.len() > T::WakeupPageSize::get() as usize {
+          return Err(TryRuntimeError::Other(
+            "WakeupPages entry has invalid length",
+          ));
+        }
+        if page.scan_slot as usize > page.entries.len() {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage scan cursor exceeds page length",
+          ));
+        }
+        let live_entries = page
+          .entries
+          .iter() // deos-bypass: bounded-iter — try-state-only WakeupPageSize slot audit
+          .filter(|entry| entry.is_some())
+          .count() as u32;
+        if live_entries == 0 || page.live_entries != live_entries {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage live-entry count disagrees with slots",
+          ));
+        }
+        let Some(bucket) = WakeupBuckets::<T>::get(block) else {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage has no matching bucket metadata",
+          ));
+        };
+        if let Some(previous_page) = page.previous_page
+          && WakeupPages::<T>::get((block, previous_page)).and_then(|previous| previous.next_page)
+            != Some(page_id)
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage previous link is not reciprocal",
+          ));
+        }
+        if let Some(next_page) = page.next_page
+          && WakeupPages::<T>::get((block, next_page)).and_then(|next| next.previous_page)
+            != Some(page_id)
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupPage next link is not reciprocal",
+          ));
+        }
+        if page_id == bucket.head_page && page.previous_page.is_some() {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket head page has a predecessor",
+          ));
+        }
+        if page_id == bucket.tail_page && page.next_page.is_some() {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket tail page has a successor",
+          ));
+        }
+        let block_live = wakeup_live_by_block.entry(block).or_insert(0u32);
+        *block_live = block_live.saturating_add(live_entries);
+        for (slot, entry) in page
+          .entries
+          .iter() // deos-bypass: bounded-iter — try-state-only WakeupPageSize pointer audit
+          .enumerate()
+        {
+          let Some(entry) = entry else {
+            continue;
+          };
+          let expected = WakeupPointer {
+            block,
+            page_id,
+            slot: slot as WakeupSlot,
+          };
+          if ActorHot::<T>::get(entry.aaa_id).and_then(|hot| hot.wakeup_pointer) != Some(expected) {
+            return Err(TryRuntimeError::Other(
+              "WakeupPage live slot has no matching ActorHot pointer",
+            ));
+          }
+        }
+      }
+      if wakeup_page_count > active_count {
+        return Err(TryRuntimeError::Other(
+          "WakeupPages count exceeds active actor count",
+        ));
+      }
+      let cursor_len = WakeupCursorLen::<T>::get();
+      let wakeup_buckets = WakeupBuckets::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor-bounded bucket audit
+      for (block, bucket) in wakeup_buckets {
+        if wakeup_live_by_block.get(&block).copied() != Some(bucket.live_entries) {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket live-entry count disagrees with pages",
+          ));
+        }
+        if !WakeupPages::<T>::contains_key((block, bucket.head_page))
+          || !WakeupPages::<T>::contains_key((block, bucket.tail_page))
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket head or tail page is missing",
+          ));
+        }
+        if let Some(index) = bucket.cursor_index
+          && (index >= cursor_len || Self::wakeup_cursor_get(index) != Some(block))
+        {
+          return Err(TryRuntimeError::Other(
+            "WakeupBucket cursor reverse index does not resolve",
+          ));
+        }
+      }
+      if cursor_len > T::MaxActiveActors::get() || cursor_len > active_count {
+        return Err(TryRuntimeError::Other(
+          "WakeupCursorLen exceeds active actor capacity",
+        ));
+      }
+      let cursor_page_size = T::WakeupPageSize::get();
+      let expected_cursor_pages = cursor_len.div_ceil(cursor_page_size);
+      let actual_cursor_pages = WakeupCursorPages::<T>::iter().count() as u32; // deos-bypass: bounded-iter — try-state-only MaxActiveActors cursor-page audit
+      if actual_cursor_pages != expected_cursor_pages {
+        return Err(TryRuntimeError::Other(
+          "WakeupCursorPages count disagrees with cursor length",
+        ));
+      }
+      for page_id in 0..expected_cursor_pages {
+        let Some(page) = WakeupCursorPages::<T>::get(u64::from(page_id)) else {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursorPages has a gap in logical page order",
+          ));
+        };
+        let consumed = page_id.saturating_mul(cursor_page_size);
+        let expected_len = cursor_len.saturating_sub(consumed).min(cursor_page_size) as usize;
+        if page.len() != expected_len {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursorPage length disagrees with logical position",
+          ));
+        }
+      }
+      let mut cursor_blocks = alloc::collections::BTreeSet::new();
+      for index in 0..cursor_len {
+        let Some(block) = Self::wakeup_cursor_get(index) else {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursor index does not resolve to a page entry",
+          ));
+        };
+        if !cursor_blocks.insert(block) {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursor contains a duplicate block",
+          ));
+        }
+        if WakeupBuckets::<T>::get(block).and_then(|bucket| bucket.cursor_index) != Some(index) {
+          return Err(TryRuntimeError::Other(
+            "WakeupCursor block has no matching bucket reverse index",
+          ));
+        }
+        if index > 0 {
+          let parent = index.saturating_sub(1) / 2;
+          if Self::wakeup_cursor_get(parent).is_none_or(|parent_block| parent_block > block) {
+            return Err(TryRuntimeError::Other(
+              "WakeupCursor violates min-heap ordering",
+            ));
+          }
+        }
+      }
+      let mut live_wakeup_pointers = alloc::collections::BTreeSet::new();
+      let hot_wakeup_states = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxActiveActors pointer audit
+      for (aaa_id, hot) in hot_wakeup_states {
+        let Some(pointer) = hot.wakeup_pointer else {
+          continue;
+        };
+        if !live_wakeup_pointers.insert((pointer.block, pointer.page_id, pointer.slot)) {
+          return Err(TryRuntimeError::Other(
+            "multiple actors own the same wakeup pointer",
+          ));
+        }
+        if !Self::wakeup_page_entry_matches(pointer, aaa_id) {
+          return Err(TryRuntimeError::Other(
+            "ActorHot wakeup pointer does not resolve to its actor",
+          ));
+        }
       }
       let next_id = NextAaaId::<T>::get();
       if let Some(max_aaa_id) = max_id {
@@ -2337,135 +2932,11 @@ pub mod pallet {
         }
       }
       for aaa_id in ClosedSystemAaaIds::<T>::iter_keys() {
-        if AaaInstances::<T>::contains_key(aaa_id) {
+        if Self::active_actor_exists(aaa_id) || DormantAaaIdentities::<T>::contains_key(aaa_id) {
           return Err(TryRuntimeError::Other(
-            "ClosedSystemAaaIds contains an active aaa_id",
+            "ClosedSystemAaaIds contains an occupied aaa_id",
           ));
         }
-      }
-      let queue_epoch = QueueEpoch::<T>::get();
-      let next_marker = queue_epoch.saturating_add(1);
-      let mut current_seen = alloc::collections::BTreeSet::new();
-      for aaa_id in CurrentQueue::<T>::get().iter().copied() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "CurrentQueue contains missing aaa_id",
-          ));
-        }
-        if !current_seen.insert(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "CurrentQueue contains duplicate aaa_id",
-          ));
-        }
-        let marker = ActorQueueEpoch::<T>::get(aaa_id);
-        if marker != queue_epoch && marker != next_marker {
-          return Err(TryRuntimeError::Other(
-            "CurrentQueue entry is missing ActorQueueEpoch marker",
-          ));
-        }
-      }
-      let mut next_seen = alloc::collections::BTreeSet::new();
-      for aaa_id in NextQueue::<T>::get().iter().copied() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other("NextQueue contains missing aaa_id"));
-        }
-        if !next_seen.insert(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "NextQueue contains duplicate aaa_id",
-          ));
-        }
-        if ActorQueueEpoch::<T>::get(aaa_id) != next_marker {
-          return Err(TryRuntimeError::Other(
-            "NextQueue entry is missing ActorQueueEpoch marker",
-          ));
-        }
-      }
-      for (aaa_id, marker) in ActorQueueEpoch::<T>::iter() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "ActorQueueEpoch contains missing aaa_id",
-          ));
-        }
-        if marker == queue_epoch {
-          if !current_seen.contains(&aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "ActorQueueEpoch current marker has no matching CurrentQueue entry",
-            ));
-          }
-          if next_seen.contains(&aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "ActorQueueEpoch current marker conflicts with NextQueue membership",
-            ));
-          }
-          continue;
-        }
-        if marker == next_marker {
-          if !next_seen.contains(&aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "ActorQueueEpoch next marker has no matching NextQueue entry",
-            ));
-          }
-          continue;
-        }
-        return Err(TryRuntimeError::Other(
-          "ActorQueueEpoch marker is not aligned with QueueEpoch",
-        ));
-      }
-      for aaa_id in WakeupRetryPending::<T>::iter_keys() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "WakeupRetryPending contains missing aaa_id",
-          ));
-        }
-      }
-      let min_wakeup = MinWakeupBlock::<T>::get();
-      for (aaa_id, block) in ScheduledWakeupBlock::<T>::iter() {
-        if !AaaInstances::<T>::contains_key(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "ScheduledWakeupBlock contains missing aaa_id",
-          ));
-        }
-        if !WakeupIndex::<T>::get(block).contains(&aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "ScheduledWakeupBlock points to missing WakeupIndex entry",
-          ));
-        }
-      }
-      let mut has_wakeup = false;
-      for (block, queued) in WakeupIndex::<T>::iter() {
-        if queued.is_empty() {
-          return Err(TryRuntimeError::Other(
-            "WakeupIndex contains empty queue entry",
-          ));
-        }
-        if let Some(min_block) = min_wakeup {
-          if block < min_block {
-            return Err(TryRuntimeError::Other(
-              "WakeupIndex contains key below MinWakeupBlock",
-            ));
-          }
-        }
-        let mut wakeup_seen = alloc::collections::BTreeSet::new();
-        for aaa_id in queued.iter().copied() {
-          if !wakeup_seen.insert(aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "WakeupIndex contains duplicate aaa_id in one block queue",
-            ));
-          }
-          if let Some(live_block) = ScheduledWakeupBlock::<T>::get(aaa_id) {
-            if live_block == block && !AaaInstances::<T>::contains_key(aaa_id) {
-              return Err(TryRuntimeError::Other(
-                "WakeupIndex contains live wakeup for missing aaa_id",
-              ));
-            }
-          }
-        }
-        has_wakeup = true;
-      }
-      if min_wakeup.is_none() && has_wakeup {
-        return Err(TryRuntimeError::Other(
-          "MinWakeupBlock is missing while WakeupIndex is non-empty",
-        ));
       }
       Ok(())
     }

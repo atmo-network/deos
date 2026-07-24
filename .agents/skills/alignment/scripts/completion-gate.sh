@@ -35,6 +35,8 @@ Environment:
   RUN_CARGO_CHECK=auto|0|1
   RUN_RUNTIME_TESTS=auto|0|1
   REQUIRE_CONTEXT_SYNC=0|1
+  DEOS_VERBOSE=0|1
+  DEOS_FAILURE_TAIL_LINES=N
 EOF
 }
 
@@ -143,6 +145,12 @@ should_run_markdown_table_audit() {
     has_changed_path '\.md$' || has_changed_path '^\.agents/skills/alignment/scripts/audit-markdown-tables\.sh$'
 }
 
+should_run_architecture_readability_audit() {
+    has_changed_path '^docs/.*\.architecture\.en\.md$' || \
+        has_changed_path '^AGENTS\.md$' || \
+        has_changed_path '^\.agents/skills/alignment/scripts/audit-architecture-readability\.sh$'
+}
+
 should_run_wiki_trust() {
     has_changed_path '^wiki/.*\.md$'
 }
@@ -177,7 +185,7 @@ plan() {
     log_info "Layer 1: Changed shell syntax"
     log_info "Layer 2: Mathematical truth"
     log_info "Layer 3: Behavioral truth"
-    log_info "Layer 4: Markdown table compactness"
+    log_info "Layer 4: Markdown quality"
     log_info "Layer 5: Wiki trust"
     log_info "Layer 6: Economic claim integrity"
     log_info "Layer 7: Release-line consistency"
@@ -262,14 +270,22 @@ run_behavior_validation() {
 }
 
 run_markdown_table_validation() {
-    phase_banner "Step 6: Markdown table compactness"
-    if ! should_run_markdown_table_audit; then
+    phase_banner "Step 6: Markdown quality"
+    if should_run_markdown_table_audit; then
+        if ! "$SCRIPT_DIR/audit-markdown-tables.sh"; then
+            log_error "Markdown table compactness validation failed"
+            exit 1
+        fi
+    else
         log_warning "Skipping Markdown table audit because no Markdown files changed"
-        return 0
     fi
-    if ! "$SCRIPT_DIR/audit-markdown-tables.sh"; then
-        log_error "Markdown table compactness validation failed"
-        exit 1
+    if should_run_architecture_readability_audit; then
+        if ! "$SCRIPT_DIR/audit-architecture-readability.sh"; then
+            log_error "Architecture readability validation failed"
+            exit 1
+        fi
+    else
+        log_warning "Skipping architecture readability audit because no architecture documents changed"
     fi
 }
 
@@ -330,11 +346,11 @@ run_knowledge_sync() {
         log_warning "Context sync gate disabled"
         return 0
     fi
-    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/.*/SKILL\.md$)'; then
+    if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/README\.md$|\.agents/skills/.*/SKILL\.md$)'; then
         log_success "Context files were updated in this pass"
         return 0
     fi
-    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, docs/, or a touched SKILL.md before the next loop"
+    log_error "Context sync missing: update CHANGELOG.md, AGENTS.md, BACKLOG.md, docs/, the project skill graph, or a touched SKILL.md before the next loop"
     exit 1
 }
 
@@ -356,6 +372,24 @@ main() {
     log_success "Completion gate passed"
 }
 
+run_entrypoint() {
+    if [[ "${1:-}" == "--internal" ]]; then
+        shift
+        main "$@"
+        return
+    fi
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            main "$@"
+            return
+        fi
+    done
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    run_command_step "DEOS completion gate" "" "$script_path" --internal "$@"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    run_entrypoint "$@"
 fi

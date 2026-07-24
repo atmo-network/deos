@@ -25,6 +25,9 @@ PALLETS=(
 BENCHER_MODE=""
 ACTION=""
 TARGET_PALLET=""
+EXTRINSIC_PATTERN="*"
+OUTPUT_OVERRIDE=""
+SKIP_BUILD=0
 
 usage() {
     cat <<EOF2
@@ -39,6 +42,10 @@ Options:
   --list          List available pallets
   --check         Only verify benchmarks compile (no execution)
   --extra         Include AAA circular-chain diagnostic benchmarks excluded from production weights
+  --extrinsic NAME
+                  Benchmark one extrinsic (requires one PALLET_NAME)
+  --output FILE   Write generated weights to FILE (requires --extrinsic)
+  --skip-build    Reuse an already-built benchmark runtime
   -h, --help      Show this help message
 
 Arguments:
@@ -50,10 +57,13 @@ Examples:
   $(basename "$0") pallet_axial_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
   $(basename "$0") --extra pallet_aaa         # Include AAA circular-chain diagnostics
+  $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_aaa
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
 Environment:
   INCLUDE_EXTRA_BENCHMARKS=0|1
+  DEOS_VERBOSE=0|1              Stream full command and benchmark output (default: 0)
+  DEOS_FAILURE_TAIL_LINES=N     Failure excerpt length in compact mode (default: 80)
 EOF2
     exit 0
 }
@@ -88,6 +98,18 @@ parse_args() {
                 INCLUDE_EXTRA_BENCHMARKS=1
                 shift
                 ;;
+            --extrinsic)
+                EXTRINSIC_PATTERN="$2"
+                shift 2
+                ;;
+            --output)
+                OUTPUT_OVERRIDE="$2"
+                shift 2
+                ;;
+            --skip-build)
+                SKIP_BUILD=1
+                shift
+                ;;
             -h|--help)
                 usage
                 ;;
@@ -97,6 +119,19 @@ parse_args() {
                 ;;
         esac
     done
+
+    if [[ "$EXTRINSIC_PATTERN" == *'*'* && "$EXTRINSIC_PATTERN" != "*" ]]; then
+        log_error "--extrinsic accepts one exact NAME, not a glob"
+        exit 2
+    fi
+    if [[ "$EXTRINSIC_PATTERN" != "*" && -z "$TARGET_PALLET" ]]; then
+        log_error "--extrinsic requires one PALLET_NAME"
+        exit 2
+    fi
+    if [[ -n "$OUTPUT_OVERRIDE" && "$EXTRINSIC_PATTERN" == "*" ]]; then
+        log_error "--output requires --extrinsic"
+        exit 2
+    fi
 }
 
 check_prerequisites() {
@@ -181,12 +216,11 @@ verify_weight_file_contract() {
 
     local benchmark_file="$TEMPLATE_DIR/pallets/aaa/src/benchmarking.rs"
     local diagnostic_benchmarks=(
-        "process_remove_liquidity_max_k"
-        "scheduler_scan_hot_readiness"
-        "scheduler_scan_fallback_readiness"
-        "scheduler_scan_sparse_hot_readiness"
+        "process_remove_liquidity_indexed"
+        "scheduler_on_idle_healthy_empty"
+        "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
-        "close_aaa_on_close_execution_plan_complex"
+        "close_aaa_system_pure"
     )
 
     for benchmark in "${diagnostic_benchmarks[@]}"; do
@@ -200,10 +234,24 @@ verify_weight_file_contract() {
     done
 
     local required_runtime_benchmarks=(
-        "scheduler_actor_probe"
-        "scheduler_queue_bootstrap"
-        "scheduler_wakeup_dense_due_drain"
-        "compatibility_ingress_drain"
+        "scheduler_actor_hot_probe"
+        "scheduler_actor_program_probe"
+        "scheduler_paged_append_existing_page"
+        "scheduler_paged_append_new_page"
+        "scheduler_wakeup_append_existing_page"
+        "scheduler_wakeup_append_new_page"
+        "scheduler_wakeup_replace_exact"
+        "scheduler_wakeup_invalidate_middle_page"
+        "scheduler_wakeup_cursor_insert"
+        "scheduler_wakeup_cursor_pop_min"
+        "scheduler_wakeup_cursor_remove_exact"
+        "scheduler_wakeup_cursor_worker_partial"
+        "scheduler_wakeup_cursor_worker_remove"
+        "scheduler_wakeup_cursor_worker_future"
+        "scheduler_paged_consume_preserve_page"
+        "scheduler_paged_consume_delete_page"
+        "scheduler_paged_tombstone_drain"
+        "scheduler_paged_mixed_scan"
         "transaction_extension_ingress_base"
         "transaction_extension_ingress_notify"
     )
@@ -214,8 +262,8 @@ verify_weight_file_contract() {
         fi
     done
 
-    if grep -q 'fn compatibility_ingress_scan_notify' "$output_file"; then
-        log_error "Weight file contract check failed for pallet_aaa: retired event-vector scan weight remains"
+    if grep -q 'fn compatibility_ingress' "$output_file"; then
+        log_error "Weight file contract check failed for pallet_aaa: retired compatibility ingress weight remains"
         return 1
     fi
 
@@ -233,27 +281,37 @@ verify_weight_file_contract() {
 
 run_pallet_benchmark() {
     local pallet_name="$1"
-    local output_file="$WEIGHTS_DIR/${pallet_name}.rs"
+    local output_file="${OUTPUT_OVERRIDE:-$WEIGHTS_DIR/${pallet_name}.rs}"
     local exclude_args=()
 
     if [[ "$pallet_name" == "pallet_aaa" ]]; then
-        exclude_args=(
-            --exclude-extrinsics "pallet_aaa::process_remove_liquidity_max_k"
-            --exclude-extrinsics "pallet_aaa::scheduler_scan_hot_readiness"
-            --exclude-extrinsics "pallet_aaa::scheduler_scan_fallback_readiness"
-            --exclude-extrinsics "pallet_aaa::scheduler_scan_sparse_hot_readiness"
-            --exclude-extrinsics "pallet_aaa::scheduler_wakeup_sparse_gap_recovery"
-            --exclude-extrinsics "pallet_aaa::close_aaa_on_close_execution_plan_complex"
+        local diagnostic_benchmarks=(
+            "process_remove_liquidity_indexed"
+            "scheduler_on_idle_healthy_empty"
+            "scheduler_cooldown_ineligible_idle"
+            "scheduler_wakeup_sparse_gap_recovery"
+            "close_aaa_system_pure"
         )
+        local benchmark
+        for benchmark in "${diagnostic_benchmarks[@]}"; do
+            if [[ "$EXTRINSIC_PATTERN" != "$benchmark" ]]; then
+                exclude_args+=(--exclude-extrinsics "pallet_aaa::${benchmark}")
+            fi
+        done
 
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" != "1" ]]; then
-            exclude_args+=(
-                --exclude-extrinsics "pallet_aaa::circular_chain_stress"
-                --exclude-extrinsics "pallet_aaa::circular_chain_stress_100k"
-                --exclude-extrinsics "pallet_aaa::circular_chain_100"
-                --exclude-extrinsics "pallet_aaa::circular_chain_1000"
-                --exclude-extrinsics "pallet_aaa::circular_chain_10000"
+            local stress_benchmarks=(
+                "circular_chain_stress"
+                "circular_chain_stress_100k"
+                "circular_chain_100"
+                "circular_chain_1000"
+                "circular_chain_10000"
             )
+            for benchmark in "${stress_benchmarks[@]}"; do
+                if [[ "$EXTRINSIC_PATTERN" != "$benchmark" ]]; then
+                    exclude_args+=(--exclude-extrinsics "pallet_aaa::${benchmark}")
+                fi
+            done
         fi
     fi
 
@@ -266,7 +324,7 @@ run_pallet_benchmark() {
         local bencher_args=(
             --runtime "$runtime_wasm"
             --pallet "$pallet_name"
-            --extrinsic "*"
+            --extrinsic "$EXTRINSIC_PATTERN"
             "${exclude_args[@]}"
             --steps "$STEPS"
             --repeat "$REPEAT"
@@ -282,21 +340,28 @@ run_pallet_benchmark() {
             bencher_args+=(--template "$template_file")
         fi
 
-        frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}" 2>&1
+        run_command_step \
+            "Generate $pallet_name weights" \
+            "" \
+            frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}"
     else
         log_warning "Running benchmark tests (dry run without weight generation)"
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
             log_warning "--extra requires frame-omni-bencher for actual extra-benchmark execution; cargo fallback remains compile-only"
         fi
-        cd "$TEMPLATE_DIR"
-        cargo test --release --features runtime-benchmarks -p deos-runtime -- "benchmark" --nocapture 2>&1 || true
+        run_shell_step \
+            "Compile benchmark tests" \
+            "" \
+            "cd '$TEMPLATE_DIR' && cargo test --release --features runtime-benchmarks -p deos-runtime -- benchmark --nocapture" || true
         log_warning "Weight files NOT updated (frame-omni-bencher required for weight generation)"
         return 0
     fi
 
     if [[ -f "$output_file" ]]; then
         normalize_weight_file "$output_file"
-        verify_weight_file_contract "$pallet_name" "$output_file"
+        if [[ "$EXTRINSIC_PATTERN" == "*" ]]; then
+            verify_weight_file_contract "$pallet_name" "$output_file"
+        fi
         log_success "$pallet_name -> $output_file"
     else
         log_error "Weight file not generated for $pallet_name"
@@ -382,7 +447,7 @@ main() {
 
     check_prerequisites
 
-    if [[ "$BENCHER_MODE" == "omni" ]]; then
+    if [[ "$BENCHER_MODE" == "omni" && "$SKIP_BUILD" != "1" ]]; then
         build_benchmarks
     fi
 

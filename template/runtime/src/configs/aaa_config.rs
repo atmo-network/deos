@@ -37,7 +37,6 @@ parameter_types! {
   pub const AaaMaxFundingTrackedAssets: u32 = 10;
   pub const AaaMaxConditionsPerStep: u32 = 4;
   pub const AaaMaxSplitTransferLegs: u32 = 8;
-  pub const AaaMaxPoolScan: u32 = 64;
 
   // --- Trigger and schedule bounds ---
 
@@ -48,14 +47,15 @@ parameter_types! {
 
   // --- Scheduler controls ---
 
-  pub const AaaMaxExecutionsPerBlock: u32 = 48;
+  /// Defense-in-depth count ceiling; RefTime and ProofSize admission remain primary.
+  pub const AaaMaxExecutionsPerBlock: u32 = 1_000;
   pub const AaaMaxQueueLength: u32 = 10_000;
-  pub const AaaMaxWakeupBucketSize: u32 = 10_000;
-  pub const AaaMaxWakeupsPerBlock: u32 = 512;
-  pub const AaaMaxSpilloverBlocks: u32 = 8;
-  pub const AaaMaxQueueInsertionsPerBlock: u32 = 512;
-  pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
-  pub const AaaMaxIngressOverflowQueue: u32 = 8192;
+  /// Balanced production granularity selected from 32/64/128 production-Wasm evidence.
+  pub const AaaQueuePageSize: u32 = 64;
+  /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
+  pub const AaaWakeupPageSize: u32 = 32;
+  pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
+    pub const AaaMaxWakeupsPerBlock: u32 = 512;
   pub AaaGuaranteedOnIdleWeight: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
 
@@ -72,13 +72,6 @@ parameter_types! {
   /// Maximum number of active AAA instances. Bounds the BTreeSet storage.
   /// Set to 10,000 for production use cases with high automation density.
   pub const AaaMaxActiveActors: u32 = 10_000;
-  /// Current simplified policy: probabilistic timers may fall back to deterministic previous-block
-  /// hash sampling while the runtime stays on a trusted collator set. A relay-beacon replacement
-  /// is only acceptable if a future parachain-consumable per-block protocol beacon exists;
-  /// existing epoch-scale relay randomness items are not treated as that replacement. Secure
-  /// external entropy remains a future upgrade, not a launch requirement.
-  pub const AaaRequireSecureEntropyForProbabilisticTasks: bool = false;
-
   // --- Economic parameters ---
 
   /// Per-step flat evaluation fee
@@ -99,8 +92,8 @@ impl Get<Balance> for AaaMinUserBalanceGuard {
 
 /// Canonical unified fee-collection boundary for AAA charges.
 ///
-/// The collector transfers every opening, evaluation, execution, and close-tail fee in full to
-/// the Fee Sink System AAA. Phase-specific allocation happens later through that actor's bounded
+/// The collector transfers every opening, evaluation, and execution fee in full to the Fee Sink
+/// System AAA. Phase-specific allocation happens later through that actor's bounded
 /// execution plan rather than inside the collection path.
 pub struct TmctolFeeCollector;
 
@@ -317,15 +310,6 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     }
     amount >= Self::minimum_balance(asset)
   }
-
-  fn total_issuance(asset: AssetKind) -> Balance {
-    match asset {
-      AssetKind::Native => <Balances as NativeInspect<AccountId>>::total_issuance(),
-      AssetKind::Local(id) | AssetKind::Foreign(id) => {
-        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::total_issuance(id)
-      }
-    }
-  }
 }
 
 pub struct TmctolDexOps;
@@ -456,6 +440,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
         Box::new(asset_b),
       )?;
     }
+    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
     let lp_before = Self::lp_balance(who, asset_a, asset_b);
     AssetConversion::add_liquidity(
       RuntimeOrigin::signed(who.clone()),
@@ -482,8 +467,8 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       AssetKind::Local(id) => id,
       _ => return Err(DispatchError::Other("LP asset must be Local")),
     };
-    let (asset_a, asset_b) =
-      Self::pool_pair_for_lp(lp_id).ok_or(DispatchError::Other("Pool not found for LP token"))?;
+    let (asset_a, asset_b) = crate::AxialRouter::lp_pair_by_token_id(lp_id)
+      .ok_or(DispatchError::Other("Pool not found for LP token"))?;
     let before_a = TmctolAssetOps::balance(who, asset_a);
     let before_b = TmctolAssetOps::balance(who, asset_b);
     AssetConversion::remove_liquidity(
@@ -501,10 +486,6 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       after_a.saturating_sub(before_a),
       after_b.saturating_sub(before_b),
     ))
-  }
-
-  fn get_pool_reserves(asset_a: AssetKind, asset_b: AssetKind) -> Option<(Balance, Balance)> {
-    AssetConversion::get_reserves(asset_a, asset_b).ok()
   }
 }
 
@@ -525,20 +506,6 @@ impl TmctolDexOps {
       who,
     )
   }
-
-  fn pool_pair_for_lp(lp_token_id: u32) -> Option<(AssetKind, AssetKind)> {
-    let mut scanned = 0u32;
-    for (pool_key, pool_info) in pallet_asset_conversion::Pools::<Runtime>::iter() {
-      if scanned >= <Runtime as pallet_aaa::Config>::MaxAdapterScan::get() {
-        break;
-      }
-      scanned = scanned.saturating_add(1);
-      if pool_info.lp_token == lp_token_id {
-        return Some(pool_key);
-      }
-    }
-    None
-  }
 }
 
 /// System AAA genesis initializer for the current DEOS reference runtime.
@@ -551,7 +518,7 @@ pub struct TmctolGenesisSystemAaas;
 
 impl TmctolGenesisSystemAaas {
   pub fn resolve_zap_slippage_tolerance(foreign: AssetKind) -> Perbill {
-    let Some((native_reserve, _)) = TmctolDexOps::get_pool_reserves(AssetKind::Native, foreign)
+    let Some((native_reserve, _)) = AssetConversion::get_reserves(AssetKind::Native, foreign).ok()
     else {
       return ecosystem::params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE;
     };
@@ -583,18 +550,17 @@ impl
     Option<pallet_aaa::ScheduleWindow<crate::BlockNumber>>,
     pallet_aaa::ExecutionPlanOf<Runtime>,
   )> {
-    use pallet_aaa::{Mutability, Schedule, Step, StepErrorPolicy, Task, Trigger};
+    use pallet_aaa::{Mutability, Schedule, Trigger};
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
     let governance: AccountId = AaaPalletId::get().into_account_truncating();
 
     // --- Burn Actor (aaa_id = 0; legacy constant: BURNING_MANAGER_AAA_ID) ---
-    // Timer-driven: polls every N blocks, swaps any accumulated foreign tokens
-    // to native, then burns all native. No explicit coupling with fee source —
-    // it just processes whatever balance is on its sovereign account.
+    // Omnivorous intake: any verified inbound value signals one bounded pass that
+    // swaps configured foreign balances to native and burns available native.
     let burn_schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: ecosystem::params::BURNING_MANAGER_POLL_BLOCKS,
-        probability: None,
+      trigger: Trigger::OnAddressEvent {
+        source_filter: pallet_aaa::SourceFilter::Any,
+        asset_filter: pallet_aaa::AssetFilter::Any,
       },
       cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
     };
@@ -605,35 +571,17 @@ impl
       Self::build_burn_execution_plan(alloc::vec![], dust);
 
     // --- Fee Sink (aaa_id = 1) ---
-    // Timer-driven Phase 1 fan-out: distributes accumulated native fees/rewards
+    // Inbound-driven Phase 1 fan-out: distributes accumulated native fees/rewards
     // into staking-pool yield and native LP-donation ingress channels.
     let fee_sink_schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
+      trigger: Trigger::OnAddressEvent {
+        source_filter: pallet_aaa::SourceFilter::Any,
+        asset_filter: pallet_aaa::AssetFilter::Any,
       },
       cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
     };
     let fee_sink_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> =
       Self::build_phase1_fee_sink_execution_plan();
-
-    // --- Liquidity Actor (aaa_id = 2; legacy alias: ZAP_MANAGER_AAA_ID) ---
-    // Timer-driven skeleton; real LP provisioning steps are added by governance
-    // after TMC curves and pools are created (LP token IDs are pool-specific).
-    let liquidity_actor_schedule = Schedule {
-      trigger: Trigger::Timer {
-        every_blocks: 1,
-        probability: None,
-      },
-      cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
-    };
-    let liquidity_actor_execution_plan: pallet_aaa::ExecutionPlanOf<Runtime> = alloc::vec![Step {
-      conditions: Default::default(),
-      task: Task::Noop,
-      on_error: StepErrorPolicy::AbortCycle,
-    }]
-    .try_into()
-    .expect("Liquidity Actor noop execution_plan fits");
 
     alloc::vec![
       (
@@ -652,90 +600,16 @@ impl
         None,
         fee_sink_execution_plan,
       ),
-      (
-        ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        liquidity_actor_schedule,
-        None,
-        liquidity_actor_execution_plan,
-      ),
-      // --- TOL Bucket A: Anchor (aaa_id = 3) ---
-      (
-        ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID,
-        governance.clone(),
-        Mutability::Immutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- TOL Bucket B: Building (aaa_id = 4) ---
-      (
-        ecosystem::aaa_ids::TOL_BUCKET_B_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- TOL Bucket C: Capital (aaa_id = 5) ---
-      (
-        ecosystem::aaa_ids::TOL_BUCKET_C_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- TOL Bucket D: Dormant (aaa_id = 6) ---
-      (
-        ecosystem::aaa_ids::TOL_BUCKET_D_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- Treasury B: Building Treasury (aaa_id = 7) ---
-      // Paired Bucket B LP-removal lane; Noop until governance activates both plans
-      (
-        ecosystem::aaa_ids::TREASURY_B_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- Treasury C: Capital Treasury (aaa_id = 8) ---
-      // Paired Bucket C LP-removal lane; Noop until governance activates both plans
-      (
-        ecosystem::aaa_ids::TREASURY_C_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- Treasury D: Dormant Treasury (aaa_id = 9) ---
-      // Paired Bucket D LP-removal lane; Noop until governance activates both plans
-      (
-        ecosystem::aaa_ids::TREASURY_D_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
       // --- BLDR Splitter (aaa_id = 10) ---
-      // Receives 66% of TMC-minted $BLDR, splits 50/50 to BLDR liquidity + treasury lanes
+      // Receives 66% of TMC-minted $BLDR, splits 50/50 to BLDR liquidity + treasury lanes.
       (
         ecosystem::aaa_ids::BLDR_SPLITTER_AAA_ID,
-        governance.clone(),
+        governance,
         Mutability::Mutable,
         Schedule {
-          trigger: Trigger::Timer {
-            every_blocks: 1,
-            probability: None,
+          trigger: Trigger::OnAddressEvent {
+            source_filter: pallet_aaa::SourceFilter::Any,
+            asset_filter: pallet_aaa::AssetFilter::Any,
           },
           cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
         },
@@ -745,71 +619,35 @@ impl
           dust,
         ),
       ),
-      // --- BLDR Liquidity Actor (aaa_id = 11; legacy constant: BLDR_ZM_AAA_ID) ---
-      // Timer-driven skeleton; LP provisioning steps added by governance
-      // after NTVE-BLDR pool is created (LP token ID is pool-specific).
-      // DexOps::add_liquidity auto-creates the pool on first execution.
-      (
-        ecosystem::aaa_ids::BLDR_ZM_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- BLDR Bucket A (aaa_id = 12) ---
-      // Permanent LP accumulator for NTVE-BLDR pair
-      (
-        ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID,
-        governance.clone(),
-        Mutability::Immutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- BLDR Treasury (aaa_id = 13) ---
-      // Receives 50% of minted $BLDR from Splitter; Noop until governance activates spending
-      (
-        ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
-        governance.clone(),
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
-      // --- Native Staking LP Farmer (aaa_id = 14) ---
-      // Timer-driven skeleton; governance activates donation after the NTVE/stNTVE pool exists.
-      (
-        ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
-        governance,
-        Mutability::Mutable,
-        noop_timer_schedule(),
-        None,
-        noop_execution_plan(),
-      ),
     ]
   }
-}
 
-fn noop_timer_schedule() -> pallet_aaa::ScheduleOf<Runtime> {
-  pallet_aaa::Schedule {
-    trigger: pallet_aaa::Trigger::Timer {
-      every_blocks: 1,
-      probability: None,
-    },
-    cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
+  fn system_custody_accounts() -> alloc::vec::Vec<pallet_aaa::AaaId> {
+    alloc::vec![
+      ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID,
+      ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID,
+    ]
   }
-}
 
-fn noop_execution_plan() -> pallet_aaa::ExecutionPlanOf<Runtime> {
-  use pallet_aaa::{Step, StepErrorPolicy, Task};
-  alloc::vec![Step {
-    conditions: Default::default(),
-    task: Task::Noop,
-    on_error: StepErrorPolicy::AbortCycle,
-  }]
-  .try_into()
-  .expect("noop execution_plan fits")
+  fn dormant_system_aaas() -> alloc::vec::Vec<(pallet_aaa::AaaId, AccountId)> {
+    use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
+    let governance: AccountId = AaaPalletId::get().into_account_truncating();
+    alloc::vec![
+      ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
+      ecosystem::aaa_ids::TOL_BUCKET_B_AAA_ID,
+      ecosystem::aaa_ids::TOL_BUCKET_C_AAA_ID,
+      ecosystem::aaa_ids::TOL_BUCKET_D_AAA_ID,
+      ecosystem::aaa_ids::TREASURY_B_AAA_ID,
+      ecosystem::aaa_ids::TREASURY_C_AAA_ID,
+      ecosystem::aaa_ids::TREASURY_D_AAA_ID,
+      ecosystem::aaa_ids::BLDR_ZM_AAA_ID,
+      ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
+      ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+    ]
+    .into_iter()
+    .map(|aaa_id| (aaa_id, governance.clone()))
+    .collect()
+  }
 }
 
 impl TmctolGenesisSystemAaas {
@@ -1180,10 +1018,21 @@ impl TmctolGenesisSystemAaas {
   ) -> polkadot_sdk::sp_runtime::DispatchResult {
     Self::ensure_native_staking_lp_farming_ready()?;
     let execution_plan = Self::build_native_staking_lp_farming_execution_plan(dust_threshold);
-    crate::AAA::update_execution_plan(
+    crate::AAA::activate_aaa(
       RuntimeOrigin::root(),
       ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
-      execution_plan,
+      pallet_aaa::ProgramInput::Active {
+        schedule: pallet_aaa::Schedule {
+          trigger: pallet_aaa::Trigger::OnAddressEvent {
+            source_filter: pallet_aaa::SourceFilter::Any,
+            asset_filter: pallet_aaa::AssetFilter::Any,
+          },
+          cooldown_blocks: ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
+        },
+        schedule_window: None,
+        execution_plan,
+        funding_source_policy: pallet_aaa::FundingSourcePolicy::RuntimePolicy,
+      },
     )
   }
 
@@ -1198,7 +1047,10 @@ impl TmctolGenesisSystemAaas {
     }
     pallet_staking::Pools::<Runtime>::get(native_asset_id)
       .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
-    if crate::AAA::aaa_instances(ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID).is_none() {
+    let actor_id = ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID;
+    if crate::AAA::aaa_instances(actor_id).is_none()
+      && crate::AAA::dormant_aaa_identities(actor_id).is_none()
+    {
       return Err(DispatchError::Other("NativeStakingLpFarmerUnavailable"));
     }
     let base_asset = AssetKind::Local(native_asset_id);
@@ -1372,16 +1224,13 @@ impl pallet_aaa::Config for Runtime {
   type StakingOps = TmctolStakingOps;
   type LiquidityDonationOps = TmctolLiquidityDonationOps;
   type AaaCreationFee = AaaCreationFee;
-  type AddressEventIngressHook = RuntimeAddressEventIngressHook;
-  type AtomicityHook = ();
   type ConditionReadFee = AaaConditionReadFee;
-  type EntropyProvider = pallet_aaa::NoEntropyProvider;
   type FeeSink = AaaFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
   type GenesisSystemAaas = TmctolGenesisSystemAaas;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = AaaMaxActiveActors;
-  type MaxAdapterScan = AaaMaxPoolScan;
+  type MaxActorIdentities = AaaMaxActiveActors;
   type MaxConditionsPerStep = AaaMaxConditionsPerStep;
   type MaxConsecutiveFailures = AaaMaxConsecutiveFailures;
   type MaxAutoCloseNonceHorizon = AaaMaxAutoCloseNonceHorizon;
@@ -1389,14 +1238,13 @@ impl pallet_aaa::Config for Runtime {
   type MaxTimerJitterBlocks = AaaMaxTimerJitterBlocks;
   type MaxExecutionsPerBlock = AaaMaxExecutionsPerBlock;
   type MaxQueueLength = AaaMaxQueueLength;
-  type MaxWakeupBucketSize = AaaMaxWakeupBucketSize;
+  type QueuePageSize = AaaQueuePageSize;
+  type WakeupPageSize = AaaWakeupPageSize;
+  type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
-  type MaxSpilloverBlocks = AaaMaxSpilloverBlocks;
-  type MaxQueueInsertionsPerBlock = AaaMaxQueueInsertionsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
   type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;
-  type MaxIngressOverflowQueue = AaaMaxIngressOverflowQueue;
   type MaxOwnerSlots = AaaMaxOwnerSlots;
   type MaxExecutionPlanSteps = AaaMaxExecutionPlanSteps;
   type MaxSplitTransferLegs = AaaMaxSplitTransferLegs;
@@ -1406,7 +1254,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxWhitelistSize = AaaMaxWhitelistSize;
   type MinUserBalance = AaaMinUserBalanceGuard;
   type MinWindowLength = AaaMinWindowLength;
-  type RequireSecureEntropyForProbabilisticTasks = AaaRequireSecureEntropyForProbabilisticTasks;
   type StepBaseFee = AaaStepBaseFee;
   type WeightInfo = crate::weights::pallet_aaa::SubstrateWeight<Runtime>;
   type WeightToFee = crate::WeightToFee;
@@ -1498,6 +1345,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       alloc::boxed::Box::new(asset_a),
       alloc::boxed::Box::new(asset_b),
     )?;
+    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
     let pool_id =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b)
         .map_err(|_| DispatchError::Other("PoolIdUnavailable"))?;
@@ -1526,23 +1374,18 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
     Ok((asset_a, asset_b, liquidity / 10))
   }
 
-  fn setup_remove_liquidity_max_k(
-    owner: &AccountId,
-    max_scan: u32,
-  ) -> Result<(AssetKind, Balance), DispatchError> {
-    if max_scan == 0 {
-      return Err(DispatchError::Other("MaxAdapterScanZero"));
-    }
+  fn setup_remove_liquidity(owner: &AccountId) -> Result<(AssetKind, Balance), DispatchError> {
+    let pool_count = 1u32;
     let lp_namespace_start = primitives::assets::TYPE_LP | 1;
     let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
     if current_next_lp < lp_namespace_start {
       pallet_asset_conversion::NextPoolAssetId::<Runtime>::put(lp_namespace_start);
     }
     let liquidity = 1_000_000_000_000u128;
-    let native_seed = liquidity.saturating_mul(max_scan.saturating_add(1) as u128);
+    let native_seed = liquidity.saturating_mul(pool_count.saturating_add(1) as u128);
     let _ = <Balances as Currency<AccountId>>::deposit_creating(owner, native_seed);
     let mut target_lp: Option<(AssetKind, Balance)> = None;
-    for i in 0..max_scan {
+    for i in 0..pool_count {
       let local_asset_id = 100_000u32.saturating_add(i);
       if Self::ensure_local_asset(local_asset_id, owner).is_err() {
         return Err(DispatchError::Other("EnsureLocalAssetFailed"));
@@ -1567,6 +1410,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       {
         return Err(DispatchError::Other("CreatePoolForBenchmarkFailed"));
       }
+      super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
       let pool_account =
         <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset_a, &asset_b)
           .map_err(|_| DispatchError::Other("PoolAddressUnavailable"))?;
@@ -1603,7 +1447,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       {
         return Err(DispatchError::Other("AddLiquidityForBenchmarkFailed"));
       }
-      if i.saturating_add(1) == max_scan {
+      if i.saturating_add(1) == pool_count {
         let lp_amount = <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(
           pool_info.lp_token,
           owner,
@@ -1651,7 +1495,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
   fn setup_swap_exact_in(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, Balance), DispatchError> {
-    let _ = Self::setup_remove_liquidity_max_k(owner, 1)?;
+    let _ = Self::setup_remove_liquidity(owner)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
       &BurningManagerAccount::get(),
       EXISTENTIAL_DEPOSIT,
@@ -1662,7 +1506,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
   fn setup_swap_exact_out(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
-    let _ = Self::setup_remove_liquidity_max_k(owner, 1)?;
+    let _ = Self::setup_remove_liquidity(owner)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
       &BurningManagerAccount::get(),
       EXISTENTIAL_DEPOSIT,
@@ -1697,17 +1541,17 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       source,
       transferred.saturating_add(EXISTENTIAL_DEPOSIT),
     );
-    System::reset_events();
-    Balances::transfer_allow_death(
-      RuntimeOrigin::signed(source.clone()),
-      polkadot_sdk::sp_runtime::MultiAddress::Id(recipient.clone()),
-      transferred,
-    )
+    let _ = (recipient, transferred);
+    Ok(())
   }
 
-  fn run_address_event_ingress(_recipient: &AccountId) -> bool {
-    crate::configs::address_event_ingress::RuntimeAddressEventIngressHook::submit_events_since_with_verified_source(0, true)
-      .expect("benchmark ingress notification must succeed")
+  fn run_address_event_ingress(recipient: &AccountId, source: &AccountId, amount: Balance) -> bool {
+    let Some(aaa_id) = crate::AAA::sovereign_index(recipient) else {
+      return false;
+    };
+    crate::AAA::notify_address_event(aaa_id, AssetKind::Native, amount, source)
+      .expect("benchmark ingress notification must succeed");
+    true
   }
 
   fn setup_xcm_asset_deposit() -> DispatchResult {
@@ -1720,16 +1564,5 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
     amount: Balance,
   ) -> DispatchResult {
     crate::configs::xcm_config::benchmark_foreign_asset_deposit(recipient, source, amount)
-  }
-
-  fn clear_address_event_ingress_events() {
-    System::reset_events();
-  }
-
-  fn run_compatibility_address_event_ingress() -> Weight {
-    <crate::configs::address_event_ingress::RuntimeAddressEventIngressHook as pallet_aaa::AddressEventIngressHook<BlockNumber>>::ingest(
-      System::block_number(),
-      Weight::MAX,
-    )
   }
 }

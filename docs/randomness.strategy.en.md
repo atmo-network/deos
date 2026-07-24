@@ -77,19 +77,11 @@ This means the runtime still has an economic security path, but that path is now
 
 It is no longer also responsible for maintaining a separate local randomness market.
 
-## 4. AAA probability behavior after VRF removal
+## 4. AAA probability behavior after contract contraction
 
-AAA remains able to use probabilistic timers, but the contract is intentionally simpler now.
+AAA exposes deterministic `Timer { every_blocks }` cadence only. The runtime binds no AAA entropy provider, performs no probability sampling or hash fallback for AAA execution, and emits no probability-specific event or error.
 
-Current behavior:
-
-- The runtime does **not** bind AAA to a secure external entropy provider
-- Probabilistic timers may fall back to deterministic previous-block-hash sampling
-- That fallback is accepted only for the current trusted-collator phase and is not treated as a permissionless fairness claim
-- Same-block consumer-safe randomness is not promised
-- Probabilistic financial automation remains a convenience mechanism, not a cryptographic fairness claim
-
-This is acceptable under the new product posture because the runtime no longer claims that local AAA probability gates are backed by a dedicated secure entropy subsystem.
+A future probabilistic AAA trigger remains possible only as a separate append-only trigger variant after a concrete deterministic, financially secure entropy contract exists. Previous-block hashes, trusted-collator posture, or technically readable epoch-scale relay randomness do not satisfy that gate.
 
 ## 5. Staking after VRF removal
 
@@ -178,7 +170,7 @@ If a real per-block parachain-consumable relay beacon appears later, the preferr
 1. ingest it through a **weight-accounted parachain-system `ConsensusHook` wrapper** rather than through hot-path proof reconstruction
 2. keep the existing `FixedVelocityConsensusHook` logic as the inner/base consensus rule for slot and unincluded-segment validation
 3. materialize one compact per-block snapshot for downstream consumers
-4. let the runtime `EntropyProvider` derive subject-specific entropy from that snapshot later in the block
+4. let explicitly authorized downstream consumers derive domain-separated values from that snapshot later in the block
 
 That topology remains a future implementation preference, not a current runtime task against the existing epoch-scale relay randomness items.
 

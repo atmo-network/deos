@@ -3,7 +3,7 @@
 # Source this file: source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
-PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+PROJECT_ROOT="${DEOS_PROJECT_ROOT:-$(dirname "$SCRIPT_DIR")}"
 TEMPLATE_DIR="$PROJECT_ROOT/template"
 BIN_DIR="$PROJECT_ROOT/bin"
 
@@ -13,6 +13,9 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
+
+DEOS_VERBOSE="${DEOS_VERBOSE:-0}"
+DEOS_FAILURE_TAIL_LINES="${DEOS_FAILURE_TAIL_LINES:-80}"
 
 log_info()    { echo -e "${BLUE}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[SUCCESS]${NC} $1"; }
@@ -87,34 +90,103 @@ run_script_step() {
     log_success "$label completed in $((end_time - start_time))s"
 }
 
+step_log_path() {
+    local label="$1"
+    local slug
+    slug="$(printf '%s' "$label" | tr -cs '[:alnum:]' '-' | tr '[:upper:]' '[:lower:]')"
+    mktemp "${TMPDIR:-/tmp}/deos-${slug}.XXXXXX.log"
+}
+
+report_step_failure() {
+    local log_path="$1"
+    log_error "Last ${DEOS_FAILURE_TAIL_LINES} output lines:"
+    tail -n "$DEOS_FAILURE_TAIL_LINES" "$log_path" >&2 || true
+    log_error "Full output retained at: $log_path"
+}
+
 run_shell_step() {
     local label="$1"
     local timeout_minutes="$2"
     local command="$3"
 
     log_info "Running: $label"
-    log_info "Command: $command"
+    if [[ "$DEOS_VERBOSE" == "1" ]]; then
+        log_info "Command: $command"
+    fi
 
     local start_time
     local end_time
     local status
+    local log_path=""
     start_time=$(date +%s)
-    if [[ -n "$timeout_minutes" ]]; then
-        if timeout "${timeout_minutes}m" bash -lc "$command"; then
-            status=0
+    if [[ "$DEOS_VERBOSE" == "1" ]]; then
+        if [[ -n "$timeout_minutes" ]]; then
+            timeout "${timeout_minutes}m" bash -lc "$command" || status=$?
         else
-            status=$?
+            bash -lc "$command" || status=$?
         fi
-    elif bash -lc "$command"; then
-        status=0
     else
-        status=$?
+        log_path="$(step_log_path "$label")"
+        if [[ -n "$timeout_minutes" ]]; then
+            timeout "${timeout_minutes}m" bash -lc "$command" >"$log_path" 2>&1 || status=$?
+        else
+            bash -lc "$command" >"$log_path" 2>&1 || status=$?
+        fi
     fi
+    status="${status:-0}"
     end_time=$(date +%s)
 
     if [[ "$status" -ne 0 ]]; then
         log_error "$label failed with status $status after $((end_time - start_time))s"
+        if [[ -n "$log_path" ]]; then
+            report_step_failure "$log_path"
+        fi
         return "$status"
+    fi
+    if [[ -n "$log_path" ]]; then
+        rm -f "$log_path"
+    fi
+    log_success "$label completed in $((end_time - start_time))s"
+}
+
+run_command_step() {
+    local label="$1"
+    local timeout_minutes="$2"
+    shift 2
+
+    log_info "Running: $label"
+
+    local start_time
+    local end_time
+    local status
+    local log_path=""
+    start_time=$(date +%s)
+    if [[ "$DEOS_VERBOSE" == "1" ]]; then
+        if [[ -n "$timeout_minutes" ]]; then
+            timeout "${timeout_minutes}m" "$@" || status=$?
+        else
+            "$@" || status=$?
+        fi
+    else
+        log_path="$(step_log_path "$label")"
+        if [[ -n "$timeout_minutes" ]]; then
+            timeout "${timeout_minutes}m" "$@" >"$log_path" 2>&1 || status=$?
+        else
+            "$@" >"$log_path" 2>&1 || status=$?
+        fi
+    fi
+    status="${status:-0}"
+    end_time=$(date +%s)
+
+    if [[ "$status" -ne 0 ]]; then
+        log_error "$label failed with status $status after $((end_time - start_time))s"
+        if [[ -n "$log_path" ]]; then
+            report_step_failure "$log_path"
+        fi
+        return "$status"
+    fi
+    if [[ -n "$log_path" ]]; then
+        rm -f "$log_path"
     fi
     log_success "$label completed in $((end_time - start_time))s"
 }

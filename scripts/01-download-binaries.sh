@@ -24,6 +24,15 @@ Options:
 
 Environment:
   POLKADOT_VERSION=polkadot-stable2606
+
+Inputs:
+  Network access to the selected Polkadot SDK GitHub release.
+
+Outputs:
+  Executable node/worker binaries under repository ./bin.
+
+Side effects:
+  Creates ./bin; preserves an already executable binary at the same path.
 EOF
 }
 

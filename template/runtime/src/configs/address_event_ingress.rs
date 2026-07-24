@@ -6,14 +6,10 @@
 use super::*;
 
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use polkadot_sdk::{
-  pallet_assets::Event as AssetsEvent,
-  pallet_balances::Event as BalancesEvent,
-  sp_runtime::{
-    DispatchError, DispatchResult, impl_tx_ext_default,
-    traits::{DispatchInfoOf, PostDispatchInfoOf, StaticLookup, TransactionExtension},
-    transaction_validity::{InvalidTransaction, TransactionValidityError},
-  },
+use polkadot_sdk::sp_runtime::{
+  DispatchResult, impl_tx_ext_default,
+  traits::{DispatchInfoOf, PostDispatchInfoOf, StaticLookup, TransactionExtension},
+  transaction_validity::{InvalidTransaction, TransactionValidityError},
 };
 use primitives::assets::TYPE_FOREIGN;
 use scale_info::TypeInfo;
@@ -51,6 +47,13 @@ pub trait AddressEventIngress {
 }
 
 pub struct RuntimeAddressEventIngress;
+
+fn map_asset_id(asset_id: u32) -> AssetKind {
+  if (asset_id & TYPE_FOREIGN) == TYPE_FOREIGN {
+    return AssetKind::Foreign(asset_id);
+  }
+  AssetKind::Local(asset_id)
+}
 
 impl RuntimeAddressEventIngress {
   fn resolve_aaa(recipient: &AccountId) -> Option<pallet_aaa::AaaId> {
@@ -140,6 +143,26 @@ impl AddressEventIngress for RuntimeAddressEventIngress {
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct AddressEventIngressExtension;
 
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
+pub enum PreparedIngressAmount {
+  Fixed(Balance),
+  RecipientBalanceBefore(Balance),
+}
+
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
+pub struct PreparedIngressCandidate {
+  aaa_id: pallet_aaa::AaaId,
+  recipient: AccountId,
+  asset: AssetKind,
+  source: Option<AccountId>,
+  amount: PreparedIngressAmount,
+}
+
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
+pub enum AddressEventIngressPre {
+  Direct(Option<PreparedIngressCandidate>),
+}
+
 impl AddressEventIngressExtension {
   fn base_weight() -> Weight {
     <<Runtime as pallet_aaa::Config>::WeightInfo as pallet_aaa::WeightInfo>::transaction_extension_ingress_base()
@@ -159,20 +182,41 @@ impl AddressEventIngressExtension {
     }
   }
 
-  fn preflight_fixed_signed_transfer(
+  fn is_fixed_signed_transfer(call: &RuntimeCall) -> bool {
+    matches!(
+      call,
+      RuntimeCall::Balances(
+        pallet_balances::Call::transfer_allow_death { .. }
+          | pallet_balances::Call::transfer_keep_alive { .. }
+          | pallet_balances::Call::transfer_all { .. }
+      ) | RuntimeCall::Assets(
+        pallet_assets::Call::transfer { .. }
+          | pallet_assets::Call::transfer_keep_alive { .. }
+          | pallet_assets::Call::transfer_all { .. }
+      )
+    )
+  }
+
+  fn prepare_fixed_signed_transfer(
     origin: &RuntimeOrigin,
     call: &RuntimeCall,
-  ) -> Result<(), TransactionValidityError> {
-    let Ok(source) = frame_system::ensure_signed(origin.clone()) else {
-      return Ok(());
-    };
+  ) -> Result<Option<PreparedIngressCandidate>, TransactionValidityError> {
+    let source = frame_system::ensure_signed(origin.clone())
+      .map_err(|_| TransactionValidityError::from(InvalidTransaction::BadSigner))?;
     let candidate = match call {
       RuntimeCall::Balances(
         pallet_balances::Call::transfer_allow_death { dest, value }
         | pallet_balances::Call::transfer_keep_alive { dest, value },
       ) => <Runtime as frame_system::Config>::Lookup::lookup(dest.clone())
         .ok()
-        .map(|recipient| (recipient, AssetKind::Native, *value)),
+        .map(|recipient| {
+          (
+            recipient,
+            AssetKind::Native,
+            *value,
+            PreparedIngressAmount::Fixed(*value),
+          )
+        }),
       RuntimeCall::Balances(pallet_balances::Call::transfer_all { dest, keep_alive }) => {
         let preservation = if *keep_alive {
           polkadot_sdk::frame_support::traits::tokens::Preservation::Preserve
@@ -188,7 +232,17 @@ impl AddressEventIngressExtension {
         );
         <Runtime as frame_system::Config>::Lookup::lookup(dest.clone())
           .ok()
-          .map(|recipient| (recipient, AssetKind::Native, amount))
+          .map(|recipient| {
+            let before = <Balances as polkadot_sdk::frame_support::traits::fungible::Inspect<
+              AccountId,
+            >>::balance(&recipient);
+            (
+              recipient,
+              AssetKind::Native,
+              amount,
+              PreparedIngressAmount::RecipientBalanceBefore(before),
+            )
+          })
       }
       RuntimeCall::Assets(
         pallet_assets::Call::transfer { id, target, amount }
@@ -198,8 +252,9 @@ impl AddressEventIngressExtension {
         .map(|recipient| {
           (
             recipient,
-            RuntimeAddressEventIngressHook::map_asset_id(*id),
+            map_asset_id(*id),
             *amount,
+            PreparedIngressAmount::Fixed(*amount),
           )
         }),
       RuntimeCall::Assets(pallet_assets::Call::transfer_all {
@@ -223,24 +278,105 @@ impl AddressEventIngressExtension {
         <Runtime as frame_system::Config>::Lookup::lookup(dest.clone())
           .ok()
           .map(|recipient| {
+            let before =
+              <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<
+                AccountId,
+              >>::balance(*id, &recipient);
             (
               recipient,
-              RuntimeAddressEventIngressHook::map_asset_id(*id),
+              map_asset_id(*id),
               amount,
+              PreparedIngressAmount::RecipientBalanceBefore(before),
             )
           })
       }
       _ => None,
     };
-    let Some((recipient, asset, amount)) = candidate else {
-      return Ok(());
+    let Some((recipient, asset, preflight_amount, amount)) = candidate else {
+      return Ok(None);
     };
     let Some(aaa_id) = RuntimeAddressEventIngress::resolve_aaa(&recipient) else {
-      return Ok(());
+      return Ok(None);
     };
-    let provenance = pallet_aaa::FundingProvenance::Signed(source);
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(&provenance))
-      .map_err(|_| InvalidTransaction::Custom(40).into())
+    let provenance = pallet_aaa::FundingProvenance::Signed(source.clone());
+    crate::AAA::preflight_funding_event(aaa_id, asset, preflight_amount, Some(&provenance))
+      .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
+    Ok(Some(PreparedIngressCandidate {
+      aaa_id,
+      recipient,
+      asset,
+      source: Some(source),
+      amount,
+    }))
+  }
+
+  fn prepare_dynamic_producer(
+    call: &RuntimeCall,
+  ) -> Result<Option<PreparedIngressCandidate>, TransactionValidityError> {
+    let candidate = match call {
+      RuntimeCall::Assets(pallet_assets::Call::mint {
+        id,
+        beneficiary,
+        amount,
+      }) => <Runtime as frame_system::Config>::Lookup::lookup(beneficiary.clone())
+        .ok()
+        .map(|recipient| (recipient, map_asset_id(*id), *amount)),
+      RuntimeCall::Assets(pallet_assets::Call::force_transfer {
+        id, dest, amount, ..
+      }) => <Runtime as frame_system::Config>::Lookup::lookup(dest.clone())
+        .ok()
+        .map(|recipient| (recipient, map_asset_id(*id), *amount)),
+      RuntimeCall::Assets(pallet_assets::Call::transfer_approved {
+        id,
+        destination,
+        amount,
+        ..
+      }) => <Runtime as frame_system::Config>::Lookup::lookup(destination.clone())
+        .ok()
+        .map(|recipient| (recipient, map_asset_id(*id), *amount)),
+      RuntimeCall::Balances(pallet_balances::Call::force_transfer { dest, value, .. }) => {
+        <Runtime as frame_system::Config>::Lookup::lookup(dest.clone())
+          .ok()
+          .map(|recipient| (recipient, AssetKind::Native, *value))
+      }
+      _ => None,
+    };
+    let Some((recipient, asset, amount)) = candidate else {
+      return Ok(None);
+    };
+    let Some(aaa_id) = RuntimeAddressEventIngress::resolve_aaa(&recipient) else {
+      return Ok(None);
+    };
+    crate::AAA::preflight_funding_event(aaa_id, asset, amount, None)
+      .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
+    Ok(Some(PreparedIngressCandidate {
+      aaa_id,
+      recipient,
+      asset,
+      source: None,
+      amount: PreparedIngressAmount::Fixed(amount),
+    }))
+  }
+
+  fn prepared_amount(candidate: &PreparedIngressCandidate) -> Balance {
+    match candidate.amount {
+      PreparedIngressAmount::Fixed(amount) => amount,
+      PreparedIngressAmount::RecipientBalanceBefore(before) => {
+        let after = match candidate.asset {
+          AssetKind::Native => {
+            <Balances as polkadot_sdk::frame_support::traits::fungible::Inspect<AccountId>>::balance(
+              &candidate.recipient,
+            )
+          }
+          AssetKind::Local(asset_id) | AssetKind::Foreign(asset_id) => {
+            <crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<
+              AccountId,
+            >>::balance(asset_id, &candidate.recipient)
+          }
+        };
+        after.saturating_sub(before)
+      }
+    }
   }
 
   fn tracks(call: &RuntimeCall) -> bool {
@@ -267,7 +403,7 @@ impl TransactionExtension<RuntimeCall> for AddressEventIngressExtension {
   const IDENTIFIER: &'static str = "AddressEventIngress";
   type Implicit = ();
   type Val = ();
-  type Pre = Option<(u32, bool)>;
+  type Pre = Option<AddressEventIngressPre>;
 
   fn weight(&self, call: &RuntimeCall) -> Weight {
     if Self::tracks(call) {
@@ -285,21 +421,17 @@ impl TransactionExtension<RuntimeCall> for AddressEventIngressExtension {
     _info: &DispatchInfoOf<RuntimeCall>,
     _len: usize,
   ) -> Result<Self::Pre, TransactionValidityError> {
-    Self::preflight_fixed_signed_transfer(origin, call)?;
-    let event_source_is_verified_signer = frame_system::ensure_signed(origin.clone()).is_ok()
-      && matches!(
-        call,
-        RuntimeCall::Assets(
-          pallet_assets::Call::transfer { .. }
-            | pallet_assets::Call::transfer_keep_alive { .. }
-            | pallet_assets::Call::transfer_all { .. }
-        ) | RuntimeCall::Balances(
-          pallet_balances::Call::transfer_allow_death { .. }
-            | pallet_balances::Call::transfer_keep_alive { .. }
-            | pallet_balances::Call::transfer_all { .. }
-        )
-      );
-    Ok(Self::tracks(call).then(|| (System::event_count(), event_source_is_verified_signer)))
+    if frame_system::ensure_signed(origin.clone()).is_ok() && Self::is_fixed_signed_transfer(call) {
+      return Ok(Some(AddressEventIngressPre::Direct(
+        Self::prepare_fixed_signed_transfer(origin, call)?,
+      )));
+    }
+    if Self::tracks(call) {
+      return Ok(Some(AddressEventIngressPre::Direct(
+        Self::prepare_dynamic_producer(call)?,
+      )));
+    }
+    Ok(None)
   }
 
   fn post_dispatch_details(
@@ -309,178 +441,36 @@ impl TransactionExtension<RuntimeCall> for AddressEventIngressExtension {
     _len: usize,
     result: &DispatchResult,
   ) -> Result<Weight, TransactionValidityError> {
-    let Some((start, event_source_is_verified_signer)) = pre else {
+    let Some(pre) = pre else {
       return Ok(Weight::zero());
     };
     if result.is_err() {
       return Ok(Self::post_dispatch_refund(true, false));
     }
-    let submitted = RuntimeAddressEventIngressHook::submit_events_since_with_verified_source(
-      start,
-      event_source_is_verified_signer,
-    )
-    .map_err(|_| InvalidTransaction::Custom(40))?;
+    let submitted = match pre {
+      AddressEventIngressPre::Direct(Some(candidate)) => {
+        let amount = Self::prepared_amount(&candidate);
+        if amount == 0 {
+          false
+        } else {
+          match candidate.source.as_ref() {
+            Some(source) => {
+              crate::AAA::notify_address_event(candidate.aaa_id, candidate.asset, amount, source)
+            }
+            None => crate::AAA::notify_address_event_without_source(
+              candidate.aaa_id,
+              candidate.asset,
+              amount,
+            ),
+          }
+          .map_err(|_| InvalidTransaction::Custom(40))?;
+          true
+        }
+      }
+      AddressEventIngressPre::Direct(None) => false,
+    };
     Ok(Self::post_dispatch_refund(false, submitted))
   }
 
   impl_tx_ext_default!(RuntimeCall; validate);
-}
-
-pub struct RuntimeAddressEventIngressHook;
-
-impl RuntimeAddressEventIngressHook {
-  pub(crate) fn probe_weight() -> Weight {
-    <<Runtime as pallet_aaa::Config>::WeightInfo as pallet_aaa::WeightInfo>::compatibility_ingress_probe()
-  }
-
-  pub(crate) fn drain_unit_weight() -> Weight {
-    <<Runtime as pallet_aaa::Config>::WeightInfo as pallet_aaa::WeightInfo>::compatibility_ingress_drain()
-  }
-
-  #[cfg(test)]
-  pub(crate) fn submit_events_since(start: u32) -> bool {
-    Self::submit_events_since_with_verified_source(start, false)
-      .expect("test ingress notification must succeed")
-  }
-
-  pub(crate) fn submit_events_since_with_verified_source(
-    start: u32,
-    event_source_is_verified_signer: bool,
-  ) -> Result<bool, DispatchError> {
-    let mut submitted = false;
-    for record in System::read_events_no_consensus().skip(start as usize) {
-      submitted |= Self::submit_primary_event(&record.event, event_source_is_verified_signer)?;
-    }
-    Ok(submitted)
-  }
-
-  fn map_asset_id(asset_id: u32) -> AssetKind {
-    if (asset_id & TYPE_FOREIGN) == TYPE_FOREIGN {
-      return AssetKind::Foreign(asset_id);
-    }
-    AssetKind::Local(asset_id)
-  }
-
-  fn candidate_with_source(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> Option<pallet_aaa::IngressOverflowEvent<pallet_aaa::AaaId, AssetKind, Balance, AccountId>>
-  {
-    if amount == 0 {
-      return None;
-    }
-    let aaa_id = RuntimeAddressEventIngress::resolve_aaa(recipient)?;
-    Some(pallet_aaa::IngressOverflowEvent {
-      aaa_id,
-      asset,
-      amount,
-      provenance: Some(pallet_aaa::FundingProvenance::Signed(source.clone())),
-    })
-  }
-
-  fn candidate_without_source(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-  ) -> Option<pallet_aaa::IngressOverflowEvent<pallet_aaa::AaaId, AssetKind, Balance, AccountId>>
-  {
-    if amount == 0 {
-      return None;
-    }
-    let aaa_id = RuntimeAddressEventIngress::resolve_aaa(recipient)?;
-    Some(pallet_aaa::IngressOverflowEvent {
-      aaa_id,
-      asset,
-      amount,
-      provenance: None,
-    })
-  }
-
-  fn submit_primary_event(
-    event: &crate::RuntimeEvent,
-    event_source_is_verified_signer: bool,
-  ) -> Result<bool, DispatchError> {
-    let candidate = match event {
-      crate::RuntimeEvent::Balances(BalancesEvent::Transfer { from, to, amount }) => {
-        if event_source_is_verified_signer {
-          Self::candidate_with_source(to, AssetKind::Native, *amount, from)
-        } else {
-          Self::candidate_without_source(to, AssetKind::Native, *amount)
-        }
-      }
-      crate::RuntimeEvent::Assets(AssetsEvent::Transferred {
-        asset_id,
-        from,
-        to,
-        amount,
-      }) => {
-        let asset = Self::map_asset_id(*asset_id);
-        if event_source_is_verified_signer {
-          Self::candidate_with_source(to, asset, *amount, from)
-        } else {
-          Self::candidate_without_source(to, asset, *amount)
-        }
-      }
-      crate::RuntimeEvent::Assets(AssetsEvent::Issued {
-        asset_id,
-        owner,
-        amount,
-      }) => Self::candidate_without_source(owner, Self::map_asset_id(*asset_id), *amount),
-      _ => None,
-    };
-    let Some(candidate) = candidate else {
-      return Ok(false);
-    };
-    Self::notify_candidate(candidate)?;
-    Ok(true)
-  }
-
-  fn notify_candidate(
-    event: pallet_aaa::IngressOverflowEvent<pallet_aaa::AaaId, AssetKind, Balance, AccountId>,
-  ) -> DispatchResult {
-    match event.provenance.as_ref() {
-      Some(pallet_aaa::FundingProvenance::Signed(source)) => {
-        crate::AAA::notify_address_event(event.aaa_id, event.asset, event.amount, source)
-      }
-      Some(pallet_aaa::FundingProvenance::InternalProtocol(source)) => {
-        crate::AAA::notify_internal_address_event(event.aaa_id, event.asset, event.amount, source)
-      }
-      Some(pallet_aaa::FundingProvenance::Xcm(source)) => {
-        crate::AAA::notify_xcm_address_event(event.aaa_id, event.asset, event.amount, source)
-      }
-      None => {
-        crate::AAA::notify_address_event_without_source(event.aaa_id, event.asset, event.amount)
-      }
-    }
-  }
-}
-
-impl pallet_aaa::AddressEventIngressHook<BlockNumber> for RuntimeAddressEventIngressHook {
-  fn ingest(
-    _now: BlockNumber,
-    remaining_weight: polkadot_sdk::frame_support::weights::Weight,
-  ) -> polkadot_sdk::frame_support::weights::Weight {
-    let ingress_probe = Self::probe_weight();
-    let ingress_drain_unit = Self::drain_unit_weight();
-    let max_admit = crate::configs::aaa_config::AaaMaxIngressEventsPerBlock::get();
-    if max_admit == 0 {
-      return Weight::zero();
-    }
-    let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(remaining_weight);
-    if !meter.can_consume(ingress_probe) {
-      return Weight::zero();
-    }
-    meter.consume(ingress_probe);
-    let queued = crate::AAA::ingress_overflow_len();
-    let drain_target = max_admit.min(queued);
-    let mut drain_limit = 0u32;
-    while drain_limit < drain_target && meter.can_consume(ingress_drain_unit) {
-      meter.consume(ingress_drain_unit);
-      drain_limit = drain_limit.saturating_add(1);
-    }
-    let _ = crate::AAA::drain_address_event_overflow(drain_limit);
-    meter.consumed()
-  }
 }

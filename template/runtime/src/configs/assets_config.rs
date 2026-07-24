@@ -7,7 +7,8 @@
 use alloc::{vec, vec::Vec};
 use polkadot_sdk::{
   frame_support::{parameter_types, traits::*},
-  pallet_asset_conversion, pallet_assets,
+  pallet_asset_conversion::{self, PoolLocator},
+  pallet_assets,
   sp_runtime::traits::AccountIdConversion,
 };
 
@@ -157,6 +158,19 @@ impl pallet_asset_registry::Config for Runtime {
   type AssetOwner = AssetRegistryAccount;
   type TokenDomainHook = AssetRegistryTokenDomainHook;
   type WeightInfo = crate::weights::pallet_asset_registry::SubstrateWeight<Runtime>;
+}
+
+pub(crate) fn register_pool_lp_pair(
+  asset1: AssetKind,
+  asset2: AssetKind,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  let pool_id =
+    <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset1, &asset2)
+      .map_err(|_| polkadot_sdk::sp_runtime::DispatchError::Other("Invalid asset pair"))?;
+  let pool = pallet_asset_conversion::Pools::<Runtime>::get(&pool_id).ok_or(
+    polkadot_sdk::sp_runtime::DispatchError::Other("Pool not found"),
+  )?;
+  crate::AxialRouter::register_lp_pair(pool.lp_token, pool_id)
 }
 
 impl pallet_asset_conversion::Config for Runtime {

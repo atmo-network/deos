@@ -326,9 +326,6 @@ pub mod params {
   /// Maximum accepted donation ratio error for native staking LP farming (1%).
   pub const NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR: Perbill = Perbill::from_percent(1);
 
-  /// Burning Manager polling interval (10 blocks ≈ 1 minute).
-  pub const BURNING_MANAGER_POLL_BLOCKS: u32 = 10;
-
   /// Minimum foreign balance for BM to attempt a swap (prevents dust churn)
   pub const BURNING_MANAGER_DUST_THRESHOLD: Balance = PRECISION; // 1.0
 

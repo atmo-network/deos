@@ -121,11 +121,10 @@ check_prerequisites() {
 
 build_try_runtime_wasm() {
     phase_banner "Step 3: Build try-runtime WASM"
-    log_info "Building deos-runtime with try-runtime feature"
-    (
-        cd "$TEMPLATE_DIR"
-        cargo build --release -p deos-runtime --features try-runtime
-    )
+    run_shell_step \
+        "Build deos-runtime with try-runtime feature" \
+        "" \
+        "cd '$TEMPLATE_DIR' && cargo build --release -p deos-runtime --features try-runtime"
 
     if [[ ! -f "$WASM_PATH" ]]; then
         log_error "try-runtime WASM artifact not found: $WASM_PATH"

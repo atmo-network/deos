@@ -30,6 +30,8 @@ Options:
 Environment:
   MODE=changed|all
   SINCE_REF=HEAD|<git-ref>
+  DEOS_VERBOSE=0|1
+  DEOS_FAILURE_TAIL_LINES=N
 EOF
 }
 
@@ -342,6 +344,24 @@ main() {
     print_summary
 }
 
+run_entrypoint() {
+    if [[ "${1:-}" == "--internal" ]]; then
+        shift
+        main "$@"
+        return
+    fi
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            main "$@"
+            return
+        fi
+    done
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    run_command_step "DEOS architecture audit" "" "$script_path" --internal "$@"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    run_entrypoint "$@"
 fi

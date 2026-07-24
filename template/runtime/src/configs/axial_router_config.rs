@@ -715,7 +715,7 @@ impl pallet_axial_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
       Box::new(asset1),
       Box::new(asset2),
     )?;
-    Ok(())
+    super::assets_config::register_pool_lp_pair(asset1, asset2)
   }
 
   fn add_liquidity(

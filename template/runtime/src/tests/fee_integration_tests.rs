@@ -3,12 +3,16 @@ use super::common::{
 };
 use crate::{
   AAA, Assets, Balances, Runtime, RuntimeOrigin, Staking,
-  configs::{AssetKind, RuntimeFeeCollector, aaa_config::TmctolGenesisSystemAaas},
+  configs::{
+    AssetKind, RuntimeFeeCollector,
+    aaa_config::{TmctolAssetOps, TmctolGenesisSystemAaas},
+  },
 };
+use pallet_aaa::AssetOps;
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{
-    Currency, Hooks, OnUnbalanced,
+    Hooks, OnUnbalanced,
     fungible::Balanced,
     fungibles::Inspect,
     tokens::{Fortitude, Precision, Preservation},
@@ -103,7 +107,11 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
     let pool_native_asset_before = Assets::balance(native_asset_id, &staking_pool);
     let lp_pool_native_before = Assets::balance(native_asset_id, &pool_account);
     let lp_pool_staked_before = Assets::balance(staked_asset_id, &pool_account);
-    let _ = <Balances as Currency<_>>::deposit_creating(&fee_sink, amount);
+    assert_ok!(<TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(&fee_sink, AssetKind::Native, amount));
     crate::System::set_block_number(2);
     let _ = AAA::on_initialize(2);
     let _ = AAA::on_idle(2, Weight::from_parts(u64::MAX, u64::MAX));

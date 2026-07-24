@@ -13,9 +13,10 @@ use crate::{
   Assets, AxialRouter, Balances, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System,
   TokenMintingCurve,
 };
+use pallet_aaa::AssetOps;
 use polkadot_sdk::frame_support::{
   assert_ok,
-  traits::{Currency, Hooks, fungibles::Inspect as FungiblesInspect},
+  traits::{Hooks, fungibles::Inspect as FungiblesInspect},
 };
 use polkadot_sdk::sp_runtime::Weight;
 use primitives::{
@@ -227,9 +228,13 @@ fn native_issuance_deflation_after_burn_cycle() {
   seeded_test_ext().execute_with(|| {
     let bm = crate::AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
     let deposit = 50 * EXISTENTIAL_DEPOSIT;
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, deposit);
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      primitives::AssetKind,
+      crate::Balance,
+    >>::mint(&bm, primitives::AssetKind::Native, deposit));
     let issuance_before = Balances::total_issuance();
-    // Trigger burn via timer execution
+    // Trigger burn through the inbound-value signal.
     System::set_block_number(11);
     crate::AAA::on_initialize(11);
     crate::AAA::on_idle(11, Weight::from_parts(u64::MAX, u64::MAX));
