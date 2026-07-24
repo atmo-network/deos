@@ -12,19 +12,22 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   import { logStore } from '$lib/log/index.svelte';
   import { marketStore } from '$lib/market/index.svelte';
   import type { Quote } from '$lib/market/types';
+  import {
+    navigateToSwap,
+    subscribeToWidgetDeepLinks,
+  } from '$lib/navigation/hash-navigation';
   import { portfolioStore } from '$lib/portfolio/index.svelte';
-  import type { ReadModelProvenance } from '$lib/read-model';
+  import { resolveChainSurfaceState } from '$lib/system/connection-surface';
   import { systemStore } from '$lib/system/index.svelte';
   import {
     Badge,
     Button,
     Card,
-    IconButton,
+    Icon,
     Notice,
     NumberInput,
-    ReadModelBadge,
     RichSelect,
-    StatCard,
+    Tooltip,
   } from '$lib/ui';
   import {
     fmt,
@@ -39,75 +42,27 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   type SwapAssetValue = 'native' | 'foreign';
   type SwapAssetOption = {
     value: SwapAssetValue;
-    badge: string;
-    badgeClass: string;
     balance: bigint;
     label: string;
-  };
-  type SwapSelectItem = {
-    value: string;
-    label: string;
-    badge: string;
-    badgeClass: string;
-    detail: string;
-  };
-  type QuoteStatView = {
-    label: string;
-    value: string;
-  };
-  type CompactQuoteStripView = {
-    facts: string[];
-    provenance: ReadModelProvenance | null;
-    route: string | null;
-    visible: boolean;
-  };
-  type AssetSelectView = {
-    dense: boolean;
-    items: SwapSelectItem[];
-    label: string;
-    onValueChange: (value: string) => void;
-    selectedValue: SwapAssetValue;
-    surfaceClass: string;
-  };
-  type SwapInputLegView = {
-    amountValue: string;
-    assetSelect: AssetSelectView;
-    balanceLabel: string;
-    balanceText: string;
-    dense: boolean;
-    fillMaxEnabled: boolean;
-    onAmountInput: (value: string) => void;
-    onFillMax: () => void;
-  };
-  type SwapOutputLegView = {
-    amountText: string;
-    assetSelect: AssetSelectView;
-    balanceText: string;
-    dense: boolean;
-  };
-  type DiagnosticsPanelView = {
-    compact: boolean;
-    dense: boolean;
-    onSlippageInput: (value: string) => void;
-    provenance: ReadModelProvenance | null;
-    slippageLabel: string;
-    slippageValue: string;
-    stats: QuoteStatView[];
-    warnings: string[];
   };
   type ParsedInputState = {
     amount: bigint | null;
   };
+  type QuoteState = 'idle' | 'loading' | 'ready' | 'no-route' | 'error';
 
   const NATIVE_SWAP_FEE_HEADROOM = 100_000_000_000n;
+  const QUICK_FILL_PERCENTAGES = [25, 50, 75] as const;
 
-  let rootEl = $state<HTMLDivElement | null>(null);
-  let viewport = $state({ width: 0 });
+  let amountInputEl = $state<HTMLInputElement | null>(null);
   let inputValue = $state('');
+  let amountInputFocused = $state(false);
   let slippagePercent = $state('0.50');
   let submitting = $state(false);
   let currentQuote = $state<Quote | null>(null);
-  let quoteLoading = $state(false);
+  let networkFeeNative = $state<bigint | null>(null);
+  let networkFeeLoading = $state(false);
+  let quoteState = $state<QuoteState>('idle');
+  let quoteError = $state<string | null>(null);
   let quoteRequestId = 0;
 
   function nativeSymbol() {
@@ -120,16 +75,6 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
 
   function foreignAssetIsCanonical() {
     return systemStore.snapshot?.foreignAsset.isCanonical ?? false;
-  }
-
-  function syncViewport() {
-    if (!rootEl) {
-      viewport = { width: 0 };
-      return;
-    }
-    viewport = {
-      width: rootEl.clientWidth,
-    };
   }
 
   function parseAssetValue(value: string): SwapAssetValue | null {
@@ -148,11 +93,14 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   }
 
   function applyDirection(nextDirection: 'buy' | 'sell') {
-    if (marketStore.direction === nextDirection) {
-      return;
+    if (marketStore.direction !== nextDirection) {
+      marketStore.flipDirection();
+      inputValue = '';
     }
-    marketStore.flipDirection();
-    inputValue = '';
+    navigateToSwap(
+      nextDirection === 'buy' ? 'foreign' : 'native',
+      nextDirection === 'buy' ? 'native' : 'foreign',
+    );
   }
 
   function selectInputAsset(value: string) {
@@ -171,26 +119,35 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     applyDirection(nextDirectionForOutput(asset));
   }
 
+  function focusAmountInputFromShell(event: PointerEvent) {
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      target.closest('button, input, select, a, [role="button"]')
+    ) {
+      return;
+    }
+    amountInputEl?.focus();
+  }
+
+  function onInputAssetOpenChange(open: boolean): void {
+    if (open) {
+      amountInputEl?.blur();
+    }
+  }
+
   function inputEventValue(event: Event) {
     const target = event.currentTarget;
     return target instanceof HTMLInputElement ? target.value : '';
-  }
-
-  function updateInputValue(value: string) {
-    inputValue = value;
-  }
-
-  function updateSlippagePercent(value: string) {
-    slippagePercent = value;
   }
 
   function toSwapSelectItem(asset: SwapAssetOption) {
     return {
       value: asset.value,
       label: asset.label,
-      badge: asset.badge,
-      badgeClass: asset.badgeClass,
-      detail: `Balance: ${fmt(toFloat(asset.balance))}`,
+      detail: systemStore.snapshot
+        ? `Balance: ${fmt(toFloat(asset.balance))}`
+        : 'Balance: —',
     };
   }
 
@@ -198,8 +155,40 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     applyDirection(marketStore.direction === 'buy' ? 'sell' : 'buy');
   }
 
+  function amountAtPercentage(balance: bigint, percentage: number) {
+    return (balance * BigInt(percentage)) / 100n;
+  }
+
+  function setInputPercentage(percentage: number) {
+    inputValue = fmtInputAmount(
+      toFloat(amountAtPercentage(safeInputBalance, percentage)),
+    );
+  }
+
   function setMax() {
-    inputValue = fmtInputAmount(toFloat(safeInputBalance));
+    setInputPercentage(100);
+  }
+
+  function outputSafeBalanceValue(nextDirection: 'buy' | 'sell') {
+    if (nextDirection !== 'sell') {
+      return outBalance;
+    }
+    return outBalance > NATIVE_SWAP_FEE_HEADROOM
+      ? outBalance - NATIVE_SWAP_FEE_HEADROOM
+      : 0n;
+  }
+
+  function setOutputPercentage(percentage: number) {
+    const nextDirection = marketStore.direction === 'buy' ? 'sell' : 'buy';
+    const nextSafeBalance = outputSafeBalanceValue(nextDirection);
+    applyDirection(nextDirection);
+    inputValue = fmtInputAmount(
+      toFloat(amountAtPercentage(nextSafeBalance, percentage)),
+    );
+  }
+
+  function setOutputMax() {
+    setOutputPercentage(100);
   }
 
   function parseInputState(value: string) {
@@ -210,15 +199,11 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   function assetOptionsValue() {
     const nativeOption: SwapAssetOption = {
       value: 'native',
-      badge: '◆',
-      badgeClass: 'bg-(--mono-green)/20 text-(--mono-green)',
       balance: portfolioStore.userBalance.native,
       label: nativeSymbol(),
     };
     const foreignOption: SwapAssetOption = {
       value: 'foreign',
-      badge: String.fromCharCode(36),
-      badgeClass: 'bg-(--mono-orange)/20 text-(--mono-orange)',
       balance: portfolioStore.userBalance.foreign,
       label: foreignSymbol() + (foreignAssetIsCanonical() ? '' : '*'),
     };
@@ -263,10 +248,26 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     };
   }
 
+  function blockedSwapLabel(): string {
+    switch (chainSurface.status) {
+      case 'stale':
+        return 'Reconnect to refresh and swap';
+      case 'unconfigured':
+        return 'Connect a network to swap';
+      case 'error':
+        return 'Swap data unavailable';
+      default:
+        return 'Waiting for swap data';
+    }
+  }
+
   function buttonStateValue() {
     const snapshot = systemStore.snapshot;
     if (submitting) {
       return { text: 'Submitting swap...', disabled: true };
+    }
+    if (!chainCanQuery) {
+      return { text: blockedSwapLabel(), disabled: true };
     }
     if (!snapshot) {
       return { text: 'Waiting for chain state', disabled: true };
@@ -323,123 +324,68 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     if (!isBuy && !snapshot.hasPool) {
       return { text: 'Pool not initialized yet', disabled: true };
     }
-    if (quoteLoading) {
+    if (quoteState === 'loading') {
       return { text: 'Fetching quote...', disabled: true };
     }
-    if (!currentQuote) {
+    if (quoteState === 'error') {
+      return { text: 'Quote query failed', disabled: true };
+    }
+    if (quoteState === 'no-route' || !currentQuote) {
       return { text: 'No route available', disabled: true };
     }
-    return { text: `Swap ${inputSymbol} for ${outputSymbol}`, disabled: false };
+    return {
+      text: `${chainSurface.status === 'preview' ? 'Preview' : 'Swap'} ${inputSymbol} for ${outputSymbol}`,
+      disabled: false,
+    };
   }
 
-  function routeInfoValue() {
-    const snapshot = systemStore.snapshot;
-    if (!snapshot) {
-      return null;
+  function percentageOfInput(amount: bigint, input: bigint | null): string {
+    if (!input || input <= 0n) {
+      return '—';
     }
-    const last =
-      marketStore.history.length > 0
-        ? marketStore.history[marketStore.history.length - 1]
-        : null;
-    const tmcPrice = last?.priceEffTMC ?? 0;
-    const xykPrice = last?.priceXYK ?? 0;
-    const routerPrice = last?.priceRouter ?? null;
-    const bestRoute =
-      last?.routeRouter ??
-      (xykPrice > 0 && xykPrice < tmcPrice ? 'XYK' : 'TMC');
-    return { tmcPrice, xykPrice, routerPrice, bestRoute };
+    const percentage = Number((amount * 1_000_000n) / input) / 10_000;
+    return `${percentage.toLocaleString(undefined, {
+      minimumFractionDigits: percentage === 0 ? 0 : 2,
+      maximumFractionDigits: 4,
+    })}%`;
+  }
+
+  function priceImpactLabel(priceImpactPpb: bigint): string {
+    const percentage = Number(priceImpactPpb) / 10_000_000;
+    return `${percentage.toLocaleString(undefined, {
+      minimumFractionDigits: percentage === 0 ? 0 : 2,
+      maximumFractionDigits: 4,
+    })}%`;
+  }
+
+  function liquidityProviderFeeValue(): bigint {
+    if (!currentQuote || currentQuote.totalFee <= currentQuote.fee) {
+      return 0n;
+    }
+    return currentQuote.totalFee - currentQuote.fee;
+  }
+
+  function minimumReceivedForQuote(quote: Quote, slippageBps: number): bigint {
+    return quote.out > 0n
+      ? (quote.out * BigInt(Math.max(0, 10_000 - slippageBps))) / 10_000n
+      : 0n;
   }
 
   function minimumReceivedValue() {
     if (!currentQuote || !slippageState.valid || slippageState.bps === null) {
       return null;
     }
-    return currentQuote.out > 0n
-      ? (currentQuote.out * BigInt(Math.max(0, 10_000 - slippageState.bps))) /
-          10_000n
-      : 0n;
+    return minimumReceivedForQuote(currentQuote, slippageState.bps);
   }
 
-  function compactQuoteFactsValue() {
-    if (!currentQuote) {
-      return [];
-    }
-    return [
-      `${fmtPrice(currentQuote.effectivePrice)}`,
-      `fee ${fmt(toFloat(currentQuote.fee))} ${inputSymbol}`,
-      `min ${minimumReceived !== null ? fmtOut(toFloat(minimumReceived)) : '—'} ${outputSymbol}`,
-    ];
-  }
-
-  function quoteStatsValue() {
-    return [
-      {
-        label: 'Route',
-        value: currentQuote
-          ? currentQuote.route
-          : (routeInfo?.bestRoute ?? '—'),
-      },
-      {
-        label: 'Rate',
-        value: currentQuote
-          ? `${fmtPrice(currentQuote.effectivePrice)}`
-          : routeInfo?.routerPrice
-            ? `${fmtPrice(routeInfo.routerPrice)}`
-            : '—',
-      },
-      {
-        label: 'Input fee',
-        value: currentQuote
-          ? `${fmt(toFloat(currentQuote.fee))} ${inputSymbol}`
-          : '—',
-      },
-      {
-        label: 'Min receive',
-        value:
-          minimumReceived !== null
-            ? `${fmtOut(toFloat(minimumReceived))} ${outputSymbol}`
-            : '—',
-      },
-    ];
-  }
-
-  function warningsValue() {
+  function advisoriesValue() {
     const snapshot = systemStore.snapshot;
     const items: string[] = [];
     if (!snapshot) {
       return items;
     }
-    if (!snapshot.hasNativeCurve) {
-      items.push('Local chain has no native curve yet');
-    }
-    if (walletStore.state.signerStatus === 'readonly') {
-      items.push(
-        'Selected account is watch-only. Open the sidebar and connect an injected signer for the same address before submitting a live swap',
-      );
-    } else if (walletStore.state.signerStatus !== 'available') {
-      items.push(
-        walletStore.state.signerMessage ===
-          'No injected wallet extension detected'
-          ? 'No injected wallet extension is available in this browser. Use a built-in local dev signer or install a supported wallet extension before submitting a live swap'
-          : 'Open the sidebar and connect an injected wallet or local dev signer before submitting a live swap',
-      );
-    }
-    if (snapshot.trackedForeignAssetCount === 0) {
-      items.push('No foreign collateral is registered yet');
-    }
-    if (!isBuy && !snapshot.hasPool) {
-      items.push('Pool not initialized yet');
-    }
     if (!foreignAssetIsCanonical() && snapshot.trackedForeignAssetCount > 0) {
       items.push(`Showing fallback foreign surface for ${nativeSymbol()}`);
-    }
-    if (safeInputBalance === 0n) {
-      items.push(
-        `No spendable ${inputSymbol} balance is currently available for swap input`,
-      );
-    }
-    if (!slippageState.valid && parsedInput.amount !== null) {
-      items.push(slippageState.reason ?? 'Enter a valid slippage cap');
     }
     if (
       slippageState.valid &&
@@ -450,119 +396,19 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
         `Wide slippage cap ${slippageState.label}; minimum receive can move materially before inclusion`,
       );
     }
-    if (
-      isBuy &&
-      parsedInput.amount !== null &&
-      parsedInput.amount < snapshot.minForeignSwapAmount
-    ) {
-      items.push(
-        `Minimum buy is ${fmt(toFloat(snapshot.minForeignSwapAmount))} ${foreignSymbol()}`,
-      );
-    }
-    if (parsedInput.amount !== null && parsedInput.amount > inBalance) {
-      items.push(
-        `Selected amount exceeds the available ${inputSymbol} balance`,
-      );
-    } else if (
-      !isBuy &&
-      parsedInput.amount !== null &&
-      parsedInput.amount > safeInputBalance
-    ) {
-      items.push(
-        `Native sells still need some ${nativeSymbol()} left in the account for fees, so amounts above the safe max can fail`,
-      );
-    }
-    const quoteEligible =
-      snapshot.hasNativeCurve &&
-      snapshot.trackedForeignAssetCount > 0 &&
-      (isBuy || snapshot.hasPool) &&
-      parsedInput.amount !== null &&
-      parsedInput.amount <= inBalance &&
-      (!isBuy || parsedInput.amount >= snapshot.minForeignSwapAmount) &&
-      (isBuy || parsedInput.amount <= safeInputBalance) &&
-      slippageState.valid;
-    if (
-      quoteEligible &&
-      quoteLoading &&
-      snapshot.hasNativeCurve &&
-      snapshot.trackedForeignAssetCount > 0
-    ) {
-      items.push('Fetching a live route quote from chain state');
-    }
-    if (quoteEligible && !quoteLoading && !currentQuote) {
-      items.push('No route available for this size yet');
-    }
     return items;
   }
 
-  function compactQuoteViewValue() {
-    return {
-      facts: compactQuoteFacts,
-      provenance: quoteProvenance,
-      route: currentQuote?.route ?? null,
-      visible: compactPane && currentQuote !== null,
-    };
-  }
-
-  function inputAssetSelectViewValue() {
-    return {
-      dense: densePane,
-      items: assetSelectItems,
-      label: 'Select input asset',
-      onValueChange: selectInputAsset,
-      selectedValue: inputAssetValue,
-      surfaceClass: 'bg-white',
-    };
-  }
-
-  function outputAssetSelectViewValue() {
-    return {
-      dense: densePane,
-      items: assetSelectItems,
-      label: 'Select output asset',
-      onValueChange: selectOutputAsset,
-      selectedValue: outputAssetValue,
-      surfaceClass: 'bg-(--mono-bg)',
-    };
-  }
-
-  function payLegViewValue() {
-    return {
-      amountValue: inputValue,
-      assetSelect: inputAssetSelectView,
-      balanceLabel: isBuy ? 'Balance' : 'Safe max',
-      balanceText: fmt(toFloat(isBuy ? inBalance : safeInputBalance)),
-      dense: densePane,
-      fillMaxEnabled: fillMaxAvailable,
-      onAmountInput: updateInputValue,
-      onFillMax: setMax,
-    };
-  }
-
-  function receiveLegViewValue() {
-    return {
-      amountText: currentQuote ? fmtOut(toFloat(currentQuote.out)) : '0.00',
-      assetSelect: outputAssetSelectView,
-      balanceText: fmt(toFloat(outBalance)),
-      dense: densePane,
-    };
-  }
-
-  function diagnosticsPanelViewValue() {
-    return {
-      compact: compactPane,
-      dense: densePane,
-      onSlippageInput: updateSlippagePercent,
-      provenance: currentQuote ? quoteProvenance : null,
-      slippageLabel: slippageState.label,
-      slippageValue: slippagePercent,
-      stats: quoteStats,
-      warnings,
-    };
-  }
-
-  const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
-  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
+  const chainSurface = $derived(
+    resolveChainSurfaceState(
+      systemStore.connectionState,
+      systemStore.snapshot !== null,
+    ),
+  );
+  const chainCanQuery = $derived(
+    systemStore.snapshot !== null &&
+      systemStore.connectionState?.status === 'connected',
+  );
   const isBuy = $derived(marketStore.direction === 'buy');
   const inputAssetValue: SwapAssetValue = $derived(
     isBuy ? 'foreign' : 'native',
@@ -583,24 +429,19 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
       : portfolioStore.userBalance.foreign,
   );
   const safeInputBalance = $derived(safeInputBalanceValue());
-  const fillMaxAvailable = $derived(safeInputBalance > 0n);
+  const fillMaxAvailable = $derived(chainCanQuery && safeInputBalance > 0n);
+  const outputMaxAvailable = $derived(
+    chainCanQuery &&
+      (isBuy ? outBalance > NATIVE_SWAP_FEE_HEADROOM : outBalance > 0n),
+  );
   const assetOptions = $derived(assetOptionsValue());
   const assetSelectItems = $derived(assetOptions.map(toSwapSelectItem));
   const parsedInput = $derived(parseInputState(inputValue));
   const slippageState = $derived(slippageStateValue());
   const buttonState = $derived(buttonStateValue());
-  const quoteProvenance = $derived(marketStore.quoteView?.provenance ?? null);
-  const routeInfo = $derived(routeInfoValue());
   const minimumReceived = $derived(minimumReceivedValue());
-  const compactQuoteFacts = $derived(compactQuoteFactsValue());
-  const quoteStats = $derived(quoteStatsValue());
-  const warnings = $derived(warningsValue());
-  const compactQuoteView = $derived(compactQuoteViewValue());
-  const inputAssetSelectView = $derived(inputAssetSelectViewValue());
-  const outputAssetSelectView = $derived(outputAssetSelectViewValue());
-  const payLegView = $derived(payLegViewValue());
-  const receiveLegView = $derived(receiveLegViewValue());
-  const diagnosticsPanelView = $derived(diagnosticsPanelViewValue());
+  const liquidityProviderFee = $derived(liquidityProviderFeeValue());
+  const advisories = $derived(advisoriesValue());
 
   function formatSwapAssetAmount(
     amount: bigint | undefined,
@@ -706,10 +547,13 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
   $effect(() => {
     const snapshot = systemStore.snapshot;
     const amount = parsedInput.amount;
-    if (!snapshot || !amount) {
+    if (!chainCanQuery || !snapshot || !amount) {
       quoteRequestId += 1;
       currentQuote = null;
-      quoteLoading = false;
+      quoteState = 'idle';
+      quoteError = null;
+      networkFeeNative = null;
+      networkFeeLoading = false;
       return;
     }
     const quoteEligible =
@@ -719,16 +563,25 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
       amount <= inBalance &&
       (!isBuy || amount >= snapshot.minForeignSwapAmount) &&
       (isBuy || amount <= safeInputBalance) &&
-      slippageState.valid;
+      slippageState.valid &&
+      slippageState.bps !== null;
     if (!quoteEligible) {
       quoteRequestId += 1;
       currentQuote = null;
-      quoteLoading = false;
+      quoteState = 'idle';
+      quoteError = null;
+      networkFeeNative = null;
+      networkFeeLoading = false;
       return;
     }
     const requestId = ++quoteRequestId;
-    quoteLoading = true;
+    const quoteDirection = isBuy ? 'buy' : 'sell';
+    const slippageBps = slippageState.bps ?? 0;
+    quoteState = 'loading';
+    quoteError = null;
     currentQuote = null;
+    networkFeeNative = null;
+    networkFeeLoading = false;
     const request = isBuy
       ? marketStore.getQuoteBuy(amount)
       : marketStore.getQuoteSell(amount);
@@ -738,248 +591,516 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
           return;
         }
         currentQuote = nextQuote;
-        quoteLoading = false;
+        quoteState = nextQuote ? 'ready' : 'no-route';
+        if (!nextQuote) {
+          return;
+        }
+        networkFeeLoading = true;
+        const minAmountOut = minimumReceivedForQuote(nextQuote, slippageBps);
+        void marketStore
+          .estimateSwapNetworkFee(quoteDirection, amount, minAmountOut)
+          .then((fee) => {
+            if (requestId !== quoteRequestId) {
+              return;
+            }
+            networkFeeNative = fee;
+            networkFeeLoading = false;
+          });
       })
-      .catch(() => {
+      .catch((error: unknown) => {
         if (requestId !== quoteRequestId) {
           return;
         }
         currentQuote = null;
-        quoteLoading = false;
+        quoteState = 'error';
+        quoteError =
+          error instanceof Error ? error.message : 'Quote provider failed';
+        networkFeeNative = null;
+        networkFeeLoading = false;
       });
   });
 
-  onMount(() => {
-    syncViewport();
-    if (!rootEl) {
-      return;
-    }
-    const resizeObserver = new ResizeObserver(() => syncViewport());
-    resizeObserver.observe(rootEl);
-    return () => resizeObserver.disconnect();
-  });
+  onMount(() =>
+    subscribeToWidgetDeepLinks((link) => {
+      if (link?.widget !== 'swap') {
+        return;
+      }
+      applyDirection(link.input === 'foreign' ? 'buy' : 'sell');
+    }),
+  );
 </script>
 
-<Card class="min-h-full w-full py-1">
-  <div bind:this={rootEl} class="@container grid gap-2.5 pb-2">
-    <div
-      class={[
-        'grid gap-2.5',
-        !compactPane && '@xl:grid-cols-[minmax(0,1.1fr)_minmax(12.5rem,0.9fr)]',
-      ]}
+<Card class="h-full min-h-full w-full">
+  <div class="swap-container h-full min-h-0 pt-1 pb-3 [container-type:size]">
+    <section
+      class="swap-surface grid gap-3 rounded-xl bg-white p-2.5 shadow-[0_2px_8px_rgba(44,50,30,0.04)]"
     >
-      <section
-        class={[
-          'grid rounded-xl bg-white shadow-[0_2px_8px_rgba(44,50,30,0.04)]',
-          densePane ? 'gap-2 p-2' : 'gap-2.5 p-2.5',
-        ]}
-      >
-        {#snippet compactQuoteStrip(view: CompactQuoteStripView)}
-          {#if view.visible && view.route}
-            <div class="flex flex-wrap items-center gap-1.5 text-[10px]">
-              <ReadModelBadge provenance={view.provenance} />
-              <Badge variant="info">{view.route}</Badge>
-              {#each view.facts as fact}
-                <span
-                  class="rounded-full border border-(--mono-border) bg-(--mono-bg) px-2 py-0.5 tabnum text-(--mono-text)"
-                >
-                  {fact}
-                </span>
-              {/each}
-            </div>
+      {#if chainSurface.status === 'stale' || chainSurface.status === 'preview'}
+        <Notice variant="warn" class="swap-connection-notice grid gap-0.5">
+          <strong>{chainSurface.title}</strong>
+          <span>{chainSurface.detail}</span>
+          {#if chainSurface.status === 'stale'}
+            <span
+              >Reconnect before requesting a quote or submitting a swap.</span
+            >
           {/if}
-        {/snippet}
-        {@render compactQuoteStrip(compactQuoteView)}
-        {#snippet assetSelect(view: AssetSelectView)}
-          <RichSelect
-            value={view.selectedValue}
-            items={view.items}
-            label={view.label}
-            dense={view.dense}
-            triggerClass={view.surfaceClass}
-            onValueChange={view.onValueChange}
-          />
-        {/snippet}
-        {#snippet inputLeg(view: SwapInputLegView)}
+        </Notice>
+      {/if}
+      <div class="swap-layout grid gap-3">
+        <div class="swap-legs grid gap-y-2 gap-x-3.5">
           <div
             class={[
-              'grid gap-2 overflow-hidden rounded-xl border bg-(--mono-bg)',
-              view.dense ? 'px-2 py-1.5' : 'px-2.5 py-2',
+              'swap-leg grid cursor-text gap-2 overflow-hidden rounded-xl border bg-white px-2.5 py-2',
+              amountInputFocused
+                ? 'border-(--mono-purple)'
+                : 'border-(--mono-border)',
             ]}
+            onpointerdown={focusAmountInputFromShell}
+            role="group"
+            aria-labelledby="swap-sell-label"
           >
-            <div class="flex items-center justify-between gap-2">
+            <div class="swap-leg-meta flex items-center justify-between gap-2">
               <span
-                class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
-                >You pay</span
+                id="swap-sell-label"
+                class="text-2xs uppercase tracking-wider text-(--mono-muted)"
+                >Sell</span
               >
-              <Button
-                size="sm"
-                variant="ghost"
-                onclick={view.onFillMax}
-                class={view.fillMaxEnabled
-                  ? 'px-0 py-0 text-[10px] text-(--mono-purple) hover:underline tabnum'
-                  : 'px-0 py-0 text-[10px] text-(--mono-muted) opacity-60 tabnum'}
-                disabled={!view.fillMaxEnabled}
-              >
-                {view.balanceLabel}: {view.balanceText}
-              </Button>
+              <span class="text-2xs text-(--mono-border) tabnum">
+                {isBuy ? 'Balance' : 'Safe max'}: {systemStore.snapshot
+                  ? fmt(toFloat(isBuy ? inBalance : safeInputBalance))
+                  : '—'}
+              </span>
             </div>
-            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
+            <div
+              class="swap-value-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2"
+            >
               <NumberInput
-                value={view.amountValue}
+                bind:ref={amountInputEl}
+                value={inputValue}
                 placeholder="0.00"
                 min="0"
                 step="any"
-                oninput={(event) => view.onAmountInput(inputEventValue(event))}
-                class={[
-                  'min-w-0 border-none bg-transparent px-0 py-0 font-semibold tabnum placeholder-(--mono-border) focus:outline-none',
-                  view.dense ? 'text-base' : 'text-lg',
-                ]}
+                oninput={(event) => (inputValue = inputEventValue(event))}
+                onfocus={() => (amountInputFocused = true)}
+                onblur={() => (amountInputFocused = false)}
+                wrapperClass="min-w-0"
+                class="min-w-0 border-0 bg-transparent px-0 py-0 text-base font-semibold tabnum placeholder-(--mono-border) focus:placeholder-transparent focus:outline-none @xs:text-lg"
               />
-              {@render assetSelect(view.assetSelect)}
-            </div>
-          </div>
-        {/snippet}
-        {#snippet outputLeg(view: SwapOutputLegView)}
-          <div
-            class={[
-              'grid gap-2 overflow-hidden rounded-xl border bg-white',
-              view.dense ? 'px-2 py-1.5' : 'px-2.5 py-2',
-            ]}
-          >
-            <div class="flex items-center justify-between gap-2">
-              <span
-                class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
-                >You receive</span
-              >
-              <span class="text-[10px] text-(--mono-border) tabnum"
-                >Balance: {view.balanceText}</span
-              >
-            </div>
-            <div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
               <div
                 class={[
-                  'min-w-0 truncate font-semibold tabnum text-(--mono-muted)',
-                  view.dense ? 'text-base' : 'text-lg',
+                  'swap-quick-fill flex items-center gap-0.5',
+                  amountInputFocused && 'invisible pointer-events-none',
                 ]}
               >
-                {view.amountText}
+                {#each QUICK_FILL_PERCENTAGES as percentage}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    class="swap-fraction-button px-1 py-0 text-2xs text-(--mono-purple)"
+                    onclick={() => setInputPercentage(percentage)}
+                    disabled={!fillMaxAvailable}
+                  >
+                    {percentage}%
+                  </Button>
+                {/each}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  class="swap-max-button px-1 py-0 text-2xs text-(--mono-purple)"
+                  onclick={setMax}
+                  disabled={!fillMaxAvailable}
+                >
+                  Max
+                </Button>
               </div>
-              {@render assetSelect(view.assetSelect)}
+              <RichSelect
+                value={inputAssetValue}
+                items={assetSelectItems}
+                label="Select input asset"
+                dense
+                triggerClass="swap-asset-trigger max-w-24 border-black bg-black px-1 text-white hover:border-black data-[state=open]:border-black"
+                onOpenChange={onInputAssetOpenChange}
+                onValueChange={selectInputAsset}
+              />
             </div>
           </div>
-        {/snippet}
-        <div
-          class={[
-            'grid gap-2.5',
-            compactPane
-              ? 'grid-cols-1'
-              : '@2xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] @2xl:items-center',
-          ]}
-        >
-          {@render inputLeg(payLegView)}
-          <div
-            class={[
-              'flex -my-4 z-1',
-              compactPane
-                ? 'justify-center'
-                : 'justify-center @2xl:justify-self-center',
-            ]}
-          >
-            <IconButton
+
+          <div class="swap-flip z-1 flex -my-4 justify-center">
+            <Button
+              size="icon"
+              variant="ghost"
               onclick={flipTokens}
-              class="flex h-8 w-8 items-center justify-center rounded-full border bg-white shadow-sm"
+              class="swap-flip-button flex h-8 w-8 items-center justify-center rounded-full border-(--mono-border) bg-(--mono-border) text-white shadow-sm hover:bg-(--mono-border) hover:text-white"
               label="Flip swap direction"
             >
-              <ArrowUpDown
-                class="transition-all duration-200 hover:rotate-180 hover:text-(--mono-purple)"
-                size={14}
+              <Icon
+                icon={ArrowUpDown}
+                class="swap-direction-icon text-white transition-transform duration-200"
               />
-            </IconButton>
+            </Button>
           </div>
-          {@render outputLeg(receiveLegView)}
+
+          <div
+            class="swap-leg grid gap-2 overflow-hidden rounded-xl border border-(--mono-border) bg-white px-2.5 py-2"
+          >
+            <div class="swap-leg-meta flex items-center justify-between gap-2">
+              <span
+                class="text-2xs uppercase tracking-wider text-(--mono-muted)"
+                >Buy</span
+              >
+              <span class="text-2xs text-(--mono-border) tabnum"
+                >Balance: {systemStore.snapshot
+                  ? fmt(toFloat(outBalance))
+                  : '—'}</span
+              >
+            </div>
+            <div
+              class="swap-value-row grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2"
+            >
+              <div
+                class="flex h-full min-w-0 items-center truncate text-base font-semibold tabnum text-(--mono-muted) @xs:text-lg"
+              >
+                {currentQuote
+                  ? fmtOut(toFloat(currentQuote.out))
+                  : quoteState === 'loading'
+                    ? 'Fetching…'
+                    : quoteState === 'no-route'
+                      ? 'No route'
+                      : quoteState === 'error'
+                        ? 'Unavailable'
+                        : '—'}
+              </div>
+              <div
+                class={[
+                  'swap-quick-fill flex items-center gap-0.5',
+                  amountInputFocused && 'invisible pointer-events-none',
+                ]}
+              >
+                {#each QUICK_FILL_PERCENTAGES as percentage}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    class="swap-fraction-button px-1 py-0 text-2xs text-(--mono-purple)"
+                    onclick={() => setOutputPercentage(percentage)}
+                    disabled={!outputMaxAvailable}
+                    label={`Use ${percentage}% of this asset balance as swap input`}
+                  >
+                    {percentage}%
+                  </Button>
+                {/each}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  class="swap-max-button px-1 py-0 text-2xs text-(--mono-purple)"
+                  onclick={setOutputMax}
+                  disabled={!outputMaxAvailable}
+                  label="Use the maximum balance of this asset as swap input"
+                >
+                  Max
+                </Button>
+              </div>
+              <RichSelect
+                value={outputAssetValue}
+                items={assetSelectItems}
+                label="Select output asset"
+                dense
+                triggerClass="swap-asset-trigger max-w-24 border-black bg-black px-1 text-white hover:border-black data-[state=open]:border-black"
+                onValueChange={selectOutputAsset}
+              />
+            </div>
+          </div>
         </div>
+      </div>
+
+      <section
+        class="swap-support swap-details swap-details-grid grid gap-2.5 rounded-xl bg-(--mono-bg) p-2.5"
+        aria-label="Swap parameters and protection"
+      >
+        <div class="grid content-start gap-0.5">
+          <span class="text-3xs uppercase tracking-wider text-(--mono-muted)"
+            >Minimum received</span
+          >
+          <strong class="tabnum text-sm text-(--mono-text)">
+            {minimumReceived === null
+              ? '—'
+              : `${fmtOut(toFloat(minimumReceived))} ${outputSymbol}`}
+          </strong>
+        </div>
+        <div class="grid content-start gap-0.5">
+          <span class="text-3xs uppercase text-(--mono-muted)"
+            >Route / rate</span
+          >
+          <div class="flex min-w-0 items-center gap-1.5">
+            {#if currentQuote}
+              <Badge variant="info">{currentQuote.route}</Badge>
+              <span class="tabnum min-w-0 truncate text-(--mono-text)">
+                {fmtPrice(currentQuote.effectivePrice)}
+              </span>
+            {:else}
+              <span>—</span>
+            {/if}
+          </div>
+        </div>
+        <div class="grid content-start gap-0.5">
+          <span class="text-3xs uppercase text-(--mono-muted)"
+            >Price impact</span
+          >
+          <span class="tabnum text-(--mono-text)">
+            {currentQuote ? priceImpactLabel(currentQuote.priceImpactPpb) : '—'}
+          </span>
+        </div>
+        <div class="grid content-start gap-0.5">
+          <span class="text-3xs uppercase text-(--mono-muted)">Fees</span>
+          {#if currentQuote}
+            <div class="grid gap-0.5 text-3xs text-(--mono-muted)">
+              <span class="tabnum">
+                Router {percentageOfInput(currentQuote.fee, parsedInput.amount)} ·
+                {fmt(toFloat(currentQuote.fee))}
+                {inputSymbol}
+              </span>
+              <span class="tabnum">
+                LP {percentageOfInput(liquidityProviderFee, parsedInput.amount)} ·
+                {fmt(toFloat(liquidityProviderFee))}
+                {inputSymbol}
+              </span>
+              <span class="tabnum">
+                Estimated network {networkFeeLoading
+                  ? 'Estimating…'
+                  : networkFeeNative === null
+                    ? 'Unavailable'
+                    : `${fmt(toFloat(networkFeeNative))} ${nativeSymbol()}`}
+              </span>
+            </div>
+          {:else}
+            <span>—</span>
+          {/if}
+        </div>
+        <div class="grid content-start justify-start gap-1">
+          <span
+            id="swap-slippage-label"
+            class="text-3xs uppercase tracking-wider text-(--mono-muted)"
+            >Maximum slippage</span
+          >
+          <NumberInput
+            id="swap-slippage"
+            aria-labelledby="swap-slippage-label"
+            value={slippagePercent}
+            min="0.01"
+            max="50"
+            step="0.01"
+            suffix="%"
+            wrapperClass="w-24"
+            oninput={(event) => (slippagePercent = inputEventValue(event))}
+            class="rounded-lg border border-(--mono-border) bg-white px-2.5 py-1.5 text-compact focus:border-(--mono-purple) focus:outline-none"
+          />
+        </div>
+      </section>
+
+      {#if quoteState === 'no-route'}
+        <Notice variant="muted" class="text-3xs">
+          The connected router returned no viable route for this amount.
+        </Notice>
+      {:else if quoteState === 'error'}
+        <Notice variant="warn" class="grid gap-0.5 text-3xs">
+          <strong>Quote query failed</strong>
+          <span>{quoteError ?? 'The connected quote provider failed.'}</span>
+        </Notice>
+      {/if}
+
+      {#if advisories.length > 0}
+        <div class="advisories grid gap-1.5">
+          {#each advisories as advisory}
+            <Notice variant="warn" class="text-3xs">{advisory}</Notice>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="swap-submit-wrap w-full">
         <Button
           variant="primary"
           onclick={executeSwap}
-          disabled={buttonState.disabled}
+          aria-disabled={buttonState.disabled}
           class={[
-            'w-full rounded-xl font-semibold bg-(--mono-border) text-white transition-opacity',
-            densePane ? 'py-2 text-[11px]' : 'py-2.5 text-xs',
+            'swap-submit swap-submit-full-action w-full rounded-xl bg-(--mono-border) py-2.5 text-xs font-semibold text-white transition-opacity',
+            buttonState.disabled && 'cursor-not-allowed',
           ]}
           style={`opacity: ${buttonState.disabled ? 0.5 : 1}`}
         >
           {buttonState.text}
         </Button>
-      </section>
-      {#snippet diagnosticsPanel(view: DiagnosticsPanelView)}
-        <section
-          class={[
-            'grid rounded-xl bg-white shadow-[0_2px_8px_rgba(44,50,30,0.04)]',
-            view.dense ? 'gap-2 p-2' : 'gap-2 p-2.5',
-          ]}
+        <Tooltip
+          aria-label={buttonState.disabled ? buttonState.text : 'Swap'}
+          contentClass="max-w-64 text-center"
+          side="top"
         >
-          <div class="flex justify-end">
-            <ReadModelBadge provenance={view.provenance} />
-          </div>
-          <div
-            class={[
-              'grid gap-1.5 text-xs',
-              view.dense ? 'grid-cols-1 @xs:grid-cols-2' : 'grid-cols-2',
-            ]}
-          >
-            {#each view.stats as stat}
-              <StatCard label={stat.label} value={stat.value} />
-            {/each}
-          </div>
-          <div
-            class={[
-              'rounded-xl border bg-(--mono-bg)',
-              view.compact
-                ? 'grid gap-2 px-2.5 py-2'
-                : 'grid gap-2 px-2.5 py-2 text-xs',
-            ]}
-          >
-            <div
+          {#snippet child({ props })}
+            <Button
+              {...props}
+              variant="primary"
+              onclick={executeSwap}
+              aria-disabled={buttonState.disabled}
               class={[
-                view.compact
-                  ? 'grid gap-1 @xs:grid-cols-[auto_minmax(0,1fr)_auto] @xs:items-center'
-                  : 'flex items-center justify-between gap-2',
+                'swap-submit swap-submit-compact-action w-full items-center justify-center rounded-xl bg-(--mono-border) py-2.5 text-center text-xs font-semibold text-white transition-opacity cursor-help',
+                buttonState.disabled && 'cursor-not-allowed',
               ]}
+              style={`opacity: ${buttonState.disabled ? 0.5 : 1}`}
             >
-              <span
-                class="text-[9px] uppercase tracking-wider text-(--mono-muted)"
-                >Slippage</span
-              >
-              <NumberInput
-                value={view.slippageValue}
-                min="0.01"
-                max="50"
-                step="0.01"
-                oninput={(event) =>
-                  view.onSlippageInput(inputEventValue(event))}
-                class={[
-                  'rounded-lg border border-(--mono-border) bg-white focus:border-(--mono-purple) focus:outline-none',
-                  view.compact
-                    ? 'w-full px-2 py-1 text-[11px]'
-                    : 'w-full px-2.5 py-1.5 text-[10px]',
-                ]}
-              />
-              <span class="tabnum text-[10px] text-(--mono-text)"
-                >{view.slippageLabel}</span
-              >
-            </div>
-          </div>
-          {#if view.warnings.length > 0}
-            <div class={['grid gap-1.5', !view.dense && '@2xl:grid-cols-2']}>
-              {#each view.warnings as warning}
-                <Notice variant="warn" class="text-[9px]">{warning}</Notice>
-              {/each}
-            </div>
-          {/if}
-        </section>
-      {/snippet}
-      {@render diagnosticsPanel(diagnosticsPanelView)}
-    </div>
+              Swap
+            </Button>
+          {/snippet}
+          {#snippet content()}
+            {buttonState.text}
+          {/snippet}
+        </Tooltip>
+      </div>
+    </section>
   </div>
 </Card>
+
+<style>
+  :global(.swap-direction-icon) {
+    transform: rotate(0deg);
+  }
+  :global(.swap-flip-button:hover .swap-direction-icon) {
+    transform: rotate(180deg);
+  }
+  :global(.swap-fraction-button),
+  :global(.swap-submit-compact-action) {
+    display: none;
+  }
+  @container (max-width: 255px) {
+    :global(.swap-max-button) {
+      display: none;
+    }
+  }
+  @container (max-width: 352px) {
+    .swap-surface {
+      gap: 0.5rem;
+      padding: 0.5rem;
+    }
+    .swap-details {
+      padding: 0.5rem;
+    }
+  }
+  .swap-details-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 7rem), 1fr));
+  }
+  @container (min-width: 416px) {
+    :global(.swap-fraction-button) {
+      display: inline-flex;
+    }
+  }
+  @container (min-width: 768px) {
+    .advisories {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  @container (min-width: 1152px) {
+    .swap-legs {
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      align-items: center;
+    }
+    .swap-flip {
+      margin: 0 -0.75rem;
+    }
+    :global(.swap-direction-icon) {
+      transform: rotate(90deg);
+    }
+    :global(.swap-flip-button:hover .swap-direction-icon) {
+      transform: rotate(270deg);
+    }
+  }
+  @container (max-height: 176px) {
+    .swap-container {
+      padding-block: 0;
+    }
+    .swap-surface {
+      height: 100%;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.25rem;
+      overflow: hidden;
+    }
+    .swap-layout {
+      grid-column: 2;
+      min-width: 0;
+    }
+    .swap-legs {
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      align-items: center;
+      gap: 0.35rem;
+    }
+    .swap-leg {
+      height: 2.5rem;
+      grid-template-rows: 1.875rem;
+      gap: 0;
+      padding: 0.125rem 0.35rem 0.375rem;
+    }
+    .swap-value-row {
+      height: 1.875rem;
+      align-items: center;
+      gap: 0.25rem;
+      padding-inline: 0;
+    }
+    .swap-leg-meta,
+    .swap-support,
+    .advisories {
+      display: none;
+    }
+    .swap-flip {
+      margin: 0 -0.2rem;
+    }
+    :global(.swap-direction-icon) {
+      transform: rotate(90deg);
+    }
+    :global(.swap-flip-button:hover .swap-direction-icon) {
+      transform: rotate(270deg);
+    }
+    .swap-submit-wrap {
+      grid-column: 3;
+      width: 3.5rem;
+    }
+    :global(.swap-fraction-button),
+    :global(.swap-max-button),
+    :global(.swap-submit-full-action) {
+      display: none;
+    }
+    :global(.swap-submit-compact-action) {
+      display: inline-flex;
+    }
+    :global(.swap-asset-trigger) {
+      width: 3.25rem;
+      gap: 0;
+    }
+    :global(.swap-submit) {
+      width: auto;
+      height: 2.5rem;
+      min-width: 3.5rem;
+      padding: 0.4rem 0.375rem;
+      white-space: nowrap;
+    }
+  }
+  @container (max-width: 576px) and (max-height: 176px) {
+    .swap-surface {
+      grid-template-columns: minmax(0, 1fr) auto;
+    }
+    .swap-layout {
+      grid-column: 1;
+    }
+    .swap-submit-wrap {
+      grid-column: 2;
+    }
+    :global(.swap-connection-notice) {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  }
+</style>

@@ -80,5 +80,4 @@ confidence: 0.85
 - [Уровни экономических утверждений](economic-claim-levels.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Чем DEOS не является](what-deos-is-not.ru.md)
 - [Домены Governance](governance-domains.ru.md)

@@ -42,10 +42,11 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
   import { GovernanceUnavailableMaterializedProvider } from '$lib/governance/materialized';
   import { createPayloadReview } from '$lib/governance/payload-review.svelte';
   import { deriveGovernanceTreasuryPayloadDraftState } from '$lib/governance/treasury-payload';
+  import { fromMaterialized } from '$lib/read-model';
   import {
-    fromClientBoundedProjection,
-    fromMaterialized,
-  } from '$lib/read-model';
+    chainSurfaceIsBlocking,
+    resolveChainSurfaceState,
+  } from '$lib/system/connection-surface';
   import {
     Badge,
     Button,
@@ -53,49 +54,34 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     DetailRow,
     Notice,
     NumberInput,
-    ReadModelBadge,
     SectionCard,
     SelectField,
     TextArea,
     TextField,
   } from '$lib/ui';
 
-  type FinalizedExecutionDetail =
-    (typeof governanceStore.state.recentFinalizedProposals)[number]['executionDetail'];
   type ReferencedPayloadSuggestion = {
     payloadHash: string;
     label: string;
   };
 
-  const refresh = () => governanceStore.refresh();
   const materializedArchiveProvider =
     new GovernanceUnavailableMaterializedProvider();
   const materializedArchivePlaceholder = fromMaterialized<
     GovernanceMaterializedArchiveEntry[]
   >([], 'archive-api', 'Governance materialized archive provider', 'archive');
 
-  let rootEl = $state<HTMLDivElement | null>(null);
-  let viewport = $state({ width: 0, height: 0 });
-
-  function syncViewport() {
-    if (!rootEl) {
-      viewport = { width: 0, height: 0 };
-      return;
-    }
-    viewport = {
-      width: rootEl.clientWidth,
-      height: rootEl.clientHeight,
-    };
-  }
-
-  const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
-  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-  const activeProposalsProvenance = fromClientBoundedProjection(
-    true,
-    'governanceStore.activeProposals <- bounded governance runtime reads',
-  ).provenance;
-  const recentFinalizedProvenance = $derived(
-    governanceStore.state.recentFinalizedProposalsView?.provenance ?? null,
+  const governanceChainSurface = $derived(
+    resolveChainSurfaceState(
+      governanceStore.state.providerState,
+      (governanceStore.state.providerState.status === 'connected' ||
+        governanceStore.state.providerState.status === 'mock') &&
+        !governanceStore.state.loading &&
+        governanceStore.state.error === null,
+    ),
+  );
+  const governanceChainBlocked = $derived(
+    chainSurfaceIsBlocking(governanceChainSurface),
   );
   const voteWriteAvailability = $derived(
     governanceStore.state.writeSurfaceAvailability.castVote,
@@ -575,534 +561,575 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
 
   onMount(() => {
     void governanceStore.init();
-    syncViewport();
-    if (!rootEl) {
-      return;
-    }
-    const resizeObserver = new ResizeObserver(() => syncViewport());
-    resizeObserver.observe(rootEl);
-    return () => resizeObserver.disconnect();
   });
 </script>
 
 <Card class="min-h-full p-2">
-  <div bind:this={rootEl} class="@container grid gap-3 pb-2">
-    <div
-      class={[
-        'grid gap-3',
-        !compactPane && '@xl:grid-cols-[minmax(0,1.35fr)_minmax(15rem,0.65fr)]',
-      ]}
-    >
+  <div class="@container grid gap-3 pb-2">
+    <div class="governance-grid grid gap-3">
       <SectionCard
         title="Active proposals"
         subtitle="Vote here, receipts appear in Log"
       >
         {#snippet actions()}
-          <ReadModelBadge
-            provenance={activeProposalsProvenance}
-            tone="subtle"
-          />
-          <Badge
-            variant={voteWriteAvailability.providerStatus === 'available'
-              ? 'tmc'
-              : 'info'}
-          >
-            {voteWriteAvailability.providerStatus === 'available'
-              ? 'Vote ready'
-              : 'Vote unavailable'}
+          <Badge variant="info">
+            {governanceStore.state.error || governanceChainBlocked
+              ? '—'
+              : `${governanceStore.state.activeProposals.length} open`}
           </Badge>
-          <Badge variant="info"
-            >{governanceStore.state.activeProposals.length} open</Badge
-          >
         {/snippet}
-        {#if voteWriteAvailability.providerStatus !== 'available'}
-          <Notice variant="warn">{voteWriteAvailability.reason}</Notice>
-        {/if}
-        {#if governanceStore.state.writeError}
-          <Notice variant="warn">{governanceStore.state.writeError}</Notice>
-        {/if}
-        {#if governanceStore.state.error && governanceStore.state.error !== governanceStore.state.writeError}
-          <Notice variant="warn">{governanceStore.state.error}</Notice>
-        {/if}
-        {#if governanceStore.state.authorizedRuntimeUpgrade}
-          <AuthorizedRuntimeUpgradeNotice
-            authorization={governanceStore.state.authorizedRuntimeUpgrade}
-          />
-        {/if}
-        <div
-          class="rounded-xl border bg-white p-3 grid gap-2 text-[10px] text-(--mono-muted)"
-        >
-          <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
-            Public advisory submit
-          </div>
-          {#if unsupportedSignedSubmissionOptions.length > 0}
-            <Notice variant="muted"
-              >Signed non-advisory payload kinds exist on-chain for this domain,
-              but this browser surface still composes advisory kinds only: {unsupportedSignedSubmissionOptions
-                .map((option) =>
-                  publicSubmissionPayloadLabel(option.payloadKind),
-                )
-                .join(', ')}</Notice
-            >
+        {#if governanceStore.state.error}
+          <Notice variant="warn">
+            Governance query failed: {governanceStore.state.error}
+          </Notice>
+        {:else if !governanceChainBlocked}
+          {#if governanceChainSurface.status === 'preview' || governanceChainSurface.status === 'stale'}
+            <Notice variant="warn" class="grid gap-0.5">
+              <strong>{governanceChainSurface.title}</strong>
+              <span>{governanceChainSurface.detail}</span>
+            </Notice>
           {/if}
-          {#if advisorySubmissionOptions.length === 0}
-            <Notice variant="muted"
-              >No signed advisory proposal kinds are available for this domain</Notice
-            >
+          {#if voteWriteAvailability.providerStatus !== 'available'}
+            <Notice variant="warn">{voteWriteAvailability.reason}</Notice>
+          {/if}
+          {#if governanceStore.state.writeError}
+            <Notice variant="warn">{governanceStore.state.writeError}</Notice>
+          {/if}
+          {#if governanceStore.state.authorizedRuntimeUpgrade}
+            <AuthorizedRuntimeUpgradeNotice
+              authorization={governanceStore.state.authorizedRuntimeUpgrade}
+            />
+          {/if}
+          {#if governanceStore.state.loading}
+            <Notice>Loading proposals...</Notice>
+          {:else if governanceStore.state.activeProposals.length === 0}
+            <Notice>No active proposals</Notice>
           {:else}
-            <ProposalSemanticsRows
-              cadenceLabel="Ordinary only"
-              payloadKindLabel={selectedSubmitPayloadKind
-                ? publicSubmissionPayloadLabel(selectedSubmitPayloadKind)
-                : 'Unavailable'}
-              familyLabel={selectedSubmitPayloadKind
-                ? payloadFamilyLabel(selectedSubmitPayloadKind)
-                : 'Unavailable'}
-              executionAuthorityLabel={executionAuthorityLabel('NonExecutable')}
-              executionPathLabel={selectedSubmitPayloadKind
-                ? executionPathLabel(selectedSubmitPayloadKind, 'Binary')
-                : 'Unavailable'}
-              openingFeeLabel={selectedSubmissionOption
-                ? openingFeeLabel('Signed', selectedSubmissionOption.openingFee)
-                : 'Unavailable'}
-              advisoryScopeLabel={advisoryScopeLabel(selectedSubmitPayloadKind)}
-              authorizedRuntimeUpgradeLabel={authorizedRuntimeUpgradeLabel()}
+            <ActiveProposalCards
+              proposals={governanceStore.state.activeProposals}
+              {voteWriteAvailability}
+              onCastVote={(itemId, voteKind) =>
+                governanceStore.castVote(itemId, voteKind)}
             />
-            <SelectField
-              label="Payload kind"
-              bind:value={selectedSubmitPayloadKind}
-              selectClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            >
-              {#each advisorySubmissionOptions as option}
-                <option value={option.payloadKind}
-                  >{publicSubmissionPayloadLabel(option.payloadKind)}</option
-                >
-              {/each}
-            </SelectField>
-            {#if publicSubmissionPurposeNotice(selectedSubmitPayloadKind)}
-              <Notice variant="muted"
-                >{publicSubmissionPurposeNotice(selectedSubmitPayloadKind) ??
-                  'Unavailable'}</Notice
-              >
-            {/if}
-            <NumberInput
-              label="Item id"
-              bind:value={submitItemIdInput}
-              min="1"
-              step="1"
-              placeholder={suggestedSubmitItemId.toString()}
-              class="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <DetailRow
-              label="Suggested item id"
-              value={`#${suggestedSubmitItemId}`}
-              valueClass="text-(--mono-text)"
-            />
-            {#if submitItemIdInput.trim() !== suggestedSubmitItemId.toString()}
-              <Button
-                size="sm"
-                variant="secondary"
-                class="justify-center"
-                onclick={applySuggestedSubmitItemId}
-                >Use suggested item id</Button
-              >
-            {/if}
-            <TextField
-              label={`Summary · ${advisoryPayloadDraft.summaryByteLength}/${GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES} bytes`}
-              bind:value={submitSummaryInput}
-              placeholder={publicSubmissionSummaryPlaceholder(
-                selectedSubmitPayloadKind,
-              )}
-              inputClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <TextField
-              label={`Doc CID (optional) · ${advisoryPayloadDraft.docCidByteLength}/${GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES} bytes`}
-              bind:value={submitDocCidInput}
-              placeholder="bafy…"
-              inputClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <TextField
-              label="Referenced payload hash (optional)"
-              bind:value={submitReferencedPayloadHashInput}
-              placeholder="0x…64 hex chars"
-              inputClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            {#if referencedPayloadSuggestions.length > 0}
-              <SelectField
-                label="Quick fill from visible proposals"
-                onchange={handleReferencedPayloadSuggestionChange}
-                selectClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-              >
-                <option value="">Select a visible payload hash</option>
-                {#each referencedPayloadSuggestions as suggestion}
-                  <option value={suggestion.payloadHash}
-                    >{suggestion.label}</option
-                  >
-                {/each}
-              </SelectField>
-            {/if}
-            {#if referencedPayloadSourceLabel}
-              <DetailRow
-                label="Referenced source"
-                value={referencedPayloadSourceLabel}
-                valueClass="text-(--mono-text)"
-              />
-              <Button
-                size="sm"
-                variant="secondary"
-                class="justify-center"
-                onclick={clearReferencedPayloadSuggestion}
-                >Clear referenced payload</Button
-              >
-            {/if}
-            <DetailRow
-              label="Derived payload hash"
-              value={advisoryReview.payloadHashLoading
-                ? 'Computing...'
-                : (advisoryReview.payloadHash ?? 'Unavailable')}
-              valueClass="text-(--mono-text) break-all"
-            />
-            <DetailRow
-              label="Derived payload bytes"
-              value={advisoryPayloadDraft.encoding
-                ? `${advisoryPayloadDraft.encoding.payloadByteLength} bytes`
-                : 'Unavailable'}
-              valueClass="text-(--mono-text)"
-            />
-            <DetailRow
-              label="Summary bytes"
-              value={`${advisoryPayloadDraft.summaryByteLength}/${GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES}`}
-              valueClass="text-(--mono-text)"
-            />
-            <DetailRow
-              label="Doc CID bytes"
-              value={`${advisoryPayloadDraft.docCidByteLength}/${GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES}`}
-              valueClass="text-(--mono-text)"
-            />
-            <DetailRow
-              label="Referenced payload"
-              value={advisoryPayloadDraft.encoding?.referencedPayloadHash ??
-                'None'}
-              valueClass="text-(--mono-text) break-all"
-            />
-            <DetailRow
-              label="Derived preimage status"
-              value={advisoryPayloadHashPreimageStatusLabel(
-                advisoryReview.payloadHashPreimageStatus,
-                advisoryReview.payloadHashPreimageStatusLoading,
-              )}
-              valueClass="text-(--mono-text)"
-            />
-            <DetailRow
-              label="Preimage note cost"
-              value={advisoryPayloadPreimageNoteCostLabel(
-                advisoryReview.payloadPreimageNoteCost,
-                advisoryReview.payloadPreimageNoteCostLoading,
-              )}
-              valueClass="text-(--mono-text)"
-            />
-            {#if advisoryPayloadDraft.encoding}
-              <TextArea
-                label="Derived payload hex"
-                value={advisoryPayloadDraft.encoding.payloadHex}
-                textareaClass="min-h-20 rounded-lg px-2 py-1 text-[11px] text-(--mono-text)"
-                readonly
-              />
-              <Notice variant="muted"
-                >The chain stores only the payload hash unless these same
-                bounded payload bytes are separately noted as a preimage</Notice
-              >
-              <Notice variant="muted"
-                >`Intent` stays inside the current governance domain, while
-                `L2SignalToL1` records the domain's upward signal toward L1
-                without dispatching privileged state transitions by itself</Notice
-              >
-              <Notice variant="muted"
-                >Optional preimage noting uses the generic Preimage pallet and
-                the quoted note cost is reserved against the noting account
-                until the preimage is requested or cleared under pallet rules</Notice
-              >
-            {/if}
-            {#if advisoryReview.payloadHashPreimageStatus?.havePreimage}
-              <Notice variant="muted"
-                >These exact payload bytes are already noted on-chain, so the
-                extra preimage step is unnecessary</Notice
-              >
-            {/if}
-            {#if advisoryReview.payloadHashPreimageStatus?.preimageRequested && !advisoryReview.payloadHashPreimageStatus.havePreimage}
-              <Notice variant="muted"
-                >This payload hash is already requested on-chain but the bytes
-                are not yet noted, so supplying the preimage should avoid a new
-                user-held note deposit</Notice
-              >
-            {/if}
-            <ActionReviewCard
-              title="Submission review"
-              submitActionLabel={submitReviewSummaryLine()}
-              submitStatusLabel={submitReviewStatusLabel()}
-              submitOpeningFeeLabel={selectedSubmissionOption
-                ? openingFeeLabel('Signed', selectedSubmissionOption.openingFee)
-                : 'Unavailable'}
-              submitResultLabel={submitReviewResultLine()}
-              submitButtonLabel={publicSubmissionButtonLabel(
-                selectedSubmitPayloadKind,
-              )}
-              submitDisabled={submitPublicProposalDisabled}
-              submitOnClick={submitPublicProposal}
-              preimageActionLabel={preimageReviewSummaryLine()}
-              preimageStatusLabel={preimageReviewStatusLabel()}
-              preimageNoteCostLabel={advisoryPayloadPreimageNoteCostLabel(
-                advisoryReview.payloadPreimageNoteCost,
-                advisoryReview.payloadPreimageNoteCostLoading,
-              )}
-              preimageResultLabel={preimageReviewResultLine()}
-              preimageButtonLabel={advisoryReview.payloadHashPreimageStatusLoading ||
-              advisoryReview.payloadPreimageNoteCostLoading
-                ? 'Checking preimage quote'
-                : advisoryReview.payloadHashPreimageStatus?.havePreimage
-                  ? 'Preimage already noted'
-                  : 'Note advisory preimage'}
-              preimageDisabled={notePreimageDisabled}
-              preimageOnClick={noteProposalPreimage}
-            />
-            {#if !submitItemReady}
-              <Notice variant="muted">Enter a positive integer item id</Notice>
-            {/if}
-            {#if !advisoryPayloadDraft.summaryValid}
-              <Notice variant="muted"
-                >Enter a non-empty summary within {GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES}
-                UTF-8 bytes</Notice
-              >
-            {/if}
-            {#if !advisoryPayloadDraft.docCidValid}
-              <Notice variant="muted"
-                >Doc CID must stay within {GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES}
-                UTF-8 bytes</Notice
-              >
-            {/if}
-            {#if !advisoryPayloadDraft.referencedPayloadHashValid}
-              <Notice variant="muted"
-                >Referenced payload hash must be blank or `0x` + 64 hex chars</Notice
-              >
-            {/if}
-            {#if submitWriteAvailability.providerStatus !== 'available'}
-              <Notice variant="warn">{submitWriteAvailability.reason}</Notice>
-            {/if}
-            {#if preimageWriteAvailability.providerStatus !== 'available'}
-              <Notice variant="muted">{preimageWriteAvailability.reason}</Notice
-              >
-            {/if}
           {/if}
-        </div>
-        {#if treasurySubmissionOption}
-          <div
-            class="rounded-xl border bg-white p-3 grid gap-2 text-[10px] text-(--mono-muted)"
-          >
-            <div
-              class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
+          <details class="rounded-xl bg-(--mono-bg) text-(--mono-muted)">
+            <summary
+              class="cursor-pointer px-3 py-2 text-2xs font-semibold uppercase tracking-wider text-(--mono-text)"
             >
-              Public tactical treasury submit
+              Compose a proposal
+            </summary>
+            <div class="composition-stack grid gap-3 px-3 pb-3">
+              <div
+                class="rounded-xl bg-white p-3 grid gap-2 text-2xs text-(--mono-muted)"
+              >
+                <div
+                  class="text-2xs uppercase tracking-wider text-(--mono-muted)"
+                >
+                  Public advisory submit
+                </div>
+                {#if unsupportedSignedSubmissionOptions.length > 0}
+                  <Notice variant="muted"
+                    >Signed non-advisory payload kinds exist on-chain for this
+                    domain, but this browser surface still composes advisory
+                    kinds only: {unsupportedSignedSubmissionOptions
+                      .map((option) =>
+                        publicSubmissionPayloadLabel(option.payloadKind),
+                      )
+                      .join(', ')}</Notice
+                  >
+                {/if}
+                {#if advisorySubmissionOptions.length === 0}
+                  <Notice variant="muted"
+                    >No signed advisory proposal kinds are available for this
+                    domain</Notice
+                  >
+                {:else}
+                  <ProposalSemanticsRows
+                    cadenceLabel="Ordinary only"
+                    payloadKindLabel={selectedSubmitPayloadKind
+                      ? publicSubmissionPayloadLabel(selectedSubmitPayloadKind)
+                      : 'Unavailable'}
+                    familyLabel={selectedSubmitPayloadKind
+                      ? payloadFamilyLabel(selectedSubmitPayloadKind)
+                      : 'Unavailable'}
+                    executionAuthorityLabel={executionAuthorityLabel(
+                      'NonExecutable',
+                    )}
+                    executionPathLabel={selectedSubmitPayloadKind
+                      ? executionPathLabel(selectedSubmitPayloadKind, 'Binary')
+                      : 'Unavailable'}
+                    openingFeeLabel={selectedSubmissionOption
+                      ? openingFeeLabel(
+                          'Signed',
+                          selectedSubmissionOption.openingFee,
+                        )
+                      : 'Unavailable'}
+                    advisoryScopeLabel={advisoryScopeLabel(
+                      selectedSubmitPayloadKind,
+                    )}
+                    authorizedRuntimeUpgradeLabel={authorizedRuntimeUpgradeLabel()}
+                  />
+                  <SelectField
+                    label="Payload kind"
+                    bind:value={selectedSubmitPayloadKind}
+                    selectClass="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  >
+                    {#each advisorySubmissionOptions as option}
+                      <option value={option.payloadKind}
+                        >{publicSubmissionPayloadLabel(
+                          option.payloadKind,
+                        )}</option
+                      >
+                    {/each}
+                  </SelectField>
+                  {#if publicSubmissionPurposeNotice(selectedSubmitPayloadKind)}
+                    <Notice variant="muted"
+                      >{publicSubmissionPurposeNotice(
+                        selectedSubmitPayloadKind,
+                      ) ?? 'Unavailable'}</Notice
+                    >
+                  {/if}
+                  <NumberInput
+                    label="Item id"
+                    bind:value={submitItemIdInput}
+                    min="1"
+                    step="1"
+                    placeholder={suggestedSubmitItemId.toString()}
+                    class="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Suggested item id"
+                    value={`#${suggestedSubmitItemId}`}
+                    valueClass="text-(--mono-text)"
+                  />
+                  {#if submitItemIdInput.trim() !== suggestedSubmitItemId.toString()}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      class="justify-center"
+                      onclick={applySuggestedSubmitItemId}
+                      >Use suggested item id</Button
+                    >
+                  {/if}
+                  <TextField
+                    label={`Summary · ${advisoryPayloadDraft.summaryByteLength}/${GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES} bytes`}
+                    bind:value={submitSummaryInput}
+                    placeholder={publicSubmissionSummaryPlaceholder(
+                      selectedSubmitPayloadKind,
+                    )}
+                    inputClass="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <TextField
+                    label={`Doc CID (optional) · ${advisoryPayloadDraft.docCidByteLength}/${GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES} bytes`}
+                    bind:value={submitDocCidInput}
+                    placeholder="bafy…"
+                    inputClass="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <TextField
+                    label="Referenced payload hash (optional)"
+                    bind:value={submitReferencedPayloadHashInput}
+                    placeholder="0x…64 hex chars"
+                    inputClass="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  {#if referencedPayloadSuggestions.length > 0}
+                    <SelectField
+                      label="Quick fill from visible proposals"
+                      onchange={handleReferencedPayloadSuggestionChange}
+                      selectClass="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                    >
+                      <option value="">Select a visible payload hash</option>
+                      {#each referencedPayloadSuggestions as suggestion}
+                        <option value={suggestion.payloadHash}
+                          >{suggestion.label}</option
+                        >
+                      {/each}
+                    </SelectField>
+                  {/if}
+                  {#if referencedPayloadSourceLabel}
+                    <DetailRow
+                      label="Referenced source"
+                      value={referencedPayloadSourceLabel}
+                      valueClass="text-(--mono-text)"
+                    />
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      class="justify-center"
+                      onclick={clearReferencedPayloadSuggestion}
+                      >Clear referenced payload</Button
+                    >
+                  {/if}
+                  <DetailRow
+                    label="Derived payload hash"
+                    value={advisoryReview.payloadHashLoading
+                      ? 'Computing...'
+                      : (advisoryReview.payloadHash ?? 'Unavailable')}
+                    valueClass="text-(--mono-text) break-all"
+                  />
+                  <DetailRow
+                    label="Derived payload bytes"
+                    value={advisoryPayloadDraft.encoding
+                      ? `${advisoryPayloadDraft.encoding.payloadByteLength} bytes`
+                      : 'Unavailable'}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Summary bytes"
+                    value={`${advisoryPayloadDraft.summaryByteLength}/${GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES}`}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Doc CID bytes"
+                    value={`${advisoryPayloadDraft.docCidByteLength}/${GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES}`}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Referenced payload"
+                    value={advisoryPayloadDraft.encoding
+                      ?.referencedPayloadHash ?? 'None'}
+                    valueClass="text-(--mono-text) break-all"
+                  />
+                  <DetailRow
+                    label="Derived preimage status"
+                    value={advisoryPayloadHashPreimageStatusLabel(
+                      advisoryReview.payloadHashPreimageStatus,
+                      advisoryReview.payloadHashPreimageStatusLoading,
+                    )}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Preimage note cost"
+                    value={advisoryPayloadPreimageNoteCostLabel(
+                      advisoryReview.payloadPreimageNoteCost,
+                      advisoryReview.payloadPreimageNoteCostLoading,
+                    )}
+                    valueClass="text-(--mono-text)"
+                  />
+                  {#if advisoryPayloadDraft.encoding}
+                    <TextArea
+                      label="Derived payload hex"
+                      value={advisoryPayloadDraft.encoding.payloadHex}
+                      textareaClass="min-h-20 rounded-lg px-2 py-1 text-compact text-(--mono-text)"
+                      readonly
+                    />
+                    <Notice variant="muted"
+                      >The chain stores only the payload hash unless these same
+                      bounded payload bytes are separately noted as a preimage</Notice
+                    >
+                    <Notice variant="muted"
+                      >`Intent` stays inside the current governance domain,
+                      while `L2SignalToL1` records the domain's upward signal
+                      toward L1 without dispatching privileged state transitions
+                      by itself</Notice
+                    >
+                    <Notice variant="muted"
+                      >Optional preimage noting uses the generic Preimage pallet
+                      and the quoted note cost is reserved against the noting
+                      account until the preimage is requested or cleared under
+                      pallet rules</Notice
+                    >
+                  {/if}
+                  {#if advisoryReview.payloadHashPreimageStatus?.havePreimage}
+                    <Notice variant="muted"
+                      >These exact payload bytes are already noted on-chain, so
+                      the extra preimage step is unnecessary</Notice
+                    >
+                  {/if}
+                  {#if advisoryReview.payloadHashPreimageStatus?.preimageRequested && !advisoryReview.payloadHashPreimageStatus.havePreimage}
+                    <Notice variant="muted"
+                      >This payload hash is already requested on-chain but the
+                      bytes are not yet noted, so supplying the preimage should
+                      avoid a new user-held note deposit</Notice
+                    >
+                  {/if}
+                  <ActionReviewCard
+                    title="Submission review"
+                    submitActionLabel={submitReviewSummaryLine()}
+                    submitStatusLabel={submitReviewStatusLabel()}
+                    submitOpeningFeeLabel={selectedSubmissionOption
+                      ? openingFeeLabel(
+                          'Signed',
+                          selectedSubmissionOption.openingFee,
+                        )
+                      : 'Unavailable'}
+                    submitResultLabel={submitReviewResultLine()}
+                    submitButtonLabel={publicSubmissionButtonLabel(
+                      selectedSubmitPayloadKind,
+                    )}
+                    submitDisabled={submitPublicProposalDisabled}
+                    submitOnClick={submitPublicProposal}
+                    preimageActionLabel={preimageReviewSummaryLine()}
+                    preimageStatusLabel={preimageReviewStatusLabel()}
+                    preimageNoteCostLabel={advisoryPayloadPreimageNoteCostLabel(
+                      advisoryReview.payloadPreimageNoteCost,
+                      advisoryReview.payloadPreimageNoteCostLoading,
+                    )}
+                    preimageResultLabel={preimageReviewResultLine()}
+                    preimageButtonLabel={advisoryReview.payloadHashPreimageStatusLoading ||
+                    advisoryReview.payloadPreimageNoteCostLoading
+                      ? 'Checking preimage quote'
+                      : advisoryReview.payloadHashPreimageStatus?.havePreimage
+                        ? 'Preimage already noted'
+                        : 'Note advisory preimage'}
+                    preimageDisabled={notePreimageDisabled}
+                    preimageOnClick={noteProposalPreimage}
+                  />
+                  {#if !submitItemReady}
+                    <Notice variant="muted"
+                      >Enter a positive integer item id</Notice
+                    >
+                  {/if}
+                  {#if !advisoryPayloadDraft.summaryValid}
+                    <Notice variant="muted"
+                      >Enter a non-empty summary within {GOVERNANCE_ADVISORY_SUMMARY_MAX_BYTES}
+                      UTF-8 bytes</Notice
+                    >
+                  {/if}
+                  {#if !advisoryPayloadDraft.docCidValid}
+                    <Notice variant="muted"
+                      >Doc CID must stay within {GOVERNANCE_ADVISORY_DOC_CID_MAX_BYTES}
+                      UTF-8 bytes</Notice
+                    >
+                  {/if}
+                  {#if !advisoryPayloadDraft.referencedPayloadHashValid}
+                    <Notice variant="muted"
+                      >Referenced payload hash must be blank or `0x` + 64 hex
+                      chars</Notice
+                    >
+                  {/if}
+                  {#if submitWriteAvailability.providerStatus !== 'available'}
+                    <Notice variant="warn"
+                      >{submitWriteAvailability.reason}</Notice
+                    >
+                  {/if}
+                  {#if preimageWriteAvailability.providerStatus !== 'available'}
+                    <Notice variant="muted"
+                      >{preimageWriteAvailability.reason}</Notice
+                    >
+                  {/if}
+                {/if}
+              </div>
+              {#if treasurySubmissionOption}
+                <div
+                  class="rounded-xl bg-(--mono-bg) p-3 grid gap-2 text-2xs text-(--mono-muted)"
+                >
+                  <div
+                    class="text-2xs uppercase tracking-wider text-(--mono-muted)"
+                  >
+                    Public tactical treasury submit
+                  </div>
+                  <ProposalSemanticsRows
+                    cadenceLabel="Ordinary only"
+                    payloadKindLabel={treasurySubmissionOptionLabel}
+                    familyLabel={payloadFamilyLabel('L2TreasurySpend')}
+                    executionAuthorityLabel={executionAuthorityLabel(
+                      'DomainTreasury',
+                    )}
+                    executionPathLabel={executionPathLabel(
+                      'L2TreasurySpend',
+                      'Invoice',
+                    )}
+                    openingFeeLabel={openingFeeLabel(
+                      'Signed',
+                      treasurySubmissionOption.openingFee,
+                    )}
+                    settlementLabel={treasurySettlementLabel(
+                      'L2TreasurySpend',
+                      'Invoice',
+                    )}
+                    fundingSourceLabel="BLDR treasury"
+                  />
+                  <Notice variant="muted"
+                    >This is the smallest live browser composition slice for the
+                    signed tactical invoice path. It always encodes
+                    `BldrTreasury` as the funding source and leaves richer
+                    treasury-routing policy for later work.</Notice
+                  >
+                  <NumberInput
+                    label="Item id"
+                    bind:value={treasurySubmitItemIdInput}
+                    min="1"
+                    step="1"
+                    placeholder={suggestedSubmitItemId.toString()}
+                    class="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Suggested item id"
+                    value={`#${suggestedSubmitItemId}`}
+                    valueClass="text-(--mono-text)"
+                  />
+                  {#if treasurySubmitItemIdInput.trim() !== suggestedSubmitItemId.toString()}
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      class="justify-center"
+                      onclick={applySuggestedTreasurySubmitItemId}
+                      >Use suggested item id</Button
+                    >
+                  {/if}
+                  <TextField
+                    label="Beneficiary"
+                    bind:value={treasuryBeneficiaryInput}
+                    placeholder="5..."
+                    inputClass="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <NumberInput
+                    label="Payout asset id"
+                    bind:value={treasuryPayoutAssetInput}
+                    min="0"
+                    step="1"
+                    placeholder="268435458"
+                    class="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <NumberInput
+                    label="Base amount"
+                    bind:value={treasuryBaseAmountInput}
+                    min="1"
+                    step="1"
+                    placeholder="1000000000000"
+                    class="rounded-lg px-2 py-1 text-xs text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Derived payload hash"
+                    value={treasuryReview.payloadHashLoading
+                      ? 'Computing...'
+                      : (treasuryReview.payloadHash ?? 'Unavailable')}
+                    valueClass="text-(--mono-text) break-all"
+                  />
+                  <DetailRow
+                    label="Derived payload bytes"
+                    value={treasuryPayloadDraft.encoding
+                      ? `${treasuryPayloadDraft.encoding.payloadByteLength} bytes`
+                      : 'Unavailable'}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Derived preimage status"
+                    value={advisoryPayloadHashPreimageStatusLabel(
+                      treasuryReview.payloadHashPreimageStatus,
+                      treasuryReview.payloadHashPreimageStatusLoading,
+                    )}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Preimage note cost"
+                    value={advisoryPayloadPreimageNoteCostLabel(
+                      treasuryReview.payloadPreimageNoteCost,
+                      treasuryReview.payloadPreimageNoteCostLoading,
+                    )}
+                    valueClass="text-(--mono-text)"
+                  />
+                  {#if treasuryPayloadDraft.encoding}
+                    <TextArea
+                      label="Derived payload hex"
+                      value={treasuryPayloadDraft.encoding.payloadHex}
+                      textareaClass="min-h-20 rounded-lg px-2 py-1 text-compact text-(--mono-text)"
+                      readonly
+                    />
+                    <Notice variant="muted"
+                      >The chain stores only the payload hash unless these same
+                      bounded payload bytes are separately noted as a preimage.</Notice
+                    >
+                  {/if}
+                  {#if treasuryReview.payloadHashPreimageStatus?.havePreimage}
+                    <Notice variant="muted"
+                      >These exact treasury payload bytes are already noted
+                      on-chain, so the extra preimage step is unnecessary.</Notice
+                    >
+                  {/if}
+                  {#if treasuryReview.payloadHashPreimageStatus?.preimageRequested && !treasuryReview.payloadHashPreimageStatus.havePreimage}
+                    <Notice variant="muted"
+                      >This treasury payload hash is already requested on-chain
+                      but the bytes are not yet noted, so supplying the preimage
+                      should avoid a new user-held note deposit.</Notice
+                    >
+                  {/if}
+                  <ActionReviewCard
+                    title="Treasury submission review"
+                    submitActionLabel={`Submit treasury invoice · ${executionPathLabel('L2TreasurySpend', 'Invoice')}`}
+                    submitStatusLabel={treasurySubmitReviewStatusLabel()}
+                    submitOpeningFeeLabel={openingFeeLabel(
+                      'Signed',
+                      treasurySubmissionOption.openingFee,
+                    )}
+                    submitResultLabel={treasurySubmitReviewResultLine()}
+                    submitButtonLabel="Submit treasury invoice"
+                    submitDisabled={treasurySubmitProposalDisabled}
+                    submitOnClick={submitTreasuryProposal}
+                    preimageActionLabel={treasuryPreimageReviewSummaryLine()}
+                    preimageStatusLabel={treasuryPreimageReviewStatusLabel()}
+                    preimageNoteCostLabel={advisoryPayloadPreimageNoteCostLabel(
+                      treasuryReview.payloadPreimageNoteCost,
+                      treasuryReview.payloadPreimageNoteCostLoading,
+                    )}
+                    preimageResultLabel={treasuryPreimageReviewResultLine()}
+                    preimageButtonLabel={treasuryReview.payloadHashPreimageStatusLoading ||
+                    treasuryReview.payloadPreimageNoteCostLoading
+                      ? 'Checking preimage quote'
+                      : treasuryReview.payloadHashPreimageStatus?.havePreimage
+                        ? 'Preimage already noted'
+                        : 'Note treasury preimage'}
+                    preimageDisabled={treasuryNotePreimageDisabled}
+                    preimageOnClick={noteTreasuryProposalPreimage}
+                  />
+                  {#if !treasurySubmitItemReady}
+                    <Notice variant="muted"
+                      >Enter a positive integer item id.</Notice
+                    >
+                  {/if}
+                  {#if !treasuryPayloadDraft.beneficiaryValid}
+                    <Notice variant="muted"
+                      >Enter a valid beneficiary address.</Notice
+                    >
+                  {/if}
+                  {#if !treasuryPayloadDraft.payoutAssetValid}
+                    <Notice variant="muted"
+                      >Payout asset id must be a valid `u32` asset identifier.</Notice
+                    >
+                  {/if}
+                  {#if !treasuryPayloadDraft.baseAmountValid}
+                    <Notice variant="muted"
+                      >Base amount must be a positive integer that fits inside
+                      `u128`.</Notice
+                    >
+                  {/if}
+                </div>
+              {/if}
             </div>
-            <ProposalSemanticsRows
-              cadenceLabel="Ordinary only"
-              payloadKindLabel={treasurySubmissionOptionLabel}
-              familyLabel={payloadFamilyLabel('L2TreasurySpend')}
-              executionAuthorityLabel={executionAuthorityLabel(
-                'DomainTreasury',
-              )}
-              executionPathLabel={executionPathLabel(
-                'L2TreasurySpend',
-                'Invoice',
-              )}
-              openingFeeLabel={openingFeeLabel(
-                'Signed',
-                treasurySubmissionOption.openingFee,
-              )}
-              settlementLabel={treasurySettlementLabel(
-                'L2TreasurySpend',
-                'Invoice',
-              )}
-              fundingSourceLabel="BLDR treasury"
-            />
-            <Notice variant="muted"
-              >This is the smallest live browser composition slice for the
-              signed tactical invoice path. It always encodes `BldrTreasury` as
-              the funding source and leaves richer treasury-routing policy for
-              later work.</Notice
-            >
-            <NumberInput
-              label="Item id"
-              bind:value={treasurySubmitItemIdInput}
-              min="1"
-              step="1"
-              placeholder={suggestedSubmitItemId.toString()}
-              class="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <DetailRow
-              label="Suggested item id"
-              value={`#${suggestedSubmitItemId}`}
-              valueClass="text-(--mono-text)"
-            />
-            {#if treasurySubmitItemIdInput.trim() !== suggestedSubmitItemId.toString()}
-              <Button
-                size="sm"
-                variant="secondary"
-                class="justify-center"
-                onclick={applySuggestedTreasurySubmitItemId}
-                >Use suggested item id</Button
-              >
-            {/if}
-            <TextField
-              label="Beneficiary"
-              bind:value={treasuryBeneficiaryInput}
-              placeholder="5..."
-              inputClass="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <NumberInput
-              label="Payout asset id"
-              bind:value={treasuryPayoutAssetInput}
-              min="0"
-              step="1"
-              placeholder="268435458"
-              class="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <NumberInput
-              label="Base amount"
-              bind:value={treasuryBaseAmountInput}
-              min="1"
-              step="1"
-              placeholder="1000000000000"
-              class="rounded-lg px-2 py-1 text-[12px] text-(--mono-text)"
-            />
-            <DetailRow
-              label="Derived payload hash"
-              value={treasuryReview.payloadHashLoading
-                ? 'Computing...'
-                : (treasuryReview.payloadHash ?? 'Unavailable')}
-              valueClass="text-(--mono-text) break-all"
-            />
-            <DetailRow
-              label="Derived payload bytes"
-              value={treasuryPayloadDraft.encoding
-                ? `${treasuryPayloadDraft.encoding.payloadByteLength} bytes`
-                : 'Unavailable'}
-              valueClass="text-(--mono-text)"
-            />
-            <DetailRow
-              label="Derived preimage status"
-              value={advisoryPayloadHashPreimageStatusLabel(
-                treasuryReview.payloadHashPreimageStatus,
-                treasuryReview.payloadHashPreimageStatusLoading,
-              )}
-              valueClass="text-(--mono-text)"
-            />
-            <DetailRow
-              label="Preimage note cost"
-              value={advisoryPayloadPreimageNoteCostLabel(
-                treasuryReview.payloadPreimageNoteCost,
-                treasuryReview.payloadPreimageNoteCostLoading,
-              )}
-              valueClass="text-(--mono-text)"
-            />
-            {#if treasuryPayloadDraft.encoding}
-              <TextArea
-                label="Derived payload hex"
-                value={treasuryPayloadDraft.encoding.payloadHex}
-                textareaClass="min-h-20 rounded-lg px-2 py-1 text-[11px] text-(--mono-text)"
-                readonly
-              />
-              <Notice variant="muted"
-                >The chain stores only the payload hash unless these same
-                bounded payload bytes are separately noted as a preimage.</Notice
-              >
-            {/if}
-            {#if treasuryReview.payloadHashPreimageStatus?.havePreimage}
-              <Notice variant="muted"
-                >These exact treasury payload bytes are already noted on-chain,
-                so the extra preimage step is unnecessary.</Notice
-              >
-            {/if}
-            {#if treasuryReview.payloadHashPreimageStatus?.preimageRequested && !treasuryReview.payloadHashPreimageStatus.havePreimage}
-              <Notice variant="muted"
-                >This treasury payload hash is already requested on-chain but
-                the bytes are not yet noted, so supplying the preimage should
-                avoid a new user-held note deposit.</Notice
-              >
-            {/if}
-            <ActionReviewCard
-              title="Treasury submission review"
-              submitActionLabel={`Submit treasury invoice · ${executionPathLabel('L2TreasurySpend', 'Invoice')}`}
-              submitStatusLabel={treasurySubmitReviewStatusLabel()}
-              submitOpeningFeeLabel={openingFeeLabel(
-                'Signed',
-                treasurySubmissionOption.openingFee,
-              )}
-              submitResultLabel={treasurySubmitReviewResultLine()}
-              submitButtonLabel="Submit treasury invoice"
-              submitDisabled={treasurySubmitProposalDisabled}
-              submitOnClick={submitTreasuryProposal}
-              preimageActionLabel={treasuryPreimageReviewSummaryLine()}
-              preimageStatusLabel={treasuryPreimageReviewStatusLabel()}
-              preimageNoteCostLabel={advisoryPayloadPreimageNoteCostLabel(
-                treasuryReview.payloadPreimageNoteCost,
-                treasuryReview.payloadPreimageNoteCostLoading,
-              )}
-              preimageResultLabel={treasuryPreimageReviewResultLine()}
-              preimageButtonLabel={treasuryReview.payloadHashPreimageStatusLoading ||
-              treasuryReview.payloadPreimageNoteCostLoading
-                ? 'Checking preimage quote'
-                : treasuryReview.payloadHashPreimageStatus?.havePreimage
-                  ? 'Preimage already noted'
-                  : 'Note treasury preimage'}
-              preimageDisabled={treasuryNotePreimageDisabled}
-              preimageOnClick={noteTreasuryProposalPreimage}
-            />
-            {#if !treasurySubmitItemReady}
-              <Notice variant="muted">Enter a positive integer item id.</Notice>
-            {/if}
-            {#if !treasuryPayloadDraft.beneficiaryValid}
-              <Notice variant="muted">Enter a valid beneficiary address.</Notice
-              >
-            {/if}
-            {#if !treasuryPayloadDraft.payoutAssetValid}
-              <Notice variant="muted"
-                >Payout asset id must be a valid `u32` asset identifier.</Notice
-              >
-            {/if}
-            {#if !treasuryPayloadDraft.baseAmountValid}
-              <Notice variant="muted"
-                >Base amount must be a positive integer that fits inside `u128`.</Notice
-              >
-            {/if}
-          </div>
-        {/if}
-        {#if governanceStore.state.loading}
-          <Notice>Loading proposals...</Notice>
-        {:else if governanceStore.state.activeProposals.length === 0}
-          <Notice>No active proposals</Notice>
-        {:else}
-          <ActiveProposalCards
-            proposals={governanceStore.state.activeProposals}
-            {compactPane}
-            {densePane}
-            {voteWriteAvailability}
-            onCastVote={(itemId, voteKind) =>
-              governanceStore.castVote(itemId, voteKind)}
-          />
+          </details>
         {/if}
       </SectionCard>
 
-      <FinalizedProposalsSection
-        proposals={governanceStore.state.recentFinalizedProposals}
-        provenance={recentFinalizedProvenance}
-        authorizedRuntimeUpgrade={governanceStore.state
-          .authorizedRuntimeUpgrade}
-      />
+      <div class="grid content-start gap-3">
+        {#if governanceStore.state.error}
+          <SectionCard title="Recent finalized proposals">
+            <Notice variant="warn">
+              Governance query failed before bounded finalized state became
+              available.
+            </Notice>
+          </SectionCard>
+        {:else if !governanceChainBlocked}
+          <FinalizedProposalsSection
+            proposals={governanceStore.state.recentFinalizedProposals}
+            authorizedRuntimeUpgrade={governanceStore.state
+              .authorizedRuntimeUpgrade}
+          />
+        {/if}
 
-      <GovernanceArchiveSection
-        provider={materializedArchiveProvider}
-        archive={materializedArchivePlaceholder}
-      />
+        <GovernanceArchiveSection
+          provider={materializedArchiveProvider}
+          archive={materializedArchivePlaceholder}
+        />
+      </div>
     </div>
   </div>
 </Card>
+
+<style>
+  @container (min-width: 896px) {
+    .governance-grid {
+      grid-template-columns: minmax(0, 1.35fr) minmax(16rem, 0.65fr);
+      align-items: start;
+    }
+  }
+</style>

@@ -24,9 +24,17 @@
 
 ### Web-client product stabilization
 
-- [ ] `Reserved Edge-Lane Growth`: Only if product pressure creates another reserved left/right lane, define the concrete lane role and extend `RESERVED_LANE_SPECS` without reintroducing user-reorderable edge-lane state.
 - [ ] `Governance State Separation`: Only if proposal composition or archive work grows enough to create a named ownership conflict, split the state boundary at that concrete seam.
-- [ ] `Materialized Provider Boundary`: Only when a second indexed/archive provider family exists, decide whether `adapters/materialized-history/` should become a first-class `materialized/` or `providers/` slice.
+
+### Reference indexer and integrated deployment
+
+> Planned for a post-`0.8` release line; choose the exact milestone only when scope and delivery evidence support it. Subsquid is a candidate implementation stack, not a committed dependency.
+
+- [ ] `Reference Indexer Architecture`: Select and document the indexer stack, top-level `/indexer` workspace boundary, canonical-chain ingestion model, materialized schema ownership, bounded replay/recovery behavior, provider APIs, deployment topology, observability, and upgrade compatibility without moving archive/search state into consensus storage.
+- [ ] `Reference Indexer Service`: Add the configured reference indexer under top-level `/indexer` with reproducible schema generation, deterministic local fixtures, chain synchronization, migrations, health/readiness surfaces, archive/search queries, tests, and production-oriented configuration.
+- [ ] `Materialized Read-Model Delivery`: Implement the first indexed surfaces needed by wallet asset discovery, governance history, activity/receipt history, and bounded analytics while preserving explicit canonical-chain versus materialized provenance in every public response.
+- [ ] `Web-Client Indexer Integration`: Promote the selected materialized provider boundary into a first-class frontend slice, connect indexed wallet/governance/history experiences with stale/error/unavailable states, and keep direct chain reads authoritative for canonical current state.
+- [ ] `Integrated Stack Deployment`: Extend repository-owned local and production deployment flows so node/runtime dependencies, indexer storage, indexer service, and web client can start from one documented configuration with health ordering, persistent volumes, migrations, backup/restore guidance, and end-to-end smoke validation.
 
 ## Runtime Framework Evolution
 

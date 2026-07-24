@@ -111,6 +111,8 @@ export async function quoteBuyAtSnapshot(
     effectivePrice:
       Number(foreignAmount) / Number(authoritativeQuote.amount_out),
     fee: authoritativeQuote.router_fee,
+    totalFee: authoritativeQuote.total_fees,
+    priceImpactPpb: BigInt(authoritativeQuote.price_impact),
     tmcOut,
     xykOut,
     isSell: false,
@@ -144,6 +146,8 @@ export async function quoteSellAtSnapshot(
     effectivePrice:
       Number(authoritativeQuote.amount_out) / Number(nativeAmount),
     fee: authoritativeQuote.router_fee,
+    totalFee: authoritativeQuote.total_fees,
+    priceImpactPpb: BigInt(authoritativeQuote.price_impact),
     tmcOut: 0n,
     xykOut: authoritativeQuote.amount_out,
     isSell: true,

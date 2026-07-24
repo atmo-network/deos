@@ -74,6 +74,11 @@ export type MarketAdapter = {
   ): SwapResult | Promise<SwapResult>;
   getQuoteBuy(foreignAmount: bigint): Quote | null | Promise<Quote | null>;
   getQuoteSell(nativeAmount: bigint): Quote | null | Promise<Quote | null>;
+  estimateSwapNetworkFee?(
+    direction: 'buy' | 'sell',
+    amountIn: bigint,
+    minAmountOut: bigint,
+  ): bigint | null | Promise<bigint | null>;
   getEffectiveMintPrice(probeAmount: bigint): number | Promise<number>;
   getHistoricalPricePoints?(
     limit: number,

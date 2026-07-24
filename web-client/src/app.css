@@ -3,7 +3,8 @@
 
 :root {
   animation: random-360 12s infinite;
-  --mono-bg: #f5f6ee;
+  --vfx: hsl(var(--r) 0% 0%);
+  --mono-bg: #eef0e5;
   --mono-surface: #ffffff;
   --mono-border: hsl(var(--r) 0% 0%);
   --mono-text: #2e2f2a;
@@ -17,6 +18,9 @@
 
 @theme {
   --default-border-width: 2px;
+  --text-3xs: 0.5625rem;
+  --text-2xs: 0.625rem;
+  --text-compact: 0.6875rem;
 
   --color-surface-0: #f5f6ee;
   --color-surface-1: #ffffff;
@@ -120,8 +124,9 @@ input::-webkit-inner-spin-button {
 }
 
 ::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+  font-size: 6px;
+  width: 1em;
+  height: 1em;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -134,11 +139,14 @@ input::-webkit-inner-spin-button {
 
 ::-webkit-scrollbar-thumb {
   background: var(--mono-border);
-  border-radius: 6px;
-  border: 1px solid white;
+  border-radius: 1em;
 }
 
 ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-corner {
   background: transparent;
 }
 

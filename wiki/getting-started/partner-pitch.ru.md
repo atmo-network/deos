@@ -94,4 +94,3 @@ DEOS не устраняет рыночный, продуктовый, community
 
 - [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
 - [Форк DEOS](../usage/forking-deos.ru.md)
-- [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)

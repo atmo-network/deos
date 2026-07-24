@@ -243,18 +243,6 @@
       }
     },
     {
-      "id": "ui-kit-and-domain-dag",
-      "title": {
-        "en": "UI Kit and Domain DAG",
-        "ru": "UI Kit и Domain DAG"
-      },
-      "page_type": "concept",
-      "path": {
-        "en": "concepts/ui-kit-and-domain-dag.en.md",
-        "ru": "concepts/ui-kit-and-domain-dag.ru.md"
-      }
-    },
-    {
       "id": "generated-wiki",
       "title": {
         "en": "Generated Wiki",
@@ -336,18 +324,6 @@
       "path": {
         "en": "concepts/end-to-end-flows.en.md",
         "ru": "concepts/end-to-end-flows.ru.md"
-      }
-    },
-    {
-      "id": "architecture-diagrams",
-      "title": {
-        "en": "Architecture Diagrams",
-        "ru": "Архитектурные схемы"
-      },
-      "page_type": "concept",
-      "path": {
-        "en": "concepts/architecture-diagrams.en.md",
-        "ru": "concepts/architecture-diagrams.ru.md"
       }
     },
     {
@@ -444,18 +420,6 @@
       "path": {
         "en": "concepts/invariant-map.en.md",
         "ru": "concepts/invariant-map.ru.md"
-      }
-    },
-    {
-      "id": "what-deos-is-not",
-      "title": {
-        "en": "What DEOS Is Not",
-        "ru": "Чем DEOS не является"
-      },
-      "page_type": "concept",
-      "path": {
-        "en": "concepts/what-deos-is-not.en.md",
-        "ru": "concepts/what-deos-is-not.ru.md"
       }
     },
     {
@@ -946,16 +910,6 @@
       "type": "implements-read-model-honesty"
     },
     {
-      "from": "reference-client",
-      "to": "ui-kit-and-domain-dag",
-      "type": "uses-frontend-ownership-discipline"
-    },
-    {
-      "from": "ui-kit-and-domain-dag",
-      "to": "reference-client",
-      "type": "frontend-architecture-detail"
-    },
-    {
       "from": "generated-wiki",
       "to": "reference-client",
       "type": "rendered-by-client"
@@ -1108,46 +1062,6 @@
     {
       "from": "newcomer-faq",
       "to": "end-to-end-flows",
-      "type": "answers-with"
-    },
-    {
-      "from": "domain-map",
-      "to": "architecture-diagrams",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "end-to-end-flows",
-      "type": "supports"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "routing-and-minting-loop",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "aaa-system",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "read-model-split",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "governance-domains",
-      "type": "visualizes"
-    },
-    {
-      "from": "reading-paths",
-      "to": "architecture-diagrams",
-      "type": "recommends"
-    },
-    {
-      "from": "newcomer-faq",
-      "to": "architecture-diagrams",
       "type": "answers-with"
     },
     {
@@ -1382,11 +1296,6 @@
     },
     {
       "from": "tol-bucket-scenarios",
-      "to": "architecture-diagrams",
-      "type": "uses"
-    },
-    {
-      "from": "tol-bucket-scenarios",
       "to": "aaa-system",
       "type": "uses"
     },
@@ -1421,21 +1330,6 @@
       "type": "uses"
     },
     {
-      "from": "what-deos-is-not",
-      "to": "deos-framework",
-      "type": "clarifies"
-    },
-    {
-      "from": "what-deos-is-not",
-      "to": "invariant-map",
-      "type": "relates"
-    },
-    {
-      "from": "what-deos-is-not",
-      "to": "parachain-context",
-      "type": "relates"
-    },
-    {
       "from": "economic-claim-levels",
       "to": "economic-thresholds",
       "type": "clarifies"
@@ -1453,11 +1347,6 @@
     {
       "from": "reading-paths",
       "to": "invariant-map",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
-      "to": "what-deos-is-not",
       "type": "recommends"
     },
     {
@@ -1537,11 +1426,6 @@
     },
     {
       "from": "deos-in-60-seconds",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
-    },
-    {
-      "from": "deos-in-60-seconds",
       "to": "tmctol-standard",
       "type": "introduces"
     },
@@ -1614,11 +1498,6 @@
       "from": "deos-in-60-seconds",
       "to": "partner-pitch",
       "type": "routes"
-    },
-    {
-      "from": "partner-pitch",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
     },
     {
       "from": "partner-pitch",

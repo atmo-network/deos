@@ -4,12 +4,15 @@ Owns: Migration/normalization from older persisted workspace layouts into the cu
 Excludes: New default layout specification, live layout mutation, and persistence IO.
 Zone: Layout migration helper; depends only on layout contracts.
 */
+import { isSidebarWidgetId } from './sidebar-projection.ts';
 import {
   ALL_PANELS,
   type PanelId,
+  SIDEBAR_WIDGET_IDS,
+  type SidebarWidgetId,
   type TileNode,
   type WorkspaceFrameState,
-} from './types';
+} from './types.ts';
 
 type UnknownRecord = { [key: string]: unknown };
 
@@ -107,22 +110,57 @@ export function normalizeFrameState(
   if (!isUnknownRecord(sidebar)) {
     return null;
   }
-  const sidebarValue = sidebar;
-  const edge =
-    sidebarValue.edge === 'left'
-      ? 'left'
-      : sidebarValue.edge === 'right'
-        ? 'right'
-        : null;
-  const open =
-    typeof sidebarValue.open === 'boolean' ? sidebarValue.open : null;
-  if (edge === null || open === null) {
+  const open = typeof sidebar.open === 'boolean' ? sidebar.open : null;
+  if (open === null) {
     return null;
   }
+  const storedWidgetOrder = Array.isArray(sidebar.widgetOrder)
+    ? Array.from(
+        new Set(
+          sidebar.widgetOrder.filter((widgetId): widgetId is SidebarWidgetId =>
+            isSidebarWidgetId(widgetId),
+          ),
+        ),
+      )
+    : [];
+  const placementVersion = sidebar.placementVersion === 1 ? 1 : null;
+  const widgetOrder =
+    placementVersion === 1 || storedWidgetOrder.length > 0
+      ? storedWidgetOrder
+      : [...SIDEBAR_WIDGET_IDS];
+  const expandedWidgetId = !('expandedWidgetId' in sidebar)
+    ? 'account-menu'
+    : sidebar.expandedWidgetId === null
+      ? null
+      : isSidebarWidgetId(sidebar.expandedWidgetId)
+        ? sidebar.expandedWidgetId
+        : 'account-menu';
+  const mobile = isUnknownRecord(value.mobile) ? value.mobile : null;
+  const panelOrder = Array.isArray(mobile?.panelOrder)
+    ? Array.from(
+        new Set(
+          mobile.panelOrder.filter(
+            (panelId): panelId is PanelId =>
+              typeof panelId === 'string' && isPanelId(panelId),
+          ),
+        ),
+      )
+    : [];
+  const expandedPanelId =
+    typeof mobile?.expandedPanelId === 'string' &&
+    isPanelId(mobile.expandedPanelId)
+      ? mobile.expandedPanelId
+      : null;
   return {
     sidebar: {
-      edge,
+      placementVersion: 1,
       open,
+      widgetOrder,
+      expandedWidgetId,
+    },
+    mobile: {
+      panelOrder,
+      expandedPanelId,
     },
   };
 }

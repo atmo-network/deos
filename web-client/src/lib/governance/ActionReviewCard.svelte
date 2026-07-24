@@ -44,14 +44,12 @@ Zone: Governance component; may compose UI Kit primitives and receive action cal
   }: Props = $props();
 </script>
 
-<div
-  class="rounded-xl border bg-(--mono-bg) p-3 grid gap-2 text-[10px] text-(--mono-muted)"
->
+<div class="rounded-xl bg-white p-3 grid gap-2 text-[10px] text-(--mono-muted)">
   <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
     {title}
   </div>
   <div class="grid gap-2 @sm:grid-cols-2">
-    <div class="rounded-lg border bg-white p-2 grid gap-1">
+    <div class="rounded-lg bg-(--mono-bg) p-2 grid gap-1">
       <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
         Submit proposal
       </div>
@@ -87,7 +85,7 @@ Zone: Governance component; may compose UI Kit primitives and receive action cal
         onclick={submitOnClick}>{submitButtonLabel}</Button
       >
     </div>
-    <div class="rounded-lg border bg-white p-2 grid gap-1">
+    <div class="rounded-lg bg-(--mono-bg) p-2 grid gap-1">
       <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
         Note preimage
       </div>

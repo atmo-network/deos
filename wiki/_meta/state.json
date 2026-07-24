@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-20",
+  "generated_at": "2026-07-22",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -40,12 +40,14 @@
         "en": [
           "../README.md",
           "../docs/README.md",
-          "../docs/core.architecture.en.md"
+          "../docs/core.architecture.en.md",
+          "../docs/framework-instance.contract.en.md"
         ],
         "ru": [
           "../README.md",
           "../docs/README.md",
-          "../docs/core.architecture.en.md"
+          "../docs/core.architecture.en.md",
+          "../docs/framework-instance.contract.en.md"
         ]
       }
     },
@@ -236,10 +238,16 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/core.architecture.en.md"
+          "../docs/core.architecture.en.md",
+          "../template/README.md",
+          "../template/Cargo.toml",
+          "../template/runtime/src/lib.rs"
         ],
         "ru": [
-          "../docs/core.architecture.en.md"
+          "../docs/core.architecture.en.md",
+          "../template/README.md",
+          "../template/Cargo.toml",
+          "../template/runtime/src/lib.rs"
         ]
       }
     },
@@ -509,32 +517,6 @@
         ]
       }
     },
-    "ui-kit-and-domain-dag": {
-      "path": {
-        "en": "concepts/ui-kit-and-domain-dag.en.md",
-        "ru": "concepts/ui-kit-and-domain-dag.ru.md"
-      },
-      "page_type": "concept",
-      "title": {
-        "en": "UI Kit and Domain DAG",
-        "ru": "UI Kit и Domain DAG"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "confidence": 0.95,
-      "sources": {
-        "en": [
-          "../docs/web-client.architecture.en.md",
-          "../web-client/README.md",
-          "../web-client/src/lib/ui/README.md"
-        ],
-        "ru": [
-          "../docs/web-client.architecture.en.md",
-          "../web-client/README.md",
-          "../web-client/src/lib/ui/README.md"
-        ]
-      }
-    },
     "generated-wiki": {
       "path": {
         "en": "concepts/generated-wiki.en.md",
@@ -554,22 +536,24 @@
           "../docs/web-client.architecture.en.md",
           "../web-client/README.md",
           "../.agents/skills/wiki-sync/SKILL.md",
-          "wiki/_meta/navigation.json",
-          "wiki/_meta/state.json",
-          "wiki/_meta/graph.json",
-          "wiki/_meta/aliases.json",
-          "wiki/_meta/locales.json"
+          "_meta/navigation.json",
+          "_meta/state.json",
+          "_meta/graph.json",
+          "_meta/aliases.json",
+          "_meta/locales.json",
+          "_meta/search.json"
         ],
         "ru": [
           "../docs/README.md",
           "../docs/web-client.architecture.en.md",
           "../web-client/README.md",
           "../.agents/skills/wiki-sync/SKILL.md",
-          "wiki/_meta/navigation.json",
-          "wiki/_meta/state.json",
-          "wiki/_meta/graph.json",
-          "wiki/_meta/aliases.json",
-          "wiki/_meta/locales.json"
+          "_meta/navigation.json",
+          "_meta/state.json",
+          "_meta/graph.json",
+          "_meta/aliases.json",
+          "_meta/locales.json",
+          "_meta/search.json"
         ]
       }
     },
@@ -767,36 +751,6 @@
         ]
       }
     },
-    "architecture-diagrams": {
-      "path": {
-        "en": "concepts/architecture-diagrams.en.md",
-        "ru": "concepts/architecture-diagrams.ru.md"
-      },
-      "page_type": "concept",
-      "title": {
-        "en": "Architecture Diagrams",
-        "ru": "Архитектурные схемы"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "confidence": 0.85,
-      "sources": {
-        "en": [
-          "../docs/core.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/staking.architecture.en.md"
-        ],
-        "ru": [
-          "../docs/core.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/staking.architecture.en.md"
-        ]
-      }
-    },
     "token-surfaces": {
       "path": {
         "en": "concepts/token-surfaces.en.md",
@@ -906,16 +860,20 @@
           "../README.md",
           "../docs/README.md",
           "../template/pallets/aaa/EMBEDDING.md",
+          "../docs/framework-instance.contract.en.md",
           "../template/README.md",
-          "../web-client/README.md"
+          "../web-client/README.md",
+          "../docs/tmctol.specification.en.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
           "../template/pallets/aaa/EMBEDDING.md",
+          "../docs/framework-instance.contract.en.md",
           "../template/README.md",
-          "../web-client/README.md"
+          "../web-client/README.md",
+          "../docs/tmctol.specification.en.md"
         ]
       }
     },
@@ -1039,32 +997,6 @@
         ]
       }
     },
-    "what-deos-is-not": {
-      "path": {
-        "en": "concepts/what-deos-is-not.en.md",
-        "ru": "concepts/what-deos-is-not.ru.md"
-      },
-      "page_type": "concept",
-      "title": {
-        "en": "What DEOS Is Not",
-        "ru": "Чем DEOS не является"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "confidence": 0.9,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../docs/core.architecture.en.md",
-          "../docs/tmctol.specification.en.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../docs/core.architecture.en.md",
-          "../docs/tmctol.specification.en.md"
-        ]
-      }
-    },
     "economic-claim-levels": {
       "path": {
         "en": "concepts/economic-claim-levels.en.md",
@@ -1107,18 +1039,8 @@
       "audience": "developer",
       "confidence": 0.9,
       "sources": {
-        "en": [
-          "../README.md",
-          "../docs/README.md",
-          "../template/README.md",
-          "../web-client/README.md"
-        ],
-        "ru": [
-          "../README.md",
-          "../docs/README.md",
-          "../template/README.md",
-          "../web-client/README.md"
-        ]
+        "en": ["../AGENTS.md", "../README.md"],
+        "ru": ["../AGENTS.md", "../README.md"]
       }
     },
     "tech-stack": {
@@ -1136,15 +1058,21 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../README.md",
-          "../template/README.md",
-          "../web-client/README.md",
+          "../docs/core.architecture.en.md",
+          "../template/Cargo.toml",
+          "../template/runtime/src/lib.rs",
+          "../web-client/package.json",
+          "../web-client/src/lib/read-model.ts",
+          "../simulator/README.md",
           "../scripts/README.md"
         ],
         "ru": [
-          "../README.md",
-          "../template/README.md",
-          "../web-client/README.md",
+          "../docs/core.architecture.en.md",
+          "../template/Cargo.toml",
+          "../template/runtime/src/lib.rs",
+          "../web-client/package.json",
+          "../web-client/src/lib/read-model.ts",
+          "../simulator/README.md",
           "../scripts/README.md"
         ]
       }
@@ -1163,8 +1091,8 @@
       "audience": "developer",
       "confidence": 0.85,
       "sources": {
-        "en": ["../docs/tmctol.specification.en.md", "../simulator/README.md"],
-        "ru": ["../docs/tmctol.specification.en.md", "../simulator/README.md"]
+        "en": ["../docs/tmctol.specification.en.md"],
+        "ru": ["../docs/tmctol.specification.en.md"]
       }
     },
     "scripts-layer": {
@@ -1181,8 +1109,8 @@
       "audience": "developer",
       "confidence": 0.9,
       "sources": {
-        "en": ["../scripts/README.md", "../AGENTS.md"],
-        "ru": ["../scripts/README.md", "../AGENTS.md"]
+        "en": ["../scripts/README.md"],
+        "ru": ["../scripts/README.md"]
       }
     },
     "three-layer-validation": {
@@ -1199,18 +1127,8 @@
       "audience": "developer",
       "confidence": 0.9,
       "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../simulator/README.md",
-          "../template/README.md",
-          "../web-client/README.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../simulator/README.md",
-          "../template/README.md",
-          "../web-client/README.md"
-        ]
+        "en": ["../AGENTS.md"],
+        "ru": ["../AGENTS.md"]
       }
     },
     "contributing": {
@@ -1227,18 +1145,8 @@
       "audience": "developer",
       "confidence": 0.85,
       "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../README.md",
-          "../BACKLOG.md",
-          "../CHANGELOG.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../README.md",
-          "../BACKLOG.md",
-          "../CHANGELOG.md"
-        ]
+        "en": ["../AGENTS.md", "../docs/README.md"],
+        "ru": ["../AGENTS.md", "../docs/README.md"]
       }
     },
     "deos-in-60-seconds": {

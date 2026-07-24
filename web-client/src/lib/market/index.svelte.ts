@@ -16,6 +16,7 @@ import type { SystemSnapshot } from '$lib/system/types';
 import { toFloat } from '$lib/ui/format';
 
 const PROBE_AMOUNT = 100n * PRECISION;
+const NETWORK_FEE_ESTIMATE_TIMEOUT_MS = 2_000;
 
 type MarketBridge = {
   getAdapter: () => Adapter;
@@ -152,11 +153,42 @@ class MarketStore {
           : null;
       }
       return quote;
-    } catch {
+    } catch (error) {
       if (requestId === this.quoteRequestId) {
         this.quoteView = null;
       }
+      throw error;
+    }
+  }
+
+  async estimateSwapNetworkFee(
+    direction: 'buy' | 'sell',
+    amountIn: bigint,
+    minAmountOut: bigint,
+  ): Promise<bigint | null> {
+    const adapter = this.adapter();
+    if (!adapter?.estimateSwapNetworkFee) {
       return null;
+    }
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    try {
+      return await Promise.race([
+        Promise.resolve(
+          adapter.estimateSwapNetworkFee(direction, amountIn, minAmountOut),
+        ),
+        new Promise<null>((resolve) => {
+          timeout = setTimeout(
+            () => resolve(null),
+            NETWORK_FEE_ESTIMATE_TIMEOUT_MS,
+          );
+        }),
+      ]);
+    } catch {
+      return null;
+    } finally {
+      if (timeout !== null) {
+        clearTimeout(timeout);
+      }
     }
   }
 
@@ -177,11 +209,11 @@ class MarketStore {
           : null;
       }
       return quote;
-    } catch {
+    } catch (error) {
       if (requestId === this.quoteRequestId) {
         this.quoteView = null;
       }
-      return null;
+      throw error;
     }
   }
 

@@ -5,11 +5,12 @@ Excludes: Tile tree mutation policy, widget rendering, and reserved edge-lane co
 Zone: Layout rendering component; receives state/callbacks from PaneHost.
 -->
 <script lang="ts">
-  import { Button } from '$lib/ui';
+  import { Button, Icon } from '$lib/ui';
 
   import type { PreviewTabItem } from './pane-dnd';
   import type { TabFlipAnimate } from './tab-flip';
   import type { PanelId, TileLeaf } from './types';
+  import { PANEL_ICONS } from './widget-icons';
 
   type Props = {
     leaf: TileLeaf;
@@ -26,6 +27,7 @@ Zone: Layout rendering component; receives state/callbacks from PaneHost.
     onTabDragStart: (event: DragEvent, tabId: PanelId) => void;
     onAnyDragEnd: () => void;
     onSelectTab: (tabId: PanelId) => void;
+    onTabKeydown: (event: KeyboardEvent, tabId: PanelId) => void;
     onTabBarDragOver: (event: DragEvent) => void;
     onTabBarDragLeave: (event: DragEvent) => void;
     onTabBarDrop: (event: DragEvent) => void;
@@ -50,6 +52,7 @@ Zone: Layout rendering component; receives state/callbacks from PaneHost.
     onTabDragStart,
     onAnyDragEnd,
     onSelectTab,
+    onTabKeydown,
     onTabBarDragOver,
     onTabBarDragLeave,
     onTabBarDrop,
@@ -106,15 +109,15 @@ Zone: Layout rendering component; receives state/callbacks from PaneHost.
       tabindex="-1"
     >
       {#each previewTabs as item (item.key)}
-        <div
-          animate:animateTabs
-          class="relative shrink-0 will-change-transform"
-        >
+        <div animate:animateTabs class="relative shrink-0">
           {#if item.kind === 'projection'}
             <div
               class="pointer-events-none relative shrink-0 select-none rounded-lg border border-(--mono-purple)/35 bg-(--mono-purple)/10 px-2.5 py-1 text-[11px] font-medium whitespace-nowrap text-(--mono-purple) sm:px-3 sm:text-xs z-1"
             >
-              {panelLabels[item.tabId]}
+              <span class="inline-flex items-center gap-1.5">
+                <Icon icon={PANEL_ICONS[item.tabId]} size="xs" />
+                <span>{panelLabels[item.tabId]}</span>
+              </span>
             </div>
           {:else}
             <Button
@@ -125,19 +128,22 @@ Zone: Layout rendering component; receives state/callbacks from PaneHost.
               ondragstart={(event) => onTabDragStart(event, item.tabId)}
               ondragend={onAnyDragEnd}
               onclick={() => onSelectTab(item.tabId)}
+              onkeydown={(event) => onTabKeydown(event, item.tabId)}
+              aria-keyshortcuts="Shift+ArrowRight"
               role="tab"
               aria-selected={leaf.activeTab === item.tabId}
               class={[
-                'rounded-lg border border-transparent px-2.5 py-1 text-[11px] font-medium select-none cursor-pointer active:cursor-grabbing whitespace-nowrap transition-[transform,opacity,color,background-color,border-color] duration-150 sm:px-3 sm:text-xs active:border-(--mono-border)',
+                'inline-flex flex-row items-center gap-1.5 rounded-lg border border-transparent px-2.5 py-1 text-[11px] font-medium select-none cursor-pointer active:cursor-grabbing whitespace-nowrap transition-[transform,opacity,color,background-color,border-color] duration-150 sm:px-3 sm:text-xs active:border-(--mono-border)',
                 leaf.activeTab === item.tabId
-                  ? 'bg-(--mono-border) text-white'
+                  ? 'bg-(--mono-border) text-white hover:bg-(--mono-border) hover:text-white'
                   : 'text-(--mono-border) hover:bg-white hover:text-(--mono-text)',
                 isLiftedSourceTab(item.tabId)
                   ? 'scale-[0.98] opacity-40'
                   : 'opacity-100',
               ]}
             >
-              {panelLabels[item.tabId]}
+              <Icon icon={PANEL_ICONS[item.tabId]} size="xs" />
+              <span>{panelLabels[item.tabId]}</span>
             </Button>
           {/if}
         </div>

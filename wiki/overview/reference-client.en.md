@@ -50,11 +50,17 @@ The client keeps economic functions separate from layout infrastructure:
 - Layout is pane, tile, split, tab, footer, header, sidebar, and reserved-lane machinery;
 - Reserved edge lanes are developer-configured shell zones, not user-reorderable economic panes.
 
-Widgets should adapt to pane width and height instead of assuming one desktop-only stack.
+Widgets adapt to pane width and height instead of assuming one desktop-only stack. The reusable backbone owns task hierarchy, minimum phases, accessibility, provenance, and safety; downstream forks own brand, palette, typography, effects, terminology, and enabled product policy.
+
+## Responsive and Disconnected Behavior
+
+The desktop workspace persists a bounded tile tree with adjacent-only resizing. Below the mobile breakpoint, the client projects the same panels into a one-dimensional, single-expanded accordion with a separate persisted order; moving or expanding a mobile task does not rewrite desktop topology. The account/settings lane becomes a focus-contained bottom sheet instead of displacing the workspace.
+
+Chain absence never becomes a fabricated zero. Widgets distinguish loading, live snapshots, retained stale evidence, explicit preview data, unconfigured providers, and errors. Local account selection, signer discovery, address handling, drafts, Wiki reading, and receipts may remain useful offline, while balance-derived actions, quotes, and execution require a live canonical snapshot.
 
 ## Ownership and Feedback
 
-The client uses [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md) to keep repeated controls and structural boundaries in owner layers. Widgets should express product intent, not rebuild primitive controls or reach through adapter internals.
+The client uses UI Kit and Domain DAG discipline to keep repeated controls and structural boundaries in owner layers. Widgets should express product intent, not rebuild primitive controls or reach through adapter internals.
 
 Execution feedback is centralized: `LogWidget` is the main transaction/progress surface, while action widgets stay focused on initiating actions. This follows the same anti-duplication rule as UI primitives and provenance badges.
 
@@ -71,6 +77,5 @@ The web client renders generated wiki content as trusted repo-local markdown and
 - [First Steps](../getting-started/first-steps.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
-- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

@@ -79,5 +79,4 @@ A threat is not “solved” just because a page mentions it. It is controlled o
 - [Economic Claim Levels](economic-claim-levels.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
-- [What DEOS Is Not](what-deos-is-not.en.md)
 - [Governance Domains](governance-domains.en.md)

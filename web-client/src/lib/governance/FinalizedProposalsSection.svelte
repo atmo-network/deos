@@ -29,22 +29,14 @@ Zone: Governance presentation component; consumes typed governance contracts and
     urgentEligibilityLabel,
     urgentExecutionContractLabel,
   } from '$lib/governance/labels';
-  import type { ReadModelProvenance } from '$lib/read-model';
-  import {
-    Badge,
-    DetailRow,
-    Notice,
-    ReadModelBadge,
-    SectionCard,
-  } from '$lib/ui';
+  import { Badge, DetailRow, Notice, SectionCard } from '$lib/ui';
 
   type Props = {
     proposals: GovernanceRetainedFinalizedProposal[];
-    provenance: ReadModelProvenance | null;
     authorizedRuntimeUpgrade: GovernanceAuthorizedRuntimeUpgrade | null;
   };
 
-  let { proposals, provenance, authorizedRuntimeUpgrade }: Props = $props();
+  let { proposals, authorizedRuntimeUpgrade }: Props = $props();
 
   function finalizedRuntimeUpgradeApplicationLabel(
     proposal: GovernanceRetainedFinalizedProposal,
@@ -68,7 +60,6 @@ Zone: Governance presentation component; consumes typed governance contracts and
 
 <SectionCard title="Recent finalized" subtitle="Bounded recent outcomes">
   {#snippet actions()}
-    <ReadModelBadge {provenance} />
     <Badge variant="info">{proposals.length} retained</Badge>
   {/snippet}
   <Notice variant="muted">
@@ -77,7 +68,7 @@ Zone: Governance presentation component; consumes typed governance contracts and
   {#if proposals.length > 0}
     <div class="grid gap-2">
       {#each proposals as proposal}
-        <div class="rounded-xl border bg-(--mono-bg) px-3 py-2 grid gap-1">
+        <div class="rounded-xl bg-white px-3 py-2 grid gap-1">
           <DetailRow
             label={`#${proposal.itemId}`}
             value={finalizedOutcomeLabel(proposal)}

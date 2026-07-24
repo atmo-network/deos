@@ -88,7 +88,7 @@ DEOS проще понимать как набор связанных домен
 
 Клиентский домен объясняет, как браузерный продукт показывает систему, не притворяясь источником истины. Он отделяет прямое on-chain состояние, session-derived projections и будущих materialized/indexed providers.
 
-Читайте [Эталонный клиент](../overview/reference-client.ru.md), [UI Kit и Domain DAG](ui-kit-and-domain-dag.ru.md) и [Разделение read-model](read-model-split.ru.md).
+Читайте [Эталонный клиент](../overview/reference-client.ru.md) и [Разделение read-model](read-model-split.ru.md).
 
 ### Инструменты и валидация
 
@@ -119,7 +119,6 @@ DEOS проще понимать как набор связанных домен
 
 ## Связанные страницы
 
-- [Архитектурные схемы](architecture-diagrams.ru.md)
 - [Сквозные сценарии](end-to-end-flows.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)

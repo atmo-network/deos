@@ -181,7 +181,6 @@ Wiki-карта текущего состояния для базовых дом
 - [Домены Governance](../concepts/governance-domains.ru.md)
 - [Экономика $BLDR](../concepts/builder-economy.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)
-- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
 - [Маршруты чтения](../getting-started/reading-paths.ru.md)
 - [Статус разработки](../development/status.ru.md)

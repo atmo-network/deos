@@ -15,6 +15,7 @@ Zone: Foundation UI; may wrap Bits UI but must not import product slices.
   type Props = Omit<HTMLButtonAttributes, 'class'> & {
     variant?: 'primary' | 'secondary' | 'ghost';
     size?: 'sm' | 'md' | 'lg' | 'icon';
+    label?: string;
     class?: ClassValue | null;
     children: Snippet;
   };
@@ -23,6 +24,8 @@ Zone: Foundation UI; may wrap Bits UI but must not import product slices.
     variant = 'secondary',
     size = 'md',
     type = 'button',
+    label,
+    title = label,
     children,
     class: cls = '',
     ...rest
@@ -43,10 +46,15 @@ Zone: Foundation UI; may wrap Bits UI but must not import product slices.
   };
 
   const className = $derived(
-    mergeClasses(variants[variant], sizes[size], 'rounded-xl', cls),
+    mergeClasses(
+      variants[variant],
+      sizes[size],
+      'cursor-pointer rounded-xl disabled:cursor-not-allowed',
+      cls,
+    ),
   );
 </script>
 
-<BitsButton.Root {type} class={className} {...rest}>
+<BitsButton.Root {type} aria-label={label} {title} class={className} {...rest}>
   {@render children()}
 </BitsButton.Root>

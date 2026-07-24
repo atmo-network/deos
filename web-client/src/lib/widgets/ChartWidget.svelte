@@ -10,14 +10,15 @@ Zone: Presentation widget; consumes market store/read-model provenance and UI Ki
 
   import { marketStore } from '$lib/market/index.svelte';
   import type { PricePoint } from '$lib/market/types';
-  import { Button, Card } from '$lib/ui';
+  import { resolveChainSurfaceState } from '$lib/system/connection-surface';
+  import { systemStore } from '$lib/system/index.svelte';
+  import { Button, Card, Notice } from '$lib/ui';
   import { fmtPrice } from '$lib/ui/format';
 
-  let containerEl: HTMLDivElement;
-  let svgEl: SVGSVGElement;
+  let containerEl = $state<HTMLDivElement | null>(null);
+  let svgEl = $state<SVGSVGElement | null>(null);
   let resizeObserver: ResizeObserver | null = null;
   let hidden = $state(new Set<string>());
-  let viewport = $state({ width: 0, height: 0 });
 
   type ChartSeriesPoint = {
     label: string;
@@ -73,21 +74,27 @@ Zone: Presentation widget; consumes market store/read-model provenance and UI Ki
     });
   });
   const latestPoint = $derived.by(() => chartData.at(-1) ?? null);
-  const historyProvenance = $derived(
-    marketStore.historyView?.provenance ?? null,
-  );
-  const stackedFooterRail = $derived(
-    viewport.width > 0 && viewport.width < 560,
+  const chainSurface = $derived(
+    resolveChainSurfaceState(
+      systemStore.connectionState,
+      marketStore.historyView !== null,
+    ),
   );
   const latestSeries = $derived.by(() => {
     if (!latestPoint) {
-      return [];
+      return new Map<string, number>();
     }
-    return [
-      { label: 'TMC', value: latestPoint.priceEffTMC, color: COLORS.tmc },
-      { label: 'Router', value: latestPoint.priceRouter, color: COLORS.router },
-      { label: 'XYK', value: latestPoint.priceXYK, color: COLORS.xyk },
-    ].filter(hasVisibleValue);
+    const entries: Array<[string, number | null]> = [
+      ['TMC', latestPoint.priceEffTMC],
+      ['Router', latestPoint.priceRouter],
+      ['XYK', latestPoint.priceXYK],
+    ];
+    return new Map(
+      entries.filter(
+        (item): item is [string, number] =>
+          item[1] != null && item[1] > 0 && Number.isFinite(item[1]),
+      ),
+    );
   });
 
   function xValue(d: PricePoint) {
@@ -105,7 +112,6 @@ Zone: Presentation widget; consumes market store/read-model provenance and UI Ki
     const rect = containerEl.getBoundingClientRect();
     const width = rect.width;
     const height = rect.height;
-    viewport = { width, height };
     const compact = height < 240 || width < 320;
     const margin = compact ? COMPACT_MARGIN : DEFAULT_MARGIN;
     const tickFontSize = compact ? 8 : 9;
@@ -342,66 +348,80 @@ Zone: Presentation widget; consumes market store/read-model provenance and UI Ki
   });
 </script>
 
-<Card class="h-full min-h-full w-full flex flex-col overflow-hidden">
-  <div bind:this={containerEl} class="relative flex-1 min-h-0 overflow-hidden">
-    <svg bind:this={svgEl} class="block h-full w-full"></svg>
+<Card
+  class="chart-container flex h-full min-h-full w-full flex-col overflow-hidden [container-type:size]"
+>
+  {#if chainSurface.status === 'stale' || chainSurface.status === 'preview'}
+    <Notice variant="warn" class="mx-2.5 mt-2 grid gap-0.5">
+      <strong>{chainSurface.title}</strong>
+      <span>{chainSurface.detail}</span>
+    </Notice>
+  {/if}
+  <div
+    bind:this={containerEl}
+    class="chart-surface relative flex-1 min-h-0 overflow-hidden"
+  >
+    <svg
+      bind:this={svgEl}
+      class="block h-full w-full"
+      role="img"
+      aria-label="TMC, router, and XYK price history"
+    ></svg>
     <div
-      class="d3-tooltip pointer-events-none absolute z-10 min-w-30 rounded-lg border border-(--mono-border) bg-white/95 px-2.5 py-2 text-[11px] opacity-0 shadow-sm transition-opacity backdrop-blur-sm"
+      class="d3-tooltip pointer-events-none absolute z-10 min-w-30 rounded-lg border border-(--mono-border) bg-white/95 px-2.5 py-2 text-compact opacity-0 shadow-sm transition-opacity backdrop-blur-sm"
     ></div>
   </div>
 
-  <div class="shrink-0 px-2.5 py-2">
-    <div
-      class={[
-        'grid gap-2',
-        stackedFooterRail || latestSeries.length === 0
-          ? 'grid-cols-1'
-          : 'grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center',
-      ]}
-    >
-      {#if latestSeries.length > 0}
-        <div class="flex min-w-0 flex-wrap items-center gap-1.5 text-[10px]">
-          {#each latestSeries as item (item.label)}
-            <span
-              class="inline-flex items-center gap-1 rounded-full border border-(--mono-border) bg-(--mono-bg) px-2 py-0.5"
-            >
-              <span
-                class="inline-block h-1.5 w-1.5 rounded-full"
-                style:background={item.color}
-              ></span>
-              <span class="text-(--mono-muted)">{item.label}</span>
-              <span class="tabnum text-(--mono-text)"
-                >${fmtPrice(item.value)}</span
-              >
-            </span>
-          {/each}
-        </div>
-      {/if}
+  <div
+    class="compact-chart-status hidden px-2.5 pt-2 text-center text-2xs uppercase tracking-wider text-(--mono-muted)"
+  >
+    {latestPoint ? 'Latest venue prices' : 'Awaiting market data'}
+  </div>
 
-      <div class={['flex flex-wrap items-center justify-center gap-1.5']}>
-        {#each LEGEND_ITEMS as item}
-          <Button
-            size="sm"
-            variant="ghost"
-            aria-pressed={!hidden.has(item.label)}
-            onclick={() => toggleSeries(item.label)}
-            class={[
-              'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] cursor-pointer',
-              hidden.has(item.label)
-                ? 'text-(--mono-muted) opacity-60'
-                : 'text-(--mono-text)',
-            ]}
+  <div
+    class="series-controls flex shrink-0 flex-wrap items-center justify-center gap-1.5 px-2.5 py-2"
+  >
+    {#each LEGEND_ITEMS as item}
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-pressed={!hidden.has(item.label)}
+        onclick={() => toggleSeries(item.label)}
+        class={[
+          'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-2xs cursor-pointer',
+          hidden.has(item.label)
+            ? 'text-(--mono-muted) opacity-60'
+            : 'text-(--mono-text)',
+        ]}
+      >
+        <span
+          class="inline-block h-2 w-2 rounded-full"
+          style:background={item.color}
+        ></span>
+        <span class={hidden.has(item.label) ? 'line-through' : ''}>
+          {item.label}
+        </span>
+        {#if latestSeries.has(item.label)}
+          <span class="tabnum"
+            >${fmtPrice(latestSeries.get(item.label) ?? 0)}</span
           >
-            <span
-              class="inline-block h-2 w-2 rounded-full"
-              style:background={item.color}
-            ></span>
-            <span class={hidden.has(item.label) ? 'line-through' : ''}
-              >{item.label}</span
-            >
-          </Button>
-        {/each}
-      </div>
-    </div>
+        {/if}
+      </Button>
+    {/each}
   </div>
 </Card>
+
+<style>
+  @container (max-height: 128px) {
+    .chart-surface {
+      display: none;
+    }
+    .compact-chart-status {
+      display: block;
+    }
+    .series-controls {
+      flex: 1;
+      align-content: center;
+    }
+  }
+</style>

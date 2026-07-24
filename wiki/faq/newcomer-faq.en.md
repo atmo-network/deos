@@ -73,7 +73,7 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 
 **Where do release versions and status notes belong?** Release history belongs in the changelog, open work belongs in the backlog, and newcomer-facing current state belongs in [Development Status](../development/status.en.md). Architecture and wiki pages should explain implementation truth and boundaries.
 
-**What are UI Kit and Domain DAG?** They are client-side anti-duplication and ownership disciplines. See [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md).
+**What are UI Kit and Domain DAG?** They are client-side anti-duplication and ownership disciplines maintained in the web-client architecture and validation tooling.
 
 **Why can the web client render wiki markdown directly?** Wiki markdown is trusted repo-local content guarded by repository validation, not arbitrary user input. See [Generated Wiki](../concepts/generated-wiki.en.md).
 
@@ -85,6 +85,5 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 - [Reading Paths](../getting-started/reading-paths.en.md)
 - [AAA System](../overview/aaa-system.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

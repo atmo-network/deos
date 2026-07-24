@@ -65,16 +65,16 @@ Concrete adapters receive shell/session facts through `system/adapter-context.ts
 - `src/lib/layout/` owns the workspace frame, center tile tree, pane hosts, tabs, split handles, header, footer, sidebar, reserved lane specs, and mobile linearization.
 - `src/lib/widgets/` owns user-facing product surfaces such as Swap, Wallet, Staking, Governance, Chart, Statistics, Automation, Log, Wiki, Account, Settings, Status, and AccountChip.
 - Reserved edge lanes are developer-configured shell zones, not user-reorderable economic panes.
-- Widgets should adapt to pane width/height and keep the main action readable before exposing secondary diagnostics.
+- Widgets should adapt to pane width/height and keep the main action readable before exposing secondary diagnostics. Shareable hash deep links activate existing tabs and widget-local state, for example `#wiki/start-here` and `#swap/native/foreign`, without rebuilding the saved tile layout.
 
 ### UI Kit
 
 `src/lib/ui/` is the local UI Kit. Its local contract is documented in [`src/lib/ui/README.md`](src/lib/ui/README.md). It owns reusable presentation primitives and safe interaction defaults:
 
-- `Button`, `IconButton`, `SelectableTile`
+- `Button`, `Icon`, `BackButton`, `SelectableTile`, `DisclosureSection`
 - `Card`, `SectionCard`, `StatCard`, `DetailRow`, `Notice`, `Badge`
 - `TextField`, `NumberInput`, `TextArea`, `SelectField`
-- `PopoverPanel`, `SidePanelDialog`, `ReadModelBadge`, `Sparkline`
+- `Tooltip`, `Sparkline`
 - `class.ts` and `format.ts`
 
 UI Kit primitives stay foundation-only and must not import product domains. Repeated raw controls should graduate into UI Kit instead of being rebuilt inside widgets. Numeric domain inputs should validate complete literals before conversion; token amount controls use the shared strict token parser/formatter in `src/lib/ui/format.ts`, while non-token numeric domains use complete-literal helpers from `src/lib/format/numeric.ts`.
@@ -103,7 +103,7 @@ The wiki is trusted reviewed repository content, not arbitrary user input. Safet
 npm run validate:wiki
 ```
 
-That guard rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed wiki frontmatter before content is rendered in the browser.
+That guard rejects raw HTML blocks, dangerous URL schemes, inline DOM event handlers, and malformed wiki frontmatter before content is rendered in the browser. It also fails when the bounded bilingual body-search manifest no longer exactly matches Wiki page/locale coverage or generated plain text.
 
 The widget consumes:
 
@@ -112,6 +112,7 @@ The widget consumes:
 - `../wiki/_meta/graph.json`
 - `../wiki/_meta/state.json`
 - `../wiki/_meta/locales.json`
+- `../wiki/_meta/search.json` (dynamically imported only after a non-empty search query)
 
 ## Local Development
 
@@ -150,7 +151,13 @@ Use the smallest meaningful validation first. For full client validation, run:
 npm run validate
 ```
 
-That command runs Prettier, deterministic AAA plan-artifact regressions, Svelte checks, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact AAA call/origin composition, and matching-Wasm provenance-gate fixtures. For architecture-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
+That command runs Prettier, deterministic AAA plan-artifact regressions, Svelte checks, Node layout/system tests, and the production build. Use `npm run test:automation` for focused metadata/SCALE artifacts, structural diffs, state-pinned amount resolution, Weight/fee separation, forecast staleness, local task rollback, Continuation cursors, donation sensitivity, exact AAA call/origin composition, and matching-Wasm provenance-gate fixtures. Pointer lifecycle and constrained-viewport regressions use the installed Chrome browser through Playwright:
+
+```sh
+npm run test:browser
+```
+
+The browser suite starts an isolated Vite server and covers live split-group freezing, adjacent-only previews, pointer cancellation, mouse/touch capture, one final persistence commit, and recursive minimum-height scrolling. For architecture-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
 
 ```sh
 ../scripts/validate-local.sh --audit-only

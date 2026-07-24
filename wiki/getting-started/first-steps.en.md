@@ -75,7 +75,7 @@ Use [Governance Overview](../overview/governance-overview.en.md), [Governance Do
 
 ### Client and wiki
 
-Use [Reference Client](../overview/reference-client.en.md), [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md), and [Generated Wiki](../concepts/generated-wiki.en.md) when browser UX, read-model honesty, layout, UI primitives, or wiki rendering are involved.
+Use [Reference Client](../overview/reference-client.en.md) and [Generated Wiki](../concepts/generated-wiki.en.md) when browser UX, read-model honesty, layout, UI primitives, or wiki rendering are involved.
 
 ### Local operations
 

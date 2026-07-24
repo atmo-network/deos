@@ -90,5 +90,4 @@ A partner team starts by reading the external entry pages, reviewing the fork pr
 - [Partner Pitch](partner-pitch.en.md)
 - [Forking DEOS](../usage/forking-deos.en.md)
 - [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
-- [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
 - [Economic Claim Levels](../concepts/economic-claim-levels.en.md)

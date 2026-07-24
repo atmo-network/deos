@@ -5,48 +5,69 @@ Excludes: Runtime actor scheduling, system store ownership, adapter transport, a
 Zone: Presentation widget; consumes system automation projections and UI Kit helpers.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-
   import type { AutomationActorSnapshot } from '$lib/automation/types';
-  import { fromClientBoundedProjection } from '$lib/read-model';
+  import { resolveChainSurfaceState } from '$lib/system/connection-surface';
   import { systemStore } from '$lib/system/index.svelte';
-  import { Badge, Card, DetailRow, Notice } from '$lib/ui';
+  import {
+    BackButton,
+    Badge,
+    Button,
+    Card,
+    Notice,
+    SectionCard,
+    StatCard,
+  } from '$lib/ui';
   import { fmt, toFloat } from '$lib/ui/format';
 
-  let rootEl = $state<HTMLDivElement | null>(null);
-  let viewport = $state({ width: 0, height: 0 });
+  let selectedActorId = $state<number | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let actors = $state<AutomationActorSnapshot[]>([]);
+  let hasActorSnapshot = $state(false);
 
-  const automationProvenance = fromClientBoundedProjection(
-    true,
-    'automationWidget <- AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account',
-  ).provenance;
+  const chainSurface = $derived(
+    resolveChainSurfaceState(systemStore.connectionState, hasActorSnapshot),
+  );
+  const selectedActor = $derived(
+    actors.find((actor) => actor.aaaId === selectedActorId) ?? null,
+  );
+  const actorHealth = $derived.by(() => ({
+    live: actors.filter(
+      (actor) =>
+        actor.exists && !actor.paused && actor.runState !== 'suspended',
+    ).length,
+    suspended: actors.filter(
+      (actor) =>
+        actor.exists && !actor.paused && actor.runState === 'suspended',
+    ).length,
+    paused: actors.filter((actor) => actor.exists && actor.paused).length,
+    missing: actors.filter((actor) => !actor.exists).length,
+  }));
 
-  function syncViewport() {
-    if (!rootEl) {
-      viewport = { width: 0, height: 0 };
-      return;
+  $effect(() => {
+    if (selectedActorId !== null && !selectedActor) {
+      selectedActorId = null;
     }
-    viewport = {
-      width: rootEl.clientWidth,
-      height: rootEl.clientHeight,
-    };
-  }
-
-  const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
-  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
+  });
 
   $effect(() => {
     systemStore.snapshot?.blockNumber;
+    const connectionStatus = systemStore.connectionState?.status;
+    if (connectionStatus !== 'connected') {
+      loading = false;
+      error = null;
+      return;
+    }
+
     const adapter = systemStore.adapter;
     if (!adapter.getAutomationActors) {
       actors = [];
+      hasActorSnapshot = false;
       loading = false;
-      error = 'Automation surface not available in the current adapter';
+      error = 'The connected adapter does not expose System AAA Actor state.';
       return;
     }
+
     loading = true;
     error = null;
     let cancelled = false;
@@ -56,6 +77,7 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
           return;
         }
         actors = nextActors;
+        hasActorSnapshot = true;
         loading = false;
       })
       .catch((refreshError) => {
@@ -65,122 +87,201 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
         error =
           refreshError instanceof Error
             ? refreshError.message
-            : 'Actor refresh failed';
+            : 'System AAA Actor refresh failed';
         loading = false;
       });
     return () => {
       cancelled = true;
     };
   });
-
-  onMount(() => {
-    syncViewport();
-    if (!rootEl) {
-      return;
-    }
-    const resizeObserver = new ResizeObserver(() => syncViewport());
-    resizeObserver.observe(rootEl);
-    return () => resizeObserver.disconnect();
-  });
 </script>
 
-<Card class="min-h-full flex flex-col">
-  <div bind:this={rootEl} class="h-full flex flex-col min-h-0">
-    <div class="grid gap-3 p-3 text-xs">
-      {#if loading}
-        <div class="text-(--mono-muted)">Loading automation…</div>
-      {:else if error}
+<Card class="h-full min-h-full flex flex-col">
+  <div
+    class="automation-container grid h-full min-h-0 gap-3 p-3 text-xs [container-type:size]"
+  >
+    {#if error && systemStore.connectionState?.status === 'connected' && !hasActorSnapshot}
+      <SectionCard title="Automation unavailable">
         <Notice variant="warn">{error}</Notice>
-      {:else}
-        {#each actors as actor}
-          <div
-            class={[
-              'rounded-xl border bg-white',
-              densePane ? 'grid gap-2 p-2' : 'grid gap-2 p-3',
-            ]}
-          >
-            <div
-              class={[
-                densePane
-                  ? 'grid gap-1'
-                  : 'flex flex-wrap items-start justify-between gap-2',
-              ]}
-            >
-              <div>
-                <div class="font-medium text-(--mono-text)">{actor.label}</div>
-                <div class="text-[10px] text-(--mono-muted)">{actor.role}</div>
-              </div>
-              <Badge
-                variant={actor.exists
-                  ? actor.paused
-                    ? 'info'
-                    : actor.runState === 'suspended'
-                      ? 'xyk'
-                      : 'tmc'
-                  : 'info'}
-              >
-                {#if !actor.exists}
-                  missing
-                {:else if actor.paused}
-                  paused
-                {:else if actor.runState === 'suspended'}
-                  suspended
-                {:else}
-                  live
-                {/if}
-              </Badge>
-            </div>
-            {#if compactPane}
-              <div
-                class="grid gap-1 rounded-xl border bg-(--mono-bg) px-2.5 py-2 text-[10px] text-(--mono-muted)"
-              >
-                <DetailRow
-                  label="Trigger"
-                  value={actor.triggerLabel}
-                  valueClass="text-(--mono-text)"
-                />
-                <DetailRow
-                  label="Run"
-                  value={actor.continuation
-                    ? `#${actor.cycleNonce} · try ${actor.continuation.attempt} · step ${actor.continuation.cursor + 1}`
-                    : `#${actor.cycleNonce}`}
-                  valueClass="tabnum text-(--mono-text)"
-                />
-                <DetailRow
-                  label="Balance"
-                  value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
-                  valueClass="tabnum text-(--mono-text)"
-                />
-              </div>
-            {:else}
-              <div class="grid gap-1 text-[10px] text-(--mono-muted)">
-                <DetailRow
-                  label="Trigger"
-                  value={actor.triggerLabel}
-                  valueClass="text-(--mono-text)"
-                />
-                <DetailRow
-                  label="Logical run"
-                  value={`#${actor.cycleNonce}`}
-                  valueClass="tabnum text-(--mono-text)"
-                />
-                <DetailRow
-                  label="Continuation"
-                  value={actor.continuation
-                    ? `Attempt ${actor.continuation.attempt} · step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
-                    : 'None'}
-                  valueClass="tabnum text-(--mono-text)"
-                />
-                <DetailRow
-                  label="Native balance"
-                  value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
-                  valueClass="tabnum text-(--mono-text)"
-                />
-              </div>
-            {/if}
-          </div>
-        {/each}
+      </SectionCard>
+    {:else}
+      {#if chainSurface.status === 'stale' || chainSurface.status === 'preview'}
+        <Notice variant="warn" class="grid gap-0.5">
+          <strong>{chainSurface.title}</strong>
+          <span>{chainSurface.detail}</span>
+        </Notice>
       {/if}
-    </div>
+      {#if error}
+        <Notice variant="warn">Actor refresh failed: {error}</Notice>
+      {/if}
+      {#if selectedActor}
+        <section
+          class="actor-detail grid w-full max-w-3xl justify-self-center content-start gap-3 rounded-xl bg-(--mono-bg) p-3"
+        >
+          <div class="flex min-w-0 items-center gap-2">
+            <BackButton
+              onclick={() => (selectedActorId = null)}
+              label="Back to actors"
+            />
+            <div class="min-w-0 flex-1">
+              <div class="truncate text-base font-semibold text-(--mono-text)">
+                {selectedActor.label}
+              </div>
+              <div class="truncate text-2xs text-(--mono-muted)">
+                {selectedActor.role}
+              </div>
+            </div>
+            <Badge
+              variant={selectedActor.exists
+                ? selectedActor.paused
+                  ? 'info'
+                  : selectedActor.runState === 'suspended'
+                    ? 'xyk'
+                    : 'tmc'
+                : 'info'}
+            >
+              {selectedActor.exists
+                ? selectedActor.paused
+                  ? 'paused'
+                  : selectedActor.runState === 'suspended'
+                    ? 'suspended'
+                    : 'live'
+                : 'missing'}
+            </Badge>
+          </div>
+          <div
+            class="evidence-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,calc(var(--widget-em)*17.0667)),1fr))] gap-2"
+          >
+            <StatCard label="Trigger" value={selectedActor.triggerLabel} />
+            <StatCard
+              label="Logical run"
+              value={`#${selectedActor.cycleNonce}`}
+            />
+            <StatCard
+              label="Continuation"
+              value={selectedActor.continuation
+                ? `Attempt ${selectedActor.continuation.attempt} · step ${selectedActor.continuation.cursor + 1} · block ${selectedActor.continuation.lastAttemptBlock}`
+                : 'None'}
+            />
+            <StatCard
+              label="Last cycle"
+              value={selectedActor.lastCycleBlock?.toString() ?? '—'}
+            />
+            <StatCard
+              label="Native balance"
+              value={`${fmt(toFloat(selectedActor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
+            />
+          </div>
+        </section>
+      {:else}
+        <SectionCard title="Actor health" class="automation-health">
+          {#if loading}
+            <Notice>Loading automation…</Notice>
+          {:else if error}
+            <Notice variant="warn">{error}</Notice>
+          {:else}
+            <div
+              class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,7rem),1fr))] gap-2"
+            >
+              <StatCard
+                label="Live"
+                value={hasActorSnapshot ? actorHealth.live.toString() : '—'}
+                toneClass="text-(--mono-green)"
+              />
+              <StatCard
+                label="Suspended"
+                value={hasActorSnapshot
+                  ? actorHealth.suspended.toString()
+                  : '—'}
+                toneClass="text-(--mono-orange)"
+              />
+              <StatCard
+                label="Paused"
+                value={hasActorSnapshot ? actorHealth.paused.toString() : '—'}
+                toneClass="text-(--mono-orange)"
+              />
+              <StatCard
+                label="Missing"
+                value={hasActorSnapshot ? actorHealth.missing.toString() : '—'}
+                toneClass="text-(--mono-muted)"
+              />
+            </div>
+          {/if}
+        </SectionCard>
+
+        {#if !loading && !error && hasActorSnapshot}
+          {#if actors.length === 0}
+            <Notice>No System AAA Actors exposed</Notice>
+          {:else}
+            <div
+              class="actor-grid grid grid-cols-[repeat(auto-fit,minmax(min(100%,calc(var(--widget-em)*17.0667)),1fr))] gap-2"
+            >
+              {#each actors as actor}
+                <article
+                  class="actor-row flex min-w-0 items-center gap-3 rounded-xl bg-(--mono-bg) px-3 py-2"
+                >
+                  <div class="min-w-0 flex-1">
+                    <div class="truncate font-medium text-(--mono-text)">
+                      {actor.label}
+                    </div>
+                    <div
+                      class="actor-role truncate text-2xs text-(--mono-muted)"
+                    >
+                      {actor.role}
+                    </div>
+                  </div>
+                  <Badge
+                    variant={actor.exists
+                      ? actor.paused
+                        ? 'info'
+                        : actor.runState === 'suspended'
+                          ? 'xyk'
+                          : 'tmc'
+                      : 'info'}
+                  >
+                    {actor.exists
+                      ? actor.paused
+                        ? 'paused'
+                        : actor.runState === 'suspended'
+                          ? 'suspended'
+                          : 'live'
+                      : 'missing'}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    class="shrink-0 text-(--mono-purple)"
+                    onclick={() => (selectedActorId = actor.aaaId)}
+                  >
+                    View
+                  </Button>
+                </article>
+              {/each}
+            </div>
+          {/if}
+        {/if}
+      {/if}
+    {/if}
   </div>
 </Card>
+
+<style>
+  @container (max-height: 176px) {
+    :global(.automation-health) {
+      display: none;
+    }
+    .actor-grid {
+      align-self: center;
+    }
+    .actor-role {
+      display: none;
+    }
+    .actor-detail {
+      align-self: center;
+      padding: calc(var(--spacing) * 2);
+    }
+    .evidence-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+</style>

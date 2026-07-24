@@ -5,6 +5,12 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   plugins: [tailwindcss(), sveltekit()],
   server: {
+    watch: {
+      awaitWriteFinish: {
+        stabilityThreshold: 150,
+        pollInterval: 20,
+      },
+    },
     fs: {
       allow: ['.papi', '..'],
     },

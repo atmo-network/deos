@@ -225,24 +225,60 @@ export function mergeLeafIntoLeaf(
   };
 }
 
-export function updateSplitRatio(
+function rebalanceDirectionalSplit(
+  node: TileNode,
+  direction: 'horizontal' | 'vertical',
+  weights: ReadonlyMap<string, number>,
+): { node: TileNode; weight: number } {
+  if (node.type === 'leaf' || node.direction !== direction) {
+    return { node, weight: Math.max(0, weights.get(node.id) ?? 0) };
+  }
+  const first = rebalanceDirectionalSplit(node.children[0], direction, weights);
+  const second = rebalanceDirectionalSplit(
+    node.children[1],
+    direction,
+    weights,
+  );
+  const totalWeight = first.weight + second.weight;
+  const nextRatio = totalWeight > 0 ? first.weight / totalWeight : node.ratio;
+  const nextNode =
+    first.node === node.children[0] &&
+    second.node === node.children[1] &&
+    nextRatio === node.ratio
+      ? node
+      : {
+          ...node,
+          ratio: nextRatio,
+          children: [first.node, second.node] as [TileNode, TileNode],
+        };
+  return { node: nextNode, weight: totalWeight };
+}
+
+export function updateDirectionalSplitWeights(
   node: TileNode,
   splitId: string,
-  ratio: number,
+  weights: ReadonlyMap<string, number>,
 ): TileNode {
   if (node.type === 'leaf') {
     return node;
   }
   if (node.id === splitId) {
-    return { ...node, ratio: Math.max(0.15, Math.min(0.85, ratio)) };
+    return rebalanceDirectionalSplit(node, node.direction, weights).node;
   }
-  return {
-    ...node,
-    children: [
-      updateSplitRatio(node.children[0], splitId, ratio),
-      updateSplitRatio(node.children[1], splitId, ratio),
-    ],
-  };
+  const first = updateDirectionalSplitWeights(
+    node.children[0],
+    splitId,
+    weights,
+  );
+  const second = updateDirectionalSplitWeights(
+    node.children[1],
+    splitId,
+    weights,
+  );
+  if (first === node.children[0] && second === node.children[1]) {
+    return node;
+  }
+  return { ...node, children: [first, second] };
 }
 
 export function setActiveInLeaf(

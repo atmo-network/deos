@@ -5,6 +5,8 @@ Excludes: Workspace layout implementation, domain stores, and widget composition
 Zone: SvelteKit layout entrypoint with no product-domain ownership.
 -->
 <script lang="ts">
+  import { Tooltip } from 'bits-ui';
+
   import '../app.css';
 
   let { children } = $props();
@@ -14,4 +16,6 @@ Zone: SvelteKit layout entrypoint with no product-domain ownership.
   <title>DEOS</title>
 </svelte:head>
 
-{@render children()}
+<Tooltip.Provider>
+  {@render children()}
+</Tooltip.Provider>

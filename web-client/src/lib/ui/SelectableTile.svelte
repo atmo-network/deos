@@ -28,10 +28,10 @@ Zone: Foundation UI; accepts caller content without importing product slices.
 <button
   {type}
   class={mergeClasses(
-    'rounded-xl border px-3 py-2 text-left transition-colors',
+    'cursor-pointer rounded-xl px-3 py-2 text-left transition-colors disabled:cursor-not-allowed',
     selected
-      ? 'border-(--mono-purple) bg-(--mono-bg)'
-      : 'border-(--mono-border) bg-white hover:border-(--mono-purple)/40',
+      ? 'bg-(--mono-purple)/10 ring-1 ring-(--mono-purple)/40'
+      : 'bg-(--mono-bg) hover:bg-(--mono-purple)/5',
     cls,
   )}
   {...rest}

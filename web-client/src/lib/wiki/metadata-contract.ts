@@ -52,6 +52,19 @@ export type WikiStateManifest = {
   pages: Record<string, WikiStatePage>;
 };
 
+export type WikiSearchPage = {
+  id: string;
+  text: LocalizedValue;
+};
+
+export type WikiSearchManifest = {
+  generated_at: string;
+  max_chars_per_page: number;
+  default_locale: string;
+  available_locales: string[];
+  pages: WikiSearchPage[];
+};
+
 export type WikiNavigationItem = {
   id: string;
   title: LocalizedValue;

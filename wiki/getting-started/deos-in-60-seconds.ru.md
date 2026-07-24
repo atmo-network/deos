@@ -63,6 +63,5 @@ DEOS в первую очередь нужен основателям экоси
 ## Что читать дальше
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 - [Карта доменов](../concepts/domain-map.ru.md)

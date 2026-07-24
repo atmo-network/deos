@@ -146,7 +146,6 @@ export class BlockchainAdapter implements Adapter {
   private onTransactionProgress:
     | ((progress: TransactionProgress) => void)
     | null = null;
-  private networkLogSupported = true;
   private readonly snapshotBuilder = new BlockchainSnapshotBuilder(() =>
     this.selectedAddress(),
   );
@@ -270,7 +269,6 @@ export class BlockchainAdapter implements Adapter {
     this.context = context;
     this.onRefresh = onRefresh || null;
     this.onTransactionProgress = onTransactionProgress || null;
-    this.networkLogSupported = true;
     void this.connection.start(this.endpoint(), this.onRefresh);
   }
 
@@ -374,49 +372,45 @@ export class BlockchainAdapter implements Adapter {
   }
 
   async getAutomationActors(): Promise<AutomationActorSnapshot[]> {
-    try {
-      const snapshot = await (await this.ensurePapi()).snapshot();
-      return await Promise.all(
-        KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const [hot, program, continuation] = await Promise.all([
-            snapshot.typedApi.query.AAA.ActorHot.getValue(BigInt(actor.aaaId), {
-              at: snapshot.at,
-            }),
-            snapshot.typedApi.query.AAA.ActorProgram.getValue(
-              BigInt(actor.aaaId),
-              { at: snapshot.at },
-            ),
-            snapshot.typedApi.query.AAA.ContinuationState.getValue(
-              BigInt(actor.aaaId),
-              { at: snapshot.at },
-            ),
-          ]);
-          const exists = hot != null && program != null;
-          const sovereignAccount =
-            hot?.sovereign_account ??
-            deriveSystemAaaSovereignAccount(actor.aaaId);
-          const account = await snapshot.typedApi.query.System.Account.getValue(
-            sovereignAccount,
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    return await Promise.all(
+      KNOWN_SYSTEM_ACTORS.map(async (actor) => {
+        const [hot, program, continuation] = await Promise.all([
+          snapshot.typedApi.query.AAA.ActorHot.getValue(BigInt(actor.aaaId), {
+            at: snapshot.at,
+          }),
+          snapshot.typedApi.query.AAA.ActorProgram.getValue(
+            BigInt(actor.aaaId),
             { at: snapshot.at },
-          );
-          return {
-            aaaId: actor.aaaId,
-            label: actor.label,
-            role: actor.role,
-            exists,
-            paused: automationActorPaused(hot),
-            runState: automationActorRunState(hot),
-            cycleNonce: hot?.cycle_nonce ?? 0n,
-            continuation: automationContinuationSnapshot(continuation),
-            lastCycleBlock: hot?.last_cycle_block ?? null,
-            triggerLabel: automationTriggerLabel(program?.schedule.trigger),
-            nativeBalance: account?.data?.free ?? 0n,
-          } satisfies AutomationActorSnapshot;
-        }),
-      );
-    } catch {
-      return [];
-    }
+          ),
+          snapshot.typedApi.query.AAA.ContinuationState.getValue(
+            BigInt(actor.aaaId),
+            { at: snapshot.at },
+          ),
+        ]);
+        const exists = hot != null && program != null;
+        const sovereignAccount =
+          hot?.sovereign_account ??
+          deriveSystemAaaSovereignAccount(actor.aaaId);
+        const account = await snapshot.typedApi.query.System.Account.getValue(
+          sovereignAccount,
+          { at: snapshot.at },
+        );
+        return {
+          aaaId: actor.aaaId,
+          label: actor.label,
+          role: actor.role,
+          exists,
+          paused: automationActorPaused(hot),
+          runState: automationActorRunState(hot),
+          cycleNonce: hot?.cycle_nonce ?? 0n,
+          continuation: automationContinuationSnapshot(continuation),
+          lastCycleBlock: hot?.last_cycle_block ?? null,
+          triggerLabel: automationTriggerLabel(program?.schedule.trigger),
+          nativeBalance: account?.data?.free ?? 0n,
+        } satisfies AutomationActorSnapshot;
+      }),
+    );
   }
 
   async getUserBalance(): Promise<{ native: bigint; foreign: bigint }> {
@@ -784,44 +778,66 @@ export class BlockchainAdapter implements Adapter {
     }
   }
 
-  async getRecentNetworkLog(limit: number): Promise<LogEntry[]> {
-    if (limit <= 0 || !this.networkLogSupported) {
-      return [];
+  async estimateSwapNetworkFee(
+    direction: 'buy' | 'sell',
+    amountIn: bigint,
+    minAmountOut: bigint,
+  ): Promise<bigint | null> {
+    const accountId = this.selectedQuoteAccountId();
+    if (!accountId || amountIn <= 0n || minAmountOut < 0n) {
+      return null;
     }
     try {
       const snapshot = await (await this.ensurePapi()).snapshot();
-      const records = await snapshot.typedApi.query.System.Events.getValue({
-        at: snapshot.at,
-      });
-      if (!records || records.length === 0) {
-        return [];
-      }
-      const entries: LogEntry[] = [];
-      for (
-        let index = records.length - 1;
-        index >= 0 && entries.length < limit;
-        index -= 1
-      ) {
-        const event = unwrapEventRecord(records[index]);
-        if (!event) {
-          continue;
-        }
-        const label = formatChainEventLabel(event);
-        entries.push({
-          id: `${snapshot.finalizedBlockNumber}-${index}-${label}`,
-          step: snapshot.finalizedBlockNumber,
-          blockNumber: snapshot.finalizedBlockNumber,
-          message: formatChainEventMessage(event),
-          type: classifyChainEvent(event),
-          label,
-          accountId: null,
-        });
-      }
-      return entries;
+      const foreignAsset = await this.resolvePrimaryForeignAsset(snapshot);
+      const from = direction === 'buy' ? foreignAsset : NATIVE_ASSET;
+      const to = direction === 'buy' ? NATIVE_ASSET : foreignAsset;
+      return await snapshot.typedApi.tx.AxialRouter.swap({
+        from,
+        to,
+        amount_in: amountIn,
+        min_amount_out: minAmountOut,
+        recipient: accountId,
+        deadline: snapshot.finalizedBlockNumber + 50,
+      }).getEstimatedFees(accountId);
     } catch {
-      this.networkLogSupported = false;
+      return null;
+    }
+  }
+
+  async getRecentNetworkLog(limit: number): Promise<LogEntry[]> {
+    if (limit <= 0) {
       return [];
     }
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    const records = await snapshot.typedApi.query.System.Events.getValue({
+      at: snapshot.at,
+    });
+    if (!records || records.length === 0) {
+      return [];
+    }
+    const entries: LogEntry[] = [];
+    for (
+      let index = records.length - 1;
+      index >= 0 && entries.length < limit;
+      index -= 1
+    ) {
+      const event = unwrapEventRecord(records[index]);
+      if (!event) {
+        continue;
+      }
+      const label = formatChainEventLabel(event);
+      entries.push({
+        id: `${snapshot.finalizedBlockNumber}-${index}-${label}`,
+        step: snapshot.finalizedBlockNumber,
+        blockNumber: snapshot.finalizedBlockNumber,
+        message: formatChainEventMessage(event),
+        type: classifyChainEvent(event),
+        label,
+        accountId: null,
+      });
+    }
+    return entries;
   }
 
   async getEffectiveMintPrice(probeAmount: bigint): Promise<number> {

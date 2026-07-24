@@ -246,6 +246,7 @@ If repository conventions allow, the agent SHOULD maintain:
 - `graph.json` for typed relations between pages, with localized node labels and localized page paths grouped under language keys where needed
 - `aliases.json` for canonical naming and alias resolution, with alias maps grouped by language key
 - `locales.json` for supported locales, default locale, and localized page or metadata entrypoints
+- `search.json` for per-page-bounded localized plain text used by offline client search without eagerly loading every Markdown chunk
 
 ## Frontend Rendering Contract
 
@@ -262,6 +263,7 @@ The agent MUST prefer:
 - Glossary-friendly terminology
 - Explicit overview pages for major topic areas
 - Frontend-safe metadata fields
+- A generated locale-complete body-search manifest with an explicit per-page character bound when the client supports full-text discovery
 - Deterministic placement of pages within topic structure
 
 The agent MUST avoid:

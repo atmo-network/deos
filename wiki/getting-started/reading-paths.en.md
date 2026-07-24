@@ -51,12 +51,11 @@ If you only need the shortest entry, use [Start Here](start-here.en.md) first. U
 4. [Executive Summary](executive-summary.en.md)
 5. [DEOS Framework Overview](../overview/deos-framework.en.md)
 6. [Domain Map](../concepts/domain-map.en.md)
-7. [Architecture Diagrams](../concepts/architecture-diagrams.en.md)
-8. [Core Terms](../glossary/core-terms.en.md)
-9. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
-10. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-11. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-12. [Newcomer FAQ](../faq/newcomer-faq.en.md)
+7. [Core Terms](../glossary/core-terms.en.md)
+8. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
+9. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+10. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
+11. [Newcomer FAQ](../faq/newcomer-faq.en.md)
 
 This path gives you project vocabulary before pallet names, runtime details, or implementation-specific terms appear.
 
@@ -67,12 +66,11 @@ This path gives you project vocabulary before pallet names, runtime details, or 
 3. [Executive Summary](executive-summary.en.md)
 4. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
 5. [$BLDR Builder Economy](../concepts/builder-economy.en.md)
-6. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
-7. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-8. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
-9. [Invariant and Threat Map](../concepts/invariant-map.en.md)
-10. [Forking DEOS](../usage/forking-deos.en.md)
-11. [Reference Client](../overview/reference-client.en.md)
+6. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+7. [Economic Claim Levels](../concepts/economic-claim-levels.en.md)
+8. [Invariant and Threat Map](../concepts/invariant-map.en.md)
+9. [Forking DEOS](../usage/forking-deos.en.md)
+10. [Reference Client](../overview/reference-client.en.md)
 
 This path is for partners, ecosystem readers, and technical evaluators who need the meme, boundaries, risk model, and fork obligations before reading implementation topology.
 
@@ -119,11 +117,10 @@ Governance work must keep constitutional protection, primary tracks, typed paylo
 ## If you are changing the web client
 
 1. [Reference Client](../overview/reference-client.en.md)
-2. [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
-3. [Read-Model Split](../concepts/read-model-split.en.md)
-4. [Generated Wiki](../concepts/generated-wiki.en.md)
-5. [Scripts Layer](../usage/scripts-layer.en.md)
-6. [Development Status](../development/status.en.md)
+2. [Read-Model Split](../concepts/read-model-split.en.md)
+3. [Generated Wiki](../concepts/generated-wiki.en.md)
+4. [Scripts Layer](../usage/scripts-layer.en.md)
+5. [Development Status](../development/status.en.md)
 
 Client work should preserve UI Kit reuse, Domain DAG ownership, read-model provenance, and the trusted wiki rendering boundary.
 
@@ -147,7 +144,6 @@ Status work should separate shipped baseline, open backlog, completed delivery, 
 6. [Tech Stack](../implementation/tech-stack.en.md)
 7. [Parachain Context](../concepts/parachain-context.en.md)
 8. [Forking DEOS](../usage/forking-deos.en.md)
-9. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
 
 Tooling and fork work should stay bounded, explicit, and honest about prerequisites, preserved framework contracts, and behavior.
 

@@ -50,10 +50,9 @@ Read:
 
 1. [Partner Pitch](partner-pitch.en.md), if you need the external adoption case
 2. [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
-3. [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
-4. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
-5. [TMCTOL Standard](../concepts/tmctol-standard.en.md), starting with the summary and core mechanics
-6. [Economic Claim Levels](../concepts/economic-claim-levels.en.md) if you need to distinguish mechanism claims from market promises
+3. [Physics vs Politics](../comparisons/physics-vs-politics.en.md)
+4. [TMCTOL Standard](../concepts/tmctol-standard.en.md), starting with the summary and core mechanics
+5. [Economic Claim Levels](../concepts/economic-claim-levels.en.md) if you need to distinguish mechanism claims from market promises
 
 Done when you can answer:
 

@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-20",
+  "generated_at": "2026-07-22",
   "audience": "newcomer",
   "default_locale": "en",
   "available_locales": ["en", "ru"],
@@ -236,22 +236,6 @@
           }
         },
         {
-          "id": "ui-kit-and-domain-dag",
-          "title": {
-            "en": "UI Kit and Domain DAG",
-            "ru": "UI Kit и Domain DAG"
-          },
-          "path": {
-            "en": "concepts/ui-kit-and-domain-dag.en.md",
-            "ru": "concepts/ui-kit-and-domain-dag.ru.md"
-          },
-          "page_type": "concept",
-          "summary": {
-            "en": "How the web client centralizes reusable presentation primitives and validates ownership boundaries across widgets, domains, layout, adapters, and system wiring.",
-            "ru": "Как web-client централизует reusable presentation primitives и проверяет ownership boundaries между widgets, domains, layout, adapters и system wiring."
-          }
-        },
-        {
           "id": "generated-wiki",
           "title": {
             "en": "Generated Wiki",
@@ -297,22 +281,6 @@
           "summary": {
             "en": "Concrete walkthroughs that connect user actions, runtime routing, AAA actor wakeups, buckets, read-model surfaces, and validation choices.",
             "ru": "Конкретные сценарии, связывающие пользовательские действия, runtime routing, пробуждение AAA акторов, buckets, read-model surfaces и validation."
-          }
-        },
-        {
-          "id": "architecture-diagrams",
-          "title": {
-            "en": "Architecture Diagrams",
-            "ru": "Архитектурные схемы"
-          },
-          "path": {
-            "en": "concepts/architecture-diagrams.en.md",
-            "ru": "concepts/architecture-diagrams.ru.md"
-          },
-          "page_type": "concept",
-          "summary": {
-            "en": "Compact text diagrams for subsystem relationships, routing, AAA actor graphs, governance/staking, and read-model boundaries.",
-            "ru": "Компактные текстовые схемы связей подсистем, routing, AAA actor graphs, governance/staking и read-model boundaries."
           }
         },
         {
@@ -409,22 +377,6 @@
           "summary": {
             "en": "Core invariants and threats mapped to owner surfaces, validation routes, governance mutability, and failure modes.",
             "ru": "Ключевые инварианты и угрозы с owner surfaces, validation routes, governance-mutability и failure modes."
-          }
-        },
-        {
-          "id": "what-deos-is-not",
-          "title": {
-            "en": "What DEOS Is Not",
-            "ru": "Чем DEOS не является"
-          },
-          "path": {
-            "en": "concepts/what-deos-is-not.en.md",
-            "ru": "concepts/what-deos-is-not.ru.md"
-          },
-          "page_type": "concept",
-          "summary": {
-            "en": "Negative-space boundaries for DAO, stable-asset, smart-contract, oracle, indexer, randomness, and product misconceptions.",
-            "ru": "Отрицательные границы против DAO, stable-asset, smart-contract, oracle, indexer, randomness и product misconceptions."
           }
         },
         {

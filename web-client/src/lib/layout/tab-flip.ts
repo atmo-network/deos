@@ -22,6 +22,15 @@ type FlipControllerOptions = {
   suppressionMs: number;
 };
 
+let layoutResizeFlipSuppressedUntil = 0;
+
+export function suppressTabFlipForLayoutResize(durationMs = 160): void {
+  layoutResizeFlipSuppressedUntil = Math.max(
+    layoutResizeFlipSuppressedUntil,
+    Date.now() + durationMs,
+  );
+}
+
 export function createTabFlipController(options: FlipControllerOptions) {
   const { flipDurationMs, suppressionMs } = options;
   let flipSuppressedByResize = false;
@@ -43,7 +52,10 @@ export function createTabFlipController(options: FlipControllerOptions) {
   }
 
   function animate(node: Element, animation: FlipAnimation) {
-    if (flipSuppressedByResize) {
+    if (
+      flipSuppressedByResize ||
+      Date.now() < layoutResizeFlipSuppressedUntil
+    ) {
       return flip(node, animation, { duration: 0 });
     }
     return flip(node, animation, {

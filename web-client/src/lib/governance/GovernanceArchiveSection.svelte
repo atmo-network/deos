@@ -7,13 +7,7 @@ Zone: Governance presentation component; makes the indexed/archive boundary expl
 <script lang="ts">
   import type { GovernanceMaterializedArchiveEntry } from '$lib/governance';
   import type { ReadModelValue } from '$lib/read-model';
-  import {
-    Badge,
-    DetailRow,
-    Notice,
-    ReadModelBadge,
-    SectionCard,
-  } from '$lib/ui';
+  import { Badge, DetailRow, Notice, SectionCard } from '$lib/ui';
 
   type ArchiveProviderView = {
     label(): string;
@@ -33,7 +27,6 @@ Zone: Governance presentation component; makes the indexed/archive boundary expl
   subtitle="Explicit materialized provider boundary"
 >
   {#snippet actions()}
-    <ReadModelBadge provenance={archive.provenance} />
     <Badge variant="info">future provider</Badge>
   {/snippet}
   <Notice variant="muted">
@@ -41,7 +34,7 @@ Zone: Governance presentation component; makes the indexed/archive boundary expl
     search and ballot timelines belong to a separate materialized/indexed
     provider, not to expanded consensus-state retention.
   </Notice>
-  <div class="rounded-xl border bg-(--mono-bg) px-3 py-2 grid gap-1">
+  <div class="rounded-xl bg-white px-3 py-2 grid gap-1">
     <DetailRow
       label="Provider"
       value={provider.label()}
@@ -61,7 +54,7 @@ Zone: Governance presentation component; makes the indexed/archive boundary expl
   {#if archive.value.length > 0}
     <div class="grid gap-2">
       {#each archive.value as entry}
-        <div class="rounded-xl border bg-(--mono-bg) px-3 py-2 grid gap-1">
+        <div class="rounded-xl bg-white px-3 py-2 grid gap-1">
           <DetailRow
             label={`#${entry.itemId}`}
             value={entry.title}

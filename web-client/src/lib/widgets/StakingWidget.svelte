@@ -9,17 +9,17 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 
   import { parseUnsignedDecimalNumber } from '$lib/format/numeric';
   import { portfolioStore } from '$lib/portfolio/index.svelte';
-  import { fromClientBoundedProjection } from '$lib/read-model';
   import type {
     NativeCollatorLpPositionProjection,
     NativeGovernanceCustodyPositionProjection,
   } from '$lib/staking/types';
+  import { resolveChainSurfaceState } from '$lib/system/connection-surface';
   import { systemStore } from '$lib/system/index.svelte';
   import {
     Button,
+    DisclosureSection,
     Notice,
     NumberInput,
-    ReadModelBadge,
     SectionCard,
     StatCard,
     TextField,
@@ -32,12 +32,6 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   } from '$lib/ui/format';
   import { walletStore } from '$lib/wallet/index.svelte';
 
-  type Props = {
-    compactPane: boolean;
-    densePane: boolean;
-  };
-
-  let { compactPane, densePane }: Props = $props();
   let rewardEpochInput = $state('');
   let compoundOperatorInput = $state('');
   let lpAmountInput = $state('');
@@ -53,11 +47,6 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     $state<NativeGovernanceCustodyPositionProjection | null>(null);
   let nominationRewardClaimable = $state<bigint | null>(null);
   let nominationRewardClaimableEpoch = $state<number | null>(null);
-
-  const nativeStakingProvenance = fromClientBoundedProjection(
-    true,
-    'stakingWidget.nativeStaking <- staking runtime view functions',
-  ).provenance;
 
   function fixedU128ToFloat(value: bigint | null): number | null {
     if (value == null) {
@@ -79,11 +68,16 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   }
 
   const snap = $derived(systemStore.snapshot);
+  const chainSurface = $derived(
+    resolveChainSurfaceState(systemStore.connectionState, snap !== null),
+  );
+  const stakingChainUnavailable = $derived(
+    systemStore.connectionState?.status !== 'connected',
+  );
   const nativeStakingCards = $derived.by(() => {
     if (!snap?.nativeStaking.isAvailable) {
       return [];
     }
-    const pool = snap.nativeStaking.pool;
     const position = snap.nativeStaking.accountPosition;
     const exchangeRate = fixedU128ToFloat(snap.nativeStaking.exchangeRate);
     return [
@@ -91,16 +85,6 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
         label: 'stNTVE rate',
         value: exchangeRate != null ? `${fmt(exchangeRate)} NTVE` : '—',
         detail: 'Per stNTVE receipt',
-      },
-      {
-        label: 'NTVE reserve',
-        value: pool ? fmt(toFloat(pool.reserveNative)) : '—',
-        detail: pool ? `LP #${pool.lpAssetId}` : 'Pool unavailable',
-      },
-      {
-        label: 'stNTVE reserve',
-        value: pool ? fmt(toFloat(pool.reserveStaked)) : '—',
-        detail: pool ? `st asset #${pool.stakedAssetId}` : 'Pool unavailable',
       },
       {
         label: 'Locked LP',
@@ -148,17 +132,14 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       {
         label: 'Wallet NTVE',
         value: fmt(toFloat(nativeWalletBalances.native)),
-        detail: `Asset #${pool.nativeAssetId}`,
       },
       {
         label: 'Wallet stNTVE',
         value: fmt(toFloat(nativeWalletBalances.staked)),
-        detail: `Asset #${pool.stakedAssetId}`,
       },
       {
         label: 'Wallet LP',
         value: fmt(toFloat(nativeWalletBalances.lp)),
-        detail: `LP #${pool.lpAssetId}`,
       },
     ];
   });
@@ -184,13 +165,17 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   );
   const nativeStakingPoolUnavailable = $derived(!snap?.nativeStaking.pool);
   const stakingWriteDisabled = $derived(
-    stakingActionBusy || stakingSignerUnavailable || rewardEpoch === null,
+    stakingActionBusy ||
+      stakingChainUnavailable ||
+      stakingSignerUnavailable ||
+      rewardEpoch === null,
   );
   const compoundDisabled = $derived(
     stakingWriteDisabled || compoundOperatorInput.trim().length === 0,
   );
   const lpAmountActionDisabled = $derived(
     stakingActionBusy ||
+      stakingChainUnavailable ||
       stakingSignerUnavailable ||
       nativeStakingPoolUnavailable ||
       lpAmount === null ||
@@ -198,6 +183,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   );
   const lpWithdrawDisabled = $derived(
     stakingActionBusy ||
+      stakingChainUnavailable ||
       stakingSignerUnavailable ||
       lpOperatorInput.trim().length === 0,
   );
@@ -206,6 +192,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   );
   const governanceCustodyAmountDisabled = $derived(
     stakingActionBusy ||
+      stakingChainUnavailable ||
       stakingSignerUnavailable ||
       nativeStakingPoolUnavailable ||
       governanceCustodyAmount === null,
@@ -215,6 +202,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   );
   const governanceAssetWithdrawDisabled = $derived(
     stakingActionBusy ||
+      stakingChainUnavailable ||
       stakingSignerUnavailable ||
       selectedGovernanceAssetId === null,
   );
@@ -462,37 +450,16 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 </script>
 
 {#snippet actionSection(title: string, description: string, children: Snippet)}
-  <details class="rounded-xl border bg-white p-3 group" open>
-    <summary class="cursor-pointer list-none">
-      <div class="grid gap-1">
-        <div class="flex items-start justify-between gap-2">
-          <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
-            {title}
-          </div>
-          <div
-            class="text-[10px] text-(--mono-muted) group-open:rotate-180 transition-transform"
-          >
-            ⌄
-          </div>
-        </div>
-        <div class="text-[10px] text-(--mono-muted)">{description}</div>
-      </div>
-    </summary>
-    <div class="mt-3 grid gap-3">
-      {@render children()}
-    </div>
-  </details>
+  <DisclosureSection {title}>
+    <p class="action-description text-2xs leading-relaxed text-(--mono-muted)">
+      {description}
+    </p>
+    {@render children()}
+  </DisclosureSection>
 {/snippet}
 
 {#snippet nominationRewardsSection()}
-  <div
-    class={[
-      'grid gap-2',
-      densePane
-        ? 'grid-cols-1'
-        : '@lg:grid-cols-[minmax(0,0.65fr)_minmax(0,1fr)]',
-    ]}
-  >
+  <div class="action-fields grid gap-2">
     <NumberInput
       label="Reward epoch"
       bind:value={rewardEpochInput}
@@ -506,11 +473,13 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       placeholder="Collator address for compound lock"
     />
   </div>
-  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-3']}>
+  <div class="action-buttons grid gap-2">
     <Button
       size="sm"
       variant="ghost"
-      disabled={stakingActionBusy || rewardEpoch === null}
+      disabled={stakingActionBusy ||
+        stakingChainUnavailable ||
+        rewardEpoch === null}
       onclick={loadNominationRewardClaimability}>Check claimable</Button
     >
     <Button
@@ -539,14 +508,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 {/snippet}
 
 {#snippet collatorLpSection()}
-  <div
-    class={[
-      'grid gap-2',
-      densePane
-        ? 'grid-cols-1'
-        : '@lg:grid-cols-[minmax(0,0.55fr)_minmax(0,1fr)_minmax(0,1fr)]',
-    ]}
-  >
+  <div class="action-fields action-fields-three grid gap-2">
     <NumberInput
       label="LP amount"
       bind:value={lpAmountInput}
@@ -579,7 +541,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   {#if stakingActionError}
     <Notice variant="warn">{stakingActionError}</Notice>
   {/if}
-  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-2']}>
+  <div class="action-buttons grid gap-2">
     <Button
       size="sm"
       variant="ghost"
@@ -589,17 +551,14 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     <Button
       size="sm"
       variant="ghost"
-      disabled={stakingActionBusy || lpOperatorInput.trim().length === 0}
+      disabled={stakingActionBusy ||
+        stakingChainUnavailable ||
+        lpOperatorInput.trim().length === 0}
       onclick={loadCollatorPositionDetail}>Load operator position detail</Button
     >
   </div>
   {#if collatorPositionDetail}
-    <div
-      class={[
-        'grid gap-2',
-        densePane ? 'grid-cols-1' : 'grid-cols-2 @2xl:grid-cols-5',
-      ]}
-    >
+    <div class="detail-grid grid gap-2">
       <StatCard
         label="Operator LP"
         value={fmt(toFloat(collatorPositionDetail.lockedLp))}
@@ -619,12 +578,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       />
     </div>
   {/if}
-  <div
-    class={[
-      'grid gap-2',
-      densePane ? 'grid-cols-1' : 'grid-cols-2 @2xl:grid-cols-4',
-    ]}
-  >
+  <div class="action-buttons grid gap-2">
     <Button
       size="sm"
       variant="primary"
@@ -657,14 +611,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
 {/snippet}
 
 {#snippet governanceCustodySection()}
-  <div
-    class={[
-      'grid gap-2',
-      densePane
-        ? 'grid-cols-1'
-        : '@lg:grid-cols-[minmax(0,0.7fr)_minmax(0,1fr)]',
-    ]}
-  >
+  <div class="action-fields grid gap-2">
     <NumberInput
       label="Custody amount"
       bind:value={governanceCustodyAmountInput}
@@ -690,15 +637,9 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
           onclick={() => (governanceCustodyAssetKind = 'staked')}>stNTVE</Button
         >
       </div>
-      <div class="text-[10px] text-(--mono-muted)">
-        Selected: {selectedGovernanceAssetLabel}{selectedGovernanceAssetId ===
-        null
-          ? ' · pool view unavailable'
-          : ` · asset #${selectedGovernanceAssetId}`}
-      </div>
     </div>
   </div>
-  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-2']}>
+  <div class="action-buttons grid gap-2">
     <Button
       size="sm"
       variant="ghost"
@@ -711,18 +652,15 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     <Button
       size="sm"
       variant="ghost"
-      disabled={stakingActionBusy || selectedGovernanceAssetId === null}
+      disabled={stakingActionBusy ||
+        stakingChainUnavailable ||
+        selectedGovernanceAssetId === null}
       onclick={loadGovernanceCustodyDetail}
       >Load NativeVotePower custody detail</Button
     >
   </div>
   {#if governanceCustodyDetail}
-    <div
-      class={[
-        'grid gap-2',
-        densePane ? 'grid-cols-1' : 'grid-cols-2 @2xl:grid-cols-4',
-      ]}
-    >
+    <div class="detail-grid grid gap-2">
       <StatCard
         label="Governance LP"
         value={fmt(toFloat(governanceCustodyDetail.governanceLockedLp))}
@@ -749,7 +687,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
       />
     </div>
   {/if}
-  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-3']}>
+  <div class="action-buttons grid gap-2">
     <Button
       size="sm"
       variant="primary"
@@ -778,7 +716,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
         : `Withdraw ${selectedGovernanceAssetLabel}`}</Button
     >
   </div>
-  <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-3']}>
+  <div class="action-buttons grid gap-2">
     <Button
       size="sm"
       variant="primary"
@@ -796,29 +734,31 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
     <Button
       size="sm"
       variant="secondary"
-      disabled={stakingActionBusy || stakingSignerUnavailable}
+      disabled={stakingActionBusy ||
+        stakingChainUnavailable ||
+        stakingSignerUnavailable}
       onclick={withdrawUnlockedNativeLpForGovernance}
       >{stakingActionBusy ? 'Submitting...' : 'Withdraw governance LP'}</Button
     >
   </div>
 {/snippet}
 
-<SectionCard title="Staking" subtitle="Bounded NTVE/stNTVE read model">
-  {#snippet actions()}
-    <ReadModelBadge provenance={nativeStakingProvenance} tone="subtle" />
-  {/snippet}
+<SectionCard
+  title="Staking"
+  class="staking-container h-full min-h-0 [container-type:size]"
+>
+  {#if chainSurface.status === 'stale' || chainSurface.status === 'preview'}
+    <Notice variant="warn" class="grid gap-0.5">
+      <strong>{chainSurface.title}</strong>
+      <span>{chainSurface.detail}</span>
+      {#if chainSurface.status === 'stale'}
+        <span>Reconnect before submitting staking or custody operations.</span>
+      {/if}
+    </Notice>
+  {/if}
   {#if nativeStakingCards.length > 0}
-    <div class="grid gap-3">
-      <div
-        class={[
-          'grid gap-2',
-          densePane
-            ? 'grid-cols-1'
-            : compactPane
-              ? 'grid-cols-2'
-              : 'grid-cols-2 @2xl:grid-cols-3',
-        ]}
-      >
+    <div class="staking-shell grid gap-3">
+      <div class="staking-overview grid gap-2">
         {#each nativeStakingCards as card}
           <StatCard
             label={card.label}
@@ -828,13 +768,9 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
         {/each}
       </div>
       {#if nativeWalletBalanceCards.length > 0}
-        <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-3']}>
+        <div class="wallet-overview grid gap-2">
           {#each nativeWalletBalanceCards as card}
-            <StatCard
-              label={card.label}
-              value={card.value}
-              detail={card.detail}
-            />
+            <StatCard label={card.label} value={card.value} />
           {/each}
         </div>
       {/if}
@@ -854,10 +790,38 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
         governanceCustodySection,
       )}
     </div>
-  {:else}
+  {:else if snap}
     <Notice
       >Native staking runtime views are unavailable in the current metadata or
       the canonical NTVE/stNTVE pool is not initialized.</Notice
     >
   {/if}
 </SectionCard>
+
+<style>
+  .staking-overview,
+  .wallet-overview,
+  .detail-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  }
+  .action-buttons {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 8.5rem), 1fr));
+  }
+  @container (max-height: 224px) {
+    .wallet-overview,
+    .action-description {
+      display: none;
+    }
+  }
+  @container (min-width: 576px) {
+    .action-fields {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      align-items: start;
+    }
+  }
+  @container (min-width: 928px) {
+    .action-fields-three {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+</style>

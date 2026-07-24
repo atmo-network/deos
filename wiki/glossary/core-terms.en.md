@@ -180,7 +180,6 @@ The wiki current-state map for baseline domains, active focus, open boundaries, 
 - [Governance Domains](../concepts/governance-domains.en.md)
 - [$BLDR Builder Economy](../concepts/builder-economy.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
-- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Reading Paths](../getting-started/reading-paths.en.md)
 - [Development Status](../development/status.en.md)

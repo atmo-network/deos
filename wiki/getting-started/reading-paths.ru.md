@@ -52,12 +52,11 @@ confidence: 0.85
 4. [Executive Summary](executive-summary.ru.md)
 5. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 6. [Карта доменов](../concepts/domain-map.ru.md)
-7. [Архитектурные схемы](../concepts/architecture-diagrams.ru.md)
-8. [Базовые термины](../glossary/core-terms.ru.md)
-9. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
-10. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-11. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-12. [FAQ для новичков](../faq/newcomer-faq.ru.md)
+7. [Базовые термины](../glossary/core-terms.ru.md)
+8. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
+9. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+10. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
+11. [FAQ для новичков](../faq/newcomer-faq.ru.md)
 
 Этот маршрут дает словарь проекта до того, как появятся имена pallet-ов, детали runtime или термины конкретной реализации.
 
@@ -68,12 +67,11 @@ confidence: 0.85
 3. [Executive Summary](executive-summary.ru.md)
 4. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
 5. [Экономика $BLDR](../concepts/builder-economy.ru.md)
-6. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
-7. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-8. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
-9. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
-10. [Форк DEOS](../usage/forking-deos.ru.md)
-11. [Эталонный клиент](../overview/reference-client.ru.md)
+6. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+7. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
+8. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
+9. [Форк DEOS](../usage/forking-deos.ru.md)
+10. [Эталонный клиент](../overview/reference-client.ru.md)
 
 Этот маршрут для партнеров, ecosystem readers и technical evaluators, которым сначала нужны мем, границы, карта рисков и обязанности форка, а уже потом topology реализации.
 
@@ -120,11 +118,10 @@ confidence: 0.85
 ## Если вы меняете веб-клиент
 
 1. [Эталонный клиент](../overview/reference-client.ru.md)
-2. [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
-3. [Разделение read-model](../concepts/read-model-split.ru.md)
-4. [Generated Wiki](../concepts/generated-wiki.ru.md)
-5. [Слой скриптов](../usage/scripts-layer.ru.md)
-6. [Статус разработки](../development/status.ru.md)
+2. [Разделение read-model](../concepts/read-model-split.ru.md)
+3. [Generated Wiki](../concepts/generated-wiki.ru.md)
+4. [Слой скриптов](../usage/scripts-layer.ru.md)
+5. [Статус разработки](../development/status.ru.md)
 
 Работа с клиентом должна сохранять повторное использование UI Kit, правила владения Domain DAG, честное происхождение данных в read-model и доверенную границу рендеринга wiki.
 
@@ -148,7 +145,6 @@ confidence: 0.85
 6. [Технологический стек](../implementation/tech-stack.ru.md)
 7. [Parachain context](../concepts/parachain-context.ru.md)
 8. [Форк DEOS](../usage/forking-deos.ru.md)
-9. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
 
 Работа с инструментами и fork work должна оставаться ограниченной, явной и честной по требованиям запуска, сохраненным framework contracts и поведению.
 

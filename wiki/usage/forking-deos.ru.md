@@ -31,7 +31,7 @@ related:
   - Технологический стек
   - Токеновые поверхности
   - Трехуровневая валидация
-last_compiled: 2026-07-20
+last_compiled: 2026-07-21
 confidence: 0.85
 ---
 
@@ -120,7 +120,6 @@ Downstream-specific business logic, dApp behavior, токеновый нарра
 ## Связанные страницы
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
-- [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
 - [Структура репозитория](../implementation/repository-structure.ru.md)
 - [Технологический стек](../implementation/tech-stack.ru.md)
 - [Parachain context](../concepts/parachain-context.ru.md)

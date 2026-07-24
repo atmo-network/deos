@@ -26,12 +26,7 @@ Zone: Foundation UI; depends only on caller-provided strings/classes.
   }: Props = $props();
 </script>
 
-<div
-  class={mergeClasses(
-    'min-w-0 rounded-xl border bg-(--mono-bg) px-3 py-2',
-    cls,
-  )}
->
+<div class={mergeClasses('min-w-0 rounded-xl bg-white px-3 py-2', cls)}>
   <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
     {label}
   </div>

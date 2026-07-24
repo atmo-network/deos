@@ -14,6 +14,8 @@ Zone: Foundation UI; wraps native number input attributes without importing prod
     class?: ClassValue | null;
     label?: string;
     helper?: string;
+    ref?: HTMLInputElement | null;
+    suffix?: string;
     value?: string | number;
     wrapperClass?: ClassValue | null;
   };
@@ -23,6 +25,8 @@ Zone: Foundation UI; wraps native number input attributes without importing prod
     class: cls = '',
     label,
     helper,
+    ref = $bindable(null),
+    suffix,
     wrapperClass = '',
     id,
     ...rest
@@ -38,16 +42,28 @@ Zone: Foundation UI; wraps native number input attributes without importing prod
       >{label}</Label.Root
     >
   {/if}
-  <input
-    id={inputId}
-    type="number"
-    bind:value
-    class={mergeClasses(
-      'w-full bg-white border border-(--mono-border) rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-(--mono-purple)',
-      cls,
-    )}
-    {...rest}
-  />
+  <div class="relative min-w-0">
+    <input
+      id={inputId}
+      bind:this={ref}
+      type="number"
+      bind:value
+      class={mergeClasses(
+        'w-full bg-white border border-(--mono-border) px-3 py-2 text-sm focus:outline-none focus:border-(--mono-purple)',
+        suffix && 'pr-7',
+        cls,
+      )}
+      {...rest}
+    />
+    {#if suffix}
+      <span
+        class="pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2 text-xs text-(--mono-muted)"
+        aria-hidden="true"
+      >
+        {suffix}
+      </span>
+    {/if}
+  </div>
   {#if helper}
     <div class="text-[10px] text-(--mono-muted)">{helper}</div>
   {/if}

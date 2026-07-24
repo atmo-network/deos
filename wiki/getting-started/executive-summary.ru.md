@@ -91,5 +91,4 @@ DEOS нужна runtime-first среда, где economic rules, assets, automat
 - [Partner Pitch](partner-pitch.ru.md)
 - [Форк DEOS](../usage/forking-deos.ru.md)
 - [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
-- [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
 - [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)

@@ -76,7 +76,7 @@ confidence: 0.85
 
 ### Клиент и wiki
 
-Используйте [Эталонный клиент](../overview/reference-client.ru.md), [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md) и [Generated Wiki](../concepts/generated-wiki.ru.md), когда работа касается браузерного UX, честности read-model, layout, UI-примитивов или рендеринга wiki.
+Используйте [Эталонный клиент](../overview/reference-client.ru.md) и [Generated Wiki](../concepts/generated-wiki.ru.md), когда работа касается браузерного UX, честности read-model, layout, UI-примитивов или рендеринга wiki.
 
 ### Локальные операции
 

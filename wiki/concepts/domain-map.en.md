@@ -87,7 +87,7 @@ Read [Staking Pools](staking-pools.en.md) and [Three-Layer Validation](../develo
 
 The client domain explains how the browser product shows the system without pretending to be the source of truth. It distinguishes direct on-chain state, session-derived projections, and future materialized/indexed providers.
 
-Read [Reference Client](../overview/reference-client.en.md), [UI Kit and Domain DAG](ui-kit-and-domain-dag.en.md), and [Read-Model Split](read-model-split.en.md).
+Read [Reference Client](../overview/reference-client.en.md) and [Read-Model Split](read-model-split.en.md).
 
 ### Tooling and validation
 
@@ -118,7 +118,6 @@ A useful traversal is:
 
 ## Related
 
-- [Architecture Diagrams](architecture-diagrams.en.md)
 - [End-to-End Flows](end-to-end-flows.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)

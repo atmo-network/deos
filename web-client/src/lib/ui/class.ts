@@ -5,6 +5,7 @@ Excludes: Styling tokens, product/domain class policy, Tailwind configuration, a
 Zone: Foundation UI helper; safe for UI Kit primitives and presentation-only components to import.
 */
 import type { ClassValue } from 'svelte/elements';
+import { twMerge } from 'tailwind-merge';
 
 export function flattenClass(
   value: ClassValue | null | undefined | false,
@@ -37,5 +38,5 @@ export function flattenClass(
 export function mergeClasses(
   ...values: Array<ClassValue | null | undefined | false>
 ): string {
-  return values.map(flattenClass).filter(Boolean).join(' ');
+  return twMerge(values.map(flattenClass).filter(Boolean).join(' '));
 }

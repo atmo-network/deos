@@ -92,6 +92,29 @@ Zone: Layout rendering component; consumes layout store and pane helpers only.
     requestAnimationFrame(() => layoutStore.startDrag(tabId, leaf.id));
   }
 
+  function onTabKeydown(event: KeyboardEvent, tabId: PanelId) {
+    if (!event.shiftKey || event.key !== 'ArrowRight') {
+      return;
+    }
+    event.preventDefault();
+    if (!layoutStore.moveTabToSidebar(tabId, leaf.id)) {
+      return;
+    }
+    let attempts = 0;
+    const focusSidebarGrip = () => {
+      const grip = document.getElementById(`sidebar-widget-reorder-${tabId}`);
+      if (grip) {
+        grip.focus();
+        return;
+      }
+      attempts += 1;
+      if (attempts < 12) {
+        requestAnimationFrame(focusSidebarGrip);
+      }
+    };
+    requestAnimationFrame(focusSidebarGrip);
+  }
+
   function onPaneDragStart(event: DragEvent) {
     if (!event.dataTransfer) {
       return;
@@ -248,6 +271,7 @@ Zone: Layout rendering component; consumes layout store and pane helpers only.
     {onTabDragStart}
     {onAnyDragEnd}
     onSelectTab={(tabId) => layoutStore.setActiveTab(leaf.id, tabId)}
+    {onTabKeydown}
     {onTabBarDragOver}
     {onTabBarDragLeave}
     {onTabBarDrop}

@@ -5,7 +5,12 @@ Excludes: Wallet signer custody, adapter transport implementation, and widget re
 Zone: Log state slice; may subscribe to adapter events and wallet account changes.
 */
 import type { Adapter } from '$lib/adapters/contract';
-import type { LogEntry, LogType, TransactionProgress } from '$lib/log/types';
+import type {
+  LogEntry,
+  LogType,
+  NetworkFeedState,
+  TransactionProgress,
+} from '$lib/log/types';
 import { type ReadModelValue, fromSessionDerivedChain } from '$lib/read-model';
 import { walletStore } from '$lib/wallet/index.svelte';
 
@@ -18,6 +23,10 @@ class LogStore {
   log: LogEntry[] = $state([]);
   networkLog: LogEntry[] = $state([]);
   networkLogView: ReadModelValue<LogEntry[]> | null = $state(null);
+  networkFeedState: NetworkFeedState = $state({
+    status: 'idle',
+    message: null,
+  });
   txProgress: TransactionProgress = $state(IDLE_PROGRESS);
   private logCounter = 0;
 
@@ -25,6 +34,7 @@ class LogStore {
     this.log = [];
     this.networkLog = [];
     this.networkLogView = null;
+    this.networkFeedState = { status: 'idle', message: null };
     this.txProgress = IDLE_PROGRESS;
   }
 
@@ -34,13 +44,16 @@ class LogStore {
 
   async refreshNetworkLog(adapter: Adapter) {
     if (!adapter.getRecentNetworkLog) {
+      this.networkFeedState = {
+        status: 'error',
+        message: 'The connected adapter does not expose a network event feed.',
+      };
       return;
     }
+
+    this.networkFeedState = { status: 'loading', message: null };
     try {
       const recentEntries = await adapter.getRecentNetworkLog(24);
-      if (recentEntries.length === 0) {
-        return;
-      }
       const seen = new Set<string>();
       const merged = [...recentEntries, ...this.networkLog].filter((entry) => {
         const key = String(entry.id);
@@ -70,8 +83,15 @@ class LogStore {
           asOfBlock: nextNetworkLog[0]?.blockNumber ?? undefined,
         },
       );
-    } catch {
-      // Keep the last successful live network feed instead of blanking the panel
+      this.networkFeedState = { status: 'ready', message: null };
+    } catch (error) {
+      this.networkFeedState = {
+        status: 'error',
+        message:
+          error instanceof Error
+            ? error.message
+            : 'The finalized network event feed could not be refreshed.',
+      };
     }
   }
 

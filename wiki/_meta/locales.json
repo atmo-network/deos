@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-20",
+  "generated_at": "2026-07-22",
   "default_locale": "en",
   "supported_locales": ["en", "ru"],
   "entrypoints": {
@@ -95,10 +95,6 @@
       "en": "concepts/governance-domains.en.md",
       "ru": "concepts/governance-domains.ru.md"
     },
-    "ui-kit-and-domain-dag": {
-      "en": "concepts/ui-kit-and-domain-dag.en.md",
-      "ru": "concepts/ui-kit-and-domain-dag.ru.md"
-    },
     "generated-wiki": {
       "en": "concepts/generated-wiki.en.md",
       "ru": "concepts/generated-wiki.ru.md"
@@ -151,10 +147,6 @@
       "en": "concepts/end-to-end-flows.en.md",
       "ru": "concepts/end-to-end-flows.ru.md"
     },
-    "architecture-diagrams": {
-      "en": "concepts/architecture-diagrams.en.md",
-      "ru": "concepts/architecture-diagrams.ru.md"
-    },
     "token-surfaces": {
       "en": "concepts/token-surfaces.en.md",
       "ru": "concepts/token-surfaces.ru.md"
@@ -186,10 +178,6 @@
     "invariant-map": {
       "en": "concepts/invariant-map.en.md",
       "ru": "concepts/invariant-map.ru.md"
-    },
-    "what-deos-is-not": {
-      "en": "concepts/what-deos-is-not.en.md",
-      "ru": "concepts/what-deos-is-not.ru.md"
     },
     "economic-claim-levels": {
       "en": "concepts/economic-claim-levels.en.md",

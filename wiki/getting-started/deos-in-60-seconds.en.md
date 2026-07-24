@@ -62,6 +62,5 @@ DEOS is mainly for ecosystem founders, Substrate/Polkadot builders, tokenomics d
 ## What to read next
 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [Domain Map](../concepts/domain-map.en.md)

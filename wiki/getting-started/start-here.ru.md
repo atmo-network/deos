@@ -51,10 +51,9 @@ confidence: 0.85
 
 1. [Partner Pitch](partner-pitch.ru.md), если нужен внешний adoption case
 2. [DEOS за 60 секунд](deos-in-60-seconds.ru.md)
-3. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
-4. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
-5. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), начиная с краткого описания и базовой механики
-6. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md), если нужно отличить claims о механизме от рыночных обещаний
+3. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
+4. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md), начиная с краткого описания и базовой механики
+5. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md), если нужно отличить claims о механизме от рыночных обещаний
 
 Путь завершен, когда вы можете ответить:
 

@@ -31,6 +31,7 @@ DEOS owns the portable substrate:
 - Read-model provenance rules separating canonical-chain projections from materialized/indexed views.
 - Configuration seams that let instances choose parameters without rewriting core logic.
 - Validation gates and reference patterns that protect forkability.
+- The reference client's responsive/intrinsic backbone: workspace topology, pane geometry, widget task hierarchy and minimum viable phases, accessible interaction semantics, signer/error safety, transaction feedback, and read-model provenance.
 
 A framework feature is healthy when it clarifies or strengthens these reusable surfaces.
 
@@ -45,6 +46,7 @@ A DEOS instance owns its concrete economy:
 - Concrete bucket names, percentages, activation rules, and spend priorities.
 - Which governance domains are public, private, advisory, tactical, or protected.
 - Which reference mechanisms are enabled, renamed, replaced, or disabled.
+- Product skin and art direction layered over the client backbone, including branded palette, gradients, effects, typography, illustration, and visual character, provided the skin preserves accessible states, safety information, provenance, and intrinsic task behavior.
 
 A downstream instance may diverge from the reference line without violating DEOS, provided it does not claim guarantees that its chosen configuration no longer preserves.
 

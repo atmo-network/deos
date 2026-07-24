@@ -74,7 +74,7 @@ confidence: 0.85
 
 **Где живут версии релизов и status notes?** История релизов живет в changelog, открытая работа — в backlog, а текущее состояние для новичков — в [Статусе разработки](../development/status.ru.md). Architecture и wiki pages должны объяснять implementation truth и границы.
 
-**Что такое UI Kit и Domain DAG?** Это клиентские дисциплины против дублирования и размытых границ владения. Смотрите [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md).
+**Что такое UI Kit и Domain DAG?** Это клиентские дисциплины против дублирования и размытых границ владения, закрепленные в архитектуре и проверках web-client.
 
 **Почему web client может рендерить wiki markdown напрямую?** Wiki markdown — доверенный repo-local content под проверкой репозитория, а не произвольный пользовательский ввод. Смотрите [Generated Wiki](../concepts/generated-wiki.ru.md).
 
@@ -86,6 +86,5 @@ confidence: 0.85
 - [Маршруты чтения](../getting-started/reading-paths.ru.md)
 - [Система AAA](../overview/aaa-system.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

@@ -113,8 +113,14 @@ export const LEGACY_SHIPPED_DEFAULT_LAYOUT_SPEC = {
 
 export const CANONICAL_DEFAULT_FRAME_STATE: WorkspaceFrameState = {
   sidebar: {
+    placementVersion: 1,
     open: false,
-    edge: 'right',
+    widgetOrder: ['account-menu', 'settings'],
+    expandedWidgetId: 'account-menu',
+  },
+  mobile: {
+    panelOrder: [],
+    expandedPanelId: null,
   },
 };
 

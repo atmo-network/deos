@@ -22,12 +22,7 @@ Zone: Foundation UI; composes UI Kit Card and caller snippets only.
   let { title, subtitle, actions, class: cls = '', children }: Props = $props();
 </script>
 
-<Card
-  class={mergeClasses(
-    'border bg-white p-3 grid gap-3 shadow-[0_2px_8px_rgba(44,50,30,0.04)]',
-    cls,
-  )}
->
+<Card class={mergeClasses('bg-(--mono-bg) p-3 grid gap-3', cls)}>
   {#if title || subtitle || actions}
     <div class="flex flex-wrap items-start justify-between gap-2">
       <div class="min-w-0 flex-1">
