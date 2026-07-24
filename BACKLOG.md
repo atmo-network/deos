@@ -2,18 +2,7 @@
 
 > Open framework work only; durable protocol lives in `AGENTS.md`, and completed delivery history lives in `CHANGELOG.md`.
 >
-> Release boundary: `DEOS 0.7.2 — Work-Proportional AAA` is the next runtime release candidate; every other open item remains outside that release unless the dedicated plan below explicitly owns it.
-
-## DEOS 0.7.2 — Work-Proportional AAA
-
-> `0.7.2` supersedes `0.7.1` as the next AAA semantic-core candidate. The release evolves AAA from bounded execution into a work-proportional deterministic actor runtime: consensus state, ProofSize, decoding, storage writes, and scheduler work must scale with actual pending work rather than maximum configured capacity, inactive economic accounts, completed plan prefixes, or monolithic bounded containers.
->
-> This remains the pre-`1.0`, fresh-genesis compatibility window. Breaking semantic, SCALE, call, and storage cleanup remains allowed before the append-only AAA `1.0` line; no historical migration ceremony is required for the unlaunched reference chain, but every changed surface and storage-version consequence must remain explicit. AAA `1.0` stays blocked through the independent non-TMCTOL embedding gates for both this release and the planned `0.7.3` Continuation extension. AAA must remain a bounded deterministic economic actor runtime rather than becoming a general-purpose VM, and every retained or added mechanism must justify its consensus-state, ProofSize, weight, and semantic cost. Both releases preserve task-scoped transactional rollback and plan-level non-atomicity; neither may add whole-plan rollback.
-
-
-### Checkpoint D — Portability and release convergence
-
-- [ ] `0.7.2 / Release delivery`: Commit the converged release candidate, push branch `0.7.2`, open the release PR into `main`, require green repository checks, merge without rewriting checkpoint history, and verify `main` resolves to the released candidate before beginning `0.7.3`.
+> Release boundary: `DEOS 0.7.2 — Work-Proportional AAA` shipped through the validated `0.7.2` checkpoint history. Open AAA work now begins with the isolated `0.7.3` Continuation contract below.
 
 ## DEOS 0.7.3 — Progress-Preserving AAA Continuation
 
