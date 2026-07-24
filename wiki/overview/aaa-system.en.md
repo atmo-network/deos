@@ -26,7 +26,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-07-21
+last_compiled: 2026-07-24
 confidence: 0.95
 ---
 
@@ -45,19 +45,31 @@ AAA gives the runtime one reusable way to run bounded execution plans instead of
 The normative system contract requires:
 
 - Deterministic scheduling with durable late, paused, cooldown, and pre-window signals;
-- Balance/event-driven triggering without silent loss beyond bounded ingress caps;
+- Balance/event-driven triggering through direct producer-owned adapters without an event scanner or deferred compatibility queue;
 - Two-dimensional RefTime and ProofSize admission before each housekeeping, queue, wakeup, close, or cycle operation, including a generated fixed hook base before any `on_idle` storage access;
 - Typed tasks such as transfer, swap, liquidity, burn, mint, stake, and unstake;
-- Lifecycle rules for pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
+- Lifecycle rules for identity-only dormancy, atomic activation/deactivation, pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
 - Adapter boundaries with runtime-derived worst-case weights so AAA orchestrates mechanics without owning DEX, staking, or asset logic.
 
-Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility.
+Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it.
 
-Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Producers preflight before value movement and propagate fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the cycle, pending funding promotes only after success, and bounded events expose activation, accumulation, promotion, and policy updates.
+Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the cycle, pending funding promotes only after success, and bounded events expose activation, accumulation, promotion, and policy updates.
+
+## Operational Observability
+
+AAA keeps current starvation observability sparse. `IdleStarvationState` is absent/Healthy during normal operation, becomes `Starving { since }` on the first exhausted post-housekeeping budget, and becomes `Alerted { since }` at the configured threshold. Duration derives from block number, so unchanged starving or alerted blocks do not rewrite a counter.
+
+`IdleStarvationDetected` and `IdleStarvationRecovered` each emit once per alerted interval. The current phase is canonical chain state; long-term alert history and duration trends belong in an indexed view built from those events. The production-Wasm healthy-empty probe confirms five reads and zero writes.
 
 ## Embedding Boundary
 
-External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, entropy, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. Its `FeeCollector` transfers every User charge in full into the configured `FeeSink`; the DEOS reference Fee Sink then applies the current 50/50 staking/liquidity plan, while equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
+External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into `FeeSink`; downstream allocation remains outside AAA. The DEOS reference Fee Sink currently applies the 50/50 staking/liquidity plan; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
+
+The independent `template/aaa-embedding-runtime` fixture makes this boundary executable. It starts with zero System AAAs, uses local account/asset types and smaller scheduler pages, proves direct Executive ingress and fresh-genesis integrity, and offers separate unsupported-adapter and exact-output DEX profiles. It is portability evidence, not a second product or prescribed topology.
+
+The `0.7.2` line resets the unlaunched reference chain to storage version `1`; it ships no historical migration. Continuation and `RetryLater` remain outside this line in `0.7.3`, whose independent embedding gate must pass before AAA can declare a post-`1.0` append-only surface.
+
+The DEOS reference runtime also owns `LpPairByTokenId` outside generic AAA, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded.
 
 The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep` or `AbortCycle` then decides whether the cycle proceeds or stops.
 
@@ -78,7 +90,7 @@ This keeps AAA useful outside one tokenomic configuration.
 
 On the current reference line, AAA is the execution substrate for runtime-side protocol behavior: burning, liquidity provisioning, treasury splitting, bucket handling, BLDR lane flows, and native staking LP provisioning.
 
-The shipped runtime provisions System actors at genesis, plus one deterministic fee-sink address. Native staking LP provisioning starts dormant and can activate only after the native staking receipt, staking pool, actor, and non-empty `NTVE/stNTVE` AMM are ready.
+The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active programs at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These programs react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-program input with an explicit schedule, run plan, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
 
 AAA does not replace TMC, Axial Router, staking, or governance. Those subsystems own math and domain rules. AAA gives them a deterministic way to be orchestrated together.
 

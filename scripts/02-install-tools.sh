@@ -16,6 +16,15 @@ Tools:
   zombienet
   chain-spec-builder (package: staging-chain-spec-builder)
   try-runtime
+
+Inputs:
+  Cargo and network access when a requested tool is absent.
+
+Outputs:
+  The listed executables in the active Cargo installation root.
+
+Side effects:
+  Installs only missing tools; preserves commands already available on PATH.
 EOF
 }
 

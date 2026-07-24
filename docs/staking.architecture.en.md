@@ -74,7 +74,11 @@ graph TD
 
 ### Launch reward phases
 
-The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-Axial action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning. The LP-donation half is wired through Fee Sink → AAA #14 with a native-balance bridge into the local native-staking asset before donation execution. The staking-yield half is bridged after that donation hook by burning native balance held by the staking pool account and minting the local native-staking asset into pool truth. A future permissionless phase may divide Fee Sink flow into equal security-reward, staking-ingress, and liquidity-provisioning thirds; explicit LP nomination and claimable native rewards remain subordinate to the unresolved bounded security-reward contract.
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-Axial action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning.
+
+The LP-donation half flows through Fee Sink → AAA #14, with a native-balance bridge into the local native-staking asset before donation execution. After that donation hook, the staking-yield half burns native balance held by the staking pool account and mints the local native-staking asset into pool truth.
+
+A future permissionless phase may divide Fee Sink flow into equal security-reward, staking-ingress, and liquidity-provisioning thirds. Explicit LP nomination and claimable native rewards remain subordinate to the unresolved bounded security-reward contract.
 
 Phase 2 is treated as a runtime-upgrade boundary. The current launch line should not expose a governance parameter that can silently enable LP nomination or claimable nomination rewards while collator selection is still permissioned.
 

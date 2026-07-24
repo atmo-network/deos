@@ -96,18 +96,16 @@ pub enum TmctolConformanceStatus {
   Violated,
 }
 
-/// Bounded read projection for a System Immutable Bucket A anchor.
+/// Bounded read projection for a deterministic custody-only Bucket A anchor.
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct AnchorBucketState<AccountId> {
   pub domain: AnchorDomain,
   pub aaa_id: u64,
   pub status: GuaranteeStatus,
   pub sovereign_account: AccountId,
-  pub actor_exists: bool,
-  pub is_system: bool,
-  pub is_immutable: bool,
-  pub is_paused: bool,
-  pub has_schedule_window: bool,
+  pub is_custody_only: bool,
+  pub actor_identity_exists: bool,
+  pub scheduler_state_exists: bool,
 }
 
 /// Bounded read projection for the current anchor pool behind a domain.
@@ -134,7 +132,7 @@ pub struct BurnLivenessState<AccountId, Balance> {
   pub actor_exists: bool,
   pub is_system: bool,
   pub is_paused: bool,
-  pub has_timer_schedule: bool,
+  pub has_address_event_trigger: bool,
   pub requires_swap: bool,
   pub has_required_swap_step: bool,
   pub has_required_burn_step: bool,
@@ -153,7 +151,7 @@ pub struct ZapPostconditionState<AccountId> {
   pub actor_exists: bool,
   pub is_system: bool,
   pub is_paused: bool,
-  pub has_timer_schedule: bool,
+  pub has_address_event_trigger: bool,
   pub configured_foreign_asset: Option<AssetKind>,
   pub configured_lp_asset: Option<AssetKind>,
   pub has_add_liquidity_step: bool,

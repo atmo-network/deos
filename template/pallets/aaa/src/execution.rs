@@ -1,7 +1,6 @@
 use super::pallet::*;
 use super::types::Task as AaaTask;
 use super::{AssetOps, DexOps, FeeCollector, LiquidityDonationOps, StakingOps};
-use alloc::vec::Vec;
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
   Perbill,
@@ -89,7 +88,6 @@ enum PreparedTask<T: Config> {
     asset: T::AssetId,
     shares: T::Balance,
   },
-  Noop,
 }
 
 enum PreparedTaskOutcome<T: Config> {
@@ -101,24 +99,27 @@ enum PreparedTaskOutcome<T: Config> {
 impl<T: Config> Pallet<T> {
   pub(crate) fn promote_pending_funding(aaa_id: AaaId) {
     let mut promotions = alloc::vec::Vec::new();
-    AaaInstances::<T>::mutate(aaa_id, |maybe| {
-      let Some(inst) = maybe.as_mut() else {
+    ActorFunding::<T>::mutate(aaa_id, |maybe| {
+      let Some(funding) = maybe.as_mut() else {
         return;
       };
-      let assets: alloc::vec::Vec<_> = inst.funding_snapshots.keys().copied().collect();
+      let assets: alloc::vec::Vec<_> = funding.funding_snapshots.keys().copied().collect();
       for asset in assets {
-        let Some(batch) = inst.funding_snapshots.get_mut(&asset) else {
+        let Some(batch) = funding.funding_snapshots.get_mut(&asset) else {
           continue;
         };
         if batch.pending_amount.is_zero() {
           continue;
         }
         batch.amount = batch.pending_amount;
-        if let Some(block) = batch.pending_last_block.take() {
-          batch.block = block;
-        }
         batch.pending_amount = Zero::zero();
         promotions.push((asset, batch.amount));
+      }
+    });
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      if let Some(hot) = maybe_hot {
+        hot.pending_funding_count = 0;
+        hot.has_pending_funding = false;
       }
     });
     for (asset, amount) in promotions {
@@ -130,29 +131,22 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  pub(crate) fn execute_single_cycle(aaa_id: AaaId) -> Weight {
-    let base_weight = T::DbWeight::get()
-      .reads(1)
-      .saturating_add(T::DbWeight::get().writes(1));
-    let now = frame_system::Pallet::<T>::block_number();
-    let instance = match AaaInstances::<T>::get(aaa_id) {
-      Some(inst) => inst,
-      None => return base_weight,
-    };
+  pub(crate) fn execute_single_cycle(
+    aaa_id: AaaId,
+    instance: AaaInstanceOf<T>,
+    now: BlockNumberFor<T>,
+  ) -> Weight {
+    let base_weight = T::DbWeight::get().writes(1);
     if instance.cycle_nonce == u64::MAX {
-      if instance.aaa_type == AaaType::User {
-        if Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted).is_err() {
-          Self::defer_failed_close(aaa_id);
-        }
+      if instance.actor_class.aaa_type() == AaaType::User {
+        Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted)
+          .expect("fresh execution snapshot satisfies terminal preconditions");
       } else {
-        AaaInstances::<T>::mutate(aaa_id, |maybe| {
+        ActorHot::<T>::mutate(aaa_id, |maybe| {
           if let Some(inst) = maybe.as_mut() {
-            inst.is_paused = true;
-            inst.pause_reason = Some(PauseReason::CycleNonceExhausted);
-            inst.updated_at = now;
+            inst.lifecycle = ActiveLifecycle::Paused(PauseReason::CycleNonceExhausted);
           }
         });
-        Self::sync_readiness_state(aaa_id);
         // Ringless: no need to remove from ring - scheduler checks is_paused flag
         Self::deposit_event(Event::AaaPaused {
           aaa_id,
@@ -161,28 +155,31 @@ impl<T: Config> Pallet<T> {
       }
       return base_weight;
     }
-    let Some(cycle_nonce) = AaaInstances::<T>::mutate(aaa_id, |maybe| {
+    let Some(cycle_nonce) = ActorHot::<T>::mutate(aaa_id, |maybe| {
       let inst = maybe.as_mut()?;
       inst.cycle_nonce = inst.cycle_nonce.saturating_add(1);
-      inst.manual_trigger_pending = false;
+      inst.pending_signal = false;
       inst.last_cycle_block = now;
-      inst.updated_at = now;
       Some(inst.cycle_nonce)
     }) else {
       return base_weight;
     };
-    Self::sync_readiness_state(aaa_id);
-    if matches!(instance.schedule.trigger, Trigger::OnAddressEvent { .. }) {
-      Self::consume_address_event(aaa_id);
-    }
     Self::deposit_event(Event::CycleStarted {
       aaa_id,
       cycle_nonce,
     });
+    let funding = if instance.funding_tracked_count == 0 {
+      None
+    } else {
+      Some(ActorFunding::<T>::get(aaa_id).expect("active actor funding existence was prevalidated"))
+    };
+    let empty_funding_snapshots = FundingSnapshotsOf::<T>::default();
     let actor = instance.sovereign_account.clone();
-    let is_user = instance.aaa_type == AaaType::User;
+    let is_user = instance.actor_class.aaa_type() == AaaType::User;
     let execution_plan = &instance.execution_plan;
-    let funding_snapshots = &instance.funding_snapshots;
+    let funding_snapshots = funding
+      .as_ref()
+      .map_or(&empty_funding_snapshots, |state| &state.funding_snapshots);
     let mut executed_steps: u32 = 0;
     let mut skipped_conditions: u32 = 0;
     let mut skipped_resolution: u32 = 0;
@@ -197,63 +194,39 @@ impl<T: Config> Pallet<T> {
     let trigger_balances =
       Self::capture_trigger_balances(&actor, execution_plan, reserved_fee_remaining);
     let trigger_share_balances = Self::capture_trigger_share_balances(&actor, execution_plan);
-    let mut intent_buffer: Vec<PreparedTask<T>> = Vec::new();
     for (step_idx, step) in execution_plan.iter().enumerate() {
       let step_num = step_idx as u32;
-      if is_user {
-        let eval_fee = Self::compute_eval_fee(step.conditions.len() as u32);
-        if !eval_fee.is_zero() {
-          reserved_fee_remaining = reserved_fee_remaining.saturating_sub(eval_fee);
-          let native = T::NativeAssetId::get();
-          let balance = T::AssetOps::balance(&actor, native);
-          let fee_sink = T::FeeSink::get();
-          if balance < eval_fee {
-            let err = DispatchError::from(Error::<T>::InsufficientFee);
-            failed_steps = failed_steps.saturating_add(1);
-            Self::deposit_event(Event::StepFailed {
-              aaa_id,
-              cycle_nonce,
-              step_index: step_num,
-              error: err,
-            });
-            execution_plan_failed =
-              Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, err);
-            if execution_plan_failed {
-              break;
-            }
-            continue;
-          }
-          if T::FeeCollector::collect_fee(&actor, &fee_sink, native, eval_fee).is_err() {
-            failed_steps = failed_steps.saturating_add(1);
-            Self::deposit_event(Event::StepFailed {
-              aaa_id,
-              cycle_nonce,
-              step_index: step_num,
-              error: DispatchError::Other("EvaluationFeeTransferFailed"),
-            });
-            execution_plan_failed = Self::apply_error_policy(
-              aaa_id,
-              cycle_nonce,
-              step_num,
-              step.on_error,
-              DispatchError::Other("EvaluationFeeTransferFailed"),
-            );
-            if execution_plan_failed {
-              break;
-            }
-            continue;
-          }
-        }
-      }
-      let condition_result =
-        Self::evaluate_conditions(&step.conditions, &actor, reserved_fee_remaining);
-      match condition_result {
+      let eval_fee = if is_user {
+        Self::compute_eval_fee(step.conditions.len() as u32)
+      } else {
+        T::Balance::zero()
+      };
+      let exec_fee = if is_user {
+        T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task))
+      } else {
+        T::Balance::zero()
+      };
+      let reserved_step_fee = eval_fee.saturating_add(exec_fee);
+      match Self::evaluate_conditions(&step.conditions, &actor, reserved_fee_remaining) {
         Ok(true) => {}
         Ok(false) => {
           if is_user {
-            let skip_exec_fee =
-              T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
+            if let Err(error) = Self::collect_user_step_fee(&actor, eval_fee) {
+              failed_steps = failed_steps.saturating_add(1);
+              Self::deposit_event(Event::StepFailed {
+                aaa_id,
+                cycle_nonce,
+                step_index: step_num,
+                error,
+              });
+              execution_plan_failed =
+                Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, error);
+              if execution_plan_failed {
+                break;
+              }
+              continue;
+            }
           }
           skipped_conditions = skipped_conditions.saturating_add(1);
           Self::deposit_event(Event::StepSkipped {
@@ -264,33 +237,34 @@ impl<T: Config> Pallet<T> {
           });
           continue;
         }
-        Err(e) => {
-          if is_user {
-            let skip_exec_fee =
-              T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
-          }
+        Err(error) => {
+          let charged_error = if is_user {
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
+            Self::collect_user_step_fee(&actor, eval_fee)
+              .err()
+              .unwrap_or(error)
+          } else {
+            error
+          };
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::StepFailed {
             aaa_id,
             cycle_nonce,
             step_index: step_num,
-            error: e,
+            error: charged_error,
           });
           execution_plan_failed =
-            Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, e);
+            Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, charged_error);
           if execution_plan_failed {
             break;
           }
           continue;
         }
       }
-      let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-      let charge_exec_fee = is_user && !exec_fee.is_zero();
       let prepared_task = match Self::prepare_task(
         &step.task,
         &actor,
-        instance.aaa_type,
+        instance.actor_class.aaa_type(),
         reserved_fee_remaining,
         &trigger_balances,
         &trigger_share_balances,
@@ -298,8 +272,23 @@ impl<T: Config> Pallet<T> {
       ) {
         Ok(PreparedTaskOutcome::Executable(task)) => task,
         Ok(PreparedTaskOutcome::Skipped) => {
-          if charge_exec_fee {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
+          if is_user {
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
+            if let Err(error) = Self::collect_user_step_fee(&actor, eval_fee) {
+              failed_steps = failed_steps.saturating_add(1);
+              Self::deposit_event(Event::StepFailed {
+                aaa_id,
+                cycle_nonce,
+                step_index: step_num,
+                error,
+              });
+              execution_plan_failed =
+                Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, error);
+              if execution_plan_failed {
+                break;
+              }
+              continue;
+            }
           }
           skipped_resolution = skipped_resolution.saturating_add(1);
           Self::deposit_event(Event::StepSkipped {
@@ -311,8 +300,23 @@ impl<T: Config> Pallet<T> {
           continue;
         }
         Ok(PreparedTaskOutcome::FundingUnavailable) => {
-          if charge_exec_fee {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
+          if is_user {
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
+            if let Err(error) = Self::collect_user_step_fee(&actor, eval_fee) {
+              failed_steps = failed_steps.saturating_add(1);
+              Self::deposit_event(Event::StepFailed {
+                aaa_id,
+                cycle_nonce,
+                step_index: step_num,
+                error,
+              });
+              execution_plan_failed =
+                Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, error);
+              if execution_plan_failed {
+                break;
+              }
+              continue;
+            }
           }
           skipped_funding_unavailable = skipped_funding_unavailable.saturating_add(1);
           Self::deposit_event(Event::StepSkipped {
@@ -323,72 +327,33 @@ impl<T: Config> Pallet<T> {
           });
           continue;
         }
-        Err(e) => {
-          if charge_exec_fee {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-          }
+        Err(error) => {
+          let charged_error = if is_user {
+            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
+            Self::collect_user_step_fee(&actor, eval_fee)
+              .err()
+              .unwrap_or(error)
+          } else {
+            error
+          };
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::StepFailed {
             aaa_id,
             cycle_nonce,
             step_index: step_num,
-            error: e,
+            error: charged_error,
           });
           execution_plan_failed =
-            Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, e);
+            Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, charged_error);
           if execution_plan_failed {
             break;
           }
           continue;
         }
       };
-      if charge_exec_fee {
-        let native = T::NativeAssetId::get();
-        let balance = T::AssetOps::balance(&actor, native);
-        let fee_sink = T::FeeSink::get();
-        if balance < exec_fee {
-          reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-          let err = DispatchError::from(Error::<T>::InsufficientFee);
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::StepFailed {
-            aaa_id,
-            cycle_nonce,
-            step_index: step_num,
-            error: err,
-          });
-          execution_plan_failed =
-            Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, err);
-          if execution_plan_failed {
-            break;
-          }
-          continue;
-        }
-        if T::FeeCollector::collect_fee(&actor, &fee_sink, native, exec_fee).is_err() {
-          reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::StepFailed {
-            aaa_id,
-            cycle_nonce,
-            step_index: step_num,
-            error: DispatchError::Other("ExecutionFeeTransferFailed"),
-          });
-          execution_plan_failed = Self::apply_error_policy(
-            aaa_id,
-            cycle_nonce,
-            step_num,
-            step.on_error,
-            DispatchError::Other("ExecutionFeeTransferFailed"),
-          );
-          if execution_plan_failed {
-            break;
-          }
-          continue;
-        }
-        reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-      }
-      intent_buffer.push(prepared_task);
-      for task in intent_buffer.drain(..) {
-        if let Err(error) = Self::execute_prepared_task(task, aaa_id, &actor) {
+      if is_user {
+        reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
+        if let Err(error) = Self::collect_user_step_fee(&actor, reserved_step_fee) {
           failed_steps = failed_steps.saturating_add(1);
           Self::deposit_event(Event::StepFailed {
             aaa_id,
@@ -398,27 +363,41 @@ impl<T: Config> Pallet<T> {
           });
           execution_plan_failed =
             Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, error);
+          if execution_plan_failed {
+            break;
+          }
+          continue;
+        }
+      }
+      if let Err(error) = Self::execute_prepared_task(prepared_task, aaa_id, &actor) {
+        failed_steps = failed_steps.saturating_add(1);
+        Self::deposit_event(Event::StepFailed {
+          aaa_id,
+          cycle_nonce,
+          step_index: step_num,
+          error,
+        });
+        execution_plan_failed =
+          Self::apply_error_policy(aaa_id, cycle_nonce, step_num, step.on_error, error);
+        if execution_plan_failed {
           break;
         }
-        executed_steps = executed_steps.saturating_add(1);
+        continue;
       }
+      executed_steps = executed_steps.saturating_add(1);
+    }
+    let should_promote_funding = ActorHot::<T>::mutate(aaa_id, |maybe| {
+      let Some(hot) = maybe.as_mut() else {
+        return false;
+      };
       if execution_plan_failed {
-        break;
+        hot.consecutive_failures = hot.consecutive_failures.saturating_add(1);
+        false
+      } else {
+        hot.consecutive_failures = 0;
+        hot.has_pending_funding
       }
-    }
-    if !execution_plan_failed {
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        if let Some(inst) = maybe.as_mut() {
-          inst.consecutive_failures = 0;
-        }
-      });
-    } else {
-      AaaInstances::<T>::mutate(aaa_id, |maybe| {
-        if let Some(inst) = maybe.as_mut() {
-          inst.consecutive_failures = inst.consecutive_failures.saturating_add(1);
-        }
-      });
-    }
+    });
     Self::deposit_event(Event::CycleSummary {
       aaa_id,
       cycle_nonce,
@@ -428,23 +407,21 @@ impl<T: Config> Pallet<T> {
       skipped_funding_unavailable,
       failed_steps,
     });
-    if !execution_plan_failed {
+    if should_promote_funding {
       Self::promote_pending_funding(aaa_id);
     }
     if execution_plan_failed {
-      if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
-        if !inst.is_paused && Self::failure_limit_reached(inst.consecutive_failures) {
-          if Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures).is_err() {
-            Self::defer_failed_close(aaa_id);
-          }
+      if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
+        if !inst.lifecycle.is_paused() && Self::failure_limit_reached(inst.consecutive_failures) {
+          Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures)
+            .expect("fresh execution snapshot satisfies terminal preconditions");
         }
       }
-    } else if let Some(inst) = AaaInstances::<T>::get(aaa_id) {
+    } else if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
       if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
         if cycle_nonce >= target_nonce {
-          if Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached).is_err() {
-            Self::defer_failed_close(aaa_id);
-          }
+          Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached)
+            .expect("fresh execution snapshot satisfies terminal preconditions");
         }
       }
     }
@@ -454,222 +431,28 @@ impl<T: Config> Pallet<T> {
     ))
   }
 
-  fn defer_failed_close(aaa_id: AaaId) {
-    Self::deposit_event(Event::CycleDeferred {
-      aaa_id,
-      reason: DeferReason::CloseTransitionFailed,
-    });
-    Self::enqueue(aaa_id);
-  }
-
   pub(crate) fn failure_limit_reached(consecutive_failures: u32) -> bool {
     let max_failures = T::MaxConsecutiveFailures::get();
     max_failures > 0 && consecutive_failures >= max_failures
-  }
-
-  pub(crate) fn execute_on_close_execution_plan(
-    aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
-    mut reserved_fee_remaining: T::Balance,
-  ) {
-    let actor = &instance.sovereign_account;
-    let execution_plan = &instance.on_close_execution_plan;
-    let funding_snapshots = &instance.funding_snapshots;
-    let is_user = instance.aaa_type == AaaType::User;
-    let trigger_balances =
-      Self::capture_trigger_balances(actor, execution_plan, reserved_fee_remaining);
-    let trigger_share_balances = Self::capture_trigger_share_balances(actor, execution_plan);
-    let mut intent_buffer: Vec<PreparedTask<T>> = Vec::new();
-    let mut executed_steps = 0u32;
-    let mut skipped_steps = 0u32;
-    let mut failed_steps = 0u32;
-    for (step_idx, step) in execution_plan.iter().enumerate() {
-      let step_num = step_idx as u32;
-      if is_user {
-        let eval_fee = Self::compute_eval_fee(step.conditions.len() as u32);
-        if !eval_fee.is_zero() {
-          let native = T::NativeAssetId::get();
-          let balance = T::AssetOps::balance(actor, native);
-          let fee_sink = T::FeeSink::get();
-          if reserved_fee_remaining < eval_fee || balance < eval_fee {
-            let error = DispatchError::from(Error::<T>::InsufficientFee);
-            failed_steps = failed_steps.saturating_add(1);
-            Self::deposit_event(Event::OnCloseStepFailed {
-              aaa_id,
-              step_index: step_num,
-              kind: OnCloseStepFailureKind::EvaluationFee,
-              error,
-            });
-            continue;
-          }
-          if T::FeeCollector::collect_fee(actor, &fee_sink, native, eval_fee).is_err() {
-            let error = DispatchError::Other("EvaluationFeeTransferFailed");
-            failed_steps = failed_steps.saturating_add(1);
-            Self::deposit_event(Event::OnCloseStepFailed {
-              aaa_id,
-              step_index: step_num,
-              kind: OnCloseStepFailureKind::EvaluationFee,
-              error,
-            });
-            continue;
-          }
-          reserved_fee_remaining = reserved_fee_remaining.saturating_sub(eval_fee);
-        }
-      }
-      match Self::evaluate_conditions(&step.conditions, actor, reserved_fee_remaining) {
-        Ok(true) => {}
-        Ok(false) => {
-          if is_user {
-            let skip_exec_fee =
-              T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
-          }
-          skipped_steps = skipped_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepSkipped {
-            aaa_id,
-            step_index: step_num,
-            reason: StepSkippedReason::ConditionsNotMet,
-          });
-          continue;
-        }
-        Err(error) => {
-          if is_user {
-            let skip_exec_fee =
-              T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(skip_exec_fee);
-          }
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepFailed {
-            aaa_id,
-            step_index: step_num,
-            kind: OnCloseStepFailureKind::Condition,
-            error,
-          });
-          if Self::apply_error_policy(aaa_id, instance.cycle_nonce, step_num, step.on_error, error)
-          {
-            break;
-          }
-          continue;
-        }
-      }
-      let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-      let charge_exec_fee = is_user && !exec_fee.is_zero();
-      let prepared_task = match Self::prepare_task(
-        &step.task,
-        actor,
-        instance.aaa_type,
-        reserved_fee_remaining,
-        &trigger_balances,
-        &trigger_share_balances,
-        funding_snapshots,
-      ) {
-        Ok(PreparedTaskOutcome::Executable(task)) => task,
-        Ok(PreparedTaskOutcome::Skipped) => {
-          if charge_exec_fee {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-          }
-          skipped_steps = skipped_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepSkipped {
-            aaa_id,
-            step_index: step_num,
-            reason: StepSkippedReason::ResolutionSkipped,
-          });
-          continue;
-        }
-        Ok(PreparedTaskOutcome::FundingUnavailable) => {
-          if charge_exec_fee {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-          }
-          skipped_steps = skipped_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepSkipped {
-            aaa_id,
-            step_index: step_num,
-            reason: StepSkippedReason::FundingUnavailable,
-          });
-          continue;
-        }
-        Err(error) => {
-          if charge_exec_fee {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-          }
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepFailed {
-            aaa_id,
-            step_index: step_num,
-            kind: OnCloseStepFailureKind::Resolution,
-            error,
-          });
-          if Self::apply_error_policy(aaa_id, instance.cycle_nonce, step_num, step.on_error, error)
-          {
-            break;
-          }
-          continue;
-        }
-      };
-      if charge_exec_fee {
-        let native = T::NativeAssetId::get();
-        let balance = T::AssetOps::balance(actor, native);
-        let fee_sink = T::FeeSink::get();
-        if reserved_fee_remaining < exec_fee || balance < exec_fee {
-          let error = DispatchError::from(Error::<T>::InsufficientFee);
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepFailed {
-            aaa_id,
-            step_index: step_num,
-            kind: OnCloseStepFailureKind::ExecutionFee,
-            error,
-          });
-          continue;
-        }
-        if T::FeeCollector::collect_fee(actor, &fee_sink, native, exec_fee).is_err() {
-          let error = DispatchError::Other("ExecutionFeeTransferFailed");
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepFailed {
-            aaa_id,
-            step_index: step_num,
-            kind: OnCloseStepFailureKind::ExecutionFee,
-            error,
-          });
-          continue;
-        }
-        reserved_fee_remaining = reserved_fee_remaining.saturating_sub(exec_fee);
-      }
-      intent_buffer.push(prepared_task);
-      let mut abort = false;
-      for task in intent_buffer.drain(..) {
-        if let Err(error) = Self::execute_prepared_task(task, aaa_id, actor) {
-          failed_steps = failed_steps.saturating_add(1);
-          Self::deposit_event(Event::OnCloseStepFailed {
-            aaa_id,
-            step_index: step_num,
-            kind: OnCloseStepFailureKind::Adapter,
-            error,
-          });
-          abort =
-            Self::apply_error_policy(aaa_id, instance.cycle_nonce, step_num, step.on_error, error);
-          if abort {
-            break;
-          }
-          continue;
-        }
-        executed_steps = executed_steps.saturating_add(1);
-      }
-      if abort {
-        break;
-      }
-    }
-    Self::deposit_event(Event::OnCloseExecutionPlanSummary {
-      aaa_id,
-      executed_steps,
-      skipped_steps,
-      failed_steps,
-    });
   }
 
   pub(crate) fn compute_eval_fee(num_conditions: u32) -> BalanceOf<T> {
     let base = T::StepBaseFee::get();
     let per_cond = T::ConditionReadFee::get();
     base.saturating_add(per_cond.saturating_mul(num_conditions.into()))
+  }
+
+  fn collect_user_step_fee(actor: &T::AccountId, fee: T::Balance) -> DispatchResult {
+    if fee.is_zero() {
+      return Ok(());
+    }
+    let native = T::NativeAssetId::get();
+    ensure!(
+      T::AssetOps::balance(actor, native) >= fee,
+      Error::<T>::InsufficientFee
+    );
+    T::FeeCollector::collect_fee(actor, &T::FeeSink::get(), native, fee)
+      .map_err(|_| DispatchError::Other("StepFeeTransferFailed"))
   }
 
   fn apply_error_policy(
@@ -744,7 +527,7 @@ impl<T: Config> Pallet<T> {
       } => {
         Self::push_trigger_asset(amount, *asset_a, assets);
       }
-      AaaTask::Noop | AaaTask::Unstake { .. } => {}
+      AaaTask::Unstake { .. } => {}
     }
   }
 
@@ -806,7 +589,7 @@ impl<T: Config> Pallet<T> {
     trigger_share_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
   ) -> Result<PreparedTaskOutcome<T>, DispatchError> {
@@ -1107,7 +890,6 @@ impl<T: Config> Pallet<T> {
           shares: resolved,
         }))
       }
-      AaaTask::Noop => Ok(PreparedTaskOutcome::Executable(PreparedTask::Noop)),
     }
   }
 
@@ -1277,7 +1059,6 @@ impl<T: Config> Pallet<T> {
               shares,
             });
           }
-          PreparedTask::Noop => {}
         }
         Ok(())
       })();
@@ -1296,7 +1077,7 @@ impl<T: Config> Pallet<T> {
     trigger_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
     policy: AmountResolutionPolicy,
@@ -1372,7 +1153,7 @@ impl<T: Config> Pallet<T> {
     trigger_share_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
@@ -1417,7 +1198,7 @@ impl<T: Config> Pallet<T> {
     trigger_balances: &[(T::AssetId, T::Balance)],
     funding_snapshots: &BoundedBTreeMap<
       T::AssetId,
-      FundingBatch<T::Balance, BlockNumberFor<T>>,
+      FundingBatch<T::Balance>,
       T::MaxFundingTrackedAssets,
     >,
     policy: AmountResolutionPolicy,

@@ -11,6 +11,15 @@ Builds the current DEOS reference runtime (`deos-runtime`) WASM artifact in rele
 
 Options:
   -h, --help        Show this help message
+
+Inputs:
+  Locked template Cargo workspace and repository-pinned Rust toolchain.
+
+Outputs:
+  target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm.
+
+Side effects:
+  Installs the pinned WASM target when absent and updates Cargo build artifacts.
 EOF
 }
 
@@ -55,16 +64,12 @@ build_runtime() {
     phase_banner "Step 3: Build runtime"
     log_info "Building parachain runtime (this may take several minutes)..."
 
-    cd "$TEMPLATE_DIR"
-
     # substrate-wasm-builder treats any presence of SKIP_WASM_BUILD, including `0`, as skip.
     unset SKIP_WASM_BUILD
-    local start_time=$(date +%s)
-    cargo build --release -p deos-runtime --locked
-    local end_time=$(date +%s)
-    local build_duration=$((end_time - start_time))
-
-    log_success "Runtime build completed in ${build_duration} seconds"
+    run_shell_step \
+        "Build parachain runtime" \
+        "" \
+        "cd '$TEMPLATE_DIR' && cargo build --release -p deos-runtime --locked"
 }
 
 verify_build() {

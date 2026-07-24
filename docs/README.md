@@ -108,7 +108,10 @@ Implementation-specific documents describing how the current runtime realizes th
   Repo-local onboarding and navigation layer derived from `/docs`, also consumed by the browser-facing wiki surface.
 
 - [Scripts Layer Map](../scripts/README.md)
-  Canonical map of atomic scripts, named orchestrators, and local admin utilities.
+  Canonical map of human-callable atoms, shared deterministic compositions, and local admin utilities.
+
+- [Project Skill Graph](../.agents/skills/README.md)
+  Agent-facing Domain DAG for validation routing, delivery judgment, capability ownership, and shared-script boundaries.
 
 - [Web Client Architecture](./web-client.architecture.en.md)
   Client implementation contract: product role, read-model honesty, widget-vs-layout vocabulary, UI Kit, Domain DAG, adapter boundaries, generated-wiki rendering, and validation.

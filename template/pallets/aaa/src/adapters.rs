@@ -47,8 +47,6 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
   fn minimum_balance(asset: AssetId) -> Balance;
 
   fn can_deposit(who: &AccountId, asset: AssetId, amount: Balance) -> bool;
-
-  fn total_issuance(asset: AssetId) -> Balance;
 }
 
 /// DEX operations — swap and liquidity
@@ -110,8 +108,6 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     lp_asset: AssetId,
     lp_amount: Balance,
   ) -> Result<(Balance, Balance), DispatchError>;
-
-  fn get_pool_reserves(asset_a: AssetId, asset_b: AssetId) -> Option<(Balance, Balance)>;
 }
 
 /// No-op `AssetOps` for use in configurations where asset ops are not needed.
@@ -138,10 +134,6 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
 
   fn can_deposit(_: &AccountId, _: AssetId, _: Balance) -> bool {
     true
-  }
-
-  fn total_issuance(_: AssetId) -> Balance {
-    Balance::default()
   }
 }
 
@@ -184,10 +176,6 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: Balance,
   ) -> Result<(Balance, Balance), DispatchError> {
     Err(DispatchError::Other("DexOps not configured"))
-  }
-
-  fn get_pool_reserves(_: AssetId, _: AssetId) -> Option<(Balance, Balance)> {
-    None
   }
 }
 

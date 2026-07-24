@@ -11,7 +11,10 @@ use super::common::{
   liquidity_actor_account, new_test_ext, seeded_test_ext,
 };
 use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
-use pallet_aaa::{AmountResolution, DexOps, Event, ExecutionPlanOf, StepErrorPolicy, Task};
+use pallet_aaa::{
+  AmountResolution, AssetOps, DexOps, Event, ExecutionPlanOf, FundingSourcePolicy, ProgramInput,
+  StepErrorPolicy, Task,
+};
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
   traits::{
@@ -25,6 +28,28 @@ use primitives::ecosystem::{aaa_ids, protocol_tokens};
 use primitives::{AssetKind, GuaranteeStatus, TmctolConformanceStatus};
 
 use super::aaa_integration_tests::has_aaa_event;
+
+fn activate_dormant_system(
+  aaa_id: pallet_aaa::AaaId,
+  execution_plan: ExecutionPlanOf<Runtime>,
+) -> polkadot_sdk::sp_runtime::DispatchResult {
+  AAA::activate_aaa(
+    RuntimeOrigin::root(),
+    aaa_id,
+    ProgramInput::Active {
+      schedule: pallet_aaa::Schedule {
+        trigger: pallet_aaa::Trigger::OnAddressEvent {
+          source_filter: pallet_aaa::SourceFilter::Any,
+          asset_filter: pallet_aaa::AssetFilter::Any,
+        },
+        cooldown_blocks: primitives::ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
+      },
+      schedule_window: None,
+      execution_plan,
+      funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+    },
+  )
+}
 
 // --- Genesis System AAA ---
 
@@ -106,22 +131,21 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
         primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD,
         primitives::ecosystem::params::SYSTEM_AAA_MAX_SWAP_SLIPPAGE,
       );
-    assert_ok!(AAA::update_execution_plan(
+    assert_ok!(AAA::activate_aaa(
       RuntimeOrigin::root(),
       aaa_ids::TREASURY_B_AAA_ID,
-      execution_plan,
-    ));
-    assert_ok!(AAA::update_schedule(
-      RuntimeOrigin::root(),
-      aaa_ids::TREASURY_B_AAA_ID,
-      pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 10,
-          probability: None,
+      ProgramInput::Active {
+        schedule: pallet_aaa::Schedule {
+          trigger: pallet_aaa::Trigger::OnAddressEvent {
+            source_filter: pallet_aaa::SourceFilter::Any,
+            asset_filter: pallet_aaa::AssetFilter::Any,
+          },
+          cooldown_blocks: 5,
         },
-        cooldown_blocks: 5,
+        schedule_window: None,
+        execution_plan,
+        funding_source_policy: FundingSourcePolicy::RuntimePolicy,
       },
-      None,
     ));
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
@@ -138,15 +162,19 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
 #[test]
 fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
   new_test_ext().execute_with(|| {
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_ids::BURNING_MANAGER_AAA_ID, |maybe| {
-      let actor = maybe.as_mut().expect("Burning Manager exists");
-      actor.execution_plan = alloc::vec![pallet_aaa::Step {
+    pallet_aaa::ActorProgram::<Runtime>::mutate(aaa_ids::BURNING_MANAGER_AAA_ID, |maybe| {
+      let program = maybe.as_mut().expect("Burning Manager program exists");
+      program.execution_plan = alloc::vec![pallet_aaa::Step {
         conditions: Default::default(),
-        task: pallet_aaa::Task::Noop,
+        task: pallet_aaa::Task::Transfer {
+          to: ALICE,
+          asset: AssetKind::Native,
+          amount: AmountResolution::Fixed(0),
+        },
         on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
       }]
       .try_into()
-      .expect("noop plan fits");
+      .expect("malformed burn plan fits");
     });
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
@@ -168,8 +196,7 @@ fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
         lp_asset,
         primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD,
       );
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
+    assert_ok!(activate_dormant_system(
       aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
       execution_plan,
     ));
@@ -249,8 +276,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
     ]
     .try_into()
     .expect("malformed zap plan still fits runtime bounds");
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
+    assert_ok!(activate_dormant_system(
       aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
       malformed_plan,
     ));
@@ -268,10 +294,16 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
 #[test]
 fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
   new_test_ext().execute_with(|| {
-    pallet_aaa::AaaInstances::<Runtime>::mutate(aaa_ids::TOL_BUCKET_A_AAA_ID, |maybe| {
-      let actor = maybe.as_mut().expect("TOL Bucket A exists");
-      actor.mutability = pallet_aaa::Mutability::Mutable;
-    });
+    let aaa_id = aaa_ids::TOL_BUCKET_A_AAA_ID;
+    pallet_aaa::DormantAaaIdentities::<Runtime>::insert(
+      aaa_id,
+      pallet_aaa::DormantAaaIdentity {
+        sovereign_account: AAA::sovereign_account_id_system(aaa_id),
+        owner: ALICE,
+        actor_class: pallet_aaa::ActorClass::System,
+        mutability: pallet_aaa::Mutability::Mutable,
+      },
+    );
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
     assert_eq!(state.tol_anchor.status, GuaranteeStatus::Violated);
@@ -287,9 +319,9 @@ fn genesis_burning_manager_aaa_has_deterministic_sovereign_and_correct_state() {
     let instance = AAA::aaa_instances(aaa_id).expect("Burning Manager AAA must exist at genesis");
     let expected_sovereign = AAA::sovereign_account_id_system(aaa_id);
     assert_eq!(instance.sovereign_account, expected_sovereign);
-    assert_eq!(instance.aaa_type, pallet_aaa::AaaType::System);
+    assert_eq!(instance.actor_class, pallet_aaa::ActorClass::System);
     assert_eq!(instance.mutability, pallet_aaa::Mutability::Mutable);
-    assert!(!instance.is_paused);
+    assert_eq!(instance.lifecycle, pallet_aaa::ActiveLifecycle::Active);
     assert_eq!(instance.consecutive_failures, 0);
     assert!(!instance.manual_trigger_pending);
     assert_eq!(
@@ -313,24 +345,40 @@ fn genesis_burning_manager_aaa_sovereign_is_stable_across_rebuilds() {
 }
 
 #[test]
-fn genesis_bm_execution_plan_uses_timer_trigger() {
+fn genesis_value_driven_programs_use_omnivorous_address_event_triggers() {
   new_test_ext().execute_with(|| {
-    let instance = AAA::aaa_instances(aaa_ids::BURNING_MANAGER_AAA_ID).unwrap();
-    assert!(
-      matches!(instance.schedule.trigger, pallet_aaa::Trigger::Timer { .. }),
-      "BM must use Timer trigger (no coupling with fee source)"
-    );
+    for aaa_id in [
+      aaa_ids::BURNING_MANAGER_AAA_ID,
+      aaa_ids::FEE_SINK_AAA_ID,
+      aaa_ids::BLDR_SPLITTER_AAA_ID,
+    ] {
+      let instance = AAA::aaa_instances(aaa_id).expect("genesis active actor exists");
+      assert!(
+        matches!(
+          instance.schedule.trigger,
+          pallet_aaa::Trigger::OnAddressEvent {
+            source_filter: pallet_aaa::SourceFilter::Any,
+            asset_filter: pallet_aaa::AssetFilter::Any,
+          }
+        ),
+        "value-driven actor {aaa_id} must react to verified inbound value without polling"
+      );
+    }
   });
 }
 
 // --- Burning Manager ---
 
 #[test]
-fn bm_burns_native_on_timer() {
+fn bm_burns_native_on_address_event() {
   seeded_test_ext().execute_with(|| {
     let bm = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
     let deposit = 50 * crate::EXISTENTIAL_DEPOSIT;
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, deposit);
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::transfer(&ALICE, &bm, AssetKind::Native, deposit));
     let issuance_before = Balances::total_issuance();
     let bm_balance_before = Balances::free_balance(&bm);
     assert!(bm_balance_before > 0);
@@ -351,11 +399,16 @@ fn bm_burns_native_on_timer() {
 }
 
 #[test]
-fn bm_skips_burn_when_balance_below_dust() {
+fn bm_skips_burn_when_signaled_balance_is_below_dust() {
   new_test_ext().execute_with(|| {
     let bm = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
-    let _ =
-      <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, crate::EXISTENTIAL_DEPOSIT);
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(
+      &bm, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT
+    ));
     let issuance_before = Balances::total_issuance();
     System::set_block_number(11);
     AAA::on_initialize(11);
@@ -369,7 +422,7 @@ fn bm_skips_burn_when_balance_below_dust() {
 }
 
 #[test]
-fn router_fee_flows_to_bm_sovereign_and_burns_on_next_poll() {
+fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let bm_id = aaa_ids::BURNING_MANAGER_AAA_ID;
@@ -397,17 +450,15 @@ fn router_fee_flows_to_bm_sovereign_and_burns_on_next_poll() {
     let fee_received = bm_after_swap.saturating_sub(bm_before);
     assert!(fee_received > 0, "BM sovereign must receive router fee");
     let issuance_before_burn = Balances::total_issuance();
-    let bm_before_poll = AAA::aaa_instances(bm_id).expect("BM must exist");
-    let target_cycle_nonce = bm_before_poll.cycle_nonce.saturating_add(1);
-    let cadence = match &bm_before_poll.schedule.trigger {
-      pallet_aaa::Trigger::Timer { every_blocks, .. } => *every_blocks,
-      _ => panic!("BM must stay timer-driven"),
-    };
-    let max_wait_blocks = cadence
-      .max(bm_before_poll.schedule.cooldown_blocks)
-      .saturating_add(2);
+    let bm_before_signal = AAA::aaa_instances(bm_id).expect("BM must exist");
+    let target_cycle_nonce = bm_before_signal.cycle_nonce.saturating_add(1);
+    assert!(matches!(
+      bm_before_signal.schedule.trigger,
+      pallet_aaa::Trigger::OnAddressEvent { .. }
+    ));
+    let max_wait_blocks = bm_before_signal.schedule.cooldown_blocks.saturating_add(2);
     let start_block = System::block_number();
-    let mut next_poll_observed = false;
+    let mut ingress_cycle_observed = false;
     for offset in 1..=max_wait_blocks {
       let block = start_block.saturating_add(offset);
       System::set_block_number(block);
@@ -422,18 +473,18 @@ fn router_fee_flows_to_bm_sovereign_and_burns_on_next_poll() {
           } if *aaa_id == bm_id && *cycle_nonce == target_cycle_nonce
         )
       }) {
-        next_poll_observed = true;
+        ingress_cycle_observed = true;
         break;
       }
     }
     assert!(
-      next_poll_observed,
-      "BM must start next timer cycle within cadence/cooldown bound"
+      ingress_cycle_observed,
+      "Burn Actor must run after the router fee ingress signal"
     );
     let issuance_after_burn = Balances::total_issuance();
     assert!(
       issuance_after_burn < issuance_before_burn,
-      "Fee must be burned on the observed next BM poll"
+      "Fee must be burned after the observed ingress-driven cycle"
     );
   });
 }
@@ -507,16 +558,15 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
       new_execution_plan
     ));
     let foreign_amount = 2 * primitives::ecosystem::params::PRECISION;
-    {
-      use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
-      assert_ok!(
-        <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
-          super::common::ASSET_A,
-          &bm,
-          foreign_amount,
-        )
-      );
-    }
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(
+      &bm,
+      AssetKind::Local(super::common::ASSET_A),
+      foreign_amount,
+    ));
     let foreign_before = crate::Assets::balance(super::common::ASSET_A, &bm);
     let issuance_before = Balances::total_issuance();
     for block in 11..=30 {
@@ -693,7 +743,11 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let bm = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
     let amount = primitives::ecosystem::params::PRECISION;
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount * 10);
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(&bm, AssetKind::Native, amount * 10));
     let price = 1_000_000_000_000u128;
     pallet_axial_router::EmaPrices::<Runtime>::insert(
       AssetKind::Native,
@@ -761,10 +815,15 @@ fn swap_without_pool_fails_execution_plan() {
       bm_id,
       execution_plan
     ));
-    let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(
       &bm,
+      AssetKind::Native,
       100 * primitives::ecosystem::params::PRECISION,
-    );
+    ));
     System::set_block_number(11);
     AAA::on_initialize(11);
     AAA::on_idle(11, Weight::from_parts(u64::MAX, u64::MAX));
@@ -960,14 +1019,6 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       );
     }
     let fund_amount = 10 * primitives::ecosystem::params::PRECISION;
-    let _ =
-      <Balances as Currency<crate::AccountId>>::deposit_creating(&liquidity_actor, fund_amount);
-    assert_ok!(super::common::mint_tokens(
-      ASSET_A,
-      &ALICE,
-      &liquidity_actor,
-      fund_amount
-    ));
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
       .next()
       .expect("pool must exist after setup");
@@ -978,11 +1029,19 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       crate::configs::aaa_config::TmctolGenesisSystemAaas::build_zap_execution_plan(
         foreign, lp_asset, dust,
       );
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
-      liquidity_actor_id,
-      execution_plan
+    assert_ok!(activate_dormant_system(liquidity_actor_id, execution_plan));
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(
+      &liquidity_actor, AssetKind::Native, fund_amount
     ));
+    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+      crate::AccountId,
+      AssetKind,
+      crate::Balance,
+    >>::mint(&liquidity_actor, foreign, fund_amount));
     let price = 1_000_000_000_000u128;
     pallet_axial_router::EmaPrices::<Runtime>::insert(AssetKind::Native, foreign, price);
     pallet_axial_router::EmaPrices::<Runtime>::insert(foreign, AssetKind::Native, price);
@@ -1103,10 +1162,9 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       aaa_ids::BURNING_MANAGER_AAA_ID,
       burn_execution_plan
     ));
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
+    assert_ok!(activate_dormant_system(
       aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
-      zap_execution_plan
+      zap_execution_plan,
     ));
     // Explicitly trigger execution since we deposited funds before updating execution plans
     assert_ok!(AAA::manual_trigger(
@@ -1192,16 +1250,8 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
       crate::configs::aaa_config::TmctolGenesisSystemAaas::build_treasury_lp_unwind_execution_plan(
         lp_asset, 100,
       );
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
-      bucket_id,
-      bucket_plan,
-    ));
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
-      treasury_id,
-      treasury_plan,
-    ));
+    assert_ok!(activate_dormant_system(bucket_id, bucket_plan));
+    assert_ok!(activate_dormant_system(treasury_id, treasury_plan));
     assert_ok!(AAA::update_schedule(
       RuntimeOrigin::root(),
       bucket_id,
@@ -1215,10 +1265,7 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
       RuntimeOrigin::root(),
       treasury_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
-        },
+        trigger: pallet_aaa::Trigger::Timer { every_blocks: 1 },
         cooldown_blocks: 0,
       },
       None,
@@ -1264,7 +1311,25 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
 fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink() {
   seeded_test_ext().execute_with(|| {
     let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let liquidity_actor_id = aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
     let liquidity_actor = liquidity_actor_account();
+    let execution_plan =
+      ExecutionPlanOf::<Runtime>::try_from(vec![pallet_aaa::StepOf::<Runtime> {
+        conditions: Default::default(),
+        task: Task::Transfer {
+          to: ALICE,
+          asset: AssetKind::Native,
+          amount: AmountResolution::Fixed(1),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }])
+      .expect("liquidity actor test plan fits");
+    assert_ok!(activate_dormant_system(liquidity_actor_id, execution_plan));
+    assert!(
+      !AAA::actor_hot(liquidity_actor_id)
+        .expect("liquidity actor hot state")
+        .pending_signal
+    );
     assert_ok!(TokenMintingCurve::create_curve(
       RuntimeOrigin::root(),
       AssetKind::Native,
@@ -1302,6 +1367,15 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink(
     assert_eq!(
       crate::Assets::balance(ASSET_A, &liquidity_actor),
       liquidity_actor_foreign_before + foreign_amount
+    );
+    let hot = AAA::actor_hot(liquidity_actor_id).expect("liquidity actor hot state");
+    assert!(
+      hot.pending_signal,
+      "TMC distribution must notify the liquidity actor directly"
+    );
+    assert!(
+      hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some(),
+      "direct TMC ingress must retain exact scheduler readiness"
     );
   });
 }
@@ -1560,19 +1634,15 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       crate::configs::aaa_config::TmctolGenesisSystemAaas::build_bldr_zm_execution_plan(
         bldr_asset, lp_asset, dust,
       );
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
-      zm_id,
-      zm_execution_plan
-    ));
-    // 3. Set ZM timer schedule (Splitter schedule already active from genesis)
+    assert_ok!(activate_dormant_system(zm_id, zm_execution_plan));
+    // 3. Keep ZM ingress-driven with no cooldown for the chained test.
     assert_ok!(AAA::update_schedule(
       RuntimeOrigin::root(),
       zm_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 1,
-          probability: None,
+        trigger: pallet_aaa::Trigger::OnAddressEvent {
+          source_filter: pallet_aaa::SourceFilter::Any,
+          asset_filter: pallet_aaa::AssetFilter::Any,
         },
         cooldown_blocks: 0,
       },
@@ -1678,19 +1748,12 @@ fn treasury_b_buyback_burns_bldr() {
         dust,
         slippage,
       );
-    assert_ok!(AAA::update_execution_plan(
-      RuntimeOrigin::root(),
-      treasury_b_id,
-      execution_plan,
-    ));
+    assert_ok!(activate_dormant_system(treasury_b_id, execution_plan));
     assert_ok!(AAA::update_schedule(
       RuntimeOrigin::root(),
       treasury_b_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer {
-          every_blocks: 10,
-          probability: None,
-        },
+        trigger: pallet_aaa::Trigger::Timer { every_blocks: 10 },
         cooldown_blocks: 5,
       },
       None,
@@ -1998,14 +2061,10 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
       if bucket_id == aaa_ids::TOL_BUCKET_A_AAA_ID {
         assert_noop!(
           AAA::update_execution_plan(RuntimeOrigin::root(), bucket_id, execution_plan),
-          pallet_aaa::Error::<Runtime>::ImmutableAaa
+          pallet_aaa::Error::<Runtime>::AaaNotFound
         );
       } else {
-        assert_ok!(AAA::update_execution_plan(
-          RuntimeOrigin::root(),
-          bucket_id,
-          execution_plan
-        ));
+        assert_ok!(activate_dormant_system(bucket_id, execution_plan));
         assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), bucket_id));
       }
       before_lp.push((bucket_id, crate::Assets::balance(lp_asset_id, &bucket)));

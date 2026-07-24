@@ -2,6 +2,97 @@ use frame::prelude::*;
 use polkadot_sdk::sp_runtime::Perbill;
 
 pub type AaaId = u64;
+pub type QueueTicket = u64;
+pub type QueuePageId = u64;
+pub type WakeupPageId = u64;
+pub type WakeupSlot = u32;
+pub type WakeupCursorIndex = u32;
+
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub enum IdleStarvationPhase<BlockNumber> {
+  #[default]
+  Healthy,
+  Starving {
+    since: BlockNumber,
+  },
+  Alerted {
+    since: BlockNumber,
+  },
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupPointer<BlockNumber> {
+  pub block: BlockNumber,
+  pub page_id: WakeupPageId,
+  pub slot: WakeupSlot,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupEntry {
+  pub aaa_id: AaaId,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupPage<Entries> {
+  pub entries: Entries,
+  pub live_entries: u32,
+  pub scan_slot: WakeupSlot,
+  pub previous_page: Option<WakeupPageId>,
+  pub next_page: Option<WakeupPageId>,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct WakeupBucketState {
+  pub head_page: WakeupPageId,
+  pub tail_page: WakeupPageId,
+  pub next_page_id: WakeupPageId,
+  pub live_entries: u32,
+  pub cursor_index: Option<WakeupCursorIndex>,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct QueueEntry {
+  pub aaa_id: AaaId,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QueueDrainStats {
+  pub entries_scanned: u32,
+  pub tombstones_skipped: u32,
+  pub pages_touched: u32,
+  pub pages_deleted: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WakeupDrainStats {
+  pub entries_scanned: u32,
+  pub ready_entries: u32,
+  pub stale_entries: u32,
+  pub pages_touched: u32,
+  pub pages_deleted: u32,
+}
 pub const SYSTEM_OWNER_SLOT_SENTINEL: u8 = 0;
 
 #[derive(
@@ -80,7 +171,6 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     asset: AssetId,
     shares: AmountResolution<Balance>,
   },
-  Noop,
 }
 
 impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get<u32>> Clone
@@ -166,7 +256,6 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         asset: asset.clone(),
         shares: shares.clone(),
       },
-      Self::Noop => Self::Noop,
     }
   }
 }
@@ -269,7 +358,6 @@ impl<
         .field("asset", asset)
         .field("shares", shares)
         .finish(),
-      Self::Noop => f.write_str("Noop"),
     }
   }
 }
@@ -429,7 +517,6 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
           shares: right_shares,
         },
       ) => left_asset == right_asset && left_shares == right_shares,
-      (Self::Noop, Self::Noop) => true,
       _ => false,
     }
   }
@@ -446,6 +533,30 @@ impl<AssetId: Eq, Balance: Eq, AccountId: Eq, MaxSplitTransferLegs: Get<u32>> Eq
 pub enum AaaType {
   User,
   System,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActorClass {
+  User { owner_slot: u8 },
+  System,
+}
+
+impl ActorClass {
+  pub fn aaa_type(self) -> AaaType {
+    match self {
+      Self::User { .. } => AaaType::User,
+      Self::System => AaaType::System,
+    }
+  }
+
+  pub fn owner_slot(self) -> Option<u8> {
+    match self {
+      Self::User { owner_slot } => Some(owner_slot),
+      Self::System => None,
+    }
+  }
 }
 
 #[derive(
@@ -478,6 +589,20 @@ pub enum PauseReason {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub enum ActiveLifecycle {
+  Active,
+  Paused(PauseReason),
+}
+
+impl ActiveLifecycle {
+  pub fn is_paused(self) -> bool {
+    matches!(self, Self::Paused(_))
+  }
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub enum CloseReason {
   OwnerInitiated,
   BalanceExhausted,
@@ -501,7 +626,6 @@ pub enum StepErrorPolicy {
 )]
 pub enum DeferReason {
   InsufficientWeightBudget,
-  CloseTransitionFailed,
 }
 
 #[derive(
@@ -511,17 +635,6 @@ pub enum StepSkippedReason {
   ConditionsNotMet,
   ResolutionSkipped,
   FundingUnavailable,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub enum OnCloseStepFailureKind {
-  EvaluationFee,
-  ExecutionFee,
-  Condition,
-  Resolution,
-  Adapter,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -617,7 +730,6 @@ impl<AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq for AssetFilter<AssetId, MaxWhi
 pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
   Timer {
     every_blocks: u32,
-    probability: Option<Perbill>,
   },
   OnAddressEvent {
     source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
@@ -631,12 +743,8 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
 {
   fn clone(&self) -> Self {
     match self {
-      Self::Timer {
-        every_blocks,
-        probability,
-      } => Self::Timer {
+      Self::Timer { every_blocks } => Self::Timer {
         every_blocks: *every_blocks,
-        probability: *probability,
       },
       Self::OnAddressEvent {
         source_filter,
@@ -655,13 +763,9 @@ impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: G
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Timer {
-        every_blocks,
-        probability,
-      } => f
+      Self::Timer { every_blocks } => f
         .debug_struct("Timer")
         .field("every_blocks", every_blocks)
-        .field("probability", probability)
         .finish(),
       Self::OnAddressEvent {
         source_filter,
@@ -684,13 +788,11 @@ impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> Parti
       (
         Self::Timer {
           every_blocks: left_every_blocks,
-          probability: left_probability,
         },
         Self::Timer {
           every_blocks: right_every_blocks,
-          probability: right_probability,
         },
-      ) => left_every_blocks == right_every_blocks && left_probability == right_probability,
+      ) => left_every_blocks == right_every_blocks,
       (
         Self::OnAddressEvent {
           source_filter: left_source_filter,
@@ -851,11 +953,9 @@ pub struct ScheduleWindow<BlockNumber> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct FundingBatch<Balance, BlockNumber> {
+pub struct FundingBatch<Balance> {
   pub amount: Balance,
-  pub block: BlockNumber,
   pub pending_amount: Balance,
-  pub pending_last_block: Option<BlockNumber>,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -915,85 +1015,95 @@ impl<AccountId: Eq, MaxSignedFundingSources: Get<u32>> Eq
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct AaaInstance<
-  AccountId,
-  BlockNumber,
-  Schedule,
-  ExecutionPlan,
-  FundingPolicy,
-  FundingSnapshots,
-  FundingTrackedAssets,
-  Balance,
-> {
-  pub aaa_id: AaaId,
+pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
+  Dormant,
+  Active {
+    schedule: Schedule,
+    schedule_window: Option<ScheduleWindow<BlockNumber>>,
+    execution_plan: ExecutionPlan,
+    funding_source_policy: FundingPolicy,
+  },
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DormantAaaIdentity<AccountId> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
-  pub owner_slot: u8,
-  pub aaa_type: AaaType,
+  pub actor_class: ActorClass,
   pub mutability: Mutability,
-  pub is_paused: bool,
-  pub pause_reason: Option<PauseReason>,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorHotState<AccountId, BlockNumber, Balance> {
+  pub sovereign_account: AccountId,
+  pub owner: AccountId,
+  pub actor_class: ActorClass,
+  pub mutability: Mutability,
+  pub lifecycle: ActiveLifecycle,
+  pub cycle_nonce: u64,
+  pub auto_close_at_cycle_nonce: Option<u64>,
+  pub consecutive_failures: u32,
+  pub pending_signal: bool,
+  pub queue_ticket: Option<u64>,
+  pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
+  pub terminal_at: Option<BlockNumber>,
+  pub last_user_queue_mutation_block: Option<BlockNumber>,
+  pub cycle_weight_upper: Weight,
+  pub cycle_fee_upper: Balance,
+  pub funding_tracked_count: u32,
+  pub pending_funding_count: u32,
+  pub has_pending_funding: bool,
+  pub first_eligible_at: BlockNumber,
+  pub last_cycle_block: BlockNumber,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorProgramState<Schedule, BlockNumber, ExecutionPlan> {
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
-  pub on_close_execution_plan: ExecutionPlan,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance> {
+  pub sovereign_account: AccountId,
+  pub owner: AccountId,
+  pub actor_class: ActorClass,
+  pub mutability: Mutability,
+  pub lifecycle: ActiveLifecycle,
+  pub schedule: Schedule,
+  pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
+  pub execution_plan: ExecutionPlan,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
   pub manual_trigger_pending: bool,
+  pub queue_ticket: Option<u64>,
+  pub last_user_queue_mutation_block: Option<BlockNumber>,
+  pub cycle_weight_upper: Weight,
+  pub cycle_fee_upper: Balance,
+  pub funding_tracked_count: u32,
+  pub pending_funding_count: u32,
+  pub has_pending_funding: bool,
+  pub first_eligible_at: BlockNumber,
+  pub last_cycle_block: BlockNumber,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorFundingState<FundingPolicy, FundingSnapshots, FundingTrackedAssets> {
   pub funding_source_policy: FundingPolicy,
   pub funding_snapshots: FundingSnapshots,
   pub funding_tracked_assets: FundingTrackedAssets,
-  pub cycle_weight_upper: Weight,
-  pub cycle_fee_upper: Balance,
-  pub created_at: BlockNumber,
-  pub updated_at: BlockNumber,
-  pub last_cycle_block: BlockNumber,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub enum ReadinessTrigger {
-  Timer {
-    every_blocks: u32,
-    probability: Option<Perbill>,
-  },
-  OnAddressEvent,
-  Manual,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct AaaReadinessState<BlockNumber> {
-  pub aaa_type: AaaType,
-  pub is_paused: bool,
-  pub trigger: ReadinessTrigger,
-  pub cooldown_blocks: u32,
-  pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
-  pub manual_trigger_pending: bool,
-  pub cycle_nonce: u64,
-  pub last_cycle_block: BlockNumber,
-}
-
-#[derive(
-  Clone,
-  Copy,
-  Debug,
-  Default,
-  Decode,
-  DecodeWithMemTracking,
-  Encode,
-  Eq,
-  PartialEq,
-  TypeInfo,
-  MaxEncodedLen,
-)]
-pub struct InboxState<BlockNumber> {
-  pub is_pending: bool,
-  pub generation: u64,
-  pub last_event_block: BlockNumber,
 }
 
 #[derive(
@@ -1011,14 +1121,4 @@ impl<AccountId> FundingProvenance<AccountId> {
       Self::Signed(account) | Self::InternalProtocol(account) | Self::Xcm(account) => account,
     }
   }
-}
-
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct IngressOverflowEvent<AaaId, AssetId, Balance, AccountId> {
-  pub aaa_id: AaaId,
-  pub asset: AssetId,
-  pub amount: Balance,
-  pub provenance: Option<FundingProvenance<AccountId>>,
 }

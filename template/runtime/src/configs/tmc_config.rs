@@ -75,6 +75,53 @@ impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
   }
 }
 
+pub struct TmctolMintDistributionIngress;
+impl pallet_tmc::MintDistributionHook<AccountId> for TmctolMintDistributionIngress {
+  fn before_collateral_transfer(
+    source: &AccountId,
+    asset: AssetKind,
+    account: &AccountId,
+    amount: Balance,
+  ) -> Result<(), DispatchError> {
+    use super::address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
+    RuntimeAddressEventIngress::preflight_internal_inbound(account, asset, amount, source)
+  }
+
+  fn before_sink_mint(
+    source: &AccountId,
+    minted_asset: AssetKind,
+    account: &AccountId,
+    amount: Balance,
+  ) -> Result<(), DispatchError> {
+    use super::address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
+    RuntimeAddressEventIngress::preflight_internal_inbound(account, minted_asset, amount, source)
+  }
+
+  fn after_distribution(
+    source: &AccountId,
+    collateral_asset: AssetKind,
+    collateral_account: &AccountId,
+    collateral_amount: Balance,
+    minted_asset: AssetKind,
+    minted_account: &AccountId,
+    minted_amount: Balance,
+  ) -> Result<(), DispatchError> {
+    use super::address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
+    RuntimeAddressEventIngress::on_internal_inbound(
+      collateral_account,
+      collateral_asset,
+      collateral_amount,
+      source,
+    )?;
+    RuntimeAddressEventIngress::on_internal_inbound(
+      minted_account,
+      minted_asset,
+      minted_amount,
+      source,
+    )
+  }
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 pub struct TmcBenchmarkHelper;
 
@@ -125,7 +172,7 @@ impl pallet_tmc::pallet::Config for Runtime {
   type TreasuryAccount = LiquidityActorAccount;
   type MintOutputResolver = TmctolMintOutput;
   type UserAllocationRatio = TmcUserAllocationRatio;
-  type MintDistributionHook = ();
+  type MintDistributionHook = TmctolMintDistributionIngress;
   type WeightInfo = crate::weights::pallet_tmc::SubstrateWeight<Runtime>;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = TmcBenchmarkHelper;

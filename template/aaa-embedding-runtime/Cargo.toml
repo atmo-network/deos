@@ -1,0 +1,45 @@
+[package]
+name = "aaa-embedding-runtime"
+description = "Minimal independent runtime fixture for the public pallet-aaa embedding contract"
+version = "0.7.2"
+authors.workspace = true
+license = "MIT-0"
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codec = { workspace = true }
+pallet-aaa.workspace = true
+scale-info.workspace = true
+polkadot-sdk = { workspace = true, features = [
+  "frame-executive",
+  "frame-support",
+  "frame-system",
+  "pallet-balances",
+  "sp-core",
+  "sp-io",
+  "sp-runtime",
+] }
+
+[features]
+default = ["std"]
+std = [
+  "codec/std",
+  "pallet-aaa/std",
+  "polkadot-sdk/std",
+  "scale-info/std",
+]
+dex-fixture = []
+runtime-benchmarks = [
+  "pallet-aaa/runtime-benchmarks",
+  "polkadot-sdk/runtime-benchmarks",
+]
+try-runtime = [
+  "pallet-aaa/try-runtime",
+  "polkadot-sdk/try-runtime",
+]

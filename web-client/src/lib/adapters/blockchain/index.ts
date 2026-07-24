@@ -78,6 +78,15 @@ function triggerRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function automationActorPaused(instance: unknown): boolean {
+  const actor = triggerRecord(instance);
+  const lifecycle = triggerRecord(actor?.lifecycle);
+  if (typeof lifecycle?.type === 'string') {
+    return lifecycle.type === 'Paused';
+  }
+  return actor?.is_paused === true;
+}
+
 function automationTriggerLabel(trigger?: {
   type: string;
   value?: unknown;
@@ -89,10 +98,9 @@ function automationTriggerLabel(trigger?: {
     case 'Timer': {
       const timer = triggerRecord(trigger.value);
       const everyBlocks = timer?.every_blocks;
-      const probability = timer?.probability;
       const timerLabel =
         typeof everyBlocks === 'number' ? everyBlocks : 'unknown';
-      return probability ? `Timer/${timerLabel} + p` : `Timer/${timerLabel}`;
+      return `Timer/${timerLabel}`;
     }
     case 'OnAddressEvent':
       return 'Address event';
@@ -342,18 +350,18 @@ export class BlockchainAdapter implements Adapter {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const instance =
-            await snapshot.typedApi.query.AAA.AaaInstances.getValue(
+          const [hot, program] = await Promise.all([
+            snapshot.typedApi.query.AAA.ActorHot.getValue(BigInt(actor.aaaId), {
+              at: snapshot.at,
+            }),
+            snapshot.typedApi.query.AAA.ActorProgram.getValue(
               BigInt(actor.aaaId),
               { at: snapshot.at },
-            );
-          const readiness =
-            await snapshot.typedApi.query.AAA.AaaReadiness.getValue(
-              BigInt(actor.aaaId),
-              { at: snapshot.at },
-            );
+            ),
+          ]);
+          const exists = hot != null && program != null;
           const sovereignAccount =
-            instance?.sovereign_account ??
+            hot?.sovereign_account ??
             deriveSystemAaaSovereignAccount(actor.aaaId);
           const account = await snapshot.typedApi.query.System.Account.getValue(
             sovereignAccount,
@@ -363,13 +371,10 @@ export class BlockchainAdapter implements Adapter {
             aaaId: actor.aaaId,
             label: actor.label,
             role: actor.role,
-            exists: instance != null,
-            paused: instance?.is_paused ?? false,
-            lastCycleBlock:
-              instance?.last_cycle_block ?? readiness?.last_cycle_block ?? null,
-            triggerLabel: automationTriggerLabel(
-              readiness?.trigger ?? instance?.schedule.trigger,
-            ),
+            exists,
+            paused: automationActorPaused(hot),
+            lastCycleBlock: hot?.last_cycle_block ?? null,
+            triggerLabel: automationTriggerLabel(program?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,
           } satisfies AutomationActorSnapshot;
         }),

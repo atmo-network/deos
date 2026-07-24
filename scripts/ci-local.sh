@@ -3,6 +3,11 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
+ONLY_CHECK="all"
+FIX_FORMAT=0
+TARGET_PACKAGE=""
+TEST_FILTER=""
+FEATURE_MODE="auto"
 SKIP_WASM_BUILD="${SKIP_WASM_BUILD:-1}"
 if [[ "$SKIP_WASM_BUILD" == "1" ]]; then
     export SKIP_WASM_BUILD
@@ -20,16 +25,67 @@ Usage: ci-local.sh [OPTIONS]
 Runs the local CI workflow: clippy, tests, docs, formatting check, and workspace check.
 
 Options:
-  -h, --help        Show this help message
+  --only CHECK       Run one compact check: clippy, tests, docs, format, or check
+  --package NAME     Scope clippy, tests, docs, or check to one Cargo package
+  --test-filter NAME Scope --only tests to one Cargo test-name filter
+  --all-features     Enable all Cargo features (Clippy default)
+  --default-features Use package default features, including for Clippy
+  --fix              Apply formatting; requires --only format
+  -h, --help         Show this help message
 
 Environment:
   SKIP_WASM_BUILD=0|1
+  DEOS_VERBOSE=0|1
+  DEOS_FAILURE_TAIL_LINES=N
 EOF
 }
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --only)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--only requires a check name"
+                    exit 2
+                fi
+                ONLY_CHECK="$2"
+                case "$ONLY_CHECK" in
+                    clippy|tests|docs|format|check) ;;
+                    *)
+                        log_error "Unsupported check: $ONLY_CHECK"
+                        exit 2
+                        ;;
+                esac
+                shift 2
+                continue
+                ;;
+            --package)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--package requires a package name"
+                    exit 2
+                fi
+                TARGET_PACKAGE="$2"
+                shift 2
+                continue
+                ;;
+            --test-filter)
+                if [[ $# -lt 2 ]]; then
+                    log_error "--test-filter requires a test name"
+                    exit 2
+                fi
+                TEST_FILTER="$2"
+                shift 2
+                continue
+                ;;
+            --all-features)
+                FEATURE_MODE="all"
+                ;;
+            --default-features)
+                FEATURE_MODE="default"
+                ;;
+            --fix)
+                FIX_FORMAT=1
+                ;;
             -h|--help)
                 usage
                 exit 0
@@ -42,6 +98,26 @@ parse_args() {
         esac
         shift
     done
+    if (( FIX_FORMAT == 1 )) && [[ "$ONLY_CHECK" != "format" ]]; then
+        log_error "--fix requires --only format"
+        exit 2
+    fi
+    if [[ -n "$TARGET_PACKAGE" && ! "$TARGET_PACKAGE" =~ ^[A-Za-z0-9_-]+$ ]]; then
+        log_error "--package accepts a Cargo package name"
+        exit 2
+    fi
+    if [[ -n "$TARGET_PACKAGE" && "$ONLY_CHECK" == "format" ]]; then
+        log_error "--package does not apply to formatting"
+        exit 2
+    fi
+    if [[ -n "$TEST_FILTER" && "$ONLY_CHECK" != "tests" ]]; then
+        log_error "--test-filter requires --only tests"
+        exit 2
+    fi
+    if [[ -n "$TEST_FILTER" && ! "$TEST_FILTER" =~ ^[A-Za-z0-9_:.-]+$ ]]; then
+        log_error "--test-filter contains unsupported characters"
+        exit 2
+    fi
 }
 
 check_prerequisites() {
@@ -60,38 +136,81 @@ check_prerequisites() {
     log_success "Prerequisites checked"
 }
 
+selected() {
+    [[ "$ONLY_CHECK" == "all" || "$ONLY_CHECK" == "$1" ]]
+}
+
+cargo_scope_args() {
+    if [[ -n "$TARGET_PACKAGE" ]]; then
+        printf '%s' "--package '$TARGET_PACKAGE'"
+    else
+        printf '%s' "--workspace"
+    fi
+}
+
+cargo_feature_args() {
+    local check="$1"
+    if [[ "$FEATURE_MODE" == "all" || ( "$FEATURE_MODE" == "auto" && "$check" == "clippy" ) ]]; then
+        printf '%s' "--all-features"
+    fi
+}
+
 run_primary_checks() {
     phase_banner "Step 2: Primary checks"
+    local scope_args test_filter
+    scope_args="$(cargo_scope_args)"
+    test_filter="${TEST_FILTER:+ '$TEST_FILTER'}"
 
-    run_shell_step "Clippy (Linting)" \
-        "30" \
-        "cargo clippy --all-targets --all-features --locked --workspace --quiet -- -D warnings"
+    if selected clippy; then
+        local feature_args
+        feature_args="$(cargo_feature_args clippy)"
+        run_shell_step "Clippy (Linting)" \
+            "30" \
+            "cargo clippy --all-targets $feature_args --locked $scope_args --quiet -- -D warnings"
+    fi
 
-    run_shell_step "Tests" \
-        "15" \
-        "cargo test --workspace"
+    if selected tests; then
+        local feature_args
+        feature_args="$(cargo_feature_args tests)"
+        run_shell_step "Tests" \
+            "15" \
+            "cargo test $feature_args $scope_args$test_filter"
+    fi
 
-    run_shell_step "Documentation Build" \
-        "15" \
-        "cargo doc --workspace --no-deps"
+    if selected docs; then
+        local feature_args
+        feature_args="$(cargo_feature_args docs)"
+        run_shell_step "Documentation Build" \
+            "15" \
+            "cargo doc $feature_args $scope_args --no-deps"
+    fi
 }
 
 run_additional_checks() {
     phase_banner "Step 3: Additional checks"
 
-    log_info "Checking code formatting"
-    if cargo fmt -- --check; then
-        log_success "Code formatting is correct"
-    else
-        log_warning "Code formatting issues found (run 'cargo fmt' to fix)"
+    if selected format; then
+        if (( FIX_FORMAT == 1 )); then
+            run_shell_step \
+                "Apply code formatting" \
+                "" \
+                "cd '$TEMPLATE_DIR' && cargo fmt"
+        else
+            run_shell_step \
+                "Code formatting" \
+                "" \
+                "cd '$TEMPLATE_DIR' && cargo fmt -- --check"
+        fi
     fi
 
-    log_info "Checking basic workspace consistency"
-    if cargo check --workspace --quiet; then
-        log_success "Workspace check passed"
-    else
-        log_error "Workspace check failed"
-        exit 1
+    if selected check; then
+        local scope_args feature_args
+        scope_args="$(cargo_scope_args)"
+        feature_args="$(cargo_feature_args check)"
+        run_shell_step \
+            "Basic workspace consistency" \
+            "" \
+            "cd '$TEMPLATE_DIR' && cargo check $feature_args $scope_args --quiet"
     fi
 }
 
@@ -100,16 +219,17 @@ print_summary() {
     local test_file_count
     local doc_file_count
 
-    workspace_members=$(grep -c 'members.*=' Cargo.toml || echo 'N/A')
-    test_file_count=$(find . -name '*.rs' -exec grep -l '#\[test\]' {} ';' | wc -l)
-    doc_file_count=$(find target/doc -name '*.html' 2>/dev/null | wc -l)
-
     phase_banner "Summary"
-    log_success "Local CI workflow completed successfully"
-    log_info "Project statistics"
-    echo "  Workspace members: $workspace_members"
-    echo "  Test files: $test_file_count"
-    echo "  Documentation: $doc_file_count HTML files generated"
+    log_success "Local CI workflow completed successfully (selection: $ONLY_CHECK)"
+    if [[ "$ONLY_CHECK" == "all" ]]; then
+        workspace_members=$(grep -c 'members.*=' Cargo.toml || echo 'N/A')
+        test_file_count=$(find . -name '*.rs' -exec grep -l '#\[test\]' {} ';' | wc -l)
+        doc_file_count=$(find target/doc -name '*.html' 2>/dev/null | wc -l)
+        log_info "Project statistics"
+        echo "  Workspace members: $workspace_members"
+        echo "  Test files: $test_file_count"
+        echo "  Documentation: $doc_file_count HTML files generated"
+    fi
 }
 
 main() {
@@ -121,6 +241,24 @@ main() {
     print_summary
 }
 
+run_entrypoint() {
+    if [[ "${1:-}" == "--internal" ]]; then
+        shift
+        main "$@"
+        return
+    fi
+    local arg
+    for arg in "$@"; do
+        if [[ "$arg" == "-h" || "$arg" == "--help" ]]; then
+            main "$@"
+            return
+        fi
+    done
+    local script_path
+    script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+    run_command_step "DEOS local CI" "" "$script_path" --internal "$@"
+}
+
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    main "$@"
+    run_entrypoint "$@"
 fi

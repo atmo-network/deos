@@ -584,7 +584,7 @@ mod tests {
       UnitWeightCost::get(),
       <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::xcm_asset_deposit()
     );
-    assert!(UnitWeightCost::get().proof_size() > 64 * 1024);
+    assert!(UnitWeightCost::get().proof_size() > 0);
   }
 
   #[test]

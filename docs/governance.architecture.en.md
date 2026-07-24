@@ -31,32 +31,87 @@ It is a bounded runtime component whose main architectural job is to turn govern
 The new contract layer in [`governance.specification.en.md`](./governance.specification.en.md) is intentionally broader than the runtime slice described here.
 The most important current gaps are:
 
-1. `First dual-mode protection-track slice exists, but it is still narrower than the target contract`
-   the runtime now exposes a separate protection track with `Veto` plus protection-track `Pass`, supports one ordinary-track vote plus one protection-track vote per account on the same proposal, allows bounded replacement of the protection-track side for the same account/item, and keeps the path universal across today's protected proposal set; the backing protection surface is now domain-specific (`$VETO` asset for protocol / network governance, native `$NTVE` stake for `$BLDR` governance), requires raw `Veto` turnout to clear a `1%` dust floor before the final fail-closed gate can activate, and now simply keeps protection admissible until the configured protection-window close instead of relying on the older first-touch activation deadline; richer class families and broader track menus still remain future work
+**1. First dual-mode protection-track slice exists, but it remains narrower than the target contract.**
 
-2. `The Declining Power slice is now closer to the target contract, and urgent handling now has one narrowly scoped live exception on the current line`
-   ballot weight now follows the shipped piecewise `7x -> 1x` curve through a bounded vote-time epoch stored per ballot, and the pallet already separates ordinary-track and protection-track weighting windows internally so those clocks can diverge honestly later. The runtime now also exposes an explicit urgent-policy query surface per proposal so the expeditable contract is no longer implicit; on the current launch line that policy is still narrow rather than universal: only strategic `L1RootAction` proposals are expeditable, and they now require unanimous raw protection-track `Pass` (`100%` of eligible `$VETO` supply) before the fast path triggers. The current line also uses one tighter runtime-upgrade-only exception above the generic urgent path: once that unanimous protection condition is met, the pallet immediately resolves and executes the runtime-upgrade authorization path without waiting for a separate primary-track ballot. Outside that strategic runtime-upgrade exception, urgent handling still remains disabled until a later constitutional/runtime policy opts more `(domain, payload_kind)` pairs in. The remaining gap is no longer missing urgent mechanics; it is the still-narrow policy surface around them rather than the absence of an implementation path.
+The runtime exposes a separate protection track with `Veto` and protection-track `Pass`. Each account may cast one ordinary-track vote and one protection-track vote on the same proposal, with bounded replacement of its protection-track side for the same item. The path remains universal across today's protected proposal set.
 
-3. `Admin-heavy proposal control`
-   signed users can cast votes, the browser now exposes both the bounded advisory submit path and the first minimal tactical treasury invoice submit path, and the current runtime now also opts tactical `$BLDR` `L2TreasurySpend` into signed submission alongside the earlier advisory combinations; manual resolution/rejection, requeue, and policy-aware early finalization otherwise remain `Root`-gated in the current runtime
+The backing surface is domain-specific: the `$VETO` asset protects protocol / network governance, while native `$NTVE` stake protects `$BLDR` governance. Raw `Veto` turnout must clear a `1%` dust floor before the final fail-closed gate can activate. Protection remains admissible until the configured protection-window close instead of the older first-touch activation deadline. Richer class families and broader track menus remain future work.
 
-4. `Pallet-side payload executor scaffold now exists, and the first executable runtime slices are live`
-   the governance kernel now has a canonical bounded enactment scaffold: finalized proposals can either stay as approved-only outcomes, enter bounded pending-enactment buckets, finalize advisory payloads explicitly without dispatch, or record generic execution success / execution failure once a runtime payload executor is enabled. The current reference runtime now enables one bounded slice for each executable payload kind: `(a)` `L1RootAction` may dispatch preimage-backed `RuntimeCall::System(authorize_upgrade { code_hash })` under Root-equivalent authority in the strategic domain, `(b)` `L2ParameterChange` may now dispatch two narrow domain-local parameter paths by applying preimage-backed `RuntimeCall::AxialRouter(add_tracked_asset { asset })` and bounded `RuntimeCall::AxialRouter(update_router_fee { new_fee })` through governance-owned internal setters instead of Root dispatch, and `(c)` tactical `L2TreasurySpend` now decodes a dedicated bounded invoice payload (`beneficiary`, `payout_asset`, `base_amount`, explicit funding source), reads the resolved winning primary option from bounded governance state, applies the on-chain invoice scalar, and executes the final transfer from the designated BLDR Treasury sovereign account rather than as Root. The current treasury authority topology is therefore explicit rather than implicit: the tactical `$BLDR` domain declares exactly one executable funding source (`BldrTreasury`), that source resolves to the domain treasury sovereign account only for the tactical domain, and wider source families or native payout topologies remain future opt-in governance/runtime work rather than hidden rights of the current invoice payload. Launch-line `$BLDR` referenda are now not just conceptually invoice-centric but live invoice-shaped on the reference line, while changes to System AAA behavior still require `L2SignalToL1` or an explicit delegation of those control surfaces into the domain. A current scan of Root-only custom-pallet control surfaces also narrows the next truthful `L2ParameterChange` search space: TMC launch-physics mutation remains out of contract, staking onboarding/recovery/admin reward-bootstrap paths remain system-owned, AAA global breaker/actor-limit controls remain system-owned, and asset-registry registration/migration remains L1-owned. The remaining runtime gap is therefore narrower than a generic "more setters" wishlist: the next valid slice is a genuinely delegated/domain-owned parameter surface, not opportunistic reuse of unrelated Root setters.
+**2. The Declining Power slice is closer to the target contract, with one narrowly scoped urgent exception.**
 
-5. `Runtime-upgrade execution now matches the intended post-bootstrap line closely`
-   governance can now drive the first parachain-safe runtime-upgrade step through a dedicated bounded `L1RootAction` payload that carries only `code_hash` and dispatches `System::authorize_upgrade { code_hash }`, and the current line now also emits `ProposalRuntimeUpgradeAuthorized` as a runtime-upgrade-specific success event distinct from generic execution success. Pending relay of that authorized code is now exposed canonically through the bounded governance/runtime view `authorized_runtime_upgrade()` rather than requiring browser/product code to read raw `System.AuthorizedUpgrade` storage layout directly, and the browser governance surface uses that view so product UX can say when a governance-authorized upgrade is still awaiting `apply_authorized_upgrade { code }` while also stating that the browser does not expose that live write path. Integration coverage now also proves the paired system-level second step itself is already live after authorization: any origin may submit the matching code bytes to `System.apply_authorized_upgrade { code }`, and invalid authorized code clears the pending authorization with an explicit system rejection event instead of silently wedging state. The current line now also adds one constitutional acceleration rule on top of that path: unanimous raw protection-track `Pass` over the full eligible `$VETO` supply immediately resolves and executes the runtime-upgrade authorization step without waiting for a separate primary-track ballot, while the ordinary/urgent machinery for other payload kinds remains untouched. That means the current role split is now explicit and post-bootstrap: governance owns authorization of the code hash, while the later `apply_authorized_upgrade` call is only a transport/relay step for already-authorized bytes rather than a second governance decision. The repo now also ships `/scripts/authorized-upgrade-local.sh check` as a plan-only operator verifier for local WASM vs pending authorized hash, `/scripts/authorized-upgrade-local.sh apply` as the explicit relay submit surface, and the local dev bootstrap no longer depends on Sudo for the wallet/swap seeding surfaces that previously blocked this handoff.
+Ballot weight follows the shipped piecewise `7x -> 1x` curve through a bounded vote-time epoch stored per ballot. The pallet separates ordinary-track and protection-track weighting windows internally so those clocks can diverge honestly later.
 
-6. `Invoice-family vote storage, primary-lane query shape, kernel-side resolution, and runtime activation now exist`
-   outside the new protection path, the pallet no longer hardcodes storage-level primary voting to only `Aye / Nay`: the vote enum and bounded ballot storage can now also represent invoice-family `Amplify / Approve / Reduce / Nay`, family-aware cast validation rejects mismatched primary vote kinds, the runtime now also exposes a family-aware `proposal_primary_track_tally(domain, item_id)` query that reports deterministic lowest-scalar tie-breaking for the leading positive invoice option, the pallet kernel can now resolve invoice families into explicit `PassingAmplify / PassingApprove / PassingReduce` states instead of collapsing them back into binary approval, and the reference runtime now marks tactical `L2TreasurySpend` in the canonical `$BLDR` domain as `Invoice` so those semantics are live rather than latent
+An explicit urgent-policy query surface per proposal makes the expeditable contract visible. Current policy remains narrow: only strategic `L1RootAction` proposals are expeditable, and the fast path requires unanimous raw protection-track `Pass` over `100%` of eligible `$VETO` supply.
 
-7. `The target public cadence is now shipped, while urgent policy remains narrow on the current line`
-   the pallet has additive timing scaffolding, pending-enactment status handling, split ordinary-vs-protection weighting windows, a generic lead-in admission gate for ordinary ballots, bounded servicing for due pending-enactment buckets, and a generic urgent fast-track mechanism. The current runtime now configures those surfaces to the target public ordinary cadence: protection opens at submit, ordinary primary opens after a `3 day` lead-in, both ordinary protection and ordinary primary run for `7 days`, and successful ordinary approvals enter a default `3 day` enactment delay. The current urgent line now opts in exactly one strategic exception: protocol `L1RootAction` is expeditable and uses unanimous raw protection-track `Pass` as an immediate runtime-upgrade authorization path, while the rest of the launch line still remains deny-by-default. Confirm-period machinery remains disabled, and the remaining gap is therefore no longer public cadence policy but broader call-matrix expansion, richer execution observability, and any later urgent-policy opt-in rollout.
+A tighter runtime-upgrade-only exception sits above the generic urgent path. Once unanimous protection passes, the pallet immediately resolves and executes runtime-upgrade authorization without waiting for a separate primary-track ballot.
 
-8. `Payload readiness is observable, but admission is still soft`
-   the runtime already persists `payload_hash` metadata, exposes derived execution authority, and reports `proposal_payload_availability(domain, item_id)` through the canonical preimage provider, but it does not yet hard-enforce a payload-kind-specific admission/execution gate beyond that readiness scaffold. The target contract now says executable payload kinds may be submitted before the full preimage is noted as long as the canonical request/readiness surface stays honest, while actual enactment still requires runtime-visible payload availability.
+Outside that exception, urgent handling remains disabled until constitutional/runtime policy opts more `(domain, payload_kind)` pairs in. The remaining gap concerns the narrow policy surface, not missing urgent mechanics or an absent implementation path.
 
-9. `GovXP now matches the counters-first v1 contract`
-   the runtime exports bounded GovXP input counters only; no separate live GovXP multiplier surface remains in the canonical runtime query contract, which keeps v1 aligned with the specification's counters-first / defer-multiplier policy
+**3. Proposal control remains admin-heavy.**
+
+Signed users can cast votes. The browser exposes the bounded advisory submit path and the first minimal tactical treasury invoice submit path. The runtime also opts tactical `$BLDR` `L2TreasurySpend` into signed submission alongside the earlier advisory combinations.
+
+Manual resolution/rejection, requeue, and policy-aware early finalization otherwise remain `Root`-gated in the current runtime.
+
+**4. A pallet-side payload executor scaffold and the first executable runtime slices are live.**
+
+The governance kernel has a canonical bounded enactment scaffold. Finalized proposals can stay as approved-only outcomes, enter bounded pending-enactment buckets, finalize advisory payloads without dispatch, or record generic execution success / failure when a runtime payload executor is enabled.
+
+The current runtime enables one bounded `L1RootAction` slice. In the strategic domain, it may dispatch preimage-backed `RuntimeCall::System(authorize_upgrade { code_hash })` under Root-equivalent authority.
+
+The bounded `L2ParameterChange` slice supports two narrow domain-local paths. Preimage-backed `RuntimeCall::AxialRouter(add_tracked_asset { asset })` and bounded `RuntimeCall::AxialRouter(update_router_fee { new_fee })` apply through governance-owned internal setters instead of Root dispatch.
+
+Tactical `L2TreasurySpend` decodes a bounded invoice payload with `beneficiary`, `payout_asset`, `base_amount`, and explicit funding source. It reads the resolved winning primary option from bounded governance state, applies the on-chain invoice scalar, and transfers from the designated BLDR Treasury sovereign account rather than as Root.
+
+The treasury authority topology remains explicit. The tactical `$BLDR` domain declares exactly one executable funding source, `BldrTreasury`, which resolves to the domain treasury sovereign account only for that domain. Wider source families or native payout topologies remain future opt-in work, not hidden rights of the invoice payload.
+
+Launch-line `$BLDR` referenda are live invoice-shaped rather than merely invoice-centric in concept. Changes to System AAA behavior still require `L2SignalToL1` or explicit delegation of those control surfaces into the domain.
+
+A scan of Root-only custom-pallet controls narrows the next truthful `L2ParameterChange` search space. TMC launch-physics mutation remains out of contract; staking onboarding, recovery, and admin reward-bootstrap paths remain system-owned; AAA global breaker and actor-limit controls remain system-owned; asset-registry registration and migration remain L1-owned.
+
+The remaining runtime gap is narrower than a generic "more setters" wishlist. The next valid slice must expose a genuinely delegated, domain-owned parameter surface rather than opportunistically reuse unrelated Root setters.
+
+**5. Runtime-upgrade execution closely matches the intended post-bootstrap line.**
+
+Governance can drive the first parachain-safe step through a bounded `L1RootAction` payload carrying only `code_hash` and dispatching `System::authorize_upgrade { code_hash }`. `ProposalRuntimeUpgradeAuthorized` reports this success separately from generic execution success.
+
+The bounded `authorized_runtime_upgrade()` governance/runtime view exposes pending relay without requiring browser code to read raw `System.AuthorizedUpgrade` storage. The browser uses that view to show when authorization still awaits `apply_authorized_upgrade { code }`, while stating that it does not expose that live write path.
+
+Integration coverage proves the paired system-level second step works after authorization. Any origin may submit matching bytes to `System.apply_authorized_upgrade { code }`. Invalid authorized code clears the pending authorization with an explicit system rejection event instead of silently wedging state.
+
+One constitutional acceleration rule overlays that path. Unanimous raw protection-track `Pass` over the full eligible `$VETO` supply immediately resolves and executes authorization without a separate primary ballot. Ordinary and urgent machinery for other payload kinds remains untouched.
+
+The post-bootstrap role split stays explicit: governance authorizes the code hash, while `apply_authorized_upgrade` only transports already-authorized bytes rather than making a second governance decision.
+
+The repository ships `/scripts/authorized-upgrade-local.sh check` as a plan-only verifier for local WASM against the pending hash and `/scripts/authorized-upgrade-local.sh apply` as the explicit relay submit surface. Local dev bootstrap no longer depends on Sudo for the wallet/swap seeding surfaces that previously blocked this handoff.
+
+**6. Invoice-family storage, queries, resolution, and runtime activation exist.**
+
+Outside the protection path, storage-level primary voting no longer hardcodes only `Aye / Nay`. The vote enum and bounded ballots represent invoice-family `Amplify / Approve / Reduce / Nay`, and family-aware cast validation rejects mismatched primary vote kinds.
+
+The family-aware `proposal_primary_track_tally(domain, item_id)` query reports deterministic lowest-scalar tie-breaking for the leading positive invoice option. The kernel resolves invoice families into `PassingAmplify / PassingApprove / PassingReduce` instead of collapsing them into binary approval.
+
+The reference runtime marks tactical `L2TreasurySpend` in the canonical `$BLDR` domain as `Invoice`, making those semantics live rather than latent.
+
+**7. The target public cadence is shipped, while urgent policy remains narrow.**
+
+The pallet has additive timing scaffolding, pending-enactment status handling, split ordinary/protection weighting windows, a generic lead-in gate for ordinary ballots, bounded servicing for due pending-enactment buckets, and a generic urgent fast-track mechanism.
+
+Runtime policy opens protection at submission and ordinary primary after a `3 day` lead-in. Ordinary protection and primary each run for `7 days`; successful ordinary approvals receive a default `3 day` enactment delay.
+
+The urgent line opts in exactly one strategic exception. Protocol `L1RootAction` is expeditable and uses unanimous raw protection-track `Pass` for immediate runtime-upgrade authorization; the rest of the launch line remains deny-by-default.
+
+Confirm-period machinery remains disabled. The remaining gap concerns broader call-matrix expansion, richer execution observability, and later urgent-policy opt-ins rather than public cadence policy.
+
+**8. Payload readiness is observable, but admission remains soft.**
+
+The runtime persists `payload_hash` metadata, exposes derived execution authority, and reports `proposal_payload_availability(domain, item_id)` through the canonical preimage provider. It does not yet hard-enforce a payload-kind-specific admission/execution gate beyond that readiness scaffold.
+
+The target contract permits executable payload submission before the full preimage is noted when the canonical request/readiness surface remains honest. Actual enactment still requires runtime-visible payload availability.
+
+**9. GovXP matches the counters-first v1 contract.**
+
+The runtime exports only bounded GovXP input counters. No separate live GovXP multiplier remains in the canonical runtime query contract, keeping v1 aligned with the specification's counters-first / defer-multiplier policy.
 
 This architecture doc now matches that narrowed contract directly.
 
@@ -608,7 +663,9 @@ using a strict `>` comparison against the runtime threshold, while the end-of-wi
 
 In `runtime-benchmarks` builds, the ordinary provider deliberately falls back to equal weight `1`, while the protection-power provider now falls back to `1 / 1` vote-weight-plus-total-issuance so benchmarking can exercise the immediate-cancellation worst case deterministically.
 
-This is an important example of the project's `Runtime-as-Config` discipline: the pallet does not hardcode one-account-one-vote, does not hardcode a staking formula for ordinary ballots, and keeps both the ordinary and protection vote-power surfaces runtime-wired rather than baking asset lookup or temporal policy directly into pallet logic. The current runtime now centralizes domain hierarchy, profile identity, and weight behavior through one typed `GovernanceDomainPolicy` declaration plus shared helper consumers in `runtime/src/configs/governance_config.rs`, so protocol `$NTVE + $VETO` governance and canonical tactical `$BLDR + $NTVE` governance stay aligned between tally logic, query identity, and exported domain policy.
+This demonstrates the project's `Runtime-as-Config` discipline. The pallet does not hardcode one-account-one-vote or an ordinary-ballot staking formula. It keeps ordinary and protection vote-power surfaces runtime-wired rather than baking asset lookup or temporal policy into pallet logic.
+
+The runtime centralizes domain hierarchy, profile identity, and weight behavior through one typed `GovernanceDomainPolicy` declaration and shared consumers in `runtime/src/configs/governance_config.rs`. Protocol `$NTVE + $VETO` governance and tactical `$BLDR + $NTVE` governance therefore stay aligned across tally logic, query identity, and exported domain policy.
 
 The current public surface is intentionally narrow: `governance_domain_policy(domain)` exposes the launch-line ordinary/protection power profiles, but it does not yet attempt to encode richer future class families, execution authorities, or broader constitutional topology beyond the current bounded query contract.
 
@@ -616,20 +673,31 @@ The current public surface is intentionally narrow: `governance_domain_policy(do
 
 For the current launch line, the runtime policy is now intentionally frozen to the simplest bounded rule set that already exists in code:
 
-1. `Ballot-time Declining Power`
-   normal runtime builds now use the shipped piecewise `7x -> 1x` Declining Power curve across both ordinary and protection-track ballots: ordinary `Aye / Nay` derive their base from same-domain `Staking::stake_value(domain, account)`, while protection-track `Veto / Pass` derive their base from the runtime-declared protection surface for that domain; on the `$BLDR` domain, that native protection surface currently adds locked `$NTVE`, locked `stNTVE` converted through the staking exchange rate, and account-level locked `NTVE/stNTVE` LP converted into conservative native-equivalent `NativeVotePower`
+**1. Ballot-time Declining Power.**
 
-2. `Domain-scoped hierarchy`
-   protocol / network governance currently runs as `$NTVE` primary + `$VETO` protection, while `$BLDR` tactical governance currently runs as `$BLDR` primary + `$NTVE` protection; both use the same bounded `Veto / Pass` cancellation lane, but with different base-weight surfaces
+Normal runtime builds apply the shipped piecewise `7x -> 1x` curve to ordinary and protection-track ballots. Ordinary `Aye / Nay` derive their base from same-domain `Staking::stake_value(domain, account)`; protection-track `Veto / Pass` use the runtime-declared protection surface for that domain.
 
-3. `Protection-track cancellation`
-   the first live protection slice is now enabled through domain-specific backing: the runtime creates the well-known `$VETO` asset class at genesis with deterministic metadata and an Asset Registry-owned admin surface for protocol governance, uses locked `$NTVE` / `stNTVE` / `NTVE/stNTVE` LP-derived native `NativeVotePower` for `$BLDR` governance, lets one account vote once in the ordinary track and once in the protection track on the same item, reprices later protection-track replacements to the later ballot epoch, keeps protection-track ballots admissible until the configured protection close, cancels immediately only when frozen raw protection power is **strictly greater** than the runtime threshold against total eligible protection supply, ignores raw `Veto` turnout below `1%` of that supply as dust protection, and otherwise stays fail-closed unless decline-weighted `Pass` strictly outweighs decline-weighted `Veto`; veto-cancelled items do not credit governance reward memory
+For `$BLDR`, the native protection surface adds locked `$NTVE`, locked `stNTVE` converted through the staking exchange rate, and account-level locked `NTVE/stNTVE` LP converted into conservative native-equivalent `NativeVotePower`.
 
-4. `Override and recovery`
-   admin control stays intentionally narrow: `reject_proposal(...)`, policy-aware `force_resolve_proposal_from_votes(...)`, and `requeue_proposal_for_auto_finalization(...)` are the recovery/override surface, with no broader arbitrary override contract added on top
+**2. Domain-scoped hierarchy.**
 
-5. `Finalized history`
-   bounded finalized-outcome retention is treated as sufficient for the kernel pallet; durable archival history belongs to events, indexers, or a future dedicated history surface rather than unbounded in-kernel storage growth
+Protocol / network governance runs as `$NTVE` primary + `$VETO` protection, while `$BLDR` tactical governance runs as `$BLDR` primary + `$NTVE` protection. Both use the same bounded `Veto / Pass` cancellation lane with different base-weight surfaces.
+
+**3. Protection-track cancellation.**
+
+Domain-specific backing enables the first live protection slice. Protocol governance uses the well-known `$VETO` asset class, created at genesis with deterministic metadata and an Asset Registry-owned admin surface. `$BLDR` governance uses locked `$NTVE` / `stNTVE` / `NTVE/stNTVE` LP-derived native `NativeVotePower`.
+
+One account may vote once in each track on the same item. Later protection replacements use the later ballot epoch, and protection ballots remain admissible until the configured close.
+
+Immediate cancellation requires frozen raw protection power to be **strictly greater** than the threshold against eligible protection supply. Raw `Veto` turnout below `1%` of supply counts as dust; otherwise the gate stays fail-closed unless decline-weighted `Pass` strictly outweighs decline-weighted `Veto`. Veto-cancelled items receive no governance reward-memory credit.
+
+**4. Override and recovery.**
+
+Admin control stays intentionally narrow. `reject_proposal(...)`, policy-aware `force_resolve_proposal_from_votes(...)`, and `requeue_proposal_for_auto_finalization(...)` form the recovery/override surface, with no broader arbitrary override contract.
+
+**5. Finalized history.**
+
+Bounded finalized-outcome retention is sufficient for the kernel pallet. Durable archival history belongs to events, indexers, or a future dedicated history surface rather than unbounded in-kernel storage growth.
 
 Richer vote-power formulas, broader emergency policy, or permanent on-chain history remain future opt-in choices, not unresolved debt in the current launch baseline.
 
@@ -644,7 +712,8 @@ Instead:
 - `cast_vote(...)` computes ordinary ballot weight through `ProposalVoteWeightProvider` and protection-track ballot weight/raw power through `VetoVotePowerProvider` exactly once at vote time; `proposal_vote_tally(...)` and resolution then sum the stored ballot weights rather than re-reading live balances
 - `cast_vote(...)` extends `GovernanceLocks[account].lock_until` to the maximum of its current value and the proposal's effective primary close plus enactment delay; runtime staking integration now uses that horizon to refuse collator-LP, standalone-governance-LP, `$NTVE`, and `stNTVE` unlock requests while the locked position is still custody-backing frozen `NativeVotePower`
 - `cast_vote(...)` now already enforces the generic rule that ordinary ballots cannot enter before `primary_open`, while protection-track ballots remain admissible during any configured lead-in
-- `proposal_resolution_state(...)` first checks whether frozen raw protection-majority already triggers the separate immediate threshold, then after maturity requires raw `Veto` turnout to clear the `1%` dust floor before applying the stored-weight protection-track `Veto` vs `Pass` gate, and only then derives primary passing/rejected state from the family-aware primary tally: binary families still use weighted `Aye / Nay`, while invoice families now use `weighted_positive` vs `weighted_nay` plus deterministic lowest-scalar tie-breaking across `Amplify / Approve / Reduce`; the current launch-line runtime still reports only `Binary`, so those invoice resolution branches remain kernel-ready rather than live policy on the reference line
+- `proposal_resolution_state(...)` first checks whether frozen raw protection-majority triggers the immediate threshold. After maturity, raw `Veto` turnout must clear the `1%` dust floor before the stored-weight `Veto` versus `Pass` gate applies; only then does the evaluator derive primary state from the family-aware tally.
+- Binary families use weighted `Aye / Nay`. Invoice families use `weighted_positive` versus `weighted_nay` with deterministic lowest-scalar tie-breaking across `Amplify / Approve / Reduce`. The launch-line runtime still reports only `Binary`, so invoice resolution remains kernel-ready rather than live reference-line policy.
 - Vote-derived finalization paths reuse the same logic rather than carrying a second hidden policy engine
 
 This keeps the pallet simpler and more honest, but it means tally/resolution cost scales with the bounded ballot-set size rather than O(1) cached counters.
@@ -701,7 +770,9 @@ The current pallet already provides chain-native reads for known `(domain, item_
 - `reward_coefficient(domain, account)`
 - `govxp_counters(domain, account)`
 
-These are the authoritative bounded surfaces for live proposal detail, proposal meaning, submission authority, public opening-fee cost, payload readiness, primary-track family identity, primary-lane leader/tally interpretation, retained winning-primary-option identity, urgent-policy eligibility, live tally/status interpretation, additive timing/enactment scaffolding, recent execution detail, staking reward-memory export, and GovXP input observability. The helper/query contract is no longer merely internal pallet convenience: the runtime now exports these bounded projections through canonical governance view functions, while raw storage remains an implementation detail except where explicitly named as a stable discovery surface.
+These authoritative bounded surfaces cover live proposal detail and meaning, submission authority, opening-fee cost, payload readiness, primary-track family and tally interpretation, retained winner identity, urgent eligibility, status and timing, enactment and execution detail, staking reward memory, and GovXP inputs.
+
+The helper/query contract no longer serves only as internal pallet convenience. Canonical governance view functions export these bounded projections, while raw storage remains an implementation detail except where explicitly named as a stable discovery surface.
 
 ### Indexed / materialized governance views
 
@@ -827,32 +898,43 @@ The pallet intentionally retains only recent finalized outcomes.
 
 ## Current Watchpoints
 
-1. `Launch policy is intentionally narrow and frozen`
-   the runtime currently uses ballot-time Declining Power on top of same-domain `Staking::stake_value(...)` for ordinary `Aye / Nay`, the same ballot-time Declining Power on top of the `$VETO` protocol asset for protocol / network protection-track `Veto / Pass`, the same ballot-time Declining Power on top of locked `$NTVE` / `stNTVE` / `NTVE/stNTVE` LP-derived native `NativeVotePower` for `$BLDR` protection-track `Veto / Pass`, a raw-supply immediate-cancellation gate plus a raw `1%` veto dust floor before the final protection gate can activate, protection-track admission until the configured protection close, bounded recent finalized-outcome retention, and a narrow admin recovery surface by design; broader governance models remain future opt-in, not hidden implementation debt
+**1. Launch policy is intentionally narrow and frozen.**
 
-2. `Epochs are block numbers today`
-   the current launch line now runs the public ordinary timing policy directly (`ProposalLeadInPeriod = 3 days`, `ProposalVotingPeriod = 7 days`, `ProposalProtectionPeriod = 7 days`, `ProposalEnactmentDelay = 3 days`), while urgent handling is still tightly scoped: only protocol `L1RootAction` is opted in, and it now uses unanimous raw protection-track `Pass` as the live acceleration path
+Ordinary `Aye / Nay` applies ballot-time Declining Power to same-domain `Staking::stake_value(...)`. Protocol / network protection-track `Veto / Pass` applies the same curve to the `$VETO` asset. `$BLDR` protection applies it to locked `$NTVE` / `stNTVE` / `NTVE/stNTVE` LP-derived native `NativeVotePower`.
 
-3. `Auto-finalization is bucket-bounded`
-   this avoids global scans, but overloaded maturity epochs can defer and may need explicit requeue by admin
+The policy includes a raw-supply immediate-cancellation gate and a raw `1%` veto dust floor before final protection can activate. It admits protection ballots until the configured close, retains bounded recent outcomes, and exposes a deliberately narrow admin recovery surface. Broader models remain future opt-ins, not hidden implementation debt.
 
-4. `Finalized outcomes are recent history, not archive history`
-   consumers that need durable historical indexing should not rely on this pallet as permanent storage
+**2. Epochs are block numbers today.**
 
-5. `Item identity is bounded, not eternal`
-   `(domain, item_id)` is protected across active state and the live reward-memory horizon, but the pallet does not promise permanent archival uniqueness after bounded retention/expiry windows are gone
+The launch line runs the public ordinary timing policy directly: `ProposalLeadInPeriod = 3 days`, `ProposalVotingPeriod = 7 days`, `ProposalProtectionPeriod = 7 days`, and `ProposalEnactmentDelay = 3 days`. Urgent handling remains tightly scoped: only protocol `L1RootAction` is opted in, using unanimous raw protection-track `Pass` as the live acceleration path.
 
-6. `Ballot cardinality is bounded`
-   the current pallet is built for bounded runtime safety, not large open referendum sets with unbounded voter storage; adding the protection track widens one proposal's bounded vote-set shape, but does not remove the cap discipline
+**3. Auto-finalization is bucket-bounded.**
 
-7. `The first protection-track slice is universal across today's proposals, but still narrow`
-   TMCTOL currently treats the live proposal set as protected, so the separate dual-mode protection track remains universally available today; richer class families and broader multi-track policy still remain future work
+This avoids global scans, but overloaded maturity epochs can defer and may need explicit requeue by admin.
 
-8. `Unified status is deliberately two-phase`
-   `proposal_status(...)` returns `Active(Rejected { ... })` or `Active(VetoPassing { ... })` before finalization; consumers should distinguish policy state from finalized state
+**4. Finalized outcomes are recent history, not archive history.**
 
-9. `GovXP identity layers beyond the counters-first v1 slice are still out of scope`
-   the pallet now ships bounded GovXP input counters only, while richer identity layers, any later bounded multiplier policy, delegation semantics, and soulbound reputation policy still remain future work
+Consumers that need durable historical indexing should not rely on this pallet as permanent storage.
+
+**5. Item identity is bounded, not eternal.**
+
+`(domain, item_id)` is protected across active state and the live reward-memory horizon, but the pallet does not promise permanent archival uniqueness after bounded retention/expiry windows expire.
+
+**6. Ballot cardinality is bounded.**
+
+The pallet targets bounded runtime safety, not large open referendum sets with unbounded voter storage. Adding the protection track widens one proposal's bounded vote-set shape without removing cap discipline.
+
+**7. The first protection-track slice is universal across today's proposals, but still narrow.**
+
+TMCTOL treats the live proposal set as protected, so the separate dual-mode protection track remains universally available today. Richer class families and broader multi-track policy remain future work.
+
+**8. Unified status is deliberately two-phase.**
+
+`proposal_status(...)` returns `Active(Rejected { ... })` or `Active(VetoPassing { ... })` before finalization. Consumers should distinguish policy state from finalized state.
+
+**9. GovXP identity layers beyond the counters-first v1 slice remain out of scope.**
+
+The pallet ships only bounded GovXP input counters. Richer identity layers, any later bounded multiplier policy, delegation semantics, and soulbound reputation policy remain future work.
 
 ## Conclusion
 

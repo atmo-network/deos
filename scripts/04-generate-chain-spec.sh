@@ -37,6 +37,15 @@ Environment:
   LOCAL_WEB_CLIENT_SLOPE=1000000
   LOCAL_WEB_CLIENT_FOREIGN_BALANCE=1152921504606846976
 
+Inputs:
+  Built DEOS runtime WASM, chain-spec-builder, jq, and the selected profile values.
+
+Outputs:
+  template/chain_spec.json.
+
+Side effects:
+  Replaces the generated local chain spec; never deploys or starts a network.
+
 Notes:
   CHAIN_TYPE=Live only switches the metadata/profile surface. Final production
   authorities/accounts still need to be replaced before deployment.
