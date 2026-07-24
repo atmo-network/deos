@@ -591,7 +591,7 @@ Timer rules:
 
 1. `every_blocks` MUST satisfy `0 < every_blocks <= MaxExecutionDelayBlocks`; otherwise fail with `ExecutionDelayTooLong`.
 2. Timer cadence is deterministic and exposes no probability or entropy input.
-3. Effective timer eligibility at or before the next block MUST use one live paged-FIFO ticket beyond the current block cutoff; later eligibility MUST persist exactly one `WakeupIndex` entry, including `every_blocks = 1` when cooldown or window delay dominates.
+3. Effective timer eligibility at or before the next block MUST use one live paged-FIFO ticket beyond the current block cutoff; later eligibility MUST persist exactly one live paged wakeup owned by `ActorHot.wakeup_pointer`, including `every_blocks = 1` when cooldown or window delay dominates.
 4. Timer rearming, skipped-readiness preservation, and readiness checks MUST use the same effective-eligibility calculation rather than independent cadence/cooldown/window branches.
 5. Deterministic anti-storm jitter SHOULD be applied for delayed timers (`every_blocks > 1`):
    `jitter_window = min(every_blocks / 4, MaxTimerJitterBlocks)`
@@ -693,7 +693,7 @@ The AAA runtime is a **deterministic event-driven actor runtime**. Actors are ne
 2. **Paged Physical Storage**: `QueuePages[page_id]` stores bounded consecutive entries, with the ticket derived from page and slot unless production-Wasm evidence justifies encoding it. The scheduler may stop mid-page or traverse many pages in one block; it persists the exact next head and deletes only fully consumed pages. `QueuePageSize` is I/O granularity, not throughput or execution capacity.
 3. **Actor-Local Membership**: `ActorHot.queue_ticket` is the actor's sole live queue membership. An entry is live only when its ticket equals that field; otherwise it is a tombstone. Enqueue coalesces while a live ticket exists. Cancellation, close, pause, dormancy, and replacement invalidate actor-local state without scanning pages.
 4. **Queue Continuation**: Cadence `every_blocks <= 1` re-admits actors through a new ticket beyond the captured cutoff rather than timer indexing.
-5. **Temporal Wakeup Layer (`WakeupIndex` + `MinWakeupBlock`)**: Delayed timers (`every_blocks > 1`) use canonical bounded wakeup storage plus an actor-keyed live pointer; dormant, closed, or missing actors drop lazily when reached.
+5. **Temporal Wakeup Layer**: Delayed timers use bounded `WakeupPages` and `WakeupBuckets`, a sparse paged minimum cursor, and one actor-keyed live pointer; stale entries without the matching pointer drop lazily when reached.
 6. **Rejected Physical Extremes**: Production MUST use neither `StorageValue<BoundedRingBuffer<_, MaxQueueLength>>` nor `StorageMap<QueueTicket, QueueEntry>`. Algorithmic O(1) does not imply bounded physical trie I/O: the former inherits maximum-value decode/encode/proof behavior, while the latter pays one trie key and proof path per entry. A bounded intermediate page size amortizes trie overhead without coupling each touch to 10,000-entry capacity.
 
 For every block `B` and actor `A`, the consensus invariant is:
@@ -724,7 +724,7 @@ Each block MUST use a two-dimensional `WeightMeter` to admit ingress, wakeup, qu
 
 1. An actor MUST own at most one live queue ticket and one live future wakeup. Repeated same-block signals, transfers, internal notifications, or funding events coalesce into actor-local pending state. Physical occupancy includes tombstones and remains bounded by unconsumed capacity; User-controlled enqueue/invalidate churn MUST be fee-accounted or independently rate-limited.
 2. Head cleanup MUST retain sufficient admission to skip stale entries and reclaim fully consumed pages even under queue saturation. A live actor cannot append another entry while its ticket remains live. Page boundaries MUST NOT alter FIFO order or prevent scanning/execution from continuing into a later page.
-3. Wakeup overflow probes `requested_block..requested_block + MaxSpilloverBlocks`, then emits `WakeupScheduleDropped`, increments `WakeupScheduleDrops`, and persists `WakeupRetryPending[aaa_id]` if no bucket fits. A bounded canonical-key pass retries live actors without a new external signal and clears each marker only after scheduling succeeds or the actor closes.
+3. Wakeup placement MUST retain the exact requested block. Global live entries are bounded by `MaxActiveActors`; same-block density grows through bounded pages rather than spillover, drops, or actor-key retry scans.
 4. Runtime MUST reserve at least `MinOnIdleReservePct` for `on_idle`; before storage access, the hook MUST reserve its generated fixed base. Subsequent two-dimensional admission charges ingress, wakeups, each touched queue page and inspected entry, actor loading/admission, sweeps, cycle work, and complete close cleanup before the operation begins.
 5. Implementations MUST distinguish entries scanned, actors loaded, actors admitted, actors executed, tombstones skipped, actors deferred, pages touched, and pages deleted. `MaxExecutionsPerBlock` MUST NOT serve as a physical scan limit. A separate `MaxQueueEntriesScannedPerBlock` MAY protect malformed/tombstone-heavy state only when benchmark evidence justifies it.
 6. If either Weight dimension, the successful-execution ceiling, or a justified independent scan ceiling is reached, no additional inadmissible operation may start. A ready live head that fails only because its complete bound does not fit MUST retain its ticket and remain the first candidate next block. Under documented recurring-budget scenarios, the fairness SLO is starvation-free execution with nonce spread `<= 3`; this is not unconditional under zero or insufficient `on_idle` budget.
@@ -739,8 +739,8 @@ Each block MUST use a two-dimensional `WeightMeter` to admit ingress, wakeup, qu
 
 Because actors are never globally polled, the protocol relies on the Bounded Double-Buffer plus explicit starvation telemetry to guarantee forward progress:
 
-1. `MinWakeupBlock` MUST advance across overdue `WakeupIndex` work in bounded passes: one `on_idle` call processes at most `MaxWakeupsPerBlock` actor entries and at most that many block cursors, preserves a partially drained bucket or an unadmitted bucket at its current cursor, and resumes sparse-gap catch-up in later blocks.
-2. Scheduled execution (timer or event) MUST roll over across saturated blocks through queue carry-over and wakeup spillover; if bounded wakeup spillover is exhausted, runtime MUST surface the incident via `WakeupScheduleDropped` and `WakeupScheduleDrops`. Closing an actor MUST use `ScheduledWakeupBlock` to remove its authoritative `WakeupIndex` entry in one bucket-bounded mutation; malformed orphan entries without a reverse pointer remain lazy-drop compatibility state only.
+1. The paged minimum cursor MUST expose the earliest distinct wakeup block without scanning sparse gaps. One `on_idle` call processes at most `MaxWakeupsPerBlock` slots, preserves a partial bucket at the same minimum, and stops before a future minimum or an inadmissible RefTime/ProofSize unit.
+2. Scheduled execution MUST roll over through queue carry-over while temporal placement remains exact. Closing an actor MUST use `ActorHot.wakeup_pointer` to invalidate its exact page slot and transactionally repair or remove empty page, bucket, and cursor topology.
 3. After the fixed hook base has been admitted, `IdleStarvationBlocks` MUST increment only when the breaker is inactive and either Weight dimension of the remaining `on_idle` budget after bounded housekeeping is zero; a budget too small for the base performs no telemetry work.
 4. `IdleStarvationBlocks` MUST reset to zero as soon as both post-housekeeping Weight dimensions remain positive, including blocks where no actor is ready.
 5. `IdleStarvationDetected` MUST emit exactly once on threshold crossing and MUST NOT repeat on every subsequent starved block.
@@ -862,8 +862,6 @@ SwapExecuted { aaa_id, asset_in, asset_out, amount_in, amount_out }
 SweepBatchProcessed { requested: u32, closed: u32, alive: u32, missing: u32 }
 TransferExecuted { aaa_id, asset, amount, to }
 UnstakeExecuted { aaa_id, asset, shares }
-WakeupRescheduled { aaa_id, requested_block, scheduled_block }
-WakeupScheduleDropped { aaa_id, requested_block }
 ```
 
 ### 11.2 Cycle Correlation
@@ -1035,7 +1033,7 @@ This section defines the stable storage surface. Actor cardinality/capacity, imm
 - `QueuePages` (`Map<Blake2_128Concat<QueuePageId>, BoundedVec<QueueEntry, QueuePageSize>>`): bounded physical pages for the logical FIFO; tickets derive from page and slot unless benchmarked production metadata explicitly stores them
 - `WakeupPages` (`Map<Blake2_128Concat((BlockNumber, WakeupPageId)), WakeupPage>`): fixed-size temporal pages whose optional slots contain only `WakeupEntry { aaa_id }`; each page owns a bounded scan cursor, live-entry count, and previous/next page links
 - `WakeupBuckets` (`Map<Blake2_128Concat(BlockNumber), WakeupBucketState>`): bounded head/tail/next-page/live-entry metadata for one target block; page ids are monotonic within the bucket and page unlink remains O(1)
-- `MinWakeupBlock` (`BlockNumber`): earliest unresolved temporal bucket or bounded repair cursor; sparse-future and overdue recovery MUST NOT require an actor scan
+- `WakeupCursorPages` + `WakeupCursorLen`: paged minimum heap over distinct wakeup blocks; sparse-future and overdue recovery MUST NOT require an actor scan or intermediate-block scan
 - `ActorHot.queue_ticket` (`Option<QueueTicket>`): sole live queue membership and lazy-invalidation marker
 - `ActorHot.wakeup_pointer` (`Option<WakeupPointer { block, page_id, slot }>`): sole live temporal membership; replacement and lifecycle invalidation update the exact bounded page slot, while drain clears only a matching pointer
 - `ActorHot.pending_signal` (`bool`): canonical Manual/AddressEvent readiness latch
@@ -1077,7 +1075,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 25. `ActiveActorLimit` satisfies `0 < limit <= min(MaxActiveActors, MaxQueueLength)`, transactionally maintained O(1) active count makes active creation/activation fail fast, and `ActorIdentityCount <= MaxActorIdentities` bounds dormant plus active identity state (Section 2.4; Section 10.1; Section 10.2)
 26. Event-driven queueing uses one actor-local live ticket plus the block-start tail cutoff to enforce `executions(A, B) <= 1`; execution-created late enqueues persist beyond the cutoff (Section 8.1; Section 8.3)
 27. Governance updates of `ActiveActorLimit` fail fast when `new_limit > MaxQueueLength`; the default/effective operational cap remains queue-bounded to avoid scheduler actor-loss under full activation (Section 10.2; Section 15)
-28. Timer scheduling is hybrid and deterministic: cadence `<=1` uses queue continuation, delayed timers use the canonical `WakeupIndex`, and bounded jitter reduces synchronized wakeup bursts (Section 7.1 items 3, 4, 5; Section 8.1 item 3)
+28. Timer scheduling is hybrid and deterministic: immediately eligible cadence uses queue continuation, later eligibility uses exact paged wakeups, and bounded jitter reduces synchronized wakeup bursts (Section 7.1 items 3, 4, 5; Section 8.1 item 3)
 29. `IdleStarvationBlocks` increments only when a breaker-inactive post-housekeeping budget exhausts either Weight dimension, resets when both remain positive, and emits `IdleStarvationDetected` on threshold crossing only (Section 8.6 items 3, 4, 5; Section 9.2)
 30. Dormant identities and custody-only accounts own no executable program, scheduler/readiness/funding state, recurring reads/writes, fee work, or cycle events; activate/deactivate transitions preserve identity, slots, and balances atomically (Section 2.4)
 
@@ -1093,8 +1091,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 - `MaxActorIdentities`: runtime-specific hard cap for active plus dormant identities; MUST be at least `MaxActiveActors`
 - `MaxQueueLength`: 1,024–16,384; maximum unconsumed physical occupancy including tombstones
 - `QueuePageSize`: production-Wasm-selected bounded page size; page size is I/O granularity and MUST NOT cap per-block traversal
-- `MaxWakeupBucketSize`: 1,024–16,384; one-block `WakeupIndex` bucket bound
-- `MaxSpilloverBlocks`: runtime-configurable bounded wakeup spillover horizon; reference default `8`
+- `WakeupPageSize`: bounded temporal page I/O granularity; reference default `32`
 - `MaxWakeupsPerBlock`: 64–1,024; bounded overdue wakeup-drain throughput
 - `MaxConditionsPerStep`: 4; condition bound per step
 - `MaxConsecutiveFailures`: 10; terminal threshold; `MaxAutoCloseNonceHorizon`: reference default 10,000; current-relative future-target bound

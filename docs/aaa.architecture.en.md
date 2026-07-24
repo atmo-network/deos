@@ -319,9 +319,9 @@ Pallet regressions cover opening-, evaluation-, and execution-fee failures. Runt
 
 Scheduler execution is queue-first and deterministic:
 
-It uses two scheduler layers: an active run queue for work that can execute now, and a temporal wakeup layer for work that becomes eligible later. In the current stable line, that temporal layer is concretely represented by block-bucketed `WakeupIndex` bounded by `MaxWakeupBucketSize`; any future tree-backed or other ordered representation would now require an explicit spec/storage migration rather than being treated as a casual invisible swap.
+It uses two scheduler layers: a monotonic paged FIFO for work that can execute now and an exact paged temporal layer for later eligibility. Distinct wakeup blocks use a paged minimum heap; same-block actors occupy linked fixed-capacity pages.
 
-1. **Wakeup drain**: overdue timer actors are drained from `WakeupIndex` and admitted into the active run queue; the generated dense-due model meters cursor and bucket work for `0..=MaxWakeupsPerBlock`, while each actor additionally reserves the generated full spillover-retry bound. One pass scans at most `MaxWakeupsPerBlock` actor entries and the same number of block cursors; partial buckets, unadmitted buckets, and sparse-gap catch-up retain their cursor for later blocks
+1. **Wakeup drain**: the cursor exposes the earliest due block without scanning sparse gaps; one admitted unit consumes one slot, preserves a partial bucket at the same minimum, and either appends live readiness to the active FIFO or lazily discards a stale pointer
 2. **Ingress admission**: each matched producer event is applied independently to funding and the boolean inbox latch; the actor's readiness latch and queue membership remain bounded and may join the active run queue in the same `on_idle` pass
 3. **Block-start cutoff**: after already-due wakeups materialize, the scheduler snapshots `QueueTail`; every later append receives a ticket at or beyond that cutoff and cannot execute in the current block
 4. **Paged scan and admission**: the scheduler advances `QueueHead` across stale tickets under the independent scan ceiling and two-dimensional `WeightMeter`, stops at the first live ticket that cannot be admitted, and consumes a live ticket only after admission succeeds or a terminal/skip transition owns progress
@@ -331,19 +331,9 @@ It uses two scheduler layers: an active run queue for work that can execute now,
 
 ### Temporal Wakeup Layer
 
-The temporal wakeup layer is a scheduler responsibility, not just a storage map:
+The temporal wakeup layer owns future eligibility and admits it only through the active run queue. Every active actor may own at most one exact pointer; replacement and closure invalidate that slot without scanning actors or blocks. `MaxActiveActors` bounds global live wakeups, while `WakeupPageSize` controls I/O granularity rather than same-block capacity. This makes spillover buckets, placement-drop events, and actor-key retry scans unnecessary.
 
-- It owns future eligibility for delayed timers and spillover wakeups.
-- It is admitted into execution only by draining overdue entries into the active run queue.
-- In the current stable line it is represented by canonical `WakeupIndex` buckets, `MinWakeupBlock`, and an actor-keyed live wakeup pointer.
-- Live actors keep at most one future wakeup entry; rescheduling replaces the prior live wakeup instead of accumulating multi-bucket live state.
-- Actor closure takes the actor-keyed live wakeup pointer and removes the actor from that exact bounded future bucket; it never scans the temporal index or leaves a stale entry through a supported lifecycle path.
-- Close admission includes a generated 10,000-entry queue-bootstrap model as a conservative full-bucket decode/scan/rewrite proxy plus the bucket database mutation; long-horizon timer churn regressions verify immediate cleanup. Malformed orphan entries without a reverse pointer remain compatibility state and still drop lazily when due.
-- Saturating every probed bucket emits/increments the existing drop observability and persists `WakeupRetryPending[aaa_id]`; each housekeeping pass selects at most `MaxSweepPerBlock` markers in canonical storage-key order, independently of `NextAaaId` and `SweepCursor`, and clears a marker only after successful scheduling or terminal cleanup.
-- Each direct retry pre-admits a generated scheduler actor-probe bound plus the complete generated spillover-probe bound in both Weight dimensions before marker iteration or mutation. Close removes the marker transactionally, try-runtime rejects markers for missing actors, and a sparse-ID regression places `NextAaaId` ten million positions beyond the pending actor while still recovering it in the next funded pass.
-- A replacement temporal representation must preserve deterministic ordering, bounded insertion/extraction, and cheap exact close invalidation. It may retire saturation retry and overflow events only after a capacity proof shows one durable live wakeup for every active actor.
-
-The production temporal path now uses the paged wakeup substrate and sparse cursor:
+The production path uses the paged wakeup substrate and sparse cursor:
 
 - `WakeupPages<(block, page_id)>` and per-block `WakeupBuckets` own the paged topology.
 - `WakeupCursorPages` plus `WakeupCursorLen` provide the production paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
@@ -392,7 +382,7 @@ Integrated worker evidence uses the same production-Wasm route:
 | Full-depth bucket removal | `500,351,000 / 56,563` | `39 / 30` |
 | Future-minimum stop | `11,734,000 / 3,906` | `2 / 0` |
 
-The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short. Current activation checkpoint hashes are AAA weights `5ea4520b82967a4414e9630c701cdec46fa6d9e5d01a5c1685d46c0b8b6baea2` and compressed Wasm `4dea242d94b060dc50882178242d27b58836a4214a1e86ac99d6144be217179a`. Legacy temporal storage and weight surfaces remain pending removal before final regeneration.
+The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short. After legacy removal, a complete production-Wasm `20 x 10` pallet regeneration produced AAA weights `c5df147d32894c5298dacc5c934e0f5f9cf4d6dc2b10e56cb2d8e6271210e5fc` and compressed Wasm `5e41f5827db016a807a8c149d47b7a2ea090254fb68d13459e42d3d5cdf0d7f1`; the backlog retains final `50 x 20` changed-path acceptance.
 
 ### Starvation Safeguard
 
@@ -498,7 +488,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `ActorIdentityCount`: transactionally maintained O(1) cardinality across `ActorHot` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorProgram`, and `ActorFunding`
 - `QueueHead` / `QueueTail` / `QueuePages`: active monotonic paged FIFO with append, block-start cutoff, exact-head admission/consume, actor-local live-ticket dedup/invalidation, tombstone draining, full-page reclamation, and empty partial-tail alignment. Page entries contain only `aaa_id`, with logical tickets derived from page/slot, so replacement tickets leave old entries physically distinguishable as tombstones without page rewrites.
-- `WakeupIndex` / `MinWakeupBlock` / `ScheduledWakeupBlock`: time-ordered overdue wakeup layer; `WakeupRetryPending`: actor-keyed durable retry marker when the bounded spillover horizon is saturated
+- `WakeupPages` / `WakeupBuckets` / `WakeupCursorPages` / `WakeupCursorLen`: exact paged temporal topology and sparse minimum cursor; each live actor points to at most one page slot through `ActorHot.wakeup_pointer`
 - `ActiveActorLimit`: governance-configurable operational active cap
 - `OwnerSlotMask`: user owner-slot occupancy bitmask; System AAA never consumes it
 - `SovereignIndex`: reverse index from sovereign account to active or dormant `aaa_id`; custody-only accounts intentionally have no entry
@@ -567,7 +557,7 @@ The current pallet already provides chain-native bounded reads for live actor an
 - `actor_funding(aaa_id)` for funding policy, tracked assets, batches, and pending indication
 - `owner_slot_mask(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(aaa_id)` for System AAA addressing against the known runtime catalog
-- Bounded scheduler / readiness / breaker / ingress surfaces such as `ActorHot.pending_signal`, `QueueHead`, `QueueTail`, `QueuePages`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `ActiveActorLimit`, `GlobalCircuitBreaker`, `IdleStarvationBlocks`, and the ingress-overflow ring state
+- Bounded scheduler / readiness / breaker / ingress surfaces such as `ActorHot.pending_signal`, `ActorHot.wakeup_pointer`, `QueueHead`, `QueueTail`, `QueuePages`, paged wakeup stores, `ActiveActorLimit`, `GlobalCircuitBreaker`, `IdleStarvationBlocks`, and the ingress-overflow ring state
 - Live execution-side effects and bounded operational events
 
 These are the authoritative bounded surfaces for known-actor inspection, per-owner recovery, scheduler state, and current operator observability.
@@ -691,7 +681,7 @@ Selected configured bounds in the current DEOS reference runtime:
 - `QueuePageSize = 64` is the selected active paged-FIFO production granularity: 32/64/128 production-Wasm evidence covers single-page operations, 10,000-entry stale traversal, mixed multi-page consumption, and complete execution through the 1,000-attempt ceiling
 - `MaxQueueEntriesScannedPerBlock = 10,000`, independently bounded by physical queue capacity and not aliased to the execution ceiling
 - `ActiveActorLimit` (governance operational cap, `<= min(MaxActiveActors, MaxQueueLength)`)
-- `MaxWakeupBucketSize = 10,000` (temporal wakeup bucket bound, decoupled from run-queue semantics)
+- `WakeupPageSize = 32` is temporal I/O granularity; `MaxActiveActors = 10,000` independently bounds global live wakeups and `MaxWakeupsPerBlock` bounds per-pass slot work
 - Runtime block-weight policy divides capacity equally between transaction dispatch and background execution: `50%` dispatch and `50%` guaranteed `on_idle` headroom; Operational extrinsics retain their priority/fee class but have no dedicated weight reserve until a concrete critical call justifies a measured allocation, and a runtime regression pins the partition plus `reserved = None`
 
 Production-Wasm queue-operation comparison (`50` steps, `20` repeats; each cell is `RefTime / estimated ProofSize`):
@@ -805,7 +795,7 @@ Implementation is covered by:
 - `template/runtime/src/tests/aaa_integration_tests.rs` — runtime integration suite with explicit fast/stress scheduler lanes
 - `template/pallets/aaa/src/benchmarking.rs` — FRAME v2 benchmarks for all dispatchables + scheduler/close-path diagnostic benchmarks
 - `aaa_0_7_2_candidate_scale_variant_indices_are_explicit` — pins candidate indices through SCALE type metadata for core `Task`, amount resolution, conditions, source/asset/funding policies, triggers, actor type/mutability, pause/close/defer/skip/failure outcomes, pallet events/errors, canonical typed creation calls (`0..=3`), retained control calls (`4..=17`), reserved retired creation indices (`18..=20`), and lifecycle calls (`21..=22`) before the post-1.0 append-only lock activates
-- `aaa_0_7_2_candidate_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 27 candidate entry names, including dormant identity and identity-count state, query modifiers, plain/map shapes, `Blake2_128Concat` map hashers, and concrete key/value SCALE types through FRAME storage metadata, making accidental schema drift fail before a live-chain migration contract exists
+- `aaa_0_7_2_candidate_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 25 candidate entry names, including split actor state, paged queue/wakeup topology, dormant identity, and identity counts, with query modifiers, map hashers, and concrete SCALE types through FRAME storage metadata
 
 Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, funding semantics, lifecycle transitions, and emergency starvation path.
 
@@ -814,7 +804,7 @@ Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, fund
 Current runtime exposes enough state/events to treat queue pressure as an operational signal rather than an inferred guess:
 
 - Queue pressure: `QueueHead`, `QueueTail`, bounded `QueuePages`, and `ActiveActorLimit`
-- Wakeup backlog: `WakeupIndex`, `MinWakeupBlock`, `WakeupRescheduled`, `WakeupScheduleDropped`, `WakeupScheduleDrops`
+- Wakeup backlog: `WakeupCursorLen`, `WakeupBuckets.live_entries`, paged cursor minimum, and actor-local `wakeup_pointer`
 - Deferred-cycle rate: `CycleDeferred`
 - Starvation signal: `IdleStarvationDetected`
 - Sweep hygiene: `SweepBatchProcessed`
@@ -860,11 +850,10 @@ Observed results:
 
 Temporal wakeup measurements (`scheduler_wakeup_*`):
 
-- Dense due-drain is a generated production class over `0..=MaxWakeupsPerBlock`: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_dense_due_drain --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_dense_due_drain.rs`
-- The diagnostic-only `scheduler_cooldown_ineligible_idle` case admits a Timer actor once, verifies its sole cooldown wakeup and absence of live queue membership, then measures the scheduler at an ineligible intermediate block; it remains excluded from production weights and must be regenerated before quoting post-cutover timing numbers.
-- Sparse-gap recovery remains a diagnostic-only plateau probe excluded from the runtime artifact: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_sparse_gap_recovery --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_sparse_gap_recovery.rs`
-- Spillover retry is a generated production class bound to `MaxSpilloverBlocks + 1` buckets; runtime constant `AaaMaxSpilloverBlocks` binds `Config::MaxSpilloverBlocks` at reference value `8`: `frame-omni-bencher v1 benchmark pallet --runtime target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm --pallet pallet_aaa --extrinsic scheduler_wakeup_spillover_probe --steps 30 --repeat 20 --heap-pages 4096 --output /tmp/pallet_aaa_scheduler_wakeup_spillover_probe.rs`
-- The sparse diagnostic remains the evidence gate for any future `tree`/`heap` vocabulary or storage migration; until it shows a real win against lifecycle pain points, block-bucketed `WakeupIndex` remains the reference representation.
+- Production classes cover append, exact replacement/invalidation, partial/full/stale page drain, cursor insert/pop/exact removal, one-slot worker progress, full-depth worker removal, and future-minimum stop.
+- `scheduler_wakeup_cursor_worker_remove` materializes the maximum configured cursor depth and measures page drain, reverse-index repair, bucket deletion, and active-FIFO append as one production path.
+- `scheduler_wakeup_cursor_worker_partial` verifies resumable one-slot progress without cursor removal; `scheduler_wakeup_cursor_worker_future` isolates the non-mutating minimum check.
+- The diagnostic-only `scheduler_cooldown_ineligible_idle` case verifies one cooldown wakeup and no active queue membership at an intermediate block; it remains excluded from production weights.
 
 Close-path complexity diagnostics (`on_close_execution_plan`):
 

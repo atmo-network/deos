@@ -514,10 +514,6 @@ impl<T: Config> Pallet<T> {
         hot.wakeup_pointer = Some(pointer);
       }
     });
-    match MinWakeupBlock::<T>::get() {
-      Some(current_min) if current_min <= block => {}
-      _ => MinWakeupBlock::<T>::put(block),
-    }
     true
   }
 
@@ -965,10 +961,6 @@ impl<T: Config> Pallet<T> {
     T::WeightInfo::scheduler_wakeup_append_new_page()
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_insert())
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_remove_exact())
-  }
-
-  fn wakeup_retry_probe_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_wakeup_spillover_probe(T::MaxSpilloverBlocks::get().saturating_add(1))
   }
 
   pub fn scheduler_actor_probe_weight_upper() -> Weight {
@@ -1654,31 +1646,7 @@ impl<T: Config> Pallet<T> {
     let mut cursor = SweepCursor::<T>::get();
     let iteration_weight =
       T::WeightInfo::permissionless_sweep().saturating_add(T::DbWeight::get().writes(1));
-    let retry_weight =
-      Self::scheduler_probe_weight_upper().saturating_add(Self::wakeup_retry_probe_weight_upper());
-    let now = frame_system::Pallet::<T>::block_number();
-    let mut retry_limit = 0u32;
-    let mut admitted_retry_weight = Weight::zero();
-    while retry_limit < max_check {
-      let next_weight = admitted_retry_weight.saturating_add(retry_weight);
-      if !meter.can_consume(next_weight) {
-        break;
-      }
-      admitted_retry_weight = next_weight;
-      retry_limit = retry_limit.saturating_add(1);
-    }
-    let retry_ids = WakeupRetryPending::<T>::iter_keys()
-      .take(retry_limit as usize)
-      .collect::<Vec<_>>();
-    for aaa_id in &retry_ids {
-      if ActorHot::<T>::contains_key(*aaa_id) {
-        let _ = Self::defer_wakeup(*aaa_id, now.saturating_add(One::one()));
-      } else {
-        WakeupRetryPending::<T>::remove(aaa_id);
-      }
-      meter.consume(retry_weight);
-    }
-    let mut checked = retry_ids.len() as u32;
+    let mut checked = 0u32;
     while checked < max_check {
       if !meter.can_consume(iteration_weight) {
         break;

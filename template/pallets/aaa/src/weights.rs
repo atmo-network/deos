@@ -57,8 +57,6 @@ pub trait WeightInfo {
   fn scheduler_paged_mixed_scan(entries: u32) -> Weight;
   fn scheduler_paged_execute_cheap(executions: u32) -> Weight;
   fn scheduler_actor_probe() -> Weight;
-  fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight;
-  fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
   fn compatibility_ingress_probe() -> Weight;
@@ -323,27 +321,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().reads_writes(18, 16))
   }
 
-  fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight {
-    let bounded = u64::from(blocked_buckets.min(T::MaxSpilloverBlocks::get().saturating_add(1)));
-    Weight::from_parts(
-      20_000_000u64.saturating_add(bounded.saturating_mul(5_000_000)),
-      4_096u64.saturating_add(bounded.saturating_mul(80_497)),
-    )
-    .saturating_add(T::DbWeight::get().reads_writes(
-      6u64.saturating_add(bounded),
-      6u64.saturating_add(bounded),
-    ))
-  }
-
-  fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight {
-    Weight::from_parts(30_000_000, 100_000)
-      .saturating_add(Weight::from_parts(20_000_000, 16_000).saturating_mul(wakeups.into()))
-      .saturating_add(T::DbWeight::get().reads_writes(
-        8u64.saturating_add(u64::from(wakeups).saturating_mul(4)),
-        8u64.saturating_add(u64::from(wakeups).saturating_mul(5)),
-      ))
-  }
-
   fn transaction_extension_ingress_base() -> Weight {
     Weight::from_parts(10_000_000, 4_096).saturating_add(T::DbWeight::get().reads(1))
   }
@@ -521,13 +498,6 @@ impl WeightInfo for () {
       .saturating_add(Weight::from_parts(100_000_000, 8_000).saturating_mul(executions.into()))
   }
   fn scheduler_actor_probe() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
-  fn scheduler_wakeup_spillover_probe(blocked_buckets: u32) -> Weight {
-    Weight::from_parts(20_000_000u64.saturating_add(u64::from(blocked_buckets).saturating_mul(5_000_000)), 4_096)
-  }
-  fn scheduler_wakeup_dense_due_drain(wakeups: u32) -> Weight {
-    Weight::from_parts(30_000_000, 100_000)
-      .saturating_add(Weight::from_parts(20_000_000, 16_000).saturating_mul(wakeups.into()))
-  }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(10_000_000, 4_096) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(1_500_000_000, 800_000) }
   fn compatibility_ingress_probe() -> Weight { Weight::from_parts(10_000_000, 1_000) }

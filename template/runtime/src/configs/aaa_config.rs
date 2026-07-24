@@ -56,10 +56,8 @@ parameter_types! {
   /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
   pub const AaaWakeupPageSize: u32 = 32;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
-  pub const AaaMaxWakeupBucketSize: u32 = 10_000;
-  pub const AaaMaxWakeupsPerBlock: u32 = 512;
-  pub const AaaMaxSpilloverBlocks: u32 = 8;
-  pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
+    pub const AaaMaxWakeupsPerBlock: u32 = 512;
+    pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
   pub const AaaMaxIngressOverflowQueue: u32 = 8192;
   pub AaaGuaranteedOnIdleWeight: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
@@ -1263,9 +1261,7 @@ impl pallet_aaa::Config for Runtime {
   type QueuePageSize = AaaQueuePageSize;
   type WakeupPageSize = AaaWakeupPageSize;
   type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
-  type MaxWakeupBucketSize = AaaMaxWakeupBucketSize;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
-  type MaxSpilloverBlocks = AaaMaxSpilloverBlocks;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
   type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;

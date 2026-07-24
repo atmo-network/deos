@@ -75,10 +75,9 @@ impl TmctolReadModel {
     );
     let actor_identity_exists = pallet_aaa::ActorHot::<Runtime>::contains_key(aaa_id)
       || pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(aaa_id);
-    let scheduler_state_exists = pallet_aaa::ScheduledWakeupBlock::<Runtime>::contains_key(aaa_id)
-      || pallet_aaa::WakeupRetryPending::<Runtime>::get(aaa_id)
-      || pallet_aaa::ActorHot::<Runtime>::get(aaa_id)
-        .is_some_and(|hot| hot.pending_signal || hot.queue_ticket.is_some());
+    let scheduler_state_exists = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).is_some_and(|hot| {
+      hot.pending_signal || hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some()
+    });
     let status = if is_custody_only && !actor_identity_exists && !scheduler_state_exists {
       GuaranteeStatus::Satisfied
     } else {

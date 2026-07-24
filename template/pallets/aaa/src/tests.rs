@@ -157,39 +157,37 @@ fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
     ("AaaResumed", 4),
     ("AaaClosed", 5),
     ("CycleDeferred", 6),
-    ("WakeupRescheduled", 7),
-    ("WakeupScheduleDropped", 8),
-    ("CycleStarted", 9),
-    ("CycleSummary", 10),
-    ("StepSkipped", 11),
-    ("StepFailed", 12),
-    ("TransferExecuted", 13),
-    ("SplitTransferExecuted", 14),
-    ("SwapExecuted", 15),
-    ("BurnExecuted", 16),
-    ("MintExecuted", 17),
-    ("StakeExecuted", 18),
-    ("UnstakeExecuted", 19),
-    ("LiquidityDonated", 20),
-    ("LiquidityAdded", 21),
-    ("LiquidityRemoved", 22),
-    ("ScheduleUpdated", 23),
-    ("ExecutionPlanUpdated", 24),
-    ("OnCloseExecutionPlanUpdated", 25),
-    ("OnCloseStepFailed", 26),
-    ("OnCloseStepSkipped", 27),
-    ("OnCloseExecutionPlanSummary", 28),
-    ("AutoCloseNonceSet", 29),
-    ("AutoCloseNonceIncremented", 30),
-    ("ActiveActorLimitSet", 31),
-    ("GlobalCircuitBreakerSet", 32),
-    ("ManualTriggerSet", 33),
-    ("SweepBatchProcessed", 34),
-    ("IdleStarvationDetected", 35),
-    ("FundingSourcePolicyUpdated", 36),
-    ("FundingBatchActivated", 37),
-    ("FundingBatchPendingAccumulated", 38),
-    ("FundingBatchPromoted", 39),
+    ("CycleStarted", 7),
+    ("CycleSummary", 8),
+    ("StepSkipped", 9),
+    ("StepFailed", 10),
+    ("TransferExecuted", 11),
+    ("SplitTransferExecuted", 12),
+    ("SwapExecuted", 13),
+    ("BurnExecuted", 14),
+    ("MintExecuted", 15),
+    ("StakeExecuted", 16),
+    ("UnstakeExecuted", 17),
+    ("LiquidityDonated", 18),
+    ("LiquidityAdded", 19),
+    ("LiquidityRemoved", 20),
+    ("ScheduleUpdated", 21),
+    ("ExecutionPlanUpdated", 22),
+    ("OnCloseExecutionPlanUpdated", 23),
+    ("OnCloseStepFailed", 24),
+    ("OnCloseStepSkipped", 25),
+    ("OnCloseExecutionPlanSummary", 26),
+    ("AutoCloseNonceSet", 27),
+    ("AutoCloseNonceIncremented", 28),
+    ("ActiveActorLimitSet", 29),
+    ("GlobalCircuitBreakerSet", 30),
+    ("ManualTriggerSet", 31),
+    ("SweepBatchProcessed", 32),
+    ("IdleStarvationDetected", 33),
+    ("FundingSourcePolicyUpdated", 34),
+    ("FundingBatchActivated", 35),
+    ("FundingBatchPendingAccumulated", 36),
+    ("FundingBatchPromoted", 37),
   ]);
   assert_variant_contract::<Error<Test>>(&[
     ("AaaIdOverflow", 0),
@@ -792,11 +790,6 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       "WakeupBuckets",
       "WakeupCursorPages",
       "WakeupCursorLen",
-      "WakeupIndex",
-      "MinWakeupBlock",
-      "ScheduledWakeupBlock",
-      "WakeupScheduleDrops",
-      "WakeupRetryPending",
       "OwnerSlotMask",
       "SovereignIndex",
       "ActiveActorLimit",
@@ -845,11 +838,6 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       ("WakeupBuckets", true, true),
       ("WakeupCursorPages", true, true),
       ("WakeupCursorLen", false, false),
-      ("WakeupIndex", false, true),
-      ("MinWakeupBlock", true, false),
-      ("ScheduledWakeupBlock", true, true),
-      ("WakeupScheduleDrops", false, false),
-      ("WakeupRetryPending", false, true),
       ("OwnerSlotMask", false, true),
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
@@ -879,23 +867,15 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
   assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[13]);
   assert_map_storage_types::<u64, crate::WakeupCursorPageOf<Test>>(&entries[14]);
   assert_plain_storage_type::<u32>(&entries[15]);
-  assert_map_storage_types::<
-    MockBlockNumber,
-    BoundedVec<u64, <Test as crate::Config>::MaxWakeupBucketSize>,
-  >(&entries[16]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[17]);
-  assert_map_storage_types::<u64, MockBlockNumber>(&entries[18]);
-  assert_plain_storage_type::<u64>(&entries[19]);
-  assert_map_storage_types::<u64, bool>(&entries[20]);
-  assert_map_storage_types::<AccountId, u8>(&entries[21]);
-  assert_map_storage_types::<AccountId, u64>(&entries[22]);
+  assert_map_storage_types::<AccountId, u8>(&entries[16]);
+  assert_map_storage_types::<AccountId, u64>(&entries[17]);
+  assert_plain_storage_type::<u32>(&entries[18]);
+  assert_plain_storage_type::<bool>(&entries[19]);
+  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[20]);
+  assert_plain_storage_type::<u32>(&entries[21]);
+  assert_plain_storage_type::<u32>(&entries[22]);
   assert_plain_storage_type::<u32>(&entries[23]);
-  assert_plain_storage_type::<bool>(&entries[24]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[25]);
-  assert_plain_storage_type::<u32>(&entries[26]);
-  assert_plain_storage_type::<u32>(&entries[27]);
-  assert_plain_storage_type::<u32>(&entries[28]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[29]);
+  assert_plain_storage_type::<MockBlockNumber>(&entries[24]);
 }
 
 fn ordinary_transfer_to_aaa(
@@ -1244,8 +1224,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_eq!(AAA::actor_identity_count(), 1);
     assert_eq!(AAA::active_aaa_count(), 0);
     assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert!(!crate::ScheduledWakeupBlock::<Test>::contains_key(aaa_id));
-    assert!(!crate::WakeupRetryPending::<Test>::get(aaa_id));
     System::reset_events();
     for block in 2..=5 {
       System::set_block_number(block);
@@ -1312,8 +1290,6 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
     assert_eq!(AAA::actor_identity_count(), 1);
     assert_eq!(AAA::active_aaa_count(), 0);
     assert_eq!(native_balance(&identity.sovereign_account), preserved);
-    assert!(!crate::ScheduledWakeupBlock::<Test>::contains_key(aaa_id));
-    assert!(!crate::WakeupRetryPending::<Test>::get(aaa_id));
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     assert!(AAA::dormant_aaa_identities(aaa_id).is_none());
     assert_eq!(AAA::actor_identity_count(), 0);
@@ -3385,20 +3361,13 @@ fn paged_scheduler_preserves_the_unexecuted_fifo_suffix() {
 }
 
 #[test]
-fn paged_wakeup_uses_the_exact_requested_block_despite_legacy_bucket_pressure() {
+fn paged_wakeup_uses_the_exact_requested_block_without_spillover() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let max_bucket: u32 = <Test as crate::Config>::MaxWakeupBucketSize::get();
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
     crate::pallet::QueueTail::<Test>::put(u64::from(
       <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
     ));
-    let full_ids: Vec<u64> = (2_000_000..2_000_000 + u64::from(max_bucket)).collect();
-    crate::pallet::WakeupIndex::<Test>::insert(
-      2,
-      BoundedVec::<u64, <Test as crate::Config>::MaxWakeupBucketSize>::try_from(full_ids)
-        .expect("legacy wakeup queue must fit"),
-    );
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
     assert_eq!(
@@ -7939,7 +7908,7 @@ fn timer_always_executes_on_interval() {
 }
 
 #[test]
-fn timer_every_block_uses_queue_continuation_without_wakeup_index() {
+fn timer_every_block_uses_queue_continuation_without_temporal_state() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, timer_schedule(1), None, inert_execution_plan());
@@ -7947,10 +7916,7 @@ fn timer_every_block_uses_queue_continuation_without_wakeup_index() {
       frame_system::Pallet::<Test>::set_block_number(block);
       AAA::on_initialize(block);
       AAA::on_idle(block, Weight::MAX);
-      assert!(
-        crate::pallet::WakeupIndex::<Test>::iter().next().is_none(),
-        "every-block timers must not use WakeupIndex"
-      );
+      assert_eq!(AAA::wakeup_cursor_len(), 0);
     }
     let cycle_nonce = AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce;
     assert!(

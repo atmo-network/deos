@@ -4148,8 +4148,8 @@ fn run_blocks_with_queue_diagnostics(
       .min(u64::from(u32::MAX)) as u32;
     let mut wakeup_backlog = 0u32;
     let mut wakeup_buckets = 0u32;
-    for (_, queued) in pallet_aaa::WakeupIndex::<Runtime>::iter() {
-      wakeup_backlog = wakeup_backlog.saturating_add(queued.len() as u32);
+    for (_, bucket) in pallet_aaa::WakeupBuckets::<Runtime>::iter() {
+      wakeup_backlog = wakeup_backlog.saturating_add(bucket.live_entries);
       wakeup_buckets = wakeup_buckets.saturating_add(1);
     }
     queue_diag.max_queue_occupancy = queue_diag.max_queue_occupancy.max(queue_occupancy);
@@ -4416,13 +4416,13 @@ fn clear_genesis_system_actors_for_stress_fixture() {
     pallet_aaa::DormantAaaIdentities::<Runtime>::remove(aaa_id);
     pallet_aaa::SovereignIndex::<Runtime>::remove(&identity.sovereign_account);
   }
-  let _ = pallet_aaa::ScheduledWakeupBlock::<Runtime>::clear(u32::MAX, None);
-  let _ = pallet_aaa::WakeupRetryPending::<Runtime>::clear(u32::MAX, None);
-  let _ = pallet_aaa::WakeupIndex::<Runtime>::clear(u32::MAX, None);
+  let _ = pallet_aaa::WakeupPages::<Runtime>::clear(u32::MAX, None);
+  let _ = pallet_aaa::WakeupBuckets::<Runtime>::clear(u32::MAX, None);
+  let _ = pallet_aaa::WakeupCursorPages::<Runtime>::clear(u32::MAX, None);
+  pallet_aaa::WakeupCursorLen::<Runtime>::put(0);
   let _ = pallet_aaa::QueuePages::<Runtime>::clear(u32::MAX, None);
   pallet_aaa::QueueHead::<Runtime>::put(0);
   pallet_aaa::QueueTail::<Runtime>::put(0);
-  pallet_aaa::MinWakeupBlock::<Runtime>::kill();
   pallet_aaa::ActiveAaaCount::<Runtime>::put(0);
   pallet_aaa::ActorIdentityCount::<Runtime>::put(0);
 }
@@ -4599,8 +4599,8 @@ fn reference_idle_budget_carries_mixed_admitted_tasks_without_starvation() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
     close_genesis_system_actors();
-    let mut aaa_ids = setup_inert_actors(4, 10_000u128);
-    let (transfer_ids, _) = setup_circular_chain(4, 10_000u128);
+    let mut aaa_ids = setup_inert_actors(32, 10_000u128);
+    let (transfer_ids, _) = setup_circular_chain(32, 10_000u128);
     aaa_ids.extend(transfer_ids);
     let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as Get<Weight>>::get();
     let (diag, queue_diag) = run_blocks_with_queue_diagnostics(&aaa_ids, 40, budget);

@@ -1128,7 +1128,6 @@ mod benches {
     {
       core::hint::black_box(NextAaaId::<T>::get());
       core::hint::black_box(SweepCursor::<T>::get());
-      core::hint::black_box(WakeupRetryPending::<T>::iter_keys().next());
     }
   }
 
@@ -1670,7 +1669,6 @@ mod benches {
     let _ = QueuePages::<T>::clear(u32::MAX, None);
     QueueHead::<T>::put(0);
     QueueTail::<T>::put(0);
-    MinWakeupBlock::<T>::kill();
     GlobalCircuitBreaker::<T>::put(false);
     let bounded = n
       .min(T::MaxExecutionsPerBlock::get())
@@ -1715,57 +1713,6 @@ mod benches {
       "unbounded diagnostic budget completed only {executed} of {bounded} requested cheap actors"
     );
     assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
-  }
-
-  // Compatibility benchmark retained until the legacy weight surface is removed.
-  #[benchmark]
-  fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {
-    let due = n.min(T::MaxWakeupsPerBlock::get());
-    let due_block: BlockNumberFor<T> = 1u32.into();
-    frame_system::Pallet::<T>::set_block_number(due_block);
-    for seed in 0..due {
-      let aaa_id = bench_create_system_manual::<T>(9_000_000u32.saturating_add(seed));
-      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, due_block));
-    }
-    #[block]
-    {
-      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    assert!(WakeupBuckets::<T>::get(due_block).is_none());
-  }
-
-  // Compatibility diagnostic retained until the legacy weight surface is removed.
-  #[benchmark]
-  fn scheduler_wakeup_sparse_gap_recovery(g: Linear<64, 4_096>) {
-    let gap = g.max(T::MaxWakeupsPerBlock::get());
-    let now: BlockNumberFor<T> = 1u32.into();
-    let future: BlockNumberFor<T> = gap.saturating_add(1).into();
-    frame_system::Pallet::<T>::set_block_number(now);
-    let aaa_id = bench_create_system_manual::<T>(9_100_000);
-    assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, future));
-    #[block]
-    {
-      let _ = Pallet::<T>::execute_cycle(Weight::MAX);
-    }
-    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(future));
-  }
-
-  // Compatibility benchmark retained until spillover weights are removed.
-  #[benchmark]
-  fn scheduler_wakeup_spillover_probe(b: Linear<0, 9>) {
-    let aaa_id = bench_create_system_manual::<T>(b);
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    QueueHead::<T>::put(0);
-    QueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
-    #[block]
-    {
-      Pallet::<T>::enqueue(aaa_id);
-    }
-    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| {
-      hot
-        .wakeup_pointer
-        .is_some_and(|pointer| pointer.block == 2u32.into())
-    }));
   }
 
   #[benchmark]

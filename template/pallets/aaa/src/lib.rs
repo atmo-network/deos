@@ -176,11 +176,7 @@ pub mod pallet {
     #[pallet::constant]
     type MaxQueueEntriesScannedPerBlock: Get<u32>;
     #[pallet::constant]
-    type MaxWakeupBucketSize: Get<u32>;
-    #[pallet::constant]
     type MaxWakeupsPerBlock: Get<u32>;
-    #[pallet::constant]
-    type MaxSpilloverBlocks: Get<u32>;
     #[pallet::constant]
     type MaxSweepPerBlock: Get<u32>;
     #[pallet::constant]
@@ -511,28 +507,6 @@ pub mod pallet {
   #[pallet::storage]
   #[pallet::getter(fn wakeup_cursor_len)]
   pub type WakeupCursorLen<T> = StorageValue<_, WakeupCursorIndex, ValueQuery>;
-
-  #[pallet::storage]
-  pub type WakeupIndex<T: Config> = StorageMap<
-    _,
-    Blake2_128Concat,
-    BlockNumberFor<T>,
-    BoundedVec<AaaId, T::MaxWakeupBucketSize>,
-    ValueQuery,
-  >;
-
-  #[pallet::storage]
-  pub type MinWakeupBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
-
-  #[pallet::storage]
-  pub type ScheduledWakeupBlock<T: Config> =
-    StorageMap<_, Blake2_128Concat, AaaId, BlockNumberFor<T>, OptionQuery>;
-
-  #[pallet::storage]
-  pub type WakeupScheduleDrops<T: Config> = StorageValue<_, u64, ValueQuery>;
-
-  #[pallet::storage]
-  pub type WakeupRetryPending<T: Config> = StorageMap<_, Blake2_128Concat, AaaId, bool, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn owner_slot_mask)]
@@ -878,15 +852,6 @@ pub mod pallet {
     CycleDeferred {
       aaa_id: AaaId,
       reason: DeferReason,
-    },
-    WakeupRescheduled {
-      aaa_id: AaaId,
-      requested_block: BlockNumberFor<T>,
-      scheduled_block: BlockNumberFor<T>,
-    },
-    WakeupScheduleDropped {
-      aaa_id: AaaId,
-      requested_block: BlockNumberFor<T>,
     },
     CycleStarted {
       aaa_id: AaaId,
@@ -2373,8 +2338,6 @@ pub mod pallet {
             Error::<T>::AaaNotFound.into(),
           ));
         }
-        ScheduledWakeupBlock::<T>::remove(aaa_id);
-        WakeupRetryPending::<T>::remove(aaa_id);
         Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);
         DormantAaaIdentities::<T>::insert(aaa_id, identity);
@@ -2682,8 +2645,6 @@ pub mod pallet {
             Error::<T>::AaaNotFound.into(),
           ));
         }
-        ScheduledWakeupBlock::<T>::remove(aaa_id);
-        WakeupRetryPending::<T>::remove(aaa_id);
         Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2911,11 +2872,7 @@ pub mod pallet {
       let dormant_identities = DormantAaaIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
       for (aaa_id, identity) in dormant_identities {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
-        if Self::active_actor_exists(aaa_id)
-          || ActorFunding::<T>::contains_key(aaa_id)
-          || ScheduledWakeupBlock::<T>::contains_key(aaa_id)
-          || WakeupRetryPending::<T>::get(aaa_id)
-        {
+        if Self::active_actor_exists(aaa_id) || ActorFunding::<T>::contains_key(aaa_id) {
           return Err(TryRuntimeError::Other(
             "Dormant identity owns active scheduler or inbox state",
           ));
@@ -3212,62 +3169,6 @@ pub mod pallet {
             "ClosedSystemAaaIds contains an occupied aaa_id",
           ));
         }
-      }
-      for aaa_id in WakeupRetryPending::<T>::iter_keys() {
-        if !Self::active_actor_exists(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "WakeupRetryPending contains missing aaa_id",
-          ));
-        }
-      }
-      let min_wakeup = MinWakeupBlock::<T>::get();
-      for (aaa_id, block) in ScheduledWakeupBlock::<T>::iter() {
-        if !Self::active_actor_exists(aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "ScheduledWakeupBlock contains missing aaa_id",
-          ));
-        }
-        if !WakeupIndex::<T>::get(block).contains(&aaa_id) {
-          return Err(TryRuntimeError::Other(
-            "ScheduledWakeupBlock points to missing WakeupIndex entry",
-          ));
-        }
-      }
-      let mut has_wakeup = false;
-      for (block, queued) in WakeupIndex::<T>::iter() {
-        if queued.is_empty() {
-          return Err(TryRuntimeError::Other(
-            "WakeupIndex contains empty queue entry",
-          ));
-        }
-        if let Some(min_block) = min_wakeup {
-          if block < min_block {
-            return Err(TryRuntimeError::Other(
-              "WakeupIndex contains key below MinWakeupBlock",
-            ));
-          }
-        }
-        let mut wakeup_seen = alloc::collections::BTreeSet::new();
-        for aaa_id in queued.iter().copied() {
-          if !wakeup_seen.insert(aaa_id) {
-            return Err(TryRuntimeError::Other(
-              "WakeupIndex contains duplicate aaa_id in one block queue",
-            ));
-          }
-          if let Some(live_block) = ScheduledWakeupBlock::<T>::get(aaa_id) {
-            if live_block == block && !Self::active_actor_exists(aaa_id) {
-              return Err(TryRuntimeError::Other(
-                "WakeupIndex contains live wakeup for missing aaa_id",
-              ));
-            }
-          }
-        }
-        has_wakeup = true;
-      }
-      if min_wakeup.is_none() && has_wakeup {
-        return Err(TryRuntimeError::Other(
-          "MinWakeupBlock is missing while WakeupIndex is non-empty",
-        ));
       }
       Ok(())
     }
