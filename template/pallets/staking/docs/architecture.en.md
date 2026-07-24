@@ -74,7 +74,7 @@ graph TD
 
 ### Launch reward phases
 
-The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-DEOS action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning.
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects transaction, Actor-execution, governance-opening, and XCM-execution fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning. DEOS Router trading fees remain on the Burn Actor path.
 
 The LP-donation half flows through Fee Sink → Actors #14, with a native-balance bridge into the local native-staking asset before donation execution. After that donation hook, the staking-yield half burns native balance held by the staking pool account and mints the local native-staking asset into pool truth.
 
@@ -119,25 +119,25 @@ The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace befor
 
 ### Core pool and receipt state
 
-| Storage | Role | Notes |
-| --- | --- | --- |
-| `Pools[asset_id]` | Share-vault totals | shares, accounted balance, staker count |
-| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | bounded receipt -> base lookup |
-| `Positions[(asset_id, account)]` | Legacy share ownership | bridge for pre-receipt positions |
-| `OperatorCommissions[operator]` | Operator commission | bounded by `MaxOperatorCommission` |
+| Storage                                      | Role                   | Notes                                   |
+| -------------------------------------------- | ---------------------- | --------------------------------------- |
+| `Pools[asset_id]`                            | Share-vault totals     | shares, accounted balance, staker count |
+| `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | bounded receipt -> base lookup          |
+| `Positions[(asset_id, account)]`             | Legacy share ownership | bridge for pre-receipt positions        |
+| `OperatorCommissions[operator]`              | Operator commission    | bounded by `MaxOperatorCommission`      |
 
 `Positions` is retained only for legacy compatibility. Fresh ownership is receipt-based.
 
 ### Native LP security state
 
-| Storage | Role |
-| --- | --- |
-| `NativeLpLocks[(account, operator)]` | Collator-specific locked LP position |
-| `OperatorNativeLpLocked[operator]` | Aggregate LP backing for session ranking |
-| `AccountNativeLpLocked[account]` | Aggregate account LP custody for NativeVotePower |
-| `AccountNativeCollatorLpLocked[account]` | Collator-locked LP only, used for native nomination rewards |
-| `TotalNativeLpLocked` | Aggregate native LP custody |
-| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal |
+| Storage                                       | Role                                                        |
+| --------------------------------------------- | ----------------------------------------------------------- |
+| `NativeLpLocks[(account, operator)]`          | Collator-specific locked LP position                        |
+| `OperatorNativeLpLocked[operator]`            | Aggregate LP backing for session ranking                    |
+| `AccountNativeLpLocked[account]`              | Aggregate account LP custody for NativeVotePower            |
+| `AccountNativeCollatorLpLocked[account]`      | Collator-locked LP only, used for native nomination rewards |
+| `TotalNativeLpLocked`                         | Aggregate native LP custody                                 |
+| `PendingNativeLpUnlocks[(account, operator)]` | Delayed withdrawal request after collator backing removal   |
 
 Unlock requests immediately remove LP from backing and reward/governance aggregates, then delay token withdrawal by `NativeLpUnlockDelay`.
 

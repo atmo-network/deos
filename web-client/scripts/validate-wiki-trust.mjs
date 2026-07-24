@@ -24,6 +24,10 @@ const defaultConsolidationAuditor = join(
   repoRoot,
   '.agents/skills/wiki-sync/scripts/audit-wiki-consolidation.sh',
 );
+const defaultSearchIndexer = join(
+  repoRoot,
+  '.agents/skills/wiki-sync/scripts/build-search-index.mjs',
+);
 const defaultWikiDir = join(repoRoot, 'wiki');
 const args = process.argv.slice(2);
 const helpRequested = args.some((arg) => arg === '--help' || arg === '-h');
@@ -36,6 +40,7 @@ Runs the trusted wiki markdown validator used by the browser renderer, then runs
 Environment:
   WIKI_TRUST_VALIDATOR  Absolute path to validate-wiki-trust.sh
   WIKI_CONSOLIDATION_AUDITOR  Absolute path to audit-wiki-consolidation.sh
+  WIKI_SEARCH_INDEXER  Absolute path to build-search-index.mjs
 
 Defaults:
   validator=<repo>/.agents/skills/wiki-sync/scripts/validate-wiki-trust.sh
@@ -52,9 +57,16 @@ Examples:
 const validator = process.env.WIKI_TRUST_VALIDATOR ?? defaultValidator;
 const consolidationAuditor =
   process.env.WIKI_CONSOLIDATION_AUDITOR ?? defaultConsolidationAuditor;
+const searchIndexer = process.env.WIKI_SEARCH_INDEXER ?? defaultSearchIndexer;
 const hasWikiDirArg = args.some(
   (arg) => arg === '--wiki-dir' || arg.startsWith('--wiki-dir='),
 );
+const wikiDirValueIndex = args.indexOf('--wiki-dir');
+const wikiDirEqualsArg = args.find((arg) => arg.startsWith('--wiki-dir='));
+const selectedWikiDir =
+  (wikiDirValueIndex >= 0 ? args[wikiDirValueIndex + 1] : undefined) ??
+  wikiDirEqualsArg?.slice('--wiki-dir='.length) ??
+  defaultWikiDir;
 const validatorArgs = hasWikiDirArg
   ? args
   : ['--wiki-dir', defaultWikiDir, ...args];
@@ -81,6 +93,17 @@ if (!existsSync(consolidationAuditor)) {
   process.exit(127);
 }
 
+if (!existsSync(searchIndexer)) {
+  writeErr(
+    [
+      'Wiki search indexer not found.',
+      `Expected: ${searchIndexer}`,
+      'Set WIKI_SEARCH_INDEXER to the indexer script path.',
+    ].join('\n'),
+  );
+  process.exit(127);
+}
+
 const result = spawnSync('bash', [validator, ...validatorArgs], {
   cwd: webClientRoot,
   env: process.env,
@@ -94,6 +117,25 @@ if (result.error) {
 
 if ((result.status ?? 1) !== 0) {
   process.exit(result.status ?? 1);
+}
+
+const searchResult = spawnSync(
+  process.execPath,
+  [searchIndexer, '--wiki-dir', selectedWikiDir, '--check'],
+  {
+    cwd: webClientRoot,
+    env: process.env,
+    stdio: 'inherit',
+  },
+);
+
+if (searchResult.error) {
+  writeErr(searchResult.error.message);
+  process.exit(1);
+}
+
+if ((searchResult.status ?? 1) !== 0) {
+  process.exit(searchResult.status ?? 1);
 }
 
 const consolidationResult = spawnSync(

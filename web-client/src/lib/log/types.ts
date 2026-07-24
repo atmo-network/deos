@@ -6,6 +6,11 @@ Zone: Log public contract; safe for stores, adapters, and widgets to import.
 */
 export type LogType = 'info' | 'buy' | 'sell' | 'error';
 
+export type NetworkFeedState = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  message: string | null;
+};
+
 export type LogEntry = {
   id: number | string;
   step: number;

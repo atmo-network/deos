@@ -45,7 +45,7 @@ Zone: Foundation UI; use Bits UI wrappers instead when select behavior needs cus
     id={selectId}
     bind:value
     class={mergeClasses(
-      'w-full rounded-xl border border-(--mono-border) bg-white px-3 py-2 text-sm text-(--mono-text) focus:border-(--mono-purple) focus:outline-none',
+      'w-full cursor-pointer rounded-xl border border-(--mono-border) bg-white px-3 py-2 text-sm text-(--mono-text) focus:border-(--mono-purple) focus:outline-none disabled:cursor-not-allowed',
       selectClass,
     )}
     {...rest}

@@ -5,11 +5,11 @@ Excludes: Tree mutation, persistence, DOM rendering, and widget implementation.
 Zone: Layout algorithm helper; depends only on layout contracts.
 */
 import {
-  ALL_PANELS,
   MAX_TILE_LEAF_COUNT,
   type PanelId,
   type TileLeaf,
   type TileNode,
+  isWorkspaceWidgetId,
 } from './types';
 
 export function findLeaf(node: TileNode, id: string): TileLeaf | null {
@@ -19,6 +19,19 @@ export function findLeaf(node: TileNode, id: string): TileLeaf | null {
   return findLeaf(node.children[0], id) || findLeaf(node.children[1], id);
 }
 
+export function findLeafContainingPanel(
+  node: TileNode,
+  panelId: PanelId,
+): TileLeaf | null {
+  if (node.type === 'leaf') {
+    return node.tabs.includes(panelId) ? node : null;
+  }
+  return (
+    findLeafContainingPanel(node.children[0], panelId) ??
+    findLeafContainingPanel(node.children[1], panelId)
+  );
+}
+
 export function countLeaves(node: TileNode): number {
   if (node.type === 'leaf') {
     return 1;
@@ -26,23 +39,42 @@ export function countLeaves(node: TileNode): number {
   return countLeaves(node.children[0]) + countLeaves(node.children[1]);
 }
 
-function collectPanels(node: TileNode, out: Set<PanelId>) {
+export function countPanels(node: TileNode): number {
   if (node.type === 'leaf') {
-    for (const tab of node.tabs) {
-      out.add(tab);
-    }
-    return;
+    return node.tabs.length;
   }
-  collectPanels(node.children[0], out);
-  collectPanels(node.children[1], out);
+  return countPanels(node.children[0]) + countPanels(node.children[1]);
+}
+
+export function findFirstLeaf(node: TileNode): TileLeaf {
+  return node.type === 'leaf' ? node : findFirstLeaf(node.children[0]);
+}
+
+function collectPanels(node: TileNode, out: PanelId[]): boolean {
+  if (node.type === 'leaf') {
+    if (
+      node.tabs.length === 0 ||
+      !node.tabs.includes(node.activeTab) ||
+      node.tabs.some((panelId) => !isWorkspaceWidgetId(panelId))
+    ) {
+      return false;
+    }
+    out.push(...node.tabs);
+    return true;
+  }
+  return (
+    collectPanels(node.children[0], out) && collectPanels(node.children[1], out)
+  );
 }
 
 export function isValidTree(node: TileNode): boolean {
-  const panels = new Set<PanelId>();
-  collectPanels(node, panels);
+  const panels: PanelId[] = [];
+  if (!collectPanels(node, panels)) {
+    return false;
+  }
   return (
     countLeaves(node) <= MAX_TILE_LEAF_COUNT &&
-    ALL_PANELS.every((panel) => panels.has(panel)) &&
-    panels.size === ALL_PANELS.length
+    panels.length > 0 &&
+    new Set(panels).size === panels.length
   );
 }

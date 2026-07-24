@@ -1,10 +1,10 @@
 /*
 Domain: Layout contracts
-Owns: Workspace panel ids, tile tree types, lane topology types, and persisted frame state shapes.
+Owns: Workspace widget identities, placement subsets, tile tree types, lane topology types, and persisted frame state shapes.
 Excludes: Store mutation, DOM rendering, widget implementations, and adapter/domain state.
 Zone: Layout public contract; safe for layout, system, and widget composition to import.
 */
-export type PanelId =
+export type WorkspaceWidgetId =
   | 'swap'
   | 'chart'
   | 'statistics'
@@ -12,9 +12,14 @@ export type PanelId =
   | 'governance'
   | 'wallet'
   | 'automation'
-  | 'wiki';
+  | 'wiki'
+  | 'account-menu'
+  | 'settings';
 
-export const ALL_PANELS: PanelId[] = [
+export type PanelId = WorkspaceWidgetId;
+export type SidebarWidgetId = WorkspaceWidgetId;
+
+export const ALL_WORKSPACE_WIDGETS: WorkspaceWidgetId[] = [
   'swap',
   'chart',
   'statistics',
@@ -23,9 +28,21 @@ export const ALL_PANELS: PanelId[] = [
   'wallet',
   'automation',
   'wiki',
+  'account-menu',
+  'settings',
 ];
 
-export const PANEL_LABELS: Record<PanelId, string> = {
+export const ALL_PANELS: PanelId[] = ALL_WORKSPACE_WIDGETS;
+
+const WORKSPACE_WIDGET_SET = new Set<string>(ALL_WORKSPACE_WIDGETS);
+
+export function isWorkspaceWidgetId(
+  value: unknown,
+): value is WorkspaceWidgetId {
+  return typeof value === 'string' && WORKSPACE_WIDGET_SET.has(value);
+}
+
+export const WIDGET_LABELS: Record<WorkspaceWidgetId, string> = {
   swap: 'Swap',
   chart: 'Chart',
   statistics: 'Statistics',
@@ -34,7 +51,11 @@ export const PANEL_LABELS: Record<PanelId, string> = {
   wallet: 'Wallet',
   automation: 'Automation',
   wiki: 'Wiki',
+  'account-menu': 'Account',
+  settings: 'Settings',
 };
+
+export const PANEL_LABELS: Record<PanelId, string> = WIDGET_LABELS;
 
 export type TileLeaf = {
   type: 'leaf';
@@ -57,7 +78,7 @@ export type DropEdge = 'right' | 'bottom' | 'left';
 
 export type DragTabState = {
   tabId: PanelId;
-  sourceLeafId: string;
+  sourceLeafId: string | null;
 };
 
 export type DragLeafState = {
@@ -65,6 +86,8 @@ export type DragLeafState = {
 };
 
 export const MOBILE_LAYOUT_BREAKPOINT = 640;
+export const MIN_PANE_STACK_HEIGHT_PX = 96;
+export const SPLIT_HANDLE_EXTENT_PX = 12;
 export const MAX_TILE_GRID_COLUMNS = 4;
 export const MAX_TILE_GRID_ROWS = 4;
 export const MAX_TILE_LEAF_COUNT = MAX_TILE_GRID_COLUMNS * MAX_TILE_GRID_ROWS;
@@ -75,6 +98,10 @@ export type ReservedLaneWidgetId =
   | 'account-menu'
   | 'settings'
   | 'status';
+export const SIDEBAR_WIDGET_IDS: SidebarWidgetId[] = [
+  'account-menu',
+  'settings',
+];
 export type SidebarLaneEdge = 'left' | 'right';
 export type ReservedLaneSpec = {
   id: ReservedLaneId;
@@ -86,11 +113,18 @@ export type ReservedLaneSpec = {
   mobileWidgets?: ReservedLaneWidgetId[];
 };
 export type SidebarLaneState = {
+  placementVersion: 1;
   open: boolean;
-  edge: SidebarLaneEdge;
+  widgetOrder: SidebarWidgetId[];
+  expandedWidgetId: SidebarWidgetId | null;
+};
+export type MobileWorkspaceState = {
+  panelOrder: PanelId[];
+  expandedPanelId: PanelId | null;
 };
 export type WorkspaceFrameState = {
   sidebar: SidebarLaneState;
+  mobile: MobileWorkspaceState;
 };
 
 export const RESERVED_LANE_SPECS: Record<ReservedLaneId, ReservedLaneSpec> = {

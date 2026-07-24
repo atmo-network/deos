@@ -54,7 +54,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Partner Pitch](getting-started/partner-pitch.en.md) — external-facing why-it-matters page for partner teams
 - [Executive Summary](getting-started/executive-summary.en.md) — one-page summary for ecosystem and investor readers
 - [End-to-End Flows](concepts/end-to-end-flows.en.md) — concrete walkthroughs across routing, actors, buckets, staking, and validation
-- [Architecture Diagrams](concepts/architecture-diagrams.en.md) — compact text maps for subsystem relationships
 - [DEOS Framework Overview](overview/deos-framework.en.md) — what the framework is
 
 ## Domain hubs

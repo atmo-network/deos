@@ -51,12 +51,11 @@ If you only need the shortest entry, use [Start Here](start-here.en.md) first. U
 4. [Executive Summary](executive-summary.en.md)
 5. [DEOS Framework Overview](../overview/deos-framework.en.md)
 6. [Domain Map](../concepts/domain-map.en.md)
-7. [Architecture Diagrams](../concepts/architecture-diagrams.en.md)
-8. [Core Terms](../glossary/core-terms.en.md)
-9. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
-10. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
-11. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-12. [Newcomer FAQ](../faq/newcomer-faq.en.md)
+7. [Core Terms](../glossary/core-terms.en.md)
+8. [End-to-End Flows](../concepts/end-to-end-flows.en.md)
+9. [TMCTOL Standard](../concepts/tmctol-standard.en.md)
+10. [Token-Driven Automation](../concepts/token-driven-automation.en.md)
+11. [Newcomer FAQ](../faq/newcomer-faq.en.md)
 
 This path gives you project vocabulary before pallet names, runtime details, or implementation-specific terms appear.
 

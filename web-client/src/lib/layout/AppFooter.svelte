@@ -34,10 +34,15 @@ Zone: Layout edge-lane component; composes configured footer widgets only.
   });
 </script>
 
-<footer class="shrink-0 flex justify-center items-center m-3 mt-0">
+<footer
+  class={[
+    'shrink-0 flex justify-center items-center mx-3 mt-0',
+    mobile ? 'mb-[max(0.75rem,env(safe-area-inset-bottom))]' : 'mb-3',
+  ]}
+>
   {#if widgetIds.includes('status')}
     <div
-      class="rounded-2xl border border-(--mono-border) bg-[linear-gradient(135deg,#ffffff_0%,#f2f8ec_46%,#edf6fa_100%)] px-1 py-1 shadow-[0_8px_24px_rgba(44,50,30,0.05)] overflow-x-auto scrollbar-none"
+      class="min-h-8 w-max max-w-[calc(100vw-1.5rem)] rounded-xl border border-(--mono-border) bg-white px-1 py-0.5 shadow-[0_8px_24px_rgba(44,50,30,0.05)] overflow-x-auto scrollbar-none"
     >
       {#if StatusWidget}
         <StatusWidget />

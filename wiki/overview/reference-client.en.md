@@ -50,7 +50,13 @@ The client keeps economic functions separate from layout infrastructure:
 - Layout is pane, tile, split, tab, footer, header, sidebar, and reserved-lane machinery;
 - Reserved edge lanes are developer-configured shell zones, not user-reorderable economic panes.
 
-Widgets should adapt to pane width and height instead of assuming one desktop-only stack.
+Widgets adapt to pane width and height instead of assuming one desktop-only stack. The reusable backbone owns task hierarchy, minimum phases, accessibility, provenance, and safety; downstream forks own brand, palette, typography, effects, terminology, and enabled product policy.
+
+## Responsive and Disconnected Behavior
+
+The desktop workspace persists a bounded tile tree with adjacent-only resizing. Below the mobile breakpoint, the client projects the same panels into a one-dimensional, single-expanded accordion with a separate persisted order; moving or expanding a mobile task does not rewrite desktop topology. The account/settings lane becomes a focus-contained bottom sheet instead of displacing the workspace.
+
+Chain absence never becomes a fabricated zero. Widgets distinguish loading, live snapshots, retained stale evidence, explicit preview data, unconfigured providers, and errors. Local account selection, signer discovery, address handling, drafts, Wiki reading, and receipts may remain useful offline, while balance-derived actions, quotes, and execution require a live canonical snapshot.
 
 ## Ownership and Feedback
 

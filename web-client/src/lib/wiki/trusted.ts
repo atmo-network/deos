@@ -16,6 +16,7 @@ type ResolvedWikiHref =
 export type TrustedWikiPage = {
   markdown: string;
   html: string;
+  relatedWikiPaths: string[];
 };
 
 const wikiPageImporters = import.meta.glob<string>('../../../../wiki/**/*.md', {
@@ -62,14 +63,34 @@ function resolveWikiHref(href: string, sourcePath: string): ResolvedWikiHref {
   return { kind: 'repo', path: resolvedPath.slice(1) };
 }
 
-function renderTrustedWikiMarkdown(
-  markdown: string,
-  sourcePath: string,
-): string {
+function extractRelatedWikiPaths(content: string, sourcePath: string) {
+  const relatedSectionPattern =
+    /\n## (?:Related|Связанные страницы)\s*\n([\s\S]*)$/;
+  const match = content.match(relatedSectionPattern);
+  if (!match || match.index === undefined) {
+    return { content, relatedWikiPaths: [] as string[] };
+  }
+  const relatedWikiPaths: string[] = [];
+  const linkPattern = /\[[^\]]+\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
+  for (const link of match[1].matchAll(linkPattern)) {
+    const resolved = resolveWikiHref(link[1], sourcePath);
+    if (resolved.kind === 'wiki' && !relatedWikiPaths.includes(resolved.path)) {
+      relatedWikiPaths.push(resolved.path);
+    }
+  }
+  return {
+    content: content.slice(0, match.index).trimEnd(),
+    relatedWikiPaths,
+  };
+}
+
+function renderTrustedWikiMarkdown(markdown: string, sourcePath: string) {
   let content = markdown;
   if (content.startsWith('---')) {
     content = content.replace(/^---[\s\S]*?\n---\n/, '');
   }
+  const related = extractRelatedWikiPaths(content, sourcePath);
+  content = related.content;
   const renderer = new marked.Renderer();
   renderer.link = function ({ href, title, tokens }) {
     const text = this.parser.parseInline(tokens);
@@ -100,7 +121,10 @@ function renderTrustedWikiMarkdown(
     html += `>${text}</a>`;
     return html;
   };
-  return marked.parse(content, { async: false, renderer });
+  return {
+    html: marked.parse(content, { async: false, renderer }),
+    relatedWikiPaths: related.relatedWikiPaths,
+  };
 }
 
 export async function loadTrustedWikiPage(
@@ -114,10 +138,14 @@ export async function loadTrustedWikiPage(
   if (!importer) {
     throw new Error(`Wiki page not found: ${path}`);
   }
-  const pagePromise = importer().then((markdown) => ({
-    markdown,
-    html: renderTrustedWikiMarkdown(markdown, path),
-  }));
+  const pagePromise = importer().then((markdown) => {
+    const rendered = renderTrustedWikiMarkdown(markdown, path);
+    return {
+      markdown,
+      html: rendered.html,
+      relatedWikiPaths: rendered.relatedWikiPaths,
+    };
+  });
   wikiPageCache.set(path, pagePromise);
   return pagePromise;
 }

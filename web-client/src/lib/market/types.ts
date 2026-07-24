@@ -36,6 +36,8 @@ export type Quote = {
   route: 'TMC' | 'XYK';
   effectivePrice: number;
   fee: bigint;
+  totalFee: bigint;
+  priceImpactPpb: bigint;
   tmcOut: bigint;
   xykOut: bigint;
   isSell: boolean;

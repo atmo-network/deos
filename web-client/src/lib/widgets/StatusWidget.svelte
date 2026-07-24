@@ -2,55 +2,126 @@
 Domain: Status widget
 Owns: Compact footer status presentation for chain connection and active account readiness.
 Excludes: System connection lifecycle, wallet store ownership, and footer lane layout.
-Zone: Presentation widget; consumes system/wallet state and read-model provenance badges.
+Zone: Presentation widget; consumes system/wallet state and UI Kit helpers.
 -->
 <script lang="ts">
-  import { fromClientBoundedProjection } from '$lib/read-model';
+  import { Blocks, KeyRound, UserRound, Wifi, WifiOff } from '@lucide/svelte';
+
+  import { resolveChainSurfaceState } from '$lib/system/connection-surface';
   import { systemStore } from '$lib/system/index.svelte';
-  import { ReadModelBadge } from '$lib/ui';
+  import { Icon, Tooltip } from '$lib/ui';
   import { walletStore } from '$lib/wallet/index.svelte';
 
-  const footerProvenance = fromClientBoundedProjection(
-    true,
-    'statusWidget.footerStrip <- system connection state + finalized snapshot + selected account session',
-  ).provenance;
+  const connectionStatus = $derived(
+    systemStore.connectionState?.status ?? 'initializing',
+  );
+  const chainSurface = $derived(
+    resolveChainSurfaceState(
+      systemStore.connectionState,
+      systemStore.snapshot !== null,
+    ),
+  );
+  const connectionMessage = $derived(
+    systemStore.connectionState?.status === 'connected'
+      ? chainSurface.detail
+      : (systemStore.connectionState?.message ?? chainSurface.detail),
+  );
+  const finalizedBlockValue = $derived.by(() => {
+    const blockNumber = systemStore.snapshot?.blockNumber;
+    if (blockNumber === null || blockNumber === undefined) {
+      return '—';
+    }
+    if (chainSurface.status === 'stale') {
+      return `${blockNumber} · stale`;
+    }
+    if (chainSurface.status === 'preview') {
+      return `${blockNumber} · preview`;
+    }
+    return blockNumber.toString();
+  });
+  const finalizedBlockTone = $derived(
+    chainSurface.status === 'ready'
+      ? 'text-(--mono-cyan)'
+      : chainSurface.status === 'stale' || chainSurface.status === 'preview'
+        ? 'text-(--mono-orange)'
+        : chainSurface.status === 'error'
+          ? 'text-(--mono-pink)'
+          : 'text-(--mono-muted)',
+  );
 
-  const footerItems = $derived.by(() => [
+  const statusItems = $derived.by(() => [
     {
-      label: 'Connection',
-      value: systemStore.connectionState?.status ?? 'unconfigured',
+      key: 'network',
+      label: 'Network',
+      value: connectionStatus,
+      detail: connectionMessage,
+      icon:
+        systemStore.connectionState?.status === 'connected' ? Wifi : WifiOff,
+      tone:
+        systemStore.connectionState?.status === 'connected'
+          ? 'text-(--mono-green)'
+          : connectionStatus === 'error'
+            ? 'text-(--mono-pink)'
+            : 'text-(--mono-muted)',
     },
     {
+      key: 'signer',
       label: 'Signer',
       value: walletStore.state.signerStatus,
+      detail: walletStore.state.signerMessage,
+      icon: KeyRound,
+      tone:
+        walletStore.state.signerStatus === 'available'
+          ? 'text-(--mono-green)'
+          : 'text-(--mono-muted)',
     },
     {
+      key: 'account',
       label: 'Account',
       value: walletStore.state.selectedLabel,
+      detail: walletStore.state.selectedAddress || 'No account selected',
+      icon: UserRound,
+      tone: 'text-(--mono-purple)',
     },
     {
+      key: 'block',
       label: 'Finalized block',
-      value: systemStore.snapshot?.blockNumber?.toString() ?? '—',
+      value: finalizedBlockValue,
+      detail:
+        chainSurface.status === 'ready'
+          ? 'Latest bounded finalized-chain snapshot from the live provider'
+          : chainSurface.detail,
+      icon: Blocks,
+      tone: finalizedBlockTone,
     },
   ]);
 </script>
 
 <div
-  class="flex max-w-[calc(100vw-2rem)] flex-wrap items-center justify-center gap-1.5 text-[10px] leading-none"
+  class="status-container flex min-h-6 w-max max-w-full flex-nowrap items-center justify-center gap-1.5 text-2xs leading-tight"
+  aria-label="Workspace status"
 >
-  <ReadModelBadge provenance={footerProvenance} tone="subtle" />
-  {#each footerItems as item}
-    <div
-      class="inline-flex items-center gap-1.5 rounded-full border border-(--mono-border) bg-white/90 px-2 py-0.75"
+  {#each statusItems as item}
+    <Tooltip
+      aria-label={`${item.label}: ${item.value}. ${item.detail}`}
+      class="inline-flex min-h-6 min-w-0 flex-none cursor-help items-center justify-center gap-1.5 rounded-lg bg-transparent px-2 py-0.5 text-(--mono-text) max-[28rem]:basis-8 max-[28rem]:px-2"
+      contentClass="max-w-80"
     >
-      <div
-        class="shrink-0 text-[9px] uppercase tracking-wider text-(--mono-muted)"
+      {#snippet content()}
+        <div class="font-semibold">{item.label}: {item.value}</div>
+        <div class="mt-1 break-all text-(--mono-muted)">{item.detail}</div>
+      {/snippet}
+      <Icon icon={item.icon} size="sm" class={item.tone} />
+      <span
+        class="shrink-0 text-3xs uppercase tracking-wider text-(--mono-muted) max-[44rem]:hidden"
       >
         {item.label}
-      </div>
-      <div class="max-w-24 truncate text-[11px] font-medium text-(--mono-text)">
+      </span>
+      <span
+        class="min-w-0 truncate text-compact font-medium max-[28rem]:hidden"
+      >
         {item.value}
-      </div>
-    </div>
+      </span>
+    </Tooltip>
   {/each}
 </div>

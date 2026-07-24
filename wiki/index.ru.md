@@ -55,7 +55,6 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Partner Pitch](getting-started/partner-pitch.ru.md) — внешняя страница о том, почему это важно для партнёрских команд
 - [Executive Summary](getting-started/executive-summary.ru.md) — одностраничное резюме для читателей из экосистемы и инвесторов
 - [Сквозные сценарии](concepts/end-to-end-flows.ru.md) — конкретные проходы через маршрутизацию, actors, корзины, staking и проверку
-- [Архитектурные схемы](concepts/architecture-diagrams.ru.md) — компактные текстовые карты связей подсистем
 - [Обзор фреймворка DEOS](overview/deos-framework.ru.md) — что такое фреймворк
 
 ## Доменные хабы

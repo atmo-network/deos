@@ -2,13 +2,13 @@
 Domain: Account widget
 Owns: Wallet account selection panel, signer status presentation, and account input controls.
 Excludes: Signer discovery implementation, adapter lifecycle, portfolio balances, and layout state.
-Zone: Presentation widget; consumes wallet store and UI Kit primitives.
+Zone: Presentation widget; consumes local wallet state, system connection readiness, and UI Kit primitives.
 -->
 <script lang="ts">
-  import { onMount } from 'svelte';
-
+  import { systemStore } from '$lib/system/index.svelte';
   import {
     Button,
+    DisclosureSection,
     Notice,
     type NoticeVariant,
     SectionCard,
@@ -24,10 +24,11 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
     variant: NoticeVariant;
   };
 
-  let rootEl = $state<HTMLElement | null>(null);
-  let viewport = $state({ width: 0, height: 0 });
   let customAccountInput = $state(walletStore.state.accountInput);
 
+  const chainConnected = $derived(
+    systemStore.connectionState?.status === 'connected',
+  );
   const customAccountState = $derived.by((): CustomAccountState => {
     const input = customAccountInput.trim();
     if (input.length === 0) {
@@ -48,38 +49,18 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
     }
     return {
       disabled: false,
-      message:
-        'Selecting this account will refresh the live wallet, system, and governance views',
+      message: chainConnected
+        ? 'Selecting this account will refresh connected system and governance views'
+        : 'Account selection stays local; chain-backed views update after the network reconnects',
       variant: 'muted',
     };
   });
 
-  const compactPane = $derived(viewport.width > 0 && viewport.width < 430);
-  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-
-  function syncViewport() {
-    if (!rootEl) {
-      viewport = { width: 0, height: 0 };
+  async function refreshConnectedViews(): Promise<void> {
+    if (!chainConnected) {
       return;
     }
-    viewport = {
-      width: rootEl.clientWidth,
-      height: rootEl.clientHeight,
-    };
-  }
-
-  function shortAddress(address: string): string {
-    if (address.length <= 18) {
-      return address;
-    }
-    return `${address.slice(0, 8)}…${address.slice(-8)}`;
-  }
-
-  async function refreshAll(): Promise<void> {
-    const [{ governanceStore }, { systemStore }] = await Promise.all([
-      import('$lib/governance/index.svelte'),
-      import('$lib/system/index.svelte'),
-    ]);
+    const { governanceStore } = await import('$lib/governance/index.svelte');
     await Promise.all([systemStore.refresh(), governanceStore.refresh()]);
   }
 
@@ -89,7 +70,7 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
     }
     walletStore.setSelectedAddress(input);
     customAccountInput = walletStore.state.accountInput;
-    await refreshAll();
+    await refreshConnectedViews();
   }
 
   async function handleCustomAccountKeydown(
@@ -104,23 +85,15 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
 
   async function connectInjectedAccounts(): Promise<void> {
     await walletStore.connectInjectedAccounts();
-    await refreshAll();
+    await refreshConnectedViews();
   }
-
-  onMount(() => {
-    syncViewport();
-    if (!rootEl) {
-      return;
-    }
-    const resizeObserver = new ResizeObserver(() => syncViewport());
-    resizeObserver.observe(rootEl);
-    return () => resizeObserver.disconnect();
-  });
 </script>
 
-<section bind:this={rootEl} class="grid gap-3">
+<section class="@container grid gap-3">
   <SectionCard title="Account status" class="text-xs">
-    <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-2']}>
+    <div
+      class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,9rem),1fr))] gap-2"
+    >
       <StatCard label="Account" value={walletStore.state.selectedLabel} />
       <StatCard
         label="Signer"
@@ -131,45 +104,50 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
     </div>
     <StatCard
       label="Address"
-      value={densePane
-        ? shortAddress(walletStore.state.selectedAddress)
-        : walletStore.state.selectedAddress}
-      detail={densePane ? walletStore.state.selectedAddress : undefined}
+      value={walletStore.state.selectedAddress}
       class="break-all"
     />
-    <div class="text-[10px] text-(--mono-muted)">
+    <div class="text-2xs text-(--mono-muted)">
       {walletStore.state.signerMessage}
     </div>
+    {#if !chainConnected}
+      <Notice variant="muted">
+        Account selection, address validation, and signer discovery remain
+        local. Chain-backed widgets refresh after a network connection becomes
+        available.
+      </Notice>
+    {/if}
   </SectionCard>
 
-  <SectionCard title="Zombienet presets" class="text-xs">
-    <div class={['grid gap-2', densePane ? 'grid-cols-1' : 'grid-cols-2']}>
+  <DisclosureSection title="Zombienet presets" class="text-xs">
+    <div
+      class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,13rem),1fr))] gap-2"
+    >
       {#each walletStore.state.devAccounts as account}
         <SelectableTile
           onclick={() => chooseAccount(account.label)}
           selected={account.address === walletStore.state.selectedAddress}
         >
           <div class="font-medium text-(--mono-text)">{account.label}</div>
-          <div class="text-[10px] text-(--mono-muted)">{account.suri}</div>
+          <div class="text-2xs text-(--mono-muted)">{account.suri}</div>
         </SelectableTile>
       {/each}
     </div>
-  </SectionCard>
+  </DisclosureSection>
 
-  <SectionCard title="Injected wallets" class="text-xs">
-    {#snippet actions()}
-      {#if walletStore.state.availability.status === 'available'}
-        <Button
-          size="sm"
-          onclick={connectInjectedAccounts}
-          disabled={walletStore.state.loadingInjectedAccounts}
-        >
-          {walletStore.state.loadingInjectedAccounts
-            ? 'Connecting...'
-            : 'Connect'}
-        </Button>
-      {/if}
-    {/snippet}
+  <DisclosureSection title="Injected wallets" class="text-xs">
+    {#if walletStore.state.availability.status === 'available'}
+      <Button
+        size="sm"
+        class="justify-self-start"
+        onclick={connectInjectedAccounts}
+        disabled={walletStore.state.loadingInjectedAccounts}
+      >
+        {walletStore.state.loadingInjectedAccounts
+          ? 'Connecting...'
+          : 'Connect wallet'}
+      </Button>
+    {/if}
     {#if walletStore.state.lastError}
       <Notice variant="warn">{walletStore.state.lastError}</Notice>
     {/if}
@@ -183,34 +161,29 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
           : 'Injected account discovery is unavailable until a supported wallet extension is present.'}
       </Notice>
     {:else}
-      <div class={['grid gap-2', compactPane ? 'grid-cols-1' : 'grid-cols-2']}>
+      <div
+        class="grid grid-cols-[repeat(auto-fit,minmax(min(100%,13rem),1fr))] gap-2"
+      >
         {#each walletStore.state.injectedAccounts as account}
           <SelectableTile
             onclick={() => chooseAccount(account.address)}
             selected={account.address === walletStore.state.selectedAddress}
           >
             <div class="font-medium text-(--mono-text)">{account.label}</div>
-            <div class="text-[10px] text-(--mono-muted)">
+            <div class="text-2xs text-(--mono-muted)">
               {account.extensionName}
             </div>
-            <div class="break-all text-[10px] text-(--mono-muted)">
+            <div class="break-all text-2xs text-(--mono-muted)">
               {account.address}
             </div>
           </SelectableTile>
         {/each}
       </div>
     {/if}
-  </SectionCard>
+  </DisclosureSection>
 
-  <SectionCard title="Custom account" class="text-xs">
-    <div
-      class={[
-        'grid gap-2',
-        compactPane
-          ? 'grid-cols-1'
-          : 'grid-cols-[minmax(0,1fr)_auto] items-end',
-      ]}
-    >
+  <DisclosureSection title="Custom account" class="text-xs">
+    <div class="grid gap-2 @md:grid-cols-[minmax(0,1fr)_auto] @md:items-end">
       <TextField
         bind:value={customAccountInput}
         placeholder="Alice, //Alice, or DEOS address"
@@ -218,7 +191,7 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
       />
       <Button
         size="sm"
-        class={compactPane ? 'w-full' : 'min-w-28'}
+        class="w-full @lg:w-auto @lg:min-w-28"
         onclick={() => chooseAccount(customAccountInput)}
         disabled={customAccountState.disabled}>Use account</Button
       >
@@ -226,9 +199,5 @@ Zone: Presentation widget; consumes wallet store and UI Kit primitives.
     <Notice variant={customAccountState.variant}
       >{customAccountState.message}</Notice
     >
-    <div class="text-[10px] text-(--mono-muted)">
-      This widget owns account selection and signer onboarding. Wallet surfaces
-      below only act on the account selected here.
-    </div>
-  </SectionCard>
+  </DisclosureSection>
 </section>
