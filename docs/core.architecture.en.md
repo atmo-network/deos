@@ -124,7 +124,7 @@ _The algorithmic issuer._
 
 _The deflationary engine._
 
-- `Function`: Passive accumulation and destruction. Timer-polled every 10 blocks.
+- `Function`: Passive accumulation and destruction. Omnivorous `OnAddressEvent` intake schedules one bounded pass after matched inbound value, subject to the configured cooldown.
 - `Execution Plan`: For each registered foreign asset — `SwapExactIn(foreign→native, AllBalance, 5% slippage)` with `BalanceAbove` dust guard. Final step — `Burn(native, AllBalance)`.
 - `Resilience`: Swap failures → `ContinueNextStep` → skip to next asset or burn step. Cooldown prevents retry storms.
 
@@ -134,7 +134,7 @@ _The launch economics fan-out hub._
 
 - `Function`: Collects all non-Axial protocol action fees and routes them into the active reward flows for the current launch phase; Axial Router trading fees remain the dedicated Burn Actor flow.
 - `Collection Rule`: 100% of transaction, AAA, governance-opening, and XCM-execution fees enters Fee Sink before allocation; collection never pays the current author directly.
-- `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — every block, timer-driven `every_blocks = 1`:
+- `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — omnivorous `OnAddressEvent` intake schedules the fan-out after matched inbound value, subject to the configured cooldown:
   1. 50% → staking-pool ingress holding account as native balance, later burned and minted into the local native-staking asset after AAA #14 donation execution
   2. 50% → native staking LP provisioning actor AAA #14 as native balance, immediately burned and bridged into the local native-staking asset for donation execution
 - `Release Gate`: the Phase 1 staking-yield and LP-donation bridge is wired; block reward source/amount design remains the separate future gate.
@@ -215,10 +215,10 @@ Each step is independently reversible and governance-gated. No implicit cross-pa
 
 ### 3.5 Antifragile Design Principles
 
-- `Fail-fast over silent drift`: AAA step errors are handled by explicit `on_error` policy (`ContinueNextStep` / `AbortCycle`). No silent state corruption.
-- `Idempotent operations`: Execution-plan steps are stateless — each execution starts from current on-chain balances, not accumulated state.
-- `Observable automation`: Every cycle emits `CycleStarted` / `StepFailed` / `CycleSummary` events. Silent stalls are detectable through sparse `IdleStarvationState` transitions and detection/recovery events.
-- `Bounded execution`: AAA scheduler uses budget-cap admission with `cycle_weight_upper_bound`. No unbounded loops.
+- `Fail-fast over silent drift`: AAA step errors use explicit `ContinueNextStep`, `AbortCycle`, or Mutable-only `RetryLater`; only adapter-classified Temporary failure may suspend. No silent retry heuristic exists.
+- `Static operations`: Tasks own no mutable workflow memory. Sparse scheduler-owned Continuation records only bounded unresolved-suffix progress while a Mutable run remains suspended.
+- `Observable automation`: One `CycleStarted` and terminal `CycleSummary` bound each logical run; continuation events correlate attempts. Sparse starvation transitions expose scheduler-budget phase changes.
+- `Bounded execution`: AAA admits opening plans or unresolved retry suffixes plus terminal cleanup under both Weight dimensions. No unbounded loops exist.
 
 ## 4. Deterministic Execution via AAA Scheduler
 
@@ -241,8 +241,8 @@ Block N:
     - Process actors in deterministic FIFO order up to MaxExecutionsPerBlock:
         1. Reserve the complete actor-probe bound
         2. Apply trigger, cooldown, breaker, window, fee, and lifecycle gates
-        3. Admit the complete cycle and measured pure terminal cleanup
-        4. Execute the bounded plan through runtime adapters
+        3. Admit the complete opening plan or unresolved Continuation suffix plus pure cleanup
+        4. Execute the bounded attempt through runtime adapters
         5. Leave weight-deferred head work in place and append late work beyond the cutoff
 ```
 
@@ -258,8 +258,8 @@ Block N:
 The system implements "Economic Backpressure" to handle volatility gracefully.
 
 - `Problem`: If DEX conditions are unfavorable (high slippage, low liquidity), executing a swap is dangerous.
-- `Solution`: Step failure → `ContinueNextStep` → execution plan degrades gracefully. Cooldown prevents immediate retry. Actor re-enters the scheduler after the next eligible cooldown boundary.
-- `Result`: The system "waits out" the volatility or attack, resuming only when conditions stabilize.
+- `Solution`: A final failure may use `ContinueNextStep` to advance, while a Mutable plan may use `RetryLater` only for an adapter-classified Temporary failure. Cooldown schedules the unresolved suffix through the canonical FIFO/wakeup substrate.
+- `Result`: Temporary incapacity can preserve a committed prefix and resume at the same step. Permanent and unsupported failures never create Continuation.
 
 ### 4.3 Adapter Architecture
 
@@ -269,9 +269,9 @@ AAA delegates host behavior through typed runtime contracts:
 - `DexOps`: caller-aware swaps plus liquidity addition and removal
 - `StakingOps`: runtime-defined stake positions, shares, and transferable share assets
 - `LiquidityDonationOps`: adapter-owned pair balancing and receipt-suppression semantics
-- `FeeCollector`, `FundingAuthority`, entropy, ingress, task-weight, and atomicity hooks: host-owned authority, metering, provenance, and lifecycle integration
+- `FeeCollector`, `FundingAuthority`, direct ingress, task-failure retry class, task weights, and atomicity hooks: host-owned authority, metering, provenance, and lifecycle integration
 
-Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The detailed portable contract lives in `aaa.specification.en.md` and `aaa.embedding.en.md`; the current DEOS binding lives in `aaa.architecture.en.md`.
+Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The detailed portable contract lives in `aaa.specification.en.md` and the package-owned `../template/pallets/aaa/EMBEDDING.md`; the current DEOS binding lives in `aaa.architecture.en.md`.
 
 ### 4.4 Amount Resolution
 

@@ -74,6 +74,20 @@ The browser realization axis is separate:
 
 A session-built chart or retained UI panel must not masquerade as archive truth. A future archive/search/dashboard surface must declare its materialized provider boundary explicitly. `ReadModelValue.fetchedAt` is only a browser observation timestamp for cache/session freshness; canonical chain time or finality must come from bounded chain facts such as `asOfBlock` / `asOfHash` when those facts matter.
 
+The automation widget reads known System actors from `AAA.ActorHot`, `AAA.ActorProgram`, and sparse `AAA.ContinuationState`. Current cursor/attempt status is canonical-chain truth. Historical attempt timelines remain materialized. The automation authoring contract exposes `RetryLater` only for Mutable plans and does not fabricate adapter retryability.
+
+The automation domain validates metadata-bound plan artifacts. It discovers `ProgramInput`, `AaaType`, and `Mutability` from exact runtime metadata, requires SCALE decode/re-encode equality, derives deterministic `planId`, produces lossless JSON-safe projections, and classifies cross-genesis or cross-metadata diffs as incompatible until explicit rebinding.
+
+Its static forecast mirrors pallet amount-resolution policy over an explicitly supplied state pin: fee reserve, minimum balance, trigger snapshot, last funding, and staking shares remain distinct inputs. Cost output keeps RefTime, ProofSize, evaluation fee, execution upper fee, and lifecycle overhead separate. `StaticAllStepsReached` does not simulate adapter quotes, mutations, failures, or early aborts.
+
+The adapter-local simulation kernel clones state per task, commits successful effects, discards failed task effects, preserves prior prefixes, and models abort, continue, and Mutable-only Temporary retry outcomes with one scalar cursor. Donation classification identifies the amount surface and observation window. Every result says `AdapterLocalProjection`; only a matching-runtime-Wasm adapter may claim runtime-level simulation.
+
+AAA call composition discovers the pallet and outer `RuntimeCall` from the artifact metadata, then exposes exact SCALE bytes, hash, `planId`, runtime identity, and required origin. User calls remain direct owner-signed actions. Root-required System calls report `UnsupportedAaaRootCall`: current strategic `L1RootAction` decodes only the dedicated runtime-upgrade payload, so call-byte composition does not imply governance admission.
+
+The matching-Wasm trust gate hashes supplied runtime code and binds it to artifact metadata, runtime versions, finalized block/state identity, runtime API identity, actor id, mode, and `planId`. Its metadata-discovered codec requires exact `AaaSimulationApi` version/signature, canonical SCALE round trips, typed success, bounded ordered step evidence, and equality between provider summary and runtime bytes.
+
+The DEOS simulation adapter selects the current finalized hash or accepts an explicitly identified finalized fixture block, reads its header state root, V16 metadata, runtime version, genesis identity, and `:code`, and calls the typed simulation API at that same hash without submission. Local Omni Node evidence covers exact-plan rejection, successful fresh execution, and a stored Continuation attempt. The remote node remains a trusted provider: pin equality prevents drift but does not independently verify Wasm execution or state correctness.
+
 ## 4. Domain Ownership
 
 The client is organized by explicit owners rather than a generic `shared/` bucket.
@@ -84,7 +98,7 @@ Primary slices:
 - `portfolio/` — balances, bounded asset projection, transfers, deposits.
 - `staking/` — staking-facing types/contracts.
 - `governance/` — proposal store, labels, payload helpers, review helpers, projections.
-- `automation/` — automation-facing contracts/types.
+- `automation/` — automation authoring policy, canonical plan artifacts/diffs, and bounded actor/Continuation projection contracts.
 - `log/` — transaction progress, receipts, account log, network feed.
 - `wallet/` — wallet session, signer discovery, address validation, local-dev signer routing.
 - `system/` — chain snapshot, endpoint/session wiring, adapter runtime context, persistence.

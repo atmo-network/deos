@@ -20,8 +20,8 @@ use sp_version::RuntimeVersion;
 
 // Local module imports
 use super::{
-  AccountId, AssetConversion, Balance, Block, ConsensusHook, Executive, InherentDataExt, Nonce,
-  ParachainInfo, ParachainSystem, Runtime, RuntimeCall, RuntimeGenesisConfig, SLOT_DURATION,
+  AAA, AccountId, AssetConversion, Balance, Block, ConsensusHook, Executive, InherentDataExt,
+  Nonce, ParachainInfo, ParachainSystem, Runtime, RuntimeCall, RuntimeGenesisConfig, SLOT_DURATION,
   SessionKeys, System, TransactionPayment, VERSION,
 };
 use crate::configs::AssetKind;
@@ -108,6 +108,24 @@ impl_runtime_apis! {
     impl frame_support::view_functions::runtime_api::RuntimeViewFunction<Block> for Runtime {
         fn execute_view_function(id: frame_support::view_functions::ViewFunctionId, input: Vec<u8>) -> Result<Vec<u8>, frame_support::view_functions::ViewFunctionDispatchError> {
             Runtime::execute_view_function(id, input)
+        }
+    }
+
+    impl pallet_aaa::AaaSimulationApi<Block, pallet_aaa::ProgramInputOf<Runtime>> for Runtime {
+        fn simulate_current_program(
+            aaa_id: pallet_aaa::AaaId,
+            expected_type: pallet_aaa::AaaType,
+            expected_mutability: pallet_aaa::Mutability,
+            expected_program: pallet_aaa::ProgramInputOf<Runtime>,
+            mode: pallet_aaa::SimulationMode,
+        ) -> Result<pallet_aaa::SimulationResult, pallet_aaa::SimulationError> {
+            AAA::simulate_current_program(
+                aaa_id,
+                expected_type,
+                expected_mutability,
+                expected_program,
+                mode,
+            )
         }
     }
 

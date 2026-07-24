@@ -323,7 +323,7 @@ fn genesis_burning_manager_aaa_has_deterministic_sovereign_and_correct_state() {
     assert_eq!(instance.mutability, pallet_aaa::Mutability::Mutable);
     assert_eq!(instance.lifecycle, pallet_aaa::ActiveLifecycle::Active);
     assert_eq!(instance.consecutive_failures, 0);
-    assert!(!instance.manual_trigger_pending);
+    assert!(!instance.pending_signal);
     assert_eq!(
       AAA::next_aaa_id(),
       aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID + 1

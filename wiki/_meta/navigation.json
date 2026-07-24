@@ -464,8 +464,8 @@
           },
           "page_type": "overview",
           "summary": {
-            "en": "The system-level view of AAA as a bounded actor runtime with host-runtime adapter boundaries, task-scoped atomicity, and portable execution-plan patterns.",
-            "ru": "Системный взгляд на AAA как на bounded actor runtime с границами host-runtime adapters, task-scoped atomicity и portable execution-plan patterns."
+            "en": "AAA as a bounded actor runtime with task-scoped atomicity, sparse progress-preserving Continuation, and portable host-adapter boundaries.",
+            "ru": "AAA как ограниченная среда акторов с атомарностью отдельных задач, разреженным сохранением прогресса и переносимыми границами интерфейсов."
           }
         },
         {

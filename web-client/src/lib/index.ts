@@ -22,6 +22,11 @@ export {
   type DeosSignerMatch,
 } from './adapters/blockchain';
 export {
+  runDeosAaaFinalizedSimulation,
+  type AaaFinalizedSimulationInput,
+  type AaaFinalizedSimulationMode,
+} from './adapters/blockchain/aaa-simulation';
+export {
   DEFAULT_DEOS_WS_ENDPOINT,
   DeosPapiConnection,
   normalizeBlockchainEndpoint,
@@ -124,6 +129,12 @@ export {
 } from './wallet/index.svelte';
 
 // Foundation and domain contracts
+export * from './automation/forecast';
+export * from './automation/governance-composition';
+export * from './automation/matching-wasm';
+export * from './automation/plan-artifact';
+export * from './automation/runtime-simulation-codec';
+export * from './automation/simulation';
 export * from './automation/types';
 export * from './economics';
 export * from './format/numeric';

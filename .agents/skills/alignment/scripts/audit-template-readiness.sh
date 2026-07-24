@@ -122,20 +122,24 @@ check_legacy_wallet_helper_aliases() {
 }
 
 check_aaa_embedding_links() {
-    local guide="$PROJECT_ROOT/docs/aaa.embedding.en.md"
+    local guide="$TEMPLATE_DIR/pallets/aaa/EMBEDDING.md"
+    local redirect="$PROJECT_ROOT/docs/aaa.embedding.en.md"
     if [[ ! -f "$guide" ]]; then
-        record_finding "AAA embedding guide is missing"
+        record_finding "package-owned AAA embedding guide is missing"
         return 0
     fi
     local missing=()
-    if ! rg -q 'aaa\.embedding\.en\.md' "$PROJECT_ROOT/docs/README.md"; then
+    if ! rg -q 'template/pallets/aaa/EMBEDDING\.md' "$PROJECT_ROOT/docs/README.md"; then
         missing+=("docs/README.md")
     fi
-    if ! rg -q 'aaa\.embedding\.en\.md' "$PROJECT_ROOT/README.md"; then
+    if ! rg -q 'template/pallets/aaa/EMBEDDING\.md' "$PROJECT_ROOT/README.md"; then
         missing+=("README.md")
     fi
-    if ! rg -q 'aaa\.embedding\.en\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
+    if ! rg -q 'EMBEDDING\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
         missing+=("template/pallets/aaa/README.md")
+    fi
+    if [[ ! -f "$redirect" ]] || ! rg -q 'template/pallets/aaa/EMBEDDING\.md' "$redirect"; then
+        missing+=("docs/aaa.embedding.en.md")
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         record_finding "AAA embedding guide is not linked from required entrypoints"

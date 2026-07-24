@@ -15,7 +15,7 @@ use polkadot_sdk::{
 use alloc::vec;
 use core::cell::RefCell;
 
-use crate::{AssetOps, DexOps, FeeCollector, LiquidityDonationOps, StakingOps};
+use crate::{AssetOps, DexOps, FeeCollector, LiquidityDonationOps, StakingOps, TaskFailure};
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
 pub type AccountId = u64;
@@ -149,6 +149,8 @@ thread_local! {
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
+  static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
+  static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
@@ -192,6 +194,8 @@ pub fn reset_mock_adapters() {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
+  TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
+  TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = false);
@@ -212,7 +216,7 @@ impl FeeCollector<AccountId, TestAsset, Balance> for MockFeeCollector {
     amount: Balance,
   ) -> DispatchResult {
     FEE_COLLECTIONS.with(|collections| collections.borrow_mut().push(amount));
-    MockAssetOps::transfer(payer, fee_sink, native_asset, amount)
+    MockAssetOps::transfer(payer, fee_sink, native_asset, amount).map_err(|failure| failure.error)
   }
 }
 
@@ -224,14 +228,14 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     to: &AccountId,
     asset: TestAsset,
     amount: Balance,
-  ) -> Result<(), DispatchError> {
+  ) -> Result<(), TaskFailure> {
     if FAIL_TRANSFER_TO.with(|target| *target.borrow() == Some(*to)) {
-      return Err(DispatchError::Other("MockTransferTargetFailed"));
+      return Err(DispatchError::Other("MockTransferTargetFailed").into());
     }
     match asset {
       TestAsset::Native => {
         if *to == TestFeeSink::get() && FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow()) {
-          return Err(DispatchError::Other("MockFeeSinkTransferFailed"));
+          return Err(DispatchError::Other("MockFeeSinkTransferFailed").into());
         }
         use polkadot_sdk::frame_support::traits::Currency;
         <Balances as Currency<AccountId>>::transfer(
@@ -264,43 +268,44 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     Ok(())
   }
 
-  fn burn(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), DispatchError> {
+  fn burn(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), TaskFailure> {
     match asset {
       TestAsset::Native => {
         use polkadot_sdk::frame_support::traits::Currency;
         let (_, remainder) = <Balances as Currency<AccountId>>::slash(who, amount);
         if remainder > 0 {
-          return Err(DispatchError::Token(
-            polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
-          ));
+          return Err(
+            DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::FundsUnavailable).into(),
+          );
         }
         Ok(())
       }
-      _ => ASSET_BALANCES.with(|b| {
-        let mut map = b.borrow_mut();
-        let bal = map.get(&(*who, asset)).copied().unwrap_or(0);
-        if bal < amount {
-          return Err(DispatchError::Token(
-            polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
-          ));
-        }
-        map.insert((*who, asset), bal - amount);
-        BURNED.with(|br| {
-          let mut bm = br.borrow_mut();
-          let prev = bm.get(&asset).copied().unwrap_or(0);
-          bm.insert(asset, prev + amount);
-        });
-        Ok(())
-      }),
+      _ => ASSET_BALANCES
+        .with(|b| -> Result<(), DispatchError> {
+          let mut map = b.borrow_mut();
+          let bal = map.get(&(*who, asset)).copied().unwrap_or(0);
+          if bal < amount {
+            return Err(DispatchError::Token(
+              polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
+            ));
+          }
+          map.insert((*who, asset), bal - amount);
+          BURNED.with(|br| {
+            let mut bm = br.borrow_mut();
+            let prev = bm.get(&asset).copied().unwrap_or(0);
+            bm.insert(asset, prev + amount);
+          });
+          Ok(())
+        })
+        .map_err(TaskFailure::from),
     }
   }
 
-  fn mint(to: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), DispatchError> {
+  fn mint(to: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), TaskFailure> {
     match asset {
       TestAsset::Native => {
         use polkadot_sdk::frame_support::traits::Currency;
         let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
-        Ok(())
       }
       _ => ASSET_BALANCES.with(|b| {
         let mut map = b.borrow_mut();
@@ -311,9 +316,15 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
           let prev = mm.get(&asset).copied().unwrap_or(0);
           mm.insert(asset, prev + amount);
         });
-        Ok(())
       }),
     }
+    #[cfg(feature = "runtime-benchmarks")]
+    if BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow())
+      && let Some(aaa_id) = crate::SovereignIndex::<Test>::get(to)
+    {
+      crate::Pallet::<Test>::notify_address_event_without_source(aaa_id, asset, amount)?;
+    }
+    Ok(())
   }
 
   fn balance(who: &AccountId, asset: TestAsset) -> Balance {
@@ -384,6 +395,14 @@ pub fn set_fail_dex_after_input_transfer(value: bool) {
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_temporary_dex_failure(value: bool) {
+  TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = value);
+}
+
+pub fn set_temporary_add_liquidity_failure(value: bool) {
+  TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn set_fail_staking_ops(value: bool) {
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = value);
 }
@@ -409,17 +428,22 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     asset_out: TestAsset,
     amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, DispatchError> {
+  ) -> Result<Balance, TaskFailure> {
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
     let amount_out = amount_in.saturating_mul(ro) / (ri.saturating_add(amount_in));
     let quote = amount_in.saturating_mul(ro) / ri.saturating_add(amount_in);
     let min_out = (Perbill::one() - slippage_tolerance).mul_floor(quote);
     if amount_out < min_out {
-      return Err(DispatchError::Other("SlippageExceeded"));
+      return Err(DispatchError::Other("SlippageExceeded").into());
     }
     MockAssetOps::transfer(who, &u64::MAX, asset_in, amount_in)?;
+    if TEMPORARY_DEX_FAILURE.with(|v| *v.borrow()) {
+      return Err(TaskFailure::temporary(DispatchError::Other(
+        "TemporaryDexCapacity",
+      )));
+    }
     if FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockDexAfterInputTransferFailed"));
+      return Err(DispatchError::Other("MockDexAfterInputTransferFailed").into());
     }
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
     Ok(amount_out)
@@ -432,10 +456,10 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, DispatchError> {
+  ) -> Result<Balance, TaskFailure> {
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
     if amount_out >= ro {
-      return Err(DispatchError::Other("InsufficientPoolLiquidity"));
+      return Err(DispatchError::Other("InsufficientPoolLiquidity").into());
     }
     let numerator = ri.saturating_mul(amount_out);
     let denominator = ro.saturating_sub(amount_out);
@@ -445,11 +469,16 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       .saturating_add(1);
     let quoted_max_in = amount_in.saturating_add(slippage_tolerance.mul_ceil(amount_in));
     if quoted_max_in > max_amount_in {
-      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
+      return Err(DispatchError::Other("ExactOutInputCapacityExceeded").into());
     }
     MockAssetOps::transfer(who, &u64::MAX, asset_in, amount_in)?;
+    if TEMPORARY_DEX_FAILURE.with(|v| *v.borrow()) {
+      return Err(TaskFailure::temporary(DispatchError::Other(
+        "TemporaryDexCapacity",
+      )));
+    }
     if FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockDexAfterInputTransferFailed"));
+      return Err(DispatchError::Other("MockDexAfterInputTransferFailed").into());
     }
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
     Ok(amount_in)
@@ -461,7 +490,12 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     _asset_b: TestAsset,
     amount_a: Balance,
     amount_b: Balance,
-  ) -> Result<(Balance, Balance, Balance), DispatchError> {
+  ) -> Result<(Balance, Balance, Balance), TaskFailure> {
+    if TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow()) {
+      return Err(TaskFailure::temporary(DispatchError::Other(
+        "TemporaryAddLiquidityCapacity",
+      )));
+    }
     let lp_minted = integer_sqrt(amount_a.saturating_mul(amount_b));
     Ok((amount_a, amount_b, lp_minted))
   }
@@ -470,7 +504,7 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     _who: &AccountId,
     _lp_asset: TestAsset,
     lp_amount: Balance,
-  ) -> Result<(Balance, Balance), DispatchError> {
+  ) -> Result<(Balance, Balance), TaskFailure> {
     let half = lp_amount / 2;
     Ok((half, half))
   }
@@ -504,13 +538,13 @@ impl MockDexOps {
 pub struct MockStakingOps;
 
 impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
-  fn stake(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), DispatchError> {
+  fn stake(who: &AccountId, asset: TestAsset, amount: Balance) -> Result<(), TaskFailure> {
     if FAIL_STAKING_OPS.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockStakingOpsFailed"));
+      return Err(DispatchError::Other("MockStakingOpsFailed").into());
     }
     MockAssetOps::burn(who, asset, amount)?;
     if FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockStakingAfterBurnFailed"));
+      return Err(DispatchError::Other("MockStakingAfterBurnFailed").into());
     }
     STAKED.with(|s| {
       let mut map = s.borrow_mut();
@@ -520,13 +554,13 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
     Ok(())
   }
 
-  fn unstake(who: &AccountId, asset: TestAsset, shares: Balance) -> Result<(), DispatchError> {
+  fn unstake(who: &AccountId, asset: TestAsset, shares: Balance) -> Result<(), TaskFailure> {
     if FAIL_STAKING_OPS.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockStakingOpsFailed"));
+      return Err(DispatchError::Other("MockStakingOpsFailed").into());
     }
     MockAssetOps::burn(who, asset, shares)?;
     if FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockStakingAfterBurnFailed"));
+      return Err(DispatchError::Other("MockStakingAfterBurnFailed").into());
     }
     UNSTAKED.with(|s| {
       let mut map = s.borrow_mut();
@@ -558,21 +592,19 @@ impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonati
     asset_b: TestAsset,
     amount: Balance,
     _max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), DispatchError> {
+  ) -> Result<(Balance, Balance), TaskFailure> {
     if FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockLiquidityDonationOpsFailed"));
+      return Err(DispatchError::Other("MockLiquidityDonationOpsFailed").into());
     }
     if MockAssetOps::balance(who, asset_a) < amount || MockAssetOps::balance(who, asset_b) < amount
     {
-      return Err(DispatchError::Token(
-        polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
-      ));
+      return Err(
+        DispatchError::Token(polkadot_sdk::sp_runtime::TokenError::FundsUnavailable).into(),
+      );
     }
     MockAssetOps::burn(who, asset_a, amount)?;
     if FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other(
-        "MockLiquidityDonationAfterFirstBurnFailed",
-      ));
+      return Err(DispatchError::Other("MockLiquidityDonationAfterFirstBurnFailed").into());
     }
     MockAssetOps::burn(who, asset_b, amount)?;
     DONATED_LIQUIDITY.with(|d| {
@@ -604,8 +636,8 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     let asset_a = TestAsset::Local(1);
     let asset_b = TestAsset::Local(2);
     let amount = 1_000_000;
-    MockAssetOps::mint(owner, asset_a, amount)?;
-    MockAssetOps::mint(owner, asset_b, amount)?;
+    MockAssetOps::mint(owner, asset_a, amount).map_err(|failure| failure.error)?;
+    MockAssetOps::mint(owner, asset_b, amount).map_err(|failure| failure.error)?;
     Ok((asset_a, asset_b, amount, amount))
   }
 
@@ -615,22 +647,22 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     let asset_a = TestAsset::Local(1);
     let asset_b = TestAsset::Local(2);
     let amount = 1_000_000;
-    MockAssetOps::mint(owner, asset_a, amount)?;
-    MockAssetOps::mint(owner, asset_b, amount)?;
+    MockAssetOps::mint(owner, asset_a, amount).map_err(|failure| failure.error)?;
+    MockAssetOps::mint(owner, asset_b, amount).map_err(|failure| failure.error)?;
     Ok((asset_a, asset_b, amount))
   }
 
   fn setup_stake(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
     let asset = TestAsset::Local(1);
     let amount = 1_000_000;
-    MockAssetOps::mint(owner, asset, amount)?;
+    MockAssetOps::mint(owner, asset, amount).map_err(|failure| failure.error)?;
     Ok((asset, amount))
   }
 
   fn setup_unstake(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
     let asset = TestAsset::Local(1);
     let shares = 1_000_000;
-    MockAssetOps::mint(owner, asset, shares)?;
+    MockAssetOps::mint(owner, asset, shares).map_err(|failure| failure.error)?;
     Ok((asset, shares))
   }
 
@@ -641,8 +673,8 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     let asset_out = TestAsset::Local(2);
     let amount_in = 1_000;
     set_pool_reserves(asset_in, asset_out, 1_000_000, 1_000_000);
-    MockAssetOps::mint(owner, asset_in, amount_in)?;
-    MockAssetOps::mint(&u64::MAX, asset_out, 1_000_000)?;
+    MockAssetOps::mint(owner, asset_in, amount_in).map_err(|failure| failure.error)?;
+    MockAssetOps::mint(&u64::MAX, asset_out, 1_000_000).map_err(|failure| failure.error)?;
     Ok((asset_in, asset_out, amount_in))
   }
 
@@ -654,8 +686,8 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     let amount_out = 1_000;
     let max_amount_in = 2_000;
     set_pool_reserves(asset_in, asset_out, 1_000_000, 1_000_000);
-    MockAssetOps::mint(owner, asset_in, max_amount_in)?;
-    MockAssetOps::mint(&u64::MAX, asset_out, 1_000_000)?;
+    MockAssetOps::mint(owner, asset_in, max_amount_in).map_err(|failure| failure.error)?;
+    MockAssetOps::mint(&u64::MAX, asset_out, 1_000_000).map_err(|failure| failure.error)?;
     Ok((asset_in, asset_out, amount_out, max_amount_in))
   }
 
@@ -715,7 +747,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     source: &AccountId,
     amount: Balance,
   ) -> DispatchResult {
-    MockAssetOps::mint(recipient, TestAsset::Native, amount)?;
+    MockAssetOps::mint(recipient, TestAsset::Native, amount).map_err(|failure| failure.error)?;
     if let Some(aaa_id) = crate::SovereignIndex::<Test>::get(recipient) {
       crate::Pallet::<Test>::notify_xcm_address_event(aaa_id, TestAsset::Native, amount, source)?;
     }
@@ -725,7 +757,7 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
   fn setup_remove_liquidity(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
     let lp_asset = TestAsset::Local(1);
     let lp_amount = 1_000_000u128;
-    MockAssetOps::mint(owner, lp_asset, lp_amount)?;
+    MockAssetOps::mint(owner, lp_asset, lp_amount).map_err(|failure| failure.error)?;
     Ok((lp_asset, lp_amount))
   }
 }
@@ -857,6 +889,7 @@ impl pallet_aaa::Config for Test {
   type MaxUserExecutionPlanSteps = ConstU32<3>;
   type MaxSystemExecutionPlanSteps = ConstU32<10>;
   type MaxFundingTrackedAssets = ConstU32<10>;
+  type MaxContinuationSnapshotEntries = ConstU32<20>;
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<8>;
   type MaxExecutionsPerBlock = ConstU32<3>;

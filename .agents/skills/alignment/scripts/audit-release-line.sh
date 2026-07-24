@@ -235,7 +235,7 @@ run_audit() {
 
     check_template_workspace_versions "$latest_version"
     check_markdown_release_marker "$PROJECT_ROOT/docs/aaa.specification.en.md" "Specification line" "$latest_version"
-    check_markdown_release_marker "$PROJECT_ROOT/docs/aaa.embedding.en.md" "Release line" "$latest_version"
+    check_markdown_release_marker "$TEMPLATE_DIR/pallets/aaa/EMBEDDING.md" "Release line" "$latest_version"
     log_success "Release-line audit passed"
 }
 

@@ -61,6 +61,11 @@ pub trait WeightInfo {
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
   fn funding_batch_promotion(assets: u32) -> Weight;
+  fn continuation_suspend(snapshot_entries: u32) -> Weight;
+  fn continuation_retry() -> Weight;
+  fn continuation_complete() -> Weight;
+  fn continuation_cancel() -> Weight;
+  fn continuation_suffix_admission(steps: u32) -> Weight;
   fn update_funding_source_policy() -> Weight;
   fn update_schedule() -> Weight;
   fn update_execution_plan() -> Weight;
@@ -118,7 +123,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn deactivate_aaa() -> Weight {
-    Self::reopen_system_aaa()
+    Weight::from_parts(60_623_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(4))
+      .saturating_add(T::DbWeight::get().writes(6))
   }
 
   fn pause_aaa() -> Weight {
@@ -140,9 +147,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn close_aaa() -> Weight {
-    Weight::from_parts(66_420_000, 8_120)
-      .saturating_add(T::DbWeight::get().reads(7))
-      .saturating_add(T::DbWeight::get().writes(7))
+    Weight::from_parts(84_719_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(8))
+      .saturating_add(T::DbWeight::get().writes(8))
   }
 
   fn fee_collection() -> Weight {
@@ -335,7 +342,7 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn transaction_extension_ingress_notify() -> Weight {
-    Weight::from_parts(85_208_000, 12_141)
+    Weight::from_parts(88_280_000, 8_120)
       .saturating_add(T::DbWeight::get().reads(9))
       .saturating_add(T::DbWeight::get().writes(6))
   }
@@ -346,21 +353,41 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().reads_writes(2, 2))
   }
 
+  fn continuation_suspend(snapshot_entries: u32) -> Weight {
+    Weight::from_parts(27_920_348, 4_178)
+      .saturating_add(Weight::from_parts(37_426, 0).saturating_mul(snapshot_entries.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+  }
+  fn continuation_retry() -> Weight {
+    Weight::from_parts(22_070_000, 4_266).saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+  fn continuation_complete() -> Weight {
+    Weight::from_parts(18_019_000, 4_030).saturating_add(T::DbWeight::get().reads_writes(1, 2))
+  }
+  fn continuation_cancel() -> Weight {
+    Weight::from_parts(56_782_000, 8_120).saturating_add(T::DbWeight::get().reads_writes(6, 4))
+  }
+  fn continuation_suffix_admission(steps: u32) -> Weight {
+    Weight::from_parts(1_438_574, 0)
+      .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
+  }
+
   fn update_funding_source_policy() -> Weight {
-    Weight::from_parts(50_000_000, 15_000)
-      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+    Weight::from_parts(93_239_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(7))
+      .saturating_add(T::DbWeight::get().writes(7))
   }
 
   fn update_schedule() -> Weight {
-    Weight::from_parts(12_000_000, 900)
-      .saturating_add(T::DbWeight::get().reads(1))
-      .saturating_add(T::DbWeight::get().writes(1))
+    Weight::from_parts(84_020_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(6))
+      .saturating_add(T::DbWeight::get().writes(7))
   }
 
   fn update_execution_plan() -> Weight {
-    Weight::from_parts(18_000_000, 1200)
-      .saturating_add(T::DbWeight::get().reads(1))
-      .saturating_add(T::DbWeight::get().writes(1))
+    Weight::from_parts(97_290_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(7))
+      .saturating_add(T::DbWeight::get().writes(8))
   }
 
   fn set_global_circuit_breaker() -> Weight {
@@ -447,11 +474,11 @@ impl WeightInfo for () {
   fn reopen_system_aaa() -> Weight { Weight::from_parts(100_642_000, 174_945) }
   fn create_dormant_system_aaa() -> Weight { Self::create_system_aaa() }
   fn activate_aaa() -> Weight { Self::create_system_aaa() }
-  fn deactivate_aaa() -> Weight { Self::reopen_system_aaa() }
+  fn deactivate_aaa() -> Weight { Weight::from_parts(60_623_000, 8_120) }
   fn pause_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn resume_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
-  fn close_aaa() -> Weight { Weight::from_parts(66_420_000, 8_120) }
+  fn close_aaa() -> Weight { Weight::from_parts(84_719_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
   fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
   fn task_burn() -> Weight { Weight::from_parts(23_397_000, 3_593) }
@@ -502,14 +529,25 @@ impl WeightInfo for () {
   fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_616_000, 3_651) }
   fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(17_600_000, 12_141) }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
-  fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(85_208_000, 12_141) }
+  fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
   fn funding_batch_promotion(assets: u32) -> Weight {
     Weight::from_parts(24_907_138, 4_425)
       .saturating_add(Weight::from_parts(2_349_643, 0).saturating_mul(assets.into()))
   }
-  fn update_funding_source_policy() -> Weight { Weight::from_parts(50_000_000, 15_000) }
-  fn update_schedule() -> Weight { Weight::from_parts(12_000_000, 900) }
-  fn update_execution_plan() -> Weight { Weight::from_parts(18_000_000, 1200) }
+  fn continuation_suspend(snapshot_entries: u32) -> Weight {
+    Weight::from_parts(27_920_348, 4_178)
+      .saturating_add(Weight::from_parts(37_426, 0).saturating_mul(snapshot_entries.into()))
+  }
+  fn continuation_retry() -> Weight { Weight::from_parts(22_070_000, 4_266) }
+  fn continuation_complete() -> Weight { Weight::from_parts(18_019_000, 4_030) }
+  fn continuation_cancel() -> Weight { Weight::from_parts(56_782_000, 8_120) }
+  fn continuation_suffix_admission(steps: u32) -> Weight {
+    Weight::from_parts(1_438_574, 0)
+      .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
+  }
+  fn update_funding_source_policy() -> Weight { Weight::from_parts(93_239_000, 8_120) }
+  fn update_schedule() -> Weight { Weight::from_parts(84_020_000, 8_120) }
+  fn update_execution_plan() -> Weight { Weight::from_parts(97_290_000, 8_120) }
   fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
   fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
   fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }

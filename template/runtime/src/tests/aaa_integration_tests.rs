@@ -18,8 +18,9 @@ use pallet_aaa::{
   AaaId, AmountResolution, AssetFilter, AssetFilterOf, AssetOps, CloseReason, DeferReason, DexOps,
   Error, Event, ExecutionPlanOf, FeeCollector, FundingBatch, FundingSourcePolicy,
   IdleStarvationPhase, IdleStarvationState, Mutability, Schedule, ScheduleOf, ScheduleWindow,
-  SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
-  StepSkippedReason, Task, TaskOf, Trigger, WeightInfo,
+  SimulationMode, SimulationStatus, SimulationStepOutcome, SourceFilter, SourceFilterOf, SplitLeg,
+  SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf, StepSkippedReason, Task, TaskOf,
+  Trigger, WeightInfo,
 };
 use pallet_axial_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::{
@@ -1037,7 +1038,9 @@ fn exact_out_nonzero_tolerance_requires_capacity_for_adjusted_bound() {
         required_in,
         Perbill::from_percent(1),
       ),
-      Err(DispatchError::Other("ExactOutInputCapacityExceeded"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "ExactOutInputCapacityExceeded",
+      )))
     );
     assert_eq!(native_balance(&ALICE), balance_before);
   });
@@ -1366,7 +1369,9 @@ fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
     );
     assert_eq!(
       result,
-      Err(DispatchError::Other("InsufficientInputForExactOut"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "InsufficientInputForExactOut",
+      )))
     );
   });
 }
@@ -1858,14 +1863,16 @@ fn internal_asset_transfer_rolls_back_when_funding_pending_overflows() {
     });
     let alice_before = native_balance(&ALICE);
     let sovereign_before = native_balance(&sovereign);
-    assert_noop!(
+    assert_eq!(
       <TmctolAssetOps as AssetOps<AccountId, AssetKind, Balance>>::transfer(
         &ALICE,
         &sovereign,
         AssetKind::Native,
         1,
       ),
-      Error::<Runtime>::FundingBatchOverflow
+      Err(pallet_aaa::TaskFailure::permanent(
+        Error::<Runtime>::FundingBatchOverflow,
+      ))
     );
     assert_eq!(native_balance(&ALICE), alice_before);
     assert_eq!(native_balance(&sovereign), sovereign_before);
@@ -2531,7 +2538,7 @@ fn cycle_does_not_execute_when_budget_is_too_small() {
     run_idle(target_weight);
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert_eq!(instance.cycle_nonce, 0);
-    assert!(instance.manual_trigger_pending);
+    assert!(instance.pending_signal);
   });
 }
 
@@ -4830,6 +4837,44 @@ fn execution_order_lower_id_executes_before_higher_id() {
 /// - Nonce spread ≤ 2
 /// - Zero deferrals (System AAAs, Weight::MAX budget)
 /// - Zero failed steps
+#[test]
+fn runtime_simulation_core_rolls_back_deos_adapter_effects() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let execution_plan =
+      transfer_execution_plan(BOB, AssetKind::Native, crate::EXISTENTIAL_DEPOSIT);
+    let expected_program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let aaa_id = create_system(ALICE, manual_schedule(), None, execution_plan);
+    fund_native(aaa_id, 1_000 * crate::EXISTENTIAL_DEPOSIT);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
+    let actor_before = AAA::aaa_instances(aaa_id).expect("actor exists");
+    let actor_balance_before = Balances::free_balance(&actor_before.sovereign_account);
+    let bob_before = Balances::free_balance(BOB);
+    let events_before = System::event_count();
+
+    let result = AAA::simulate_current_program(
+      aaa_id,
+      pallet_aaa::AaaType::System,
+      Mutability::Mutable,
+      expected_program,
+      SimulationMode::FreshCurrentPlan,
+    )
+    .expect("ready DEOS actor simulates");
+
+    assert_eq!(result.status, SimulationStatus::Completed);
+    assert_eq!(result.cycle_nonce, 1);
+    assert_eq!(result.steps.len(), 1);
+    assert_eq!(result.steps[0].outcome, SimulationStepOutcome::Executed);
+    assert_eq!(AAA::aaa_instances(aaa_id), Some(actor_before));
+    assert_eq!(Balances::free_balance(BOB), bob_before);
+    assert_eq!(
+      Balances::free_balance(&aaa_account(aaa_id)),
+      actor_balance_before
+    );
+    assert_eq!(System::event_count(), events_before);
+  });
+}
+
 #[test]
 #[ignore] // ~30s wall-clock; run manually: cargo test --release stress_10k_actors_queue_scheduler -- --ignored
 fn stress_10k_actors_queue_scheduler() {

@@ -19,7 +19,9 @@ use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
-use pallet_aaa::{AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps};
+use pallet_aaa::{
+  AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps, TaskFailure,
+};
 
 parameter_types! {
   // --- Identity and ownership ---
@@ -35,6 +37,7 @@ parameter_types! {
   pub const AaaMaxSystemExecutionPlanSteps: u32 = 10;
   pub const AaaMaxUserExecutionPlanSteps: u32 = 3;
   pub const AaaMaxFundingTrackedAssets: u32 = 10;
+  pub const AaaMaxContinuationSnapshotEntries: u32 = 20;
   pub const AaaMaxConditionsPerStep: u32 = 4;
   pub const AaaMaxSplitTransferLegs: u32 = 8;
 
@@ -107,7 +110,7 @@ impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
     if amount == 0 {
       return Ok(());
     }
-    TmctolAssetOps::transfer(payer, fee_sink, native_asset, amount)
+    TmctolAssetOps::transfer(payer, fee_sink, native_asset, amount).map_err(|failure| failure.error)
   }
 }
 
@@ -186,7 +189,7 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     to: &AccountId,
     asset: AssetKind,
     amount: Balance,
-  ) -> Result<(), DispatchError> {
+  ) -> Result<(), TaskFailure> {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(error) =
         <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
@@ -228,44 +231,53 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
         }
       }
     })
+    .map_err(TaskFailure::permanent)
   }
 
-  fn burn(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), DispatchError> {
-    match asset {
-      AssetKind::Native => {
-        let (_, remainder) = <Balances as Currency<AccountId>>::slash(who, amount);
-        if remainder > 0 {
-          return Err(DispatchError::Token(TokenError::FundsUnavailable));
+  fn burn(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
+    (|| -> DispatchResult {
+      match asset {
+        AssetKind::Native => {
+          let (_, remainder) = <Balances as Currency<AccountId>>::slash(who, amount);
+          if remainder > 0 {
+            return Err(DispatchError::Token(TokenError::FundsUnavailable));
+          }
+          Ok(())
         }
-        Ok(())
+        AssetKind::Local(id) | AssetKind::Foreign(id) => {
+          <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::burn_from(
+            id,
+            who,
+            amount,
+            Preservation::Expendable,
+            Precision::Exact,
+            Fortitude::Polite,
+          )?;
+          Ok(())
+        }
       }
-      AssetKind::Local(id) | AssetKind::Foreign(id) => {
-        <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::burn_from(
-          id,
-          who,
-          amount,
-          Preservation::Expendable,
-          Precision::Exact,
-          Fortitude::Polite,
-        )?;
-        Ok(())
-      }
-    }
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
-  fn mint(to: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), DispatchError> {
-    match asset {
-      AssetKind::Native => {
-        let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
+  fn mint(to: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
+    (|| -> DispatchResult {
+      match asset {
+        AssetKind::Native => {
+          let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
+        }
+        AssetKind::Local(id) | AssetKind::Foreign(id) => {
+          <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+            id, to, amount,
+          )?;
+        }
       }
-      AssetKind::Local(id) | AssetKind::Foreign(id) => {
-        <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(id, to, amount)?;
-      }
-    }
-    <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_without_source(
-      to, asset, amount,
-    )?;
-    Ok(())
+      <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_without_source(
+        to, asset, amount,
+      )?;
+      Ok(())
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
   fn balance(who: &AccountId, asset: AssetKind) -> Balance {
@@ -322,22 +334,26 @@ impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDona
     asset_b: AssetKind,
     amount: Balance,
     max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), DispatchError> {
-    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
-      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
-    if asset_a == AssetKind::Local(native_asset_id) && asset_b == AssetKind::Local(staked_asset_id)
-    {
-      let donation =
-        crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
-          who,
-          amount,
-          max_ratio_error,
-        )?;
-      TmctolAssetOps::bridge_native_staking_pool_yield()?;
-      return Ok(donation);
-    }
-    Err(DispatchError::Other("LiquidityDonationUnsupported"))
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    (|| -> Result<(Balance, Balance), DispatchError> {
+      let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+      let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+        .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+      if asset_a == AssetKind::Local(native_asset_id)
+        && asset_b == AssetKind::Local(staked_asset_id)
+      {
+        let donation =
+          crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
+            who,
+            amount,
+            max_ratio_error,
+          )?;
+        TmctolAssetOps::bridge_native_staking_pool_yield()?;
+        return Ok(donation);
+      }
+      Err(DispatchError::Other("LiquidityDonationUnsupported"))
+    })()
+    .map_err(TaskFailure::permanent)
   }
 }
 
@@ -348,18 +364,21 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     asset_out: AssetKind,
     amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, DispatchError> {
-    let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
-      who.clone(),
-      asset_in,
-      asset_out,
-      amount_in,
-    )?;
-    let min_out =
-      (polkadot_sdk::sp_runtime::Perbill::one() - slippage_tolerance).mul_floor(quote.amount_out);
-    pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
-      who, asset_in, asset_out, amount_in, min_out, who,
-    )
+  ) -> Result<Balance, TaskFailure> {
+    (|| -> Result<Balance, DispatchError> {
+      let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
+        who.clone(),
+        asset_in,
+        asset_out,
+        amount_in,
+      )?;
+      let min_out =
+        (polkadot_sdk::sp_runtime::Perbill::one() - slippage_tolerance).mul_floor(quote.amount_out);
+      pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
+        who, asset_in, asset_out, amount_in, min_out, who,
+      )
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
   fn swap_exact_out(
@@ -369,59 +388,62 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, DispatchError> {
-    if amount_out == 0 {
-      return Err(DispatchError::Other("ZeroAmountOut"));
-    }
-    if max_amount_in == 0 {
-      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
-    }
-    let quote_output = |amount_in: Balance| -> Result<Balance, DispatchError> {
-      if amount_in == 0 {
-        return Err(DispatchError::Other("ZeroAmountIn"));
+  ) -> Result<Balance, TaskFailure> {
+    (|| -> Result<Balance, DispatchError> {
+      if amount_out == 0 {
+        return Err(DispatchError::Other("ZeroAmountOut"));
       }
-      Ok(
-        pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
-          who.clone(),
-          asset_in,
-          asset_out,
-          amount_in,
-        )?
-        .amount_out,
-      )
-    };
-    if quote_output(max_amount_in)? < amount_out {
-      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
-    }
-    let mut low: Balance = 1;
-    let mut high = max_amount_in;
-    for _ in 0..Self::MAX_EXACT_OUT_QUOTE_STEPS {
-      if low >= high {
-        break;
+      if max_amount_in == 0 {
+        return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
       }
-      let mid = low.saturating_add(high.saturating_sub(low) / 2);
-      match quote_output(mid) {
-        Ok(quoted) if quoted >= amount_out => high = mid,
-        _ => low = mid.saturating_add(1),
+      let quote_output = |amount_in: Balance| -> Result<Balance, DispatchError> {
+        if amount_in == 0 {
+          return Err(DispatchError::Other("ZeroAmountIn"));
+        }
+        Ok(
+          pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
+            who.clone(),
+            asset_in,
+            asset_out,
+            amount_in,
+          )?
+          .amount_out,
+        )
+      };
+      if quote_output(max_amount_in)? < amount_out {
+        return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
       }
-    }
-    let required_in = high;
-    let quoted_max_in = required_in.saturating_add(slippage_tolerance.mul_ceil(required_in));
-    if quoted_max_in > max_amount_in {
-      return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
-    }
-    if TmctolAssetOps::balance(who, asset_in) < required_in {
-      return Err(DispatchError::Other("InsufficientInputForExactOut"));
-    }
-    pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
-      who,
-      asset_in,
-      asset_out,
-      required_in,
-      amount_out,
-      who,
-    )?;
-    Ok(required_in)
+      let mut low: Balance = 1;
+      let mut high = max_amount_in;
+      for _ in 0..Self::MAX_EXACT_OUT_QUOTE_STEPS {
+        if low >= high {
+          break;
+        }
+        let mid = low.saturating_add(high.saturating_sub(low) / 2);
+        match quote_output(mid) {
+          Ok(quoted) if quoted >= amount_out => high = mid,
+          _ => low = mid.saturating_add(1),
+        }
+      }
+      let required_in = high;
+      let quoted_max_in = required_in.saturating_add(slippage_tolerance.mul_ceil(required_in));
+      if quoted_max_in > max_amount_in {
+        return Err(DispatchError::Other("ExactOutInputCapacityExceeded"));
+      }
+      if TmctolAssetOps::balance(who, asset_in) < required_in {
+        return Err(DispatchError::Other("InsufficientInputForExactOut"));
+      }
+      pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
+        who,
+        asset_in,
+        asset_out,
+        required_in,
+        amount_out,
+        who,
+      )?;
+      Ok(required_in)
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
   fn add_liquidity(
@@ -430,62 +452,68 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     asset_b: AssetKind,
     amount_a: Balance,
     amount_b: Balance,
-  ) -> Result<(Balance, Balance, Balance), DispatchError> {
-    use alloc::boxed::Box;
-    // Auto-create pool if it doesn't exist yet
-    if AssetConversion::get_reserves(asset_a, asset_b).is_err() {
-      AssetConversion::create_pool(
+  ) -> Result<(Balance, Balance, Balance), TaskFailure> {
+    (|| -> Result<(Balance, Balance, Balance), DispatchError> {
+      use alloc::boxed::Box;
+      // Auto-create pool if it doesn't exist yet
+      if AssetConversion::get_reserves(asset_a, asset_b).is_err() {
+        AssetConversion::create_pool(
+          RuntimeOrigin::signed(who.clone()),
+          Box::new(asset_a),
+          Box::new(asset_b),
+        )?;
+      }
+      super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
+      let lp_before = Self::lp_balance(who, asset_a, asset_b);
+      AssetConversion::add_liquidity(
         RuntimeOrigin::signed(who.clone()),
         Box::new(asset_a),
         Box::new(asset_b),
+        amount_a,
+        amount_b,
+        0,
+        0,
+        who.clone(),
       )?;
-    }
-    super::assets_config::register_pool_lp_pair(asset_a, asset_b)?;
-    let lp_before = Self::lp_balance(who, asset_a, asset_b);
-    AssetConversion::add_liquidity(
-      RuntimeOrigin::signed(who.clone()),
-      Box::new(asset_a),
-      Box::new(asset_b),
-      amount_a,
-      amount_b,
-      0,
-      0,
-      who.clone(),
-    )?;
-    let lp_after = Self::lp_balance(who, asset_a, asset_b);
-    let lp_minted = lp_after.saturating_sub(lp_before);
-    Ok((amount_a, amount_b, lp_minted))
+      let lp_after = Self::lp_balance(who, asset_a, asset_b);
+      let lp_minted = lp_after.saturating_sub(lp_before);
+      Ok((amount_a, amount_b, lp_minted))
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
   fn remove_liquidity(
     who: &AccountId,
     lp_asset: AssetKind,
     lp_amount: Balance,
-  ) -> Result<(Balance, Balance), DispatchError> {
-    use alloc::boxed::Box;
-    let lp_id = match lp_asset {
-      AssetKind::Local(id) => id,
-      _ => return Err(DispatchError::Other("LP asset must be Local")),
-    };
-    let (asset_a, asset_b) = crate::AxialRouter::lp_pair_by_token_id(lp_id)
-      .ok_or(DispatchError::Other("Pool not found for LP token"))?;
-    let before_a = TmctolAssetOps::balance(who, asset_a);
-    let before_b = TmctolAssetOps::balance(who, asset_b);
-    AssetConversion::remove_liquidity(
-      RuntimeOrigin::signed(who.clone()),
-      Box::new(asset_a),
-      Box::new(asset_b),
-      lp_amount,
-      0,
-      0,
-      who.clone(),
-    )?;
-    let after_a = TmctolAssetOps::balance(who, asset_a);
-    let after_b = TmctolAssetOps::balance(who, asset_b);
-    Ok((
-      after_a.saturating_sub(before_a),
-      after_b.saturating_sub(before_b),
-    ))
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    (|| -> Result<(Balance, Balance), DispatchError> {
+      use alloc::boxed::Box;
+      let lp_id = match lp_asset {
+        AssetKind::Local(id) => id,
+        _ => return Err(DispatchError::Other("LP asset must be Local")),
+      };
+      let (asset_a, asset_b) = crate::AxialRouter::lp_pair_by_token_id(lp_id)
+        .ok_or(DispatchError::Other("Pool not found for LP token"))?;
+      let before_a = TmctolAssetOps::balance(who, asset_a);
+      let before_b = TmctolAssetOps::balance(who, asset_b);
+      AssetConversion::remove_liquidity(
+        RuntimeOrigin::signed(who.clone()),
+        Box::new(asset_a),
+        Box::new(asset_b),
+        lp_amount,
+        0,
+        0,
+        who.clone(),
+      )?;
+      let after_a = TmctolAssetOps::balance(who, asset_a);
+      let after_b = TmctolAssetOps::balance(who, asset_b);
+      Ok((
+        after_a.saturating_sub(before_a),
+        after_b.saturating_sub(before_b),
+      ))
+    })()
+    .map_err(TaskFailure::permanent)
   }
 }
 
@@ -1163,28 +1191,34 @@ impl TmctolStakingOps {
 }
 
 impl pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance> for TmctolStakingOps {
-  fn stake(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), DispatchError> {
-    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let staking_asset_id = Self::staking_asset_id(asset);
-    if staking_asset_id == native_asset_id {
-      let _ = crate::Staking::stake_native(RuntimeOrigin::signed(who.clone()).into(), amount)?;
-      return Ok(());
-    }
-    let _ = crate::Staking::stake(
-      RuntimeOrigin::signed(who.clone()).into(),
-      staking_asset_id,
-      amount,
-    )?;
-    Ok(())
+  fn stake(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
+    (|| -> DispatchResult {
+      let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+      let staking_asset_id = Self::staking_asset_id(asset);
+      if staking_asset_id == native_asset_id {
+        let _ = crate::Staking::stake_native(RuntimeOrigin::signed(who.clone()).into(), amount)?;
+        return Ok(());
+      }
+      let _ = crate::Staking::stake(
+        RuntimeOrigin::signed(who.clone()).into(),
+        staking_asset_id,
+        amount,
+      )?;
+      Ok(())
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
-  fn unstake(who: &AccountId, asset: AssetKind, shares: Balance) -> Result<(), DispatchError> {
-    let _ = crate::Staking::unstake(
-      RuntimeOrigin::signed(who.clone()).into(),
-      Self::staking_asset_id(asset),
-      shares,
-    )?;
-    Ok(())
+  fn unstake(who: &AccountId, asset: AssetKind, shares: Balance) -> Result<(), TaskFailure> {
+    (|| -> DispatchResult {
+      let _ = crate::Staking::unstake(
+        RuntimeOrigin::signed(who.clone()).into(),
+        Self::staking_asset_id(asset),
+        shares,
+      )?;
+      Ok(())
+    })()
+    .map_err(TaskFailure::permanent)
   }
 
   fn share_balance(who: &AccountId, asset: AssetKind) -> Balance {
@@ -1243,6 +1277,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
+  type MaxContinuationSnapshotEntries = AaaMaxContinuationSnapshotEntries;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
   type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;
   type MaxOwnerSlots = AaaMaxOwnerSlots;
@@ -1480,7 +1515,8 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
     let (asset, amount) = Self::setup_stake(owner)?;
     <TmctolStakingOps as pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance>>::stake(
       owner, asset, amount,
-    )?;
+    )
+    .map_err(|failure| failure.error)?;
     let shares = <TmctolStakingOps as pallet_aaa::adapters::StakingOps<
       AccountId,
       AssetKind,

@@ -11,7 +11,8 @@ available_locales:
 sources:
   - ../../docs/aaa.specification.en.md
   - ../../docs/aaa.architecture.en.md
-  - ../../docs/aaa.embedding.en.md
+  - ../../docs/aaa-control-plane.contract.en.md
+  - ../../template/pallets/aaa/EMBEDDING.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -53,7 +54,15 @@ The normative system contract requires:
 
 Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it.
 
-Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the cycle, pending funding promotes only after success, and bounded events expose activation, accumulation, promotion, and policy updates.
+Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the logical run, pending funding promotes only after full success, and bounded events expose activation, accumulation, promotion, and policy updates.
+
+## Progress-Preserving Continuation
+
+A Mutable actor may mark a step `RetryLater`. When that step reports an explicitly Temporary adapter failure, AAA keeps one sparse Continuation with the unresolved step cursor, attempt number, last-attempt block, frozen typed suffix inputs, and cumulative outcomes. Retries reuse the same logical-run nonce and the existing FIFO/wakeup scheduler. They start at the unresolved step instead of replaying the committed prefix.
+
+Permanent and unsupported-adapter failures never create Continuation. Immutable actors cannot use `RetryLater`. Cancellation deletes current progress without compensation, prefix rollback, funding promotion, or balance movement; pause and the global breaker preserve it. Incoming signals during suspension remain latched for the next logical run.
+
+`CycleStarted` appears once. `CycleContinued` and `CycleSuspended` identify attempts with `(aaa_id, cycle_nonce, attempt)`, while one cumulative `CycleSummary` terminates the logical run. Current Continuation is canonical chain state. Long attempt timelines require a materialized event index.
 
 ## Operational Observability
 
@@ -65,13 +74,19 @@ AAA keeps current starvation observability sparse. `IdleStarvationState` is abse
 
 External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into `FeeSink`; downstream allocation remains outside AAA. The DEOS reference Fee Sink currently applies the 50/50 staking/liquidity plan; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
 
-The independent `template/aaa-embedding-runtime` fixture makes this boundary executable. It starts with zero System AAAs, uses local account/asset types and smaller scheduler pages, proves direct Executive ingress and fresh-genesis integrity, and offers separate unsupported-adapter and exact-output DEX profiles. It is portability evidence, not a second product or prescribed topology.
+The independent `template/pallets/aaa/embedding-runtime` external-consumer fixture makes this boundary executable. It starts with zero System AAAs, uses local account/asset types and smaller scheduler pages, and proves direct Executive ingress, fresh-genesis integrity, deterministic unsupported adapters, User/System Continuation, User exact-output swaps, System-only minting, try-state, and no-std operation. It is portability evidence, not a second product or prescribed topology.
 
-The `0.7.2` line resets the unlaunched reference chain to storage version `1`; it ships no historical migration. Continuation and `RetryLater` remain outside this line in `0.7.3`, whose independent embedding gate must pass before AAA can declare a post-`1.0` append-only surface.
+The `0.7.3` line keeps the unlaunched reference chain at fresh-baseline storage version `1`; it ships no historical migration. The independent Continuation embedding gate passes without a DEOS/TMCTOL helper or actor-topology dependency.
 
 The DEOS reference runtime also owns `LpPairByTokenId` outside generic AAA, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded.
 
-The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep` or `AbortCycle` then decides whether the cycle proceeds or stops.
+The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep`, `AbortCycle`, or Mutable-only `RetryLater` then decides whether the attempt proceeds, terminates, or suspends at the same step.
+
+## Control-Plane Boundary
+
+Off-chain tooling binds an executable plan to genesis hash, runtime versions, metadata hash, actor type, mutability, and exact `ProgramInput` SCALE bytes. Human JSON is a lossless projection, not runtime truth. A deterministic `planId` supports review and correlation while metadata changes require explicit decode, validation, and re-encoding.
+
+Plan diffs, forecasts, simulations, governance composition, and long configuration/cycle history remain local or materialized surfaces. They carry block, metadata, and model provenance and never expand consensus state or authorize signing implicitly.
 
 ## Portability Boundary
 

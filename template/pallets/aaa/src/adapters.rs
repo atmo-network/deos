@@ -1,10 +1,45 @@
-//! Adapter traits for AAA pallet
-//!
-//! Two traits abstract all runtime-specific operations, keeping pallet-aaa
-//! fully generic over asset types and independent of any runtime implementation.
+//! Runtime adapter traits for AAA task execution.
 
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::Perbill;
+
+/// Closed retryability classification supplied by runtime mutation adapters.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum RetryClass {
+  Permanent,
+  Temporary,
+}
+
+/// Typed adapter failure. Unclassified dispatch failures convert to Permanent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TaskFailure {
+  pub error: DispatchError,
+  pub retry: RetryClass,
+}
+
+impl TaskFailure {
+  pub fn permanent(error: impl Into<DispatchError>) -> Self {
+    Self {
+      error: error.into(),
+      retry: RetryClass::Permanent,
+    }
+  }
+
+  pub fn temporary(error: impl Into<DispatchError>) -> Self {
+    Self {
+      error: error.into(),
+      retry: RetryClass::Temporary,
+    }
+  }
+}
+
+impl From<DispatchError> for TaskFailure {
+  fn from(error: DispatchError) -> Self {
+    Self::permanent(error)
+  }
+}
 
 /// Runtime authorization for actors whose stored funding policy is `RuntimePolicy`.
 ///
@@ -24,24 +59,23 @@ impl<AccountId> FundingAuthority<AccountId> for () {
   }
 }
 
-/// Asset mutations and queries
+/// Asset mutations and queries.
 ///
-/// Covers Transfer, SplitTransfer, Burn, Mint, and balance queries.
-/// `mint` is privileged — pallet rejects Mint tasks for User AAA at creation.
+/// Covers Transfer, SplitTransfer, Burn, Mint, and balance queries. `mint` is privileged — the
+/// pallet rejects Mint tasks for User AAA at creation.
 pub trait AssetOps<AccountId, AssetId, Balance> {
   fn transfer(
     from: &AccountId,
     to: &AccountId,
     asset: AssetId,
     amount: Balance,
-  ) -> Result<(), DispatchError>;
+  ) -> Result<(), TaskFailure>;
 
-  fn burn(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError>;
+  fn burn(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), TaskFailure>;
 
-  fn mint(to: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError>;
+  fn mint(to: &AccountId, asset: AssetId, amount: Balance) -> Result<(), TaskFailure>;
 
-  // Adapter-visible immediately transferable balance before any AAA-local
-  // fee reservation is subtracted.
+  /// Adapter-visible transferable balance before AAA-local fee reservation.
   fn balance(who: &AccountId, asset: AssetId) -> Balance;
 
   fn minimum_balance(asset: AssetId) -> Balance;
@@ -49,24 +83,15 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
   fn can_deposit(who: &AccountId, asset: AssetId, amount: Balance) -> bool;
 }
 
-/// DEX operations — swap and liquidity
-///
-/// Optional: required only when SwapExactIn/Out, AddLiquidity, or
-/// RemoveLiquidity tasks are present in a execution_plan.
-///
-/// `swap_exact_in` receives `slippage_tolerance: Perbill` — the adapter
-/// computes `min_out` internally (e.g. via DEX quote). The pallet never
-/// touches pricing logic.
-/// Staking operations
-///
-/// Optional: required only when Stake or Unstake tasks are present.
+/// Runtime staking operations. Required only when Stake or Unstake appears in a plan.
 pub trait StakingOps<AccountId, AssetId, Balance> {
-  fn stake(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError>;
-  fn unstake(who: &AccountId, asset: AssetId, shares: Balance) -> Result<(), DispatchError>;
+  fn stake(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), TaskFailure>;
+  fn unstake(who: &AccountId, asset: AssetId, shares: Balance) -> Result<(), TaskFailure>;
   fn share_balance(who: &AccountId, asset: AssetId) -> Balance;
   fn share_asset(asset: AssetId) -> Option<AssetId>;
 }
 
+/// Runtime protocol-liquidity donation operation.
 pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
   fn donate_liquidity(
     who: &AccountId,
@@ -74,9 +99,10 @@ pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
     asset_b: AssetId,
     amount: Balance,
     max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), DispatchError>;
+  ) -> Result<(Balance, Balance), TaskFailure>;
 }
 
+/// Runtime DEX operations.
 pub trait DexOps<AccountId, AssetId, Balance> {
   fn swap_exact_in(
     who: &AccountId,
@@ -84,7 +110,7 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     asset_out: AssetId,
     amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, TaskFailure>;
 
   fn swap_exact_out(
     who: &AccountId,
@@ -93,7 +119,7 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, TaskFailure>;
 
   fn add_liquidity(
     who: &AccountId,
@@ -101,27 +127,33 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     asset_b: AssetId,
     amount_a: Balance,
     amount_b: Balance,
-  ) -> Result<(Balance, Balance, Balance), DispatchError>;
+  ) -> Result<(Balance, Balance, Balance), TaskFailure>;
 
   fn remove_liquidity(
     who: &AccountId,
     lp_asset: AssetId,
     lp_amount: Balance,
-  ) -> Result<(Balance, Balance), DispatchError>;
+  ) -> Result<(Balance, Balance), TaskFailure>;
 }
 
-/// No-op `AssetOps` for use in configurations where asset ops are not needed.
+/// Fail-closed `AssetOps` fallback for runtimes without asset mutation support.
 impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance> for () {
-  fn transfer(_: &AccountId, _: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
-    Ok(())
+  fn transfer(_: &AccountId, _: &AccountId, _: AssetId, _: Balance) -> Result<(), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "AssetOps not configured",
+    )))
   }
 
-  fn burn(_: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
-    Ok(())
+  fn burn(_: &AccountId, _: AssetId, _: Balance) -> Result<(), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "AssetOps not configured",
+    )))
   }
 
-  fn mint(_: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
-    Ok(())
+  fn mint(_: &AccountId, _: AssetId, _: Balance) -> Result<(), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "AssetOps not configured",
+    )))
   }
 
   fn balance(_: &AccountId, _: AssetId) -> Balance {
@@ -133,11 +165,11 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
   }
 
   fn can_deposit(_: &AccountId, _: AssetId, _: Balance) -> bool {
-    true
+    false
   }
 }
 
-/// No-op `DexOps` for configurations where DEX is not used.
+/// Fail-closed `DexOps` fallback for runtimes without DEX support.
 impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> for () {
   fn swap_exact_in(
     _: &AccountId,
@@ -145,8 +177,10 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: AssetId,
     _: Balance,
     _: Perbill,
-  ) -> Result<Balance, DispatchError> {
-    Err(DispatchError::Other("DexOps not configured"))
+  ) -> Result<Balance, TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "DexOps not configured",
+    )))
   }
 
   fn swap_exact_out(
@@ -156,8 +190,10 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: Balance,
     _: Balance,
     _: Perbill,
-  ) -> Result<Balance, DispatchError> {
-    Err(DispatchError::Other("DexOps not configured"))
+  ) -> Result<Balance, TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "DexOps not configured",
+    )))
   }
 
   fn add_liquidity(
@@ -166,27 +202,35 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: AssetId,
     _: Balance,
     _: Balance,
-  ) -> Result<(Balance, Balance, Balance), DispatchError> {
-    Err(DispatchError::Other("DexOps not configured"))
+  ) -> Result<(Balance, Balance, Balance), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "DexOps not configured",
+    )))
   }
 
   fn remove_liquidity(
     _: &AccountId,
     _: AssetId,
     _: Balance,
-  ) -> Result<(Balance, Balance), DispatchError> {
-    Err(DispatchError::Other("DexOps not configured"))
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "DexOps not configured",
+    )))
   }
 }
 
-/// No-op `StakingOps` for configurations where Staking is not used.
+/// Fail-closed `StakingOps` fallback for runtimes without staking support.
 impl<AccountId, AssetId, Balance: Default> StakingOps<AccountId, AssetId, Balance> for () {
-  fn stake(_: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
-    Err(DispatchError::Other("StakingOps not configured"))
+  fn stake(_: &AccountId, _: AssetId, _: Balance) -> Result<(), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "StakingOps not configured",
+    )))
   }
 
-  fn unstake(_: &AccountId, _: AssetId, _: Balance) -> Result<(), DispatchError> {
-    Err(DispatchError::Other("StakingOps not configured"))
+  fn unstake(_: &AccountId, _: AssetId, _: Balance) -> Result<(), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "StakingOps not configured",
+    )))
   }
 
   fn share_balance(_: &AccountId, _: AssetId) -> Balance {
@@ -198,7 +242,7 @@ impl<AccountId, AssetId, Balance: Default> StakingOps<AccountId, AssetId, Balanc
   }
 }
 
-/// No-op `LiquidityDonationOps` for configurations where LP donation is not used.
+/// Fail-closed fallback for runtimes without protocol-liquidity donation support.
 impl<AccountId, AssetId, Balance: Default> LiquidityDonationOps<AccountId, AssetId, Balance>
   for ()
 {
@@ -208,7 +252,9 @@ impl<AccountId, AssetId, Balance: Default> LiquidityDonationOps<AccountId, Asset
     _: AssetId,
     _: Balance,
     _: Perbill,
-  ) -> Result<(Balance, Balance), DispatchError> {
-    Err(DispatchError::Other("LiquidityDonationOps not configured"))
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "LiquidityDonationOps not configured",
+    )))
   }
 }

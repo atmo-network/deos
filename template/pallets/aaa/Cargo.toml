@@ -1,13 +1,18 @@
 [package]
 name = "pallet-aaa"
-version = "0.7.2"
-description = "Deterministic Account Abstraction Actors pallet"
-authors.workspace = true
+version = "0.7.3"
+description = "Deterministic Account Abstraction Actors and bounded runtime automation for FRAME"
+authors = ["DEOS Contributors"]
 license = "MIT-0"
-homepage.workspace = true
-repository.workspace = true
+homepage = "https://github.com/atmo-network/deos"
+repository = "https://github.com/atmo-network/deos"
+documentation = "https://docs.rs/pallet-aaa"
+readme = "README.md"
+keywords = ["substrate", "frame", "automation", "actors"]
+categories = ["cryptography::cryptocurrencies"]
 edition.workspace = true
 publish = false
+include = ["Cargo.toml", "README.md", "EMBEDDING.md", "src/**/*.rs"]
 
 [lints]
 workspace = true
@@ -18,6 +23,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 [dependencies]
 codec = { workspace = true }
 scale-info = { workspace = true }
+sp-api = { workspace = true }
 frame = { workspace = true }
 polkadot-sdk = { workspace = true, features = [
   "frame-support",
@@ -44,6 +50,7 @@ std = [
   "codec/std",
   "polkadot-sdk/std",
   "scale-info/std",
+  "sp-api/std",
 ]
 runtime-benchmarks = [
   "polkadot-sdk/runtime-benchmarks",

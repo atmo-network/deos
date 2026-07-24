@@ -21,7 +21,7 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- AAA.ActorHot + AAA.ActorProgram + System.Account',
+    'automationWidget <- AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account',
   ).provenance;
 
   function syncViewport() {
@@ -114,13 +114,17 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
                 variant={actor.exists
                   ? actor.paused
                     ? 'info'
-                    : 'tmc'
+                    : actor.runState === 'suspended'
+                      ? 'xyk'
+                      : 'tmc'
                   : 'info'}
               >
                 {#if !actor.exists}
                   missing
                 {:else if actor.paused}
                   paused
+                {:else if actor.runState === 'suspended'}
+                  suspended
                 {:else}
                   live
                 {/if}
@@ -136,8 +140,10 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
                   valueClass="text-(--mono-text)"
                 />
                 <DetailRow
-                  label="Cycle"
-                  value={actor.lastCycleBlock?.toString() ?? '—'}
+                  label="Run"
+                  value={actor.continuation
+                    ? `#${actor.cycleNonce} · try ${actor.continuation.attempt} · step ${actor.continuation.cursor + 1}`
+                    : `#${actor.cycleNonce}`}
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow
@@ -154,8 +160,15 @@ Zone: Presentation widget; consumes system automation projections and UI Kit hel
                   valueClass="text-(--mono-text)"
                 />
                 <DetailRow
-                  label="Last cycle"
-                  value={actor.lastCycleBlock?.toString() ?? '—'}
+                  label="Logical run"
+                  value={`#${actor.cycleNonce}`}
+                  valueClass="tabnum text-(--mono-text)"
+                />
+                <DetailRow
+                  label="Continuation"
+                  value={actor.continuation
+                    ? `Attempt ${actor.continuation.attempt} · step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
+                    : 'None'}
                   valueClass="tabnum text-(--mono-text)"
                 />
                 <DetailRow

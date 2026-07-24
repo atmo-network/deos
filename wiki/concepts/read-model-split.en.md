@@ -23,7 +23,7 @@ related:
   - Governance Domains
   - Reference Client
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-07-24
 confidence: 0.9
 ---
 
@@ -41,13 +41,13 @@ This is an architectural rule, not just a frontend wording preference.
 
 Use this class when the data is part of the live protocol contract, needs to be consumed directly by clients, and can stay bounded in storage and servicing cost.
 
-Examples include active governance state, live balances, current pool reserves, and other bounded helper views needed for canonical product flows.
+Examples include active governance state, live balances, current pool reserves, and the current sparse AAA Continuation for a suspended actor. Its cursor, attempt, frozen suffix inputs, and cumulative outcomes remain bounded facts needed for live recovery.
 
 ### Indexed or Materialized View
 
 Use this class when the data is archival, historical, search-heavy, analytical, or otherwise unbounded.
 
-Examples include full proposal archives, long-range chart history, trading dashboards, and wallet-performance analytics.
+Examples include full proposal archives, long-range chart history, trading dashboards, wallet-performance analytics, and unbounded AAA attempt timelines reconstructed from `(aaa_id, cycle_nonce, attempt)` events.
 
 ## Why the Split Exists
 

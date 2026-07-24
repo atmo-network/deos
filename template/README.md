@@ -30,7 +30,7 @@ It wires pallets together through `Runtime-as-Config` adapters and hosts:
 
 Custom DEOS runtime pallets in the current reference configuration:
 
-- [`aaa/`](./pallets/aaa/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, and execution plans
+- [`aaa/`](./pallets/aaa/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
 - [`asset-registry/`](./pallets/asset-registry/) — XCM location to asset-id registry
 - [`axial-router/`](./pallets/axial-router/) — routing and fee/burn execution gateway
 - [`governance/`](./pallets/governance/) — bounded governance reward-memory and proposal lifecycle
@@ -38,6 +38,10 @@ Custom DEOS runtime pallets in the current reference configuration:
 - [`tmc/`](./pallets/tmc/) — token minting curve logic
 
 See [`pallets/README.md`](./pallets/README.md) for the pallet index.
+
+### [`pallets/aaa/embedding-runtime/`](./pallets/aaa/embedding-runtime/README.md)
+
+External-consumer Cargo fixture owned by the `pallet-aaa` package boundary. It proves the portable host contract in default, DEX, try-runtime, and no-std profiles while starting with zero System actors and using no DEOS helper or topology dependencies.
 
 ### `primitives/`
 
