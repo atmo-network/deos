@@ -13,6 +13,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aaa-embedding-runtime"
+version = "0.7.1"
+dependencies = [
+ "pallet-aaa",
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "scale-info",
+]
+
+[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

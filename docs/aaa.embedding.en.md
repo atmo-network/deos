@@ -14,6 +14,12 @@
 
 Use this guide with the normative [AAA Specification](./aaa.specification.en.md) and the shipped [AAA Architecture](./aaa.architecture.en.md). The specification defines the portable contract; the architecture document describes the current DEOS reference binding.
 
+## Executable Portability Evidence
+
+[`template/aaa-embedding-runtime`](../template/aaa-embedding-runtime/README.md) is a minimal independent runtime fixture for this contract. It uses local account and asset types, local weight bindings, zero genesis System AAAs, smaller queue/wakeup pages, native balance ingress through its own transaction extension, and no DEOS/TMCTOL primitives or topology.
+
+The default profile proves unsupported optional adapters and ordinary step-error handling. The opt-in `dex-fixture` profile proves `SwapExactOut` through a local adapter. This package is executable portability evidence, not a second product or a normative actor topology.
+
 ## 1. Minimal Host Runtime Obligations
 
 An embedding runtime must provide only the bounded host surface that AAA cannot own itself:

@@ -17,7 +17,7 @@ The current kernel/runtime slice provides:
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
-- Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, and entropy
+- Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee collection, direct ingress, and weights
 - Genesis provisioning of System actors through runtime configuration
 
 ## Key rule
@@ -45,18 +45,17 @@ The pallet must stay generic.
 Concrete chain policy belongs in runtime configuration, including:
 
 - `AssetOps`, `DexOps`, `StakingOps`, and `LiquidityDonationOps`
-- Entropy policy and secure/insecure fallback posture
-- Fee conversion and task weight classes
+- Fee conversion, fee collection, and task weight classes
 - Ingress hooks and genesis System AAA topology
 - Governance/system origins and operational bounds
 
 ## External runtime embedding checklist
 
-A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The full host-runtime contract lives in [`docs/aaa.embedding.en.md`](../../../docs/aaa.embedding.en.md).
+A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The full host-runtime contract lives in [`docs/aaa.embedding.en.md`](../../../docs/aaa.embedding.en.md). Executable portability evidence lives in [`template/aaa-embedding-runtime`](../../aaa-embedding-runtime/README.md); that fixture is not a second product or a normative topology.
 
 Minimal checklist:
 
-- Implement asset, DEX, staking, liquidity-donation, fee-router, ingress, entropy, benchmarking, and atomicity adapters for local runtime types.
+- Implement asset, optional domain, fee-collection, direct-ingress, benchmarking, and task-weight adapters for local runtime types.
 - Bind governance/system origins, owner-slot limits, queue/wakeup bounds, fee constants, task weight classes, and native asset identity.
 - Decide which tasks are allowed for User vs System actors and keep any chain-specific policy in adapters or genesis actor configuration, not in pallet core.
 - Provide deterministic genesis System AAA definitions only for actor roles the runtime actually wants to ship.

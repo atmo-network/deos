@@ -57,7 +57,7 @@ Each numbered command is independently callable by a human or CI from any workin
   Run only explicitly selected broad compositions for audits, CI, runtime build, dependency posture, or E2E. No plan runs by default: agents choose changed-scope routes through `alignment`, while humans/releases opt into `--audit-only`, one `--*-only` mode, or `--all`. Audit leaves remain owned by `alignment` and are orchestrated here without duplicating their implementation.
 
 - [aaa-release-gate.sh](./aaa-release-gate.sh)
-  Shared human/GitHub/CI/skill implementation of the AAA scheduler stress gate. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
+  Shared human/GitHub/CI/skill implementation of the AAA scheduler stress and independent-runtime embedding gate. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
