@@ -94,9 +94,6 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
     true,
     'governanceStore.activeProposals <- bounded governance runtime reads',
   ).provenance;
-  const recentFinalizedProvenance = $derived(
-    governanceStore.state.recentFinalizedProposalsView?.provenance ?? null,
-  );
   const voteWriteAvailability = $derived(
     governanceStore.state.writeSurfaceAvailability.castVote,
   );
@@ -1112,7 +1109,6 @@ Zone: Presentation widget; consumes governance store/contracts and UI Kit withou
 
       <FinalizedProposalsSection
         proposals={governanceStore.state.recentFinalizedProposals}
-        provenance={recentFinalizedProvenance}
         authorizedRuntimeUpgrade={governanceStore.state
           .authorizedRuntimeUpgrade}
       />

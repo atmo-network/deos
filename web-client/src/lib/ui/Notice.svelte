@@ -21,9 +21,8 @@ Zone: Foundation UI; accepts caller content without importing product slices.
 
   const variants = {
     muted: 'bg-white text-(--mono-muted)',
-    warn: 'border border-(--mono-orange)/30 bg-(--mono-orange)/10 text-(--mono-orange)',
-    success:
-      'border border-(--mono-green)/30 bg-(--mono-green)/10 text-(--mono-green)',
+    warn: 'bg-(--mono-orange)/10 text-(--mono-orange)',
+    success: 'bg-(--mono-green)/10 text-(--mono-green)',
   };
 </script>
 

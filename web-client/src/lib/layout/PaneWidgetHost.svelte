@@ -14,14 +14,15 @@ Zone: Layout rendering component; bridges layout panel ids to widget loader outp
   type Props = {
     panelId: PanelId;
     panelLabels: Record<PanelId, string>;
+    intrinsicHeight?: boolean;
   };
 
-  let { panelId, panelLabels }: Props = $props();
+  let { panelId, panelLabels, intrinsicHeight = false }: Props = $props();
   let scrollHostEl = $state<HTMLDivElement | null>(null);
   let loadedWidget = $state<WidgetComponent | null>(null);
   let loadingWidget = $state(false);
   let loadError = $state<string | null>(null);
-  let hasVerticalOverflow = $state(false);
+  let hasOverflow = $state(false);
   let overflowCheckFrame = 0;
 
   const LoadedWidget = $derived(loadedWidget);
@@ -46,19 +47,21 @@ Zone: Layout rendering component; bridges layout panel ids to widget loader outp
     }
   }
 
-  function updateVerticalOverflowState() {
+  function updateOverflowState() {
     if (!scrollHostEl) {
-      hasVerticalOverflow = false;
+      hasOverflow = false;
       return;
     }
-    // Measure against the borderless viewport to avoid border-triggered scrollbar flicker
-    const borderlessClientHeight =
-      scrollHostEl.clientHeight + (hasVerticalOverflow ? 2 : 0);
-    hasVerticalOverflow =
-      scrollHostEl.scrollHeight > borderlessClientHeight + 1;
+    // Measure against the borderless viewport to avoid border-triggered scrollbar flicker.
+    const borderAdjustment = hasOverflow ? 2 : 0;
+    const borderlessClientHeight = scrollHostEl.clientHeight + borderAdjustment;
+    const borderlessClientWidth = scrollHostEl.clientWidth + borderAdjustment;
+    hasOverflow =
+      scrollHostEl.scrollHeight > borderlessClientHeight + 1 ||
+      scrollHostEl.scrollWidth > borderlessClientWidth + 1;
   }
 
-  function queueVerticalOverflowCheck() {
+  function queueOverflowCheck() {
     if (typeof window === 'undefined') {
       return;
     }
@@ -67,7 +70,7 @@ Zone: Layout rendering component; bridges layout panel ids to widget loader outp
     }
     overflowCheckFrame = requestAnimationFrame(() => {
       overflowCheckFrame = 0;
-      updateVerticalOverflowState();
+      updateOverflowState();
     });
   }
 
@@ -80,25 +83,27 @@ Zone: Layout rendering component; bridges layout panel ids to widget loader outp
     loadedWidget;
     loadingWidget;
     loadError;
-    queueVerticalOverflowCheck();
+    queueOverflowCheck();
   });
 
   onMount(() => {
-    queueVerticalOverflowCheck();
+    queueOverflowCheck();
     if (!scrollHostEl) {
       return;
     }
     const resizeObserver = new ResizeObserver(() => {
-      queueVerticalOverflowCheck();
+      queueOverflowCheck();
     });
     resizeObserver.observe(scrollHostEl);
     const mutationObserver = new MutationObserver(() => {
-      queueVerticalOverflowCheck();
+      queueOverflowCheck();
     });
     mutationObserver.observe(scrollHostEl, {
       subtree: true,
       childList: true,
       characterData: true,
+      attributes: true,
+      attributeFilter: ['open'],
     });
     return () => {
       if (overflowCheckFrame !== 0) {
@@ -114,13 +119,19 @@ Zone: Layout rendering component; bridges layout panel ids to widget loader outp
   <div
     bind:this={scrollHostEl}
     class={[
-      '@container grid h-full min-h-0 overflow-y-scroll overflow-x-hidden overscroll-contain rounded-xl border pl-1.5',
-      hasVerticalOverflow ? 'border-(--mono-border)' : 'border-transparent',
+      '@container grid min-h-0 overflow-auto overscroll-contain rounded-xl border scrollbar-gutter-both',
+      intrinsicHeight ? 'min-h-24 max-h-[min(68dvh,48rem)]' : 'h-full',
+      hasOverflow ? 'border-(--mono-border)' : 'border-transparent',
     ]}
     style:grid-template-rows="minmax(0, 1fr)"
   >
     {#if LoadedWidget}
-      <div class="h-full min-h-full">
+      <div
+        class={[
+          'widget-scale',
+          intrinsicHeight ? 'min-h-24' : 'h-full min-h-full',
+        ]}
+      >
         <LoadedWidget />
       </div>
     {:else if loadError}
@@ -138,3 +149,30 @@ Zone: Layout rendering component; bridges layout panel ids to widget loader outp
     {/if}
   </div>
 </div>
+
+<style>
+  .widget-scale {
+    --widget-em: 0.9375rem;
+    --spacing: calc(var(--widget-em) / 4);
+    --text-3xs: calc(var(--widget-em) * 0.6);
+    --text-2xs: calc(var(--widget-em) * 0.6667);
+    --text-compact: calc(var(--widget-em) * 0.7333);
+    --text-xs: calc(var(--widget-em) * 0.8);
+    --text-sm: calc(var(--widget-em) * 0.9333);
+    --text-base: var(--widget-em);
+    --text-lg: calc(var(--widget-em) * 1.125);
+    font-size: var(--widget-em);
+  }
+
+  @container (max-width: 448px) {
+    .widget-scale {
+      --widget-em: 0.875rem;
+    }
+  }
+
+  @container (min-width: 896px) {
+    .widget-scale {
+      --widget-em: 1rem;
+    }
+  }
+</style>
