@@ -34,7 +34,7 @@ use polkadot_sdk::frame_support::{
 use polkadot_sdk::sp_core::{Pair, sr25519};
 use polkadot_sdk::sp_runtime::traits::TransactionExtension;
 use polkadot_sdk::sp_runtime::{DispatchError, Perbill, generic};
-use polkadot_sdk::sp_weights::WeightToFee;
+use polkadot_sdk::sp_weights::{WeightMeter, WeightToFee};
 use polkadot_sdk::{
   staging_xcm as xcm,
   staging_xcm_executor::{AssetsInHolding, traits::TransactAsset},
@@ -4810,6 +4810,52 @@ fn scheduler_stress_lane_sparse_topology_long_run_liveness() {
       min_count,
       max_count,
     );
+  });
+}
+
+#[test]
+#[ignore] // Checkpoint A capacity acceptance; run through scripts/aaa-release-gate.sh.
+fn checkpoint_a_s6_dense_10k_wakeups_converge_without_drops() {
+  use super::common::new_test_ext;
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    close_genesis_system_actors();
+    let actor_count = 10_000u32;
+    let wakeup_block = 10;
+    let aaa_ids = setup_inert_actors(actor_count.into(), 10_000u128);
+    for aaa_id in &aaa_ids {
+      AAA::paged_invalidate(*aaa_id);
+    }
+    let queue_cutoff = AAA::queue_tail();
+    let cleanup = AAA::paged_drain_tombstones(queue_cutoff, actor_count);
+    assert_eq!(cleanup.tombstones_skipped, actor_count);
+    assert_eq!(AAA::queue_head(), AAA::queue_tail());
+    for aaa_id in &aaa_ids {
+      assert!(AAA::wakeup_substrate_schedule(*aaa_id, wakeup_block));
+    }
+
+    let bucket = AAA::wakeup_buckets(wakeup_block).expect("dense wakeup bucket");
+    assert_eq!(bucket.live_entries, actor_count);
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(wakeup_block));
+
+    let mut scanned = 0u32;
+    let mut passes = 0u32;
+    while AAA::wakeup_cursor_len() > 0 {
+      let mut meter = WeightMeter::with_limit(Weight::MAX);
+      let stats = AAA::drain_overdue_wakeups_cursor(wakeup_block, &mut meter);
+      assert!(stats.entries_scanned > 0, "each pass must make progress");
+      scanned = scanned.saturating_add(stats.entries_scanned);
+      passes = passes.saturating_add(1);
+      assert!(passes <= actor_count, "dense drain must remain bounded");
+    }
+
+    assert_eq!(scanned, actor_count);
+    assert!(AAA::wakeup_buckets(wakeup_block).is_none());
+    assert!(aaa_ids.iter().all(|aaa_id| {
+      let hot = AAA::actor_hot(*aaa_id).expect("active actor");
+      hot.wakeup_pointer.is_none() && hot.queue_ticket.is_some()
+    }));
   });
 }
 

@@ -18,6 +18,15 @@ Use this skill when an AAA change needs validation scope selection, scheduler st
 - Treat benchmark-host timing as comparative evidence, never as a reference-block throughput promise.
 - After a meaningful slice, synchronize `BACKLOG.md` and shipped architecture truth before the repository completion gate.
 
+## Checkpoint Batching
+
+- Treat the active release checkpoint as the commit boundary when its backlog groups several compatible work items.
+- Give each item one focused test family or filter. Shared invariant tests must identify the smallest owning item set so failures remain attributable.
+- During edits, run focused owners and the cheapest package check; do not replay stress or repository-wide gates after every internal correction.
+- Before the checkpoint commit, run its aggregate package/runtime set and one full AAA gate when scheduler, ingress, terminal lifecycle, economics, or production weights changed.
+- Repeat a full gate only after it fails and causes implementation/generated-artifact changes, or after a later edit crosses another runtime boundary.
+- Documentation-only reconciliation after a green code candidate uses context gates. Final release assembly still runs the complete release matrix once.
+
 ## Deterministic Entrypoint
 
 The shared human/CI/skill implementation lives at the root public automation boundary:

@@ -85,6 +85,11 @@ run_gate() {
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked stress_10k_actors_queue_scheduler -- --ignored --nocapture"
 
+    run_shell_step \
+        "AAA gate: 10k dense wakeup convergence" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked checkpoint_a_s6_dense_10k_wakeups_converge_without_drops -- --ignored --nocapture"
+
     if [[ "$INCLUDE_OCCUPANCY_PROFILE" == "1" ]]; then
         run_shell_step \
             "AAA gate: 10k queue/wakeup occupancy profile" \
