@@ -26,7 +26,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-07-21
+last_compiled: 2026-07-24
 confidence: 0.95
 ---
 
@@ -45,7 +45,7 @@ AAA gives the runtime one reusable way to run bounded execution plans instead of
 The normative system contract requires:
 
 - Deterministic scheduling with durable late, paused, cooldown, and pre-window signals;
-- Balance/event-driven triggering without silent loss beyond bounded ingress caps;
+- Balance/event-driven triggering through direct producer-owned adapters without an event scanner or deferred compatibility queue;
 - Two-dimensional RefTime and ProofSize admission before each housekeeping, queue, wakeup, close, or cycle operation, including a generated fixed hook base before any `on_idle` storage access;
 - Typed tasks such as transfer, swap, liquidity, burn, mint, stake, and unstake;
 - Lifecycle rules for identity-only dormancy, atomic activation/deactivation, pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
@@ -53,7 +53,7 @@ The normative system contract requires:
 
 Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it.
 
-Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Producers preflight before value movement and propagate fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the cycle, pending funding promotes only after success, and bounded events expose activation, accumulation, promotion, and policy updates.
+Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the cycle, pending funding promotes only after success, and bounded events expose activation, accumulation, promotion, and policy updates.
 
 ## Embedding Boundary
 
@@ -78,7 +78,7 @@ This keeps AAA useful outside one tokenomic configuration.
 
 On the current reference line, AAA is the execution substrate for runtime-side protocol behavior: burning, liquidity provisioning, treasury splitting, bucket handling, BLDR lane flows, and native staking LP provisioning.
 
-The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active programs at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These programs react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-program input with explicit schedule, run/close plans, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
+The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active programs at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These programs react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-program input with an explicit schedule, run plan, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
 
 AAA does not replace TMC, Axial Router, staking, or governance. Those subsystems own math and domain rules. AAA gives them a deterministic way to be orchestrated together.
 

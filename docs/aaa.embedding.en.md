@@ -65,7 +65,7 @@ Reusable execution-plan patterns include:
 - Scheduled burn or treasury transfer.
 - Balance-ingress triggered routing.
 - Liquidity provisioning or donation through runtime adapters.
-- Close-tail cleanup plans for actor-owned balances.
+- Ordinary final execution plans that move actor-owned balances before a later pure close.
 
 The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, treasuries, BLDR lanes, and native staking LP provisioning is one reference topology. External runtimes should copy only the task-language patterns that match their own economic standard.
 
@@ -75,8 +75,8 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 - `Fee conversion`: AAA asks `WeightToFee` for deterministic upper-bound pricing; runtime task bounds must include adapter and routing work in both Weight dimensions.
 - `DEX amount safety`: Exact-in quotes must match caller fees and executable route selection; exact-out receives a policy-derived maximum input that preserves minimum balance and future fee reserve.
 - `Staking amount safety`: Unstake current/trigger/all modes resolve through adapter shares; last-funding mode requires an adapter-mapped transferable share asset.
-- `Ingress triggers`: Every supported producer must enter through `AddressEventIngress` / fallible `notify_address_event*`, a weight-charging post-dispatch extension, or the bounded producer-owned overflow queue. The producer must run `preflight_funding_event` before value movement, propagate notification failure in the same transaction, and treat rejected durable enqueue as rollback; runtime event-vector scanning cannot own durability because a capped prefix cannot retain an unscanned tail.
-- `Hook admission`: `on_idle` must reserve its generated fixed base before any storage access; compatibility ingress must reserve its generated one-read probe before reading queue state and a complete drain unit per event. `GuaranteedOnIdleWeight` must equal genuinely reserved gross headroom, and every prospective run/close plan pair must fit it after the guaranteed `scheduler_admission_overhead` envelope in both Weight dimensions. Optional ingress drain, heavyweight wakeup-retry, and sweep-time terminal-close units consume only available headroom and may defer actor execution, so their durable queues/markers/conditions and deterministic cross-block convergence form part of the embedding contract.
+- `Ingress triggers`: Every supported producer must call fallible `notify_address_event*` through an explicit adapter, a bounded weight-charging transaction-extension candidate, or an equivalent originating-path resolver. The producer must run `preflight_funding_event` before value movement and propagate notification failure in the same transaction. Runtime event scanning and deferred compatibility ingress storage are unsupported.
+- `Hook admission`: `on_idle` must reserve its generated fixed base before storage access. `GuaranteedOnIdleWeight` must equal genuinely reserved gross headroom, and every prospective run plus measured pure cleanup must fit after `scheduler_admission_overhead` in both Weight dimensions. Temporal and explicit repair units consume only available headroom and may defer actor execution, so exact actor-local markers and cross-block convergence form part of the embedding contract.
 - `Task weight class`: The runtime must classify every task with a deterministic upper bound. Admission may be conservative; it must not underprice execution.
 - `Core task admission`: Extend the portable `Task` enum only for a reusable economic primitive that existing composition plus an adapter cannot express without violating atomicity or custody. The change must ship bounded typed parameters, amount/funding/donation semantics, adapter ownership, events/errors/rollback behavior, generated two-dimensional weights, production-budget evidence, semantic tests, and an explicit SCALE/schema-version decision together; runtime topology and product policy stay in adapters and actor graphs.
 - `Compatibility/versioning`: `0.7.x` is a fresh-genesis pre-launch line. After AAA `1.0`, existing public enum discriminants and dispatch indices are append-only; encoded argument or storage-layout changes require the owning major/migration contract, while additive host adapters and weight recalibration follow package/runtime version policy. A Cargo version never substitutes for pallet `StorageVersion`, runtime `spec_version`, or a bounded live-chain migration.
@@ -94,14 +94,14 @@ AAA guarantees task-scoped atomicity, not whole-plan atomicity. A failed executa
 | `Stake` | Stake success event persists only when adapter succeeds | Staking adapter must not leave partial receipt mint, pool share update, or source debit after failure |
 | `Unstake` | Unstake success event persists only when adapter succeeds | Staking adapter must not burn shares without returning underlying value on failure |
 | `DonateLiquidity` | Donation success event records returned amounts only on success | Donation adapter owns pair balancing and must roll back partial donation/burn/reserve mutation on failure |
-| Close-tail task | Same task-scoped rollback as normal execution | Close adapters must preserve per-task atomicity even though final actor deletion still completes |
+| Pure close | No task executes; sovereign balances remain untouched | Runtime must bind generated cleanup weight and preserve actor-owned accounts |
 | `ContinueNextStep` | Failed task rolls back, emits `StepFailed`, then later steps may execute | Plan authors should add balance guards after mutating tasks |
 | `AbortCycle` | Failed task rolls back, emits `StepFailed`, aborts cycle, and may increment failure count | Adapter rollback must complete before abort handling |
 | Earlier successful step | Remains committed after a later task fails | Whole-plan compensation is outside AAA core |
 | Task-local rollback | Reverts task storage effects and success event | Multi-step adapter mutations must be transaction-safe |
 | Event visibility | Success event is not emitted or is rolled back with failed task; failure/summary events remain observable | Adapters should not emit misleading durable success events outside the transaction boundary |
 
-For close tails, low fee-native balance or task failure is observable through close-tail failure/summary events and does not block final deletion. This is still task-scoped atomicity: the failed close task rolls back, while actor destruction proceeds after the admitted tail completes.
+Pure close has no task-scoped atomicity case: it prechecks fallible invariants, then deletes only actor-owned state and indexes without fees or balance movement.
 
 ## 8. External Runtime Test Checklist
 
@@ -110,11 +110,11 @@ A runtime embedding AAA should add local tests for any adapter that mutates more
 - Late failure after a partial transfer, burn, pool update, receipt mint, share burn, or donation mutation rolls back task-local state.
 - `ContinueNextStep` after a failed mutating task preserves earlier successful steps and executes later eligible steps.
 - `AbortCycle` after a failed mutating task rolls back the failed task and aborts without whole-plan rollback.
-- Close-tail failure rolls back the failed close task, emits close-tail failure/summary observability, and still deletes the actor once the tail completes.
+- Explicit, automatic, dormant, and sweep close preserve sovereign balances, execute no task, and emit `AaaClosed` exactly once.
 - Unsupported no-op adapters fail deterministically without panics or hidden state mutation.
 - Adapter-level success events do not survive a failed task unless they are explicitly outside the AAA transaction boundary and documented as such.
 - Fee collection failure rolls back the payer debit and leaves Fee Sink unchanged.
-- Funding overflow fails before or transactionally rolls back signed, internal-protocol, XCM, and durable-queue value movement; expired actors receive balance without inbox or funding-batch mutation.
+- Funding overflow fails before or transactionally rolls back signed, internal-protocol, and XCM value movement; expired actors receive balance without readiness or funding-batch mutation.
 - Exact-out never debits above the AAA-provided capacity, and Unstake dynamic modes resolve against shares rather than the base asset.
 
 ## 9. Non-Goals

@@ -1,11 +1,11 @@
 use crate::{
-  AaaType, ActiveLifecycle, ActorClass, ActorHot, ActorProgram, AmountResolution, AssetFilter,
-  AssetFilterOf, CloseReason, Condition, DeferReason, Error, Event, FundingSourcePolicy,
-  IdleStarvationBlocks, Mutability, NextAaaId, OnCloseStepFailureKind, OwnerSlotMask, PauseReason,
-  ProgramInput, QueueEntry, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow,
-  SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy,
-  StepOf, StepSkippedReason, SweepCursor, Task, TaskOf, Trigger, WakeupBucketState, WakeupEntry,
-  WakeupPage, WakeupPointer, adapters::AssetOps, mock::*, types::FundingBatch,
+  AaaType, ActiveLifecycle, ActorClass, ActorHot, AmountResolution, AssetFilter, AssetFilterOf,
+  CloseReason, Condition, DeferReason, Error, Event, FundingSourcePolicy, IdleStarvationBlocks,
+  Mutability, NextAaaId, OwnerSlotMask, PauseReason, ProgramInput, QueueEntry,
+  SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow, SourceFilter, SourceFilterOf,
+  SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, Task,
+  TaskOf, Trigger, WakeupBucketState, WakeupEntry, WakeupPage, WakeupPointer, adapters::AssetOps,
+  mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
 use polkadot_sdk::frame_support::{
@@ -125,21 +125,11 @@ fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
     ("AutoCloseNonceReached", 6),
   ]);
   assert_variant_contract::<StepErrorPolicy>(&[("AbortCycle", 0), ("ContinueNextStep", 1)]);
-  assert_variant_contract::<DeferReason>(&[
-    ("InsufficientWeightBudget", 0),
-    ("CloseTransitionFailed", 1),
-  ]);
+  assert_variant_contract::<DeferReason>(&[("InsufficientWeightBudget", 0)]);
   assert_variant_contract::<StepSkippedReason>(&[
     ("ConditionsNotMet", 0),
     ("ResolutionSkipped", 1),
     ("FundingUnavailable", 2),
-  ]);
-  assert_variant_contract::<OnCloseStepFailureKind>(&[
-    ("EvaluationFee", 0),
-    ("ExecutionFee", 1),
-    ("Condition", 2),
-    ("Resolution", 3),
-    ("Adapter", 4),
   ]);
   assert_variant_contract::<
     FundingSourcePolicy<AccountId, <Test as crate::Config>::MaxWhitelistSize>,
@@ -173,21 +163,17 @@ fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
     ("LiquidityRemoved", 20),
     ("ScheduleUpdated", 21),
     ("ExecutionPlanUpdated", 22),
-    ("OnCloseExecutionPlanUpdated", 23),
-    ("OnCloseStepFailed", 24),
-    ("OnCloseStepSkipped", 25),
-    ("OnCloseExecutionPlanSummary", 26),
-    ("AutoCloseNonceSet", 27),
-    ("AutoCloseNonceIncremented", 28),
-    ("ActiveActorLimitSet", 29),
-    ("GlobalCircuitBreakerSet", 30),
-    ("ManualTriggerSet", 31),
-    ("SweepBatchProcessed", 32),
-    ("IdleStarvationDetected", 33),
-    ("FundingSourcePolicyUpdated", 34),
-    ("FundingBatchActivated", 35),
-    ("FundingBatchPendingAccumulated", 36),
-    ("FundingBatchPromoted", 37),
+    ("AutoCloseNonceSet", 23),
+    ("AutoCloseNonceIncremented", 24),
+    ("ActiveActorLimitSet", 25),
+    ("GlobalCircuitBreakerSet", 26),
+    ("ManualTriggerSet", 27),
+    ("SweepBatchProcessed", 28),
+    ("IdleStarvationDetected", 29),
+    ("FundingSourcePolicyUpdated", 30),
+    ("FundingBatchActivated", 31),
+    ("FundingBatchPendingAccumulated", 32),
+    ("FundingBatchPromoted", 33),
   ]);
   assert_variant_contract::<Error<Test>>(&[
     ("AaaIdOverflow", 0),
@@ -250,7 +236,6 @@ fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
     ("permissionless_sweep_many", 14),
     ("set_auto_close_at_cycle_nonce", 15),
     ("increment_auto_close_nonce", 16),
-    ("update_on_close_execution_plan", 17),
     ("activate_aaa", 21),
     ("deactivate_aaa", 22),
   ]);
@@ -775,7 +760,6 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
     actual,
     [
       "NextAaaId",
-      "SweepCursor",
       "ActorHot",
       "ActorProgram",
       "ActorFunding",
@@ -794,11 +778,7 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       "SovereignIndex",
       "ActiveActorLimit",
       "GlobalCircuitBreaker",
-      "IngressOverflowSlots",
-      "IngressOverflowHead",
-      "IngressOverflowLen",
       "IdleStarvationBlocks",
-      "LastIngressIngestBlock",
     ]
   );
 
@@ -823,7 +803,6 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
     actual_shapes,
     [
       ("NextAaaId", false, false),
-      ("SweepCursor", false, false),
       ("ActorHot", true, true),
       ("ActorProgram", true, true),
       ("ActorFunding", true, true),
@@ -842,40 +821,31 @@ fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
       ("SovereignIndex", true, true),
       ("ActiveActorLimit", false, false),
       ("GlobalCircuitBreaker", false, false),
-      ("IngressOverflowSlots", true, true),
-      ("IngressOverflowHead", false, false),
-      ("IngressOverflowLen", false, false),
       ("IdleStarvationBlocks", false, false),
-      ("LastIngressIngestBlock", true, false),
     ]
   );
 
   let entries = &metadata.entries;
   assert_plain_storage_type::<u64>(&entries[0]);
-  assert_plain_storage_type::<u64>(&entries[1]);
-  assert_map_storage_types::<u64, crate::ActorHotStateOf<Test>>(&entries[2]);
-  assert_map_storage_types::<u64, crate::ActorProgramStateOf<Test>>(&entries[3]);
-  assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(&entries[4]);
-  assert_map_storage_types::<u64, crate::DormantAaaIdentityOf<Test>>(&entries[5]);
+  assert_map_storage_types::<u64, crate::ActorHotStateOf<Test>>(&entries[1]);
+  assert_map_storage_types::<u64, crate::ActorProgramStateOf<Test>>(&entries[2]);
+  assert_map_storage_types::<u64, crate::ActorFundingStateOf<Test>>(&entries[3]);
+  assert_map_storage_types::<u64, crate::DormantAaaIdentityOf<Test>>(&entries[4]);
+  assert_plain_storage_type::<u32>(&entries[5]);
   assert_plain_storage_type::<u32>(&entries[6]);
-  assert_plain_storage_type::<u32>(&entries[7]);
-  assert_map_storage_types::<u64, Mutability>(&entries[8]);
+  assert_map_storage_types::<u64, Mutability>(&entries[7]);
+  assert_plain_storage_type::<u64>(&entries[8]);
   assert_plain_storage_type::<u64>(&entries[9]);
-  assert_plain_storage_type::<u64>(&entries[10]);
-  assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[11]);
-  assert_map_storage_types::<(MockBlockNumber, u64), crate::WakeupPageOf<Test>>(&entries[12]);
-  assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[13]);
-  assert_map_storage_types::<u64, crate::WakeupCursorPageOf<Test>>(&entries[14]);
-  assert_plain_storage_type::<u32>(&entries[15]);
-  assert_map_storage_types::<AccountId, u8>(&entries[16]);
-  assert_map_storage_types::<AccountId, u64>(&entries[17]);
-  assert_plain_storage_type::<u32>(&entries[18]);
-  assert_plain_storage_type::<bool>(&entries[19]);
-  assert_map_storage_types::<u32, crate::IngressOverflowEventOf<Test>>(&entries[20]);
-  assert_plain_storage_type::<u32>(&entries[21]);
-  assert_plain_storage_type::<u32>(&entries[22]);
-  assert_plain_storage_type::<u32>(&entries[23]);
-  assert_plain_storage_type::<MockBlockNumber>(&entries[24]);
+  assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[10]);
+  assert_map_storage_types::<(MockBlockNumber, u64), crate::WakeupPageOf<Test>>(&entries[11]);
+  assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[12]);
+  assert_map_storage_types::<u64, crate::WakeupCursorPageOf<Test>>(&entries[13]);
+  assert_plain_storage_type::<u32>(&entries[14]);
+  assert_map_storage_types::<AccountId, u8>(&entries[15]);
+  assert_map_storage_types::<AccountId, u64>(&entries[16]);
+  assert_plain_storage_type::<u32>(&entries[17]);
+  assert_plain_storage_type::<bool>(&entries[18]);
+  assert_plain_storage_type::<u32>(&entries[19]);
 }
 
 fn ordinary_transfer_to_aaa(
@@ -960,7 +930,6 @@ fn user_active_program(
     schedule,
     schedule_window,
     execution_plan,
-    on_close_execution_plan: Default::default(),
     funding_source_policy: FundingSourcePolicy::OwnerOnly,
   }
 }
@@ -1024,7 +993,6 @@ fn system_active_program(
     schedule,
     schedule_window,
     execution_plan,
-    on_close_execution_plan: Default::default(),
     funding_source_policy: FundingSourcePolicy::RuntimePolicy,
   }
 }
@@ -1250,8 +1218,7 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
         ProgramInput::Active {
           schedule: manual_schedule(),
           schedule_window: None,
-          execution_plan: transfer_execution_plan(BOB, 10),
-          on_close_execution_plan: execution_plan_with_step(make_step(Task::Mint {
+          execution_plan: execution_plan_with_step(make_step(Task::Mint {
             asset: TestAsset::Native,
             amount: AmountResolution::Fixed(1),
           })),
@@ -1270,13 +1237,11 @@ fn dormant_identity_owns_no_scheduler_state_and_round_trips_activation() {
         schedule: manual_schedule(),
         schedule_window: None,
         execution_plan: transfer_execution_plan(BOB, 10),
-        on_close_execution_plan: Default::default(),
         funding_source_policy: FundingSourcePolicy::AnySource,
       },
     ));
     assert!(AAA::dormant_aaa_identities(aaa_id).is_none());
-    let activated = AAA::aaa_instances(aaa_id).expect("active program exists");
-    assert!(activated.on_close_execution_plan.is_empty());
+    let _activated = AAA::aaa_instances(aaa_id).expect("active program exists");
     assert_eq!(
       actor_funding(aaa_id).funding_source_policy,
       FundingSourcePolicy::AnySource
@@ -1325,12 +1290,7 @@ fn cycle_bounds_cache_is_initialized_on_create() {
 fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
   new_test_ext().execute_with(|| {
     let execution_plan = transfer_execution_plan(BOB, 10);
-    let on_close_execution_plan = AAA::default_on_close_execution_plan();
-    let required = AAA::execution_plan_admission_weight_upper(
-      AaaType::User,
-      &execution_plan,
-      &on_close_execution_plan,
-    );
+    let required = AAA::execution_plan_admission_weight_upper(AaaType::User, &execution_plan);
     set_guaranteed_on_idle_weight(required);
     assert_ok!(AAA::create_user_aaa(
       RuntimeOrigin::signed(ALICE),
@@ -1355,7 +1315,7 @@ fn create_admission_enforces_both_idle_weight_dimensions_before_charging() {
 }
 
 #[test]
-fn plan_updates_reject_a_prospective_pair_above_the_idle_budget() {
+fn plan_updates_reject_a_prospective_run_above_the_idle_budget() {
   new_test_ext().execute_with(|| {
     let aaa_id = create_user_with(
       ALICE,
@@ -1366,32 +1326,13 @@ fn plan_updates_reject_a_prospective_pair_above_the_idle_budget() {
     );
     let before = AAA::aaa_instances(aaa_id).expect("AAA exists");
     let replacement = transfer_execution_plan(BOB, 10);
-    let required = AAA::execution_plan_admission_weight_upper(
-      AaaType::User,
-      &replacement,
-      &before.on_close_execution_plan,
-    );
+    let required = AAA::execution_plan_admission_weight_upper(AaaType::User, &replacement);
     set_guaranteed_on_idle_weight(Weight::from_parts(
       required.ref_time(),
       required.proof_size().saturating_sub(1),
     ));
     assert_noop!(
       AAA::update_execution_plan(RuntimeOrigin::signed(ALICE), aaa_id, replacement),
-      Error::<Test>::ExecutionPlanExceedsOnIdleBudget
-    );
-    assert_eq!(AAA::aaa_instances(aaa_id), Some(before.clone()));
-    let replacement_close = transfer_execution_plan(BOB, 10);
-    let required = AAA::execution_plan_admission_weight_upper(
-      AaaType::User,
-      &before.execution_plan,
-      &replacement_close,
-    );
-    set_guaranteed_on_idle_weight(Weight::from_parts(
-      required.ref_time(),
-      required.proof_size().saturating_sub(1),
-    ));
-    assert_noop!(
-      AAA::update_on_close_execution_plan(RuntimeOrigin::signed(ALICE), aaa_id, replacement_close,),
       Error::<Test>::ExecutionPlanExceedsOnIdleBudget
     );
     assert_eq!(AAA::aaa_instances(aaa_id), Some(before));
@@ -1937,43 +1878,6 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
     set_fail_fee_sink_transfer(false);
     assert_eq!(AAA::active_aaa_count(), active_before);
     assert_eq!(native_balance(&ALICE), owner_before);
-  });
-}
-
-#[test]
-fn close_atomicity_checkpoint_failure_rolls_back_all_state() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      transfer_execution_plan(BOB, 1),
-    );
-    let instance_before = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    let active_before = AAA::active_aaa_count();
-    set_fail_close_checkpoint(true);
-    assert_noop!(
-      AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id),
-      DispatchError::Other("AtomicityCloseCheckpointFailed")
-    );
-    assert!(AAA::aaa_instances(aaa_id).is_some());
-    assert_eq!(
-      SovereignIndex::<Test>::get(&instance_before.sovereign_account),
-      Some(aaa_id)
-    );
-    assert!(ActorHot::<Test>::contains_key(aaa_id));
-    assert_eq!(AAA::active_aaa_count(), active_before);
-    let owner_slot = instance_before
-      .actor_class
-      .owner_slot()
-      .expect("User actor has an owner slot");
-    assert!(OwnerSlotMask::<Test>::get(ALICE) & (1 << owner_slot) != 0);
-    set_fail_close_checkpoint(false);
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(AAA::active_aaa_count(), active_before - 1);
   });
 }
 
@@ -2839,12 +2743,6 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
         )
       })
       .expect("terminal cycle summary exists");
-    let close_summary = events
-      .iter()
-      .position(|event| {
-        matches!(event, Event::OnCloseExecutionPlanSummary { aaa_id: id, .. } if *id == aaa_id)
-      })
-      .expect("close-tail summary exists");
     let closed = events
       .iter()
       .position(|event| {
@@ -2858,14 +2756,14 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
       })
       .expect("terminal close exists");
     assert!(
-      cycle_summary < close_summary && close_summary < closed,
-      "the admitted cycle must summarize before its close tail and terminal event"
+      cycle_summary < closed,
+      "the admitted cycle must summarize before the terminal event"
     );
   });
 }
 
 #[test]
-fn system_immutable_actor_closes_internally_at_failure_threshold_with_close_tail() {
+fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks() {
   new_test_ext().execute_with(|| {
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -2894,12 +2792,6 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_with_close_tail
       AAA::close_aaa(RuntimeOrigin::root(), aaa_id),
       Error::<Test>::ImmutableAaa
     );
-    ActorProgram::<Test>::mutate(aaa_id, |maybe| {
-      maybe
-        .as_mut()
-        .expect("immutable System AAA program exists")
-        .on_close_execution_plan = transfer_execution_plan(CHARLIE, 7);
-    });
     fund_native(aaa_id, 100);
     let charlie_before = native_balance(&CHARLIE);
     for cycle in 1..=threshold {
@@ -2915,7 +2807,11 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_with_close_tail
       }
     }
     assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(native_balance(&CHARLIE), charlie_before + 7);
+    assert_eq!(
+      native_balance(&CHARLIE),
+      charlie_before,
+      "terminal cleanup must not execute hidden transfer work"
+    );
     assert_eq!(
       crate::ClosedSystemAaaIds::<Test>::get(aaa_id),
       Some(Mutability::Immutable)
@@ -2975,40 +2871,6 @@ fn system_class_not_starved_by_many_user_actors() {
       "system actor must execute at least once over 20 blocks (nonce={})",
       system.cycle_nonce,
     );
-  });
-}
-
-#[test]
-fn zombie_sweep_cursor_skips_missing_ids_and_reaches_live_actor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    NextAaaId::<Test>::put(100);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      transfer_execution_plan(BOB, 1),
-    );
-    assert_eq!(aaa_id, 100);
-    SweepCursor::<Test>::put(96);
-    run_idle(Weight::MAX);
-    assert!(AAA::aaa_instances(aaa_id).is_some());
-    assert_eq!(SweepCursor::<Test>::get(), 99);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(SweepCursor::<Test>::get(), 1);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::AaaClosed {
-          aaa_id: id,
-          reason: CloseReason::BalanceExhausted,
-        } if *id == aaa_id
-      )
-    }));
   });
 }
 
@@ -3458,7 +3320,6 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
         schedule: timer_schedule(20),
         schedule_window: None,
         execution_plan: inert_execution_plan(),
-        on_close_execution_plan: BoundedVec::default(),
         funding_source_policy: FundingSourcePolicy::AnySource,
       },
     ));
@@ -3511,7 +3372,6 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
     ));
     assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
     NextAaaId::<Test>::put(10_000_000);
-    SweepCursor::<Test>::put(0);
     crate::pallet::QueueHead::<Test>::put(0);
     crate::pallet::QueueTail::<Test>::put(0);
     let bob_before = native_balance(&BOB);
@@ -3523,7 +3383,7 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
 }
 
 #[test]
-fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
+fn close_before_future_wakeup_leaves_harmless_lazy_tombstone() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
@@ -3531,8 +3391,8 @@ fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     assert!(AAA::aaa_instances(aaa_id).is_none());
     assert!(scheduled_wakeup_block(aaa_id).is_none());
-    assert!(AAA::wakeup_buckets(scheduled_block).is_none());
-    assert_eq!(AAA::wakeup_cursor_len(), 0);
+    assert!(AAA::wakeup_buckets(scheduled_block).is_some());
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
     frame_system::Pallet::<Test>::set_block_number(scheduled_block);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
@@ -3545,7 +3405,7 @@ fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
 }
 
 #[test]
-fn repeated_timer_close_churn_leaves_no_long_horizon_wakeup_entries() {
+fn repeated_timer_close_churn_converges_lazy_wakeup_tombstones() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let total = <<Test as crate::Config>::MaxWakeupsPerBlock as Get<u32>>::get() + 2;
@@ -3562,16 +3422,68 @@ fn repeated_timer_close_churn_leaves_no_long_horizon_wakeup_entries() {
       assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
       assert!(scheduled_wakeup_block(aaa_id).is_none());
     }
-    assert_eq!(AAA::wakeup_cursor_len(), 0);
-    frame_system::Pallet::<Test>::set_block_number(latest_wakeup.saturating_add(1_000));
+    assert!(AAA::wakeup_cursor_len() > 0);
     frame_system::Pallet::<Test>::reset_events();
-    run_idle(Weight::MAX);
+    for offset in 0..10 {
+      frame_system::Pallet::<Test>::set_block_number(
+        latest_wakeup.saturating_add(1_000).saturating_add(offset),
+      );
+      run_idle(Weight::MAX);
+      if AAA::wakeup_cursor_len() == 0 {
+        break;
+      }
+    }
     assert_eq!(AAA::wakeup_cursor_len(), 0);
     assert_eq!(AAA::queue_head(), AAA::queue_tail());
     assert!(!has_aaa_event(|event| matches!(
       event,
       Event::CycleStarted { .. }
     )));
+  });
+}
+
+#[test]
+fn window_expiry_wakeup_closes_inactive_actor_without_identity_scan() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      Some(ScheduleWindow { start: 1, end: 101 }),
+      inert_execution_plan(),
+    );
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(102));
+    NextAaaId::<Test>::put(10_000_000);
+    frame_system::Pallet::<Test>::set_block_number(102);
+    run_idle(Weight::MAX);
+    assert!(AAA::aaa_instances(aaa_id).is_none());
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::AaaClosed {
+        aaa_id: id,
+        reason: CloseReason::WindowExpired,
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn paused_actor_retains_direct_window_expiry_wakeup() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      Some(ScheduleWindow { start: 1, end: 101 }),
+      inert_execution_plan(),
+    );
+    fund_native(aaa_id, 1_000);
+    assert_ok!(AAA::pause_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(102));
+    frame_system::Pallet::<Test>::set_block_number(102);
+    run_idle(Weight::MAX);
+    assert!(AAA::aaa_instances(aaa_id).is_none());
   });
 }
 
@@ -3619,14 +3531,6 @@ fn expired_ingress_remains_balance_only_and_policy_touch_closes() {
     assert_eq!(native_balance(&actor), balance_before.saturating_add(1_000));
     assert!(actor_funding(aaa_id).funding_snapshots.is_empty());
     assert!(!AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
-    let overflow_len = AAA::ingress_overflow_len();
-    assert!(AAA::queue_address_event(
-      aaa_id,
-      TestAsset::Native,
-      1,
-      Some(crate::FundingProvenance::Signed(ALICE))
-    ));
-    assert_eq!(AAA::ingress_overflow_len(), overflow_len);
     assert_ok!(AAA::update_funding_source_policy(
       RuntimeOrigin::signed(ALICE),
       aaa_id,
@@ -3670,44 +3574,6 @@ fn window_expired_takes_precedence_over_balance_exhausted() {
         } if *id == aaa_id
       )
     }));
-  });
-}
-
-#[test]
-fn immutable_creation_surfaces_fix_close_plan_to_empty() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let user_id = create_user_with(
-      ALICE,
-      Mutability::Immutable,
-      manual_schedule(),
-      None,
-      transfer_execution_plan(BOB, 1),
-    );
-    let system_id = AAA::next_aaa_id();
-    assert_ok!(AAA::create_system_aaa(
-      RuntimeOrigin::root(),
-      ALICE,
-      Mutability::Immutable,
-      system_active_program(manual_schedule(), None, transfer_execution_plan(BOB, 1)),
-    ));
-    let replacement = transfer_execution_plan(CHARLIE, 1);
-    for aaa_id in [user_id, system_id] {
-      let instance = AAA::aaa_instances(aaa_id).expect("immutable actor exists");
-      assert!(instance.on_close_execution_plan.is_empty());
-    }
-    assert_noop!(
-      AAA::update_on_close_execution_plan(
-        RuntimeOrigin::signed(ALICE),
-        user_id,
-        replacement.clone()
-      ),
-      Error::<Test>::ImmutableAaa
-    );
-    assert_noop!(
-      AAA::update_on_close_execution_plan(RuntimeOrigin::root(), system_id, replacement),
-      Error::<Test>::ImmutableAaa
-    );
   });
 }
 
@@ -4224,13 +4090,12 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
         _ => None,
       })
       .collect();
-    assert_eq!(continue_events.len(), 6);
+    assert_eq!(continue_events.len(), 5);
     assert!(matches!(continue_events[0], Event::CycleStarted { aaa_id, .. } if aaa_id == continue_id));
     assert!(matches!(continue_events[1], Event::StepFailed { aaa_id, step_index: 0, .. } if aaa_id == continue_id));
     assert!(matches!(continue_events[2], Event::StepFailed { aaa_id, step_index: 1, .. } if aaa_id == continue_id));
     assert!(matches!(continue_events[3], Event::CycleSummary { aaa_id, failed_steps: 2, .. } if aaa_id == continue_id));
-    assert!(matches!(continue_events[4], Event::OnCloseExecutionPlanSummary { aaa_id, .. } if aaa_id == continue_id));
-    assert!(matches!(continue_events[5], Event::AaaClosed { aaa_id, reason: CloseReason::AutoCloseNonceReached } if aaa_id == continue_id));
+    assert!(matches!(continue_events[4], Event::AaaClosed { aaa_id, reason: CloseReason::AutoCloseNonceReached } if aaa_id == continue_id));
     let skip_step = StepOf::<Test> {
       conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
@@ -4265,12 +4130,11 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
         _ => None,
       })
       .collect();
-    assert_eq!(skip_events.len(), 5);
+    assert_eq!(skip_events.len(), 4);
     assert!(matches!(skip_events[0], Event::CycleStarted { aaa_id, .. } if aaa_id == skip_id));
     assert!(matches!(skip_events[1], Event::StepSkipped { aaa_id, step_index: 0, .. } if aaa_id == skip_id));
     assert!(matches!(skip_events[2], Event::CycleSummary { aaa_id, skipped_conditions: 1, failed_steps: 0, .. } if aaa_id == skip_id));
-    assert!(matches!(skip_events[3], Event::OnCloseExecutionPlanSummary { aaa_id, .. } if aaa_id == skip_id));
-    assert!(matches!(skip_events[4], Event::AaaClosed { aaa_id, reason: CloseReason::AutoCloseNonceReached } if aaa_id == skip_id));
+    assert!(matches!(skip_events[3], Event::AaaClosed { aaa_id, reason: CloseReason::AutoCloseNonceReached } if aaa_id == skip_id));
     let abort_id = create_system_with(
       ALICE,
       manual_schedule(),
@@ -4337,9 +4201,8 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
         _ => None,
       })
       .collect();
-    assert_eq!(close_events.len(), 2);
-    assert!(matches!(close_events[0], Event::OnCloseExecutionPlanSummary { aaa_id, .. } if aaa_id == close_only_id));
-    assert!(matches!(close_events[1], Event::AaaClosed { aaa_id, reason: CloseReason::OwnerInitiated } if aaa_id == close_only_id));
+    assert_eq!(close_events.len(), 1);
+    assert!(matches!(close_events[0], Event::AaaClosed { aaa_id, reason: CloseReason::OwnerInitiated } if aaa_id == close_only_id));
   });
 }
 
@@ -4776,7 +4639,6 @@ fn zero_on_idle_budget_performs_no_storage_or_telemetry_work() {
     let used = AAA::on_idle(1, Weight::zero());
     assert_eq!(used, Weight::zero());
     assert_eq!(IdleStarvationBlocks::<Test>::get(), 3);
-    assert!(crate::pallet::LastIngressIngestBlock::<Test>::get().is_none());
     assert_eq!(frame_system::Pallet::<Test>::event_count(), event_count);
   });
 }
@@ -4845,7 +4707,7 @@ fn starvation_resets_after_positive_post_housekeeping_budget() {
 }
 
 #[test]
-fn breaker_keeps_sweep_path_operational_on_idle() {
+fn breaker_keeps_explicit_repair_sweep_operational() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_user_with(
@@ -4856,7 +4718,10 @@ fn breaker_keeps_sweep_path_operational_on_idle() {
       transfer_execution_plan(BOB, 1),
     );
     assert_ok!(AAA::set_global_circuit_breaker(RuntimeOrigin::root(), true));
-    let _ = AAA::on_idle(1, Weight::MAX);
+    assert_ok!(AAA::permissionless_sweep(
+      RuntimeOrigin::signed(BOB),
+      aaa_id,
+    ));
     assert!(AAA::aaa_instances(aaa_id).is_none());
     assert!(has_aaa_event(|event| {
       matches!(
@@ -4871,7 +4736,7 @@ fn breaker_keeps_sweep_path_operational_on_idle() {
 }
 
 #[test]
-fn breaker_defers_scheduler_owned_fee_budget_close_without_partial_tail() {
+fn breaker_defers_scheduler_owned_fee_budget_close_without_partial_terminal_events() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_user_with(
@@ -4892,7 +4757,6 @@ fn breaker_defers_scheduler_owned_fee_budget_close_without_partial_tail() {
       event,
       Event::CycleStarted { aaa_id: id, .. }
         | Event::CycleSummary { aaa_id: id, .. }
-        | Event::OnCloseExecutionPlanSummary { aaa_id: id, .. }
         | Event::AaaClosed { aaa_id: id, .. }
         if *id == aaa_id
     )));
@@ -4934,9 +4798,7 @@ fn breaker_defers_scheduler_owned_window_expiry_close() {
     assert!(AAA::aaa_instances(aaa_id).is_some());
     assert!(!has_aaa_event(|event| matches!(
       event,
-      Event::OnCloseExecutionPlanSummary { aaa_id: id, .. }
-        | Event::AaaClosed { aaa_id: id, .. }
-        if *id == aaa_id
+      Event::AaaClosed { aaa_id: id, .. } if *id == aaa_id
     )));
     assert_ok!(AAA::set_global_circuit_breaker(
       RuntimeOrigin::root(),
@@ -4951,173 +4813,6 @@ fn breaker_defers_scheduler_owned_window_expiry_close() {
       Event::AaaClosed {
         aaa_id: id,
         reason: CloseReason::WindowExpired,
-      } if *id == aaa_id
-    )));
-  });
-}
-
-#[test]
-fn scheduler_close_failure_is_charged_deferred_and_retried() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      transfer_execution_plan(BOB, 1),
-    );
-    fund_native(aaa_id, 1_000);
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    frame_system::Pallet::<Test>::set_block_number(102);
-    frame_system::Pallet::<Test>::reset_events();
-    set_fail_close_checkpoint(true);
-    let consumed = AAA::execute_cycle(Weight::MAX);
-    assert!(consumed.ref_time() > 0 || consumed.proof_size() > 0);
-    assert!(AAA::aaa_instances(aaa_id).is_some());
-    assert!(
-      AAA::actor_hot(aaa_id)
-        .expect("deferred actor")
-        .queue_ticket
-        .is_some()
-    );
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::CycleDeferred {
-        aaa_id: id,
-        reason: DeferReason::CloseTransitionFailed,
-      } if *id == aaa_id
-    )));
-    assert!(!has_aaa_event(|event| matches!(
-      event,
-      Event::OnCloseExecutionPlanSummary { aaa_id: id, .. }
-        | Event::AaaClosed { aaa_id: id, .. }
-        if *id == aaa_id
-    )));
-    set_fail_close_checkpoint(false);
-    frame_system::Pallet::<Test>::set_block_number(103);
-    frame_system::Pallet::<Test>::reset_events();
-    let _ = AAA::execute_cycle(Weight::MAX);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::AaaClosed {
-        aaa_id: id,
-        reason: CloseReason::WindowExpired,
-      } if *id == aaa_id
-    )));
-  });
-}
-
-#[test]
-fn sweep_close_failure_is_charged_deferred_and_retried_at_same_cursor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let live_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    fund_native(live_id, 1_000);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      Some(ScheduleWindow { start: 1, end: 101 }),
-      inert_execution_plan(),
-    );
-    fund_native(aaa_id, 1_000);
-    frame_system::Pallet::<Test>::set_block_number(102);
-    frame_system::Pallet::<Test>::reset_events();
-    set_fail_close_checkpoint(true);
-    let consumed = AAA::execute_zombie_sweep(Weight::MAX);
-    assert!(consumed.ref_time() > 0 || consumed.proof_size() > 0);
-    assert!(AAA::aaa_instances(aaa_id).is_some());
-    assert_eq!(crate::SweepCursor::<Test>::get(), 0);
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::CycleDeferred {
-        aaa_id: id,
-        reason: DeferReason::CloseTransitionFailed,
-      } if *id == aaa_id
-    )));
-    assert!(!has_aaa_event(|event| matches!(
-      event,
-      Event::AaaClosed { aaa_id: id, .. } if *id == aaa_id
-    )));
-    set_fail_close_checkpoint(false);
-    frame_system::Pallet::<Test>::set_block_number(103);
-    frame_system::Pallet::<Test>::reset_events();
-    let _ = AAA::execute_zombie_sweep(Weight::MAX);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(crate::SweepCursor::<Test>::get(), aaa_id);
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::AaaClosed {
-        aaa_id: id,
-        reason: CloseReason::WindowExpired,
-      } if *id == aaa_id
-    )));
-  });
-}
-
-#[test]
-fn post_cycle_close_failure_is_deferred_requeued_and_retried() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    fund_native(aaa_id, 1_000);
-    assert_ok!(AAA::set_auto_close_at_cycle_nonce(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      Some(1),
-    ));
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    frame_system::Pallet::<Test>::reset_events();
-    set_fail_close_checkpoint(true);
-    let consumed = AAA::execute_cycle(Weight::MAX);
-    assert!(consumed.ref_time() > 0 || consumed.proof_size() > 0);
-    let retained = AAA::aaa_instances(aaa_id).expect("failed close must retain actor");
-    assert_eq!(retained.cycle_nonce, 1);
-    assert!(
-      AAA::actor_hot(aaa_id)
-        .expect("deferred actor")
-        .queue_ticket
-        .is_some()
-    );
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::CycleSummary { aaa_id: id, .. } if *id == aaa_id
-    )));
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::CycleDeferred {
-        aaa_id: id,
-        reason: DeferReason::CloseTransitionFailed,
-      } if *id == aaa_id
-    )));
-    assert!(!has_aaa_event(|event| matches!(
-      event,
-      Event::AaaClosed { aaa_id: id, .. } if *id == aaa_id
-    )));
-    set_fail_close_checkpoint(false);
-    frame_system::Pallet::<Test>::set_block_number(2);
-    frame_system::Pallet::<Test>::reset_events();
-    let _ = AAA::execute_cycle(Weight::MAX);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::AaaClosed {
-        aaa_id: id,
-        reason: CloseReason::AutoCloseNonceReached,
       } if *id == aaa_id
     )));
   });
@@ -5284,7 +4979,7 @@ fn identical_authoritative_transfers_remain_distinct_funding_events() {
     let aaa_id = create_user_with(
       ALICE,
       Mutability::Mutable,
-      manual_schedule(),
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
       execution_plan_with_step(make_step(Task::Transfer {
         to: BOB,
@@ -5298,12 +4993,23 @@ fn identical_authoritative_transfers_remain_distinct_funding_events() {
       100,
       &ALICE
     ));
+    let first_ticket = AAA::actor_hot(aaa_id)
+      .expect("actor hot state")
+      .queue_ticket;
+    assert!(first_ticket.is_some());
     assert_ok!(AAA::notify_address_event(
       aaa_id,
       TestAsset::Native,
       100,
       &ALICE
     ));
+    assert_eq!(
+      AAA::actor_hot(aaa_id)
+        .expect("actor hot state")
+        .queue_ticket,
+      first_ticket,
+      "an already-pending signal must retain one live FIFO ticket"
+    );
     let funding = actor_funding(aaa_id);
     let batch = funding
       .funding_snapshots
@@ -5315,52 +5021,7 @@ fn identical_authoritative_transfers_remain_distinct_funding_events() {
 }
 
 #[test]
-fn durable_ingress_capacity_rejects_before_additional_funding_mutation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      execution_plan_with_step(make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      })),
-    );
-    let capacity = <Test as crate::Config>::MaxIngressOverflowQueue::get();
-    for _ in 0..capacity {
-      assert!(AAA::queue_address_event(
-        aaa_id,
-        TestAsset::Native,
-        1,
-        Some(crate::FundingProvenance::Signed(ALICE))
-      ));
-    }
-    let before = actor_funding(aaa_id);
-    let before_batch = before
-      .funding_snapshots
-      .get(&TestAsset::Native)
-      .expect("authoritative funding batch")
-      .clone();
-    assert!(!AAA::queue_address_event(
-      aaa_id,
-      TestAsset::Native,
-      1,
-      Some(crate::FundingProvenance::Signed(ALICE))
-    ));
-    let after = actor_funding(aaa_id);
-    assert_eq!(
-      after.funding_snapshots.get(&TestAsset::Native),
-      Some(&before_batch)
-    );
-    assert_eq!(AAA::ingress_overflow_len(), capacity);
-  });
-}
-
-#[test]
-fn direct_notification_reports_funding_overflow_without_partial_inbox_mutation() {
+fn direct_notification_reports_funding_overflow_without_partial_readiness_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_user_with(
@@ -5888,18 +5549,6 @@ fn governance_can_manage_system_aaa_control_surface() {
         .expect("system actor")
         .auto_close_at_cycle_nonce,
       Some(7)
-    );
-    let updated_on_close_plan = transfer_execution_plan(CHARLIE, 1);
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::root(),
-      aaa_id,
-      updated_on_close_plan.clone(),
-    ));
-    assert_eq!(
-      AAA::aaa_instances(aaa_id)
-        .expect("system actor")
-        .on_close_execution_plan,
-      updated_on_close_plan
     );
     assert_ok!(AAA::close_aaa(RuntimeOrigin::root(), aaa_id));
     assert!(AAA::aaa_instances(aaa_id).is_none());
@@ -8749,13 +8398,16 @@ fn queue_progress_handles_adjacent_removal() {
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), id3));
     System::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(AAA::aaa_instances(id3).is_none());
+    assert!(AAA::aaa_instances(id3).is_some());
     assert_eq!(AAA::aaa_instances(id0).expect("id0 live").cycle_nonce, 1);
     assert_eq!(AAA::aaa_instances(id1).expect("id1 live").cycle_nonce, 1);
     assert_eq!(
       AAA::aaa_instances(id2).expect("id2 executed").cycle_nonce,
       1
     );
+    System::set_block_number(3);
+    run_idle(Weight::MAX);
+    assert!(AAA::aaa_instances(id3).is_none());
   });
 }
 
@@ -8978,618 +8630,6 @@ fn deferred_cycle_does_not_consume_auto_close_nonce_target() {
 }
 
 #[test]
-fn close_execution_plan_continues_closure_when_fee_budget_is_missing() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      inert_execution_plan(),
-    ));
-    let fee_sink_before = native_balance(&TestFeeSink::get());
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(native_balance(&TestFeeSink::get()), fee_sink_before);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseStepFailed {
-          aaa_id: id,
-          step_index: 0,
-          kind: OnCloseStepFailureKind::EvaluationFee,
-          ..
-        } if *id == aaa_id
-      )
-    }));
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 0,
-          skipped_steps: 0,
-          failed_steps: 1,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn close_step_fee_cannot_debit_beyond_remaining_reservation() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      inert_execution_plan(),
-    ));
-    let actor = sovereign_account(aaa_id);
-    fund_native_raw(&actor, 1_000);
-    let actor_before = native_balance(&actor);
-    let sink_before = native_balance(&TestFeeSink::get());
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    AAA::execute_on_close_execution_plan(aaa_id, &instance, 0);
-    assert_eq!(native_balance(&actor), actor_before);
-    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::OnCloseStepFailed {
-        aaa_id: id,
-        step_index: 0,
-        kind: OnCloseStepFailureKind::EvaluationFee,
-        ..
-      } if *id == aaa_id
-    )));
-  });
-}
-
-#[test]
-fn close_step_skips_report_condition_resolution_and_funding_outcomes() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let asset = TestAsset::Local(90);
-    let condition_skip = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
-        asset,
-        threshold: 100,
-      }])
-      .expect("one condition fits"),
-      task: Task::Stake {
-        asset: TestAsset::Native,
-        amount: AmountResolution::Fixed(0),
-      },
-      on_error: StepErrorPolicy::ContinueNextStep,
-    };
-    let close_plan = BoundedVec::try_from(vec![
-      condition_skip,
-      make_step(Task::Transfer {
-        to: BOB,
-        asset,
-        amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(1)),
-      }),
-      make_step(Task::Transfer {
-        to: BOB,
-        asset,
-        amount: AmountResolution::Fixed(10),
-      }),
-    ])
-    .expect("system close plan fits");
-    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let actor = sovereign_account(aaa_id);
-    set_asset_balance(&actor, asset, 2);
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      close_plan,
-    ));
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    for (step_index, reason) in [
-      (0, StepSkippedReason::ConditionsNotMet),
-      (1, StepSkippedReason::ResolutionSkipped),
-      (2, StepSkippedReason::FundingUnavailable),
-    ] {
-      assert!(has_aaa_event(|event| matches!(
-        event,
-        Event::OnCloseStepSkipped {
-          aaa_id: id,
-          step_index: index,
-          reason: actual_reason,
-        } if *id == aaa_id && *index == step_index && *actual_reason == reason
-      )));
-    }
-    assert!(has_aaa_event(|event| matches!(
-      event,
-      Event::OnCloseExecutionPlanSummary {
-        aaa_id: id,
-        executed_steps: 0,
-        skipped_steps: 3,
-        failed_steps: 0,
-      } if *id == aaa_id
-    )));
-  });
-}
-
-#[test]
-fn close_admission_bound_includes_cleanup_in_both_weight_dimensions() {
-  new_test_ext().execute_with(|| {
-    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    let plan_weight = AAA::compute_cycle_weight_upper(
-      instance.actor_class.aaa_type(),
-      &instance.on_close_execution_plan,
-    );
-    let cleanup_weight = AAA::close_cleanup_weight_upper();
-    let admitted_weight = AAA::close_cycle_weight_upper_bound(&instance);
-    let dispatch_weight = AAA::close_dispatch_weight_upper();
-    assert!(cleanup_weight.ref_time() > 0);
-    assert!(cleanup_weight.proof_size() > 0);
-    assert!(
-      cleanup_weight.all_gte(<() as crate::WeightInfo>::scheduler_paged_consume_preserve_page())
-    );
-    assert_eq!(admitted_weight, plan_weight.saturating_add(cleanup_weight));
-    assert!(dispatch_weight.all_gte(admitted_weight));
-    assert!(
-      dispatch_weight.all_gte(<() as crate::WeightInfo>::close_aaa_user_fee_bearing_tail(
-        <<Test as crate::Config>::MaxUserExecutionPlanSteps as Get<u32>>::get(),
-        <<Test as crate::Config>::MaxSplitTransferLegs as Get<u32>>::get(),
-      ))
-    );
-  });
-}
-
-#[test]
-fn automatic_close_defers_until_budget_can_admit_close_tail() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let sovereign = sovereign_account(aaa_id);
-    let cleanup_asset = TestAsset::Local(88);
-    fund_native_raw(&sovereign, 1_000);
-    set_asset_balance(&sovereign, cleanup_asset, 500);
-    let on_close_execution_plan = execution_plan_with_step(make_step(Task::Transfer {
-      to: ALICE,
-      asset: cleanup_asset,
-      amount: AmountResolution::AllBalance,
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      on_close_execution_plan,
-    ));
-    assert_ok!(AAA::set_auto_close_at_cycle_nonce(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      Some(1),
-    ));
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    run_idle(AAA::scheduler_admission_overhead().saturating_add(Weight::from_parts(1, 0)));
-    let inst =
-      AAA::aaa_instances(aaa_id).expect("AAA must remain active until close-tail budget fits");
-    assert_eq!(inst.cycle_nonce, 0);
-    assert_eq!(asset_balance(&sovereign, cleanup_asset), 500);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::CycleDeferred {
-          aaa_id: id,
-          reason: DeferReason::InsufficientWeightBudget,
-        } if *id == aaa_id
-      )
-    }));
-    frame_system::Pallet::<Test>::set_block_number(2);
-    run_idle(Weight::MAX);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(asset_balance(&sovereign, cleanup_asset), 1);
-    assert_eq!(asset_balance(&ALICE, cleanup_asset), 499);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 1,
-          skipped_steps: 0,
-          failed_steps: 0,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn update_on_close_execution_plan_can_cleanup_assets_via_transfer_all() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let sovereign = sovereign_account(aaa_id);
-    let cleanup_asset = TestAsset::Local(42);
-    fund_native_raw(&sovereign, 1_000);
-    set_asset_balance(&sovereign, cleanup_asset, 500);
-    assert_eq!(asset_balance(&ALICE, cleanup_asset), 0);
-    let on_close_execution_plan = execution_plan_with_step(make_step(Task::Transfer {
-      to: ALICE,
-      asset: cleanup_asset,
-      amount: AmountResolution::AllBalance,
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      on_close_execution_plan,
-    ));
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert_eq!(asset_balance(&sovereign, cleanup_asset), 1);
-    assert_eq!(asset_balance(&ALICE, cleanup_asset), 499);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 1,
-          skipped_steps: 0,
-          failed_steps: 0,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn on_close_execution_plan_executes_swap_step() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let sovereign = sovereign_account(aaa_id);
-    let foreign = TestAsset::Local(77);
-    let pool_account: AccountId = u64::MAX;
-    setup_pool(TestAsset::Native, foreign, 10_000, 10_000);
-    fund_native_raw(&pool_account, 10_000);
-    set_asset_balance(&pool_account, foreign, 10_000);
-    fund_native_raw(&sovereign, 1_000);
-    let on_close_execution_plan = execution_plan_with_step(make_step(Task::SwapExactIn {
-      asset_in: TestAsset::Native,
-      asset_out: foreign,
-      amount_in: AmountResolution::Fixed(100),
-      slippage_tolerance: Perbill::from_percent(10),
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      on_close_execution_plan,
-    ));
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert!(asset_balance(&sovereign, foreign) > 0);
-    assert!(has_aaa_event(|event| {
-      matches!(event, Event::SwapExecuted { aaa_id: id, .. } if *id == aaa_id)
-    }));
-  });
-}
-
-#[test]
-fn on_close_dex_late_failure_rolls_back_task_but_not_close() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let sovereign = sovereign_account(aaa_id);
-    let foreign = TestAsset::Local(78);
-    let pool_account: AccountId = u64::MAX;
-    setup_pool(TestAsset::Native, foreign, 10_000, 10_000);
-    set_asset_balance(&pool_account, foreign, 10_000);
-    fund_native_raw(&sovereign, 1_000);
-    let close_plan = execution_plan_with_step(make_step(Task::SwapExactIn {
-      asset_in: TestAsset::Native,
-      asset_out: foreign,
-      amount_in: AmountResolution::Fixed(100),
-      slippage_tolerance: Perbill::from_percent(10),
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      close_plan,
-    ));
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    let close_fee_upper = AAA::close_cycle_fee_upper_bound(&instance);
-    let pool_native_before = native_balance(&pool_account);
-    set_fail_dex_after_input_transfer(true);
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(native_balance(&sovereign), 1_000 - close_fee_upper);
-    assert_eq!(asset_balance(&sovereign, foreign), 0);
-    assert_eq!(native_balance(&pool_account), pool_native_before);
-    assert_eq!(asset_balance(&pool_account, foreign), 10_000);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseStepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id
-      )
-    }));
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 0,
-          skipped_steps: 0,
-          failed_steps: 1,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn on_close_execution_plan_uses_frozen_close_snapshot_with_reserved_user_fee_budget() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let sovereign = sovereign_account(aaa_id);
-    let fee_sink = TestFeeSink::get();
-    let close_funding = 501u128;
-    fund_native_raw(&sovereign, close_funding);
-    let fee_sink_before = native_balance(&fee_sink);
-    let close_plan = BoundedVec::try_from(vec![
-      make_step(Task::Transfer {
-        to: BOB,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfTrigger(Perbill::from_percent(50)),
-      }),
-      make_step(Task::Transfer {
-        to: CHARLIE,
-        asset: TestAsset::Native,
-        amount: AmountResolution::PercentageOfTrigger(Perbill::from_percent(50)),
-      }),
-    ])
-    .expect("close plan fits");
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      close_plan,
-    ));
-    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-    let close_fee_upper = AAA::close_cycle_fee_upper_bound(&instance);
-    let trigger_spendable = close_funding.saturating_sub(close_fee_upper);
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert_eq!(
-      native_balance(&BOB),
-      TEST_INITIAL_BALANCE + trigger_spendable / 2
-    );
-    assert_eq!(
-      native_balance(&CHARLIE),
-      TEST_INITIAL_BALANCE + trigger_spendable / 2
-    );
-    assert_eq!(
-      native_balance(&fee_sink),
-      fee_sink_before.saturating_add(close_fee_upper)
-    );
-    assert_eq!(native_balance(&sovereign), 1);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 2,
-          skipped_steps: 0,
-          failed_steps: 0,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn on_close_execution_plan_failures_do_not_block_closure() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let cleanup_asset = TestAsset::Local(7);
-    let sovereign = sovereign_account(aaa_id);
-    fund_native_raw(&sovereign, 1_000);
-    set_asset_balance(&sovereign, cleanup_asset, 1_000);
-    let failing_on_close_execution_plan = execution_plan_with_step(make_step(Task::Stake {
-      asset: cleanup_asset,
-      amount: AmountResolution::Fixed(900),
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      failing_on_close_execution_plan,
-    ));
-    set_fail_staking_ops(true);
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    set_fail_staking_ops(false);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseStepFailed {
-          aaa_id: id,
-          step_index: 0,
-          ..
-        } if *id == aaa_id
-      )
-    }));
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 0,
-          skipped_steps: 0,
-          failed_steps: 1,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn close_execution_plan_fee_sink_transfer_failure_is_observable_and_non_blocking() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let sovereign = sovereign_account(aaa_id);
-    let cleanup_asset = TestAsset::Local(9);
-    let fee_sink_before = native_balance(&TestFeeSink::get());
-    fund_native_raw(&sovereign, 1_000);
-    set_asset_balance(&sovereign, cleanup_asset, 500);
-    let close_plan = execution_plan_with_step(make_step(Task::Transfer {
-      to: ALICE,
-      asset: cleanup_asset,
-      amount: AmountResolution::Fixed(499),
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      close_plan,
-    ));
-    set_fail_fee_sink_transfer(true);
-    assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-    set_fail_fee_sink_transfer(false);
-    assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert_eq!(native_balance(&TestFeeSink::get()), fee_sink_before);
-    assert_eq!(asset_balance(&sovereign, cleanup_asset), 500);
-    assert_eq!(asset_balance(&ALICE, cleanup_asset), 0);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseStepFailed {
-          aaa_id: id,
-          step_index: 0,
-          ..
-        } if *id == aaa_id
-      )
-    }));
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::OnCloseExecutionPlanSummary {
-          aaa_id: id,
-          executed_steps: 0,
-          skipped_steps: 0,
-          failed_steps: 1,
-        } if *id == aaa_id
-      )
-    }));
-  });
-}
-
-#[test]
-fn update_on_close_execution_plan_accepts_full_execution_plan_surface() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let dex_close_execution_plan = execution_plan_with_step(make_step(Task::SwapExactIn {
-      asset_in: TestAsset::Native,
-      asset_out: TestAsset::Local(1),
-      amount_in: AmountResolution::AllBalance,
-      slippage_tolerance: Perbill::from_percent(1),
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      dex_close_execution_plan,
-    ));
-    let stateful_amount_execution_plan = execution_plan_with_step(make_step(Task::Transfer {
-      to: BOB,
-      asset: TestAsset::Native,
-      amount: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
-    }));
-    assert_ok!(AAA::update_on_close_execution_plan(
-      RuntimeOrigin::signed(ALICE),
-      aaa_id,
-      stateful_amount_execution_plan,
-    ));
-  });
-}
-
-#[test]
-fn update_on_close_execution_plan_rejects_mint_for_user_actor() {
-  new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let aaa_id = create_user_with(
-      ALICE,
-      Mutability::Mutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let mint_close_execution_plan = execution_plan_with_step(make_step(Task::Mint {
-      asset: TestAsset::Native,
-      amount: AmountResolution::Fixed(1),
-    }));
-    assert_noop!(
-      AAA::update_on_close_execution_plan(
-        RuntimeOrigin::signed(ALICE),
-        aaa_id,
-        mint_close_execution_plan
-      ),
-      Error::<Test>::MintNotAllowedForUserAaa
-    );
-  });
-}
-
-#[test]
 fn system_immutable_rejects_runtime_control_paths_even_for_root() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -9611,10 +8651,6 @@ fn system_immutable_rejects_runtime_control_paths_even_for_root() {
     );
     assert_noop!(
       AAA::update_execution_plan(RuntimeOrigin::root(), aaa_id, execution_plan.clone()),
-      Error::<Test>::ImmutableAaa
-    );
-    assert_noop!(
-      AAA::update_on_close_execution_plan(RuntimeOrigin::root(), aaa_id, execution_plan),
       Error::<Test>::ImmutableAaa
     );
     assert_noop!(
@@ -9671,26 +8707,18 @@ fn system_immutable_creation_rejects_schedule_window() {
 }
 
 #[test]
-fn default_close_plan_is_empty_for_created_actors() {
+fn close_cleanup_admission_uses_measured_pure_close_weight() {
   new_test_ext().execute_with(|| {
-    frame_system::Pallet::<Test>::set_block_number(1);
-    let user_id = create_user_with(
-      ALICE,
-      Mutability::Immutable,
-      manual_schedule(),
-      None,
-      inert_execution_plan(),
-    );
-    let system_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    for aaa_id in [user_id, system_id] {
-      let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
-      assert!(instance.on_close_execution_plan.is_empty());
-    }
+    let measured = <() as crate::WeightInfo>::close_aaa();
+    assert!(measured.ref_time() > 0);
+    assert!(measured.proof_size() > 0);
+    assert_eq!(AAA::close_cleanup_weight_upper(), measured);
+    assert_eq!(AAA::close_dispatch_weight_upper(), measured);
   });
 }
 
 #[test]
-fn close_tail_does_not_start_normal_cycle() {
+fn pure_close_does_not_start_normal_cycle_or_execute_tasks() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_user_with(
@@ -9716,7 +8744,7 @@ fn close_tail_does_not_start_normal_cycle() {
       matches!(event, Event::CycleSummary { aaa_id: id, .. } if *id == aaa_id)
     }));
     assert!(has_aaa_event(|event| {
-      matches!(event, Event::OnCloseExecutionPlanSummary { aaa_id: id, .. } if *id == aaa_id)
+      matches!(event, Event::AaaClosed { aaa_id: id, .. } if *id == aaa_id)
     }));
   });
 }
@@ -9762,7 +8790,6 @@ mod proptest_aaa {
         schedule: timer_schedule_pt(every_blocks),
         schedule_window: None,
         execution_plan: inert_execution_plan(),
-        on_close_execution_plan: Default::default(),
         funding_source_policy: crate::FundingSourcePolicy::OwnerOnly,
       },
     ));

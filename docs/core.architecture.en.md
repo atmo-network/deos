@@ -21,7 +21,7 @@ Token-driven actor flows follow this bounded coordination pattern:
 1. `Provenance-Aware Ingress`: Source/asset trigger filters and funding-source policy decide whether a deposit influences readiness or funding snapshots; ordinary balance credit remains separate from execution authority.
 2. `Plan-Local Statelessness`: Steps read current state without mutable cross-step scratch storage, while bounded lifecycle, readiness, queue, funding-batch, and observability state remains explicit on-chain.
 3. `Donation Sensitivity`: Assets transferred to a sovereign account remain real balances, but only configured tasks and authorized trigger/funding semantics determine whether and when they affect protocol execution. A donation is not automatically a burn or liquidity contribution.
-4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, durable queues, and wakeup retry provide bounded backpressure. Unsafe conditions may skip or abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
+4. `Reactive Resilience`: Explicit `StepErrorPolicy`, cooldowns, paged FIFO readiness, and exact temporal wakeups provide bounded backpressure. Unsafe conditions may skip or abort a cycle; subsequent execution still requires a valid trigger and sufficient two-dimensional budget.
 5. `Explicit Read-Model Split`: DEOS separates bounded authoritative on-chain values/projections that clients can consume directly from externally indexed materializations used for archive/search/analytics. Canonical product flows should rely on raw on-chain state when a bounded projection is the real protocol contract; unbounded history and heavy dashboard aggregation should remain off-chain instead of being smuggled into consensus state. The project-wide subsystem matrix and design checklist live in [`read-model.contract.en.md`](./read-model.contract.en.md).
 
 ## 3. Actor Architecture & Economic Topology
@@ -235,13 +235,13 @@ Block N:
 
   on_idle(remaining_weight):
     - Admit the generated fixed hook base in both Weight dimensions
-    - Drain bounded producer-owned address ingress
-    - Run bounded wakeup-retry and zombie-sweep housekeeping
-    - Drain due wakeups, snapshot the paged-FIFO tail cutoff, and scan from QueueHead
+    - Drain one saturated-queue tombstone unit when required
+    - Run bounded zombie-sweep housekeeping
+    - Drain exact due wakeups, snapshot the paged-FIFO tail cutoff, and scan from QueueHead
     - Process actors in deterministic FIFO order up to MaxExecutionsPerBlock:
         1. Reserve the complete actor-probe bound
         2. Apply trigger, cooldown, breaker, window, fee, and lifecycle gates
-        3. Admit the complete cycle and any predictable close tail
+        3. Admit the complete cycle and measured pure terminal cleanup
         4. Execute the bounded plan through runtime adapters
         5. Leave weight-deferred head work in place and append late work beyond the cutoff
 ```

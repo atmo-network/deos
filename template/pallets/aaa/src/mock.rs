@@ -145,7 +145,6 @@ thread_local! {
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
-  static FAIL_CLOSE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
@@ -187,7 +186,6 @@ pub fn reset_mock_adapters() {
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
-  FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
@@ -676,7 +674,11 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     Ok(())
   }
 
-  fn run_address_event_ingress(recipient: &AccountId) -> bool {
+  fn run_address_event_ingress(
+    recipient: &AccountId,
+    _source: &AccountId,
+    _amount: Balance,
+  ) -> bool {
     let event = BENCHMARK_INGRESS.with(|pending| *pending.borrow());
     let Some((event_recipient, source, amount)) = event else {
       return false;
@@ -706,15 +708,6 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
       crate::Pallet::<Test>::notify_xcm_address_event(aaa_id, TestAsset::Native, amount, source)?;
     }
     Ok(())
-  }
-
-  fn clear_address_event_ingress_events() {
-    BENCHMARK_INGRESS.with(|event| *event.borrow_mut() = None);
-  }
-
-  fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight {
-    let _ = crate::Pallet::<Test>::drain_address_event_overflow(1);
-    polkadot_sdk::sp_weights::Weight::zero()
   }
 
   fn setup_remove_liquidity_max_k(
@@ -855,7 +848,6 @@ impl pallet_aaa::Config for Test {
   type MaxUserExecutionPlanSteps = ConstU32<3>;
   type MaxSystemExecutionPlanSteps = ConstU32<10>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxIngressOverflowQueue = ConstU32<256>;
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<8>;
   type MaxExecutionsPerBlock = ConstU32<3>;
@@ -880,8 +872,6 @@ impl pallet_aaa::Config for Test {
   type AaaCreationFee = TestAaaCreationFee;
   type WeightToFee = TestWeightToFee;
   type TaskWeightInfo = ();
-  type AtomicityHook = MockAtomicityHook;
-  type AddressEventIngressHook = ();
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
@@ -928,30 +918,14 @@ pub fn set_fail_create_checkpoint(value: bool) {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = value);
 }
 
-pub fn set_fail_close_checkpoint(value: bool) {
-  FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow_mut() = value);
-}
-
 pub fn set_fail_fee_sink_transfer(value: bool) {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = value);
 }
 
-pub struct MockAtomicityHook;
-
-impl crate::AtomicityHook for MockAtomicityHook {
-  fn on_create_checkpoint(_aaa_id: u64) -> DispatchResult {
-    let should_fail = FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow());
-    if should_fail {
-      return Err(DispatchError::Other("AtomicityCreateCheckpointFailed"));
-    }
-    Ok(())
+pub(crate) fn create_atomicity_checkpoint(_aaa_id: u64) -> DispatchResult {
+  let should_fail = FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow());
+  if should_fail {
+    return Err(DispatchError::Other("AtomicityCreateCheckpointFailed"));
   }
-
-  fn on_close_checkpoint(_aaa_id: u64) -> DispatchResult {
-    let should_fail = FAIL_CLOSE_CHECKPOINT.with(|v| *v.borrow());
-    if should_fail {
-      return Err(DispatchError::Other("AtomicityCloseCheckpointFailed"));
-    }
-    Ok(())
-  }
+  Ok(())
 }

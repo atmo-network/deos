@@ -219,7 +219,7 @@ verify_weight_file_contract() {
         "process_remove_liquidity_max_k"
         "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
-        "close_aaa_on_close_execution_plan_complex"
+        "close_aaa_system_pure"
     )
 
     for benchmark in "${diagnostic_benchmarks[@]}"; do
@@ -251,7 +251,6 @@ verify_weight_file_contract() {
         "scheduler_paged_consume_delete_page"
         "scheduler_paged_tombstone_drain"
         "scheduler_paged_mixed_scan"
-        "compatibility_ingress_drain"
         "transaction_extension_ingress_base"
         "transaction_extension_ingress_notify"
     )
@@ -262,8 +261,8 @@ verify_weight_file_contract() {
         fi
     done
 
-    if grep -q 'fn compatibility_ingress_scan_notify' "$output_file"; then
-        log_error "Weight file contract check failed for pallet_aaa: retired event-vector scan weight remains"
+    if grep -q 'fn compatibility_ingress' "$output_file"; then
+        log_error "Weight file contract check failed for pallet_aaa: retired compatibility ingress weight remains"
         return 1
     fi
 
@@ -289,7 +288,7 @@ run_pallet_benchmark() {
             --exclude-extrinsics "pallet_aaa::process_remove_liquidity_max_k"
             --exclude-extrinsics "pallet_aaa::scheduler_cooldown_ineligible_idle"
             --exclude-extrinsics "pallet_aaa::scheduler_wakeup_sparse_gap_recovery"
-            --exclude-extrinsics "pallet_aaa::close_aaa_on_close_execution_plan_complex"
+            --exclude-extrinsics "pallet_aaa::close_aaa_system_pure"
         )
 
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" != "1" ]]; then

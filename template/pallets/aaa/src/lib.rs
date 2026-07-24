@@ -55,27 +55,14 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
     source: &AccountId,
     amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult;
-  fn run_address_event_ingress(recipient: &AccountId) -> bool;
+  fn run_address_event_ingress(recipient: &AccountId, source: &AccountId, amount: Balance) -> bool;
   fn setup_xcm_asset_deposit() -> polkadot_sdk::sp_runtime::DispatchResult;
   fn run_xcm_asset_deposit(
     recipient: &AccountId,
     source: &AccountId,
     amount: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult;
-  fn clear_address_event_ingress_events();
-  fn run_compatibility_address_event_ingress() -> polkadot_sdk::sp_weights::Weight;
 }
-
-pub trait AtomicityHook {
-  fn on_create_checkpoint(_aaa_id: u64) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-    Ok(())
-  }
-  fn on_close_checkpoint(_aaa_id: u64) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-    Ok(())
-  }
-}
-
-impl AtomicityHook for () {}
 
 pub trait FeeCollector<AccountId, AssetId, Balance> {
   fn collect_fee(
@@ -86,33 +73,17 @@ pub trait FeeCollector<AccountId, AssetId, Balance> {
   ) -> polkadot_sdk::frame_support::dispatch::DispatchResult;
 }
 
-pub trait AddressEventIngressHook<BlockNumber> {
-  fn ingest(
-    _now: BlockNumber,
-    _remaining_weight: polkadot_sdk::frame_support::weights::Weight,
-  ) -> polkadot_sdk::frame_support::weights::Weight;
-}
-
-impl<BlockNumber> AddressEventIngressHook<BlockNumber> for () {
-  fn ingest(
-    _now: BlockNumber,
-    _remaining_weight: polkadot_sdk::frame_support::weights::Weight,
-  ) -> polkadot_sdk::frame_support::weights::Weight {
-    polkadot_sdk::frame_support::weights::Weight::zero()
-  }
-}
-
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AddressEventIngressHook, AssetOps, AtomicityHook, DexOps, FeeCollector, FundingAuthority,
-    LiquidityDonationOps, TaskWeightInfo, WeightInfo,
+    AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps, TaskWeightInfo,
+    WeightInfo,
   };
   use crate::adapters::StakingOps as _;
   use frame::prelude::*;
   use polkadot_sdk::{
     frame_support::{PalletId, traits::EnsureOrigin},
-    sp_runtime::traits::Zero,
+    sp_runtime::traits::{CheckedAdd, One, Zero},
     sp_weights::WeightToFee as _,
   };
 
@@ -156,8 +127,6 @@ pub mod pallet {
     type MaxSystemExecutionPlanSteps: Get<u32>;
     #[pallet::constant]
     type MaxFundingTrackedAssets: Get<u32>;
-    #[pallet::constant]
-    type MaxIngressOverflowQueue: Get<u32>;
     #[pallet::constant]
     type MaxConditionsPerStep: Get<u32>;
     #[pallet::constant]
@@ -216,11 +185,6 @@ pub mod pallet {
     type WeightToFee: polkadot_sdk::sp_weights::WeightToFee<Balance = Self::Balance>;
     /// Runtime-bound upper weights for every AAA task variant
     type TaskWeightInfo: TaskWeightInfo;
-    /// Testable atomicity checkpoints for create/close lifecycle paths
-    type AtomicityHook: AtomicityHook;
-
-    /// Runtime ingress hook for address-event notifications
-    type AddressEventIngressHook: AddressEventIngressHook<BlockNumberFor<Self>>;
 
     type FeeSink: Get<Self::AccountId>;
     type FeeCollector: FeeCollector<Self::AccountId, Self::AssetId, Self::Balance>;
@@ -307,13 +271,6 @@ pub mod pallet {
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
   pub type WakeupCursorPageOf<T> = BoundedVec<BlockNumberFor<T>, <T as Config>::WakeupPageSize>;
 
-  pub type IngressOverflowEventOf<T> = IngressOverflowEvent<
-    AaaId,
-    <T as Config>::AssetId,
-    <T as Config>::Balance,
-    <T as frame_system::Config>::AccountId,
-  >;
-
   pub type AaaInstanceOf<T> = AaaInstance<
     <T as frame_system::Config>::AccountId,
     BlockNumberFor<T>,
@@ -344,9 +301,6 @@ pub mod pallet {
   pub type NextAaaId<T> = StorageValue<_, AaaId, ValueQuery>;
 
   #[pallet::storage]
-  pub type SweepCursor<T: Config> = StorageValue<_, AaaId, ValueQuery>;
-
-  #[pallet::storage]
   #[pallet::getter(fn actor_hot)]
   pub type ActorHot<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, ActorHotStateOf<T>, OptionQuery>;
@@ -375,7 +329,6 @@ pub mod pallet {
         schedule: program.schedule,
         schedule_window: program.schedule_window,
         execution_plan: program.execution_plan,
-        on_close_execution_plan: program.on_close_execution_plan,
         cycle_nonce: hot.cycle_nonce,
         auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
         consecutive_failures: hot.consecutive_failures,
@@ -420,6 +373,9 @@ pub mod pallet {
           pending_signal: instance.manual_trigger_pending,
           queue_ticket: instance.queue_ticket,
           wakeup_pointer: None,
+          terminal_at: instance
+            .schedule_window
+            .map(|window| window.end.saturating_add(One::one())),
           last_user_queue_mutation_block: instance.last_user_queue_mutation_block,
           cycle_weight_upper: instance.cycle_weight_upper,
           cycle_fee_upper: instance.cycle_fee_upper,
@@ -430,7 +386,6 @@ pub mod pallet {
           schedule: instance.schedule,
           schedule_window: instance.schedule_window,
           execution_plan: instance.execution_plan,
-          on_close_execution_plan: instance.on_close_execution_plan,
         },
       )
     }
@@ -528,23 +483,8 @@ pub mod pallet {
   pub type GlobalCircuitBreaker<T> = StorageValue<_, bool, ValueQuery>;
 
   #[pallet::storage]
-  pub type IngressOverflowSlots<T: Config> =
-    StorageMap<_, Blake2_128Concat, u32, IngressOverflowEventOf<T>, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn ingress_overflow_head)]
-  pub type IngressOverflowHead<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn ingress_overflow_len)]
-  pub type IngressOverflowLen<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
   #[pallet::getter(fn idle_starvation_blocks)]
   pub type IdleStarvationBlocks<T: Config> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  pub type LastIngressIngestBlock<T: Config> = StorageValue<_, BlockNumberFor<T>, OptionQuery>;
 
   /// Provides runtime-specific System AAA instances to initialize at genesis.
   ///
@@ -623,20 +563,12 @@ pub mod pallet {
           mutability == Mutability::Mutable || schedule_window.is_none(),
           "genesis System Immutable AAA must be perpetual"
         );
-        let on_close_execution_plan = Pallet::<T>::default_on_close_execution_plan();
-        Pallet::<T>::ensure_execution_plans_fit_idle_budget(
-          AaaType::System,
-          &execution_plan,
-          &on_close_execution_plan,
-        )
-        .unwrap_or_else(|_| {
-          panic!("genesis System AAA {aaa_id} exceeds the guaranteed on_idle budget")
-        });
-        let funding_tracked_assets = Pallet::<T>::derive_combined_funding_tracked_assets(
-          &execution_plan,
-          &on_close_execution_plan,
-        )
-        .expect("genesis execution_plan must have valid funding-tracked assets");
+        Pallet::<T>::ensure_execution_plan_fits_idle_budget(AaaType::System, &execution_plan)
+          .unwrap_or_else(|_| {
+            panic!("genesis System AAA {aaa_id} exceeds the guaranteed on_idle budget")
+          });
+        let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&execution_plan)
+          .expect("genesis execution_plan must have valid funding-tracked assets");
         let (cycle_weight_upper, cycle_fee_upper) =
           Pallet::<T>::compute_cycle_bounds(AaaType::System, &execution_plan);
         let first_eligible_at =
@@ -650,7 +582,6 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
@@ -776,7 +707,7 @@ pub mod pallet {
       T::DbWeight::get().reads(1)
     }
 
-    fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
+    fn on_idle(_now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
       let base_weight = T::WeightInfo::scheduler_on_idle_base();
       if !base_weight.all_lte(remaining_weight) {
         return Weight::zero();
@@ -797,22 +728,9 @@ pub mod pallet {
       } else {
         Weight::zero()
       };
-      let ingress_limit = after_base.saturating_sub(saturated_cleanup_weight);
-      let ingress_weight = if LastIngressIngestBlock::<T>::get() == Some(now) {
-        Weight::zero()
-      } else {
-        let hook_weight = T::AddressEventIngressHook::ingest(now, ingress_limit);
-        LastIngressIngestBlock::<T>::put(now);
-        hook_weight
-      };
-      let remaining_after_ingress = ingress_limit.saturating_sub(ingress_weight);
-      let sweep_weight = Self::execute_zombie_sweep(remaining_after_ingress);
-      let remaining_after_housekeeping = remaining_after_ingress.saturating_sub(sweep_weight);
+      let remaining_after_housekeeping = after_base.saturating_sub(saturated_cleanup_weight);
       Self::update_idle_starvation_state(breaker_active, remaining_after_housekeeping);
-      let housekeeping_weight = base_weight
-        .saturating_add(saturated_cleanup_weight)
-        .saturating_add(ingress_weight)
-        .saturating_add(sweep_weight);
+      let housekeeping_weight = base_weight.saturating_add(saturated_cleanup_weight);
       if breaker_active {
         return housekeeping_weight;
       }
@@ -945,26 +863,6 @@ pub mod pallet {
     },
     ExecutionPlanUpdated {
       aaa_id: AaaId,
-    },
-    OnCloseExecutionPlanUpdated {
-      aaa_id: AaaId,
-    },
-    OnCloseStepFailed {
-      aaa_id: AaaId,
-      step_index: u32,
-      kind: OnCloseStepFailureKind,
-      error: DispatchError,
-    },
-    OnCloseStepSkipped {
-      aaa_id: AaaId,
-      step_index: u32,
-      reason: StepSkippedReason,
-    },
-    OnCloseExecutionPlanSummary {
-      aaa_id: AaaId,
-      executed_steps: u32,
-      skipped_steps: u32,
-      failed_steps: u32,
     },
     AutoCloseNonceSet {
       aaa_id: AaaId,
@@ -1154,6 +1052,7 @@ pub mod pallet {
         });
         Ok(())
       })?;
+      Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
 
@@ -1286,10 +1185,11 @@ pub mod pallet {
         program.schedule_window = schedule_window;
       });
       ActorHot::<T>::mutate(aaa_id, |maybe| {
-        if let Some(hot) = maybe.as_mut()
-          && hot.cycle_nonce == 0
-        {
-          hot.first_eligible_at = first_eligible_at;
+        if let Some(hot) = maybe.as_mut() {
+          if hot.cycle_nonce == 0 {
+            hot.first_eligible_at = first_eligible_at;
+          }
+          hot.terminal_at = schedule_window.map(|window| window.end.saturating_add(One::one()));
         }
       });
       Self::deposit_event(Event::ScheduleUpdated { aaa_id });
@@ -1329,10 +1229,9 @@ pub mod pallet {
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
-      Self::ensure_execution_plans_fit_idle_budget(
+      Self::ensure_execution_plan_fits_idle_budget(
         snapshot.actor_class.aaa_type(),
         &execution_plan,
-        &snapshot.on_close_execution_plan,
       )?;
       ensure!(
         snapshot.mutability == Mutability::Mutable,
@@ -1352,10 +1251,7 @@ pub mod pallet {
           Error::<T>::MintNotAllowedForUserAaa
         );
       }
-      let new_tracked = Self::derive_combined_funding_tracked_assets(
-        &execution_plan,
-        &snapshot.on_close_execution_plan,
-      )?;
+      let new_tracked = Self::derive_funding_tracked_assets(&execution_plan)?;
       let mut funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       funding.funding_tracked_assets = new_tracked.clone();
       funding
@@ -1509,73 +1405,6 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(17)]
-    #[pallet::weight(
-      T::WeightInfo::update_on_close_execution_plan().saturating_add(Pallet::<T>::close_dispatch_weight_upper())
-    )]
-    pub fn update_on_close_execution_plan(
-      origin: OriginFor<T>,
-      aaa_id: AaaId,
-      on_close_execution_plan: ExecutionPlanOf<T>,
-    ) -> DispatchResult {
-      ensure!(
-        !on_close_execution_plan.is_empty(),
-        Error::<T>::EmptyExecutionPlan
-      );
-      Self::validate_execution_plan_shape(&on_close_execution_plan)?;
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
-      Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::is_window_expired(&snapshot) {
-        return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
-      }
-      Self::ensure_execution_plans_fit_idle_budget(
-        snapshot.actor_class.aaa_type(),
-        &snapshot.execution_plan,
-        &on_close_execution_plan,
-      )?;
-      ensure!(
-        snapshot.mutability == Mutability::Mutable,
-        Error::<T>::ImmutableAaa
-      );
-      let max_steps = match snapshot.actor_class.aaa_type() {
-        AaaType::User => T::MaxUserExecutionPlanSteps::get(),
-        AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
-      };
-      ensure!(
-        (on_close_execution_plan.len() as u32) <= max_steps,
-        Error::<T>::ExecutionPlanTooLong
-      );
-      if snapshot.actor_class.aaa_type() == AaaType::User {
-        ensure!(
-          !Self::execution_plan_contains_mint(&on_close_execution_plan),
-          Error::<T>::MintNotAllowedForUserAaa
-        );
-      }
-      let new_tracked = Self::derive_combined_funding_tracked_assets(
-        &snapshot.execution_plan,
-        &on_close_execution_plan,
-      )?;
-      let mut funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
-      funding.funding_tracked_assets = new_tracked.clone();
-      funding
-        .funding_snapshots
-        .retain(|asset, _| new_tracked.contains(asset));
-      funding.has_pending_funding = funding
-        .funding_snapshots
-        .values()
-        .any(|batch| !batch.pending_amount.is_zero());
-      ActorProgram::<T>::mutate(aaa_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("active actor program existence was prevalidated")
-          .on_close_execution_plan = on_close_execution_plan;
-      });
-      ActorFunding::<T>::insert(aaa_id, funding);
-      Self::deposit_event(Event::OnCloseExecutionPlanUpdated { aaa_id });
-      Ok(())
-    }
-
     #[pallet::call_index(21)]
     #[pallet::weight(T::WeightInfo::activate_aaa())]
     pub fn activate_aaa(
@@ -1635,53 +1464,9 @@ pub mod pallet {
       }
     }
 
-    fn componentwise_max_weight(left: Weight, right: Weight) -> Weight {
-      Weight::from_parts(
-        left.ref_time().max(right.ref_time()),
-        left.proof_size().max(right.proof_size()),
-      )
-    }
-
-    fn maximum_task_weight_upper() -> Weight {
-      let candidates = [
-        T::TaskWeightInfo::simple_asset_op(),
-        T::TaskWeightInfo::split_transfer(T::MaxSplitTransferLegs::get()),
-        T::TaskWeightInfo::dex_exact_in(),
-        T::TaskWeightInfo::dex_exact_out(),
-        T::TaskWeightInfo::add_liquidity(),
-        T::TaskWeightInfo::donate_liquidity(),
-        T::TaskWeightInfo::remove_liquidity(),
-        T::TaskWeightInfo::stake(),
-        T::TaskWeightInfo::unstake(),
-      ];
-      candidates
-        .into_iter()
-        .fold(Weight::zero(), Self::componentwise_max_weight)
-    }
-
-    fn maximum_close_plan_weight_upper() -> Weight {
-      let max_steps =
-        T::MaxUserExecutionPlanSteps::get().max(T::MaxSystemExecutionPlanSteps::get());
-      let per_step = Weight::from_parts(1_000_000, 128)
-        .saturating_add(
-          Weight::from_parts(500_000, 64).saturating_mul(u64::from(T::MaxConditionsPerStep::get())),
-        )
-        .saturating_add(Self::maximum_task_weight_upper());
-      Weight::from_parts(5_000_000, 1000)
-        .saturating_add(T::DbWeight::get().reads_writes(2, 2))
-        .saturating_add(per_step.saturating_mul(u64::from(max_steps)))
-    }
-
-    /// Conservative FRAME dispatch weight for any explicit or lifecycle-touch close.
+    /// Conservative FRAME dispatch weight for explicit or lifecycle-touch pure cleanup.
     pub fn close_dispatch_weight_upper() -> Weight {
-      let compositional = T::WeightInfo::close_aaa()
-        .saturating_add(Self::maximum_close_plan_weight_upper())
-        .saturating_add(Self::close_cleanup_weight_upper());
-      let measured_user_tail = T::WeightInfo::close_aaa_user_fee_bearing_tail(
-        T::MaxUserExecutionPlanSteps::get(),
-        T::MaxSplitTransferLegs::get(),
-      );
-      Self::componentwise_max_weight(compositional, measured_user_tail)
+      Self::close_cleanup_weight_upper()
     }
 
     pub(crate) fn compute_cycle_weight_upper(
@@ -1743,56 +1528,31 @@ pub mod pallet {
       instance.cycle_fee_upper
     }
 
-    pub(crate) fn close_cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
-      Self::compute_cycle_weight_upper(
-        instance.actor_class.aaa_type(),
-        &instance.on_close_execution_plan,
-      )
-      .saturating_add(Self::close_cleanup_weight_upper())
+    pub(crate) fn close_cycle_weight_upper_bound(_instance: &AaaInstanceOf<T>) -> Weight {
+      Self::close_cleanup_weight_upper()
     }
 
-    pub(crate) fn close_cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
-      Self::compute_cycle_fee_upper(
-        instance.actor_class.aaa_type(),
-        &instance.on_close_execution_plan,
-      )
-    }
-
-    /// Upper-bounds one prospective run/close pair after the baseline scheduler envelope.
-    /// Independently metered durable housekeeping may defer this pair across blocks.
+    /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
+    /// envelope. Independently metered durable housekeeping may defer this work across blocks.
     pub fn execution_plan_admission_weight_upper(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
-      on_close_execution_plan: &ExecutionPlanOf<T>,
     ) -> Weight {
       Self::scheduler_admission_overhead()
         .saturating_add(Self::compute_cycle_weight_upper(aaa_type, execution_plan))
-        .saturating_add(Self::compute_cycle_weight_upper(
-          aaa_type,
-          on_close_execution_plan,
-        ))
         .saturating_add(Self::close_cleanup_weight_upper())
     }
 
-    fn ensure_execution_plans_fit_idle_budget(
+    fn ensure_execution_plan_fits_idle_budget(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
-      on_close_execution_plan: &ExecutionPlanOf<T>,
     ) -> DispatchResult {
       ensure!(
-        Self::execution_plan_admission_weight_upper(
-          aaa_type,
-          execution_plan,
-          on_close_execution_plan,
-        )
-        .all_lte(T::GuaranteedOnIdleWeight::get()),
+        Self::execution_plan_admission_weight_upper(aaa_type, execution_plan)
+          .all_lte(T::GuaranteedOnIdleWeight::get()),
         Error::<T>::ExecutionPlanExceedsOnIdleBudget
       );
       Ok(())
-    }
-
-    pub(crate) fn default_on_close_execution_plan() -> ExecutionPlanOf<T> {
-      BoundedVec::default()
     }
 
     fn valid_owner_mask() -> u8 {
@@ -1972,7 +1732,6 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           funding_source_policy,
         } => Self::do_create_aaa(
           owner,
@@ -1981,7 +1740,6 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           funding_source_policy,
           preferred_slot,
           None,
@@ -2004,7 +1762,6 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           funding_source_policy,
         } => Self::do_create_aaa(
           owner,
@@ -2013,7 +1770,6 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           funding_source_policy,
           None,
           requested_aaa_id,
@@ -2028,7 +1784,6 @@ pub mod pallet {
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
-      on_close_execution_plan: ExecutionPlanOf<T>,
       funding_source_policy: FundingSourcePolicyOf<T>,
       preferred_user_slot: Option<u8>,
       requested_aaa_id: Option<AaaId>,
@@ -2043,14 +1798,12 @@ pub mod pallet {
         AaaType::System => T::MaxSystemExecutionPlanSteps::get(),
       };
       ensure!(
-        (execution_plan.len() as u32) <= max_steps
-          && (on_close_execution_plan.len() as u32) <= max_steps,
+        (execution_plan.len() as u32) <= max_steps,
         Error::<T>::ExecutionPlanTooLong
       );
       if aaa_type == AaaType::User {
         ensure!(
-          !Self::execution_plan_contains_mint(&execution_plan)
-            && !Self::execution_plan_contains_mint(&on_close_execution_plan),
+          !Self::execution_plan_contains_mint(&execution_plan),
           Error::<T>::MintNotAllowedForUserAaa
         );
       }
@@ -2062,7 +1815,6 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
-      Self::validate_execution_plan_shape(&on_close_execution_plan)?;
       let active_count = Self::active_instance_count();
       ensure!(
         active_count < Self::effective_active_actor_limit(),
@@ -2072,13 +1824,8 @@ pub mod pallet {
         ActorIdentityCount::<T>::get() < T::MaxActorIdentities::get(),
         Error::<T>::ActorIdentityCapacityExceeded
       );
-      Self::ensure_execution_plans_fit_idle_budget(
-        aaa_type,
-        &execution_plan,
-        &on_close_execution_plan,
-      )?;
-      let funding_tracked_assets =
-        Self::derive_combined_funding_tracked_assets(&execution_plan, &on_close_execution_plan)?;
+      Self::ensure_execution_plan_fits_idle_budget(aaa_type, &execution_plan)?;
+      let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
       let current_next_id = NextAaaId::<T>::get();
       let aaa_id = requested_aaa_id.unwrap_or(current_next_id);
       ensure!(
@@ -2128,7 +1875,6 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
-          on_close_execution_plan,
           cycle_nonce: 0,
           consecutive_failures: 0,
           manual_trigger_pending: false,
@@ -2175,7 +1921,8 @@ pub mod pallet {
         if current_next_id < next_id {
           NextAaaId::<T>::put(next_id);
         }
-        if let Err(error) = T::AtomicityHook::on_create_checkpoint(aaa_id) {
+        #[cfg(test)]
+        if let Err(error) = crate::mock::create_atomicity_checkpoint(aaa_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
@@ -2204,7 +1951,6 @@ pub mod pallet {
         schedule,
         schedule_window,
         execution_plan,
-        on_close_execution_plan,
         funding_source_policy,
       } = program
       else {
@@ -2239,24 +1985,8 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
-      ensure!(
-        (on_close_execution_plan.len() as u32) <= max_steps,
-        Error::<T>::ExecutionPlanTooLong
-      );
-      if aaa_type == AaaType::User {
-        ensure!(
-          !Self::execution_plan_contains_mint(&on_close_execution_plan),
-          Error::<T>::MintNotAllowedForUserAaa
-        );
-      }
-      Self::validate_execution_plan_shape(&on_close_execution_plan)?;
-      Self::ensure_execution_plans_fit_idle_budget(
-        aaa_type,
-        &execution_plan,
-        &on_close_execution_plan,
-      )?;
-      let funding_tracked_assets =
-        Self::derive_combined_funding_tracked_assets(&execution_plan, &on_close_execution_plan)?;
+      Self::ensure_execution_plan_fits_idle_budget(aaa_type, &execution_plan)?;
+      let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
       ensure!(
         Self::active_instance_count() < Self::effective_active_actor_limit(),
         Error::<T>::ActiveAaaCapacityExceeded
@@ -2278,7 +2008,6 @@ pub mod pallet {
         schedule,
         schedule_window,
         execution_plan,
-        on_close_execution_plan,
         cycle_nonce: 0,
         consecutive_failures: 0,
         manual_trigger_pending: false,
@@ -2417,6 +2146,10 @@ pub mod pallet {
     fn validate_schedule_window(window: &ScheduleWindow<BlockNumberFor<T>>) -> DispatchResult {
       ensure!(window.end > window.start, Error::<T>::InvalidScheduleWindow);
       ensure!(
+        window.end.checked_add(&One::one()).is_some(),
+        Error::<T>::InvalidScheduleWindow
+      );
+      ensure!(
         window.end.saturating_sub(window.start) >= T::MinWindowLength::get(),
         Error::<T>::InvalidScheduleWindow
       );
@@ -2519,26 +2252,6 @@ pub mod pallet {
       BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::ExecutionPlanTooLong.into())
     }
 
-    fn derive_combined_funding_tracked_assets(
-      execution_plan: &ExecutionPlanOf<T>,
-      on_close_execution_plan: &ExecutionPlanOf<T>,
-    ) -> Result<BoundedBTreeSet<T::AssetId, T::MaxFundingTrackedAssets>, DispatchError> {
-      let mut tracked = alloc::collections::BTreeSet::new();
-      for asset in Self::derive_funding_tracked_assets(execution_plan)?
-        .iter()
-        .copied()
-      {
-        tracked.insert(asset);
-      }
-      for asset in Self::derive_funding_tracked_assets(on_close_execution_plan)?
-        .iter()
-        .copied()
-      {
-        tracked.insert(asset);
-      }
-      BoundedBTreeSet::try_from(tracked).map_err(|_| Error::<T>::ExecutionPlanTooLong.into())
-    }
-
     pub(crate) fn validate_split_transfer_legs(legs: &SplitTransferLegsOf<T>) -> DispatchResult {
       ensure!(legs.len() >= 2, Error::<T>::InvalidSplitTransfer);
       ensure!(
@@ -2634,51 +2347,48 @@ pub mod pallet {
       instance: &AaaInstanceOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
-      polkadot_sdk::frame_support::storage::with_transaction(|| {
-        let reserved_fee_remaining = Self::admit_on_close_execution_plan(instance);
-        Self::execute_on_close_execution_plan(aaa_id, instance, reserved_fee_remaining);
-        Self::remove_actor_from_queues(aaa_id);
-        if ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
-          && Self::wakeup_substrate_invalidate(aaa_id).is_none()
-        {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-            Error::<T>::AaaNotFound.into(),
-          ));
+      ensure!(
+        Self::active_actor_snapshot(aaa_id).as_ref() == Some(instance),
+        Error::<T>::AaaNotFound
+      );
+      ensure!(
+        ActorFunding::<T>::contains_key(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      ensure!(
+        ActiveAaaCount::<T>::get() > 0,
+        Error::<T>::ActiveAaaCountInvariant
+      );
+      ensure!(
+        ActorIdentityCount::<T>::get() > 0,
+        Error::<T>::ActorIdentityCountInvariant
+      );
+      ensure!(
+        SovereignIndex::<T>::get(&instance.sovereign_account) == Some(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      if let ActorClass::User { owner_slot } = instance.actor_class {
+        ensure!(
+          OwnerSlotMask::<T>::get(&instance.owner) & (1u8 << owner_slot) != 0,
+          Error::<T>::InvalidOwnerSlot
+        );
+      }
+
+      // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as soon as
+      // hot state disappears. Terminal cleanup therefore performs no shared-container scan.
+      Self::remove_active_actor(aaa_id);
+      ActorFunding::<T>::remove(aaa_id);
+      ActiveAaaCount::<T>::mutate(|count| *count -= 1);
+      ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+      match instance.actor_class {
+        ActorClass::User { owner_slot } => {
+          Self::remove_owner_slot_binding(&instance.owner, owner_slot, &instance.sovereign_account)
         }
-        Self::remove_active_actor(aaa_id);
-        ActorFunding::<T>::remove(aaa_id);
-        if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
-          *count = count
-            .checked_sub(1)
-            .ok_or(Error::<T>::ActiveAaaCountInvariant)?;
-          Ok(())
-        }) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        ActorClass::System => {
+          SovereignIndex::<T>::remove(&instance.sovereign_account);
+          ClosedSystemAaaIds::<T>::insert(aaa_id, instance.mutability);
         }
-        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
-          *count = count
-            .checked_sub(1)
-            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
-          Ok(())
-        }) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        match instance.actor_class {
-          ActorClass::User { owner_slot } => Self::remove_owner_slot_binding(
-            &instance.owner,
-            owner_slot,
-            &instance.sovereign_account,
-          ),
-          ActorClass::System => {
-            SovereignIndex::<T>::remove(&instance.sovereign_account);
-            ClosedSystemAaaIds::<T>::insert(aaa_id, instance.mutability);
-          }
-        }
-        if let Err(error) = T::AtomicityHook::on_close_checkpoint(aaa_id) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
+      }
       Self::deposit_event(Event::AaaClosed { aaa_id, reason });
       Ok(())
     }
@@ -2688,39 +2398,38 @@ pub mod pallet {
       identity: &DormantAaaIdentityOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
-      polkadot_sdk::frame_support::storage::with_transaction(|| {
-        DormantAaaIdentities::<T>::remove(aaa_id);
-        if let Err(error) = ActorIdentityCount::<T>::try_mutate(|count| -> DispatchResult {
-          *count = count
-            .checked_sub(1)
-            .ok_or(Error::<T>::ActorIdentityCountInvariant)?;
-          Ok(())
-        }) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      ensure!(
+        DormantAaaIdentities::<T>::get(aaa_id).as_ref() == Some(identity),
+        Error::<T>::AaaNotFound
+      );
+      ensure!(
+        ActorIdentityCount::<T>::get() > 0,
+        Error::<T>::ActorIdentityCountInvariant
+      );
+      ensure!(
+        SovereignIndex::<T>::get(&identity.sovereign_account) == Some(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      if let ActorClass::User { owner_slot } = identity.actor_class {
+        ensure!(
+          OwnerSlotMask::<T>::get(&identity.owner) & (1u8 << owner_slot) != 0,
+          Error::<T>::InvalidOwnerSlot
+        );
+      }
+
+      DormantAaaIdentities::<T>::remove(aaa_id);
+      ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+      match identity.actor_class {
+        ActorClass::User { owner_slot } => {
+          Self::remove_owner_slot_binding(&identity.owner, owner_slot, &identity.sovereign_account)
         }
-        match identity.actor_class {
-          ActorClass::User { owner_slot } => Self::remove_owner_slot_binding(
-            &identity.owner,
-            owner_slot,
-            &identity.sovereign_account,
-          ),
-          ActorClass::System => {
-            SovereignIndex::<T>::remove(&identity.sovereign_account);
-            ClosedSystemAaaIds::<T>::insert(aaa_id, identity.mutability);
-          }
+        ActorClass::System => {
+          SovereignIndex::<T>::remove(&identity.sovereign_account);
+          ClosedSystemAaaIds::<T>::insert(aaa_id, identity.mutability);
         }
-        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
+      }
       Self::deposit_event(Event::AaaClosed { aaa_id, reason });
       Ok(())
-    }
-
-    fn admit_on_close_execution_plan(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
-      if instance.actor_class.aaa_type() != AaaType::User {
-        return Zero::zero();
-      }
-      let close_cycle_fee_upper = Self::close_cycle_fee_upper_bound(instance);
-      Self::user_native_balance(instance).min(close_cycle_fee_upper)
     }
 
     pub(crate) fn update_idle_starvation_state(
@@ -2874,7 +2583,7 @@ pub mod pallet {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         if Self::active_actor_exists(aaa_id) || ActorFunding::<T>::contains_key(aaa_id) {
           return Err(TryRuntimeError::Other(
-            "Dormant identity owns active scheduler or inbox state",
+            "Dormant identity owns active scheduler or readiness state",
           ));
         }
         match SovereignIndex::<T>::get(&identity.sovereign_account) {

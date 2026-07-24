@@ -602,7 +602,6 @@ pub enum StepErrorPolicy {
 )]
 pub enum DeferReason {
   InsufficientWeightBudget,
-  CloseTransitionFailed,
 }
 
 #[derive(
@@ -612,17 +611,6 @@ pub enum StepSkippedReason {
   ConditionsNotMet,
   ResolutionSkipped,
   FundingUnavailable,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub enum OnCloseStepFailureKind {
-  EvaluationFee,
-  ExecutionFee,
-  Condition,
-  Resolution,
-  Adapter,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -1009,7 +997,6 @@ pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
     schedule: Schedule,
     schedule_window: Option<ScheduleWindow<BlockNumber>>,
     execution_plan: ExecutionPlan,
-    on_close_execution_plan: ExecutionPlan,
     funding_source_policy: FundingPolicy,
   },
 }
@@ -1039,6 +1026,7 @@ pub struct ActorHotState<AccountId, BlockNumber, Balance> {
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
   pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
+  pub terminal_at: Option<BlockNumber>,
   pub last_user_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
@@ -1053,7 +1041,6 @@ pub struct ActorProgramState<Schedule, BlockNumber, ExecutionPlan> {
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
-  pub on_close_execution_plan: ExecutionPlan,
 }
 
 #[derive(
@@ -1068,7 +1055,6 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
-  pub on_close_execution_plan: ExecutionPlan,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
@@ -1106,14 +1092,4 @@ impl<AccountId> FundingProvenance<AccountId> {
       Self::Signed(account) | Self::InternalProtocol(account) | Self::Xcm(account) => account,
     }
   }
-}
-
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct IngressOverflowEvent<AaaId, AssetId, Balance, AccountId> {
-  pub aaa_id: AaaId,
-  pub asset: AssetId,
-  pub amount: Balance,
-  pub provenance: Option<FundingProvenance<AccountId>>,
 }

@@ -16,7 +16,7 @@ The current kernel/runtime slice provides:
 - Monotonic paged FIFO scheduler state (`QueueHead`, `QueueTail`, bounded `QueuePages`) plus time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with starvation observability
-- Fee admission, lifecycle controls, pause/resume, and admitted close-tail execution plans
+- Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee conversion, ingress, and entropy
 - Genesis provisioning of System actors through runtime configuration
 

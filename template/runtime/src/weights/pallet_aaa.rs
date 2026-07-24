@@ -25,7 +25,7 @@
 // --exclude-extrinsics
 // pallet_aaa::scheduler_wakeup_sparse_gap_recovery
 // --exclude-extrinsics
-// pallet_aaa::close_aaa_on_close_execution_plan_complex
+// pallet_aaa::close_aaa_system_pure
 // --exclude-extrinsics
 // pallet_aaa::circular_chain_stress
 // --exclude-extrinsics
@@ -67,13 +67,13 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::NextAaaId` (r:1 w:1)
 	/// Proof: `AAA::NextAaaId` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:2 w:2)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::DormantAaaIdentities` (r:1 w:0)
 	/// Proof: `AAA::DormantAaaIdentities` (`max_values`: None, `max_size`: Some(91), added: 2566, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::SovereignIndex` (r:2 w:1)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
@@ -91,10 +91,10 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn create_user_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1911`
-		//  Estimated: `12141`
-		// Minimum execution time: 184_803_000 picoseconds.
-		Weight::from_parts(190_600_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 185_501_000 picoseconds.
+		Weight::from_parts(194_162_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(12))
 	}
@@ -109,13 +109,13 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::NextAaaId` (r:1 w:1)
 	/// Proof: `AAA::NextAaaId` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:2 w:2)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::DormantAaaIdentities` (r:1 w:0)
 	/// Proof: `AAA::DormantAaaIdentities` (`max_values`: None, `max_size`: Some(91), added: 2566, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::SovereignIndex` (r:2 w:1)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
@@ -133,10 +133,10 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn create_user_aaa_at_slot() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1837`
-		//  Estimated: `12141`
-		// Minimum execution time: 182_149_000 picoseconds.
-		Weight::from_parts(187_387_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 183_546_000 picoseconds.
+		Weight::from_parts(190_600_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(12))
 	}
@@ -151,7 +151,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::NextAaaId` (r:1 w:1)
 	/// Proof: `AAA::NextAaaId` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::DormantAaaIdentities` (r:1 w:0)
 	/// Proof: `AAA::DormantAaaIdentities` (`max_values`: None, `max_size`: Some(91), added: 2566, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::SovereignIndex` (r:1 w:1)
@@ -159,19 +159,19 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::ActorFunding` (r:0 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:0 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	fn create_system_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `947`
-		//  Estimated: `3651`
-		// Minimum execution time: 50_077_000 picoseconds.
-		Weight::from_parts(53_848_000, 0)
-			.saturating_add(Weight::from_parts(0, 3651))
+		//  Estimated: `3656`
+		// Minimum execution time: 50_566_000 picoseconds.
+		Weight::from_parts(53_290_000, 0)
+			.saturating_add(Weight::from_parts(0, 3656))
 			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ClosedSystemAaaIds` (r:1 w:1)
 	/// Proof: `AAA::ClosedSystemAaaIds` (`max_values`: None, `max_size`: Some(25), added: 2500, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::GlobalCircuitBreaker` (r:1 w:0)
@@ -191,14 +191,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::ActorFunding` (r:0 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:0 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	fn reopen_system_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `992`
-		//  Estimated: `3651`
-		// Minimum execution time: 55_804_000 picoseconds.
-		Weight::from_parts(58_179_000, 0)
-			.saturating_add(Weight::from_parts(0, 3651))
+		//  Estimated: `3656`
+		// Minimum execution time: 55_944_000 picoseconds.
+		Weight::from_parts(58_109_000, 0)
+			.saturating_add(Weight::from_parts(0, 3656))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(7))
 	}
@@ -209,7 +209,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::NextAaaId` (r:1 w:1)
 	/// Proof: `AAA::NextAaaId` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::DormantAaaIdentities` (r:1 w:1)
 	/// Proof: `AAA::DormantAaaIdentities` (`max_values`: None, `max_size`: Some(91), added: 2566, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::SovereignIndex` (r:1 w:1)
@@ -219,10 +219,10 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn create_dormant_system_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `999`
-		//  Estimated: `3651`
-		// Minimum execution time: 42_813_000 picoseconds.
-		Weight::from_parts(45_188_000, 0)
-			.saturating_add(Weight::from_parts(0, 3651))
+		//  Estimated: `3656`
+		// Minimum execution time: 43_023_000 picoseconds.
+		Weight::from_parts(45_328_000, 0)
+			.saturating_add(Weight::from_parts(0, 3656))
 			.saturating_add(T::DbWeight::get().reads(7))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
@@ -235,25 +235,25 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::ActiveActorLimit` (r:1 w:0)
 	/// Proof: `AAA::ActiveActorLimit` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:0 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:0 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	fn activate_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `697`
-		//  Estimated: `3651`
-		// Minimum execution time: 42_604_000 picoseconds.
-		Weight::from_parts(44_629_000, 0)
-			.saturating_add(Weight::from_parts(0, 3651))
+		//  Estimated: `3656`
+		// Minimum execution time: 43_232_000 picoseconds.
+		Weight::from_parts(45_538_000, 0)
+			.saturating_add(Weight::from_parts(0, 3656))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActiveAaaCount` (r:1 w:1)
 	/// Proof: `AAA::ActiveAaaCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:0 w:1)
@@ -263,45 +263,45 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn deactivate_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `724`
-		//  Estimated: `12141`
-		// Minimum execution time: 37_086_000 picoseconds.
-		Weight::from_parts(39_112_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 37_226_000 picoseconds.
+		Weight::from_parts(39_670_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	fn pause_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `822`
-		//  Estimated: `12141`
-		// Minimum execution time: 28_705_000 picoseconds.
-		Weight::from_parts(30_522_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 33_384_000 picoseconds.
+		Weight::from_parts(35_341_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	fn resume_aaa() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `827`
-		//  Estimated: `12141`
-		// Minimum execution time: 32_895_000 picoseconds.
-		Weight::from_parts(34_781_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 32_896_000 picoseconds.
+		Weight::from_parts(35_619_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueTail` (r:1 w:1)
@@ -311,102 +311,82 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn manual_trigger() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `841`
-		//  Estimated: `12141`
-		// Minimum execution time: 42_743_000 picoseconds.
-		Weight::from_parts(44_699_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 42_394_000 picoseconds.
+		Weight::from_parts(44_629_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
-	/// Storage: `System::Account` (r:33 w:33)
-	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::SovereignIndex` (r:33 w:1)
-	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
-	/// Storage: `Assets::Asset` (r:1 w:0)
-	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActiveAaaCount` (r:1 w:1)
 	/// Proof: `AAA::ActiveAaaCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorIdentityCount` (r:1 w:1)
 	/// Proof: `AAA::ActorIdentityCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ClosedSystemAaaIds` (r:0 w:1)
-	/// Proof: `AAA::ClosedSystemAaaIds` (`max_values`: None, `max_size`: Some(25), added: 2500, mode: `MaxEncodedLen`)
+	/// Storage: `AAA::SovereignIndex` (r:1 w:1)
+	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
+	/// Storage: `AAA::OwnerSlotMask` (r:1 w:1)
+	/// Proof: `AAA::OwnerSlotMask` (`max_values`: None, `max_size`: Some(49), added: 2524, mode: `MaxEncodedLen`)
 	fn close_aaa() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `4595`
-		//  Estimated: `86889`
-		// Minimum execution time: 2_102_676_000 picoseconds.
-		Weight::from_parts(2_143_325_000, 0)
-			.saturating_add(Weight::from_parts(0, 86889))
-			.saturating_add(T::DbWeight::get().reads(72))
-			.saturating_add(T::DbWeight::get().writes(40))
+		//  Measured:  `1379`
+		//  Estimated: `8120`
+		// Minimum execution time: 62_998_000 picoseconds.
+		Weight::from_parts(66_420_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
+			.saturating_add(T::DbWeight::get().reads(7))
+			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	fn update_schedule() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `822`
-		//  Estimated: `12141`
-		// Minimum execution time: 36_388_000 picoseconds.
-		Weight::from_parts(38_274_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 36_528_000 picoseconds.
+		Weight::from_parts(38_623_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	fn update_funding_source_policy() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `959`
-		//  Estimated: `12141`
-		// Minimum execution time: 38_692_000 picoseconds.
-		Weight::from_parts(40_788_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 37_994_000 picoseconds.
+		Weight::from_parts(40_928_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	fn update_execution_plan() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1329`
-		//  Estimated: `12141`
-		// Minimum execution time: 47_492_000 picoseconds.
-		Weight::from_parts(49_518_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 47_563_000 picoseconds.
+		Weight::from_parts(49_937_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(3))
-	}
-	/// Storage: `AAA::ActorHot` (r:1 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorProgram` (r:1 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorFunding` (r:1 w:1)
-	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
-	fn update_on_close_execution_plan() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `959`
-		//  Estimated: `12141`
-		// Minimum execution time: 40_997_000 picoseconds.
-		Weight::from_parts(43_023_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
-			.saturating_add(T::DbWeight::get().reads(3))
-			.saturating_add(T::DbWeight::get().writes(2))
 	}
 	/// Storage: `AAA::GlobalCircuitBreaker` (r:0 w:1)
 	/// Proof: `AAA::GlobalCircuitBreaker` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `MaxEncodedLen`)
@@ -415,7 +395,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		//  Measured:  `0`
 		//  Estimated: `0`
 		// Minimum execution time: 7_543_000 picoseconds.
-		Weight::from_parts(9_150_000, 0)
+		Weight::from_parts(9_359_000, 0)
 			.saturating_add(Weight::from_parts(0, 0))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -427,31 +407,31 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `288`
 		//  Estimated: `1489`
-		// Minimum execution time: 13_409_000 picoseconds.
-		Weight::from_parts(15_226_000, 0)
+		// Minimum execution time: 13_340_000 picoseconds.
+		Weight::from_parts(15_225_000, 0)
 			.saturating_add(Weight::from_parts(0, 1489))
 			.saturating_add(T::DbWeight::get().reads(2))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:0)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	fn permissionless_sweep() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1000`
-		//  Estimated: `12141`
-		// Minimum execution time: 30_312_000 picoseconds.
-		Weight::from_parts(31_988_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 30_032_000 picoseconds.
+		Weight::from_parts(32_407_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(3))
 	}
 	/// Storage: `AAA::ActorHot` (r:5 w:5)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:5 w:5)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:5 w:0)
 	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:5 w:5)
@@ -460,71 +440,32 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AAA::ActiveAaaCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorIdentityCount` (r:1 w:1)
 	/// Proof: `AAA::ActorIdentityCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
+	/// Storage: `AAA::SovereignIndex` (r:5 w:5)
+	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::OwnerSlotMask` (r:5 w:5)
 	/// Proof: `AAA::OwnerSlotMask` (`max_values`: None, `max_size`: Some(49), added: 2524, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::SovereignIndex` (r:0 w:5)
-	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// The range of component `n` is `[1, 5]`.
 	fn permissionless_sweep_many(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `685 + n * (369 ±0)`
-		//  Estimated: `1489 + n * (11151 ±0)`
-		// Minimum execution time: 69_214_000 picoseconds.
-		Weight::from_parts(26_091_888, 0)
+		//  Measured:  `1009 + n * (432 ±0)`
+		//  Estimated: `1489 + n * (7130 ±0)`
+		// Minimum execution time: 70_471_000 picoseconds.
+		Weight::from_parts(27_673_561, 0)
 			.saturating_add(Weight::from_parts(0, 1489))
-			// Standard Error: 15_234
-			.saturating_add(Weight::from_parts(46_066_084, 0).saturating_mul(n.into()))
+			// Standard Error: 44_325
+			.saturating_add(Weight::from_parts(47_090_027, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(2))
-			.saturating_add(T::DbWeight::get().reads((5_u64).saturating_mul(n.into())))
+			.saturating_add(T::DbWeight::get().reads((6_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(2))
 			.saturating_add(T::DbWeight::get().writes((5_u64).saturating_mul(n.into())))
-			.saturating_add(Weight::from_parts(0, 11151).saturating_mul(n.into()))
-	}
-	/// Storage: `AAA::ActorHot` (r:2 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorProgram` (r:2 w:1)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
-	/// Storage: `System::Account` (r:10 w:10)
-	/// Proof: `System::Account` (`max_values`: None, `max_size`: Some(128), added: 2603, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorFunding` (r:2 w:1)
-	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::SovereignIndex` (r:10 w:1)
-	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
-	/// Storage: `Assets::Asset` (r:1 w:0)
-	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActiveAaaCount` (r:1 w:1)
-	/// Proof: `AAA::ActiveAaaCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorIdentityCount` (r:1 w:1)
-	/// Proof: `AAA::ActorIdentityCount` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::OwnerSlotMask` (r:1 w:1)
-	/// Proof: `AAA::OwnerSlotMask` (`max_values`: None, `max_size`: Some(49), added: 2524, mode: `MaxEncodedLen`)
-	/// The range of component `s` is `[1, 3]`.
-	/// The range of component `l` is `[2, 8]`.
-	fn close_aaa_user_fee_bearing_tail(s: u32, l: u32, ) -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `2348 + l * (82 ±0) + s * (127 ±0)`
-		//  Estimated: `23292 + l * (2694 ±24) + s * (1458 ±64)`
-		// Minimum execution time: 676_215_000 picoseconds.
-		Weight::from_parts(50_440_663, 0)
-			.saturating_add(Weight::from_parts(0, 23292))
-			// Standard Error: 227_372
-			.saturating_add(Weight::from_parts(193_150_445, 0).saturating_mul(s.into()))
-			// Standard Error: 88_095
-			.saturating_add(Weight::from_parts(56_882_697, 0).saturating_mul(l.into()))
-			.saturating_add(T::DbWeight::get().reads(12))
-			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(s.into())))
-			.saturating_add(T::DbWeight::get().reads((2_u64).saturating_mul(l.into())))
-			.saturating_add(T::DbWeight::get().writes(9))
-			.saturating_add(T::DbWeight::get().writes((1_u64).saturating_mul(l.into())))
-			.saturating_add(Weight::from_parts(0, 2694).saturating_mul(l.into()))
-			.saturating_add(Weight::from_parts(0, 1458).saturating_mul(s.into()))
+			.saturating_add(Weight::from_parts(0, 7130).saturating_mul(n.into()))
 	}
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:0)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
@@ -533,20 +474,20 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `Assets::Asset` (`max_values`: None, `max_size`: Some(210), added: 2685, mode: `MaxEncodedLen`)
 	fn fee_collection() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1647`
-		//  Estimated: `12141`
-		// Minimum execution time: 108_605_000 picoseconds.
-		Weight::from_parts(111_469_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Measured:  `1645`
+		//  Estimated: `8120`
+		// Minimum execution time: 109_652_000 picoseconds.
+		Weight::from_parts(112_866_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:1 w:1)
@@ -568,19 +509,19 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn task_simple_asset_op() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1687`
-		//  Estimated: `12141`
-		// Minimum execution time: 147_717_000 picoseconds.
-		Weight::from_parts(150_720_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 152_955_000 picoseconds.
+		Weight::from_parts(156_028_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(11))
 			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `AAA::SovereignIndex` (r:8 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:8 w:8)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:8 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:8 w:8)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `System::Account` (r:8 w:8)
@@ -603,26 +544,26 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn task_split_transfer(l: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1232 + l * (431 ±0)`
-		//  Estimated: `3675 + l * (11151 ±0)`
-		// Minimum execution time: 255_903_000 picoseconds.
-		Weight::from_parts(45_579_142, 0)
+		//  Estimated: `3675 + l * (7130 ±0)`
+		// Minimum execution time: 267_356_000 picoseconds.
+		Weight::from_parts(47_531_579, 0)
 			.saturating_add(Weight::from_parts(0, 3675))
-			// Standard Error: 40_769
-			.saturating_add(Weight::from_parts(110_101_781, 0).saturating_mul(l.into()))
+			// Standard Error: 45_195
+			.saturating_add(Weight::from_parts(115_819_039, 0).saturating_mul(l.into()))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().reads((5_u64).saturating_mul(l.into())))
 			.saturating_add(T::DbWeight::get().writes(4))
 			.saturating_add(T::DbWeight::get().writes((3_u64).saturating_mul(l.into())))
-			.saturating_add(Weight::from_parts(0, 11151).saturating_mul(l.into()))
+			.saturating_add(Weight::from_parts(0, 7130).saturating_mul(l.into()))
 	}
 	/// Storage: `AssetRegistry::ForeignAssetMapping` (r:1 w:0)
 	/// Proof: `AssetRegistry::ForeignAssetMapping` (`max_values`: None, `max_size`: Some(622), added: 3097, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:0)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
@@ -646,10 +587,10 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn xcm_asset_deposit() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `2059`
-		//  Estimated: `12141`
-		// Minimum execution time: 127_183_000 picoseconds.
-		Weight::from_parts(130_535_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 131_164_000 picoseconds.
+		Weight::from_parts(135_424_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(13))
 			.saturating_add(T::DbWeight::get().writes(8))
 	}
@@ -669,8 +610,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `771`
 		//  Estimated: `11426`
-		// Minimum execution time: 236_975_000 picoseconds.
-		Weight::from_parts(241_724_000, 0)
+		// Minimum execution time: 239_629_000 picoseconds.
+		Weight::from_parts(246_474_000, 0)
 			.saturating_add(Weight::from_parts(0, 11426))
 			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().writes(9))
@@ -689,8 +630,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1631`
 		//  Estimated: `14035`
-		// Minimum execution time: 197_584_000 picoseconds.
-		Weight::from_parts(208_201_000, 0)
+		// Minimum execution time: 200_517_000 picoseconds.
+		Weight::from_parts(204_848_000, 0)
 			.saturating_add(Weight::from_parts(0, 14035))
 			.saturating_add(T::DbWeight::get().reads(10))
 			.saturating_add(T::DbWeight::get().writes(9))
@@ -707,8 +648,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `4504`
 		//  Estimated: `81150`
-		// Minimum execution time: 309_122_000 picoseconds.
-		Weight::from_parts(336_012_000, 0)
+		// Minimum execution time: 310_519_000 picoseconds.
+		Weight::from_parts(325_536_000, 0)
 			.saturating_add(Weight::from_parts(0, 81150))
 			.saturating_add(T::DbWeight::get().reads(38))
 			.saturating_add(T::DbWeight::get().writes(6))
@@ -727,8 +668,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1252`
 		//  Estimated: `11699`
-		// Minimum execution time: 106_161_000 picoseconds.
-		Weight::from_parts(109_164_000, 0)
+		// Minimum execution time: 107_208_000 picoseconds.
+		Weight::from_parts(110_491_000, 0)
 			.saturating_add(Weight::from_parts(0, 11699))
 			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(8))
@@ -749,8 +690,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `1594`
 		//  Estimated: `11699`
-		// Minimum execution time: 127_602_000 picoseconds.
-		Weight::from_parts(131_164_000, 0)
+		// Minimum execution time: 128_580_000 picoseconds.
+		Weight::from_parts(132_630_000, 0)
 			.saturating_add(Weight::from_parts(0, 11699))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(8))
@@ -770,9 +711,9 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:0)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
@@ -785,11 +726,11 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AxialRouter::EmaLastUpdate` (`max_values`: None, `max_size`: Some(46), added: 2521, mode: `MaxEncodedLen`)
 	fn task_dex_exact_in() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `2382`
-		//  Estimated: `12141`
-		// Minimum execution time: 303_186_000 picoseconds.
-		Weight::from_parts(314_710_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Measured:  `2380`
+		//  Estimated: `8120`
+		// Minimum execution time: 305_770_000 picoseconds.
+		Weight::from_parts(319_320_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(16))
 			.saturating_add(T::DbWeight::get().writes(10))
 	}
@@ -808,9 +749,9 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:0)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
@@ -823,11 +764,11 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AxialRouter::EmaLastUpdate` (`max_values`: None, `max_size`: Some(46), added: 2521, mode: `MaxEncodedLen`)
 	fn task_dex_exact_out() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `2382`
-		//  Estimated: `12141`
-		// Minimum execution time: 853_265_000 picoseconds.
-		Weight::from_parts(886_790_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Measured:  `2380`
+		//  Estimated: `8120`
+		// Minimum execution time: 870_726_000 picoseconds.
+		Weight::from_parts(914_727_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(16))
 			.saturating_add(T::DbWeight::get().writes(10))
 	}
@@ -837,59 +778,44 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueTail` (r:1 w:0)
 	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::LastIngressIngestBlock` (r:1 w:1)
-	/// Proof: `AAA::LastIngressIngestBlock` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::IdleStarvationBlocks` (r:1 w:1)
 	/// Proof: `AAA::IdleStarvationBlocks` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
 	fn scheduler_on_idle_base() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `373`
 		//  Estimated: `1493`
-		// Minimum execution time: 14_527_000 picoseconds.
-		Weight::from_parts(16_273_000, 0)
+		// Minimum execution time: 13_480_000 picoseconds.
+		Weight::from_parts(15_296_000, 0)
 			.saturating_add(Weight::from_parts(0, 1493))
-			.saturating_add(T::DbWeight::get().reads(5))
-			.saturating_add(T::DbWeight::get().writes(2))
-	}
-	/// Storage: `AAA::NextAaaId` (r:1 w:0)
-	/// Proof: `AAA::NextAaaId` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::SweepCursor` (r:1 w:0)
-	/// Proof: `AAA::SweepCursor` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	fn scheduler_zombie_sweep_base() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `318`
-		//  Estimated: `1493`
-		// Minimum execution time: 7_124_000 picoseconds.
-		Weight::from_parts(8_730_000, 0)
-			.saturating_add(Weight::from_parts(0, 1493))
-			.saturating_add(T::DbWeight::get().reads(2))
+			.saturating_add(T::DbWeight::get().reads(4))
+			.saturating_add(T::DbWeight::get().writes(1))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	fn scheduler_actor_hot_probe() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `525`
-		//  Estimated: `3651`
-		// Minimum execution time: 9_010_000 picoseconds.
-		Weight::from_parts(10_616_000, 0)
-			.saturating_add(Weight::from_parts(0, 3651))
+		//  Measured:  `526`
+		//  Estimated: `3656`
+		// Minimum execution time: 8_940_000 picoseconds.
+		Weight::from_parts(10_756_000, 0)
+			.saturating_add(Weight::from_parts(0, 3656))
 			.saturating_add(T::DbWeight::get().reads(1))
 	}
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::GlobalCircuitBreaker` (r:1 w:0)
 	/// Proof: `AAA::GlobalCircuitBreaker` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `MaxEncodedLen`)
 	fn scheduler_actor_program_probe() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `470`
-		//  Estimated: `12141`
-		// Minimum execution time: 15_715_000 picoseconds.
-		Weight::from_parts(17_600_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Measured:  `469`
+		//  Estimated: `8120`
+		// Minimum execution time: 16_064_000 picoseconds.
+		Weight::from_parts(17_740_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(2))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
 	/// Storage: `AAA::QueueTail` (r:1 w:1)
@@ -898,16 +824,16 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	fn scheduler_paged_append_existing_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1716`
-		//  Estimated: `5181`
-		// Minimum execution time: 28_984_000 picoseconds.
-		Weight::from_parts(31_499_000, 0)
-			.saturating_add(Weight::from_parts(0, 5181))
+		//  Measured:  `1717`
+		//  Estimated: `5182`
+		// Minimum execution time: 29_054_000 picoseconds.
+		Weight::from_parts(31_988_000, 0)
+			.saturating_add(Weight::from_parts(0, 5182))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
 	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `Measured`)
 	/// Storage: `AAA::QueueTail` (r:1 w:1)
@@ -916,48 +842,48 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	fn scheduler_paged_append_new_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1202`
-		//  Estimated: `4667`
-		// Minimum execution time: 25_563_000 picoseconds.
-		Weight::from_parts(27_658_000, 0)
-			.saturating_add(Weight::from_parts(0, 4667))
+		//  Measured:  `1203`
+		//  Estimated: `4668`
+		// Minimum execution time: 25_772_000 picoseconds.
+		Weight::from_parts(28_705_000, 0)
+			.saturating_add(Weight::from_parts(0, 4668))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
 	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	fn scheduler_wakeup_append_existing_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1402`
-		//  Estimated: `4867`
-		// Minimum execution time: 33_734_000 picoseconds.
-		Weight::from_parts(36_318_000, 0)
-			.saturating_add(Weight::from_parts(0, 4867))
+		//  Measured:  `1403`
+		//  Estimated: `4868`
+		// Minimum execution time: 33_873_000 picoseconds.
+		Weight::from_parts(36_668_000, 0)
+			.saturating_add(Weight::from_parts(0, 4868))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(3))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
 	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:2)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	fn scheduler_wakeup_append_new_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1445`
-		//  Estimated: `4910`
-		// Minimum execution time: 35_690_000 picoseconds.
-		Weight::from_parts(38_553_000, 0)
-			.saturating_add(Weight::from_parts(0, 4910))
+		//  Measured:  `1446`
+		//  Estimated: `4911`
+		// Minimum execution time: 35_480_000 picoseconds.
+		Weight::from_parts(38_064_000, 0)
+			.saturating_add(Weight::from_parts(0, 4911))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().writes(4))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:1 w:2)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:2 w:2)
@@ -968,27 +894,27 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_replace_exact() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `762`
-		//  Estimated: `6702`
-		// Minimum execution time: 59_156_000 picoseconds.
-		Weight::from_parts(61_881_000, 0)
-			.saturating_add(Weight::from_parts(0, 6702))
+		//  Measured:  `763`
+		//  Estimated: `6703`
+		// Minimum execution time: 59_506_000 picoseconds.
+		Weight::from_parts(61_950_000, 0)
+			.saturating_add(Weight::from_parts(0, 6703))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().writes(7))
 	}
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupPages` (r:3 w:3)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
 	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `Measured`)
 	fn scheduler_wakeup_invalidate_middle_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `1772`
-		//  Estimated: `10187`
-		// Minimum execution time: 46_096_000 picoseconds.
-		Weight::from_parts(50_566_000, 0)
-			.saturating_add(Weight::from_parts(0, 10187))
+		//  Measured:  `1773`
+		//  Estimated: `10188`
+		// Minimum execution time: 45_327_000 picoseconds.
+		Weight::from_parts(50_357_000, 0)
+			.saturating_add(Weight::from_parts(0, 10188))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
@@ -997,14 +923,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:16 w:16)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	fn scheduler_wakeup_drain_partial_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `3882`
-		//  Estimated: `44472`
-		// Minimum execution time: 133_888_000 picoseconds.
-		Weight::from_parts(146_809_000, 0)
-			.saturating_add(Weight::from_parts(0, 44472))
+		//  Measured:  `3898`
+		//  Estimated: `44488`
+		// Minimum execution time: 135_075_000 picoseconds.
+		Weight::from_parts(146_041_000, 0)
+			.saturating_add(Weight::from_parts(0, 44488))
 			.saturating_add(T::DbWeight::get().reads(18))
 			.saturating_add(T::DbWeight::get().writes(18))
 	}
@@ -1013,18 +939,18 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:32 w:32)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
 	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
 	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_drain_full_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `6155`
-		//  Estimated: `86345`
-		// Minimum execution time: 249_337_000 picoseconds.
-		Weight::from_parts(268_264_000, 0)
-			.saturating_add(Weight::from_parts(0, 86345))
+		//  Measured:  `6187`
+		//  Estimated: `86377`
+		// Minimum execution time: 251_503_000 picoseconds.
+		Weight::from_parts(267_147_000, 0)
+			.saturating_add(Weight::from_parts(0, 86377))
 			.saturating_add(T::DbWeight::get().reads(36))
 			.saturating_add(T::DbWeight::get().writes(36))
 	}
@@ -1033,18 +959,18 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:2 w:2)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:33 w:33)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
 	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
 	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_drain_dense_boundary() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `6390`
-		//  Estimated: `89055`
-		// Minimum execution time: 265_820_000 picoseconds.
-		Weight::from_parts(283_281_000, 0)
-			.saturating_add(Weight::from_parts(0, 89055))
+		//  Measured:  `6423`
+		//  Estimated: `89088`
+		// Minimum execution time: 267_845_000 picoseconds.
+		Weight::from_parts(285_167_000, 0)
+			.saturating_add(Weight::from_parts(0, 89088))
 			.saturating_add(T::DbWeight::get().reads(38))
 			.saturating_add(T::DbWeight::get().writes(38))
 	}
@@ -1053,18 +979,18 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:32 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
 	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `Measured`)
 	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `Measured`)
 	fn scheduler_wakeup_drain_stale_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `5643`
-		//  Estimated: `85833`
-		// Minimum execution time: 159_450_000 picoseconds.
-		Weight::from_parts(168_739_000, 0)
-			.saturating_add(Weight::from_parts(0, 85833))
+		//  Measured:  `5675`
+		//  Estimated: `85865`
+		// Minimum execution time: 160_149_000 picoseconds.
+		Weight::from_parts(169_368_000, 0)
+			.saturating_add(Weight::from_parts(0, 85865))
 			.saturating_add(T::DbWeight::get().reads(36))
 			.saturating_add(T::DbWeight::get().writes(4))
 	}
@@ -1078,8 +1004,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `6167`
 		//  Estimated: `41807`
-		// Minimum execution time: 321_276_000 picoseconds.
-		Weight::from_parts(338_527_000, 0)
+		// Minimum execution time: 325_675_000 picoseconds.
+		Weight::from_parts(343_555_000, 0)
 			.saturating_add(Weight::from_parts(0, 41807))
 			.saturating_add(T::DbWeight::get().reads(25))
 			.saturating_add(T::DbWeight::get().writes(25))
@@ -1094,8 +1020,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `10659`
 		//  Estimated: `56199`
-		// Minimum execution time: 433_372_000 picoseconds.
-		Weight::from_parts(463_893_000, 0)
+		// Minimum execution time: 440_077_000 picoseconds.
+		Weight::from_parts(471_087_000, 0)
 			.saturating_add(Weight::from_parts(0, 56199))
 			.saturating_add(T::DbWeight::get().reads(34))
 			.saturating_add(T::DbWeight::get().writes(26))
@@ -1110,8 +1036,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `10227`
 		//  Estimated: `55767`
-		// Minimum execution time: 408_299_000 picoseconds.
-		Weight::from_parts(427_436_000, 0)
+		// Minimum execution time: 411_372_000 picoseconds.
+		Weight::from_parts(442_801_000, 0)
 			.saturating_add(Weight::from_parts(0, 55767))
 			.saturating_add(T::DbWeight::get().reads(33))
 			.saturating_add(T::DbWeight::get().writes(25))
@@ -1129,16 +1055,16 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::QueuePages` (r:1 w:1)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	fn scheduler_wakeup_cursor_worker_partial() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `810`
-		//  Estimated: `4275`
-		// Minimum execution time: 51_404_000 picoseconds.
-		Weight::from_parts(53_499_000, 0)
-			.saturating_add(Weight::from_parts(0, 4275))
+		//  Measured:  `811`
+		//  Estimated: `4276`
+		// Minimum execution time: 51_544_000 picoseconds.
+		Weight::from_parts(54_128_000, 0)
+			.saturating_add(Weight::from_parts(0, 4276))
 			.saturating_add(T::DbWeight::get().reads(8))
 			.saturating_add(T::DbWeight::get().writes(5))
 	}
@@ -1155,16 +1081,16 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::WakeupPages` (r:1 w:1)
 	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::QueuePages` (r:1 w:1)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	fn scheduler_wakeup_cursor_worker_remove() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `11023`
-		//  Estimated: `56563`
-		// Minimum execution time: 475_487_000 picoseconds.
-		Weight::from_parts(503_983_000, 0)
-			.saturating_add(Weight::from_parts(0, 56563))
+		//  Measured:  `11024`
+		//  Estimated: `56564`
+		// Minimum execution time: 485_196_000 picoseconds.
+		Weight::from_parts(523_609_000, 0)
+			.saturating_add(Weight::from_parts(0, 56564))
 			.saturating_add(T::DbWeight::get().reads(39))
 			.saturating_add(T::DbWeight::get().writes(30))
 	}
@@ -1176,7 +1102,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `431`
 		//  Estimated: `3896`
-		// Minimum execution time: 10_476_000 picoseconds.
+		// Minimum execution time: 10_406_000 picoseconds.
 		Weight::from_parts(12_223_000, 0)
 			.saturating_add(Weight::from_parts(0, 3896))
 			.saturating_add(T::DbWeight::get().reads(2))
@@ -1188,14 +1114,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::QueuePages` (r:1 w:0)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	fn scheduler_paged_consume_preserve_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `662`
-		//  Estimated: `4127`
-		// Minimum execution time: 19_835_000 picoseconds.
-		Weight::from_parts(21_512_000, 0)
-			.saturating_add(Weight::from_parts(0, 4127))
+		//  Measured:  `663`
+		//  Estimated: `4128`
+		// Minimum execution time: 19_626_000 picoseconds.
+		Weight::from_parts(21_581_000, 0)
+			.saturating_add(Weight::from_parts(0, 4128))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(2))
 	}
@@ -1206,14 +1132,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::QueuePages` (r:1 w:1)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	fn scheduler_paged_consume_delete_page() -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `654`
-		//  Estimated: `4119`
-		// Minimum execution time: 21_371_000 picoseconds.
-		Weight::from_parts(23_048_000, 0)
-			.saturating_add(Weight::from_parts(0, 4119))
+		//  Measured:  `655`
+		//  Estimated: `4120`
+		// Minimum execution time: 21_023_000 picoseconds.
+		Weight::from_parts(22_978_000, 0)
+			.saturating_add(Weight::from_parts(0, 4120))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(4))
 	}
@@ -1224,17 +1150,17 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::QueuePages` (r:157 w:157)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:10000 w:0)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// The range of component `n` is `[1, 10000]`.
 	fn scheduler_paged_tombstone_drain(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `584 + n * (8 ±0)`
 		//  Estimated: `2903 + n * (2484 ±0)`
-		// Minimum execution time: 19_207_000 picoseconds.
+		// Minimum execution time: 18_997_000 picoseconds.
 		Weight::from_parts(20_045_000, 0)
 			.saturating_add(Weight::from_parts(0, 2903))
-			// Standard Error: 836
-			.saturating_add(Weight::from_parts(2_150_719, 0).saturating_mul(n.into()))
+			// Standard Error: 1_403
+			.saturating_add(Weight::from_parts(2_161_984, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(3))
@@ -1247,17 +1173,17 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::QueuePages` (r:157 w:157)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:10000 w:5000)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// The range of component `n` is `[1, 10000]`.
 	fn scheduler_paged_mixed_scan(n: u32, ) -> Weight {
 		// Proof Size summary in bytes:
-		//  Measured:  `789 + n * (86 ±0)`
-		//  Estimated: `3092 + n * (2562 ±0)`
-		// Minimum execution time: 22_349_000 picoseconds.
-		Weight::from_parts(22_978_000, 0)
-			.saturating_add(Weight::from_parts(0, 3092))
-			// Standard Error: 30_037
-			.saturating_add(Weight::from_parts(12_409_795, 0).saturating_mul(n.into()))
+		//  Measured:  `788 + n * (87 ±0)`
+		//  Estimated: `3091 + n * (2562 ±0)`
+		// Minimum execution time: 22_419_000 picoseconds.
+		Weight::from_parts(23_048_000, 0)
+			.saturating_add(Weight::from_parts(0, 3091))
+			// Standard Error: 28_061
+			.saturating_add(Weight::from_parts(12_556_596, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(3))
 			.saturating_add(T::DbWeight::get().reads((1_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(2))
@@ -1273,9 +1199,9 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	/// Storage: `AAA::QueuePages` (r:16 w:16)
 	/// Proof: `AAA::QueuePages` (`max_values`: None, `max_size`: Some(538), added: 3013, mode: `Measured`)
 	/// Storage: `AAA::ActorHot` (r:999 w:999)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `Measured`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `Measured`)
 	/// Storage: `AAA::ActorProgram` (r:999 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `Measured`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `Measured`)
 	/// Storage: `AAA::GlobalCircuitBreaker` (r:1 w:0)
 	/// Proof: `AAA::GlobalCircuitBreaker` (`max_values`: Some(1), `max_size`: Some(1), added: 496, mode: `Measured`)
 	/// Storage: `AAA::ActorFunding` (r:999 w:999)
@@ -1287,34 +1213,34 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `873 + n * (254 ±0)`
 		//  Estimated: `4332 + n * (2730 ±0)`
-		// Minimum execution time: 88_839_000 picoseconds.
-		Weight::from_parts(89_468_000, 0)
+		// Minimum execution time: 90_166_000 picoseconds.
+		Weight::from_parts(90_656_000, 0)
 			.saturating_add(Weight::from_parts(0, 4332))
-			// Standard Error: 66_630
-			.saturating_add(Weight::from_parts(64_353_651, 0).saturating_mul(n.into()))
+			// Standard Error: 83_011
+			.saturating_add(Weight::from_parts(65_575_429, 0).saturating_mul(n.into()))
 			.saturating_add(T::DbWeight::get().reads(6))
 			.saturating_add(T::DbWeight::get().reads((3_u64).saturating_mul(n.into())))
 			.saturating_add(T::DbWeight::get().writes(3))
 			.saturating_add(T::DbWeight::get().writes((2_u64).saturating_mul(n.into())))
 			.saturating_add(Weight::from_parts(0, 2730).saturating_mul(n.into()))
 	}
-	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
+	/// Storage: `AAA::SovereignIndex` (r:2 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	fn transaction_extension_ingress_base() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `710`
-		//  Estimated: `3521`
-		// Minimum execution time: 13_131_000 picoseconds.
-		Weight::from_parts(14_806_000, 0)
-			.saturating_add(Weight::from_parts(0, 3521))
-			.saturating_add(T::DbWeight::get().reads(1))
+		//  Estimated: `6052`
+		// Minimum execution time: 13_550_000 picoseconds.
+		Weight::from_parts(15_365_000, 0)
+			.saturating_add(Weight::from_parts(0, 6052))
+			.saturating_add(T::DbWeight::get().reads(2))
 	}
 	/// Storage: `AAA::SovereignIndex` (r:1 w:0)
 	/// Proof: `AAA::SovereignIndex` (`max_values`: None, `max_size`: Some(56), added: 2531, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(191), added: 2666, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(4655), added: 7130, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::ActorFunding` (r:1 w:1)
 	/// Proof: `AAA::ActorFunding` (`max_values`: None, `max_size`: Some(961), added: 3436, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::QueueHead` (r:1 w:0)
@@ -1332,10 +1258,10 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 	fn transaction_extension_ingress_notify() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `1344`
-		//  Estimated: `12141`
-		// Minimum execution time: 86_255_000 picoseconds.
-		Weight::from_parts(90_585_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
+		//  Estimated: `8120`
+		// Minimum execution time: 85_348_000 picoseconds.
+		Weight::from_parts(88_281_000, 0)
+			.saturating_add(Weight::from_parts(0, 8120))
 			.saturating_add(T::DbWeight::get().reads(9))
 			.saturating_add(T::DbWeight::get().writes(6))
 	}
@@ -1346,55 +1272,12 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_aaa::WeightInfo for Substrate
 		// Proof Size summary in bytes:
 		//  Measured:  `425 + a * (37 ±0)`
 		//  Estimated: `4426`
-		// Minimum execution time: 18_997_000 picoseconds.
-		Weight::from_parts(18_749_402, 0)
+		// Minimum execution time: 18_578_000 picoseconds.
+		Weight::from_parts(18_317_187, 0)
 			.saturating_add(Weight::from_parts(0, 4426))
-			// Standard Error: 2_568
-			.saturating_add(Weight::from_parts(2_400_885, 0).saturating_mul(a.into()))
+			// Standard Error: 1_235
+			.saturating_add(Weight::from_parts(2_372_223, 0).saturating_mul(a.into()))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
-	}
-	/// Storage: `AAA::IngressOverflowLen` (r:1 w:0)
-	/// Proof: `AAA::IngressOverflowLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	fn compatibility_ingress_probe() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `311`
-		//  Estimated: `1489`
-		// Minimum execution time: 5_587_000 picoseconds.
-		Weight::from_parts(7_054_000, 0)
-			.saturating_add(Weight::from_parts(0, 1489))
-			.saturating_add(T::DbWeight::get().reads(1))
-	}
-	/// Storage: `AAA::IngressOverflowHead` (r:1 w:1)
-	/// Proof: `AAA::IngressOverflowHead` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::IngressOverflowLen` (r:1 w:1)
-	/// Proof: `AAA::IngressOverflowLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::IngressOverflowSlots` (r:1 w:1)
-	/// Proof: `AAA::IngressOverflowSlots` (`max_values`: None, `max_size`: Some(83), added: 2558, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorHot` (r:1 w:1)
-	/// Proof: `AAA::ActorHot` (`max_values`: None, `max_size`: Some(186), added: 2661, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ActorProgram` (r:1 w:0)
-	/// Proof: `AAA::ActorProgram` (`max_values`: None, `max_size`: Some(8676), added: 11151, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::QueueHead` (r:1 w:0)
-	/// Proof: `AAA::QueueHead` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::QueueTail` (r:1 w:0)
-	/// Proof: `AAA::QueueTail` (`max_values`: Some(1), `max_size`: Some(8), added: 503, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::WakeupBuckets` (r:1 w:1)
-	/// Proof: `AAA::WakeupBuckets` (`max_values`: None, `max_size`: Some(53), added: 2528, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::WakeupCursorLen` (r:1 w:1)
-	/// Proof: `AAA::WakeupCursorLen` (`max_values`: Some(1), `max_size`: Some(4), added: 499, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::WakeupCursorPages` (r:1 w:1)
-	/// Proof: `AAA::WakeupCursorPages` (`max_values`: None, `max_size`: Some(153), added: 2628, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::WakeupPages` (r:0 w:1)
-	/// Proof: `AAA::WakeupPages` (`max_values`: None, `max_size`: Some(343), added: 2818, mode: `MaxEncodedLen`)
-	fn compatibility_ingress_drain() -> Weight {
-		// Proof Size summary in bytes:
-		//  Measured:  `914`
-		//  Estimated: `12141`
-		// Minimum execution time: 57_131_000 picoseconds.
-		Weight::from_parts(59_855_000, 0)
-			.saturating_add(Weight::from_parts(0, 12141))
-			.saturating_add(T::DbWeight::get().reads(10))
-			.saturating_add(T::DbWeight::get().writes(8))
 	}
 }

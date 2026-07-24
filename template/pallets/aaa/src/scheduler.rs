@@ -8,7 +8,6 @@ use polkadot_sdk::sp_weights::WeightMeter;
 enum AdmissionDecision {
   Admit(Weight),
   Closed(Weight),
-  CloseFailed(Weight),
   Defer(DeferReason),
   Skip,
 }
@@ -71,7 +70,7 @@ impl<T: Config> Pallet<T> {
       if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
         break;
       }
-      if hot.lifecycle.is_paused() {
+      if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
         if !Self::paged_consume_head(ticket) {
           break;
         }
@@ -102,14 +101,6 @@ impl<T: Config> Pallet<T> {
           let _ = Self::paged_consume_head(ticket);
           cycle_meter.consume(weight);
           continue;
-        }
-        AdmissionDecision::CloseFailed(weight) => {
-          cycle_meter.consume(weight);
-          Self::deposit_event(Event::CycleDeferred {
-            aaa_id,
-            reason: DeferReason::CloseTransitionFailed,
-          });
-          break;
         }
         AdmissionDecision::Defer(reason) => {
           Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
@@ -908,40 +899,54 @@ impl<T: Config> Pallet<T> {
       return;
     };
     let now = frame_system::Pallet::<T>::block_number();
+    if instance.lifecycle.is_paused() {
+      Self::schedule_window_expiry(aaa_id, &instance);
+      return;
+    }
     match &instance.schedule.trigger {
       Trigger::Timer { .. } => Self::schedule_next_timer_wakeup(aaa_id, &instance, now),
       Trigger::Manual => {
         if instance.manual_trigger_pending {
           Self::enqueue(aaa_id);
+        } else {
+          Self::schedule_window_expiry(aaa_id, &instance);
         }
       }
       Trigger::OnAddressEvent { .. } => {
         if instance.manual_trigger_pending {
           Self::enqueue(aaa_id);
+        } else {
+          Self::schedule_window_expiry(aaa_id, &instance);
         }
       }
     }
   }
 
-  fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
-    Self::wakeup_substrate_schedule(aaa_id, wakeup_block)
+  fn window_expiry_wakeup(instance: &AaaInstanceOf<T>) -> Option<BlockNumberFor<T>> {
+    instance
+      .schedule_window
+      .map(|window| window.end.saturating_add(One::one()))
   }
 
-  /// Baseline scheduler envelope reserved ahead of one actor run/close pair.
-  ///
-  /// Compatibility-ingress drains and heavyweight wakeup-retry or terminal
-  /// sweep units remain independently metered durable carry-over work. They
-  /// may defer actor execution in a saturated block and therefore do not form
-  /// part of this same-block plan-admission guarantee.
+  fn schedule_window_expiry(aaa_id: AaaId, instance: &AaaInstanceOf<T>) {
+    if let Some(expiry) = Self::window_expiry_wakeup(instance) {
+      let _ = Self::wakeup_substrate_schedule(aaa_id, expiry);
+    }
+  }
+
+  fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
+    let target = Self::active_actor_snapshot(aaa_id)
+      .and_then(|instance| Self::window_expiry_wakeup(&instance))
+      .map(|expiry| wakeup_block.min(expiry))
+      .unwrap_or(wakeup_block);
+    Self::wakeup_substrate_schedule(aaa_id, target)
+  }
+
+  /// Baseline scheduler envelope reserved ahead of one actor run plus pure cleanup.
+  /// Explicit permissionless repair sweeps remain dispatch-owned and do not consume every block's
+  /// guaranteed scheduler envelope.
   pub fn scheduler_admission_overhead() -> Weight {
     T::WeightInfo::scheduler_on_idle_base()
-      .saturating_add(T::WeightInfo::compatibility_ingress_probe())
-      .saturating_add(T::WeightInfo::scheduler_zombie_sweep_base())
-      .saturating_add(
-        T::WeightInfo::permissionless_sweep()
-          .saturating_add(T::DbWeight::get().writes(1))
-          .saturating_mul(u64::from(T::MaxSweepPerBlock::get())),
-      )
       .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(1))
       .saturating_add(
         T::WeightInfo::scheduler_paged_consume_preserve_page()
@@ -955,16 +960,10 @@ impl<T: Config> Pallet<T> {
       .saturating_add(Self::scheduler_actor_probe_weight_upper())
   }
 
-  /// Upper-bounds terminal state deletion after the close plan has run.
-  ///
-  /// Queue invalidation is actor-local. The temporal term covers exact bucket
-  /// removal plus worst-depth cursor insertion; the fixed tail covers actor
-  /// cardinality, reverse indexes, checkpoint, and event state.
+  /// Conservatively prices pure actor-local terminal deletion from the measured User close path.
+  /// Shared queue and wakeup records become lazy tombstones.
   pub(crate) fn close_cleanup_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_paged_consume_preserve_page()
-      .saturating_add(Self::wakeup_registration_weight_upper())
-      .saturating_add(Weight::from_parts(10_000_000, 32_768))
-      .saturating_add(T::DbWeight::get().reads_writes(9, 12))
+    T::WeightInfo::close_aaa()
   }
 
   pub fn wakeup_registration_weight_upper() -> Weight {
@@ -1151,6 +1150,7 @@ impl<T: Config> Pallet<T> {
     periodic_continuations: &mut Vec<AaaId>,
   ) {
     if instance.lifecycle.is_paused() {
+      Self::schedule_window_expiry(aaa_id, instance);
       return;
     }
     if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
@@ -1159,6 +1159,7 @@ impl<T: Config> Pallet<T> {
     }
     let pending = instance.manual_trigger_pending;
     if !pending {
+      Self::schedule_window_expiry(aaa_id, instance);
       return;
     }
     let eligibility_block = Self::next_eligible_at(aaa_id, instance, now, false);
@@ -1176,6 +1177,7 @@ impl<T: Config> Pallet<T> {
     periodic_continuations: &mut Vec<AaaId>,
   ) {
     let Trigger::Timer { .. } = instance.schedule.trigger else {
+      Self::schedule_window_expiry(aaa_id, instance);
       return;
     };
     let eligible_at = Self::next_eligible_at(aaa_id, instance, now, true);
@@ -1254,10 +1256,9 @@ impl<T: Config> Pallet<T> {
     if !meter.can_consume(close_weight_upper) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }
-    match Self::close_actor(aaa_id, instance, reason) {
-      Ok(()) => AdmissionDecision::Closed(close_weight_upper),
-      Err(_) => AdmissionDecision::CloseFailed(close_weight_upper),
-    }
+    Self::close_actor(aaa_id, instance, reason)
+      .expect("fresh scheduler snapshot satisfies terminal preconditions");
+    AdmissionDecision::Closed(close_weight_upper)
   }
 
   fn pending_post_cycle_close_reason(instance: &AaaInstanceOf<T>) -> Option<CloseReason> {
@@ -1281,13 +1282,13 @@ impl<T: Config> Pallet<T> {
       .unwrap_or(false)
   }
 
-  fn cycle_requires_close_tail_budget(instance: &AaaInstanceOf<T>) -> bool {
+  fn cycle_requires_terminal_cleanup_budget(instance: &AaaInstanceOf<T>) -> bool {
     Self::cycle_may_close_on_failure(instance) || Self::cycle_may_auto_close_on_success(instance)
   }
 
   fn cycle_admission_weight_upper(instance: &AaaInstanceOf<T>) -> Weight {
     let mut weight = Self::cycle_weight_upper_bound(instance);
-    if Self::cycle_requires_close_tail_budget(instance) {
+    if Self::cycle_requires_terminal_cleanup_budget(instance) {
       weight = weight.saturating_add(Self::close_cycle_weight_upper_bound(instance));
     }
     weight
@@ -1417,90 +1418,6 @@ impl<T: Config> Pallet<T> {
     Self::notify_address_event_with_provenance(aaa_id, asset, amount, None)
   }
 
-  pub fn queue_address_event(
-    aaa_id: AaaId,
-    asset: T::AssetId,
-    amount: T::Balance,
-    provenance: Option<FundingProvenance<T::AccountId>>,
-  ) -> bool {
-    if amount == Zero::zero() {
-      return true;
-    }
-    let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
-      return true;
-    };
-    if Self::is_window_expired(&instance) {
-      return true;
-    }
-    let capacity = T::MaxIngressOverflowQueue::get();
-    if capacity == 0 {
-      return false;
-    }
-    let len = IngressOverflowLen::<T>::get();
-    if len >= capacity
-      || Self::preflight_funding_event(aaa_id, asset, amount, provenance.as_ref()).is_err()
-    {
-      return false;
-    }
-    let head = IngressOverflowHead::<T>::get() % capacity;
-    let tail = (head.saturating_add(len)) % capacity;
-    let event = IngressOverflowEvent {
-      aaa_id,
-      asset,
-      amount,
-      provenance,
-    };
-    if Self::apply_address_event_parts(
-      aaa_id,
-      asset,
-      amount,
-      event.provenance.as_ref(),
-      false,
-      true,
-    )
-    .is_err()
-    {
-      return false;
-    }
-    IngressOverflowSlots::<T>::insert(tail, event);
-    IngressOverflowLen::<T>::put(len.saturating_add(1));
-    true
-  }
-
-  pub fn drain_address_event_overflow(max_events: u32) -> u32 {
-    if max_events == 0 {
-      return 0;
-    }
-    let capacity = T::MaxIngressOverflowQueue::get();
-    if capacity == 0 {
-      return 0;
-    }
-    let mut drained = 0u32;
-    let mut head = IngressOverflowHead::<T>::get() % capacity;
-    let mut len = IngressOverflowLen::<T>::get();
-    while drained < max_events && len > 0 {
-      let Some(event) = IngressOverflowSlots::<T>::take(head) else {
-        head = (head.saturating_add(1)) % capacity;
-        len = len.saturating_sub(1);
-        continue;
-      };
-      let _ = Self::apply_address_event_parts(
-        event.aaa_id,
-        event.asset,
-        event.amount,
-        event.provenance.as_ref(),
-        true,
-        false,
-      );
-      head = (head.saturating_add(1)) % capacity;
-      len = len.saturating_sub(1);
-      drained = drained.saturating_add(1);
-    }
-    IngressOverflowHead::<T>::put(head);
-    IngressOverflowLen::<T>::put(len);
-    drained
-  }
-
   fn funding_event_authorized(
     aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
@@ -1582,7 +1499,7 @@ impl<T: Config> Pallet<T> {
     if Self::is_window_expired(&instance) {
       return Ok(());
     }
-    let mut inbox_matched = false;
+    let mut signal_matched = false;
     if apply_trigger
       && let Trigger::OnAddressEvent {
         source_filter,
@@ -1595,7 +1512,7 @@ impl<T: Config> Pallet<T> {
         provenance.map(FundingProvenance::account),
       ) && Self::asset_matches_filter(asset_filter, asset)
       {
-        inbox_matched = true;
+        signal_matched = true;
         if !instance.manual_trigger_pending {
           ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
             if let Some(hot) = maybe_hot {
@@ -1643,68 +1560,10 @@ impl<T: Config> Pallet<T> {
         ActorFunding::<T>::insert(aaa_id, funding);
       }
     }
-    if inbox_matched {
+    if signal_matched {
       Self::enqueue(aaa_id);
     }
     Ok(())
-  }
-
-  pub(crate) fn execute_zombie_sweep(remaining_weight: Weight) -> Weight {
-    let max_check = T::MaxSweepPerBlock::get();
-    if remaining_weight.is_zero() {
-      return Weight::zero();
-    }
-    let mut meter = WeightMeter::with_limit(remaining_weight);
-    let base_weight = T::WeightInfo::scheduler_zombie_sweep_base();
-    if !meter.can_consume(base_weight) {
-      return Weight::zero();
-    }
-    meter.consume(base_weight);
-    let max_id = NextAaaId::<T>::get();
-    if max_id == 0 {
-      return meter.consumed();
-    }
-    let mut cursor = SweepCursor::<T>::get();
-    let iteration_weight =
-      T::WeightInfo::permissionless_sweep().saturating_add(T::DbWeight::get().writes(1));
-    let mut checked = 0u32;
-    while checked < max_check {
-      if !meter.can_consume(iteration_weight) {
-        break;
-      }
-      let next_cursor = (cursor + 1) % max_id;
-      if let Some(instance) = Self::active_actor_snapshot(next_cursor) {
-        if let Some(reason) = Self::liveness_close_reason(&instance) {
-          let close_weight_upper = Self::close_cycle_weight_upper_bound(&instance);
-          let required_weight = iteration_weight.saturating_add(close_weight_upper);
-          if !meter.can_consume(required_weight) {
-            break;
-          }
-          match Self::close_actor(next_cursor, &instance, reason) {
-            Ok(()) => {
-              cursor = next_cursor;
-              SweepCursor::<T>::put(cursor);
-              checked = checked.saturating_add(1);
-              meter.consume(required_weight);
-              continue;
-            }
-            Err(_) => {
-              Self::deposit_event(Event::CycleDeferred {
-                aaa_id: next_cursor,
-                reason: DeferReason::CloseTransitionFailed,
-              });
-              meter.consume(required_weight);
-              break;
-            }
-          }
-        }
-      }
-      cursor = next_cursor;
-      SweepCursor::<T>::put(cursor);
-      checked = checked.saturating_add(1);
-      meter.consume(iteration_weight);
-    }
-    meter.consumed()
   }
 
   pub(crate) fn evaluate_actor_liveness(aaa_id: AaaId) -> DispatchResult {

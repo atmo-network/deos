@@ -53,9 +53,7 @@ use super::{
   XcmpQueue,
   weights::{BlockExecutionWeight, ExtrinsicBaseWeight, RocksDbWeight},
 };
-pub use address_event_ingress::{
-  AddressEventIngress, RuntimeAddressEventIngress, RuntimeAddressEventIngressHook,
-};
+pub use address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
 pub use assets_config::{AssetKind, genesis_protocol_asset_metadata, genesis_protocol_assets};
 #[allow(unused_imports)]
 pub use axial_router_config::{

@@ -57,8 +57,6 @@ parameter_types! {
   pub const AaaWakeupPageSize: u32 = 32;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
     pub const AaaMaxWakeupsPerBlock: u32 = 512;
-    pub const AaaMaxIngressEventsPerBlock: u32 = 1024;
-  pub const AaaMaxIngressOverflowQueue: u32 = 8192;
   pub AaaGuaranteedOnIdleWeight: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
 
@@ -95,8 +93,8 @@ impl Get<Balance> for AaaMinUserBalanceGuard {
 
 /// Canonical unified fee-collection boundary for AAA charges.
 ///
-/// The collector transfers every opening, evaluation, execution, and close-tail fee in full to
-/// the Fee Sink System AAA. Phase-specific allocation happens later through that actor's bounded
+/// The collector transfers every opening, evaluation, and execution fee in full to the Fee Sink
+/// System AAA. Phase-specific allocation happens later through that actor's bounded
 /// execution plan rather than inside the collection path.
 pub struct TmctolFeeCollector;
 
@@ -1047,7 +1045,6 @@ impl TmctolGenesisSystemAaas {
         },
         schedule_window: None,
         execution_plan,
-        on_close_execution_plan: Default::default(),
         funding_source_policy: pallet_aaa::FundingSourcePolicy::RuntimePolicy,
       },
     )
@@ -1241,8 +1238,6 @@ impl pallet_aaa::Config for Runtime {
   type StakingOps = TmctolStakingOps;
   type LiquidityDonationOps = TmctolLiquidityDonationOps;
   type AaaCreationFee = AaaCreationFee;
-  type AddressEventIngressHook = RuntimeAddressEventIngressHook;
-  type AtomicityHook = ();
   type ConditionReadFee = AaaConditionReadFee;
   type FeeSink = AaaFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
@@ -1265,7 +1260,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
   type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;
-  type MaxIngressOverflowQueue = AaaMaxIngressOverflowQueue;
   type MaxOwnerSlots = AaaMaxOwnerSlots;
   type MaxExecutionPlanSteps = AaaMaxExecutionPlanSteps;
   type MaxSplitTransferLegs = AaaMaxSplitTransferLegs;
@@ -1565,17 +1559,17 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       source,
       transferred.saturating_add(EXISTENTIAL_DEPOSIT),
     );
-    System::reset_events();
-    Balances::transfer_allow_death(
-      RuntimeOrigin::signed(source.clone()),
-      polkadot_sdk::sp_runtime::MultiAddress::Id(recipient.clone()),
-      transferred,
-    )
+    let _ = (recipient, transferred);
+    Ok(())
   }
 
-  fn run_address_event_ingress(_recipient: &AccountId) -> bool {
-    crate::configs::address_event_ingress::RuntimeAddressEventIngressHook::submit_events_since_with_verified_source(0, true)
-      .expect("benchmark ingress notification must succeed")
+  fn run_address_event_ingress(recipient: &AccountId, source: &AccountId, amount: Balance) -> bool {
+    let Some(aaa_id) = crate::AAA::sovereign_index(recipient) else {
+      return false;
+    };
+    crate::AAA::notify_address_event(aaa_id, AssetKind::Native, amount, source)
+      .expect("benchmark ingress notification must succeed");
+    true
   }
 
   fn setup_xcm_asset_deposit() -> DispatchResult {
@@ -1588,16 +1582,5 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
     amount: Balance,
   ) -> DispatchResult {
     crate::configs::xcm_config::benchmark_foreign_asset_deposit(recipient, source, amount)
-  }
-
-  fn clear_address_event_ingress_events() {
-    System::reset_events();
-  }
-
-  fn run_compatibility_address_event_ingress() -> Weight {
-    <crate::configs::address_event_ingress::RuntimeAddressEventIngressHook as pallet_aaa::AddressEventIngressHook<BlockNumber>>::ingest(
-      System::block_number(),
-      Weight::MAX,
-    )
   }
 }

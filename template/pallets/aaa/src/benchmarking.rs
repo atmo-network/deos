@@ -33,7 +33,6 @@ mod benches {
       schedule,
       schedule_window: None,
       execution_plan,
-      on_close_execution_plan: Default::default(),
       funding_source_policy: FundingSourcePolicy::OwnerOnly,
     }
   }
@@ -46,7 +45,6 @@ mod benches {
       schedule,
       schedule_window: None,
       execution_plan,
-      on_close_execution_plan: Default::default(),
       funding_source_policy: FundingSourcePolicy::RuntimePolicy,
     }
   }
@@ -103,103 +101,6 @@ mod benches {
       on_error: StepErrorPolicy::AbortCycle,
     };
     BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
-  }
-
-  fn make_split_legs<T: Config>(legs: u32, seed: u32) -> SplitTransferLegsOf<T> {
-    let bounded_legs = legs.max(2).min(T::MaxSplitTransferLegs::get());
-    let share_parts = Perbill::ACCURACY / bounded_legs;
-    let mut split_legs: alloc::vec::Vec<SplitLeg<T::AccountId>> = alloc::vec::Vec::new();
-    for i in 0..bounded_legs {
-      let recipient: T::AccountId =
-        account("close-leg", seed.saturating_mul(1000).saturating_add(i), 0);
-      split_legs.push(SplitLeg {
-        to: recipient,
-        share: Perbill::from_parts(share_parts),
-      });
-    }
-    BoundedVec::try_from(split_legs).expect("split legs must fit benchmark bounds")
-  }
-
-  fn make_dense_conditions<T: Config>()
-  -> BoundedVec<Condition<T::AssetId, T::Balance>, T::MaxConditionsPerStep> {
-    let mut conditions: alloc::vec::Vec<Condition<T::AssetId, T::Balance>> = alloc::vec::Vec::new();
-    conditions.push(Condition::BlockNumberAbove { threshold: 0 });
-    conditions.push(Condition::BlockNumberBelow {
-      threshold: u32::MAX,
-    });
-    conditions.push(Condition::BalanceAbove {
-      asset: T::NativeAssetId::get(),
-      threshold: Zero::zero(),
-    });
-    conditions.push(Condition::BalanceNotEquals {
-      asset: T::NativeAssetId::get(),
-      threshold: Zero::zero(),
-    });
-    let bounded = T::MaxConditionsPerStep::get() as usize;
-    conditions.truncate(bounded);
-    BoundedVec::try_from(conditions).expect("conditions must fit benchmark bounds")
-  }
-
-  fn make_complex_on_close_execution_plan<T: Config>(
-    owner: &T::AccountId,
-    steps: u32,
-    legs: u32,
-  ) -> ExecutionPlanOf<T> {
-    let bounded_steps = steps.max(1).min(T::MaxSystemExecutionPlanSteps::get());
-    let amount = T::MinUserBalance::get()
-      .saturating_mul(100u32.into())
-      .saturating_add(One::one());
-    let mut plan: alloc::vec::Vec<StepOf<T>> = alloc::vec::Vec::new();
-    for idx in 0..bounded_steps {
-      let task = match idx % 3 {
-        0 => AaaTask::SplitTransfer {
-          asset: T::NativeAssetId::get(),
-          amount: AmountResolution::Fixed(amount),
-          legs: make_split_legs::<T>(legs, idx),
-        },
-        1 => AaaTask::Transfer {
-          to: owner.clone(),
-          asset: T::NativeAssetId::get(),
-          amount: AmountResolution::Fixed(amount),
-        },
-        _ => AaaTask::Burn {
-          asset: T::NativeAssetId::get(),
-          amount: AmountResolution::Fixed(amount),
-        },
-      };
-      plan.push(Step {
-        conditions: make_dense_conditions::<T>(),
-        task,
-        on_error: StepErrorPolicy::ContinueNextStep,
-      });
-    }
-    BoundedVec::try_from(plan).expect("on-close execution_plan must fit benchmark bounds")
-  }
-
-  fn seed_on_close_complexity_budget<T: Config>(aaa_id: AaaId, steps: u32, legs: u32) {
-    let Some(instance) = Pallet::<T>::active_actor_snapshot(aaa_id) else {
-      return;
-    };
-    let native = T::NativeAssetId::get();
-    let amount = T::MinUserBalance::get()
-      .saturating_mul(100u32.into())
-      .saturating_add(One::one());
-    let legs_cost = amount.saturating_mul(legs.max(2).into());
-    let total_budget = amount
-      .saturating_mul(steps.max(1).into())
-      .saturating_add(legs_cost.saturating_mul(steps.max(1).into()))
-      .saturating_add(T::MinUserBalance::get().saturating_mul(1_000u32.into()));
-    let _ = T::AssetOps::mint(&instance.sovereign_account, native, total_budget);
-    for step_idx in 0..steps.max(1).min(T::MaxSystemExecutionPlanSteps::get()) {
-      for leg_idx in 0..legs.max(2).min(T::MaxSplitTransferLegs::get()) {
-        let recipient: T::AccountId = account(
-          "close-leg",
-          step_idx.saturating_mul(1000).saturating_add(leg_idx),
-          0,
-        );
-        let _ = T::AssetOps::mint(&recipient, native, One::one());
-      }
-    }
   }
 
   fn prefill_owner_slots_for_worst_case<T: Config>(owner: &T::AccountId) -> u8 {
@@ -462,30 +363,49 @@ mod benches {
   #[benchmark]
   fn close_aaa() {
     let owner: T::AccountId = whitelisted_caller();
+    ensure_creation_balance::<T>(&owner);
+    let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
     let recipient: T::AccountId = account("close-recipient", 0, 0);
     let schedule = Schedule {
       trigger: Trigger::Manual,
       cooldown_blocks: 1,
     };
     let execution_plan = make_execution_plan::<T>(recipient);
+    Pallet::<T>::create_user_aaa_at_slot(
+      RawOrigin::Signed(owner.clone()).into(),
+      owner_slot,
+      Mutability::Mutable,
+      user_program::<T>(schedule, execution_plan),
+    )
+    .expect("create_user_aaa_at_slot must succeed in close_aaa benchmark setup");
+    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    #[extrinsic_call]
+    close_aaa(RawOrigin::Signed(owner), aaa_id);
+    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
+  }
+
+  // Diagnostic counterpart for the System branch; production close pricing uses the heavier User path.
+  #[benchmark]
+  fn close_aaa_system_pure() {
+    let owner: T::AccountId = whitelisted_caller();
+    let recipient: T::AccountId = account("system-close-recipient", 0, 0);
+    let schedule = Schedule {
+      trigger: Trigger::Manual,
+      cooldown_blocks: 1,
+    };
     Pallet::<T>::create_system_aaa(
       RawOrigin::Root.into(),
-      owner.clone(),
+      owner,
       Mutability::Mutable,
-      system_program::<T>(schedule, execution_plan),
+      system_program::<T>(schedule, make_execution_plan::<T>(recipient)),
     )
-    .expect("create_system_aaa must succeed in close_aaa benchmark setup");
+    .expect("create_system_aaa must succeed in System close benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let max_steps = T::MaxSystemExecutionPlanSteps::get();
-    let max_legs = T::MaxSplitTransferLegs::get();
-    ActorProgram::<T>::mutate(aaa_id, |maybe| {
-      let program = maybe.as_mut().expect("benchmark actor program exists");
-      program.on_close_execution_plan =
-        make_complex_on_close_execution_plan::<T>(&owner, max_steps, max_legs);
-    });
-    seed_on_close_complexity_budget::<T>(aaa_id, max_steps, max_legs);
-    #[extrinsic_call]
-    close_aaa(RawOrigin::Root, aaa_id);
+    #[block]
+    {
+      Pallet::<T>::close_aaa(RawOrigin::Root.into(), aaa_id)
+        .expect("System close must succeed in benchmark");
+    }
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
@@ -561,18 +481,6 @@ mod benches {
   }
 
   #[benchmark]
-  fn update_on_close_execution_plan() {
-    let caller: T::AccountId = whitelisted_caller();
-    let aaa_id = bench_create_user::<T>(caller.clone());
-    let replacement = make_inert_execution_plan::<T>();
-    #[extrinsic_call]
-    update_on_close_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
-    let inst =
-      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after close-plan update");
-    assert_eq!(inst.on_close_execution_plan, replacement);
-  }
-
-  #[benchmark]
   fn set_global_circuit_breaker() {
     #[extrinsic_call]
     set_global_circuit_breaker(RawOrigin::Root, true);
@@ -628,74 +536,6 @@ mod benches {
       assert!(!Pallet::<T>::active_actor_exists(aaa_id));
     }
     assert_eq!(expected_len, bounded_n as usize);
-  }
-
-  // Non-dispatch diagnostic benchmark excluded from runtime weight artifact generation
-  #[benchmark]
-  fn close_aaa_on_close_execution_plan_complex(s: Linear<1, 10>, l: Linear<2, 8>) {
-    let owner: T::AccountId = whitelisted_caller();
-    let recipient: T::AccountId = account("diag-close-recipient", 0, 0);
-    let schedule = Schedule {
-      trigger: Trigger::Manual,
-      cooldown_blocks: 1,
-    };
-    let execution_plan = make_execution_plan::<T>(recipient);
-    Pallet::<T>::create_system_aaa(
-      RawOrigin::Root.into(),
-      owner.clone(),
-      Mutability::Mutable,
-      system_program::<T>(schedule, execution_plan),
-    )
-    .expect("create_system_aaa must succeed in diagnostic setup");
-    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let steps = s.min(T::MaxSystemExecutionPlanSteps::get());
-    let legs = l.min(T::MaxSplitTransferLegs::get());
-    ActorProgram::<T>::mutate(aaa_id, |maybe| {
-      let program = maybe.as_mut().expect("benchmark actor program exists");
-      program.on_close_execution_plan =
-        make_complex_on_close_execution_plan::<T>(&owner, steps, legs);
-    });
-    seed_on_close_complexity_budget::<T>(aaa_id, steps, legs);
-    #[block]
-    {
-      Pallet::<T>::close_aaa(RawOrigin::Root.into(), aaa_id)
-        .expect("close_aaa must succeed in diagnostic benchmark");
-    }
-    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
-  }
-
-  // Production close-tail admission benchmark; not a dispatchable call.
-  #[benchmark]
-  fn close_aaa_user_fee_bearing_tail(s: Linear<1, 3>, l: Linear<2, 8>) {
-    let owner: T::AccountId = whitelisted_caller();
-    ensure_creation_balance::<T>(&owner);
-    let recipient: T::AccountId = account("diag-user-close-recipient", 0, 0);
-    let schedule = Schedule {
-      trigger: Trigger::Manual,
-      cooldown_blocks: 1,
-    };
-    let execution_plan = make_execution_plan::<T>(recipient);
-    Pallet::<T>::create_user_aaa(
-      RawOrigin::Signed(owner.clone()).into(),
-      Mutability::Mutable,
-      user_program::<T>(schedule, execution_plan),
-    )
-    .expect("create_user_aaa must succeed in diagnostic setup");
-    let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let steps = s.min(T::MaxUserExecutionPlanSteps::get());
-    let legs = l.min(T::MaxSplitTransferLegs::get());
-    ActorProgram::<T>::mutate(aaa_id, |maybe| {
-      let program = maybe.as_mut().expect("benchmark actor program exists");
-      program.on_close_execution_plan =
-        make_complex_on_close_execution_plan::<T>(&owner, steps, legs);
-    });
-    seed_on_close_complexity_budget::<T>(aaa_id, steps, legs);
-    #[block]
-    {
-      Pallet::<T>::close_aaa(RawOrigin::Signed(owner).into(), aaa_id)
-        .expect("close_aaa must succeed in user fee-bearing diagnostic benchmark");
-    }
-    assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
   #[benchmark]
@@ -1105,7 +945,6 @@ mod benches {
     let now: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     GlobalCircuitBreaker::<T>::put(false);
-    LastIngressIngestBlock::<T>::kill();
     let threshold = T::MaxIdleStarvationBlocks::get();
     IdleStarvationBlocks::<T>::put(threshold.saturating_sub(1));
     #[block]
@@ -1113,21 +952,7 @@ mod benches {
       let breaker_active = GlobalCircuitBreaker::<T>::get();
       core::hint::black_box(QueueHead::<T>::get());
       core::hint::black_box(QueueTail::<T>::get());
-      let _ = LastIngressIngestBlock::<T>::get();
-      LastIngressIngestBlock::<T>::put(now);
       Pallet::<T>::update_idle_starvation_state(breaker_active, Weight::zero());
-    }
-    assert_eq!(LastIngressIngestBlock::<T>::get(), Some(now));
-  }
-
-  #[benchmark]
-  fn scheduler_zombie_sweep_base() {
-    NextAaaId::<T>::put(1);
-    SweepCursor::<T>::put(0);
-    #[block]
-    {
-      core::hint::black_box(NextAaaId::<T>::get());
-      core::hint::black_box(SweepCursor::<T>::get());
     }
   }
 
@@ -1748,7 +1573,11 @@ mod benches {
       // populated witness first so the generated envelope includes one conservative database
       // read and the map's maximum proof before exercising the real negative lookup.
       assert!(SovereignIndex::<T>::contains_key(&proof_witness));
-      assert!(!T::BenchmarkHelper::run_address_event_ingress(&recipient));
+      assert!(!T::BenchmarkHelper::run_address_event_ingress(
+        &recipient,
+        &source,
+        One::one(),
+      ));
     }
   }
 
@@ -1760,7 +1589,11 @@ mod benches {
       .expect("benchmark helper must prepare a matched producer event");
     #[block]
     {
-      assert!(T::BenchmarkHelper::run_address_event_ingress(&recipient));
+      assert!(T::BenchmarkHelper::run_address_event_ingress(
+        &recipient,
+        &source,
+        One::one(),
+      ));
     }
     assert!(
       ActorHot::<T>::get(aaa_id)
@@ -1799,37 +1632,6 @@ mod benches {
         .funding_snapshots
         .values()
         .all(|batch| batch.amount == 2u32.into() && batch.pending_amount.is_zero())
-    );
-  }
-
-  #[benchmark]
-  fn compatibility_ingress_probe() {
-    IngressOverflowLen::<T>::put(0);
-    #[block]
-    {
-      core::hint::black_box(IngressOverflowLen::<T>::get());
-    }
-  }
-
-  #[benchmark]
-  fn compatibility_ingress_drain() {
-    let source: T::AccountId = account("ingress_source", 1, 0);
-    let (aaa_id, _) = prepare_saturated_address_actor::<T>(1);
-    T::BenchmarkHelper::clear_address_event_ingress_events();
-    assert!(Pallet::<T>::queue_address_event(
-      aaa_id,
-      T::NativeAssetId::get(),
-      One::one(),
-      Some(FundingProvenance::Signed(source)),
-    ));
-    #[block]
-    {
-      let _ = Pallet::<T>::drain_address_event_overflow(1);
-    }
-    assert_eq!(IngressOverflowLen::<T>::get(), 0);
-    assert!(
-      ActorHot::<T>::get(aaa_id)
-        .is_some_and(|hot| { hot.pending_signal && hot.wakeup_pointer.is_some() })
     );
   }
 

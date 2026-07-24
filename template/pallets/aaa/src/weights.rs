@@ -21,7 +21,6 @@ pub trait WeightInfo {
   fn resume_aaa() -> Weight;
   fn manual_trigger() -> Weight;
   fn close_aaa() -> Weight;
-  fn close_aaa_user_fee_bearing_tail(steps: u32, legs: u32) -> Weight;
   fn fee_collection() -> Weight;
   fn task_simple_asset_op() -> Weight;
   fn task_split_transfer(legs: u32) -> Weight;
@@ -34,7 +33,6 @@ pub trait WeightInfo {
   fn task_dex_exact_in() -> Weight;
   fn task_dex_exact_out() -> Weight;
   fn scheduler_on_idle_base() -> Weight;
-  fn scheduler_zombie_sweep_base() -> Weight;
   fn scheduler_paged_append_existing_page() -> Weight;
   fn scheduler_paged_append_new_page() -> Weight;
   fn scheduler_wakeup_append_existing_page() -> Weight;
@@ -60,13 +58,10 @@ pub trait WeightInfo {
   fn scheduler_actor_program_probe() -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
-  fn compatibility_ingress_probe() -> Weight;
-  fn compatibility_ingress_drain() -> Weight;
   fn funding_batch_promotion(assets: u32) -> Weight;
   fn update_funding_source_policy() -> Weight;
   fn update_schedule() -> Weight;
   fn update_execution_plan() -> Weight;
-  fn update_on_close_execution_plan() -> Weight;
   fn set_global_circuit_breaker() -> Weight;
   fn set_active_actor_limit() -> Weight;
   fn permissionless_sweep() -> Weight;
@@ -141,15 +136,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn close_aaa() -> Weight {
-    Weight::from_parts(30_000_000, 2200)
-      .saturating_add(T::DbWeight::get().reads(4))
-      .saturating_add(T::DbWeight::get().writes(5))
-  }
-
-  fn close_aaa_user_fee_bearing_tail(steps: u32, legs: u32) -> Weight {
-    Weight::from_parts(60_000_000, 4_000)
-      .saturating_add(Weight::from_parts(180_000_000, 3_000).saturating_mul(steps.into()))
-      .saturating_add(Weight::from_parts(60_000_000, 3_000).saturating_mul(legs.into()))
+    Weight::from_parts(66_420_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(7))
+      .saturating_add(T::DbWeight::get().writes(7))
   }
 
   fn fee_collection() -> Weight {
@@ -213,13 +202,9 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn scheduler_on_idle_base() -> Weight {
-    Weight::from_parts(20_000_000, 8_000)
+    Weight::from_parts(15_435_000, 1_493)
       .saturating_add(T::DbWeight::get().reads(4))
-      .saturating_add(T::DbWeight::get().writes(3))
-  }
-
-  fn scheduler_zombie_sweep_base() -> Weight {
-    Weight::from_parts(15_000_000, 4_000).saturating_add(T::DbWeight::get().reads(3))
+      .saturating_add(T::DbWeight::get().writes(1))
   }
 
   fn scheduler_paged_append_existing_page() -> Weight {
@@ -328,22 +313,15 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn transaction_extension_ingress_base() -> Weight {
-    Weight::from_parts(10_000_000, 4_096).saturating_add(T::DbWeight::get().reads(1))
+    Weight::from_parts(15_226_000, 6_052).saturating_add(T::DbWeight::get().reads(2))
   }
 
   fn transaction_extension_ingress_notify() -> Weight {
-    Weight::from_parts(1_500_000_000, 800_000)
-      .saturating_add(T::DbWeight::get().reads_writes(16, 16))
+    Weight::from_parts(85_208_000, 12_141)
+      .saturating_add(T::DbWeight::get().reads(9))
+      .saturating_add(T::DbWeight::get().writes(6))
   }
 
-  fn compatibility_ingress_probe() -> Weight {
-    Weight::from_parts(10_000_000, 1_000).saturating_add(T::DbWeight::get().reads(1))
-  }
-
-  fn compatibility_ingress_drain() -> Weight {
-    Weight::from_parts(1_600_000_000, 850_000)
-      .saturating_add(T::DbWeight::get().reads_writes(20, 20))
-  }
   fn funding_batch_promotion(assets: u32) -> Weight {
     Weight::from_parts(20_000_000, 12_000)
       .saturating_add(Weight::from_parts(2_000_000, 256).saturating_mul(assets.into()))
@@ -365,10 +343,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(18_000_000, 1200)
       .saturating_add(T::DbWeight::get().reads(1))
       .saturating_add(T::DbWeight::get().writes(1))
-  }
-
-  fn update_on_close_execution_plan() -> Weight {
-    Self::update_execution_plan()
   }
 
   fn set_global_circuit_breaker() -> Weight {
@@ -451,12 +425,7 @@ impl WeightInfo for () {
   fn pause_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn resume_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
-  fn close_aaa() -> Weight { Weight::from_parts(30_000_000, 2200) }
-  fn close_aaa_user_fee_bearing_tail(steps: u32, legs: u32) -> Weight {
-    Weight::from_parts(60_000_000, 4_000)
-      .saturating_add(Weight::from_parts(180_000_000, 3_000).saturating_mul(steps.into()))
-      .saturating_add(Weight::from_parts(60_000_000, 3_000).saturating_mul(legs.into()))
-  }
+  fn close_aaa() -> Weight { Weight::from_parts(66_420_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(100_000_000, 16_000) }
   fn task_simple_asset_op() -> Weight { Weight::from_parts(1_500_000_000, 800_000) }
   fn task_split_transfer(legs: u32) -> Weight {
@@ -471,8 +440,7 @@ impl WeightInfo for () {
   fn task_unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
-  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(20_000_000, 8_000) }
-  fn scheduler_zombie_sweep_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
+  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(15_435_000, 1_493) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }
@@ -505,10 +473,8 @@ impl WeightInfo for () {
   }
   fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_616_000, 3_651) }
   fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(17_600_000, 12_141) }
-  fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(10_000_000, 4_096) }
-  fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(1_500_000_000, 800_000) }
-  fn compatibility_ingress_probe() -> Weight { Weight::from_parts(10_000_000, 1_000) }
-  fn compatibility_ingress_drain() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
+  fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
+  fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(85_208_000, 12_141) }
   fn funding_batch_promotion(assets: u32) -> Weight {
     Weight::from_parts(20_000_000, 12_000)
       .saturating_add(Weight::from_parts(2_000_000, 256).saturating_mul(assets.into()))
@@ -516,7 +482,6 @@ impl WeightInfo for () {
   fn update_funding_source_policy() -> Weight { Weight::from_parts(50_000_000, 15_000) }
   fn update_schedule() -> Weight { Weight::from_parts(12_000_000, 900) }
   fn update_execution_plan() -> Weight { Weight::from_parts(18_000_000, 1200) }
-  fn update_on_close_execution_plan() -> Weight { Weight::from_parts(18_000_000, 1200) }
   fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
   fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
   fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }

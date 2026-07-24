@@ -46,7 +46,6 @@ fn activate_dormant_system(
       },
       schedule_window: None,
       execution_plan,
-      on_close_execution_plan: Default::default(),
       funding_source_policy: FundingSourcePolicy::RuntimePolicy,
     },
   )
@@ -145,7 +144,6 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
         },
         schedule_window: None,
         execution_plan,
-        on_close_execution_plan: Default::default(),
         funding_source_policy: FundingSourcePolicy::RuntimePolicy,
       },
     ));
@@ -1313,7 +1311,25 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
 fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink() {
   seeded_test_ext().execute_with(|| {
     let foreign_amount = 10 * primitives::ecosystem::params::PRECISION;
+    let liquidity_actor_id = aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
     let liquidity_actor = liquidity_actor_account();
+    let execution_plan =
+      ExecutionPlanOf::<Runtime>::try_from(vec![pallet_aaa::StepOf::<Runtime> {
+        conditions: Default::default(),
+        task: Task::Transfer {
+          to: ALICE,
+          asset: AssetKind::Native,
+          amount: AmountResolution::Fixed(1),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }])
+      .expect("liquidity actor test plan fits");
+    assert_ok!(activate_dormant_system(liquidity_actor_id, execution_plan));
+    assert!(
+      !AAA::actor_hot(liquidity_actor_id)
+        .expect("liquidity actor hot state")
+        .pending_signal
+    );
     assert_ok!(TokenMintingCurve::create_curve(
       RuntimeOrigin::root(),
       AssetKind::Native,
@@ -1351,6 +1367,15 @@ fn native_tmc_mint_routes_collateral_and_tokens_to_default_liquidity_actor_sink(
     assert_eq!(
       crate::Assets::balance(ASSET_A, &liquidity_actor),
       liquidity_actor_foreign_before + foreign_amount
+    );
+    let hot = AAA::actor_hot(liquidity_actor_id).expect("liquidity actor hot state");
+    assert!(
+      hot.pending_signal,
+      "TMC distribution must notify the liquidity actor directly"
+    );
+    assert!(
+      hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some(),
+      "direct TMC ingress must retain exact scheduler readiness"
     );
   });
 }
