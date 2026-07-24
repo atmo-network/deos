@@ -35,7 +35,7 @@ impl<T: Config> Pallet<T> {
     let hot_admission_weight = hot_probe_weight.saturating_add(consume_weight);
     let mut executed = 0u32;
     let mut scanned = 0u32;
-    let mut periodic_continuations: Vec<AaaId> = Vec::new();
+    let mut work_requeues: Vec<AaaId> = Vec::new();
 
     while executed < max_executions && scanned < max_scanned {
       if QueueHead::<T>::get() >= cutoff || !cycle_meter.can_consume(scan_weight) {
@@ -67,7 +67,13 @@ impl<T: Config> Pallet<T> {
         break;
       }
       let aaa_id = entry.aaa_id;
-      if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
+      if hot.run_state == RunState::Suspended {
+        if ContinuationStateStore::<T>::get(entry.aaa_id)
+          .is_some_and(|continuation| continuation.last_attempt_block == now)
+        {
+          break;
+        }
+      } else if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
         break;
       }
       if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
@@ -111,7 +117,7 @@ impl<T: Config> Pallet<T> {
             break;
           }
           if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
-            Self::preserve_skipped_readiness(aaa_id, &updated, now, &mut periodic_continuations);
+            Self::schedule_next_work_local(aaa_id, &updated, now, &mut work_requeues);
           }
           continue;
         }
@@ -120,10 +126,10 @@ impl<T: Config> Pallet<T> {
       cycle_meter.consume(cycle_weight_upper);
       executed = executed.saturating_add(1);
       if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
-        Self::schedule_next_timer_wakeup_local(aaa_id, &updated, now, &mut periodic_continuations);
+        Self::schedule_next_work_local(aaa_id, &updated, now, &mut work_requeues);
       }
     }
-    for aaa_id in periodic_continuations {
+    for aaa_id in work_requeues {
       Self::enqueue(aaa_id);
     }
     cycle_meter.consumed()
@@ -145,10 +151,9 @@ impl<T: Config> Pallet<T> {
     ((ticket / page_size), (ticket % page_size) as usize)
   }
 
-  /// Append one actor to the inactive paged-FIFO substrate.
+  /// Append one actor to the monotonic paged-FIFO substrate.
   ///
-  /// The active scheduler switches to this primitive only after its page
-  /// operation weights and cutoff flow replace the double-buffer queue.
+  /// The block-start tail cutoff keeps entries appended during a pass in a later block.
   pub fn paged_enqueue(aaa_id: AaaId) -> bool {
     let Some(hot) = ActorHot::<T>::get(aaa_id) else {
       return false;
@@ -903,23 +908,7 @@ impl<T: Config> Pallet<T> {
       Self::schedule_window_expiry(aaa_id, &instance);
       return;
     }
-    match &instance.schedule.trigger {
-      Trigger::Timer { .. } => Self::schedule_next_timer_wakeup(aaa_id, &instance, now),
-      Trigger::Manual => {
-        if instance.manual_trigger_pending {
-          Self::enqueue(aaa_id);
-        } else {
-          Self::schedule_window_expiry(aaa_id, &instance);
-        }
-      }
-      Trigger::OnAddressEvent { .. } => {
-        if instance.manual_trigger_pending {
-          Self::enqueue(aaa_id);
-        } else {
-          Self::schedule_window_expiry(aaa_id, &instance);
-        }
-      }
-    }
+    Self::schedule_next_work(aaa_id, &instance, now);
   }
 
   fn window_expiry_wakeup(instance: &AaaInstanceOf<T>) -> Option<BlockNumberFor<T>> {
@@ -1143,64 +1132,52 @@ impl<T: Config> Pallet<T> {
     eligible_at
   }
 
-  fn preserve_skipped_readiness(
+  fn retry_eligible_at(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> BlockNumberFor<T> {
+    let continuation = ContinuationStateStore::<T>::get(aaa_id)
+      .expect("Suspended run_state requires ContinuationState");
+    let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
+    let mut eligible_at = continuation.last_attempt_block.saturating_add(cooldown);
+    if let Some(window) = instance.schedule_window {
+      eligible_at = eligible_at.max(window.start);
+    }
+    eligible_at
+  }
+
+  fn schedule_next_work_local(
     aaa_id: AaaId,
     instance: &AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
-    periodic_continuations: &mut Vec<AaaId>,
+    requeues: &mut Vec<AaaId>,
   ) {
     if instance.lifecycle.is_paused() {
       Self::schedule_window_expiry(aaa_id, instance);
       return;
     }
-    if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
-      Self::schedule_next_timer_wakeup_local(aaa_id, instance, now, periodic_continuations);
-      return;
-    }
-    let pending = instance.manual_trigger_pending;
-    if !pending {
-      Self::schedule_window_expiry(aaa_id, instance);
-      return;
-    }
-    let eligibility_block = Self::next_eligible_at(aaa_id, instance, now, false);
-    if eligibility_block > now {
-      Self::defer_wakeup(aaa_id, eligibility_block);
+    let eligible_at = if instance.run_state == RunState::Suspended {
+      Self::retry_eligible_at(aaa_id, instance)
+    } else if instance.pending_signal {
+      Self::next_eligible_at(aaa_id, instance, now, false)
+    } else if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
+      Self::next_eligible_at(aaa_id, instance, now, true)
     } else {
-      periodic_continuations.push(aaa_id);
-    }
-  }
-
-  fn schedule_next_timer_wakeup_local(
-    aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
-    now: BlockNumberFor<T>,
-    periodic_continuations: &mut Vec<AaaId>,
-  ) {
-    let Trigger::Timer { .. } = instance.schedule.trigger else {
       Self::schedule_window_expiry(aaa_id, instance);
       return;
     };
-    let eligible_at = Self::next_eligible_at(aaa_id, instance, now, true);
-    if eligible_at <= now.saturating_add(One::one()) {
-      periodic_continuations.push(aaa_id);
+    let wakeup_at = instance.schedule_window.map_or(eligible_at, |window| {
+      eligible_at.min(window.end.saturating_add(One::one()))
+    });
+    if wakeup_at <= now.saturating_add(One::one()) {
+      requeues.push(aaa_id);
     } else {
-      Self::defer_wakeup(aaa_id, eligible_at);
+      Self::defer_wakeup(aaa_id, wakeup_at);
     }
   }
 
-  fn schedule_next_timer_wakeup(
-    aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
-    now: BlockNumberFor<T>,
-  ) {
-    let Trigger::Timer { .. } = instance.schedule.trigger else {
-      return;
-    };
-    let eligible_at = Self::next_eligible_at(aaa_id, instance, now, true);
-    if eligible_at <= now.saturating_add(One::one()) {
+  fn schedule_next_work(aaa_id: AaaId, instance: &AaaInstanceOf<T>, now: BlockNumberFor<T>) {
+    let mut requeues = Vec::new();
+    Self::schedule_next_work_local(aaa_id, instance, now, &mut requeues);
+    for aaa_id in requeues {
       Self::enqueue(aaa_id);
-    } else {
-      Self::defer_wakeup(aaa_id, eligible_at);
     }
   }
 
@@ -1265,6 +1242,9 @@ impl<T: Config> Pallet<T> {
     if Self::failure_limit_reached(instance.consecutive_failures) {
       return Some(CloseReason::ConsecutiveFailures);
     }
+    if instance.run_state == RunState::Suspended {
+      return None;
+    }
     instance
       .auto_close_at_cycle_nonce
       .filter(|target| instance.cycle_nonce >= *target)
@@ -1286,8 +1266,8 @@ impl<T: Config> Pallet<T> {
     Self::cycle_may_close_on_failure(instance) || Self::cycle_may_auto_close_on_success(instance)
   }
 
-  fn cycle_admission_weight_upper(instance: &AaaInstanceOf<T>) -> Weight {
-    let mut weight = Self::cycle_weight_upper_bound(instance);
+  fn cycle_admission_weight_upper(instance: &AaaInstanceOf<T>, start_cursor: usize) -> Weight {
+    let mut weight = Self::attempt_weight_upper_bound(instance, start_cursor);
     if Self::cycle_requires_terminal_cleanup_budget(instance) {
       weight = weight.saturating_add(Self::close_cycle_weight_upper_bound(instance));
     }
@@ -1308,7 +1288,10 @@ impl<T: Config> Pallet<T> {
     if instance.lifecycle.is_paused() {
       return AdmissionDecision::Skip;
     }
-    if instance.actor_class.aaa_type() == AaaType::User && instance.cycle_nonce == u64::MAX {
+    if instance.run_state == RunState::Idle
+      && instance.actor_class.aaa_type() == AaaType::User
+      && instance.cycle_nonce == u64::MAX
+    {
       return Self::close_within_budget(aaa_id, instance, CloseReason::CycleNonceExhausted, meter);
     }
     if let Some(reason) = Self::pending_post_cycle_close_reason(instance) {
@@ -1317,14 +1300,78 @@ impl<T: Config> Pallet<T> {
     if !Self::is_ready_for_execution(aaa_id, instance) {
       return AdmissionDecision::Skip;
     }
-    if let Some(reason) = Self::user_resource_close_reason(instance, true) {
+    if let Some(reason) = Self::user_resource_close_reason(instance, false) {
       return Self::close_within_budget(aaa_id, instance, reason, meter);
     }
-    let cycle_weight_upper = Self::cycle_admission_weight_upper(instance);
+    let start_cursor = if instance.run_state == RunState::Suspended {
+      ContinuationStateStore::<T>::get(aaa_id)
+        .expect("Suspended run_state requires ContinuationState")
+        .cursor as usize
+    } else {
+      0
+    };
+    if instance.actor_class.aaa_type() == AaaType::User
+      && T::AssetOps::balance(&instance.sovereign_account, T::NativeAssetId::get())
+        < Self::attempt_fee_upper_bound(instance, start_cursor)
+    {
+      return Self::close_within_budget(aaa_id, instance, CloseReason::FeeBudgetExhausted, meter);
+    }
+    let cycle_weight_upper = Self::cycle_admission_weight_upper(instance, start_cursor);
     if !meter.can_consume(cycle_weight_upper) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }
     AdmissionDecision::Admit(cycle_weight_upper)
+  }
+
+  pub(crate) fn ensure_simulation_ready(
+    aaa_id: AaaId,
+    instance: &AaaInstanceOf<T>,
+    mode: SimulationMode,
+  ) -> Result<(), SimulationError> {
+    if GlobalCircuitBreaker::<T>::get() {
+      return Err(SimulationError::GlobalCircuitBreaker);
+    }
+    if Self::is_window_expired(instance) {
+      return Err(SimulationError::WindowExpired);
+    }
+    if instance.lifecycle.is_paused() {
+      return Err(SimulationError::Paused);
+    }
+    if Self::failure_limit_reached(instance.consecutive_failures) {
+      return Err(SimulationError::ConsecutiveFailures);
+    }
+    match mode {
+      SimulationMode::FreshCurrentPlan if instance.run_state != RunState::Idle => {
+        return Err(SimulationError::ModeRunStateMismatch);
+      }
+      SimulationMode::CurrentContinuation if instance.run_state != RunState::Suspended => {
+        return Err(SimulationError::ModeRunStateMismatch);
+      }
+      _ => {}
+    }
+    if mode == SimulationMode::FreshCurrentPlan && instance.cycle_nonce == u64::MAX {
+      return Err(SimulationError::CycleNonceExhausted);
+    }
+    let start_cursor = if mode == SimulationMode::CurrentContinuation {
+      ContinuationStateStore::<T>::get(aaa_id)
+        .ok_or(SimulationError::ContinuationInvariant)?
+        .cursor as usize
+    } else {
+      0
+    };
+    if !Self::is_ready_for_execution(aaa_id, instance) {
+      return Err(SimulationError::NotReady);
+    }
+    if instance.actor_class.aaa_type() == AaaType::User {
+      let balance = Self::user_native_balance(instance);
+      if balance < T::MinUserBalance::get() {
+        return Err(SimulationError::BalanceUnavailable);
+      }
+      if balance < Self::attempt_fee_upper_bound(instance, start_cursor) {
+        return Err(SimulationError::FeeBudgetUnavailable);
+      }
+    }
+    Ok(())
   }
 
   fn is_ready_for_execution(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
@@ -1335,8 +1382,11 @@ impl<T: Config> Pallet<T> {
       return false;
     }
     let now = frame_system::Pallet::<T>::block_number();
-    let include_timer = !instance.manual_trigger_pending
-      && matches!(instance.schedule.trigger, Trigger::Timer { .. });
+    if instance.run_state == RunState::Suspended {
+      return Self::retry_eligible_at(aaa_id, instance) <= now;
+    }
+    let include_timer =
+      !instance.pending_signal && matches!(instance.schedule.trigger, Trigger::Timer { .. });
     if Self::next_eligible_at(aaa_id, instance, now, include_timer) > now {
       return false;
     }
@@ -1344,7 +1394,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn evaluate_trigger(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
-    if instance.manual_trigger_pending {
+    if instance.pending_signal {
       return true;
     }
     match instance.schedule.trigger {
@@ -1513,7 +1563,7 @@ impl<T: Config> Pallet<T> {
       ) && Self::asset_matches_filter(asset_filter, asset)
       {
         signal_matched = true;
-        if !instance.manual_trigger_pending {
+        if !instance.pending_signal {
           ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
             if let Some(hot) = maybe_hot {
               hot.pending_signal = true;
@@ -1541,6 +1591,24 @@ impl<T: Config> Pallet<T> {
             added: amount,
             pending_amount,
           });
+        } else if instance.run_state == RunState::Suspended {
+          funding
+            .funding_snapshots
+            .try_insert(
+              asset,
+              FundingBatch {
+                amount: Zero::zero(),
+                pending_amount: amount,
+              },
+            )
+            .map_err(|_| Error::<T>::FundingBatchOverflow)?;
+          new_pending_asset = true;
+          Self::deposit_event(Event::FundingBatchPendingAccumulated {
+            aaa_id,
+            asset,
+            added: amount,
+            pending_amount: amount,
+          });
         } else {
           funding
             .funding_snapshots
@@ -1566,7 +1634,6 @@ impl<T: Config> Pallet<T> {
                 .pending_funding_count
                 .checked_add(1)
                 .expect("pending funding count is bounded by tracked assets");
-              hot.has_pending_funding = true;
             }
           });
         }

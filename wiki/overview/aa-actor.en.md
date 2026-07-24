@@ -24,7 +24,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-07-24
 confidence: 0.9
 ---
 
@@ -50,11 +50,14 @@ The stable contract emphasizes:
 
 - Deterministic behavior for the same state and block context;
 - Bounded work;
-- Stateless execution plans rather than mutable workflow memory;
+- Static execution plans without task-authored workflow memory;
+- Sparse scheduler-owned progress only while a Mutable actor is suspended;
 - Predictable failure outcomes;
 - Destruction in place without automatic refund fan-out.
 
 Actors are runtime infrastructure, not loose scripting.
+
+A Mutable actor can assign `RetryLater` to a step whose adapter may report a Temporary failure. AAA then stores only the unresolved cursor and bounded attempt state, preserving successful earlier steps without turning the plan into mutable code. Permanent failure terminates; cancellation deletes progress without compensating committed effects. Immutable actors cannot use this policy.
 
 ## Actor Classes and Uses
 

@@ -5,7 +5,11 @@ Excludes: Wallet store ownership, system composition wiring, UI Kit presentation
 Zone: Transport adapter boundary; consumes adapter contracts and runtime helpers without importing widgets.
 */
 import type { Adapter, AdapterRuntimeContext } from '$lib/adapters/contract';
-import type { AutomationActorSnapshot } from '$lib/automation/types';
+import type {
+  AutomationActorSnapshot,
+  AutomationContinuationSnapshot,
+  AutomationRunState,
+} from '$lib/automation/types';
 import { PRECISION } from '$lib/economics';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
@@ -85,6 +89,30 @@ function automationActorPaused(instance: unknown): boolean {
     return lifecycle.type === 'Paused';
   }
   return actor?.is_paused === true;
+}
+
+function automationActorRunState(instance: unknown): AutomationRunState {
+  const actor = triggerRecord(instance);
+  const runState = triggerRecord(actor?.run_state);
+  return runState?.type === 'Suspended' ? 'suspended' : 'idle';
+}
+
+function automationContinuationSnapshot(
+  continuation: unknown,
+): AutomationContinuationSnapshot | null {
+  const value = triggerRecord(continuation);
+  if (
+    typeof value?.cursor !== 'number' ||
+    typeof value.attempt !== 'number' ||
+    typeof value.last_attempt_block !== 'number'
+  ) {
+    return null;
+  }
+  return {
+    cursor: value.cursor,
+    attempt: value.attempt,
+    lastAttemptBlock: value.last_attempt_block,
+  };
 }
 
 function automationTriggerLabel(trigger?: {
@@ -350,11 +378,15 @@ export class BlockchainAdapter implements Adapter {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const [hot, program] = await Promise.all([
+          const [hot, program, continuation] = await Promise.all([
             snapshot.typedApi.query.AAA.ActorHot.getValue(BigInt(actor.aaaId), {
               at: snapshot.at,
             }),
             snapshot.typedApi.query.AAA.ActorProgram.getValue(
+              BigInt(actor.aaaId),
+              { at: snapshot.at },
+            ),
+            snapshot.typedApi.query.AAA.ContinuationState.getValue(
               BigInt(actor.aaaId),
               { at: snapshot.at },
             ),
@@ -373,6 +405,9 @@ export class BlockchainAdapter implements Adapter {
             role: actor.role,
             exists,
             paused: automationActorPaused(hot),
+            runState: automationActorRunState(hot),
+            cycleNonce: hot?.cycle_nonce ?? 0n,
+            continuation: automationContinuationSnapshot(continuation),
             lastCycleBlock: hot?.last_cycle_block ?? null,
             triggerLabel: automationTriggerLabel(program?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,

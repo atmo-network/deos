@@ -10,7 +10,9 @@ mod execution;
 mod scheduler;
 
 pub mod adapters;
-pub use adapters::{AssetOps, DexOps, FundingAuthority, LiquidityDonationOps, StakingOps};
+pub use adapters::{
+  AssetOps, DexOps, FundingAuthority, LiquidityDonationOps, RetryClass, StakingOps, TaskFailure,
+};
 pub use types::{SYSTEM_OWNER_SLOT_SENTINEL, Task};
 
 pub mod weights;
@@ -72,6 +74,21 @@ pub trait FeeCollector<AccountId, AssetId, Balance> {
   ) -> polkadot_sdk::frame_support::dispatch::DispatchResult;
 }
 
+sp_api::decl_runtime_apis! {
+  pub trait AaaSimulationApi<Program>
+  where
+    Program: codec::Codec,
+  {
+    fn simulate_current_program(
+      aaa_id: types::AaaId,
+      expected_type: types::AaaType,
+      expected_mutability: types::Mutability,
+      expected_program: Program,
+      mode: types::SimulationMode,
+    ) -> Result<types::SimulationResult, types::SimulationError>;
+  }
+}
+
 #[frame::pallet]
 pub mod pallet {
   use super::{
@@ -126,6 +143,8 @@ pub mod pallet {
     type MaxSystemExecutionPlanSteps: Get<u32>;
     #[pallet::constant]
     type MaxFundingTrackedAssets: Get<u32>;
+    #[pallet::constant]
+    type MaxContinuationSnapshotEntries: Get<u32>;
     #[pallet::constant]
     type MaxConditionsPerStep: Get<u32>;
     #[pallet::constant]
@@ -263,6 +282,19 @@ pub mod pallet {
   pub type FundingTrackedAssetsOf<T> =
     BoundedBTreeSet<<T as Config>::AssetId, <T as Config>::MaxFundingTrackedAssets>;
 
+  pub type ContinuationSnapshotOf<T> = BoundedBTreeMap<
+    ResolutionSurface<<T as Config>::AssetId>,
+    <T as Config>::Balance,
+    <T as Config>::MaxContinuationSnapshotEntries,
+  >;
+
+  pub type ContinuationStateOf<T> = ContinuationState<
+    <T as Config>::AssetId,
+    <T as Config>::Balance,
+    BlockNumberFor<T>,
+    <T as Config>::MaxContinuationSnapshotEntries,
+  >;
+
   pub type QueuePageOf<T> = BoundedVec<QueueEntry, <T as Config>::QueuePageSize>;
   pub type WakeupPageEntriesOf<T> = BoundedVec<Option<WakeupEntry>, <T as Config>::WakeupPageSize>;
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
@@ -312,6 +344,12 @@ pub mod pallet {
   pub type ActorFunding<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, ActorFundingStateOf<T>, OptionQuery>;
 
+  #[pallet::storage]
+  #[pallet::storage_prefix = "ContinuationState"]
+  #[pallet::getter(fn continuation_state)]
+  pub type ContinuationStateStore<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ContinuationStateOf<T>, OptionQuery>;
+
   impl<T: Config> Pallet<T> {
     pub(crate) fn compose_active_actor(
       hot: ActorHotStateOf<T>,
@@ -323,20 +361,20 @@ pub mod pallet {
         actor_class: hot.actor_class,
         mutability: hot.mutability,
         lifecycle: hot.lifecycle,
+        run_state: hot.run_state,
         schedule: program.schedule,
         schedule_window: program.schedule_window,
         execution_plan: program.execution_plan,
         cycle_nonce: hot.cycle_nonce,
         auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
         consecutive_failures: hot.consecutive_failures,
-        manual_trigger_pending: hot.pending_signal,
+        pending_signal: hot.pending_signal,
         queue_ticket: hot.queue_ticket,
         last_user_queue_mutation_block: hot.last_user_queue_mutation_block,
         cycle_weight_upper: hot.cycle_weight_upper,
         cycle_fee_upper: hot.cycle_fee_upper,
         funding_tracked_count: hot.funding_tracked_count,
         pending_funding_count: hot.pending_funding_count,
-        has_pending_funding: hot.has_pending_funding,
         first_eligible_at: hot.first_eligible_at,
         last_cycle_block: hot.last_cycle_block,
       }
@@ -367,10 +405,11 @@ pub mod pallet {
           actor_class: instance.actor_class,
           mutability: instance.mutability,
           lifecycle: instance.lifecycle,
+          run_state: instance.run_state,
           cycle_nonce: instance.cycle_nonce,
           auto_close_at_cycle_nonce: instance.auto_close_at_cycle_nonce,
           consecutive_failures: instance.consecutive_failures,
-          pending_signal: instance.manual_trigger_pending,
+          pending_signal: instance.pending_signal,
           queue_ticket: instance.queue_ticket,
           wakeup_pointer: None,
           terminal_at: instance
@@ -381,7 +420,6 @@ pub mod pallet {
           cycle_fee_upper: instance.cycle_fee_upper,
           funding_tracked_count: instance.funding_tracked_count,
           pending_funding_count: instance.pending_funding_count,
-          has_pending_funding: instance.has_pending_funding,
           first_eligible_at: instance.first_eligible_at,
           last_cycle_block: instance.last_cycle_block,
         },
@@ -402,6 +440,7 @@ pub mod pallet {
     pub(crate) fn remove_active_actor(aaa_id: AaaId) {
       ActorHot::<T>::remove(aaa_id);
       ActorProgram::<T>::remove(aaa_id);
+      ContinuationStateStore::<T>::remove(aaa_id);
     }
   }
 
@@ -567,6 +606,8 @@ pub mod pallet {
           mutability == Mutability::Mutable || schedule_window.is_none(),
           "genesis System Immutable AAA must be perpetual"
         );
+        Pallet::<T>::ensure_retry_later_allowed(mutability, &execution_plan)
+          .expect("genesis System Immutable AAA cannot use RetryLater");
         Pallet::<T>::ensure_execution_plan_fits_idle_budget(AaaType::System, &execution_plan)
           .unwrap_or_else(|_| {
             panic!("genesis System AAA {aaa_id} exceeds the guaranteed on_idle budget")
@@ -583,19 +624,19 @@ pub mod pallet {
           actor_class: ActorClass::System,
           mutability,
           lifecycle: ActiveLifecycle::Active,
+          run_state: RunState::Idle,
           schedule,
           schedule_window,
           execution_plan,
           cycle_nonce: 0,
           consecutive_failures: 0,
-          manual_trigger_pending: false,
+          pending_signal: false,
           queue_ticket: None,
           last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
           funding_tracked_count: funding_tracked_assets.len() as u32,
           pending_funding_count: 0,
-          has_pending_funding: false,
           auto_close_at_cycle_nonce: None,
           first_eligible_at,
           last_cycle_block: Zero::zero(),
@@ -688,6 +729,15 @@ pub mod pallet {
   #[pallet::hooks]
   impl<T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
     fn integrity_test() {
+      assert!(
+        T::MaxConsecutiveFailures::get() > 0,
+        "MaxConsecutiveFailures must be non-zero for bounded Continuation lifetime"
+      );
+      assert!(
+        T::MaxContinuationSnapshotEntries::get()
+          <= T::MaxSystemExecutionPlanSteps::get().saturating_mul(2),
+        "MaxContinuationSnapshotEntries must not exceed twice MaxSystemExecutionPlanSteps"
+      );
       assert!(
         T::QueuePageSize::get() > 0,
         "QueuePageSize must be non-zero"
@@ -921,6 +971,25 @@ pub mod pallet {
       asset: T::AssetId,
       amount: BalanceOf<T>,
     },
+    CycleSuspended {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      attempt: u32,
+      cursor: u32,
+      reason: SuspensionReason,
+      cumulative_outcomes: OutcomeTotals,
+    },
+    CycleContinued {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      attempt: u32,
+      cursor: u32,
+    },
+    CycleCancelled {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      reason: CancellationReason,
+    },
   }
 
   #[pallet::error]
@@ -966,6 +1035,9 @@ pub mod pallet {
     AutoCloseNonceOverflow,
     AutoCloseNonceIncrementZero,
     QueueMutationRateLimited,
+    RetryLaterNotAllowedForImmutableAaa,
+    ContinuationNotFound,
+    ContinuationInvariant,
   }
 
   #[pallet::call]
@@ -1104,7 +1176,7 @@ pub mod pallet {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::AaaPaused);
-      if !snapshot.manual_trigger_pending {
+      if !snapshot.pending_signal {
         ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
           let hot = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
           hot.pending_signal = true;
@@ -1136,12 +1208,22 @@ pub mod pallet {
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      ActorFunding::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let funding = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        funding.funding_source_policy = policy;
-        Ok(())
-      })?;
+      ensure!(
+        ActorFunding::<T>::contains_key(aaa_id),
+        Error::<T>::AaaNotFound
+      );
+      let continuation_cancelled =
+        Self::cancel_continuation_internal(aaa_id, CancellationReason::FundingPolicyChanged, None)?;
+      ActorFunding::<T>::mutate(aaa_id, |maybe| {
+        maybe
+          .as_mut()
+          .expect("active actor funding existence was prevalidated")
+          .funding_source_policy = policy;
+      });
       Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
+      if continuation_cancelled {
+        Self::prime_actor_schedule(aaa_id);
+      }
       Ok(())
     }
 
@@ -1186,6 +1268,7 @@ pub mod pallet {
         schedule_window,
         frame_system::Pallet::<T>::block_number(),
       );
+      Self::cancel_continuation_internal(aaa_id, CancellationReason::ScheduleChanged, None)?;
       ActorProgram::<T>::mutate(aaa_id, |maybe| {
         let program = maybe
           .as_mut()
@@ -1234,6 +1317,7 @@ pub mod pallet {
       Self::validate_execution_plan_shape(&execution_plan)?;
       let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::ensure_retry_later_allowed(snapshot.mutability, &execution_plan)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
@@ -1271,10 +1355,11 @@ pub mod pallet {
         .values()
         .filter(|batch| !batch.pending_amount.is_zero())
         .count() as u32;
-      let has_pending_funding = pending_funding_count > 0;
       let funding_tracked_count = new_tracked.len() as u32;
       let (cycle_weight_upper, cycle_fee_upper) =
         Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
+      let continuation_cancelled =
+        Self::cancel_continuation_internal(aaa_id, CancellationReason::ExecutionPlanChanged, None)?;
       ActorProgram::<T>::mutate(aaa_id, |maybe| {
         maybe
           .as_mut()
@@ -1289,11 +1374,13 @@ pub mod pallet {
         hot.cycle_fee_upper = cycle_fee_upper;
         hot.funding_tracked_count = funding_tracked_count;
         hot.pending_funding_count = pending_funding_count;
-        hot.has_pending_funding = has_pending_funding;
         hot.consecutive_failures = 0;
       });
       ActorFunding::<T>::insert(aaa_id, funding);
       Self::deposit_event(Event::ExecutionPlanUpdated { aaa_id });
+      if continuation_cancelled {
+        Self::prime_actor_schedule(aaa_id);
+      }
       Ok(())
     }
 
@@ -1455,6 +1542,26 @@ pub mod pallet {
       );
       Self::do_deactivate_aaa(aaa_id, instance)
     }
+
+    #[pallet::call_index(23)]
+    #[pallet::weight(T::WeightInfo::continuation_cancel())]
+    pub fn cancel_continuation(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
+      let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      Self::ensure_control_origin(origin, &instance)?;
+      ensure!(
+        instance.mutability == Mutability::Mutable,
+        Error::<T>::ImmutableAaa
+      );
+      if Self::is_window_expired(&instance) {
+        return Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
+      }
+      ensure!(
+        Self::cancel_continuation_internal(aaa_id, CancellationReason::Explicit, None)?,
+        Error::<T>::ContinuationNotFound
+      );
+      Self::prime_actor_schedule(aaa_id);
+      Ok(())
+    }
   }
 
   impl<T: Config> Pallet<T> {
@@ -1484,13 +1591,15 @@ pub mod pallet {
       Self::close_cleanup_weight_upper()
     }
 
-    pub(crate) fn compute_cycle_weight_upper(
+    pub(crate) fn compute_cycle_weight_upper_from(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
+      start_cursor: usize,
     ) -> Weight {
       let mut upper =
         Weight::from_parts(5_000_000, 1000).saturating_add(T::DbWeight::get().reads_writes(2, 2));
-      for step in execution_plan.iter() {
+      for step_index in start_cursor..execution_plan.len() {
+        let step = &execution_plan[step_index];
         let step_overhead = Weight::from_parts(1_000_000, 128);
         let condition_overhead =
           Weight::from_parts(500_000, 64).saturating_mul(step.conditions.len() as u64);
@@ -1502,6 +1611,42 @@ pub mod pallet {
           upper = upper.saturating_add(T::WeightInfo::fee_collection());
         }
       }
+      if (start_cursor..execution_plan.len())
+        .any(|step_index| execution_plan[step_index].on_error == StepErrorPolicy::RetryLater)
+      {
+        let snapshot_entries = Self::trigger_surfaces(execution_plan, start_cursor).len() as u32;
+        upper = upper.saturating_add(
+          T::WeightInfo::continuation_suspend(snapshot_entries)
+            .max(T::WeightInfo::continuation_complete())
+            .max(T::WeightInfo::continuation_cancel()),
+        );
+      }
+      upper
+    }
+
+    pub(crate) fn compute_cycle_weight_upper(
+      aaa_type: AaaType,
+      execution_plan: &ExecutionPlanOf<T>,
+    ) -> Weight {
+      Self::compute_cycle_weight_upper_from(aaa_type, execution_plan, 0)
+    }
+
+    pub(crate) fn compute_cycle_fee_upper_from(
+      aaa_type: AaaType,
+      execution_plan: &ExecutionPlanOf<T>,
+      start_cursor: usize,
+    ) -> BalanceOf<T> {
+      if aaa_type != AaaType::User {
+        return Zero::zero();
+      }
+      let mut upper = T::Balance::zero();
+      for step_index in start_cursor..execution_plan.len() {
+        let step = &execution_plan[step_index];
+        let eval_fee = Self::compute_eval_fee(step.conditions.len() as u32);
+        upper = upper.saturating_add(eval_fee);
+        let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
+        upper = upper.saturating_add(exec_fee);
+      }
       upper
     }
 
@@ -1509,17 +1654,7 @@ pub mod pallet {
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
     ) -> BalanceOf<T> {
-      if aaa_type != AaaType::User {
-        return Zero::zero();
-      }
-      let mut upper = T::Balance::zero();
-      for step in execution_plan.iter() {
-        let eval_fee = Self::compute_eval_fee(step.conditions.len() as u32);
-        upper = upper.saturating_add(eval_fee);
-        let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
-        upper = upper.saturating_add(exec_fee);
-      }
-      upper
+      Self::compute_cycle_fee_upper_from(aaa_type, execution_plan, 0)
     }
 
     pub(crate) fn compute_cycle_bounds(
@@ -1534,7 +1669,38 @@ pub mod pallet {
 
     pub(crate) fn cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
       let mut upper = instance.cycle_weight_upper;
-      if instance.has_pending_funding && instance.pending_funding_count > 0 {
+      if instance.pending_funding_count > 0 {
+        upper = upper.saturating_add(T::WeightInfo::funding_batch_promotion(
+          instance.pending_funding_count,
+        ));
+      }
+      upper
+    }
+
+    pub(crate) fn attempt_weight_upper_bound(
+      instance: &AaaInstanceOf<T>,
+      start_cursor: usize,
+    ) -> Weight {
+      let mut upper = if start_cursor == 0 {
+        Self::cycle_weight_upper_bound(instance)
+      } else {
+        Self::compute_cycle_weight_upper_from(
+          instance.actor_class.aaa_type(),
+          &instance.execution_plan,
+          start_cursor,
+        )
+      };
+      if instance.run_state == RunState::Suspended {
+        let suffix_steps = instance.execution_plan.len().saturating_sub(start_cursor) as u32;
+        // Retry and terminal transition touch the same bounded Continuation value. The transition
+        // envelope already carries its maximum proof, so only incremental RefTime composes here.
+        let retry = T::WeightInfo::continuation_retry();
+        let suffix_admission = T::WeightInfo::continuation_suffix_admission(suffix_steps);
+        upper = upper
+          .saturating_add(Weight::from_parts(retry.ref_time(), 0))
+          .saturating_add(Weight::from_parts(suffix_admission.ref_time(), 0));
+      }
+      if start_cursor > 0 && instance.pending_funding_count > 0 {
         upper = upper.saturating_add(T::WeightInfo::funding_batch_promotion(
           instance.pending_funding_count,
         ));
@@ -1544,6 +1710,21 @@ pub mod pallet {
 
     pub(crate) fn cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
       instance.cycle_fee_upper
+    }
+
+    pub(crate) fn attempt_fee_upper_bound(
+      instance: &AaaInstanceOf<T>,
+      start_cursor: usize,
+    ) -> BalanceOf<T> {
+      if start_cursor == 0 {
+        instance.cycle_fee_upper
+      } else {
+        Self::compute_cycle_fee_upper_from(
+          instance.actor_class.aaa_type(),
+          &instance.execution_plan,
+          start_cursor,
+        )
+      }
     }
 
     pub(crate) fn close_cycle_weight_upper_bound(_instance: &AaaInstanceOf<T>) -> Weight {
@@ -1564,8 +1745,18 @@ pub mod pallet {
       } else {
         T::WeightInfo::funding_batch_promotion(funding_count)
       };
+      let continuation_retry = if (0..execution_plan.len())
+        .any(|step_index| execution_plan[step_index].on_error == StepErrorPolicy::RetryLater)
+      {
+        let retry = T::WeightInfo::continuation_retry();
+        let suffix = T::WeightInfo::continuation_suffix_admission(execution_plan.len() as u32);
+        Weight::from_parts(retry.ref_time().saturating_add(suffix.ref_time()), 0)
+      } else {
+        Weight::zero()
+      };
       Self::scheduler_admission_overhead()
         .saturating_add(Self::compute_cycle_weight_upper(aaa_type, execution_plan))
+        .saturating_add(continuation_retry)
         .saturating_add(promotion)
         .saturating_add(Self::close_cleanup_weight_upper())
     }
@@ -1842,6 +2033,7 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
+      Self::ensure_retry_later_allowed(mutability, &execution_plan)?;
       let active_count = Self::active_instance_count();
       ensure!(
         active_count < Self::effective_active_actor_limit(),
@@ -1899,19 +2091,19 @@ pub mod pallet {
           },
           mutability,
           lifecycle: ActiveLifecycle::Active,
+          run_state: RunState::Idle,
           schedule,
           schedule_window,
           execution_plan,
           cycle_nonce: 0,
           consecutive_failures: 0,
-          manual_trigger_pending: false,
+          pending_signal: false,
           queue_ticket: None,
           last_user_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
           funding_tracked_count: funding_tracked_assets.len() as u32,
           pending_funding_count: 0,
-          has_pending_funding: false,
           auto_close_at_cycle_nonce: None,
           first_eligible_at,
           last_cycle_block: Zero::zero(),
@@ -2014,6 +2206,7 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
+      Self::ensure_retry_later_allowed(identity.mutability, &execution_plan)?;
       Self::ensure_execution_plan_fits_idle_budget(aaa_type, &execution_plan)?;
       let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
       ensure!(
@@ -2034,19 +2227,19 @@ pub mod pallet {
         actor_class: identity.actor_class,
         mutability: identity.mutability,
         lifecycle: ActiveLifecycle::Active,
+        run_state: RunState::Idle,
         schedule,
         schedule_window,
         execution_plan,
         cycle_nonce: 0,
         consecutive_failures: 0,
-        manual_trigger_pending: false,
+        pending_signal: false,
         queue_ticket: None,
         last_user_queue_mutation_block: None,
         cycle_weight_upper,
         cycle_fee_upper,
         funding_tracked_count: funding_tracked_assets.len() as u32,
         pending_funding_count: 0,
-        has_pending_funding: false,
         auto_close_at_cycle_nonce: None,
         first_eligible_at,
         last_cycle_block: Zero::zero(),
@@ -2090,6 +2283,11 @@ pub mod pallet {
         mutability: instance.mutability,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if let Err(error) =
+          Self::cancel_continuation_internal(aaa_id, CancellationReason::Deactivated, None)
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         Self::remove_actor_from_queues(aaa_id);
         if ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
           && Self::wakeup_substrate_invalidate(aaa_id).is_none()
@@ -2190,6 +2388,21 @@ pub mod pallet {
         window.start.saturating_sub(now) <= T::MaxExecutionDelayBlocks::get(),
         Error::<T>::ExecutionDelayTooLong
       );
+      Ok(())
+    }
+
+    fn ensure_retry_later_allowed(
+      mutability: Mutability,
+      execution_plan: &ExecutionPlanOf<T>,
+    ) -> DispatchResult {
+      if mutability == Mutability::Immutable {
+        for step in execution_plan {
+          ensure!(
+            step.on_error != StepErrorPolicy::RetryLater,
+            Error::<T>::RetryLaterNotAllowedForImmutableAaa
+          );
+        }
+      }
       Ok(())
     }
 
@@ -2405,6 +2618,17 @@ pub mod pallet {
         );
       }
 
+      let cancellation_reason = match reason {
+        CloseReason::WindowExpired => CancellationReason::WindowExpired,
+        CloseReason::OwnerInitiated => CancellationReason::Closed,
+        CloseReason::BalanceExhausted
+        | CloseReason::ConsecutiveFailures
+        | CloseReason::CycleNonceExhausted
+        | CloseReason::FeeBudgetExhausted
+        | CloseReason::AutoCloseNonceReached => CancellationReason::Terminal,
+      };
+      Self::cancel_continuation_internal(aaa_id, cancellation_reason, None)?;
+
       // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as soon as
       // hot state disappears. Terminal cleanup therefore performs no shared-container scan.
       Self::remove_active_actor(aaa_id);
@@ -2588,6 +2812,12 @@ pub mod pallet {
         let program = ActorProgram::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
           "ActorHot entry has no matching ActorProgram entry",
         ))?;
+        let has_continuation = ContinuationStateStore::<T>::contains_key(aaa_id);
+        if (hot.run_state == RunState::Suspended) != has_continuation {
+          return Err(TryRuntimeError::Other(
+            "ActorHot run_state disagrees with ContinuationState",
+          ));
+        }
         let instance = Self::compose_active_actor(hot, program);
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
@@ -2602,7 +2832,6 @@ pub mod pallet {
           .count() as u32;
         if instance.funding_tracked_count != funding.funding_tracked_assets.len() as u32
           || instance.pending_funding_count != pending_funding_count
-          || instance.has_pending_funding != (pending_funding_count > 0)
         {
           return Err(TryRuntimeError::Other(
             "ActorHot funding indications disagree with ActorFunding",
@@ -2637,10 +2866,42 @@ pub mod pallet {
           ));
         }
       }
+      let continuations = ContinuationStateStore::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor invariant audit
+      for (aaa_id, continuation) in continuations {
+        let hot = ActorHot::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
+          "ContinuationState entry has no matching ActorHot entry",
+        ))?;
+        let program = ActorProgram::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
+          "ContinuationState entry has no matching ActorProgram entry",
+        ))?;
+        if hot.run_state != RunState::Suspended
+          || hot.mutability != Mutability::Mutable
+          || hot.cycle_nonce == 0
+          || continuation.cursor >= program.execution_plan.len() as u32
+        {
+          return Err(TryRuntimeError::Other(
+            "ContinuationState violates run marker, mutability, or cursor bounds",
+          ));
+        }
+        let expected_surfaces =
+          Self::trigger_surfaces(&program.execution_plan, continuation.cursor as usize);
+        if expected_surfaces.len() != continuation.trigger_snapshot.len()
+          || expected_surfaces
+            .iter() // deos-bypass: bounded-iter — suffix surfaces are bounded by MaxContinuationSnapshotEntries
+            .any(|surface| !continuation.trigger_snapshot.contains_key(surface))
+        {
+          return Err(TryRuntimeError::Other(
+            "ContinuationState trigger snapshot disagrees with unresolved suffix",
+          ));
+        }
+      }
       let dormant_identities = DormantAaaIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
       for (aaa_id, identity) in dormant_identities {
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
-        if Self::active_actor_exists(aaa_id) || ActorFunding::<T>::contains_key(aaa_id) {
+        if Self::active_actor_exists(aaa_id)
+          || ActorFunding::<T>::contains_key(aaa_id)
+          || ContinuationStateStore::<T>::contains_key(aaa_id)
+        {
           return Err(TryRuntimeError::Other(
             "Dormant identity owns active scheduler or readiness state",
           ));

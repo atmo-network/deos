@@ -7,7 +7,7 @@ edition = "2024"
 
 [workspace]
 default-members = ["pallets/axial-router", "runtime"]
-members = ["aaa-embedding-runtime", "pallets/aaa", "pallets/asset-registry", "pallets/axial-router", "pallets/governance", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
+members = ["pallets/aaa", "pallets/aaa/embedding-runtime", "pallets/asset-registry", "pallets/axial-router", "pallets/governance", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
 resolver = "2"
 
 [workspace.lints.rust]

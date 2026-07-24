@@ -29,7 +29,7 @@ related:
   - TMCTOL Standard
   - Staking Pools
   - Read-Model Split
-last_compiled: 2026-07-20
+last_compiled: 2026-07-24
 confidence: 0.85
 ---
 
@@ -61,6 +61,16 @@ Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [Axial 
 5. A larger protocol behavior emerges from small bounded steps, but remains inspectable as an actor graph.
 
 Owner pages: [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor.en.md), [Token-Driven Automation](token-driven-automation.en.md).
+
+## Temporary Middle-Step Failure
+
+1. A Mutable plan executes `SwapExactIn`, then attempts `AddLiquidity`, then intends to `Transfer` the result.
+2. The swap succeeds and commits. The liquidity adapter reports an explicitly Temporary failure.
+3. `RetryLater` rolls back only the failed task and stores a sparse Continuation at the `AddLiquidity` cursor.
+4. Cooldown re-enters the same FIFO/wakeup scheduler without a new external trigger. Retry charges and admits only `AddLiquidity → Transfer`.
+5. Success removes Continuation and emits one cumulative summary for the original logical-run nonce. Cancellation instead keeps the swap committed and performs no compensation.
+
+Current cursor and attempt are bounded chain truth. A long attempt timeline belongs to a materialized event index.
 
 ## TOL Bucket and Treasury Lane
 

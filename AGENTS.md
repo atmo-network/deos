@@ -45,6 +45,7 @@
 - `Skill Ownership`: Repo-local skills own specialized workflows and audits; do not duplicate their internal procedures here.
 - `README Ownership`: Root and subtree READMEs own human orientation, setup, navigation, and current workspace purpose.
 - `Read-Model Ownership`: `docs/read-model.contract.en.md` owns chain/materialized data classification; `docs/web-client.architecture.en.md` owns browser realization.
+- `AAA Control-Plane Ownership`: `docs/aaa-control-plane.contract.en.md` owns off-chain plan artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized AAA history boundaries.
 - `Framework Boundary Ownership`: `docs/framework-instance.contract.en.md` owns the reusable mechanism versus downstream policy contract.
 
 ## 3. Repository Topology
@@ -86,7 +87,9 @@
 ## 5. Framework Architecture Invariants
 
 - `Framework Forkability`: Changes under `/template` must preserve generic utility and avoid hardcoding downstream ecosystem identity or business policy.
+- `Reusable Pallet Packaging`: Treat a reusable pallet as an independently consumable package; keep its public host contract and separate external-consumer fixtures under the pallet ownership boundary, while concrete DEOS adapters and topology remain in the reference runtime composition.
 - `Deterministic Mechanics`: Runtime-managed economic reactions must use explicit triggers, typed payloads, bounded state, and weight-accounted execution.
+- `AAA Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `docs/aaa.specification.en.md` owns the full contract.
 - `Token-Driven Coordination`: Prefer asset movement and runtime hooks over privileged signed calls when token ingress itself defines the event.
 - `Bounded Consensus State`: Every storage collection, iteration, history surface, retry path, and projection must have a defensible bound.
 - `Read-Model Honesty`: Public data must be classified as bounded authoritative on-chain truth or externally indexed/materialized truth; canonical UX must not hide an indexer dependency.

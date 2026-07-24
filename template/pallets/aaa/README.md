@@ -1,6 +1,6 @@
 # pallet-aaa
 
-`pallet-aaa` is the DEOS deterministic account-abstraction actor pallet.
+`pallet-aaa` is a reusable FRAME pallet for deterministic Account Abstraction Actors. DEOS provides its production-oriented reference composition.
 
 ## SDK baseline
 
@@ -17,7 +17,9 @@ The current kernel/runtime slice provides:
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
-- Runtime-configured adapters for assets, DEX, staking, liquidity donation, fee collection, direct ingress, and weights
+- Sparse progress-preserving Continuation for Mutable actors, with scalar suffix cursor, Temporary-only retry, deterministic cancellation, and no prefix replay
+- A bounded `simulate_current_program` rollback core and versioned `AaaSimulationApi` declaration that require exact stored-program identity, follow fresh/Continuation readiness, return ordered outcomes, and roll the entire attempt back
+- Runtime-configured adapters for assets, DEX, staking, liquidity donation, typed failure retryability, fee collection, direct ingress, and weights
 - Genesis provisioning of System actors through runtime configuration
 
 ## Key rule
@@ -38,6 +40,7 @@ Readiness and execution must stay deterministic and bounded:
 - Hot-path execution happens only under configured per-block limits
 - Timer readiness uses deterministic cadence and bounded actor-stable jitter; AAA exposes no probability or entropy contract
 - `on_idle` does useful work only with remaining block budget
+- Continuation retries reuse the same FIFO/wakeup substrate and admit only the unresolved suffix; they create no second scheduler, inbox, or off-chain correctness dependency
 
 ## Runtime-as-Config rule
 
@@ -51,7 +54,7 @@ Concrete chain policy belongs in runtime configuration, including:
 
 ## External runtime embedding checklist
 
-A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The full host-runtime contract lives in [`docs/aaa.embedding.en.md`](../../../docs/aaa.embedding.en.md). Executable portability evidence lives in [`template/aaa-embedding-runtime`](../../aaa-embedding-runtime/README.md); that fixture is not a second product or a normative topology.
+A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The package-owned host-runtime contract lives in [`EMBEDDING.md`](./EMBEDDING.md). Executable portability evidence lives in the separate [`embedding-runtime`](https://github.com/atmo-network/deos/tree/main/template/pallets/aaa/embedding-runtime) Cargo package under this pallet ownership boundary; that fixture is not a second product or a normative topology.
 
 Minimal checklist:
 
@@ -60,7 +63,9 @@ Minimal checklist:
 - Decide which tasks are allowed for User vs System actors and keep any chain-specific policy in adapters or genesis actor configuration, not in pallet core.
 - Provide deterministic genesis System AAA definitions only for actor roles the runtime actually wants to ship.
 - Treat example execution plans as reusable task-language patterns; treat the DEOS/TMCTOL System AAA catalog as one runtime's topology, not as the pallet's required deployment shape.
-- Validate adapter failure atomicity with runtime-local tests when adapters perform multi-step mutations.
+- Classify adapter mutation failures explicitly as Permanent or Temporary; unknown and unsupported failures stay Permanent.
+- Bind `MaxContinuationSnapshotEntries` plus generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater`.
+- Validate adapter failure atomicity and Mutable User/System Continuation with runtime-local tests when adapters perform multi-step mutations.
 
 ## Non-goals of the current slice
 
@@ -71,4 +76,4 @@ The current kernel does not yet include:
 - Unbounded task graphs or unmetered loops
 - Direct pallet-specific business logic embedded into AAA core
 
-See `docs/aaa.architecture.en.md` and `docs/aaa.specification.en.md` for the current contract.
+See the repository's [AAA Architecture](https://github.com/atmo-network/deos/blob/main/docs/aaa.architecture.en.md) and [AAA Specification](https://github.com/atmo-network/deos/blob/main/docs/aaa.specification.en.md) for the current reference binding and normative semantics.

@@ -12,7 +12,7 @@ sources:
   - ../../AGENTS.md
   - ../../README.md
   - ../../docs/README.md
-  - ../../docs/aaa.embedding.en.md
+  - ../../template/pallets/aaa/EMBEDDING.md
   - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md

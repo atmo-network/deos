@@ -135,14 +135,16 @@ Each subsystem below uses the same two buckets:
 - Account ownership/control slots
 - Live balances and execution-side effects
 - Current sparse `IdleStarvationState` and bounded detection/recovery events when scheduler observability changes phase
+- Current sparse Continuation for a suspended actor, including cursor, attempt, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
 
 #### Indexed / Materialized View
 
 - Long-lived execution history per actor
-- Per-step timeline replay across many cycles
+- Per-step and per-attempt timeline replay across many logical runs, correlated from `(aaa_id, cycle_nonce, attempt)` event boundaries
 - Fleet dashboards, rankings, and operator analytics
 - Archived run logs beyond bounded on-chain observability
 - Historical starvation intervals, duration trends, and alert/recovery timelines reconstructed from runtime events
+- Metadata-bound plan artifacts when available, structural diffs, forecasts, simulations, and configuration-version history under the provenance rules in `aaa-control-plane.contract.en.md`
 
 ### Staking
 

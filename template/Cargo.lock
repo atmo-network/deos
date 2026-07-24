@@ -13,16 +13,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "aaa-embedding-runtime"
-version = "0.7.2"
-dependencies = [
- "pallet-aaa",
- "parity-scale-codec",
- "polkadot-sdk",
- "scale-info",
-]
-
-[[package]]
 name = "addr2line"
 version = "0.25.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4107,7 +4097,7 @@ dependencies = [
 
 [[package]]
 name = "deos-runtime"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "cumulus-pallet-parachain-system",
  "docify",
@@ -8637,7 +8627,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8645,6 +8635,17 @@ dependencies = [
  "proptest",
  "scale-info",
  "serde",
+ "sp-api",
+]
+
+[[package]]
+name = "pallet-aaa-embedding-fixture"
+version = "0.7.3"
+dependencies = [
+ "pallet-aaa",
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "scale-info",
 ]
 
 [[package]]
@@ -8770,7 +8771,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-asset-registry"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8945,7 +8946,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-axial-router"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "pallet-tmc",
  "parity-scale-codec",
@@ -9437,7 +9438,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-governance"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9447,7 +9448,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-staking"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -10726,7 +10727,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmc"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -13244,7 +13245,7 @@ dependencies = [
 
 [[package]]
 name = "primitives"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "parity-scale-codec",
  "scale-info",

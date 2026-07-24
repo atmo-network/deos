@@ -11,7 +11,7 @@ usage() {
     cat <<'EOF'
 Usage: aaa-release-gate.sh [OPTIONS]
 
-Runs the AAA scheduler release gate against deos-runtime and the independent embedding runtime.
+Runs the AAA release gate across the package archive, external-consumer fixture, and deos-runtime.
 
 Options:
   --skip-occupancy-profile   Skip the 10k occupancy diagnostics profile
@@ -60,30 +60,36 @@ check_prerequisites() {
 
 run_gate() {
     if [[ "$QUICK_MODE" == "1" ]]; then
-        run_shell_step "AAA quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p deos-runtime -p aaa-embedding-runtime --all-targets -- -D warnings"
-        run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-aaa --lib && cargo test -q -p aaa-embedding-runtime --lib"
+        run_shell_step "AAA quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p deos-runtime -p pallet-aaa-embedding-fixture --all-targets -- -D warnings"
+        run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-aaa --lib && cargo test -q -p pallet-aaa-embedding-fixture --lib"
+        run_shell_step "AAA quick gate: package archive surface" "" "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-aaa --allow-dirty --locked --list"
         return
     fi
 
     run_shell_step \
+        "AAA gate: pallet package archive" \
+        "" \
+        "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-aaa --allow-dirty --locked"
+
+    run_shell_step \
         "AAA gate: independent embedding default profile" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p aaa-embedding-runtime --locked --lib"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-aaa-embedding-fixture --locked --lib"
 
     run_shell_step \
         "AAA gate: independent embedding DEX profile" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p aaa-embedding-runtime --locked --lib --features dex-fixture"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-aaa-embedding-fixture --locked --lib --features dex-fixture"
 
     run_shell_step \
         "AAA gate: independent embedding try-runtime profile" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p aaa-embedding-runtime --locked --lib --features try-runtime"
+        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p pallet-aaa-embedding-fixture --locked --lib --features try-runtime"
 
     run_shell_step \
         "AAA gate: independent embedding no-std contract" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo check --$CARGO_PROFILE -p aaa-embedding-runtime --locked --no-default-features"
+        "cd \"$TEMPLATE_DIR\" && cargo check --$CARGO_PROFILE -p pallet-aaa-embedding-fixture --locked --no-default-features"
 
     run_shell_step \
         "AAA gate: over-capacity fairness matrix" \

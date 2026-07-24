@@ -66,13 +66,15 @@
         "en": [
           "../docs/aaa.specification.en.md",
           "../docs/aaa.architecture.en.md",
-          "../docs/aaa.embedding.en.md",
+          "../docs/aaa-control-plane.contract.en.md",
+          "../template/pallets/aaa/EMBEDDING.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
           "../docs/aaa.specification.en.md",
           "../docs/aaa.architecture.en.md",
-          "../docs/aaa.embedding.en.md",
+          "../docs/aaa-control-plane.contract.en.md",
+          "../template/pallets/aaa/EMBEDDING.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -903,7 +905,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
-          "../docs/aaa.embedding.en.md",
+          "../template/pallets/aaa/EMBEDDING.md",
           "../template/README.md",
           "../web-client/README.md"
         ],
@@ -911,7 +913,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
-          "../docs/aaa.embedding.en.md",
+          "../template/pallets/aaa/EMBEDDING.md",
           "../template/README.md",
           "../web-client/README.md"
         ]

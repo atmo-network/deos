@@ -81,7 +81,8 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 
 - [TMCTOL Specification](./docs/tmctol.specification.en.md)
 - [AAA Specification](./docs/aaa.specification.en.md)
-- [AAA External Runtime Embedding Guide](./docs/aaa.embedding.en.md)
+- [AAA External Runtime Embedding Guide](./template/pallets/aaa/EMBEDDING.md)
+- [AAA Control-Plane Contract](./docs/aaa-control-plane.contract.en.md)
 - [Governance Specification](./docs/governance.specification.en.md)
 - [Read-Model Contract](./docs/read-model.contract.en.md)
 - [Core Architecture](./docs/core.architecture.en.md)

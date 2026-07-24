@@ -12,7 +12,8 @@
     "postinstall": "npm run papi:generate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "validate": "npm run format:check && npm run check && npm run build",
+    "test:automation": "node --test scripts/test-aaa-*.mjs",
+    "validate": "npm run format:check && npm run test:automation && npm run check && npm run build",
     "validate:dag": "node scripts/validate-domain-dag.mjs",
     "validate:wiki": "node scripts/validate-wiki-trust.mjs",
     "validate:all": "npm run validate && npm run validate:dag && npm run validate:wiki",
@@ -38,6 +39,8 @@
   },
   "dependencies": {
     "@polkadot-api/descriptors": "file:.papi/descriptors",
+    "@polkadot-api/metadata-builders": "^0.14.3",
+    "@polkadot-api/substrate-bindings": "^0.20.3",
     "@polkadot/keyring": "^14.0.3",
     "@polkadot/util": "^14.0.3",
     "@polkadot/util-crypto": "^14.0.3",

@@ -321,6 +321,7 @@ mod benches {
     )
     .expect("System AAA creation must succeed");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
     #[extrinsic_call]
     deactivate_aaa(RawOrigin::Signed(owner), aaa_id);
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
@@ -357,7 +358,7 @@ mod benches {
     manual_trigger(RawOrigin::Signed(caller), aaa_id);
     let inst =
       Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after manual_trigger");
-    assert!(inst.manual_trigger_pending);
+    assert!(inst.pending_signal);
   }
 
   #[benchmark]
@@ -379,6 +380,7 @@ mod benches {
     )
     .expect("create_user_aaa_at_slot must succeed in close_aaa benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
     #[extrinsic_call]
     close_aaa(RawOrigin::Signed(owner), aaa_id);
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
@@ -413,6 +415,13 @@ mod benches {
   fn update_schedule() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists")
+        .pending_signal = true;
+    });
     let new_schedule = Schedule {
       trigger: Trigger::Manual,
       cooldown_blocks: 20,
@@ -428,6 +437,13 @@ mod benches {
   fn update_funding_source_policy() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists")
+        .pending_signal = true;
+    });
     let mut allowed: BoundedBTreeSet<T::AccountId, T::MaxWhitelistSize> =
       BoundedBTreeSet::default();
     for index in 0..T::MaxWhitelistSize::get() {
@@ -449,6 +465,13 @@ mod benches {
   fn update_execution_plan() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists")
+        .pending_signal = true;
+    });
     let funding_assets = T::BenchmarkHelper::funding_assets(T::MaxFundingTrackedAssets::get());
     ActorFunding::<T>::mutate(aaa_id, |maybe| {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
@@ -817,6 +840,48 @@ mod benches {
     NextAaaId::<T>::get().saturating_sub(1)
   }
 
+  fn install_continuation<T: Config>(aaa_id: AaaId, snapshot_entries: u32) {
+    let bounded = snapshot_entries.min(T::MaxContinuationSnapshotEntries::get());
+    let asset_count = bounded.saturating_add(1) / 2;
+    let assets = T::BenchmarkHelper::funding_assets(asset_count);
+    let mut trigger_snapshot = ContinuationSnapshotOf::<T>::default();
+    for asset in assets {
+      if trigger_snapshot.len() as u32 >= bounded {
+        break;
+      }
+      trigger_snapshot
+        .try_insert(ResolutionSurface::Asset(asset), One::one())
+        .expect("benchmark snapshot asset entry fits");
+      if trigger_snapshot.len() as u32 >= bounded {
+        break;
+      }
+      trigger_snapshot
+        .try_insert(ResolutionSurface::StakingShares(asset), One::one())
+        .expect("benchmark snapshot staking entry fits");
+    }
+    assert_eq!(trigger_snapshot.len() as u32, bounded);
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      let hot = maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists");
+      hot.run_state = RunState::Suspended;
+      hot.cycle_nonce = 1;
+      hot.pending_signal = false;
+      hot.queue_ticket = None;
+      hot.wakeup_pointer = None;
+    });
+    ContinuationStateStore::<T>::insert(
+      aaa_id,
+      ContinuationState {
+        cursor: 0,
+        attempt: 0,
+        last_attempt_block: 1u32.into(),
+        trigger_snapshot,
+        cumulative_outcomes: OutcomeTotals::default(),
+      },
+    );
+  }
+
   fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
     let page_size = T::WakeupPageSize::get();
     let page_start = u32::try_from(page_id)
@@ -1018,6 +1083,10 @@ mod benches {
   #[benchmark]
   fn scheduler_actor_program_probe() {
     let aaa_id = bench_create_system_manual::<T>(3_001);
+    assert!(
+      ContinuationStateStore::<T>::get(aaa_id).is_none(),
+      "ordinary readiness benchmark must retain the absent-Continuation envelope"
+    );
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -1600,6 +1669,107 @@ mod benches {
     assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
   }
 
+  #[benchmark(pov_mode = Measured)]
+  fn continuation_suspend(s: Linear<0, 20>) {
+    let aaa_id = bench_create_system_manual::<T>(50_000_000);
+    install_continuation::<T>(aaa_id, s);
+    let state = ContinuationStateStore::<T>::take(aaa_id).expect("benchmark continuation exists");
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists")
+        .run_state = RunState::Idle;
+    });
+    #[block]
+    {
+      Pallet::<T>::persist_continuation_suspension(aaa_id, 1, state, SuspensionReason::Temporary)
+        .expect("benchmark suspension must persist");
+    }
+    assert!(ContinuationStateStore::<T>::contains_key(aaa_id));
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn continuation_retry() {
+    let aaa_id = bench_create_system_manual::<T>(50_000_001);
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::begin_continuation_attempt(
+        aaa_id,
+        1,
+        2u32.into(),
+      ));
+    }
+    assert_eq!(
+      ContinuationStateStore::<T>::get(aaa_id)
+        .expect("benchmark continuation remains")
+        .attempt,
+      1
+    );
+  }
+
+  #[benchmark(pov_mode = Measured)]
+  fn continuation_complete() {
+    let aaa_id = bench_create_system_manual::<T>(50_000_002);
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    #[block]
+    {
+      Pallet::<T>::write_continuation_state(aaa_id, None)
+        .expect("benchmark completion must clear continuation");
+    }
+    assert!(ContinuationStateStore::<T>::get(aaa_id).is_none());
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.run_state == RunState::Idle));
+  }
+
+  #[benchmark]
+  fn continuation_cancel() {
+    let aaa_id = bench_create_system_manual::<T>(50_000_003);
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state exists")
+        .pending_signal = true;
+    });
+    #[extrinsic_call]
+    cancel_continuation(RawOrigin::Root, aaa_id);
+    assert!(ContinuationStateStore::<T>::get(aaa_id).is_none());
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| {
+      hot.run_state == RunState::Idle && hot.pending_signal && hot.queue_ticket.is_some()
+    }));
+  }
+
+  #[benchmark]
+  fn continuation_suffix_admission(n: Linear<1, 10>) {
+    let bounded = n.min(T::MaxSystemExecutionPlanSteps::get());
+    let recipient: T::AccountId = account("continuation_suffix_recipient", 0, 0);
+    let mut plan = ExecutionPlanOf::<T>::default();
+    for _ in 0..bounded {
+      plan
+        .try_push(Step {
+          conditions: BoundedVec::default(),
+          task: AaaTask::Transfer {
+            to: recipient.clone(),
+            asset: T::NativeAssetId::get(),
+            amount: AmountResolution::Fixed(One::one()),
+          },
+          on_error: StepErrorPolicy::RetryLater,
+        })
+        .expect("benchmark suffix step fits");
+    }
+    #[block]
+    {
+      let mut total = Weight::zero();
+      for step_index in 0..plan.len() {
+        let step = &plan[step_index];
+        total = total
+          .saturating_add(Pallet::<T>::weight_upper_bound(&step.task))
+          .saturating_add(Weight::from_parts(step.conditions.len() as u64, 0));
+      }
+      core::hint::black_box(total);
+    }
+  }
+
   #[benchmark]
   fn transaction_extension_ingress_base() {
     let owner: T::AccountId = whitelisted_caller();
@@ -1629,6 +1799,7 @@ mod benches {
   fn transaction_extension_ingress_notify() {
     let source: T::AccountId = account("ingress_source", 0, 0);
     let (aaa_id, recipient) = prepare_saturated_address_actor::<T>(0);
+    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
     T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
       .expect("benchmark helper must prepare a matched producer event");
     #[block]
@@ -1668,7 +1839,6 @@ mod benches {
     ActorHot::<T>::mutate(aaa_id, |maybe| {
       let hot = maybe.as_mut().expect("benchmark actor hot state exists");
       hot.pending_funding_count = a;
-      hot.has_pending_funding = true;
     });
     #[block]
     {

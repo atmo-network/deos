@@ -23,7 +23,7 @@ related:
   - Three-Layer Validation
   - Reference Client
   - Generated Wiki
-last_compiled: 2026-07-20
+last_compiled: 2026-07-24
 confidence: 0.9
 ---
 
@@ -40,7 +40,7 @@ This page is a current-state map. It is not the release history and not the full
 The current framework baseline is best understood by domain:
 
 - **Economic physics**: TMCTOL minting, routing, treasury-owned liquidity, actor-mediated fee burning, and bounded invariants form the core economic loop.
-- **Autonomous actors**: AAA provides deterministic actor execution for burning, liquidity provisioning, treasury/bucket flows, and staking-related protocol automation.
+- **Autonomous actors**: AAA provides deterministic actor execution plus Mutable-only sparse Continuation for temporary middle-step incapacity. Retries preserve committed prefixes on the canonical bounded scheduler without whole-plan rollback.
 - **Staking and governance**: staking uses multi-asset share-vault mechanics, while governance uses bounded domain tracks, typed payloads, and protection surfaces.
 - **Reference client**: the SvelteKit client exposes on-chain-first wallet, swap, staking, governance, wiki, chart/status, automation, and execution-feedback surfaces.
 - **Tooling and validation**: scripts, benchmarks, metadata export, wiki trust checks, client validation, and context gates support local development and release readiness.

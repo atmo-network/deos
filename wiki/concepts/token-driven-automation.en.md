@@ -25,7 +25,7 @@ related:
   - TMCTOL Standard
   - Read-Model Split
   - Core Terms
-last_compiled: 2026-07-22
+last_compiled: 2026-07-24
 confidence: 0.9
 ---
 
@@ -63,8 +63,8 @@ The specification keeps a few guarantees central:
 
 - Deterministic behavior for identical state and block context
 - Bounded work with explicit limits
-- Stateless execution plans instead of mutable workflow memory between steps
-- Predictable failure modes such as deferred, skipped, failed, or closed
+- Static execution plans with no task-authored workflow memory; Mutable-only sparse Continuation records unresolved suffix progress
+- Predictable outcomes such as deferred, skipped, failed, suspended, cancelled, or closed
 - No automatic refund fan-out when an actor is destroyed
 
 ## Why Provenance-Aware Ingress Matters

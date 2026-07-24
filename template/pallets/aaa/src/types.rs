@@ -619,6 +619,7 @@ pub enum CloseReason {
 pub enum StepErrorPolicy {
   AbortCycle,
   ContinueNextStep,
+  RetryLater,
 }
 
 #[derive(
@@ -631,10 +632,106 @@ pub enum DeferReason {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub enum SuspensionReason {
+  FundingUnavailable,
+  Temporary,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum CancellationReason {
+  Explicit,
+  ExecutionPlanChanged,
+  FundingPolicyChanged,
+  ScheduleChanged,
+  WindowExpired,
+  Deactivated,
+  Terminal,
+  Closed,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub enum StepSkippedReason {
   ConditionsNotMet,
   ResolutionSkipped,
   FundingUnavailable,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SimulationMode {
+  FreshCurrentPlan,
+  CurrentContinuation,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SimulationStatus {
+  Completed,
+  Aborted,
+  Suspended,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SimulationStepOutcome {
+  Executed,
+  Skipped(StepSkippedReason),
+  Failed(crate::RetryClass),
+  Suspended(SuspensionReason),
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct SimulationStepRecord {
+  pub step_index: u32,
+  pub outcome: SimulationStepOutcome,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SimulationError {
+  ActorNotFound,
+  ProgramMismatch,
+  TypeMismatch,
+  MutabilityMismatch,
+  ModeRunStateMismatch,
+  GlobalCircuitBreaker,
+  WindowExpired,
+  Paused,
+  CycleNonceExhausted,
+  ConsecutiveFailures,
+  NotReady,
+  BalanceUnavailable,
+  FeeBudgetUnavailable,
+  ContinuationInvariant,
+  TransactionDepthExceeded,
+}
+
+impl From<polkadot_sdk::sp_runtime::DispatchError> for SimulationError {
+  fn from(_: polkadot_sdk::sp_runtime::DispatchError) -> Self {
+    Self::TransactionDepthExceeded
+  }
+}
+
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
+pub struct SimulationResult {
+  pub status: SimulationStatus,
+  pub cycle_nonce: u64,
+  pub attempt: u32,
+  pub start_cursor: u32,
+  pub continuation_cursor: Option<u32>,
+  pub finalized_through: Option<u32>,
+  pub cumulative_outcomes: OutcomeTotals,
+  pub steps: alloc::vec::Vec<SimulationStepRecord>,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -1026,6 +1123,75 @@ pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
 }
 
 #[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub enum RunState {
+  #[default]
+  Idle,
+  Suspended,
+}
+
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  Eq,
+  Ord,
+  PartialEq,
+  PartialOrd,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub enum ResolutionSurface<AssetId> {
+  Asset(AssetId),
+  StakingShares(AssetId),
+}
+
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub struct OutcomeTotals {
+  pub executed_steps: u32,
+  pub skipped_conditions: u32,
+  pub skipped_resolution: u32,
+  pub skipped_funding_unavailable: u32,
+  pub failed_steps: u32,
+}
+
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(MaxSnapshotEntries))]
+pub struct ContinuationState<AssetId, Balance, BlockNumber, MaxSnapshotEntries: Get<u32>> {
+  pub cursor: u32,
+  pub attempt: u32,
+  pub last_attempt_block: BlockNumber,
+  pub trigger_snapshot: BoundedBTreeMap<ResolutionSurface<AssetId>, Balance, MaxSnapshotEntries>,
+  pub cumulative_outcomes: OutcomeTotals,
+}
+
+#[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub struct DormantAaaIdentity<AccountId> {
@@ -1044,6 +1210,7 @@ pub struct ActorHotState<AccountId, BlockNumber, Balance> {
   pub actor_class: ActorClass,
   pub mutability: Mutability,
   pub lifecycle: ActiveLifecycle,
+  pub run_state: RunState,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
@@ -1056,7 +1223,6 @@ pub struct ActorHotState<AccountId, BlockNumber, Balance> {
   pub cycle_fee_upper: Balance,
   pub funding_tracked_count: u32,
   pub pending_funding_count: u32,
-  pub has_pending_funding: bool,
   pub first_eligible_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
 }
@@ -1079,20 +1245,20 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub actor_class: ActorClass,
   pub mutability: Mutability,
   pub lifecycle: ActiveLifecycle,
+  pub run_state: RunState,
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
-  pub manual_trigger_pending: bool,
+  pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
   pub last_user_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
   pub funding_tracked_count: u32,
   pub pending_funding_count: u32,
-  pub has_pending_funding: bool,
   pub first_eligible_at: BlockNumber,
   pub last_cycle_block: BlockNumber,
 }

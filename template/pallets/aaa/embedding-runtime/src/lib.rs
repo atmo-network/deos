@@ -139,11 +139,13 @@ impl polkadot_sdk::pallet_balances::Config for Runtime {
 pub struct NativeAssetOps;
 
 impl NativeAssetOps {
-  fn ensure_native(asset: AssetId) -> Result<(), DispatchError> {
+  fn ensure_native(asset: AssetId) -> Result<(), pallet_aaa::TaskFailure> {
     if asset == NATIVE_ASSET {
       Ok(())
     } else {
-      Err(DispatchError::Other("UnsupportedAsset"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "UnsupportedAsset",
+      )))
     }
   }
 }
@@ -154,25 +156,30 @@ impl AssetOps<AccountId, AssetId, Balance> for NativeAssetOps {
     to: &AccountId,
     asset: AssetId,
     amount: Balance,
-  ) -> Result<(), DispatchError> {
+  ) -> Result<(), pallet_aaa::TaskFailure> {
     Self::ensure_native(asset)?;
     <Balances as Currency<AccountId>>::transfer(from, to, amount, ExistenceRequirement::AllowDeath)
+      .map_err(pallet_aaa::TaskFailure::permanent)
   }
 
-  fn burn(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError> {
+  fn burn(who: &AccountId, asset: AssetId, amount: Balance) -> Result<(), pallet_aaa::TaskFailure> {
     Self::ensure_native(asset)?;
     if <Balances as Currency<AccountId>>::free_balance(who) < amount {
-      return Err(DispatchError::Other("InsufficientBalance"));
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "InsufficientBalance",
+      )));
     }
     let (_, remainder) = <Balances as Currency<AccountId>>::slash(who, amount);
     if remainder == 0 {
       Ok(())
     } else {
-      Err(DispatchError::Other("InsufficientBalance"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "InsufficientBalance",
+      )))
     }
   }
 
-  fn mint(to: &AccountId, asset: AssetId, amount: Balance) -> Result<(), DispatchError> {
+  fn mint(to: &AccountId, asset: AssetId, amount: Balance) -> Result<(), pallet_aaa::TaskFailure> {
     Self::ensure_native(asset)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
     Ok(())
@@ -210,10 +217,15 @@ pub fn transfer_and_notify_actor(
   AAA::preflight_funding_event(aaa_id, asset, amount, Some(&provenance))?;
   polkadot_sdk::frame_support::storage::with_transaction(|| {
     let result = NativeAssetOps::transfer(source, &actor.sovereign_account, asset, amount)
-      .and_then(|()| AAA::notify_address_event(aaa_id, asset, amount, source));
+      .and_then(|()| {
+        AAA::notify_address_event(aaa_id, asset, amount, source)
+          .map_err(pallet_aaa::TaskFailure::permanent)
+      });
     match result {
       Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-      Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error)),
+      Err(failure) => {
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(failure.error))
+      }
     }
   })
 }
@@ -224,13 +236,24 @@ pub struct FixedRateDex;
 #[cfg(feature = "dex-fixture")]
 impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
   fn swap_exact_in(
-    _: &AccountId,
-    _: AssetId,
-    _: AssetId,
-    _: Balance,
+    who: &AccountId,
+    asset_in: AssetId,
+    asset_out: AssetId,
+    amount_in: Balance,
     _: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, DispatchError> {
-    Err(DispatchError::Other("ExactInUnsupported"))
+  ) -> Result<Balance, pallet_aaa::TaskFailure> {
+    if asset_in != NATIVE_ASSET || asset_out != 2 {
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "UnsupportedPair",
+      )));
+    }
+    if polkadot_sdk::frame_system::Pallet::<Runtime>::block_number() <= 1 {
+      return Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
+        "TemporaryExactInFailure",
+      )));
+    }
+    NativeAssetOps::transfer(who, &DEX_SINK, asset_in, amount_in)?;
+    Ok(amount_in)
   }
 
   fn swap_exact_out(
@@ -240,13 +263,17 @@ impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
     amount_out: Balance,
     max_amount_in: Balance,
     _: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, DispatchError> {
+  ) -> Result<Balance, pallet_aaa::TaskFailure> {
     if asset_in != NATIVE_ASSET || asset_out != 1 {
-      return Err(DispatchError::Other("UnsupportedPair"));
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "UnsupportedPair",
+      )));
     }
     let amount_in = amount_out;
     if amount_in > max_amount_in {
-      return Err(DispatchError::Other("MaximumInputExceeded"));
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "MaximumInputExceeded",
+      )));
     }
     NativeAssetOps::transfer(who, &DEX_SINK, asset_in, amount_in)?;
     Ok(amount_in)
@@ -258,16 +285,20 @@ impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
     _: AssetId,
     _: Balance,
     _: Balance,
-  ) -> Result<(Balance, Balance, Balance), DispatchError> {
-    Err(DispatchError::Other("LiquidityUnsupported"))
+  ) -> Result<(Balance, Balance, Balance), pallet_aaa::TaskFailure> {
+    Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+      "LiquidityUnsupported",
+    )))
   }
 
   fn remove_liquidity(
     _: &AccountId,
     _: AssetId,
     _: Balance,
-  ) -> Result<(Balance, Balance), DispatchError> {
-    Err(DispatchError::Other("LiquidityUnsupported"))
+  ) -> Result<(Balance, Balance), pallet_aaa::TaskFailure> {
+    Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+      "LiquidityUnsupported",
+    )))
   }
 }
 
@@ -362,7 +393,7 @@ impl FeeCollector<AccountId, AssetId, Balance> for NativeFeeCollector {
     native_asset: AssetId,
     amount: Balance,
   ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-    NativeAssetOps::transfer(payer, fee_sink, native_asset, amount)
+    NativeAssetOps::transfer(payer, fee_sink, native_asset, amount).map_err(|failure| failure.error)
   }
 }
 
@@ -483,6 +514,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxUserExecutionPlanSteps = ConstU32<3>;
   type MaxSystemExecutionPlanSteps = ConstU32<6>;
   type MaxFundingTrackedAssets = ConstU32<4>;
+  type MaxContinuationSnapshotEntries = ConstU32<12>;
   type MaxConditionsPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
@@ -605,6 +637,46 @@ mod tests {
     )
   }
 
+  fn step(
+    task: pallet_aaa::TaskOf<Runtime>,
+    on_error: pallet_aaa::StepErrorPolicy,
+  ) -> pallet_aaa::StepOf<Runtime> {
+    pallet_aaa::Step {
+      conditions: BoundedVec::default(),
+      task,
+      on_error,
+    }
+  }
+
+  fn active_program(
+    trigger: pallet_aaa::TriggerOf<Runtime>,
+    cooldown_blocks: u32,
+    steps: Vec<pallet_aaa::StepOf<Runtime>>,
+  ) -> pallet_aaa::ProgramInputOf<Runtime> {
+    pallet_aaa::ProgramInput::Active {
+      schedule: pallet_aaa::Schedule {
+        trigger,
+        cooldown_blocks,
+      },
+      schedule_window: None,
+      execution_plan: BoundedVec::try_from(steps).expect("fixture plan fits"),
+      funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
+    }
+  }
+
+  #[cfg(feature = "dex-fixture")]
+  fn temporary_swap_step() -> pallet_aaa::StepOf<Runtime> {
+    step(
+      pallet_aaa::Task::SwapExactIn {
+        asset_in: NATIVE_ASSET,
+        asset_out: 2,
+        amount_in: pallet_aaa::AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::zero(),
+      },
+      pallet_aaa::StepErrorPolicy::RetryLater,
+    )
+  }
+
   #[test]
   fn independent_runtime_metadata_exposes_split_aaa_storage() {
     let encoded = Runtime::metadata().encode();
@@ -613,6 +685,7 @@ mod tests {
       b"ActorHot".as_slice(),
       b"ActorProgram".as_slice(),
       b"ActorFunding".as_slice(),
+      b"ContinuationState".as_slice(),
       b"QueuePages".as_slice(),
       b"WakeupPages".as_slice(),
     ] {
@@ -900,19 +973,27 @@ mod tests {
 
       System::set_block_number(2);
       let _ = AAA::on_idle(2, Weight::MAX);
-      assert!(actor_ids.iter().all(|aaa_id| {
-        AAA::aaa_instances(*aaa_id)
-          .expect("actor remains")
-          .cycle_nonce
-          == 1
-      }));
+      assert!(
+        actor_ids
+          .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
+          .all(|aaa_id| {
+            AAA::aaa_instances(*aaa_id)
+              .expect("actor remains")
+              .cycle_nonce
+              == 1
+          })
+      );
       assert_eq!(pallet_aaa::QueuePages::<Runtime>::iter().count(), 0);
-      assert!(actor_ids.iter().all(|aaa_id| {
-        pallet_aaa::ActorHot::<Runtime>::get(*aaa_id)
-          .expect("hot state remains")
-          .wakeup_pointer
-          .is_some()
-      }));
+      assert!(
+        actor_ids
+          .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
+          .all(|aaa_id| {
+            pallet_aaa::ActorHot::<Runtime>::get(*aaa_id)
+              .expect("hot state remains")
+              .wakeup_pointer
+              .is_some()
+          })
+      );
       assert!(pallet_aaa::WakeupPages::<Runtime>::iter().count() >= 2);
     });
   }
@@ -1011,6 +1092,346 @@ mod tests {
           .cycle_nonce,
         1
       );
+    });
+  }
+
+  #[cfg(feature = "dex-fixture")]
+  #[test]
+  fn mutable_user_continuation_preserves_prefix_and_residual_admission() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let plan = active_program(
+        pallet_aaa::Trigger::Manual,
+        2,
+        alloc::vec![
+          step(
+            pallet_aaa::Task::Transfer {
+              to: BOB,
+              asset: NATIVE_ASSET,
+              amount: pallet_aaa::AmountResolution::Fixed(5),
+            },
+            pallet_aaa::StepErrorPolicy::AbortCycle,
+          ),
+          temporary_swap_step(),
+          step(
+            pallet_aaa::Task::Transfer {
+              to: BOB,
+              asset: NATIVE_ASSET,
+              amount: pallet_aaa::AmountResolution::Fixed(7),
+            },
+            pallet_aaa::StepErrorPolicy::AbortCycle,
+          ),
+        ],
+      );
+      assert_ok!(AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        pallet_aaa::Mutability::Mutable,
+        plan,
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      assert_ok!(transfer_and_notify_actor(
+        aaa_id,
+        &ALICE,
+        NATIVE_ASSET,
+        100_000_000_000,
+      ));
+      let bob_before = Balances::free_balance(BOB);
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      let _ = AAA::on_idle(1, Weight::MAX);
+
+      let suspended = AAA::continuation_state(aaa_id).expect("temporary failure suspends");
+      assert_eq!(suspended.cursor, 1);
+      assert_eq!(suspended.attempt, 0);
+      assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
+      System::set_block_number(2);
+      let _ = AAA::on_idle(2, Weight::MAX);
+      assert_eq!(
+        AAA::continuation_state(aaa_id)
+          .expect("cooldown defers retry")
+          .attempt,
+        0
+      );
+
+      System::set_block_number(3);
+      let _ = AAA::on_idle(3, Weight::MAX);
+      assert!(AAA::continuation_state(aaa_id).is_none());
+      assert_eq!(
+        AAA::aaa_instances(aaa_id)
+          .expect("actor completes")
+          .cycle_nonce,
+        1
+      );
+      assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(12));
+    });
+  }
+
+  #[cfg(feature = "dex-fixture")]
+  #[test]
+  fn mutable_system_continuation_retries_without_external_topology() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(AAA::create_system_aaa(
+        RuntimeOrigin::root(),
+        ALICE,
+        pallet_aaa::Mutability::Mutable,
+        active_program(
+          pallet_aaa::Trigger::Manual,
+          1,
+          alloc::vec![temporary_swap_step()],
+        ),
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      assert_ok!(transfer_and_notify_actor(
+        aaa_id,
+        &ALICE,
+        NATIVE_ASSET,
+        1_000,
+      ));
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      assert_eq!(
+        AAA::aaa_instances(aaa_id)
+          .expect("system actor suspends")
+          .run_state,
+        pallet_aaa::RunState::Suspended
+      );
+
+      System::set_block_number(2);
+      let _ = AAA::on_idle(2, Weight::MAX);
+      assert!(AAA::continuation_state(aaa_id).is_none());
+      assert_eq!(
+        AAA::aaa_instances(aaa_id)
+          .expect("system actor completes")
+          .cycle_nonce,
+        1
+      );
+    });
+  }
+
+  #[cfg(feature = "dex-fixture")]
+  #[test]
+  fn suspended_direct_ingress_latches_once_and_survives_cancellation() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let trigger = pallet_aaa::Trigger::OnAddressEvent {
+        source_filter: pallet_aaa::SourceFilter::Any,
+        asset_filter: pallet_aaa::AssetFilter::Any,
+      };
+      assert_ok!(AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        pallet_aaa::Mutability::Mutable,
+        active_program(trigger, 2, alloc::vec![temporary_swap_step()]),
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      assert_ok!(transfer_and_notify_actor(
+        aaa_id,
+        &ALICE,
+        NATIVE_ASSET,
+        100_000_000_000,
+      ));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      let before = AAA::aaa_instances(aaa_id).expect("actor suspends");
+      let before_hot = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).expect("hot state exists");
+      assert_eq!(before.run_state, pallet_aaa::RunState::Suspended);
+
+      let sovereign = before.sovereign_account;
+      let first_call =
+        RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
+          dest: sovereign,
+          value: 1_000,
+        });
+      assert!(matches!(
+        Executive::apply_extrinsic(signed_extrinsic(ALICE, 0, first_call)),
+        Ok(Ok(_))
+      ));
+      let after = AAA::aaa_instances(aaa_id).expect("actor remains suspended");
+      let after_hot = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).expect("hot state remains");
+      assert!(after.pending_signal);
+      assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
+      assert!(after_hot.queue_ticket.is_some());
+      let repeated_call =
+        RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
+          dest: sovereign,
+          value: 1_000,
+        });
+      assert!(matches!(
+        Executive::apply_extrinsic(signed_extrinsic(ALICE, 1, repeated_call)),
+        Ok(Ok(_))
+      ));
+      let repeated_hot = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).expect("hot state remains");
+      assert_eq!(repeated_hot.queue_ticket, after_hot.queue_ticket);
+      assert_eq!(repeated_hot.wakeup_pointer, after_hot.wakeup_pointer);
+      assert_ok!(AAA::cancel_continuation(
+        RuntimeOrigin::signed(ALICE),
+        aaa_id,
+      ));
+      assert!(AAA::continuation_state(aaa_id).is_none());
+      assert!(AAA::pending_signal(aaa_id));
+
+      System::set_block_number(3);
+      let _ = AAA::on_idle(3, Weight::MAX);
+      assert!(AAA::continuation_state(aaa_id).is_none());
+      assert_eq!(
+        AAA::aaa_instances(aaa_id)
+          .expect("latched run completes")
+          .cycle_nonce,
+        2
+      );
+    });
+  }
+
+  #[cfg(feature = "dex-fixture")]
+  #[test]
+  fn continuation_cancel_then_pure_close_preserves_sovereign_balance() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        pallet_aaa::Mutability::Mutable,
+        active_program(
+          pallet_aaa::Trigger::Manual,
+          1,
+          alloc::vec![temporary_swap_step()],
+        ),
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      let sovereign = AAA::aaa_instances(aaa_id)
+        .expect("actor exists")
+        .sovereign_account;
+      assert_ok!(transfer_and_notify_actor(
+        aaa_id,
+        &ALICE,
+        NATIVE_ASSET,
+        100_000_000_000,
+      ));
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      assert!(AAA::continuation_state(aaa_id).is_some());
+      let balance_before = Balances::free_balance(sovereign);
+      assert_ok!(AAA::cancel_continuation(
+        RuntimeOrigin::signed(ALICE),
+        aaa_id,
+      ));
+      assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+      assert!(AAA::aaa_instances(aaa_id).is_none());
+      assert_eq!(Balances::free_balance(sovereign), balance_before);
+    });
+  }
+
+  #[test]
+  fn abort_policy_terminates_permanent_unsupported_failure() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(AAA::create_system_aaa(
+        RuntimeOrigin::root(),
+        ALICE,
+        pallet_aaa::Mutability::Mutable,
+        active_program(
+          pallet_aaa::Trigger::Manual,
+          0,
+          alloc::vec![step(
+            pallet_aaa::Task::Stake {
+              asset: NATIVE_ASSET,
+              amount: pallet_aaa::AmountResolution::Fixed(10),
+            },
+            pallet_aaa::StepErrorPolicy::AbortCycle,
+          )],
+        ),
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      assert_ok!(transfer_and_notify_actor(aaa_id, &ALICE, NATIVE_ASSET, 100));
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      let actor = AAA::aaa_instances(aaa_id).expect("actor remains after first failure");
+      assert_eq!(actor.consecutive_failures, 1);
+      assert_eq!(actor.run_state, pallet_aaa::RunState::Idle);
+      assert!(AAA::continuation_state(aaa_id).is_none());
+    });
+  }
+
+  #[test]
+  fn immutable_and_unsupported_paths_never_create_continuation() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let unsupported_retry = active_program(
+        pallet_aaa::Trigger::Manual,
+        1,
+        alloc::vec![step(
+          pallet_aaa::Task::Stake {
+            asset: NATIVE_ASSET,
+            amount: pallet_aaa::AmountResolution::Fixed(10),
+          },
+          pallet_aaa::StepErrorPolicy::RetryLater,
+        )],
+      );
+      assert_noop!(
+        AAA::create_system_aaa(
+          RuntimeOrigin::root(),
+          ALICE,
+          pallet_aaa::Mutability::Immutable,
+          unsupported_retry.clone(),
+        ),
+        pallet_aaa::Error::<Runtime>::RetryLaterNotAllowedForImmutableAaa
+      );
+      assert_ok!(AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        pallet_aaa::Mutability::Mutable,
+        unsupported_retry,
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      assert_ok!(transfer_and_notify_actor(
+        aaa_id,
+        &ALICE,
+        NATIVE_ASSET,
+        100_000_000_000,
+      ));
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      assert!(AAA::continuation_state(aaa_id).is_none());
+      assert_eq!(
+        AAA::aaa_instances(aaa_id).expect("actor remains").run_state,
+        pallet_aaa::RunState::Idle
+      );
+    });
+  }
+
+  #[test]
+  fn independent_runtime_binds_nonzero_continuation_weights() {
+    let suspend = <pallet_aaa::weights::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::continuation_suspend(12);
+    let retry =
+      <pallet_aaa::weights::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::continuation_retry(
+      );
+    let cancel = <pallet_aaa::weights::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::continuation_cancel();
+    assert!(suspend.ref_time() > retry.ref_time());
+    assert!(cancel.proof_size() > retry.proof_size());
+  }
+
+  #[cfg(all(feature = "dex-fixture", feature = "try-runtime"))]
+  #[test]
+  fn try_state_accepts_a_suspended_independent_actor() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(AAA::create_system_aaa(
+        RuntimeOrigin::root(),
+        ALICE,
+        pallet_aaa::Mutability::Mutable,
+        active_program(
+          pallet_aaa::Trigger::Manual,
+          1,
+          alloc::vec![temporary_swap_step()],
+        ),
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      assert_ok!(transfer_and_notify_actor(
+        aaa_id,
+        &ALICE,
+        NATIVE_ASSET,
+        1_000
+      ));
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      assert!(AAA::continuation_state(aaa_id).is_some());
+      assert!(AAA::try_state(1).is_ok());
     });
   }
 
@@ -1124,11 +1545,15 @@ mod tests {
         10,
         Perbill::zero(),
       ),
-      Err(DispatchError::Other("DexOps not configured"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "DexOps not configured",
+      )))
     );
     assert_eq!(
       <() as pallet_aaa::StakingOps<AccountId, AssetId, Balance>>::stake(&ALICE, NATIVE_ASSET, 10,),
-      Err(DispatchError::Other("StakingOps not configured"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "StakingOps not configured",
+      )))
     );
     assert_eq!(
       <() as pallet_aaa::LiquidityDonationOps<AccountId, AssetId, Balance>>::donate_liquidity(
@@ -1138,7 +1563,9 @@ mod tests {
         10,
         Perbill::zero(),
       ),
-      Err(DispatchError::Other("LiquidityDonationOps not configured"))
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "LiquidityDonationOps not configured",
+      )))
     );
   }
 }

@@ -93,7 +93,7 @@ resolve_path() {
 collect_changed_rust_files() {
     local tracked
     local untracked
-    tracked="$(git -C "$PROJECT_ROOT" diff --name-only "$SINCE_REF" -- '*.rs' || true)"
+    tracked="$(git -C "$PROJECT_ROOT" diff --name-only --diff-filter=ACMRTUXB "$SINCE_REF" -- '*.rs' || true)"
     untracked="$(git -C "$PROJECT_ROOT" ls-files --others --exclude-standard -- '*.rs' || true)"
     printf '%s\n%s\n' "$tracked" "$untracked" | awk 'NF' | sort -u
 }

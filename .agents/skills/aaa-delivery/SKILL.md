@@ -1,12 +1,12 @@
 ---
 name: aaa-delivery
-description: Guides AAA scheduler validation, stress evidence application, release gating, and delivery handoff.
+description: Guides AAA scheduler and package-boundary validation, stress and portability evidence, release gating, and delivery handoff.
 fmos: true
 ---
 
 # AAA Delivery
 
-Use this skill when an AAA change needs validation scope selection, scheduler stress evidence application, or release-candidate handoff. The skill owns AAA delivery judgment; shared root scripts own deterministic execution.
+Use this skill when an AAA change needs validation scope selection, scheduler stress evidence, package-boundary portability evidence, or release-candidate handoff. The skill owns AAA delivery judgment; shared root scripts own deterministic execution.
 
 ## Workflow Boundary
 
@@ -16,6 +16,8 @@ Use this skill when an AAA change needs validation scope selection, scheduler st
 - Use the full gate for scheduler stress acceptance, release preparation, or changes to queue/wakeup capacity, fairness, liveness, or guaranteed `on_idle` admission.
 - Keep the 10,000-entry occupancy profile enabled unless the touched contract cannot affect scheduler storage topology and the handoff states that reason explicitly.
 - Treat benchmark-host timing as comparative evidence, never as a reference-block throughput promise.
+- Keep the embedding runtime as a separate external-consumer Cargo package under the `pallet-aaa` ownership boundary; pallet unit mocks do not replace that public-contract proof.
+- For package-readiness changes, validate fixture feature profiles and a local `cargo package` archive while keeping registry publication approval-gated.
 - After a meaningful slice, synchronize `BACKLOG.md` and shipped architecture truth before the repository completion gate.
 
 ## Checkpoint Batching
