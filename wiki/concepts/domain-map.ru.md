@@ -119,7 +119,6 @@ DEOS проще понимать как набор связанных домен
 
 ## Связанные страницы
 
-- [Архитектурные схемы](architecture-diagrams.ru.md)
 - [Сквозные сценарии](end-to-end-flows.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)

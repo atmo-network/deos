@@ -118,7 +118,6 @@ A useful traversal is:
 
 ## Related
 
-- [Architecture Diagrams](architecture-diagrams.en.md)
 - [End-to-End Flows](end-to-end-flows.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)

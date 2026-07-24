@@ -6,12 +6,15 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
 -->
 <script lang="ts">
   import { RefreshCw, Trash2 } from '@lucide/svelte';
-  import { onMount } from 'svelte';
 
   import { logStore } from '$lib/log/index.svelte';
   import type { LogEntry } from '$lib/log/types';
+  import {
+    chainSurfaceIsBlocking,
+    resolveChainSurfaceState,
+  } from '$lib/system/connection-surface';
   import { systemStore } from '$lib/system/index.svelte';
-  import { Badge, Button, Card, IconButton, ReadModelBadge } from '$lib/ui';
+  import { Badge, Button, Card, Icon, Notice } from '$lib/ui';
   import { walletStore } from '$lib/wallet/index.svelte';
 
   type LogMode = 'account' | 'network';
@@ -28,12 +31,8 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
     sell: 'text-(--mono-pink)',
     error: 'text-(--mono-orange)',
   };
-  const COMPACT_HEIGHT_THRESHOLD = 240;
 
   let mode = $state<LogMode>('account');
-  let rootEl = $state<HTMLDivElement | null>(null);
-  let viewport = $state({ width: 0, height: 0 });
-  let compact = $state(false);
 
   const selectedAccount = $derived(walletStore.state.selectedAddress);
   const txProgress = $derived(logStore.txProgress);
@@ -46,8 +45,21 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
     }),
   );
   const networkEntries = $derived(logStore.networkLog);
-  const networkProvenance = $derived(
-    logStore.networkLogView?.provenance ?? null,
+  const networkChainSurface = $derived(
+    resolveChainSurfaceState(
+      systemStore.connectionState,
+      logStore.networkLogView !== null,
+    ),
+  );
+  const networkChainBlocked = $derived(
+    chainSurfaceIsBlocking(networkChainSurface),
+  );
+  const networkRowsBlocked = $derived(
+    mode === 'network' &&
+      (networkChainBlocked ||
+        (logStore.networkLogView === null &&
+          (logStore.networkFeedState.status === 'loading' ||
+            logStore.networkFeedState.status === 'error'))),
   );
   const visibleEntries = $derived(
     mode === 'account' ? accountEntries : networkEntries,
@@ -76,19 +88,6 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
     }
     return rows;
   });
-  const tickerItems = $derived.by(() => {
-    const items: string[] = [];
-    if (mode === 'account' && txProgress.kind !== 'idle') {
-      items.push(formatTransactionTicker(txProgress));
-    }
-    for (const entry of visibleEntries.slice(0, 16)) {
-      items.push(formatTickerEntry(entry));
-    }
-    return items;
-  });
-  const tickerLoop = $derived(
-    tickerItems.length > 1 ? [...tickerItems, ...tickerItems] : tickerItems,
-  );
   const hasReceipt = $derived(mode === 'account' && txProgress.kind !== 'idle');
   const receiptBlock = $derived(
     'blockNumber' in txProgress ? (txProgress.blockNumber ?? null) : null,
@@ -104,22 +103,43 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
       ? txProgress.highlights.slice(0, 3)
       : [],
   );
-
-  const narrowPane = $derived(viewport.width > 0 && viewport.width < 430);
-  const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-
-  function syncViewport() {
-    if (!rootEl) {
-      viewport = { width: 0, height: 0 };
-      compact = false;
-      return;
+  const oneLineText = $derived.by(() => {
+    if (hasReceipt) {
+      const action =
+        'actionLabel' in txProgress && txProgress.actionLabel
+          ? `${txProgress.actionLabel} · `
+          : '';
+      return `${action}${txProgress.message}`;
     }
-    viewport = {
-      width: rootEl.clientWidth,
-      height: rootEl.clientHeight,
-    };
-    compact = rootEl.clientHeight < COMPACT_HEIGHT_THRESHOLD;
-  }
+    if (mode === 'network') {
+      if (networkChainBlocked) {
+        return 'No network events available';
+      }
+      if (
+        logStore.networkFeedState.status === 'loading' &&
+        logStore.networkLogView === null
+      ) {
+        return 'Loading finalized network events';
+      }
+      if (
+        logStore.networkFeedState.status === 'error' &&
+        logStore.networkLogView === null
+      ) {
+        return 'Live network feed unavailable';
+      }
+    }
+    const entry = visibleEntries[0];
+    if (!entry) {
+      return mode === 'account'
+        ? 'No account activity yet'
+        : 'No finalized network events captured at the latest refresh';
+    }
+    const provenance =
+      mode === 'network' && networkChainSurface.status === 'stale'
+        ? 'Stale · '
+        : '';
+    return `${provenance}${blockLabel(entry.blockNumber, entry.step)} · ${entryLabel(entry)} · ${entry.message}`;
+  });
 
   function entryLabel(entry: LogEntry): string {
     return entry.label ?? entry.type;
@@ -128,50 +148,58 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
   function blockLabel(blockNumber: number | null, step: number): string {
     return blockNumber !== null ? `#${blockNumber}` : `S${step}`;
   }
-
-  function formatTickerEntry(entry: LogEntry): string {
-    return `${blockLabel(entry.blockNumber, entry.step)} · ${entryLabel(entry)} · ${entry.message}`;
-  }
-
-  function formatTransactionTicker(progress: typeof txProgress): string {
-    const actionLabel =
-      'actionLabel' in progress
-        ? (progress.actionLabel ?? 'Transaction')
-        : 'Transaction';
-    const block =
-      'blockNumber' in progress && progress.blockNumber !== undefined
-        ? ` · ${blockLabel(progress.blockNumber ?? null, -1)}`
-        : '';
-    return `${actionLabel} · ${progress.kind}${block} · ${progress.message}`;
-  }
-
-  onMount(() => {
-    syncViewport();
-    if (!rootEl) {
-      return;
-    }
-    const resizeObserver = new ResizeObserver(() => syncViewport());
-    resizeObserver.observe(rootEl);
-    return () => resizeObserver.disconnect();
-  });
 </script>
 
-<Card class="min-h-full flex flex-col" level={1}>
-  <div bind:this={rootEl} class="h-full flex flex-col min-h-0">
-    <div class="shrink-0 px-3 py-2 grid gap-2 text-[11px]">
+<Card class="h-full min-h-full flex flex-col" level={1}>
+  <div class="log-container flex h-full min-h-0 flex-col [container-type:size]">
+    <div
+      class="log-one-line hidden h-full min-w-0 items-center gap-2 px-2 text-2xs"
+    >
+      <div
+        class="flex shrink-0 items-center gap-0.5 rounded-lg bg-(--mono-bg) p-0.5"
+      >
+        <Button
+          size="sm"
+          variant="ghost"
+          onclick={() => (mode = 'account')}
+          class={mode === 'account'
+            ? 'bg-white px-1.5 py-0.5 text-3xs text-(--mono-text)'
+            : 'px-1.5 py-0.5 text-3xs'}
+        >
+          Account
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onclick={() => (mode = 'network')}
+          class={mode === 'network'
+            ? 'bg-white px-1.5 py-0.5 text-3xs text-(--mono-text)'
+            : 'px-1.5 py-0.5 text-3xs'}
+        >
+          Network
+        </Button>
+      </div>
+      <span class="min-w-0 flex-1 truncate font-mono text-(--mono-text)">
+        {oneLineText}
+      </span>
+      <span
+        class="shrink-0 rounded-full bg-(--mono-border) px-1.5 py-0.5 tabnum text-white"
+      >
+        {entryCount}
+      </span>
+    </div>
+
+    <div class="log-standard-header shrink-0 grid gap-2 px-3 py-2 text-compact">
       <div class="flex max-w-full flex-wrap items-center justify-end gap-2">
         <div
-          class={[
-            'flex items-center gap-1 rounded-xl border border-(--mono-border) bg-(--mono-bg) p-0.5 text-[10px]',
-            densePane && 'w-full justify-between',
-          ]}
+          class="flex items-center gap-1 rounded-xl bg-(--mono-bg) p-0.5 text-2xs"
         >
           <Button
             size="sm"
             variant="ghost"
             onclick={() => (mode = 'account')}
             class={[
-              'rounded-lg px-2 py-1 text-[10px]',
+              'rounded-lg px-2 py-1 text-2xs',
               mode === 'account'
                 ? 'bg-white text-(--mono-text)'
                 : 'text-(--mono-muted)',
@@ -184,7 +212,7 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
             variant="ghost"
             onclick={() => (mode = 'network')}
             class={[
-              'rounded-lg px-2 py-1 text-[10px]',
+              'rounded-lg px-2 py-1 text-2xs',
               mode === 'network'
                 ? 'bg-white text-(--mono-text)'
                 : 'text-(--mono-muted)',
@@ -194,129 +222,98 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
           </Button>
         </div>
         <span
-          class="text-[10px] bg-(--mono-border) text-white px-1.5 py-0.5 rounded-full tabnum"
+          class="rounded-full bg-(--mono-border) px-1.5 py-0.5 text-2xs text-white tabnum"
         >
           {entryCount}
         </span>
-        {#if mode === 'network'}
-          <ReadModelBadge provenance={networkProvenance} />
-        {/if}
         {#if mode === 'account'}
-          <IconButton
+          <Button
+            size="icon"
+            variant="ghost"
             onclick={() => logStore.clear()}
             label="Clear current account log"
           >
-            <Trash2 size={12} />
-          </IconButton>
+            <Icon icon={Trash2} size="sm" />
+          </Button>
         {:else}
-          <IconButton
+          <Button
+            size="icon"
+            variant="ghost"
             onclick={() => void systemStore.refresh()}
             label="Refresh network log"
+            disabled={systemStore.connectionState?.status !== 'connected' ||
+              logStore.networkFeedState.status === 'loading'}
           >
-            <RefreshCw size={12} />
-          </IconButton>
+            <Icon icon={RefreshCw} size="sm" />
+          </Button>
         {/if}
       </div>
     </div>
 
-    {#if compact}
-      <div class="flex-1 min-h-0 overflow-hidden px-3 py-2">
-        {#if tickerItems.length > 0}
-          <div
-            class="flex h-full items-center overflow-hidden rounded-xl border bg-(--mono-bg) px-3"
-          >
-            <div
-              class="log-ticker-track flex min-w-max items-center gap-8 whitespace-nowrap pr-8 font-mono text-[11px] text-(--mono-text)"
-            >
-              {#each tickerLoop as item, index (`${item}-${index}`)}
-                <span class="inline-flex items-center gap-2">
-                  <span class="text-(--mono-border)">•</span>
-                  <span>{item}</span>
-                </span>
-              {/each}
-            </div>
-          </div>
-        {:else}
-          <div
-            class="flex h-full items-center rounded-xl border bg-(--mono-bg) px-3 text-[11px] text-(--mono-muted)"
-          >
-            {mode === 'account'
-              ? 'No account activity yet'
-              : 'No finalized network events captured in this session yet'}
-          </div>
+    <div
+      class="log-standard-content min-h-0 flex-1 content-start grid gap-2 px-3 py-2 text-compact"
+    >
+      {#if mode === 'network' && !networkChainBlocked}
+        {#if networkChainSurface.status === 'stale' || networkChainSurface.status === 'preview'}
+          <Notice variant="warn" class="grid gap-0.5">
+            <strong>{networkChainSurface.title}</strong>
+            <span>{networkChainSurface.detail}</span>
+          </Notice>
         {/if}
-      </div>
-    {:else}
-      <div
-        class="flex-1 min-h-0 px-3 py-2 grid gap-2 content-start text-[11px]"
-      >
-        {#if hasReceipt}
+        {#if logStore.networkFeedState.status === 'loading'}
+          <Notice>Refreshing finalized network events…</Notice>
+        {:else if logStore.networkFeedState.status === 'error'}
+          <Notice variant="warn">
+            Live feed refresh failed: {logStore.networkFeedState.message ??
+              'Unknown provider error'}
+          </Notice>
+        {/if}
+      {/if}
+
+      {#if hasReceipt}
+        <div
+          class="log-row grid gap-3 rounded-xl bg-(--mono-bg) px-3 py-2 font-mono"
+        >
           <div
-            class={[
-              'grid gap-3 rounded-xl border bg-(--mono-bg) font-mono',
-              narrowPane
-                ? 'px-2.5 py-2'
-                : 'grid-cols-[72px_minmax(0,1fr)] px-3 py-2',
-            ]}
+            class="log-row-label flex items-center justify-between gap-2 text-2xs uppercase tracking-wider text-(--mono-muted)"
           >
-            <div
-              class={[
-                'text-[10px] uppercase tracking-wider text-(--mono-muted)',
-                narrowPane
-                  ? 'flex items-center justify-between gap-2'
-                  : 'flex flex-col gap-1',
-              ]}
+            <span>Latest</span>
+            <span class="tabnum text-(--mono-text)"
+              >{receiptBlock !== null ? `#${receiptBlock}` : 'Live'}</span
             >
-              <span>Latest</span>
-              <span class="tabnum text-(--mono-text)"
-                >{receiptBlock !== null ? `#${receiptBlock}` : 'Live'}</span
-              >
-            </div>
-            <div class="grid gap-2">
-              <div class="flex flex-wrap items-center gap-2">
-                <Badge variant="info">{txProgress.kind}</Badge>
-                {#if 'actionLabel' in txProgress && txProgress.actionLabel}
-                  <span class="text-(--mono-text)"
-                    >{txProgress.actionLabel}</span
-                  >
-                {/if}
-                {#if receiptEvents !== null}
-                  <span class="text-(--mono-border)"
-                    >events {receiptEvents}</span
-                  >
-                {/if}
-                {#if receiptError}
-                  <span class="text-(--mono-orange)">{receiptError}</span>
-                {/if}
-              </div>
-              <div class="text-(--mono-text)">{txProgress.message}</div>
-              {#if receiptHighlights.length > 0}
-                <div class="flex flex-wrap gap-x-3 gap-y-1 text-(--mono-muted)">
-                  {#each receiptHighlights as highlight}
-                    <span>{highlight}</span>
-                  {/each}
-                </div>
+          </div>
+          <div class="grid gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <Badge variant="info">{txProgress.kind}</Badge>
+              {#if 'actionLabel' in txProgress && txProgress.actionLabel}
+                <span class="text-(--mono-text)">{txProgress.actionLabel}</span>
+              {/if}
+              {#if receiptEvents !== null}
+                <span class="text-(--mono-border)">events {receiptEvents}</span>
+              {/if}
+              {#if receiptError}
+                <span class="text-(--mono-orange)">{receiptError}</span>
               {/if}
             </div>
+            <div class="text-(--mono-text)">{txProgress.message}</div>
+            {#if receiptHighlights.length > 0}
+              <div class="flex flex-wrap gap-x-3 gap-y-1 text-(--mono-muted)">
+                {#each receiptHighlights as highlight}
+                  <span>{highlight}</span>
+                {/each}
+              </div>
+            {/if}
           </div>
-        {/if}
+        </div>
+      {/if}
 
+      {#if !networkRowsBlocked}
         {#each blockRows as row (row.id)}
           <div
-            class={[
-              'grid gap-3 rounded-xl border bg-(--mono-bg) font-mono',
-              narrowPane
-                ? 'px-2.5 py-2'
-                : 'grid-cols-[72px_minmax(0,1fr)] px-3 py-2',
-            ]}
+            class="log-row grid gap-3 rounded-xl bg-(--mono-bg) px-3 py-2 font-mono"
           >
             <div
-              class={[
-                'text-[10px] uppercase tracking-wider text-(--mono-muted)',
-                narrowPane
-                  ? 'flex items-center justify-between gap-2'
-                  : 'flex flex-col gap-1',
-              ]}
+              class="log-row-label flex items-center justify-between gap-2 text-2xs uppercase tracking-wider text-(--mono-muted)"
             >
               <span>Block</span>
               <span class="tabnum text-(--mono-text)"
@@ -325,17 +322,10 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
             </div>
             <div class="grid gap-1.5">
               {#each row.entries as entry (entry.id)}
-                <div
-                  class={[
-                    'grid gap-0.5',
-                    narrowPane
-                      ? 'grid-cols-1'
-                      : 'sm:grid-cols-[92px_minmax(0,1fr)] sm:gap-3',
-                  ]}
-                >
+                <div class="entry-row grid gap-0.5">
                   <div
                     class={[
-                      'text-[10px] uppercase tracking-wider',
+                      'text-2xs uppercase tracking-wider',
                       LOG_COLORS[entry.type] || LOG_COLORS.info,
                     ]}
                   >
@@ -353,21 +343,35 @@ Zone: Presentation widget; consumes log/system/wallet state and UI Kit primitive
               : 'No finalized network events captured in this session yet'}
           </div>
         {/each}
-      </div>
-    {/if}
+      {/if}
+    </div>
   </div>
 </Card>
 
 <style>
-  .log-ticker-track {
-    animation: log-ticker-scroll 24s linear infinite;
-  }
-  @keyframes log-ticker-scroll {
-    from {
-      transform: translateX(0);
+  @container (max-height: 80px) {
+    .log-one-line {
+      display: flex;
     }
-    to {
-      transform: translateX(-50%);
+    .log-standard-header,
+    .log-standard-content {
+      display: none;
+    }
+  }
+  @container (min-width: 480px) {
+    .log-row {
+      grid-template-columns: calc(var(--widget-em) * 4.8) minmax(0, 1fr);
+    }
+    .log-row-label {
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: flex-start;
+    }
+  }
+  @container (min-width: 544px) {
+    .entry-row {
+      grid-template-columns: calc(var(--widget-em) * 6.1333) minmax(0, 1fr);
+      gap: calc(var(--spacing) * 3);
     }
   }
 </style>

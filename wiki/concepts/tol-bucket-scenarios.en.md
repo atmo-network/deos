@@ -85,6 +85,5 @@ A downstream fork may alter policy, but it should preserve bucket provenance as 
 
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [End-to-End Flows](end-to-end-flows.en.md)
-- [Architecture Diagrams](architecture-diagrams.en.md)
 - [AAA System](../overview/aaa-system.en.md)
 - [Token-Driven Automation](token-driven-automation.en.md)

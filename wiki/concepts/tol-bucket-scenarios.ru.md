@@ -86,6 +86,5 @@ Bucket D -> Treasury D lane
 
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Сквозные сценарии](end-to-end-flows.ru.md)
-- [Architecture diagrams](architecture-diagrams.ru.md)
 - [AAA system](../overview/aaa-system.ru.md)
 - [Token-driven automation](token-driven-automation.ru.md)

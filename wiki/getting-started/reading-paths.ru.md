@@ -52,12 +52,11 @@ confidence: 0.85
 4. [Executive Summary](executive-summary.ru.md)
 5. [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 6. [Карта доменов](../concepts/domain-map.ru.md)
-7. [Архитектурные схемы](../concepts/architecture-diagrams.ru.md)
-8. [Базовые термины](../glossary/core-terms.ru.md)
-9. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
-10. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-11. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-12. [FAQ для новичков](../faq/newcomer-faq.ru.md)
+7. [Базовые термины](../glossary/core-terms.ru.md)
+8. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
+9. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+10. [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
+11. [FAQ для новичков](../faq/newcomer-faq.ru.md)
 
 Этот маршрут дает словарь проекта до того, как появятся имена pallet-ов, детали runtime или термины конкретной реализации.
 

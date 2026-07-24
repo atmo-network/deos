@@ -9,13 +9,12 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
   import { Select } from 'bits-ui';
   import type { ClassValue } from 'svelte/elements';
 
+  import Icon from './Icon.svelte';
   import { mergeClasses } from './class';
 
   export type RichSelectItem = {
     value: string;
     label: string;
-    badge?: string;
-    badgeClass?: ClassValue | null;
     detail?: string;
   };
 
@@ -26,6 +25,7 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
     allowDeselect?: boolean;
     dense?: boolean;
     triggerClass?: ClassValue | null;
+    onOpenChange?: (open: boolean) => void;
     onValueChange: (value: string) => void;
   };
 
@@ -36,6 +36,7 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
     allowDeselect = false,
     dense = false,
     triggerClass = '',
+    onOpenChange,
     onValueChange,
   }: Props = $props();
 
@@ -47,7 +48,7 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
   );
   const triggerClassName = $derived(
     mergeClasses(
-      'inline-flex min-w-31 items-center gap-1.5 rounded-lg border border-(--mono-border) font-medium transition-colors hover:border-(--mono-purple) data-[state=open]:border-(--mono-purple)',
+      'inline-flex w-fit min-w-0 max-w-full cursor-pointer items-center gap-1.5 rounded-lg border border-(--mono-border) font-medium transition-colors hover:border-(--mono-purple) data-[state=open]:border-(--mono-purple)',
       dense ? 'px-2 py-0.5 text-[11px]' : 'px-2 py-1 text-xs',
       triggerClass,
     ),
@@ -59,25 +60,16 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
   {value}
   items={selectItems}
   {allowDeselect}
+  {onOpenChange}
   {onValueChange}
 >
   <Select.Trigger class={triggerClassName} aria-label={label}>
-    {#if selectedItem?.badge}
-      <span
-        class={mergeClasses(
-          'flex h-4 w-4 items-center justify-center rounded-full text-[9px]',
-          selectedItem.badgeClass,
-        )}
-      >
-        {selectedItem.badge}
-      </span>
-    {/if}
     <span class="min-w-0 truncate">{selectedItem?.label ?? label}</span>
-    <ChevronDown size={12} class="shrink-0 text-(--mono-muted)" />
+    <Icon icon={ChevronDown} size="sm" class="text-current" />
   </Select.Trigger>
   <Select.Portal>
     <Select.Content
-      sideOffset={8}
+      sideOffset={3}
       class="z-50 min-w-44 rounded-xl border border-(--mono-border) bg-[linear-gradient(135deg,#ffffff_0%,#f7fbef_46%,#edf6fa_100%)] p-1 shadow-[0_8px_24px_rgba(44,50,30,0.06)]"
     >
       <Select.Viewport class="grid gap-1">
@@ -85,18 +77,8 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
           <Select.Item
             value={item.value}
             label={item.label}
-            class="group grid cursor-default grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-transparent px-2.5 py-2 text-xs outline-none transition-colors data-highlighted:border-(--mono-purple)/20 data-highlighted:bg-(--mono-bg) data-selected:border-(--mono-purple)/25 data-selected:bg-(--mono-bg)"
+            class="group grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-transparent px-2.5 py-2 text-xs outline-none transition-colors data-highlighted:border-(--mono-purple)/20 data-highlighted:bg-(--mono-bg) data-selected:border-(--mono-purple)/25 data-selected:bg-(--mono-bg)"
           >
-            {#if item.badge}
-              <span
-                class={mergeClasses(
-                  'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-medium',
-                  item.badgeClass,
-                )}
-              >
-                {item.badge}
-              </span>
-            {/if}
             <span class="min-w-0">
               <span class="block truncate font-medium text-(--mono-text)"
                 >{item.label}</span
@@ -107,9 +89,10 @@ Zone: Foundation UI; wraps Bits UI select for reusable non-native select surface
                 >
               {/if}
             </span>
-            <Check
-              size={12}
-              class="shrink-0 text-(--mono-purple) opacity-0 transition-opacity group-data-selected:opacity-100"
+            <Icon
+              icon={Check}
+              size="sm"
+              class="text-(--mono-purple) opacity-0 transition-opacity group-data-selected:opacity-100"
             />
           </Select.Item>
         {/each}

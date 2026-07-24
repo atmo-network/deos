@@ -1090,46 +1090,6 @@
     },
     {
       "from": "domain-map",
-      "to": "architecture-diagrams",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "end-to-end-flows",
-      "type": "supports"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "routing-and-minting-loop",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "aaa-system",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "read-model-split",
-      "type": "visualizes"
-    },
-    {
-      "from": "architecture-diagrams",
-      "to": "governance-domains",
-      "type": "visualizes"
-    },
-    {
-      "from": "reading-paths",
-      "to": "architecture-diagrams",
-      "type": "recommends"
-    },
-    {
-      "from": "newcomer-faq",
-      "to": "architecture-diagrams",
-      "type": "answers-with"
-    },
-    {
-      "from": "domain-map",
       "to": "token-surfaces",
       "type": "guides"
     },
@@ -1357,11 +1317,6 @@
       "from": "tol-bucket-scenarios",
       "to": "end-to-end-flows",
       "type": "extends"
-    },
-    {
-      "from": "tol-bucket-scenarios",
-      "to": "architecture-diagrams",
-      "type": "uses"
     },
     {
       "from": "tol-bucket-scenarios",

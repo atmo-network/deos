@@ -18,6 +18,7 @@ sources:
   - ../_meta/graph.json
   - ../_meta/aliases.json
   - ../_meta/locales.json
+  - ../_meta/search.json
 status: active
 audience: newcomer
 tags:
@@ -31,7 +32,7 @@ related:
   - First Steps
   - Agent Coordination
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-07-21
 confidence: 0.9
 ---
 
@@ -62,8 +63,9 @@ Together, the reference client, agents, and validation scripts use the compiled 
 - `navigation.json` orders sections and frontend summaries;
 - `state.json` records page status, audience, confidence, paths, and provenance;
 - `graph.json` stores nodes and typed reading relations;
-- `aliases.json` routes search terms to canonical page ids;
-- `locales.json` maps each page id to localized Markdown paths.
+- `aliases.json` routes curated search terms to canonical page ids;
+- `locales.json` maps each page id to localized Markdown paths;
+- `search.json` stores at most 12,000 plain-text characters per page and locale so client body search can load one bounded manifest instead of every Markdown chunk.
 
 A page id is the stable identity; locale files are renderings of it:
 
