@@ -388,11 +388,7 @@ Integrated worker evidence uses the same production-Wasm route:
 
 The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short.
 
-Final Checkpoint A production-Wasm `50 x 20` regeneration produced AAA weights `639daf4d15439c6399223ca26be048d2a1bf55f3b98e1fc965ce7257e8ca721d` and compressed Wasm `d5f5e1d823c5081feb1f1783dd919d100f9322ebbc250ccc0efd924f34a16f31`.
-
-The accepted Checkpoint B baseline produced weights `e9bde16220861004ce805867aa7a44a523ef28a538de87d397cd76fc4fc57417` and production Wasm `3ce446889e50858a5c4f2bc5739ddb2f441363b510877929fdf1bf37f9f9ce06`.
-
-The measured Checkpoint C candidate produces weights `dd5d99ff3007e3d092cb087cd4106c03fcfbc74ee82cb9f6fdce1df13a203ae3` and production Wasm `b6cdfb79bc0fc9a1b43900caf46e769f1ecdb1b22f56d16daa10388dd0ed0e13`.
+The released production artifacts use AAA weights `dd5d99ff3007e3d092cb087cd4106c03fcfbc74ee82cb9f6fdce1df13a203ae3` and compressed Wasm `be54c0be0a71342c8b94fcf74553c7a3a8d02707dab363faab965e8026c3c304`. These hashes bind the measured paths to the package-marked runtime artifact; they do not create a throughput promise.
 
 ### Starvation Safeguard
 
@@ -489,7 +485,7 @@ Funding state follows typed provenance rather than a dedicated value-transfer ca
 Primary storage follows explicit owners. Section 13's stable behavioral stores constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state. No synchronized readiness mirror remains.
 
 - `NextAaaId`: monotonic AAA id allocator
-- `ActorHot`: active/paused identity, lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, direct `terminal_at`, optional User queue-mutation block guard, and compact admission bounds; the measured metadata maximum is 191 bytes
+- `ActorHot`: active/paused identity, lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, direct `terminal_at`, optional User queue-mutation block guard, and compact admission bounds; the measured metadata maximum is 200 bytes
 - `ActorProgram`: active schedule/window plus the bounded run plan; the measured metadata maximum is 4,655 bytes
 - `ActorFunding`: active-only funding-source policy, bounded tracked-asset set, `funding_snapshots[asset] = FundingBatch { amount, pending_amount }`, and canonical `has_pending_funding`; ingress, promotion, and policy mutation touch this store without rewriting hot/program state, promotion skips batch traversal when false, and try-state reconciles the indication against every bounded batch
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
@@ -506,7 +502,16 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 
 ### Pre-fork storage baseline
 
-The AAA `0.7.x` pre-launch line supports fresh genesis only; it does not claim an in-place state upgrade from `0.6.x`. Pallet genesis writes storage version `1`, and runtime integration asserts that the current and on-chain versions agree on a fresh chain. No historical `OnRuntimeUpgrade` bridge ships on this pre-fork line; downstream live forks own bounded versioned migrations after launch.
+The AAA `0.7.x` pre-launch line supports fresh genesis only; it does not claim an in-place state upgrade from `0.6.x`. Pallet genesis writes the reset baseline storage version `1`, and pallet, DEOS-runtime, and independent-runtime tests assert that current/on-chain versions and `try_state` agree on fresh state. No historical `OnRuntimeUpgrade` bridge ships on this pre-fork line; downstream live forks own bounded versioned migrations after launch.
+
+### Schema delta from the frozen `0.7.1` comparison baseline
+
+- Removed stores: `SweepCursor`, `AaaInstances`, `CurrentQueue`, `NextQueue`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `WakeupScheduleDrops`, `WakeupRetryPending`, `QueueEpoch`, `ActorQueueEpoch`, `AaaReadiness`, `AddressEventInbox`, `IngressOverflowSlots`, `IngressOverflowHead`, `IngressOverflowLen`, `IdleStarvationBlocks`, and `LastIngressIngestBlock`.
+- Split/replaced values: `AaaInstances` became `ActorHot`, `ActorProgram`, and `ActorFunding`; `FundingBatch` removed `block` and `pending_last_block`; `Timer` removed `probability`; dormant identity and sparse starvation state gained dedicated encodings.
+- Added stores: `DormantAaaIdentities`, `ActorIdentityCount`, paged queue/wakeup stores, `WakeupCursorLen`, and `IdleStarvationState`. Existing owner, sovereign, active-cap, breaker, closed-System, allocator, and active-count stores retain their logical roles under the reset baseline.
+- Removed public variants: `Task::Noop`, `DeferReason::CloseTransitionFailed`, `OnCloseStepFailureKind`, event variants for wakeup reschedule/drop and close-plan execution, `SecureEntropyUnavailable`, and `Error::InsecureEntropyProvider`. Current event/error indices were compacted before `1.0`; activation, deactivation, starvation recovery, identity invariants, and queue-mutation errors occupy the pinned current indices.
+- Call `17` (`update_on_close_execution_plan`) was removed. Transitional dormant calls `18..=20` remain retired; calls `21..=22` own activation/deactivation. Calls `0..=3` now encode one `ProgramInput::Dormant | Active { schedule, schedule_window, execution_plan, funding_source_policy }` instead of parallel active-only arguments.
+- `aaa_0_7_2_scale_variant_indices_are_explicit` and `aaa_0_7_2_storage_schema_is_explicit` pin current discriminants, call indices, all 20 storage entries, modifiers, hashers, keys, and concrete value types. The independent runtime additionally proves those split prefixes in generated runtime metadata.
 
 ## Lifecycle State Machine
 
@@ -801,8 +806,9 @@ Implementation is covered by:
 - `template/pallets/aaa/src/tests.rs` — pallet-level unit/regression suite
 - `template/runtime/src/tests/aaa_integration_tests.rs` — runtime integration suite with explicit fast/stress scheduler lanes
 - `template/pallets/aaa/src/benchmarking.rs` — FRAME v2 benchmarks for all dispatchables + scheduler/close-path diagnostic benchmarks
-- `aaa_0_7_2_candidate_scale_variant_indices_are_explicit` — pins candidate indices through SCALE type metadata for core `Task`, amount resolution, conditions, source/asset/funding policies, triggers, actor type/mutability, pause/close/defer/skip/failure outcomes, pallet events/errors, canonical typed creation calls (`0..=3`), retained control calls (`4..=17`), reserved retired creation indices (`18..=20`), and lifecycle calls (`21..=22`) before the post-1.0 append-only lock activates
-- `aaa_0_7_2_candidate_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 20 candidate entry names, including split actor state, paged queue/wakeup topology, dormant identity, and identity counts, with query modifiers, map hashers, and concrete SCALE types through FRAME storage metadata
+- `aaa_0_7_2_scale_variant_indices_are_explicit` — pins released indices through SCALE type metadata for core `Task`, amount resolution, conditions, source/asset/funding policies, triggers, actor type/mutability, pause/close/defer/skip outcomes, pallet events/errors, canonical typed creation calls (`0..=3`), retained control calls (`4..=16`), retired indices (`17..=20`), and lifecycle calls (`21..=22`) before the post-1.0 append-only lock activates
+- `aaa_0_7_2_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 20 released entry names, including split actor state, paged queue/wakeup topology, dormant identity, and identity counts, with query modifiers, map hashers, and concrete SCALE types through FRAME storage metadata
+- `seeded_state_machine_preserves_cross_store_and_scheduler_invariants` — runs 32 deterministic, shrinkable/replayable operation traces over create, activate/deactivate, funding/signal, manual enqueue, pause/resume, program update, wakeup, execution, close/reopen, and User slot round-trip; after every transition it reconciles split stores/counts, queue tickets, wakeup pointers, sovereign indices, funding promotion, per-block execution, owner-slot recovery, and balance conservation
 
 Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, funding semantics, lifecycle transitions, and emergency starvation path.
 

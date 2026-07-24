@@ -1,9 +1,10 @@
 # AAA Specification
 
 - **Component**: `pallet-aaa` (Account Abstraction Actors)
-- **Specification line**: `0.7.1`
+- **Specification line**: `0.7.2`
 - **Date**: July 2026
 - **Status**: Normative
+- **Continuation**: Deferred to `0.7.3`; no retry cursor or `RetryLater` semantics belong to this line
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 
@@ -28,7 +29,9 @@ This specification MUST stay at or below **1280 lines** (formatting-preserving c
 9. **Saturating Arithmetic**: Intermediate fee/limit math MUST use saturating semantics. User-visible amount resolution MUST NOT silently overflow or underflow and MUST resolve deterministically (`Skipped` outcome or explicit failure).
 10. **Execution-Context Correctness**: Rules MUST respect FRAME hook semantics (e.g., no reliance on current block hash during execution).
 11. **Deferred-Horizon Cap**: Runtime MUST reject configurations that postpone first eligible execution beyond ten years.
-12. **Spec-Impl and Compatibility Lock**: Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass. The `0.7.x` pre-launch line remains fresh-genesis and MAY make an explicitly released breaking cleanup without shipping historical migration ceremony. Once AAA `1.0` is declared, existing task/condition/trigger/amount/close/event/error SCALE discriminants and dispatch call indices become append-only; existing call argument encodings and semantics remain stable; storage prefix/hasher/key/value encoding changes require a bounded migration, incremented pallet `StorageVersion`, and runtime compatibility bump; removals or semantic reinterpretations require an AAA major version; additive adapters/configuration or conservative weight recalibration follow Rust/package semver and runtime metadata/spec-version policy without pretending that package version alone migrates a live chain.
+12. **Spec-Impl Lock**: Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass.
+13. **Pre-1.0 Compatibility**: The `0.7.x` pre-launch line remains fresh-genesis and MAY make an explicitly released breaking cleanup without historical migration ceremony. AAA `1.0` MUST remain blocked until the `0.7.3` Continuation line repeats the independent-runtime embedding gate.
+14. **Post-1.0 Compatibility**: After AAA `1.0`, existing task, condition, trigger, amount, source-filter, asset-filter, funding-policy, actor-class, mutability, program-input, error-policy, lifecycle, outcome, event, error, and call discriminants become append-only. Existing call argument encodings and semantics remain stable. Storage prefix, modifier, hasher, key, or value changes require a bounded migration, incremented pallet `StorageVersion`, and runtime compatibility bump. Removal or reinterpretation requires an AAA major version; additive host adapters, configuration, and conservative weight recalibration follow package/runtime version policy without pretending that package version migrates a live chain.
 
 ## 2. Actor Model
 

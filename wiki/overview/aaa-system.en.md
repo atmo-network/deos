@@ -67,6 +67,8 @@ External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL Syst
 
 The independent `template/aaa-embedding-runtime` fixture makes this boundary executable. It starts with zero System AAAs, uses local account/asset types and smaller scheduler pages, proves direct Executive ingress and fresh-genesis integrity, and offers separate unsupported-adapter and exact-output DEX profiles. It is portability evidence, not a second product or prescribed topology.
 
+The `0.7.2` line resets the unlaunched reference chain to storage version `1`; it ships no historical migration. Continuation and `RetryLater` remain outside this line in `0.7.3`, whose independent embedding gate must pass before AAA can declare a post-`1.0` append-only surface.
+
 The DEOS reference runtime also owns `LpPairByTokenId` outside generic AAA, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded.
 
 The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep` or `AbortCycle` then decides whether the cycle proceeds or stops.

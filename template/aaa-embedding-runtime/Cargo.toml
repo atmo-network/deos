@@ -1,7 +1,7 @@
 [package]
 name = "aaa-embedding-runtime"
 description = "Minimal independent runtime fixture for the public pallet-aaa embedding contract"
-version = "0.7.1"
+version = "0.7.2"
 authors.workspace = true
 license = "MIT-0"
 homepage.workspace = true

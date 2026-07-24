@@ -75,7 +75,7 @@ fn assert_variant_contract<T: TypeInfo>(expected: &[(&str, u8)]) {
 }
 
 #[test]
-fn aaa_0_7_2_candidate_scale_variant_indices_are_explicit() {
+fn aaa_0_7_2_scale_variant_indices_are_explicit() {
   assert_variant_contract::<RuntimeTask>(&[
     ("Transfer", 0),
     ("SplitTransfer", 1),
@@ -750,7 +750,7 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
 }
 
 #[test]
-fn aaa_0_7_2_candidate_storage_schema_is_explicit() {
+fn aaa_0_7_2_storage_schema_is_explicit() {
   let storage_info = AAA::storage_info();
   assert!(storage_info.iter().all(|entry| entry.pallet_name == b"AAA"));
   let actual: alloc::vec::Vec<_> = storage_info
@@ -9072,10 +9072,14 @@ fn pure_close_does_not_start_normal_cycle_or_execute_tasks() {
 #[cfg(test)]
 mod proptest_aaa {
   use crate::{
-    ActorHot, AmountResolution, Mutability, Schedule, ScheduleOf, StepErrorPolicy, StepOf, Task,
-    Trigger, mock::*,
+    ActorFunding, ActorHot, ActorProgram, AmountResolution, AssetFilter, ClosedSystemAaaIds,
+    DormantAaaIdentities, FundingSourcePolicy, Mutability, QueuePages, Schedule, ScheduleOf,
+    SourceFilter, StepErrorPolicy, StepOf, Task, Trigger, WakeupPages, mock::*,
   };
-  use polkadot_sdk::frame_support::{BoundedVec, assert_ok, traits::Hooks};
+  use polkadot_sdk::frame_support::{
+    BoundedVec, assert_ok,
+    traits::{Get, Hooks},
+  };
   use polkadot_sdk::{frame_system, sp_runtime::Weight};
   use proptest::prelude::*;
 
@@ -9114,6 +9118,138 @@ mod proptest_aaa {
       },
     ));
     id
+  }
+
+  #[derive(Clone, Copy, Debug)]
+  enum ModelOp {
+    Create,
+    Activate,
+    Deactivate,
+    Fund,
+    Signal,
+    ManualTrigger,
+    Pause,
+    Resume,
+    UpdateProgram,
+    Enqueue,
+    Wakeup,
+    Execute,
+    Close,
+    Reopen,
+    UserSlotRoundTrip,
+  }
+
+  fn model_op() -> impl Strategy<Value = ModelOp> {
+    (0u8..15).prop_map(|index| match index {
+      0 => ModelOp::Create,
+      1 => ModelOp::Activate,
+      2 => ModelOp::Deactivate,
+      3 => ModelOp::Fund,
+      4 => ModelOp::Signal,
+      5 => ModelOp::ManualTrigger,
+      6 => ModelOp::Pause,
+      7 => ModelOp::Resume,
+      8 => ModelOp::UpdateProgram,
+      9 => ModelOp::Enqueue,
+      10 => ModelOp::Wakeup,
+      11 => ModelOp::Execute,
+      12 => ModelOp::Close,
+      13 => ModelOp::Reopen,
+      _ => ModelOp::UserSlotRoundTrip,
+    })
+  }
+
+  fn system_program(
+    trigger: Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>,
+  ) -> crate::ProgramInputOf<Test> {
+    crate::ProgramInput::Active {
+      schedule: Schedule {
+        trigger,
+        cooldown_blocks: 0,
+      },
+      schedule_window: None,
+      execution_plan: inert_execution_plan(),
+      funding_source_policy: FundingSourcePolicy::AnySource,
+    }
+  }
+
+  fn assert_model_invariants(
+    system_id: Option<u64>,
+    system_sovereign: Option<AccountId>,
+    closed: bool,
+    tracked_accounts: &std::collections::BTreeSet<AccountId>,
+    conserved_total: Balance,
+  ) {
+    let hot_ids: std::collections::BTreeSet<_> = ActorHot::<Test>::iter_keys().collect();
+    let program_ids: std::collections::BTreeSet<_> = ActorProgram::<Test>::iter_keys().collect();
+    let funding_ids: std::collections::BTreeSet<_> = ActorFunding::<Test>::iter_keys().collect();
+    let dormant_ids: std::collections::BTreeSet<_> =
+      DormantAaaIdentities::<Test>::iter_keys().collect();
+    assert_eq!(hot_ids, program_ids);
+    assert_eq!(hot_ids, funding_ids);
+    assert!(hot_ids.is_disjoint(&dormant_ids));
+    assert_eq!(AAA::active_aaa_count() as usize, hot_ids.len());
+    assert_eq!(
+      AAA::actor_identity_count() as usize,
+      hot_ids.len().saturating_add(dormant_ids.len())
+    );
+
+    let mut live_tickets = std::collections::BTreeSet::new();
+    for aaa_id in &hot_ids {
+      let hot = ActorHot::<Test>::get(aaa_id).expect("hot key resolves");
+      assert_eq!(AAA::sovereign_index(&hot.sovereign_account), Some(*aaa_id));
+      if let Some(ticket) = hot.queue_ticket {
+        assert!(
+          live_tickets.insert(ticket),
+          "duplicate live queue ticket {ticket}"
+        );
+        let page_size = u64::from(<<Test as crate::Config>::QueuePageSize as Get<u32>>::get());
+        let page = QueuePages::<Test>::get(ticket / page_size).expect("live queue page exists");
+        assert_eq!(
+          page
+            .get((ticket % page_size) as usize)
+            .map(|entry| entry.aaa_id),
+          Some(*aaa_id)
+        );
+      }
+      if let Some(pointer) = hot.wakeup_pointer {
+        let page = WakeupPages::<Test>::get((pointer.block, pointer.page_id))
+          .expect("live wakeup page exists");
+        assert_eq!(
+          page.entries.get(pointer.slot as usize),
+          Some(&Some(crate::WakeupEntry { aaa_id: *aaa_id }))
+        );
+      }
+    }
+    for aaa_id in &dormant_ids {
+      let identity = DormantAaaIdentities::<Test>::get(aaa_id).expect("dormant key resolves");
+      assert_eq!(
+        AAA::sovereign_index(&identity.sovereign_account),
+        Some(*aaa_id)
+      );
+      assert!(ActorHot::<Test>::get(aaa_id).is_none());
+    }
+
+    if let Some(aaa_id) = system_id {
+      if closed {
+        assert_eq!(
+          ClosedSystemAaaIds::<Test>::get(aaa_id),
+          Some(Mutability::Mutable)
+        );
+        assert!(ActorHot::<Test>::get(aaa_id).is_none());
+        assert!(DormantAaaIdentities::<Test>::get(aaa_id).is_none());
+        if let Some(sovereign) = system_sovereign {
+          assert_eq!(AAA::sovereign_index(sovereign), None);
+        }
+      } else {
+        assert!(hot_ids.contains(&aaa_id) || dormant_ids.contains(&aaa_id));
+      }
+    }
+    assert_eq!(AAA::owner_slot_mask(ALICE), 0);
+    let actual_total = tracked_accounts.iter().fold(0u128, |total, account| {
+      total.saturating_add(Balances::free_balance(account))
+    });
+    assert_eq!(actual_total, conserved_total);
   }
 
   proptest! {
@@ -9207,6 +9343,231 @@ mod proptest_aaa {
         expected_after_close,
         active_after_close
       );
+    }
+  }
+
+  proptest! {
+    #![proptest_config(ProptestConfig {
+      cases: 32,
+      rng_seed: proptest::test_runner::RngSeed::Fixed(0xDE05_0720),
+      ..ProptestConfig::default()
+    })]
+
+    #[test]
+    fn seeded_state_machine_preserves_cross_store_and_scheduler_invariants(
+      operations in prop::collection::vec(model_op(), 1..80),
+    ) {
+      new_test_ext().execute_with(|| {
+        use polkadot_sdk::frame_support::traits::{Currency, ExistenceRequirement};
+
+        frame_system::Pallet::<Test>::set_block_number(1);
+        let system_id = 0;
+        let system_sovereign = AAA::sovereign_account_id_system(system_id);
+        let user_sovereign = AAA::sovereign_account_id(&ALICE, 0);
+        let tracked_accounts: std::collections::BTreeSet<AccountId> =
+          std::collections::BTreeSet::from([
+          ALICE,
+          BOB,
+          TestFeeSink::get(),
+          system_sovereign,
+          user_sovereign,
+        ]);
+        let conserved_total = tracked_accounts.iter().fold(0u128, |total, account| {
+          total.saturating_add(Balances::free_balance(account))
+        });
+
+        assert_ok!(AAA::create_system_aaa(
+          RuntimeOrigin::root(),
+          ALICE,
+          Mutability::Mutable,
+          crate::ProgramInput::Dormant,
+        ));
+        let mut closed = false;
+        assert_model_invariants(
+          Some(system_id),
+          Some(system_sovereign),
+          closed,
+          &tracked_accounts,
+          conserved_total,
+        );
+
+        for (index, operation) in operations.iter().enumerate() {
+          let block = (index as u64).saturating_add(2);
+          frame_system::Pallet::<Test>::set_block_number(block);
+          let before_hot: std::collections::BTreeMap<_, _> = ActorHot::<Test>::iter().collect();
+
+          match operation {
+            ModelOp::Create => {}
+            ModelOp::Activate if !closed && DormantAaaIdentities::<Test>::contains_key(system_id) => {
+              let _ = AAA::activate_aaa(
+                RuntimeOrigin::root(),
+                system_id,
+                system_program(Trigger::Manual),
+              );
+            }
+            ModelOp::Deactivate if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let _ = AAA::deactivate_aaa(RuntimeOrigin::root(), system_id);
+            }
+            ModelOp::Fund if !closed => {
+              let recipient = ActorHot::<Test>::get(system_id)
+                .map(|hot| hot.sovereign_account)
+                .or_else(|| {
+                  DormantAaaIdentities::<Test>::get(system_id)
+                    .map(|identity| identity.sovereign_account)
+                });
+              if let Some(recipient) = recipient {
+                if ActorHot::<Test>::contains_key(system_id) {
+                  let provenance = crate::FundingProvenance::Signed(ALICE);
+                  if AAA::preflight_funding_event(
+                    system_id,
+                    TestAsset::Native,
+                    100,
+                    Some(&provenance),
+                  )
+                  .is_ok()
+                  {
+                    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+                      &ALICE,
+                      &recipient,
+                      100,
+                      ExistenceRequirement::AllowDeath,
+                    ));
+                    assert_ok!(AAA::notify_address_event(
+                      system_id,
+                      TestAsset::Native,
+                      100,
+                      &ALICE,
+                    ));
+                  }
+                } else {
+                  assert_ok!(<Balances as Currency<AccountId>>::transfer(
+                    &ALICE,
+                    &recipient,
+                    100,
+                    ExistenceRequirement::AllowDeath,
+                  ));
+                }
+              }
+            }
+            ModelOp::Signal if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let schedule = Schedule {
+                trigger: Trigger::OnAddressEvent {
+                  source_filter: SourceFilter::Any,
+                  asset_filter: AssetFilter::Any,
+                },
+                cooldown_blocks: 0,
+              };
+              let _ = AAA::update_schedule(RuntimeOrigin::root(), system_id, schedule, None);
+              if let Some(hot) = ActorHot::<Test>::get(system_id) {
+                let provenance = crate::FundingProvenance::Signed(ALICE);
+                if AAA::preflight_funding_event(
+                  system_id,
+                  TestAsset::Native,
+                  10,
+                  Some(&provenance),
+                )
+                .is_ok()
+                {
+                  assert_ok!(<Balances as Currency<AccountId>>::transfer(
+                    &ALICE,
+                    &hot.sovereign_account,
+                    10,
+                    ExistenceRequirement::AllowDeath,
+                  ));
+                  assert_ok!(AAA::notify_address_event(
+                    system_id,
+                    TestAsset::Native,
+                    10,
+                    &ALICE,
+                  ));
+                }
+              }
+            }
+            ModelOp::ManualTrigger | ModelOp::Enqueue
+              if !closed && ActorHot::<Test>::contains_key(system_id) =>
+            {
+              let _ = AAA::manual_trigger(RuntimeOrigin::root(), system_id);
+            }
+            ModelOp::Pause if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let _ = AAA::pause_aaa(RuntimeOrigin::root(), system_id);
+            }
+            ModelOp::Resume if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let _ = AAA::resume_aaa(RuntimeOrigin::root(), system_id);
+            }
+            ModelOp::UpdateProgram if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let _ = AAA::update_execution_plan(
+                RuntimeOrigin::root(),
+                system_id,
+                inert_execution_plan(),
+              );
+            }
+            ModelOp::Wakeup if !closed && ActorHot::<Test>::contains_key(system_id) => {
+              let schedule = timer_schedule_pt(2);
+              let _ = AAA::update_schedule(RuntimeOrigin::root(), system_id, schedule, None);
+            }
+            ModelOp::Execute => {
+              let _ = AAA::on_idle(block, Weight::MAX);
+            }
+            ModelOp::Close if !closed => {
+              if AAA::close_aaa(RuntimeOrigin::root(), system_id).is_ok() {
+                closed = true;
+              }
+            }
+            ModelOp::Reopen if closed => {
+              if AAA::reopen_system_aaa(
+                RuntimeOrigin::root(),
+                system_id,
+                ALICE,
+                Mutability::Mutable,
+                crate::ProgramInput::Dormant,
+              )
+              .is_ok()
+              {
+                closed = false;
+              }
+            }
+            ModelOp::UserSlotRoundTrip => {
+              assert_eq!(AAA::owner_slot_mask(ALICE), 0);
+              assert_ok!(AAA::create_user_aaa_at_slot(
+                RuntimeOrigin::signed(ALICE),
+                0,
+                Mutability::Mutable,
+                crate::ProgramInput::Dormant,
+              ));
+              let user_id = AAA::next_aaa_id().saturating_sub(1);
+              assert_eq!(
+                AAA::dormant_aaa_identities(user_id)
+                  .expect("temporary User identity exists")
+                  .sovereign_account,
+                user_sovereign
+              );
+              assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), user_id));
+              assert_eq!(AAA::owner_slot_mask(ALICE), 0);
+            }
+            _ => {}
+          }
+
+          for (aaa_id, previous) in &before_hot {
+            if let Some(hot) = ActorHot::<Test>::get(aaa_id) {
+              assert!(hot.cycle_nonce <= previous.cycle_nonce.saturating_add(1));
+              if matches!(operation, ModelOp::Execute) && previous.lifecycle.is_paused() {
+                assert_eq!(hot.cycle_nonce, previous.cycle_nonce);
+              }
+              if hot.cycle_nonce > previous.cycle_nonce {
+                assert!(!hot.has_pending_funding);
+                assert_eq!(hot.pending_funding_count, 0);
+              }
+            }
+          }
+          assert_model_invariants(
+            Some(system_id),
+            Some(system_sovereign),
+            closed,
+            &tracked_accounts,
+            conserved_total,
+          );
+        }
+      });
     }
   }
 }
