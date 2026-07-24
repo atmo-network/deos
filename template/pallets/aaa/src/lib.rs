@@ -2366,9 +2366,14 @@ pub mod pallet {
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         Self::remove_actor_from_queues(aaa_id);
-        if let Some(wakeup_block) = ScheduledWakeupBlock::<T>::take(aaa_id) {
-          Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
+        if ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
+          && Self::wakeup_substrate_invalidate(aaa_id).is_none()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaNotFound.into(),
+          ));
         }
+        ScheduledWakeupBlock::<T>::remove(aaa_id);
         WakeupRetryPending::<T>::remove(aaa_id);
         Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);
@@ -2670,9 +2675,14 @@ pub mod pallet {
         let reserved_fee_remaining = Self::admit_on_close_execution_plan(instance);
         Self::execute_on_close_execution_plan(aaa_id, instance, reserved_fee_remaining);
         Self::remove_actor_from_queues(aaa_id);
-        if let Some(wakeup_block) = ScheduledWakeupBlock::<T>::take(aaa_id) {
-          Self::remove_wakeup_bucket_entry(wakeup_block, aaa_id);
+        if ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.wakeup_pointer.is_some())
+          && Self::wakeup_substrate_invalidate(aaa_id).is_none()
+        {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            Error::<T>::AaaNotFound.into(),
+          ));
         }
+        ScheduledWakeupBlock::<T>::remove(aaa_id);
         WakeupRetryPending::<T>::remove(aaa_id);
         Self::remove_active_actor(aaa_id);
         ActorFunding::<T>::remove(aaa_id);

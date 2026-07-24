@@ -1,6 +1,7 @@
 ---
 name: upgrade-delivery
 description: Coordinates guarded DEOS runtime-upgrade preparation, authorization verification, ministerial relay planning, and post-upgrade evidence without owning governance decisions or shared commands.
+fmos: true
 ---
 
 # Upgrade Delivery
@@ -80,13 +81,13 @@ An unavailable RPC permits offline artifact and local compatibility evidence onl
 
 Report only:
 
-- target endpoint/network identity;
-- candidate Wasm path and hash;
-- highest completed evidence rung;
-- authorization classification and version-check state;
-- local/try-runtime checks actually executed;
-- whether relay remained plan-only or received explicit approval;
-- observed post-upgrade events/state when available;
-- blocker and exact unblocker.
+- Target endpoint/network identity;
+- Candidate Wasm path and hash;
+- Highest completed evidence rung;
+- Authorization classification and version-check state;
+- Local/try-runtime checks actually executed;
+- Whether relay remained plan-only or received explicit approval;
+- Observed post-upgrade events/state when available;
+- Blocker and exact unblocker.
 
 Stop when the next step needs governance action, explicit relay approval, unavailable live evidence, or an unresolved compatibility decision.

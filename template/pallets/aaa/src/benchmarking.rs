@@ -741,7 +741,7 @@ mod benches {
       T::AssetOps::transfer(&caller, &recipient, native, amount)
         .expect("ingress-aware transfer must succeed");
     }
-    assert!(WakeupRetryPending::<T>::contains_key(target_id));
+    assert!(ActorHot::<T>::get(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
   }
 
   #[benchmark]
@@ -768,7 +768,7 @@ mod benches {
       }
     }
     for (target_id, _) in targets {
-      assert!(WakeupRetryPending::<T>::contains_key(target_id));
+      assert!(ActorHot::<T>::get(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
     }
   }
 
@@ -784,7 +784,7 @@ mod benches {
       T::BenchmarkHelper::run_xcm_asset_deposit(&recipient, &source, amount)
         .expect("AAA-aware XCM deposit must succeed");
     }
-    assert!(WakeupRetryPending::<T>::contains_key(target_id));
+    assert!(ActorHot::<T>::get(target_id).is_some_and(|hot| hot.wakeup_pointer.is_some()));
   }
 
   #[benchmark]
@@ -950,19 +950,6 @@ mod benches {
     NextAaaId::<T>::get().saturating_sub(1)
   }
 
-  fn fill_wakeup_bucket<T: Config>(block: BlockNumberFor<T>, count: u32, seed: u64) {
-    let bounded = count.min(T::MaxWakeupBucketSize::get());
-    let mut ids: alloc::vec::Vec<AaaId> = alloc::vec::Vec::with_capacity(bounded as usize);
-    for i in 0..bounded {
-      ids.push(seed.saturating_add(u64::from(i)));
-    }
-    WakeupIndex::<T>::insert(
-      block,
-      BoundedVec::<AaaId, T::MaxWakeupBucketSize>::try_from(ids)
-        .expect("wakeup bucket must fit benchmark bounds"),
-    );
-  }
-
   fn install_wakeup_cursor_page<T: Config>(page_id: WakeupPageId, len: u32) {
     let page_size = T::WakeupPageSize::get();
     let page_start = u32::try_from(page_id)
@@ -1069,14 +1056,6 @@ mod benches {
     });
     QueueHead::<T>::put(0);
     QueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
-    for offset in 0..=T::MaxSpilloverBlocks::get() {
-      let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
-      fill_wakeup_bucket::<T>(
-        block,
-        T::MaxWakeupBucketSize::get(),
-        10_000_000 + u64::from(offset) * 100_000,
-      );
-    }
     (aaa_id, recipient)
   }
 
@@ -1103,7 +1082,7 @@ mod benches {
     let _ = Pallet::<T>::on_idle(first_block, Weight::MAX);
     let expected_wakeup: BlockNumberFor<T> = 11u32.into();
     assert_eq!(
-      ScheduledWakeupBlock::<T>::get(aaa_id),
+      ActorHot::<T>::get(aaa_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block)),
       Some(expected_wakeup)
     );
     let now: BlockNumberFor<T> = 2u32.into();
@@ -1115,7 +1094,7 @@ mod benches {
     let instance = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA exists");
     assert_eq!(instance.cycle_nonce, 1);
     assert_eq!(
-      ScheduledWakeupBlock::<T>::get(aaa_id),
+      ActorHot::<T>::get(aaa_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block)),
       Some(expected_wakeup)
     );
     assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.queue_ticket.is_none()));
@@ -1488,7 +1467,7 @@ mod benches {
     let second = bench_create_system_manual::<T>(34_100_001);
     assert!(Pallet::<T>::wakeup_substrate_schedule(first, wakeup_block));
     assert!(Pallet::<T>::wakeup_substrate_schedule(second, wakeup_block));
-    let limit = T::WeightInfo::scheduler_wakeup_cursor_pop_min()
+    let limit = T::WeightInfo::scheduler_wakeup_cursor_worker_future()
       .saturating_add(Pallet::<T>::wakeup_cursor_drain_unit_weight_upper(false));
     let mut meter = polkadot_sdk::sp_weights::WeightMeter::with_limit(limit);
     #[block]
@@ -1738,69 +1717,55 @@ mod benches {
     assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
   }
 
-  // Runtime-backed hook benchmark for dense overdue wakeup admission.
+  // Compatibility benchmark retained until the legacy weight surface is removed.
   #[benchmark]
   fn scheduler_wakeup_dense_due_drain(n: Linear<0, 64>) {
-    let due = n
-      .min(T::MaxWakeupsPerBlock::get())
-      .min(T::MaxWakeupBucketSize::get());
+    let due = n.min(T::MaxWakeupsPerBlock::get());
     let due_block: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(due_block);
-    fill_wakeup_bucket::<T>(due_block, due, 9_000_000);
-    for i in 0..due {
-      ScheduledWakeupBlock::<T>::insert(9_000_000u64.saturating_add(u64::from(i)), due_block);
+    for seed in 0..due {
+      let aaa_id = bench_create_system_manual::<T>(9_000_000u32.saturating_add(seed));
+      assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, due_block));
     }
-    MinWakeupBlock::<T>::put(due_block);
     #[block]
     {
       let _ = Pallet::<T>::execute_cycle(Weight::MAX);
     }
-    assert!(WakeupIndex::<T>::get(due_block).is_empty());
+    assert!(WakeupBuckets::<T>::get(due_block).is_none());
   }
 
-  // Non-dispatch diagnostic benchmark for bounded sparse-gap recovery after long halts.
+  // Compatibility diagnostic retained until the legacy weight surface is removed.
   #[benchmark]
   fn scheduler_wakeup_sparse_gap_recovery(g: Linear<64, 4_096>) {
     let gap = g.max(T::MaxWakeupsPerBlock::get());
-    let min_block: BlockNumberFor<T> = 1u32.into();
-    let now: BlockNumberFor<T> = gap.saturating_add(1).into();
-    let expected: BlockNumberFor<T> = T::MaxWakeupsPerBlock::get().saturating_add(1).into();
-    MinWakeupBlock::<T>::put(min_block);
+    let now: BlockNumberFor<T> = 1u32.into();
+    let future: BlockNumberFor<T> = gap.saturating_add(1).into();
     frame_system::Pallet::<T>::set_block_number(now);
+    let aaa_id = bench_create_system_manual::<T>(9_100_000);
+    assert!(Pallet::<T>::wakeup_substrate_schedule(aaa_id, future));
     #[block]
     {
       let _ = Pallet::<T>::execute_cycle(Weight::MAX);
     }
-    assert_eq!(MinWakeupBlock::<T>::get(), Some(expected));
+    assert_eq!(Pallet::<T>::wakeup_cursor_peek(), Some(future));
   }
 
-  // Runtime-backed hook benchmark for bounded spillover probing in WakeupIndex.
+  // Compatibility benchmark retained until spillover weights are removed.
   #[benchmark]
   fn scheduler_wakeup_spillover_probe(b: Linear<0, 9>) {
     let aaa_id = bench_create_system_manual::<T>(b);
     frame_system::Pallet::<T>::set_block_number(1u32.into());
-    let blocked_buckets = b.min(9);
     QueueHead::<T>::put(0);
     QueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
-    for offset in 0..blocked_buckets {
-      let block: BlockNumberFor<T> = (2u32.saturating_add(offset)).into();
-      fill_wakeup_bucket::<T>(
-        block,
-        T::MaxWakeupBucketSize::get(),
-        10_000_000 + u64::from(offset) * 100_000,
-      );
-    }
     #[block]
     {
       Pallet::<T>::enqueue(aaa_id);
     }
-    if blocked_buckets < 9 {
-      let scheduled_block: BlockNumberFor<T> = (2u32.saturating_add(blocked_buckets)).into();
-      assert!(WakeupIndex::<T>::get(scheduled_block).contains(&aaa_id));
-      assert_eq!(WakeupScheduleDrops::<T>::get(), 0);
-    } else {
-      assert_eq!(WakeupScheduleDrops::<T>::get(), 1);
-    }
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| {
+      hot
+        .wakeup_pointer
+        .is_some_and(|pointer| pointer.block == 2u32.into())
+    }));
   }
 
   #[benchmark]
@@ -1834,8 +1799,10 @@ mod benches {
     {
       assert!(T::BenchmarkHelper::run_address_event_ingress(&recipient));
     }
-    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
-    assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
+    assert!(
+      ActorHot::<T>::get(aaa_id)
+        .is_some_and(|hot| { hot.pending_signal && hot.wakeup_pointer.is_some() })
+    );
   }
 
   #[benchmark]
@@ -1897,8 +1864,10 @@ mod benches {
       let _ = Pallet::<T>::drain_address_event_overflow(1);
     }
     assert_eq!(IngressOverflowLen::<T>::get(), 0);
-    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
-    assert!(WakeupRetryPending::<T>::contains_key(aaa_id));
+    assert!(
+      ActorHot::<T>::get(aaa_id)
+        .is_some_and(|hot| { hot.pending_signal && hot.wakeup_pointer.is_some() })
+    );
   }
 
   /// Builds a circular chain of `n` system AAAs where each transfers 1% of its

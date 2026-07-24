@@ -1,6 +1,7 @@
 ---
 name: aaa-delivery
 description: Guides AAA scheduler validation, stress evidence application, release gating, and delivery handoff.
+fmos: true
 ---
 
 # AAA Delivery
@@ -31,8 +32,8 @@ This skill selects and interprets that command; it does not own a second executa
 
 Report:
 
-- selected quick/full profile and occupancy decision;
-- passed stress cases and any explicitly skipped external gate;
-- generated weight and production-Wasm hashes when they changed;
-- remaining backlog gate and exact unblocker;
-- confirmation that no throughput claim exceeds measured production-Wasm and runtime-budget evidence.
+- Selected quick/full profile and occupancy decision;
+- Passed stress cases and any explicitly skipped external gate;
+- Generated weight and production-Wasm hashes when they changed;
+- Remaining backlog gate and exact unblocker;
+- Confirmation that no throughput claim exceeds measured production-Wasm and runtime-budget evidence.

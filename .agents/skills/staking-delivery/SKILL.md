@@ -1,6 +1,7 @@
 ---
 name: staking-delivery
 description: Coordinates guarded DEOS native-staking bootstrap readiness, call preparation, authority boundaries, and activation handoff without owning staking semantics or shared commands.
+fmos: true
 ---
 
 # Staking Delivery
@@ -81,12 +82,12 @@ An unavailable RPC permits only a generic sequence review, not a target readines
 
 Report only:
 
-- target endpoint/network identity;
-- observed readiness state and first unmet dependency;
-- checks actually executed;
-- next prepared call family and its authority class, without duplicating opaque bytes in durable prose;
-- whether all work remained read-only/plan-only;
-- blocker, remediation owner, and exact unblocker;
-- post-action state only when re-observed.
+- Target endpoint/network identity;
+- Observed readiness state and first unmet dependency;
+- Checks actually executed;
+- Next prepared call family and its authority class, without duplicating opaque bytes in durable prose;
+- Whether all work remained read-only/plan-only;
+- Blocker, remediation owner, and exact unblocker;
+- Post-action state only when re-observed.
 
 Stop when the next transition requires governance, signing, funds, live submission, or correction of an inconsistent runtime state.

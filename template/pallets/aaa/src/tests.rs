@@ -30,6 +30,10 @@ type RuntimeStep = StepOf<Test>;
 type RuntimeProgramInput = crate::ProgramInputOf<Test>;
 type MockBlockNumber = polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>;
 
+fn scheduled_wakeup_block(aaa_id: crate::AaaId) -> Option<MockBlockNumber> {
+  AAA::actor_hot(aaa_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block))
+}
+
 fn assert_plain_storage_type<T: TypeInfo + 'static>(entry: &StorageEntryMetadataIR) {
   let StorageEntryTypeIR::Plain(actual) = entry.ty else {
     panic!("{} must remain plain storage", entry.name);
@@ -2436,7 +2440,7 @@ fn manual_trigger_waits_through_cooldown_without_second_signal() {
         .expect("AAA exists")
         .manual_trigger_pending
     );
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(6));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(6));
     frame_system::Pallet::<Test>::set_block_number(6);
     run_idle(Weight::MAX);
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
@@ -2467,7 +2471,7 @@ fn manual_trigger_waits_for_schedule_window_without_second_signal() {
         .expect("AAA exists")
         .manual_trigger_pending
     );
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(10));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(10));
     frame_system::Pallet::<Test>::set_block_number(10);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -2516,7 +2520,7 @@ fn address_event_waits_through_cooldown_without_second_signal() {
     ));
     run_idle(Weight::MAX);
     assert!(AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(6));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(6));
     frame_system::Pallet::<Test>::set_block_number(6);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -3062,14 +3066,13 @@ fn wakeup_drain_respects_max_wakeups_per_block() {
       let id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
       ids.push(id);
     }
-    crate::pallet::WakeupIndex::<Test>::insert(
-      1,
-      BoundedVec::<u64, <Test as crate::Config>::MaxWakeupBucketSize>::try_from(ids)
-        .expect("wakeup batch must fit"),
-    );
-    crate::pallet::MinWakeupBlock::<Test>::put(1);
+    for aaa_id in ids {
+      assert!(AAA::wakeup_substrate_schedule(aaa_id, 1));
+    }
     run_idle(Weight::MAX);
-    let remaining = crate::pallet::WakeupIndex::<Test>::get(1).len() as u32;
+    let remaining = AAA::wakeup_buckets(1)
+      .map(|bucket| bucket.live_entries)
+      .unwrap_or(0);
     assert_eq!(remaining, total - max_wakeups);
   });
 }
@@ -3079,35 +3082,28 @@ fn wakeup_drain_preserves_bucket_when_proof_budget_cannot_admit_it() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    crate::pallet::WakeupIndex::<Test>::insert(
-      1,
-      BoundedVec::<u64, <Test as crate::Config>::MaxWakeupBucketSize>::try_from(vec![aaa_id])
-        .expect("wakeup fits"),
-    );
-    crate::pallet::ScheduledWakeupBlock::<Test>::insert(aaa_id, 1);
-    crate::pallet::MinWakeupBlock::<Test>::put(1);
+    assert!(AAA::wakeup_substrate_schedule(aaa_id, 1));
     run_idle(Weight::from_parts(u64::MAX, 300));
     assert_eq!(
-      crate::pallet::WakeupIndex::<Test>::get(1).as_slice(),
-      &[aaa_id]
+      AAA::wakeup_buckets(1)
+        .expect("preserved bucket")
+        .live_entries,
+      1
     );
-    assert_eq!(
-      crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id),
-      Some(1)
-    );
-    assert_eq!(crate::pallet::MinWakeupBlock::<Test>::get(), Some(1));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(1));
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(1));
   });
 }
 
 #[test]
-fn wakeup_drain_caps_sparse_block_scan_per_idle_pass() {
+fn wakeup_drain_stops_at_the_sparse_future_minimum() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(10_000);
-    let max_wakeups: u32 = <Test as crate::Config>::MaxWakeupsPerBlock::get();
-    crate::pallet::MinWakeupBlock::<Test>::put(1);
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    assert!(AAA::wakeup_substrate_schedule(aaa_id, 1_000_000));
     run_idle(Weight::MAX);
-    let expected = 1u64.saturating_add(u64::from(max_wakeups));
-    assert_eq!(crate::pallet::MinWakeupBlock::<Test>::get(), Some(expected));
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(1_000_000));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(1_000_000));
   });
 }
 
@@ -3124,7 +3120,7 @@ fn paged_enqueue_coalesces_without_a_per_block_insertion_cap() {
       AAA::queue_tail().saturating_sub(AAA::queue_head()),
       u64::from(total)
     );
-    assert!(crate::pallet::WakeupIndex::<Test>::get(2).is_empty());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
   });
 }
 
@@ -3291,7 +3287,7 @@ fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_
     crate::pallet::QueueTail::<Test>::put(u64::from(capacity));
 
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(2));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
     assert_ok!(AAA::set_global_circuit_breaker(RuntimeOrigin::root(), true));
     let cleanup_budget =
       <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_on_idle_base()
@@ -3321,7 +3317,7 @@ fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_
       1
     );
     assert_eq!(AAA::queue_head(), AAA::queue_tail());
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), None);
+    assert_eq!(scheduled_wakeup_block(aaa_id), None);
   });
 }
 
@@ -3389,7 +3385,7 @@ fn paged_scheduler_preserves_the_unexecuted_fifo_suffix() {
 }
 
 #[test]
-fn defer_wakeup_spills_to_later_block_when_requested_bucket_is_full() {
+fn paged_wakeup_uses_the_exact_requested_block_despite_legacy_bucket_pressure() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let max_bucket: u32 = <Test as crate::Config>::MaxWakeupBucketSize::get();
@@ -3401,22 +3397,15 @@ fn defer_wakeup_spills_to_later_block_when_requested_bucket_is_full() {
     crate::pallet::WakeupIndex::<Test>::insert(
       2,
       BoundedVec::<u64, <Test as crate::Config>::MaxWakeupBucketSize>::try_from(full_ids)
-        .expect("full wakeup queue must fit"),
+        .expect("legacy wakeup queue must fit"),
     );
-    frame_system::Pallet::<Test>::reset_events();
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    assert!(crate::pallet::WakeupIndex::<Test>::get(3).contains(&aaa_id));
-    assert_eq!(crate::pallet::WakeupScheduleDrops::<Test>::get(), 0);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::WakeupRescheduled {
-          aaa_id: id,
-          requested_block: 2,
-          scheduled_block: 3,
-        } if *id == aaa_id
-      )
-    }));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
+    assert_eq!(
+      AAA::wakeup_buckets(2).expect("paged bucket").live_entries,
+      1
+    );
+    assert_eq!(AAA::wakeup_cursor_peek(), Some(2));
   });
 }
 
@@ -3430,13 +3419,14 @@ fn defer_wakeup_deduplicates_repeated_manual_trigger_for_same_actor() {
     ));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    let queued = crate::pallet::WakeupIndex::<Test>::get(2);
-    let duplicates = queued
-      .iter()
-      .filter(|queued_id| **queued_id == aaa_id)
-      .count();
-    assert_eq!(duplicates, 1);
-    assert_eq!(crate::pallet::WakeupScheduleDrops::<Test>::get(), 0);
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
+    assert_eq!(
+      AAA::wakeup_buckets(2)
+        .expect("deduplicated bucket")
+        .live_entries,
+      1
+    );
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
   });
 }
 
@@ -3447,7 +3437,7 @@ fn first_eligible_at_is_the_canonical_initial_timer_anchor() {
     let aaa_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert_eq!(
-      crate::ScheduledWakeupBlock::<Test>::get(aaa_id),
+      scheduled_wakeup_block(aaa_id),
       Some(instance.first_eligible_at)
     );
     assert!(instance.first_eligible_at >= 27);
@@ -3480,7 +3470,7 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
     let instance = AAA::aaa_instances(aaa_id).expect("active AAA exists");
     assert!(instance.first_eligible_at >= 30);
     assert_eq!(
-      crate::ScheduledWakeupBlock::<Test>::get(aaa_id),
+      scheduled_wakeup_block(aaa_id),
       Some(instance.first_eligible_at)
     );
   });
@@ -3491,42 +3481,22 @@ fn early_reexecution_replaces_live_future_wakeup_instead_of_accumulating() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
-    let initial_block = crate::pallet::WakeupIndex::<Test>::iter()
-      .find_map(|(block, queue)| queue.contains(&aaa_id).then_some(block))
-      .expect("timer wakeup should be scheduled");
-    assert_eq!(
-      crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id),
-      Some(initial_block)
-    );
+    let initial_block = scheduled_wakeup_block(aaa_id).expect("timer wakeup should be scheduled");
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(initial_block));
     frame_system::Pallet::<Test>::set_block_number(2);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
-    let scheduled_blocks = crate::pallet::WakeupIndex::<Test>::iter()
-      .filter_map(|(block, queue)| queue.contains(&aaa_id).then_some(block))
-      .collect::<Vec<_>>();
-    assert_eq!(
-      scheduled_blocks.len(),
-      1,
-      "live actors must keep only one future wakeup entry"
-    );
-    let rescheduled_block = scheduled_blocks[0];
+    let rescheduled_block = scheduled_wakeup_block(aaa_id).expect("replacement wakeup");
     assert_ne!(rescheduled_block, initial_block);
-    assert_eq!(
-      crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id),
-      Some(rescheduled_block)
-    );
-    assert!(
-      !crate::pallet::WakeupIndex::<Test>::get(initial_block).contains(&aaa_id),
-      "old live wakeup must be replaced on early re-execution"
-    );
+    assert!(AAA::wakeup_buckets(initial_block).is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 1);
   });
 }
 
 #[test]
-fn wakeup_retry_ignores_sparse_historical_id_distance() {
+fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let max_bucket: u32 = <Test as crate::Config>::MaxWakeupBucketSize::get();
     let aaa_id = create_user_with(
       ALICE,
       Mutability::Mutable,
@@ -3538,54 +3508,22 @@ fn wakeup_retry_ignores_sparse_historical_id_distance() {
     crate::pallet::QueueTail::<Test>::put(u64::from(
       <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
     ));
-    let full_ids: Vec<u64> = (5_000_000..5_000_000 + u64::from(max_bucket)).collect();
-    for block in 2..=10 {
-      crate::pallet::WakeupIndex::<Test>::insert(
-        block,
-        BoundedVec::<u64, <Test as crate::Config>::MaxWakeupBucketSize>::try_from(full_ids.clone())
-          .expect("full wakeup queue must fit"),
-      );
-    }
-    frame_system::Pallet::<Test>::reset_events();
     assert_ok!(AAA::notify_address_event(
       aaa_id,
       TestAsset::Native,
       100,
       &ALICE
     ));
-    assert_eq!(crate::pallet::WakeupScheduleDrops::<Test>::get(), 1);
-    assert!(has_aaa_event(|event| {
-      matches!(
-        event,
-        Event::WakeupScheduleDropped {
-          aaa_id: id,
-          requested_block: 2,
-        } if *id == aaa_id
-      )
-    }));
-    assert!(AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
-    assert!(crate::pallet::WakeupRetryPending::<Test>::get(aaa_id));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
     NextAaaId::<Test>::put(10_000_000);
     SweepCursor::<Test>::put(0);
     crate::pallet::QueueHead::<Test>::put(0);
     crate::pallet::QueueTail::<Test>::put(0);
-    for block in 2..=10 {
-      crate::pallet::WakeupIndex::<Test>::remove(block);
-    }
-    crate::pallet::MinWakeupBlock::<Test>::kill();
     let bob_before = native_balance(&BOB);
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
-    assert!(!crate::pallet::WakeupRetryPending::<Test>::get(aaa_id));
-    assert_eq!(
-      crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id),
-      Some(3)
-    );
-    frame_system::Pallet::<Test>::set_block_number(3);
-    run_idle(Weight::MAX);
     assert_eq!(native_balance(&BOB), bob_before.saturating_add(10));
     assert!(!AAA::actor_hot(aaa_id).is_some_and(|hot| hot.pending_signal));
-    assert_eq!(crate::pallet::WakeupScheduleDrops::<Test>::get(), 1);
   });
 }
 
@@ -3594,20 +3532,16 @@ fn close_before_future_wakeup_removes_authoritative_bucket_entry() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
-    let scheduled_block = crate::pallet::WakeupIndex::<Test>::iter()
-      .find_map(|(block, queue)| queue.contains(&aaa_id).then_some(block))
-      .expect("timer wakeup should be scheduled");
+    let scheduled_block = scheduled_wakeup_block(aaa_id).expect("timer wakeup should be scheduled");
     assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
     assert!(AAA::aaa_instances(aaa_id).is_none());
-    assert!(crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id).is_none());
-    assert!(
-      !crate::pallet::WakeupIndex::<Test>::get(scheduled_block).contains(&aaa_id),
-      "close must remove the entry from its reverse-indexed future bucket"
-    );
+    assert!(scheduled_wakeup_block(aaa_id).is_none());
+    assert!(AAA::wakeup_buckets(scheduled_block).is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
     frame_system::Pallet::<Test>::set_block_number(scheduled_block);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
-    assert!(!crate::pallet::WakeupIndex::<Test>::get(scheduled_block).contains(&aaa_id));
+    assert!(AAA::wakeup_buckets(scheduled_block).is_none());
     assert_eq!(AAA::queue_head(), AAA::queue_tail());
     assert!(!has_aaa_event(|event| {
       matches!(event, Event::CycleStarted { aaa_id: id, .. } if *id == aaa_id)
@@ -3624,21 +3558,20 @@ fn repeated_timer_close_churn_leaves_no_long_horizon_wakeup_entries() {
     let mut latest_wakeup = 1u64;
     for _ in 0..total {
       let aaa_id = create_system_with(ALICE, timer_schedule(4_000), None, inert_execution_plan());
-      let wakeup = crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id)
-        .expect("timer wakeup must be scheduled");
+      let wakeup = scheduled_wakeup_block(aaa_id).expect("timer wakeup must be scheduled");
       latest_wakeup = latest_wakeup.max(wakeup);
       actors.push(aaa_id);
     }
 
     for aaa_id in actors {
       assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-      assert!(crate::pallet::ScheduledWakeupBlock::<Test>::get(aaa_id).is_none());
+      assert!(scheduled_wakeup_block(aaa_id).is_none());
     }
-    assert!(crate::pallet::WakeupIndex::<Test>::iter().next().is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
     frame_system::Pallet::<Test>::set_block_number(latest_wakeup.saturating_add(1_000));
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
-    assert!(crate::pallet::WakeupIndex::<Test>::iter().next().is_none());
+    assert_eq!(AAA::wakeup_cursor_len(), 0);
     assert_eq!(AAA::queue_head(), AAA::queue_tail());
     assert!(!has_aaa_event(|event| matches!(
       event,
@@ -8042,7 +7975,7 @@ fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
       AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
       1
     );
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(11));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(11));
     assert!(
       AAA::actor_hot(aaa_id)
         .expect("timer actor")
@@ -8056,7 +7989,7 @@ fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
         AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
         1
       );
-      assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(11));
+      assert_eq!(scheduled_wakeup_block(aaa_id), Some(11));
     }
     frame_system::Pallet::<Test>::set_block_number(11);
     run_idle(Weight::MAX);
@@ -8084,14 +8017,14 @@ fn timer_eligibility_uses_maximum_of_cadence_cooldown_and_window() {
       }),
       inert_execution_plan(),
     );
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(15));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(15));
     frame_system::Pallet::<Test>::set_block_number(15);
     run_idle(Weight::MAX);
     assert_eq!(
       AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
       1
     );
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(25));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(25));
   });
 }
 
@@ -8106,7 +8039,7 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
     let aaa_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
     run_idle(Weight::MAX);
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), Some(6));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(6));
     assert_ok!(AAA::pause_aaa(RuntimeOrigin::root(), aaa_id));
     frame_system::Pallet::<Test>::set_block_number(6);
     run_idle(Weight::MAX);
@@ -8114,7 +8047,7 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
       AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
       1
     );
-    assert_eq!(crate::ScheduledWakeupBlock::<Test>::get(aaa_id), None);
+    assert_eq!(scheduled_wakeup_block(aaa_id), None);
     assert!(
       AAA::actor_hot(aaa_id)
         .expect("paused actor")
@@ -8137,15 +8070,7 @@ fn timer_wakeup_uses_deterministic_jitter_for_delayed_cadence() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let cadence = 20u32;
     let aaa_id = create_system_with(ALICE, timer_schedule(cadence), None, inert_execution_plan());
-    let scheduled_block = crate::pallet::WakeupIndex::<Test>::iter()
-      .find_map(|(block, queue)| {
-        if queue.contains(&aaa_id) {
-          Some(block)
-        } else {
-          None
-        }
-      })
-      .expect("timer wakeup should be scheduled");
+    let scheduled_block = scheduled_wakeup_block(aaa_id).expect("timer wakeup should be scheduled");
     let window = cadence
       .saturating_div(4)
       .min(<Test as crate::Config>::MaxTimerJitterBlocks::get());

@@ -23,7 +23,7 @@ impl<T: Config> Pallet<T> {
     // Materialize already-due temporal readiness before taking the block-start
     // run-queue snapshot. Every later append, including actor self-enqueue during
     // execution, receives a ticket at or beyond this cutoff and waits one block.
-    Self::drain_overdue_wakeups_paged(now, &mut cycle_meter);
+    Self::drain_overdue_wakeups_cursor(now, &mut cycle_meter);
     let cutoff = QueueTail::<T>::get();
 
     let max_executions = T::MaxExecutionsPerBlock::get();
@@ -918,63 +918,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> bool {
-    // Temporal wakeup layer: place future eligibility into bounded block buckets.
-    let previous_block = ScheduledWakeupBlock::<T>::get(aaa_id);
-    let mut target_block = wakeup_block;
-    let mut scheduled_block: Option<BlockNumberFor<T>> = None;
-    for _ in 0..=T::MaxSpilloverBlocks::get() {
-      let inserted = WakeupIndex::<T>::mutate(target_block, |queue| {
-        if queue.contains(&aaa_id) {
-          return true;
-        }
-        queue.try_push(aaa_id).is_ok()
-      });
-      if inserted {
-        scheduled_block = Some(target_block);
-        break;
-      }
-      target_block = target_block.saturating_add(One::one());
-    }
-    let Some(scheduled_block) = scheduled_block else {
-      WakeupRetryPending::<T>::insert(aaa_id, true);
-      WakeupScheduleDrops::<T>::mutate(|drops| *drops = drops.saturating_add(1));
-      Self::deposit_event(Event::WakeupScheduleDropped {
-        aaa_id,
-        requested_block: wakeup_block,
-      });
-      return false;
-    };
-    if previous_block != Some(scheduled_block) {
-      if let Some(previous_block) = previous_block {
-        Self::remove_wakeup_bucket_entry(previous_block, aaa_id);
-      }
-      ScheduledWakeupBlock::<T>::insert(aaa_id, scheduled_block);
-    }
-    if scheduled_block != wakeup_block {
-      Self::deposit_event(Event::WakeupRescheduled {
-        aaa_id,
-        requested_block: wakeup_block,
-        scheduled_block,
-      });
-    }
-    WakeupRetryPending::<T>::remove(aaa_id);
-    match MinWakeupBlock::<T>::get() {
-      Some(current_min) if current_min <= scheduled_block => {}
-      _ => MinWakeupBlock::<T>::put(scheduled_block),
-    }
-    true
-  }
-
-  pub(crate) fn remove_wakeup_bucket_entry(block: BlockNumberFor<T>, aaa_id: AaaId) {
-    WakeupIndex::<T>::mutate_exists(block, |maybe_queue| {
-      let Some(queue) = maybe_queue.as_mut() else {
-        return;
-      };
-      queue.retain(|id| *id != aaa_id);
-      if queue.is_empty() {
-        *maybe_queue = None;
-      }
-    });
+    Self::wakeup_substrate_schedule(aaa_id, wakeup_block)
   }
 
   /// Baseline scheduler envelope reserved ahead of one actor run/close pair.
@@ -1001,25 +945,26 @@ impl<T: Config> Pallet<T> {
         T::WeightInfo::scheduler_paged_append_existing_page()
           .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
-      .saturating_add(Self::wakeup_cursor_weight())
+      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future())
       .saturating_add(Self::scheduler_probe_weight_upper())
   }
 
   /// Upper-bounds terminal state deletion after the close plan has run.
   ///
-  /// Actor-local queue invalidation is O(1). The generated wakeup-bucket scan
-  /// proxy covers removal from one full future bucket, while the fixed tail covers
-  /// pointer/retry state, actor cardinality, reverse indexes, checkpoint, and event.
+  /// Queue invalidation is actor-local. The temporal term covers exact bucket
+  /// removal plus worst-depth cursor insertion; the fixed tail covers actor
+  /// cardinality, reverse indexes, checkpoint, and event state.
   pub(crate) fn close_cleanup_weight_upper() -> Weight {
     T::WeightInfo::scheduler_paged_consume_preserve_page()
-      .saturating_add(Weight::from_parts(3_000_000_000, 170_000))
-      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+      .saturating_add(Self::wakeup_registration_weight_upper())
       .saturating_add(Weight::from_parts(10_000_000, 32_768))
       .saturating_add(T::DbWeight::get().reads_writes(9, 12))
   }
 
   pub fn wakeup_registration_weight_upper() -> Weight {
-    Self::wakeup_retry_probe_weight_upper()
+    T::WeightInfo::scheduler_wakeup_append_new_page()
+      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_insert())
+      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_remove_exact())
   }
 
   fn wakeup_retry_probe_weight_upper() -> Weight {
@@ -1046,28 +991,12 @@ impl<T: Config> Pallet<T> {
     Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
   }
 
-  pub fn wakeup_drain_weight_upper(wakeups: u32) -> Weight {
-    T::WeightInfo::scheduler_wakeup_dense_due_drain(wakeups)
-  }
-
-  fn wakeup_cursor_weight() -> Weight {
-    Self::wakeup_drain_weight_upper(0)
-  }
-
-  fn wakeup_drain_actor_weight_upper() -> Weight {
-    Self::wakeup_drain_weight_upper(1).saturating_add(Self::wakeup_retry_probe_weight_upper())
-  }
-
   pub fn wakeup_cursor_drain_unit_weight_upper(removes_bucket: bool) -> Weight {
-    let enqueue_or_reschedule = T::WeightInfo::scheduler_paged_append_new_page()
-      .saturating_add(T::WeightInfo::scheduler_wakeup_append_new_page())
-      .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_insert());
-    let mut weight =
-      T::WeightInfo::scheduler_wakeup_drain_partial_page().saturating_add(enqueue_or_reschedule);
     if removes_bucket {
-      weight = weight.saturating_add(T::WeightInfo::scheduler_wakeup_cursor_remove_exact());
+      T::WeightInfo::scheduler_wakeup_cursor_worker_remove()
+    } else {
+      T::WeightInfo::scheduler_wakeup_cursor_worker_partial()
     }
-    weight
   }
 
   pub fn drain_overdue_wakeups_cursor(
@@ -1096,7 +1025,10 @@ impl<T: Config> Pallet<T> {
         block
       };
       let base_weight = Self::wakeup_cursor_drain_unit_weight_upper(false);
-      if !meter.can_consume(base_weight) {
+      if QueueTail::<T>::get().saturating_sub(QueueHead::<T>::get())
+        >= u64::from(T::MaxActiveActors::get())
+        || !meter.can_consume(base_weight)
+      {
         break;
       }
       let Some(bucket) = WakeupBuckets::<T>::get(block_cursor) else {
@@ -1126,66 +1058,6 @@ impl<T: Config> Pallet<T> {
       }
     }
     total
-  }
-
-  fn drain_overdue_wakeups_paged(now: BlockNumberFor<T>, meter: &mut WeightMeter) {
-    let cursor_weight = Self::wakeup_cursor_weight();
-    if !meter.can_consume(cursor_weight) {
-      return;
-    }
-    meter.consume(cursor_weight);
-    let mut processed = 0u32;
-    let max_wakeups = T::MaxWakeupsPerBlock::get();
-    let mut scanned_blocks = 0u32;
-    let mut cursor = MinWakeupBlock::<T>::get();
-    while processed < max_wakeups && scanned_blocks < max_wakeups {
-      let Some(block_cursor) = cursor else {
-        break;
-      };
-      if block_cursor > now {
-        break;
-      }
-      let bucket_weight = T::WeightInfo::scheduler_wakeup_dense_due_drain(0);
-      if !meter.can_consume(bucket_weight) {
-        break;
-      }
-      meter.consume(bucket_weight);
-      scanned_blocks = scanned_blocks.saturating_add(1);
-      let actors = WakeupIndex::<T>::take(block_cursor).into_inner();
-      if actors.is_empty() {
-        cursor = Some(block_cursor.saturating_add(One::one()));
-        continue;
-      }
-      let actor_weight = Self::wakeup_drain_actor_weight_upper();
-      let mut index = 0usize;
-      while index < actors.len() && processed < max_wakeups {
-        if !meter.can_consume(actor_weight) {
-          break;
-        }
-        meter.consume(actor_weight);
-        let aaa_id = actors[index];
-        processed = processed.saturating_add(1);
-        index = index.saturating_add(1);
-        if ScheduledWakeupBlock::<T>::get(aaa_id) != Some(block_cursor) {
-          continue;
-        }
-        ScheduledWakeupBlock::<T>::remove(aaa_id);
-        Self::enqueue(aaa_id);
-      }
-      if index < actors.len() {
-        WakeupIndex::<T>::insert(
-          block_cursor,
-          BoundedVec::<AaaId, T::MaxWakeupBucketSize>::truncate_from(actors[index..].to_vec()),
-        );
-        cursor = Some(block_cursor);
-        break;
-      }
-      cursor = Some(block_cursor.saturating_add(One::one()));
-    }
-    match cursor {
-      Some(block_cursor) => MinWakeupBlock::<T>::put(block_cursor),
-      None => MinWakeupBlock::<T>::kill(),
-    }
   }
 
   fn timer_jitter_blocks(aaa_id: AaaId, every_blocks: u32) -> BlockNumberFor<T> {

@@ -3222,15 +3222,17 @@ fn liquidity_tasks_use_separate_generated_runtime_weights() {
 }
 
 #[test]
-fn wakeup_spillover_admission_uses_generated_runtime_weight() {
+fn wakeup_registration_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
-    let probes = <Runtime as pallet_aaa::Config>::MaxSpilloverBlocks::get().saturating_add(1);
-    assert_eq!(
-      AAA::wakeup_registration_weight_upper(),
-      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_spillover_probe(
-        probes
-      )
-    );
+    let expected =
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_append_new_page()
+        .saturating_add(
+          <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_insert(),
+        )
+        .saturating_add(
+          <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_remove_exact(),
+        );
+    assert_eq!(AAA::wakeup_registration_weight_upper(), expected);
   });
 }
 
@@ -3271,14 +3273,15 @@ fn scheduler_paged_admission_uses_generated_runtime_weights() {
 }
 
 #[test]
-fn wakeup_drain_admission_uses_generated_runtime_weight() {
+fn wakeup_drain_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
-    let wakeups = <Runtime as pallet_aaa::Config>::MaxWakeupsPerBlock::get();
     assert_eq!(
-      AAA::wakeup_drain_weight_upper(wakeups),
-      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_dense_due_drain(
-        wakeups
-      )
+      AAA::wakeup_cursor_drain_unit_weight_upper(false),
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_partial()
+    );
+    assert_eq!(
+      AAA::wakeup_cursor_drain_unit_weight_upper(true),
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_wakeup_cursor_worker_remove()
     );
   });
 }
@@ -4625,7 +4628,7 @@ fn reference_idle_budget_carries_mixed_admitted_tasks_without_starvation() {
 }
 
 #[test]
-fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
+fn reference_idle_budget_converges_paged_wakeup_and_close_pressure() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -4635,7 +4638,7 @@ fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
       10_000u128,
     );
     for &aaa_id in &retry_ids {
-      pallet_aaa::WakeupRetryPending::<Runtime>::insert(aaa_id, true);
+      assert!(AAA::wakeup_substrate_schedule(aaa_id, 102));
     }
 
     let expired_count = <Runtime as pallet_aaa::Config>::MaxSweepPerBlock::get();
@@ -4677,7 +4680,7 @@ fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
       run_idle(budget);
       let retries_done = retry_ids
         .iter()
-        .all(|id| !pallet_aaa::WakeupRetryPending::<Runtime>::get(id));
+        .all(|id| AAA::actor_hot(*id).is_some_and(|hot| hot.wakeup_pointer.is_none()));
       let closes_done = expired_ids
         .iter()
         .all(|id| AAA::aaa_instances(*id).is_none());
@@ -4692,8 +4695,8 @@ fn reference_idle_budget_converges_wakeup_retry_and_close_pressure() {
     assert!(
       retry_ids
         .iter()
-        .all(|id| !pallet_aaa::WakeupRetryPending::<Runtime>::get(id)),
-      "durable wakeup retries must converge"
+        .all(|id| AAA::actor_hot(*id).is_some_and(|hot| hot.wakeup_pointer.is_none())),
+      "paged wakeups must converge"
     );
     assert!(
       retry_ids

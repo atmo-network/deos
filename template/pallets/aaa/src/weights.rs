@@ -503,9 +503,9 @@ impl WeightInfo for () {
   fn scheduler_wakeup_cursor_insert() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
   fn scheduler_wakeup_cursor_pop_min() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
   fn scheduler_wakeup_cursor_remove_exact() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
-  fn scheduler_wakeup_cursor_worker_partial() -> Weight { Weight::from_parts(3_000_000_000, 750_000) }
-  fn scheduler_wakeup_cursor_worker_remove() -> Weight { Weight::from_parts(3_000_000_000, 750_000) }
-  fn scheduler_wakeup_cursor_worker_future() -> Weight { Weight::from_parts(500_000_000, 100_000) }
+  fn scheduler_wakeup_cursor_worker_partial() -> Weight { Weight::from_parts(51_474_000, 4_285) }
+  fn scheduler_wakeup_cursor_worker_remove() -> Weight { Weight::from_parts(500_351_000, 56_563) }
+  fn scheduler_wakeup_cursor_worker_future() -> Weight { Weight::from_parts(11_734_000, 3_906) }
   fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_consume_delete_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {

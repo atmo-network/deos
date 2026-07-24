@@ -343,16 +343,16 @@ The temporal wakeup layer is a scheduler responsibility, not just a storage map:
 - Each direct retry pre-admits a generated scheduler actor-probe bound plus the complete generated spillover-probe bound in both Weight dimensions before marker iteration or mutation. Close removes the marker transactionally, try-runtime rejects markers for missing actors, and a sparse-ID regression places `NextAaaId` ten million positions beyond the pending actor while still recovering it in the next funded pass.
 - A replacement temporal representation must preserve deterministic ordering, bounded insertion/extraction, and cheap exact close invalidation. It may retire saturation retry and overflow events only after a capacity proof shows one durable live wakeup for every active actor.
 
-The replacement contract now has an inactive storage substrate without changing the production drain path:
+The production temporal path now uses the paged wakeup substrate and sparse cursor:
 
 - `WakeupPages<(block, page_id)>` and per-block `WakeupBuckets` own the paged topology.
-- `WakeupCursorPages` plus `WakeupCursorLen` provide an inactive paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
+- `WakeupCursorPages` plus `WakeupCursorLen` provide the production paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
 - Heap insertion and minimum removal use a `MaxActiveActors`-derived height bound, preserve contiguous cursor pages, and avoid scanning empty intermediate blocks; try-state reconciles page shape, uniqueness, ordering, and reverse indices.
 - `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
 - Transactional replacement invalidates the prior exact slot, removes an emptied block from the cursor, creates the replacement bucket and cursor entry atomically, and rolls back on reverse-index mismatch; bounded neighboring-page work unlinks empty pages.
-- The inactive cursor-driven overdue worker peeks sparse blocks, stops before future minima, and processes one slot per admitted unit. It meters cursor lookup, page scan, queue append or reschedule, and possible full-depth cursor removal before mutation; partial progress keeps the same minimum for later resumption.
-- The inactive drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, discards stale slots, and removes an exhausted bucket from the cursor in the same transaction.
+- The cursor-driven overdue worker runs before the block-start queue cutoff, peeks sparse blocks, stops before future minima, and processes one slot per admitted unit. It meters cursor lookup, page scan, queue append, and possible full-depth cursor removal before mutation; partial progress keeps the same minimum for later resumption.
+- The production drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, discards stale slots, and removes an exhausted bucket from the cursor in the same transaction.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
 
 Production-Wasm `50 x 20` focused operation evidence compares candidate page sizes (`RefTime / estimated ProofSize`):
@@ -392,7 +392,7 @@ Integrated worker evidence uses the same production-Wasm route:
 | Full-depth bucket removal | `500,351,000 / 56,563` | `39 / 30` |
 | Future-minimum stop | `11,734,000 / 3,906` | `2 / 0` |
 
-The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short. Current checkpoint hashes are AAA weights `5ea4520b82967a4414e9630c701cdec46fa6d9e5d01a5c1685d46c0b8b6baea2` and compressed Wasm `00f6a4856bf56677c456c80b77d68744c5cf271eceea2571256551269d2560db`. Production activation remains required before replacing `WakeupIndex` and `ScheduledWakeupBlock`.
+The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short. Current activation checkpoint hashes are AAA weights `5ea4520b82967a4414e9630c701cdec46fa6d9e5d01a5c1685d46c0b8b6baea2` and compressed Wasm `4dea242d94b060dc50882178242d27b58836a4214a1e86ac99d6144be217179a`. Legacy temporal storage and weight surfaces remain pending removal before final regeneration.
 
 ### Starvation Safeguard
 
