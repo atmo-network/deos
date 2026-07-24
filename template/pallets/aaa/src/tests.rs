@@ -2387,6 +2387,32 @@ fn manual_trigger_survives_paused_queue_pop_and_resume() {
 }
 
 #[test]
+fn checkpoint_a_s4_paused_head_uses_hot_only_admission() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_ok!(AAA::pause_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    let scan = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_tombstone_drain(1);
+    let consume = <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_preserve_page()
+      .max(<<Test as crate::Config>::WeightInfo as crate::WeightInfo>::scheduler_paged_consume_delete_page());
+    let hot = AAA::scheduler_actor_hot_probe_weight_upper();
+    AAA::execute_cycle(scan.saturating_add(hot).saturating_add(consume));
+
+    let paused = AAA::actor_hot(aaa_id).expect("paused actor");
+    assert!(paused.pending_signal);
+    assert_eq!(paused.cycle_nonce, 0);
+    assert!(paused.queue_ticket.is_none());
+  });
+}
+
+#[test]
 fn manual_trigger_waits_through_cooldown_without_second_signal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);

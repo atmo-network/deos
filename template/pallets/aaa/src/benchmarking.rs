@@ -1132,18 +1132,34 @@ mod benches {
   }
 
   #[benchmark]
-  fn scheduler_actor_probe() {
+  fn scheduler_actor_hot_probe() {
     let aaa_id = bench_create_system_manual::<T>(3_000);
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state must exist")
+        .lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+    });
+    #[block]
+    {
+      Pallet::<T>::benchmark_scheduler_actor_hot_probe(aaa_id);
+    }
+  }
+
+  #[benchmark]
+  fn scheduler_actor_program_probe() {
+    let aaa_id = bench_create_system_manual::<T>(3_001);
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       maybe_hot
         .as_mut()
         .expect("benchmark actor hot state must exist")
         .pending_signal = true;
     });
+    let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     #[block]
     {
-      Pallet::<T>::benchmark_scheduler_actor_probe(aaa_id);
+      Pallet::<T>::benchmark_scheduler_actor_program_probe(aaa_id, hot);
     }
   }
 

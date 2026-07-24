@@ -3237,11 +3237,17 @@ fn wakeup_registration_admission_uses_generated_runtime_weights() {
 }
 
 #[test]
-fn scheduler_actor_probe_admission_uses_generated_runtime_weight() {
+fn scheduler_actor_probe_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
+    let hot =
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_hot_probe();
+    let program =
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_program_probe();
+    assert_eq!(AAA::scheduler_actor_hot_probe_weight_upper(), hot);
+    assert_eq!(AAA::scheduler_actor_program_probe_weight_upper(), program);
     assert_eq!(
       AAA::scheduler_actor_probe_weight_upper(),
-      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_probe()
+      hot.saturating_add(program)
     );
   });
 }
@@ -3265,10 +3271,13 @@ fn scheduler_paged_admission_uses_generated_runtime_weights() {
   seeded_test_ext().execute_with(|| {
     let scan = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_paged_tombstone_drain(1);
     let consume = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_paged_consume_delete_page();
-    let probe = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_probe();
+    let hot = <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_hot_probe();
+    let program =
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::scheduler_actor_program_probe();
     assert!(scan.ref_time() > 0 && scan.proof_size() > 0);
     assert!(consume.ref_time() > 0 && consume.proof_size() > 0);
-    assert_eq!(AAA::scheduler_actor_probe_weight_upper(), probe);
+    assert_eq!(AAA::scheduler_actor_hot_probe_weight_upper(), hot);
+    assert_eq!(AAA::scheduler_actor_program_probe_weight_upper(), program);
   });
 }
 

@@ -31,7 +31,9 @@ impl<T: Config> Pallet<T> {
     let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
     let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
       .max(T::WeightInfo::scheduler_paged_consume_delete_page());
-    let probe_weight = Self::scheduler_probe_weight_upper().saturating_add(consume_weight);
+    let hot_probe_weight = Self::scheduler_actor_hot_probe_weight_upper();
+    let program_probe_weight = Self::scheduler_actor_program_probe_weight_upper();
+    let hot_admission_weight = hot_probe_weight.saturating_add(consume_weight);
     let mut executed = 0u32;
     let mut scanned = 0u32;
     let mut periodic_continuations: Vec<AaaId> = Vec::new();
@@ -54,16 +56,17 @@ impl<T: Config> Pallet<T> {
       let Some((ticket, entry)) = Self::paged_head_entry() else {
         break;
       };
-      if ticket >= cutoff || !cycle_meter.can_consume(probe_weight) {
+      if ticket >= cutoff || !cycle_meter.can_consume(hot_admission_weight) {
         break;
       }
       let Some(hot) = ActorHot::<T>::get(entry.aaa_id) else {
-        continue;
+        cycle_meter.consume(hot_probe_weight);
+        break;
       };
+      cycle_meter.consume(hot_probe_weight);
       if hot.queue_ticket != Some(ticket) {
-        continue;
+        break;
       }
-      cycle_meter.consume(probe_weight);
       let aaa_id = entry.aaa_id;
       if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
         break;
@@ -72,14 +75,21 @@ impl<T: Config> Pallet<T> {
         if !Self::paged_consume_head(ticket) {
           break;
         }
+        cycle_meter.consume(consume_weight);
         continue;
       }
+      if !cycle_meter.can_consume(program_probe_weight.saturating_add(consume_weight)) {
+        break;
+      }
+      cycle_meter.consume(consume_weight);
       let Some(program) = ActorProgram::<T>::get(aaa_id) else {
+        cycle_meter.consume(program_probe_weight);
         if !Self::paged_consume_head(ticket) {
           break;
         }
         continue;
       };
+      cycle_meter.consume(program_probe_weight);
       let instance = Self::compose_active_actor(hot, program);
       let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, &cycle_meter) {
         AdmissionDecision::Admit(weight) => {
@@ -942,7 +952,7 @@ impl<T: Config> Pallet<T> {
           .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future())
-      .saturating_add(Self::scheduler_probe_weight_upper())
+      .saturating_add(Self::scheduler_actor_probe_weight_upper())
   }
 
   /// Upper-bounds terminal state deletion after the close plan has run.
@@ -963,17 +973,28 @@ impl<T: Config> Pallet<T> {
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_remove_exact())
   }
 
-  pub fn scheduler_actor_probe_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_actor_probe()
+  pub fn scheduler_actor_hot_probe_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_actor_hot_probe()
   }
 
-  fn scheduler_probe_weight_upper() -> Weight {
-    Self::scheduler_actor_probe_weight_upper()
+  pub fn scheduler_actor_program_probe_weight_upper() -> Weight {
+    T::WeightInfo::scheduler_actor_program_probe()
+  }
+
+  pub fn scheduler_actor_probe_weight_upper() -> Weight {
+    Self::scheduler_actor_hot_probe_weight_upper()
+      .saturating_add(Self::scheduler_actor_program_probe_weight_upper())
   }
 
   #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn benchmark_scheduler_actor_probe(aaa_id: AaaId) {
+  pub(crate) fn benchmark_scheduler_actor_hot_probe(aaa_id: AaaId) {
     let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
+    assert!(hot.lifecycle.is_paused());
+    core::hint::black_box(hot);
+  }
+
+  #[cfg(feature = "runtime-benchmarks")]
+  pub(crate) fn benchmark_scheduler_actor_program_probe(aaa_id: AaaId, hot: ActorHotStateOf<T>) {
     let program = ActorProgram::<T>::get(aaa_id).expect("benchmark actor program state must exist");
     let instance = Self::compose_active_actor(hot, program);
     let meter = WeightMeter::with_limit(Weight::zero());
