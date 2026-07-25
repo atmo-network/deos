@@ -30,6 +30,14 @@ function artifact(mutability = 'Mutable') {
 }
 
 const blockHash = hash('4');
+const localStep = (stepIndex, onError = 'AbortCycle', overrides = {}) => ({
+  stepIndex,
+  conditionSet: { type: 'Always' },
+  taskControl: 'Execute',
+  onError,
+  ...overrides,
+});
+
 const provenance = {
   artifact: artifact(),
   blockHash,
@@ -44,12 +52,8 @@ test('local projection commits successful tasks and rolls back one failed task',
   const result = simulateAaaLocally({
     ...provenance,
     initialState: { balance: 100n },
-    steps: [
-      { stepIndex: 0, onError: 'AbortCycle' },
-      { stepIndex: 1, onError: 'ContinueNextStep' },
-      { stepIndex: 2, onError: 'AbortCycle' },
-    ],
-    runStep(step, state) {
+    steps: [localStep(0), localStep(1, 'ContinueNextStep'), localStep(2)],
+    runTask(step, state) {
       if (step.stepIndex === 0) {
         state.balance -= 10n;
         return { kind: 'Executed' };
@@ -85,12 +89,8 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
   const suspended = simulateAaaLocally({
     ...provenance,
     initialState: { balance: 100n },
-    steps: [
-      { stepIndex: 0, onError: 'AbortCycle' },
-      { stepIndex: 1, onError: 'RetryLater' },
-      { stepIndex: 2, onError: 'AbortCycle' },
-    ],
-    runStep(step, state) {
+    steps: [localStep(0), localStep(1, 'RetryLater'), localStep(2)],
+    runTask(step, state) {
       if (step.stepIndex === 0) {
         state.balance -= 10n;
         return { kind: 'Executed' };
@@ -111,12 +111,8 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
     startCursor: suspended.continuationCursor,
     initialState: suspended.state,
     initialCounts: suspended.cumulative,
-    steps: [
-      { stepIndex: 0, onError: 'AbortCycle' },
-      { stepIndex: 1, onError: 'RetryLater' },
-      { stepIndex: 2, onError: 'AbortCycle' },
-    ],
-    runStep(step, state) {
+    steps: [localStep(0), localStep(1, 'RetryLater'), localStep(2)],
+    runTask(step, state) {
       if (step.stepIndex === 1) state.balance -= 20n;
       else state.balance += 5n;
       return { kind: 'Executed' };
@@ -137,8 +133,8 @@ test('permanent RetryLater aborts, and Immutable plans reject retry policy', () 
   const aborted = simulateAaaLocally({
     ...provenance,
     initialState: { balance: 1n },
-    steps: [{ stepIndex: 0, onError: 'RetryLater' }],
-    runStep(_step, state) {
+    steps: [localStep(0, 'RetryLater')],
+    runTask(_step, state) {
       state.balance = 0n;
       return { kind: 'Failed', retry: 'Permanent', error: 'invalid' };
     },
@@ -153,12 +149,91 @@ test('permanent RetryLater aborts, and Immutable plans reject retry policy', () 
         ...provenance,
         artifact: artifact('Immutable'),
         initialState: {},
-        steps: [{ stepIndex: 0, onError: 'RetryLater' }],
-        runStep() {
+        steps: [localStep(0, 'RetryLater')],
+        runTask() {
           return { kind: 'Executed' };
         },
       }),
     /Mutable-only/,
+  );
+});
+
+test('condition groups evaluate every atom and any atomic error fails the whole group', () => {
+  const observations = [];
+  const result = simulateAaaLocally({
+    ...provenance,
+    initialState: { balance: 10n },
+    steps: [
+      localStep(0, 'ContinueNextStep', {
+        conditionSet: {
+          type: 'Any',
+          conditions: ['true', 'error', 'false'],
+        },
+      }),
+      localStep(1),
+    ],
+    evaluateCondition(condition) {
+      observations.push(condition);
+      return condition === 'error'
+        ? { kind: 'Error', retry: 'Permanent', error: 'observation-failed' }
+        : { kind: 'Value', value: condition === 'true' };
+    },
+    runTask(step, state) {
+      state.balance += BigInt(step.stepIndex + 1);
+      return { kind: 'Executed' };
+    },
+  });
+  assert.deepEqual(observations, ['true', 'error', 'false']);
+  assert.deepEqual(
+    result.journal.map(({ outcome }) => outcome.kind),
+    ['Failed', 'Executed'],
+  );
+  assert.equal(result.state.balance, 12n);
+
+  let reads = 0;
+  const skipped = simulateAaaLocally({
+    ...provenance,
+    initialState: {},
+    steps: [
+      localStep(0, 'AbortCycle', {
+        conditionSet: { type: 'All', conditions: [true, false, true] },
+      }),
+    ],
+    evaluateCondition(_condition) {
+      const value = [true, false, true][reads++];
+      return { kind: 'Value', value };
+    },
+    runTask() {
+      throw new Error('false aggregate must not execute its task');
+    },
+  });
+  assert.equal(reads, 3);
+  assert.equal(skipped.journal[0].outcome.kind, 'SkippedCondition');
+});
+
+test('StopCycle completes after its committed prefix and leaves the suffix unreachable', () => {
+  const executed = [];
+  const result = simulateAaaLocally({
+    ...provenance,
+    initialState: { balance: 10n },
+    steps: [
+      localStep(0),
+      localStep(1, 'RetryLater', { taskControl: 'StopCycle' }),
+      localStep(2),
+    ],
+    runTask(step, state) {
+      executed.push(step.stepIndex);
+      state.balance += 1n;
+      return { kind: 'Executed' };
+    },
+  });
+  assert.equal(result.status, 'Completed');
+  assert.equal(result.finalizedThrough, 1);
+  assert.equal(result.state.balance, 11n);
+  assert.deepEqual(executed, [0]);
+  assert.deepEqual(
+    result.journal.map(({ outcome }) => outcome.kind),
+    ['Executed', 'Stopped'],
   );
 });
 

@@ -68,7 +68,10 @@ test('System AAA composition exposes exact Root call but denies current governan
       schedule_window: undefined,
       execution_plan: [
         {
-          conditions: [],
+          conditions: {
+            type: 'Any',
+            value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+          },
           task: {
             type: 'Mint',
             value: {

@@ -679,6 +679,16 @@ impl
 }
 
 impl TmctolGenesisSystemAaas {
+  fn all_conditions(
+    conditions: alloc::vec::Vec<pallet_aaa::Condition<AssetKind, Balance>>,
+  ) -> pallet_aaa::ConditionSetOf<Runtime> {
+    pallet_aaa::ConditionSet::All(
+      conditions
+        .try_into()
+        .expect("runtime condition group fits MaxConditionsPerStep"),
+    )
+  }
+
   pub fn build_phase1_fee_sink_execution_plan() -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, SplitLeg, Step, StepErrorPolicy, Task};
     alloc::vec![Step {
@@ -714,17 +724,11 @@ impl TmctolGenesisSystemAaas {
     dust_threshold: Balance,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
-    let dust_guard = |asset: AssetKind| -> Conditions {
-      alloc::vec![Condition::BalanceAbove {
+    let dust_guard = |asset: AssetKind| {
+      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset,
         threshold: dust_threshold,
-      }]
-      .try_into()
-      .expect("single condition fits")
+      }])
     };
     let mut steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec::Vec::new();
     for foreign in foreign_assets {
@@ -768,20 +772,14 @@ impl TmctolGenesisSystemAaas {
     dust_threshold: Balance,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, SplitLeg, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
-    let dust_guard = |asset: AssetKind| -> Conditions {
-      alloc::vec![Condition::BalanceAbove {
+    let dust_guard = |asset: AssetKind| {
+      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset,
         threshold: dust_threshold,
-      }]
-      .try_into()
-      .expect("single condition fits")
+      }])
     };
-    let dual_dust_guard = |asset_a: AssetKind, asset_b: AssetKind| -> Conditions {
-      alloc::vec![
+    let dual_dust_guard = |asset_a: AssetKind, asset_b: AssetKind| {
+      Self::all_conditions(alloc::vec![
         Condition::BalanceAbove {
           asset: asset_a,
           threshold: dust_threshold,
@@ -790,9 +788,7 @@ impl TmctolGenesisSystemAaas {
           asset: asset_b,
           threshold: dust_threshold,
         },
-      ]
-      .try_into()
-      .expect("two conditions fit")
+      ])
     };
     let slippage_tolerance = Self::resolve_zap_slippage_tolerance(foreign);
     let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![
@@ -876,12 +872,10 @@ impl TmctolGenesisSystemAaas {
     let treasury_account =
       pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(treasury_aaa_id);
     alloc::vec![Step {
-      conditions: alloc::vec![Condition::BalanceAbove {
+      conditions: Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset: lp_asset,
         threshold: dust_threshold,
-      }]
-      .try_into()
-      .expect("single condition fits"),
+      }]),
       task: Task::Transfer {
         to: treasury_account,
         asset: lp_asset,
@@ -902,12 +896,10 @@ impl TmctolGenesisSystemAaas {
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
     alloc::vec![Step {
-      conditions: alloc::vec![Condition::BalanceAbove {
+      conditions: Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset: lp_asset,
         threshold: dust_threshold,
-      }]
-      .try_into()
-      .expect("single condition fits"),
+      }]),
       task: Task::RemoveLiquidity {
         lp_asset,
         amount: AmountResolution::AllBalance,
@@ -928,17 +920,11 @@ impl TmctolGenesisSystemAaas {
     dust_threshold: Balance,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, SplitLeg, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      pallet_aaa::Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
-    let dust_guard = |asset: AssetKind| -> Conditions {
-      alloc::vec![Condition::BalanceAbove {
+    let dust_guard = |asset: AssetKind| {
+      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset,
         threshold: dust_threshold,
-      }]
-      .try_into()
-      .expect("single condition fits")
+      }])
     };
     let bldr_zm_account = pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
       ecosystem::aaa_ids::BLDR_ZM_AAA_ID,
@@ -982,20 +968,14 @@ impl TmctolGenesisSystemAaas {
     dust_threshold: Balance,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      pallet_aaa::Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
-    let dust_guard = |asset: AssetKind| -> Conditions {
-      alloc::vec![Condition::BalanceAbove {
+    let dust_guard = |asset: AssetKind| {
+      Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset,
         threshold: dust_threshold,
-      }]
-      .try_into()
-      .expect("single condition fits")
+      }])
     };
-    let dual_dust_guard = |asset_a: AssetKind, asset_b: AssetKind| -> Conditions {
-      alloc::vec![
+    let dual_dust_guard = |asset_a: AssetKind, asset_b: AssetKind| {
+      Self::all_conditions(alloc::vec![
         Condition::BalanceAbove {
           asset: asset_a,
           threshold: dust_threshold,
@@ -1004,9 +984,7 @@ impl TmctolGenesisSystemAaas {
           asset: asset_b,
           threshold: dust_threshold,
         },
-      ]
-      .try_into()
-      .expect("two conditions fit")
+      ])
     };
     let bldr_bucket_a = pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
       ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID,
@@ -1092,21 +1070,15 @@ impl TmctolGenesisSystemAaas {
     dust_threshold: Balance,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
     let native_staking_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let native_asset = AssetKind::Local(native_staking_asset_id);
     let staked_asset_id = crate::Staking::staked_asset_id(native_staking_asset_id)
       .expect("native staking LP farming activation checks staked asset first");
     let staked_asset = AssetKind::Local(staked_asset_id);
-    let native_dust: Conditions = alloc::vec![Condition::BalanceAbove {
+    let native_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
       asset: native_asset,
       threshold: dust_threshold,
-    }]
-    .try_into()
-    .expect("single condition fits");
+    }]);
     let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![Step {
       conditions: native_dust,
       task: Task::DonateLiquidity {
@@ -1136,22 +1108,14 @@ impl TmctolGenesisSystemAaas {
     slippage: polkadot_sdk::sp_runtime::Perbill,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
-    type Conditions = polkadot_sdk::frame_support::BoundedVec<
-      Condition<AssetKind, Balance>,
-      <Runtime as pallet_aaa::Config>::MaxConditionsPerStep,
-    >;
-    let native_dust: Conditions = alloc::vec![Condition::BalanceAbove {
+    let native_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
       asset: AssetKind::Native,
       threshold: dust_threshold,
-    }]
-    .try_into()
-    .expect("single condition fits");
-    let target_dust: Conditions = alloc::vec![Condition::BalanceAbove {
+    }]);
+    let target_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
       asset: target_asset,
       threshold: dust_threshold,
-    }]
-    .try_into()
-    .expect("single condition fits");
+    }]);
     let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![
       // Step 1: Swap NTVE → target (% of current balance)
       Step {
@@ -1565,6 +1529,19 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
         }
       })
       .collect()
+  }
+
+  fn setup_condition_assets(
+    owner: &AccountId,
+    max: u32,
+  ) -> Result<alloc::vec::Vec<AssetKind>, DispatchError> {
+    let assets = Self::funding_assets(max);
+    for asset in &assets {
+      if let AssetKind::Local(asset_id) = asset {
+        Self::ensure_local_asset(*asset_id, owner)?;
+      }
+    }
+    Ok(assets)
   }
 
   fn setup_address_event_ingress(

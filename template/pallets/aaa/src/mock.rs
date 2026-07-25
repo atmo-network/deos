@@ -153,6 +153,7 @@ thread_local! {
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
+  static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
   static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN: RefCell<bool> = RefCell::new(false);
   #[cfg(feature = "runtime-benchmarks")]
@@ -198,6 +199,7 @@ pub fn reset_mock_adapters() {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
+  STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN.with(|v| *v.borrow_mut() = false);
   #[cfg(feature = "runtime-benchmarks")]
@@ -411,6 +413,10 @@ pub fn set_fail_staking_after_burn(value: bool) {
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_staking_share_asset_available(value: bool) {
+  STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = value);
+}
+
 pub fn set_fail_liquidity_donation_ops(value: bool) {
   FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow_mut() = value);
 }
@@ -575,7 +581,9 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
   }
 
   fn share_asset(asset: TestAsset) -> Option<TestAsset> {
-    if asset == TestAsset::Local(u32::MAX) {
+    if !STAKING_SHARE_ASSET_AVAILABLE.with(|value| *value.borrow())
+      || asset == TestAsset::Local(u32::MAX)
+    {
       None
     } else {
       Some(asset)
@@ -701,6 +709,13 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
         }
       })
       .collect()
+  }
+
+  fn setup_condition_assets(
+    _owner: &AccountId,
+    max: u32,
+  ) -> Result<alloc::vec::Vec<TestAsset>, DispatchError> {
+    Ok(Self::funding_assets(max))
   }
 
   fn enable_asset_ops_ingress() {

@@ -1,13 +1,13 @@
 use crate::{
   AaaType, ActiveLifecycle, ActorClass, ActorHot, AmountResolution, AssetFilter, AssetFilterOf,
-  CancellationReason, CloseReason, Condition, ContinuationStateStore, DeferReason, Error, Event,
-  FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase, IdleStarvationState, Mutability,
-  NextAaaId, OutcomeTotals, OwnerSlotMask, PauseReason, ProgramInput, QueueEntry,
-  ResolutionSurface, RetryClass, RunState, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf,
-  ScheduleWindow, SimulationError, SimulationMode, SimulationStatus, SimulationStepOutcome,
-  SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SuspensionReason, Task,
-  TaskFailure, TaskOf, Trigger, WakeupBucketState, WakeupEntry, WakeupPage, WakeupPointer,
+  CancellationReason, CloseReason, Condition, ConditionSet, ContinuationStateStore, DeferReason,
+  Error, Event, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
+  IdleStarvationState, Mutability, NextAaaId, OutcomeTotals, OwnerSlotMask, PauseReason,
+  ProgramInput, QueueEntry, ResolutionSurface, RetryClass, RunState, SYSTEM_OWNER_SLOT_SENTINEL,
+  Schedule, ScheduleOf, ScheduleWindow, SimulationError, SimulationMode, SimulationStatus,
+  SimulationStepOutcome, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex,
+  SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SuspensionReason,
+  Task, TaskFailure, TaskOf, Trigger, WakeupBucketState, WakeupEntry, WakeupPage, WakeupPointer,
   adapters::AssetOps, mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
@@ -80,6 +80,36 @@ fn assert_variant_contract<T: TypeInfo>(expected: &[(&str, u8)]) {
 }
 
 #[test]
+fn aaa_step_metadata_is_a_closed_linear_control_surface() {
+  let info = RuntimeStep::type_info();
+  let TypeDef::Composite(definition) = info.type_def else {
+    panic!("Step must remain a SCALE composite");
+  };
+  assert_eq!(definition.fields.len(), 3);
+  assert_eq!(definition.fields[0].name, Some("conditions"));
+  assert_eq!(definition.fields[1].name, Some("task"));
+  assert_eq!(definition.fields[2].name, Some("on_error"));
+  assert!(
+    definition.fields[0]
+      .type_name
+      .unwrap_or_default()
+      .contains("ConditionSet")
+  );
+  assert!(
+    definition.fields[1]
+      .type_name
+      .unwrap_or_default()
+      .contains("Task")
+  );
+  assert!(
+    definition.fields[2]
+      .type_name
+      .unwrap_or_default()
+      .contains("StepErrorPolicy")
+  );
+}
+
+#[test]
 fn unit_asset_adapter_fails_closed_for_every_mutation() {
   type UnsupportedAssetOps = ();
   assert_eq!(
@@ -131,7 +161,7 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 }
 
 #[test]
-fn aaa_0_7_3_scale_variant_indices_are_explicit() {
+fn aaa_0_7_4_scale_variant_indices_are_explicit() {
   assert_variant_contract::<RuntimeTask>(&[
     ("Transfer", 0),
     ("SplitTransfer", 1),
@@ -144,6 +174,7 @@ fn aaa_0_7_3_scale_variant_indices_are_explicit() {
     ("Stake", 8),
     ("DonateLiquidity", 9),
     ("Unstake", 10),
+    ("StopCycle", 11),
   ]);
   assert_variant_contract::<AmountResolution<u128>>(&[
     ("Fixed", 0),
@@ -160,6 +191,7 @@ fn aaa_0_7_3_scale_variant_indices_are_explicit() {
     ("BlockNumberAbove", 4),
     ("BlockNumberBelow", 5),
   ]);
+  assert_variant_contract::<crate::ConditionSetOf<Test>>(&[("Always", 0), ("All", 1), ("Any", 2)]);
   assert_variant_contract::<RuntimeSourceFilter>(&[("Any", 0), ("OwnerOnly", 1), ("Whitelist", 2)]);
   assert_variant_contract::<RuntimeAssetFilter>(&[("Any", 0), ("Whitelist", 1)]);
   assert_variant_contract::<Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>>(
@@ -172,6 +204,18 @@ fn aaa_0_7_3_scale_variant_indices_are_explicit() {
   assert_variant_contract::<PauseReason>(&[("Manual", 0), ("CycleNonceExhausted", 1)]);
   assert_variant_contract::<ActiveLifecycle>(&[("Active", 0), ("Paused", 1)]);
   assert_variant_contract::<RunState>(&[("Idle", 0), ("Suspended", 1)]);
+  assert_variant_contract::<SimulationStatus>(&[
+    ("Completed", 0),
+    ("Aborted", 1),
+    ("Suspended", 2),
+  ]);
+  assert_variant_contract::<SimulationStepOutcome>(&[
+    ("Executed", 0),
+    ("Skipped", 1),
+    ("Failed", 2),
+    ("Suspended", 3),
+    ("Stopped", 4),
+  ]);
   assert_variant_contract::<ResolutionSurface<TestAsset>>(&[("Asset", 0), ("StakingShares", 1)]);
   assert_variant_contract::<CloseReason>(&[
     ("OwnerInitiated", 0),
@@ -251,6 +295,7 @@ fn aaa_0_7_3_scale_variant_indices_are_explicit() {
     ("CycleSuspended", 35),
     ("CycleContinued", 36),
     ("CycleCancelled", 37),
+    ("CycleStopped", 38),
   ]);
   assert_variant_contract::<Error<Test>>(&[
     ("AaaIdOverflow", 0),
@@ -297,6 +342,7 @@ fn aaa_0_7_3_scale_variant_indices_are_explicit() {
     ("RetryLaterNotAllowedForImmutableAaa", 41),
     ("ContinuationNotFound", 42),
     ("ContinuationInvariant", 43),
+    ("EmptyConditionSet", 44),
   ]);
   assert_variant_contract::<crate::Call<Test>>(&[
     ("create_user_aaa", 0),
@@ -1129,9 +1175,17 @@ fn timer_schedule(every_blocks: u32) -> RuntimeSchedule {
   }
 }
 
+fn all_conditions(conditions: Vec<Condition<TestAsset, Balance>>) -> crate::ConditionSetOf<Test> {
+  ConditionSet::All(BoundedVec::try_from(conditions).expect("conditions fit"))
+}
+
+fn any_conditions(conditions: Vec<Condition<TestAsset, Balance>>) -> crate::ConditionSetOf<Test> {
+  ConditionSet::Any(BoundedVec::try_from(conditions).expect("conditions fit"))
+}
+
 fn make_step(task: RuntimeTask) -> RuntimeStep {
   StepOf::<Test> {
-    conditions: BoundedVec::default(),
+    conditions: ConditionSet::Always,
     task,
     on_error: StepErrorPolicy::AbortCycle,
   }
@@ -1290,7 +1344,7 @@ fn setup_pool(asset_a: TestAsset, asset_b: TestAsset, reserve_a: Balance, reserv
 
 fn temporary_retry_swap_plan() -> crate::ExecutionPlanOf<Test> {
   BoundedVec::try_from(vec![StepOf::<Test> {
-    conditions: BoundedVec::default(),
+    conditions: ConditionSet::Always,
     task: Task::SwapExactIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(77),
@@ -1320,7 +1374,7 @@ fn create_suspended_system_retry(block: u64) -> u64 {
 }
 
 fn user_step_fee(step: &StepOf<Test>) -> Balance {
-  AAA::compute_eval_fee(step.conditions.len() as u32).saturating_add(
+  AAA::compute_eval_fee(step.conditions.len()).saturating_add(
     <TestWeightToFee as WeightToFee>::weight_to_fee(&AAA::weight_upper_bound(&step.task)),
   )
 }
@@ -1681,6 +1735,21 @@ fn generated_continuation_weights_cover_distinct_storage_paths() {
     assert!(suffix_min.ref_time() < suffix_max.ref_time());
     assert_eq!(suffix_min.proof_size(), suffix_max.proof_size());
   });
+}
+
+#[test]
+fn generated_condition_weight_scales_by_atomic_count_and_covers_both_modes() {
+  use crate::WeightInfo;
+
+  let zero = <Test as crate::Config>::WeightInfo::condition_set_evaluation(0);
+  let one = <Test as crate::Config>::WeightInfo::condition_set_evaluation(1);
+  let maximum = <Test as crate::Config>::WeightInfo::condition_set_evaluation(4);
+  assert_eq!(zero, Weight::zero());
+  assert!(one.ref_time() > 0 && one.proof_size() > 0);
+  assert!(maximum.ref_time() >= one.ref_time());
+  assert!(maximum.proof_size() >= one.proof_size());
+  assert!(maximum.ref_time() >= 41_068_000);
+  assert!(maximum.proof_size() >= 9_045);
 }
 
 #[test]
@@ -3020,12 +3089,10 @@ fn condition_skip_fee_route_failure_aborts_before_skip_event() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: Balance::MAX,
-      }]
-      .try_into()
-      .expect("one condition fits"),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -3102,7 +3169,7 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -3182,7 +3249,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
     let threshold = <Test as crate::Config>::MaxConsecutiveFailures::get();
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -4041,7 +4108,7 @@ fn retry_later_aborts_permanent_failure_without_executing_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -4094,7 +4161,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -4191,13 +4258,375 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
 }
 
 #[test]
+fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let execution_plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(10),
+      }),
+      StepOf::<Test> {
+        conditions: ConditionSet::Always,
+        task: Task::StopCycle,
+        on_error: StepErrorPolicy::RetryLater,
+      },
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(5),
+      }),
+    ])
+    .expect("three steps fit");
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    fund_native(aaa_id, 100);
+    crate::pallet::ActorFunding::<Test>::mutate(aaa_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("active actor funding exists")
+        .funding_snapshots
+        .try_insert(
+          TestAsset::Native,
+          FundingBatch {
+            amount: 10,
+            pending_amount: 7,
+          },
+        )
+        .expect("one funding batch fits");
+    });
+    ActorHot::<Test>::mutate(aaa_id, |maybe| {
+      maybe
+        .as_mut()
+        .expect("active actor exists")
+        .pending_funding_count = 1;
+    });
+    let bob_before = native_balance(&BOB);
+    let charlie_before = native_balance(&CHARLIE);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    let actor = AAA::aaa_instances(aaa_id).expect("actor remains active");
+    assert_eq!(actor.run_state, RunState::Idle);
+    assert_eq!(actor.cycle_nonce, 1);
+    assert_eq!(actor.consecutive_failures, 0);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert_eq!(native_balance(&BOB), bob_before + 10);
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    let promoted = actor_funding(aaa_id)
+      .funding_snapshots
+      .get(&TestAsset::Native)
+      .cloned()
+      .expect("funding batch remains");
+    assert_eq!((promoted.amount, promoted.pending_amount), (7, 0));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleStopped {
+        aaa_id: id,
+        cycle_nonce: 1,
+        step_index: 1,
+      } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 2,
+        failed_steps: 0,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn skipped_stop_cycle_advances_to_the_suffix() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let stop = StepOf::<Test> {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
+        asset: TestAsset::Native,
+        threshold: 1_000,
+      }]),
+      task: Task::StopCycle,
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    let execution_plan = BoundedVec::try_from(vec![
+      stop,
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(5),
+      }),
+    ])
+    .expect("two steps fit");
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    fund_native(aaa_id, 100);
+    let bob_before = native_balance(&BOB);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(native_balance(&BOB), bob_before + 5);
+    assert!(!has_aaa_event(|event| matches!(
+      event,
+      Event::CycleStopped { aaa_id: id, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 1,
+        skipped_conditions: 1,
+        failed_steps: 0,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn stop_cycle_runs_normal_auto_close_after_the_summary() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::StopCycle)),
+    );
+    assert_ok!(AAA::set_auto_close_at_cycle_nonce(
+      RuntimeOrigin::root(),
+      aaa_id,
+      Some(1),
+    ));
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    frame_system::Pallet::<Test>::reset_events();
+
+    run_idle(Weight::MAX);
+
+    assert!(AAA::aaa_instances(aaa_id).is_none());
+    let events: Vec<_> = System::events()
+      .into_iter()
+      .filter_map(|record| match record.event {
+        RuntimeEvent::AAA(event) => Some(event),
+        _ => None,
+      })
+      .collect();
+    let stopped = events
+      .iter()
+      .position(|event| matches!(event, Event::CycleStopped { aaa_id: id, .. } if *id == aaa_id))
+      .expect("stop event");
+    let summary = events
+      .iter()
+      .position(|event| matches!(event, Event::CycleSummary { aaa_id: id, .. } if *id == aaa_id))
+      .expect("summary event");
+    let closed = events
+      .iter()
+      .position(|event| matches!(event, Event::AaaClosed { aaa_id: id, reason: CloseReason::AutoCloseNonceReached } if *id == aaa_id))
+      .expect("auto-close event");
+    assert!(stopped < summary && summary < closed);
+  });
+}
+
+#[test]
+fn stop_cycle_fee_failure_obeys_error_policy_without_stopping() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::StopCycle)),
+    );
+    fund_native(aaa_id, 100_000);
+    let sink_before = native_balance(&TestFeeSink::get());
+    set_fail_fee_sink_transfer(true);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert!(!has_aaa_event(|event| matches!(
+      event,
+      Event::CycleStopped { aaa_id: id, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 0,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor remains active")
+        .consecutive_failures,
+      1
+    );
+    assert_eq!(native_balance(&TestFeeSink::get()), sink_before);
+
+    set_fail_fee_sink_transfer(false);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    let task: TaskOf<Test> = Task::StopCycle;
+    let task_weight = AAA::weight_upper_bound(&task);
+    let expected_fee = TestStepBaseFee::get().saturating_add(
+      <TestWeightToFee as polkadot_sdk::sp_weights::WeightToFee>::weight_to_fee(&task_weight),
+    );
+    assert_eq!(
+      native_balance(&TestFeeSink::get()),
+      sink_before.saturating_add(expected_fee)
+    );
+    assert_eq!(fee_collections().last(), Some(&expected_fee));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleStopped {
+        aaa_id: id,
+        cycle_nonce: 2,
+        step_index: 0,
+      } if *id == aaa_id
+    )));
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("successful actor remains active")
+        .consecutive_failures,
+      0
+    );
+  });
+}
+
+#[test]
+fn matching_runtime_simulation_reports_stop_and_rolls_everything_back() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let execution_plan = BoundedVec::try_from(vec![
+      make_step(Task::StopCycle),
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(5),
+      }),
+    ])
+    .expect("two steps fit");
+    let program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    let events_before = System::events();
+    let actor_before = AAA::aaa_instances(aaa_id).expect("actor exists");
+
+    let result = AAA::simulate_current_program(
+      aaa_id,
+      AaaType::System,
+      Mutability::Mutable,
+      program,
+      SimulationMode::FreshCurrentPlan,
+    )
+    .expect("ready current plan simulates");
+
+    assert_eq!(result.status, SimulationStatus::Completed);
+    assert_eq!(result.finalized_through, Some(0));
+    assert_eq!(result.cumulative_outcomes.executed_steps, 1);
+    assert_eq!(
+      result.steps,
+      vec![SimulationStepRecord {
+        step_index: 0,
+        outcome: SimulationStepOutcome::Stopped,
+      }]
+    );
+    assert_eq!(AAA::aaa_instances(aaa_id), Some(actor_before));
+    assert_eq!(System::events(), events_before);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+  });
+}
+
+#[test]
+fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
+    set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
+    let execution_plan = BoundedVec::try_from(vec![
+      make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(10),
+      }),
+      StepOf::<Test> {
+        conditions: ConditionSet::Always,
+        task: Task::SwapExactIn {
+          asset_in: TestAsset::Native,
+          asset_out: TestAsset::Local(77),
+          amount_in: AmountResolution::Fixed(20),
+          slippage_tolerance: Perbill::one(),
+        },
+        on_error: StepErrorPolicy::RetryLater,
+      },
+      make_step(Task::StopCycle),
+      make_step(Task::Transfer {
+        to: CHARLIE,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(5),
+      }),
+    ])
+    .expect("four steps fit");
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    fund_native(aaa_id, 100);
+    let bob_before = native_balance(&BOB);
+    let charlie_before = native_balance(&CHARLIE);
+    set_temporary_dex_failure(true);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::continuation_state(aaa_id).expect("suspended").cursor,
+      1
+    );
+    assert_eq!(native_balance(&BOB), bob_before + 10);
+
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+
+    let actor = AAA::aaa_instances(aaa_id).expect("actor remains active");
+    assert_eq!(actor.run_state, RunState::Idle);
+    assert_eq!(actor.consecutive_failures, 0);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert_eq!(native_balance(&BOB), bob_before + 10);
+    assert_eq!(native_balance(&CHARLIE), charlie_before);
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleStopped {
+        aaa_id: id,
+        cycle_nonce: 1,
+        step_index: 2,
+      } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        aaa_id: id,
+        executed_steps: 3,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
 fn temporary_failure_keeps_continue_next_step_semantics() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -4287,7 +4716,7 @@ fn retry_later_inclusive_failure_cutoff_clears_continuation() {
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -4606,7 +5035,7 @@ fn funding_arrival_during_suspension_stays_pending() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -4686,7 +5115,7 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::SwapExactIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -4771,7 +5200,7 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
         amount: AmountResolution::PercentageOfTrigger(Perbill::from_percent(10)),
       }),
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::SwapExactIn {
           asset_in: asset_b,
           asset_out,
@@ -4849,7 +5278,7 @@ fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
     setup_pool(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in,
         asset_out,
@@ -4903,7 +5332,7 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
     let mut steps = Vec::new();
     for index in 0..10u32 {
       steps.push(StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::AddLiquidity {
           asset_a: TestAsset::Local(100 + index * 2),
           asset_b: TestAsset::Local(101 + index * 2),
@@ -4950,7 +5379,7 @@ fn suspended_funding_is_conserved_and_promoted_once_after_success() {
     setup_pool(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in,
         asset_out,
@@ -5042,7 +5471,7 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::SwapExactIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -5753,11 +6182,10 @@ fn condition_skip_charges_one_evaluation_fee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: Balance::MAX,
-      }])
-      .expect("one condition fits"),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -5937,7 +6365,7 @@ fn cycle_summary_tracks_step_outcomes() {
     .expect("single condition must fit");
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: step_conditions,
+        conditions: ConditionSet::All(step_conditions),
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -5956,7 +6384,7 @@ fn cycle_summary_tracks_step_outcomes() {
         amount: AmountResolution::Fixed(10),
       }),
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::SwapExactIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
@@ -6005,7 +6433,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = |on_error| StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -6064,11 +6492,10 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     assert!(matches!(continue_events[3], Event::CycleSummary { aaa_id, failed_steps: 2, .. } if aaa_id == continue_id));
     assert!(matches!(continue_events[4], Event::AaaClosed { aaa_id, reason: CloseReason::AutoCloseNonceReached } if aaa_id == continue_id));
     let skip_step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1,
-      }])
-      .expect("one condition fits"),
+      }]),
       task: Task::Stake {
         asset: TestAsset::Native,
         amount: AmountResolution::Fixed(0),
@@ -8195,15 +8622,245 @@ fn mint_works_for_system_aaa() {
 }
 
 #[test]
+fn condition_sets_are_canonical_bounded_and_mode_distinct() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    let observed = TestAsset::Local(99);
+    set_asset_balance(&ALICE, observed, 100);
+    let always: crate::ConditionSetOf<Test> = ConditionSet::Always;
+    assert!(always.is_always());
+    assert_eq!(always.len(), 0);
+    assert_eq!(AAA::evaluate_condition_set(&always, &ALICE, 0), Ok(true));
+
+    let all = all_conditions(vec![
+      Condition::BalanceAbove {
+        asset: observed,
+        threshold: 50,
+      },
+      Condition::BlockNumberBelow { threshold: 10 },
+      Condition::BalanceBelow {
+        asset: observed,
+        threshold: 200,
+      },
+      Condition::BlockNumberAbove { threshold: 1 },
+    ]);
+    let any = any_conditions(vec![
+      Condition::BalanceAbove {
+        asset: observed,
+        threshold: 1_000,
+      },
+      Condition::BlockNumberBelow { threshold: 1 },
+      Condition::BalanceBelow {
+        asset: observed,
+        threshold: 200,
+      },
+      Condition::BlockNumberAbove { threshold: 10 },
+    ]);
+    assert_eq!(all.len(), 4);
+    assert_eq!(any.len(), 4);
+    assert_eq!(AAA::evaluate_condition_set(&all, &ALICE, 0), Ok(true));
+    assert_eq!(AAA::evaluate_condition_set(&any, &ALICE, 0), Ok(true));
+    assert_ne!(all.encode(), any.encode());
+
+    let all_false = all_conditions(vec![
+      Condition::BalanceAbove {
+        asset: observed,
+        threshold: 1_000,
+      },
+      Condition::BlockNumberAbove { threshold: 10 },
+    ]);
+    let any_false = any_conditions(vec![
+      Condition::BalanceAbove {
+        asset: observed,
+        threshold: 1_000,
+      },
+      Condition::BlockNumberAbove { threshold: 10 },
+    ]);
+    assert_eq!(
+      AAA::evaluate_condition_set(&all_false, &ALICE, 0),
+      Ok(false)
+    );
+    assert_eq!(
+      AAA::evaluate_condition_set(&any_false, &ALICE, 0),
+      Ok(false)
+    );
+  });
+}
+
+#[test]
+fn empty_all_and_any_are_rejected_without_normalization() {
+  new_test_ext().execute_with(|| {
+    let empty = BoundedVec::default();
+    for conditions in [ConditionSet::All(empty.clone()), ConditionSet::Any(empty)] {
+      let plan = execution_plan_with_step(StepOf::<Test> {
+        conditions,
+        task: Task::StopCycle,
+        on_error: StepErrorPolicy::AbortCycle,
+      });
+      assert_noop!(
+        AAA::create_system_aaa(
+          RuntimeOrigin::root(),
+          ALICE,
+          Mutability::Mutable,
+          system_active_program(manual_schedule(), None, plan),
+        ),
+        Error::<Test>::EmptyConditionSet
+      );
+    }
+  });
+}
+
+#[test]
+fn any_with_multiple_true_atoms_executes_the_task_once() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    let step = StepOf::<Test> {
+      conditions: any_conditions(vec![
+        Condition::BlockNumberAbove { threshold: 1 },
+        Condition::BlockNumberBelow { threshold: 10 },
+      ]),
+      task: Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::Fixed(10),
+      },
+      on_error: StepErrorPolicy::AbortCycle,
+    };
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(step),
+    );
+    fund_native(aaa_id, 100);
+    let bob_before = native_balance(&BOB);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(native_balance(&BOB), bob_before + 10);
+    assert_eq!(
+      System::events()
+        .iter()
+        .filter(|record| matches!(
+          record.event,
+          RuntimeEvent::AAA(Event::TransferExecuted { aaa_id: id, .. }) if id == aaa_id
+        ))
+        .count(),
+      1
+    );
+  });
+}
+
+#[test]
+fn any_skip_cannot_create_continuation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(5);
+    let step = StepOf::<Test> {
+      conditions: any_conditions(vec![
+        Condition::BlockNumberBelow { threshold: 1 },
+        Condition::BlockNumberAbove { threshold: 10 },
+      ]),
+      task: Task::SwapExactIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::RetryLater,
+    };
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(step),
+    );
+    fund_native(aaa_id, 100);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor remains")
+        .consecutive_failures,
+      0
+    );
+  });
+}
+
+#[test]
+fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let step = StepOf::<Test> {
+      conditions: any_conditions(vec![
+        Condition::BlockNumberBelow { threshold: 2 },
+        Condition::BlockNumberAbove { threshold: 100 },
+      ]),
+      task: Task::SwapExactIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::RetryLater,
+    };
+    let aaa_id = create_system_with(
+      ALICE,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(step),
+    );
+    fund_native(aaa_id, 100);
+    set_temporary_dex_failure(true);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::continuation_state(aaa_id).expect("suspended").cursor,
+      0
+    );
+
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSummary {
+        aaa_id: id,
+        skipped_conditions: 1,
+        failed_steps: 1,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn condition_fee_depends_only_on_total_atomic_count() {
+  let forward = all_conditions(vec![
+    Condition::BlockNumberAbove { threshold: 1 },
+    Condition::BlockNumberBelow { threshold: 10 },
+  ]);
+  let reverse = any_conditions(vec![
+    Condition::BlockNumberBelow { threshold: 10 },
+    Condition::BlockNumberAbove { threshold: 1 },
+  ]);
+  assert_eq!(forward.len(), reverse.len());
+  assert_eq!(
+    AAA::compute_eval_fee(forward.len()),
+    AAA::compute_eval_fee(reverse.len())
+  );
+}
+
+#[test]
 fn condition_balance_above_skips_when_below() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 1_000,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -8239,11 +8896,10 @@ fn condition_balance_above_executes_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 50,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -8270,8 +8926,7 @@ fn condition_block_number_above_skips_before_threshold() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(5);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BlockNumberAbove { threshold: 10 }])
-        .unwrap(),
+      conditions: all_conditions(vec![Condition::BlockNumberAbove { threshold: 10 }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -8296,8 +8951,7 @@ fn condition_block_number_below_skips_after_threshold() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(20);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BlockNumberBelow { threshold: 10 }])
-        .unwrap(),
+      conditions: all_conditions(vec![Condition::BlockNumberBelow { threshold: 10 }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -8322,7 +8976,7 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
@@ -8366,7 +9020,7 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
     set_pool_reserves(asset_in, asset_out, 10_000, 10_000);
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in,
         asset_out,
@@ -8845,12 +9499,45 @@ fn unstake_last_funding_rejects_position_without_transferable_share_asset() {
 }
 
 #[test]
+fn unstake_last_funding_fails_closed_if_share_mapping_disappears_mid_lifetime() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset = TestAsset::Local(8);
+    let execution_plan = execution_plan_with_step(make_step(Task::Unstake {
+      asset,
+      shares: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+    }));
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    set_asset_balance(&ALICE, asset, 100);
+    assert_ok!(ordinary_transfer_to_aaa(
+      RuntimeOrigin::signed(ALICE),
+      aaa_id,
+      asset,
+      100,
+    ));
+    let actor = sovereign_account(aaa_id);
+    set_staking_share_asset_available(false);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&actor, asset), 100);
+    assert_eq!(unstaked_shares(actor, asset), 0);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::StepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
 fn stake_adapter_failure_can_continue_next_step() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(13);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Stake {
         asset,
         amount: AmountResolution::Fixed(40),
@@ -8896,7 +9583,7 @@ fn unstake_adapter_failure_aborts_cycle_without_partial_effects() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Local(14);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Unstake {
         asset,
         shares: AmountResolution::Fixed(40),
@@ -8942,7 +9629,7 @@ fn staking_adapter_late_failure_rolls_back_partial_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Native;
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Stake {
         asset,
         amount: AmountResolution::Fixed(40),
@@ -8987,7 +9674,7 @@ fn unstake_adapter_late_failure_rolls_back_partial_mutation() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset = TestAsset::Native;
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Unstake {
         asset,
         shares: AmountResolution::Fixed(40),
@@ -9097,7 +9784,7 @@ fn donate_liquidity_adapter_failure_is_non_partial_and_can_continue() {
     let asset_a = TestAsset::Local(11);
     let asset_b = TestAsset::Local(12);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -9152,7 +9839,7 @@ fn donate_liquidity_adapter_failure_aborts_cycle_without_partial_effects() {
     let asset_a = TestAsset::Local(15);
     let asset_b = TestAsset::Local(16);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -9203,7 +9890,7 @@ fn donate_liquidity_adapter_late_failure_rolls_back_partial_mutation() {
     let asset_a = TestAsset::Native;
     let asset_b = TestAsset::Local(19);
     let failing_step = StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::DonateLiquidity {
         asset_a,
         asset_b,
@@ -9251,11 +9938,10 @@ fn condition_balance_below_skips_when_above() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceBelow {
+      conditions: all_conditions(vec![Condition::BalanceBelow {
         asset: TestAsset::Native,
         threshold: 50,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9280,11 +9966,10 @@ fn condition_balance_below_executes_when_below() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceBelow {
+      conditions: all_conditions(vec![Condition::BalanceBelow {
         asset: TestAsset::Native,
         threshold: 200,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9307,11 +9992,10 @@ fn condition_balance_equals_matches_exact() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceEquals {
+      conditions: all_conditions(vec![Condition::BalanceEquals {
         asset: TestAsset::Native,
         threshold: 100,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9338,11 +10022,10 @@ fn condition_balance_equals_skips_when_not_equal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceEquals {
+      conditions: all_conditions(vec![Condition::BalanceEquals {
         asset: TestAsset::Native,
         threshold: 999,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9367,11 +10050,10 @@ fn condition_balance_not_equals_executes_when_different() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceNotEquals {
+      conditions: all_conditions(vec![Condition::BalanceNotEquals {
         asset: TestAsset::Native,
         threshold: 999,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9394,11 +10076,10 @@ fn condition_balance_not_equals_skips_when_equal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceNotEquals {
+      conditions: all_conditions(vec![Condition::BalanceNotEquals {
         asset: TestAsset::Native,
         threshold: 100,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9457,11 +10138,10 @@ fn condition_sees_spendable_not_raw_balance_for_user_aaa() {
     // Fund 200: raw=200, spendable=200-101=99
     // Condition threshold=150: raw(200)>150 but spendable(99)<150
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 150,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9494,11 +10174,10 @@ fn condition_sees_full_balance_for_system_aaa() {
     frame_system::Pallet::<Test>::set_block_number(1);
     // System AAA: reserved=0, so spendable == raw
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 150,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9522,11 +10201,10 @@ fn system_condition_respects_adapter_visible_native_lock() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9561,11 +10239,10 @@ fn user_condition_combines_adapter_lock_with_reserved_fee_budget() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let step = StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 60,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -9815,11 +10492,10 @@ fn user_dca_complete_lifecycle() {
     let foreign = TestAsset::Local(1);
     set_asset_balance(&ALICE, foreign, 10_000);
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: foreign,
         threshold: 50,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: BOB,
         asset: foreign,
@@ -9906,11 +10582,10 @@ fn user_dca_swap_then_cold_storage_transfer() {
     // ExecutionPlan: SwapExactIn(foreign → native) → Transfer(native → cold wallet)
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+        conditions: all_conditions(vec![Condition::BalanceAbove {
           asset: foreign,
           threshold: 50,
-        }])
-        .unwrap(),
+        }]),
         task: Task::SwapExactIn {
           asset_in: foreign,
           asset_out: TestAsset::Native,
@@ -9920,11 +10595,10 @@ fn user_dca_swap_then_cold_storage_transfer() {
         on_error: StepErrorPolicy::AbortCycle,
       },
       StepOf::<Test> {
-        conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+        conditions: all_conditions(vec![Condition::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 10,
-        }])
-        .unwrap(),
+        }]),
         task: Task::Transfer {
           to: cold_wallet,
           asset: TestAsset::Native,
@@ -9964,11 +10638,10 @@ fn user_copybook_savings() {
     let schedule = timer_schedule(10);
     // Transfer 5% of current native balance to savings
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+      conditions: all_conditions(vec![Condition::BalanceAbove {
         asset: TestAsset::Native,
         threshold: 100,
-      }])
-      .unwrap(),
+      }]),
       task: Task::Transfer {
         to: savings,
         asset: TestAsset::Native,
@@ -10004,11 +10677,10 @@ fn user_portfolio_rebalancer_both_directions() {
     // BalanceBelow checks spendable = raw - fee_reserve
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: BoundedVec::try_from(vec![Condition::BalanceAbove {
+        conditions: all_conditions(vec![Condition::BalanceAbove {
           asset: TestAsset::Native,
           threshold: 5000,
-        }])
-        .unwrap(),
+        }]),
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -10017,7 +10689,7 @@ fn user_portfolio_rebalancer_both_directions() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       StepOf::<Test> {
-        conditions: BoundedVec::try_from(vec![
+        conditions: all_conditions(vec![
           Condition::BalanceBelow {
             asset: TestAsset::Native,
             threshold: 500,
@@ -10026,8 +10698,7 @@ fn user_portfolio_rebalancer_both_directions() {
             asset: foreign,
             threshold: 500,
           },
-        ])
-        .unwrap(),
+        ]),
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign,
@@ -10079,7 +10750,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
     // ExecutionPlan references both assets via PercentageOfLastFunding
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::Transfer {
           to: BOB,
           asset: foreign_a,
@@ -10088,7 +10759,7 @@ fn multi_asset_execution_plan_tracks_all_referenced_assets() {
         on_error: StepErrorPolicy::AbortCycle,
       },
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign_b,
@@ -10167,7 +10838,7 @@ fn funding_snapshot_isolated_per_asset() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let foreign = TestAsset::Local(1);
     let execution_plan = execution_plan_with_step(StepOf::<Test> {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Transfer {
         to: BOB,
         asset: foreign,
@@ -10204,7 +10875,7 @@ fn percentage_of_last_funding_multi_asset() {
     let foreign_b = TestAsset::Local(2);
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::Transfer {
           to: BOB,
           asset: foreign_a,
@@ -10213,7 +10884,7 @@ fn percentage_of_last_funding_multi_asset() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       StepOf::<Test> {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::Transfer {
           to: CHARLIE,
           asset: foreign_b,
@@ -10802,9 +11473,9 @@ mod proptest_aaa {
   };
   use crate::{
     ActorFunding, ActorHot, ActorProgram, AmountResolution, AssetFilter, ClosedSystemAaaIds,
-    ContinuationStateStore, DormantAaaIdentities, Event, FundingSourcePolicy, Mutability,
-    QueuePages, RunState, Schedule, ScheduleOf, SourceFilter, StepErrorPolicy, StepOf, Task,
-    Trigger, WakeupPages, mock::*,
+    ConditionSet, ContinuationStateStore, DormantAaaIdentities, Event, FundingSourcePolicy,
+    Mutability, QueuePages, RunState, Schedule, ScheduleOf, SourceFilter, StepErrorPolicy, StepOf,
+    Task, Trigger, WakeupPages, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -10829,7 +11500,7 @@ mod proptest_aaa {
 
   fn inert_execution_plan() -> crate::ExecutionPlanOf<Test> {
     BoundedVec::try_from(vec![RuntimeStep {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: Task::Stake {
         asset: TestAsset::Native,
         amount: AmountResolution::Fixed(0),
@@ -10868,7 +11539,7 @@ mod proptest_aaa {
           slippage_tolerance: Perbill::one(),
         }),
         StepOf::<Test> {
-          conditions: BoundedVec::default(),
+          conditions: ConditionSet::Always,
           task: Task::AddLiquidity {
             asset_a: TestAsset::Local(77),
             asset_b: TestAsset::Local(88),
@@ -10953,7 +11624,7 @@ mod proptest_aaa {
           amount: AmountResolution::Fixed(10),
         }),
         StepOf::<Test> {
-          conditions: BoundedVec::default(),
+          conditions: ConditionSet::Always,
           task: Task::SwapExactIn {
             asset_in: TestAsset::Native,
             asset_out: TestAsset::Local(77),
@@ -11048,7 +11719,7 @@ mod proptest_aaa {
   fn model_retry_plan() -> crate::ExecutionPlanOf<Test> {
     BoundedVec::try_from(vec![
       RuntimeStep {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::Transfer {
           to: BOB,
           asset: TestAsset::Native,
@@ -11057,7 +11728,7 @@ mod proptest_aaa {
         on_error: StepErrorPolicy::AbortCycle,
       },
       RuntimeStep {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: Task::SwapExactIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),

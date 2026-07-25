@@ -4,6 +4,7 @@ extern crate alloc;
 
 pub use pallet::*;
 
+pub mod contract;
 pub mod types;
 
 mod execution;
@@ -50,6 +51,10 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance, Balance), polkadot_sdk::sp_runtime::DispatchError>;
   fn funding_assets(max: u32) -> alloc::vec::Vec<AssetId>;
+  fn setup_condition_assets(
+    owner: &AccountId,
+    max: u32,
+  ) -> Result<alloc::vec::Vec<AssetId>, polkadot_sdk::sp_runtime::DispatchError>;
   fn enable_asset_ops_ingress() {}
   fn setup_address_event_ingress(
     recipient: &AccountId,
@@ -243,6 +248,11 @@ pub mod pallet {
     <T as frame_system::Config>::AccountId,
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
+  >;
+
+  pub type ConditionSetOf<T> = ConditionSet<
+    Condition<<T as Config>::AssetId, <T as Config>::Balance>,
+    <T as Config>::MaxConditionsPerStep,
   >;
 
   pub type TaskOf<T> = super::types::Task<
@@ -990,6 +1000,11 @@ pub mod pallet {
       cycle_nonce: u64,
       reason: CancellationReason,
     },
+    CycleStopped {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      step_index: u32,
+    },
   }
 
   #[pallet::error]
@@ -1038,6 +1053,7 @@ pub mod pallet {
     RetryLaterNotAllowedForImmutableAaa,
     ContinuationNotFound,
     ContinuationInvariant,
+    EmptyConditionSet,
   }
 
   #[pallet::call]
@@ -1583,6 +1599,7 @@ pub mod pallet {
         AaaTask::Stake { .. } => T::TaskWeightInfo::stake(),
         AaaTask::DonateLiquidity { .. } => T::TaskWeightInfo::donate_liquidity(),
         AaaTask::Unstake { .. } => T::TaskWeightInfo::unstake(),
+        AaaTask::StopCycle => T::TaskWeightInfo::stop_cycle(),
       }
     }
 
@@ -1601,11 +1618,10 @@ pub mod pallet {
       for step_index in start_cursor..execution_plan.len() {
         let step = &execution_plan[step_index];
         let step_overhead = Weight::from_parts(1_000_000, 128);
-        let condition_overhead =
-          Weight::from_parts(500_000, 64).saturating_mul(step.conditions.len() as u64);
+        let condition_evaluation = T::WeightInfo::condition_set_evaluation(step.conditions.len());
         upper = upper
           .saturating_add(step_overhead)
-          .saturating_add(condition_overhead)
+          .saturating_add(condition_evaluation)
           .saturating_add(Self::weight_upper_bound(&step.task));
         if aaa_type == AaaType::User {
           upper = upper.saturating_add(T::WeightInfo::fee_collection());
@@ -1642,7 +1658,7 @@ pub mod pallet {
       let mut upper = T::Balance::zero();
       for step_index in start_cursor..execution_plan.len() {
         let step = &execution_plan[step_index];
-        let eval_fee = Self::compute_eval_fee(step.conditions.len() as u32);
+        let eval_fee = Self::compute_eval_fee(step.conditions.len());
         upper = upper.saturating_add(eval_fee);
         let exec_fee = T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task));
         upper = upper.saturating_add(exec_fee);
@@ -2408,6 +2424,13 @@ pub mod pallet {
 
     fn validate_execution_plan_shape(execution_plan: &ExecutionPlanOf<T>) -> DispatchResult {
       for step in execution_plan.iter() {
+        ensure!(
+          !matches!(
+            &step.conditions,
+            ConditionSet::All(conditions) | ConditionSet::Any(conditions) if conditions.is_empty()
+          ),
+          Error::<T>::EmptyConditionSet
+        );
         match &step.task {
           AaaTask::Transfer { .. }
           | AaaTask::SplitTransfer { .. }
@@ -2423,7 +2446,8 @@ pub mod pallet {
           | AaaTask::AddLiquidity { .. }
           | AaaTask::Stake { .. }
           | AaaTask::DonateLiquidity { .. }
-          | AaaTask::Unstake { .. } => {}
+          | AaaTask::Unstake { .. }
+          | AaaTask::StopCycle => {}
         }
       }
       Ok(())
@@ -2490,6 +2514,7 @@ pub mod pallet {
               check_amount(shares, share_asset);
             }
           }
+          AaaTask::StopCycle => {}
         }
       }
 

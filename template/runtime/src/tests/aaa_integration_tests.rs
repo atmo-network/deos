@@ -92,7 +92,7 @@ fn signed_extrinsic(
 
 fn make_step(task: RuntimeTask) -> RuntimeStep {
   StepOf::<Runtime> {
-    conditions: BoundedVec::default(),
+    conditions: pallet_aaa::ConditionSet::Always,
     task,
     on_error: StepErrorPolicy::AbortCycle,
   }
@@ -204,6 +204,54 @@ fn aaa_account(aaa_id: AaaId) -> crate::AccountId {
 fn fund_native(aaa_id: AaaId, amount: u128) {
   let aaa_acc = aaa_account(aaa_id);
   let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&aaa_acc, amount);
+}
+
+#[test]
+fn deos_runtime_executes_always_all_and_any_with_fixed_successors() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let atom =
+      |condition| BoundedVec::try_from(vec![condition]).expect("one condition fits runtime bound");
+    let transfer = |amount| Task::Transfer {
+      to: BOB,
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(amount),
+    };
+    let plan = BoundedVec::try_from(vec![
+      pallet_aaa::Step {
+        conditions: pallet_aaa::ConditionSet::Always,
+        task: transfer(7),
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+      pallet_aaa::Step {
+        conditions: pallet_aaa::ConditionSet::All(atom(pallet_aaa::Condition::BlockNumberAbove {
+          threshold: 0,
+        })),
+        task: transfer(11),
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+      pallet_aaa::Step {
+        conditions: pallet_aaa::ConditionSet::Any(atom(pallet_aaa::Condition::BlockNumberAbove {
+          threshold: 0,
+        })),
+        task: transfer(13),
+        on_error: StepErrorPolicy::AbortCycle,
+      },
+    ])
+    .expect("three-step User plan fits");
+    let aaa_id = create_user(ALICE, manual_schedule(), None, plan);
+    fund_native(aaa_id, 10_000_000_000_000);
+    let bob_before = Balances::free_balance(BOB);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    let _ = AAA::on_idle(1, Weight::MAX);
+    assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(31));
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor remains active")
+        .cycle_nonce,
+      1
+    );
+  });
 }
 
 #[test]
@@ -3611,7 +3659,7 @@ fn user_dca_e2e_lifecycle_with_natural_close() {
     let foreign = AssetKind::Local(ASSET_A);
     let swap_amount = 50 * primitives::ecosystem::params::PRECISION;
     let execution_plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
-      conditions: BoundedVec::default(),
+      conditions: pallet_aaa::ConditionSet::Always,
       task: Task::SwapExactIn {
         asset_in: AssetKind::Native,
         asset_out: foreign,
@@ -3771,12 +3819,14 @@ fn setup_circular_chain(
   for i in 0..n {
     let next_sov = sovereign_accounts[((i + 1) % n) as usize].clone();
     let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_aaa::Step {
-      conditions: alloc::vec![pallet_aaa::Condition::BalanceAbove {
-        asset: primitives::AssetKind::Native,
-        threshold: crate::EXISTENTIAL_DEPOSIT,
-      }]
-      .try_into()
-      .expect("fits"),
+      conditions: pallet_aaa::ConditionSet::All(
+        alloc::vec![pallet_aaa::Condition::BalanceAbove {
+          asset: primitives::AssetKind::Native,
+          threshold: crate::EXISTENTIAL_DEPOSIT,
+        }]
+        .try_into()
+        .expect("fits"),
+      ),
       task: Task::Transfer {
         to: next_sov,
         asset: primitives::AssetKind::Native,

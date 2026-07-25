@@ -5,7 +5,10 @@ Excludes: Concrete provider implementations, widget composition, and domain stor
 Zone: Adapter public contract; may reference domain projection types but must not import concrete adapters/widgets.
 */
 import type { DeosChainConnectionState } from '$lib/adapters/blockchain/deos';
-import type { AutomationActorSnapshot } from '$lib/automation/types';
+import type {
+  AutomationActorSnapshot,
+  AutomationAuthoringContext,
+} from '$lib/automation/types';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
 import type {
@@ -61,6 +64,9 @@ export type AutomationAdapter = {
   getAutomationActors?():
     | AutomationActorSnapshot[]
     | Promise<AutomationActorSnapshot[]>;
+  getAutomationAuthoringContext?():
+    | AutomationAuthoringContext
+    | Promise<AutomationAuthoringContext>;
 };
 
 export type MarketAdapter = {

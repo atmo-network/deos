@@ -24,6 +24,7 @@ import {
   decodeAaaRuntimeSimulationResult,
   encodeAaaRuntimeSimulationResult,
 } from '../../automation/runtime-simulation-codec.ts';
+import type { AutomationAuthoringContext } from '../../automation/types.ts';
 
 const RUNTIME_CODE_STORAGE_KEY = '0x3a636f6465' as HexString;
 const METADATA_VERSION = 16;
@@ -89,7 +90,7 @@ function runtimeIdentity(
   };
 }
 
-async function finalizedRuntimeContext(
+async function finalizedPlanContext(
   client: DeosClient,
   typedApi: DeosTypedApi,
   selectedBlock?: AaaFinalizedSimulationInput['finalizedBlock'],
@@ -107,17 +108,11 @@ async function finalizedRuntimeContext(
     );
   }
   const at = finalizedBlock.hash as HexString;
-  const [header, chainSpec, version, metadata, runtimeCodeHex] =
-    await Promise.all([
-      client.getBlockHeader(at),
-      client.getChainSpecData(),
-      typedApi.apis.Core.version({ at }),
-      typedApi.apis.Metadata.metadata_at_version(METADATA_VERSION, { at }),
-      client._request<string | null>('state_getStorage', [
-        RUNTIME_CODE_STORAGE_KEY,
-        at,
-      ]),
-    ]);
+  const [chainSpec, version, metadata] = await Promise.all([
+    client.getChainSpecData(),
+    typedApi.apis.Core.version({ at }),
+    typedApi.apis.Metadata.metadata_at_version(METADATA_VERSION, { at }),
+  ]);
   if (
     selectedBlock?.number === 0 &&
     selectedBlock.hash !== chainSpec.genesisHash
@@ -127,16 +122,49 @@ async function finalizedRuntimeContext(
   if (!(metadata instanceof Uint8Array)) {
     throw new Error('Finalized runtime does not expose V16 metadata');
   }
+  return {
+    at,
+    blockNumber: finalizedBlock.number,
+    metadataBytes: metadata,
+    runtime: runtimeIdentity(chainSpec.genesisHash, version),
+  };
+}
+
+export async function getDeosAaaFinalizedAuthoringContext(
+  connection: DeosSimulationConnection,
+): Promise<AutomationAuthoringContext> {
+  const { client, typedApi } = await connection.ensureConnected();
+  const context = await finalizedPlanContext(client, typedApi);
+  return {
+    metadataBytes: context.metadataBytes,
+    runtime: context.runtime,
+    finalizedBlock: {
+      hash: asPlanHex(context.at, 'finalized block hash'),
+      number: context.blockNumber,
+    },
+  };
+}
+
+async function finalizedRuntimeContext(
+  client: DeosClient,
+  typedApi: DeosTypedApi,
+  selectedBlock?: AaaFinalizedSimulationInput['finalizedBlock'],
+) {
+  const context = await finalizedPlanContext(client, typedApi, selectedBlock);
+  const [header, runtimeCodeHex] = await Promise.all([
+    client.getBlockHeader(context.at),
+    client._request<string | null>('state_getStorage', [
+      RUNTIME_CODE_STORAGE_KEY,
+      context.at,
+    ]),
+  ]);
   if (runtimeCodeHex == null) {
     throw new Error('Finalized state does not expose runtime :code');
   }
   return {
-    at,
-    blockNumber: finalizedBlock.number,
+    ...context,
     stateRoot: header.stateRoot,
-    metadataBytes: metadata,
     runtimeCodeBytes: hexToBytes(runtimeCodeHex, 'runtime :code'),
-    runtime: runtimeIdentity(chainSpec.genesisHash, version),
   };
 }
 

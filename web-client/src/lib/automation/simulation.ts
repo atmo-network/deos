@@ -20,13 +20,24 @@ export type AaaStepErrorPolicy =
   | 'ContinueNextStep'
   | 'RetryLater';
 
-export type AaaLocalStep = {
+export type AaaLocalConditionSet<Condition> =
+  | { type: 'Always' }
+  | { type: 'All' | 'Any'; conditions: Condition[] };
+
+export type AaaLocalStep<Condition> = {
   stepIndex: number;
+  conditionSet: AaaLocalConditionSet<Condition>;
+  taskControl: 'Execute' | 'StopCycle';
   onError: AaaStepErrorPolicy;
 };
 
+export type AaaLocalConditionOutcome =
+  | { kind: 'Value'; value: boolean }
+  | { kind: 'Error'; retry: 'Temporary' | 'Permanent'; error: string };
+
 export type AaaLocalStepOutcome =
   | { kind: 'Executed' }
+  | { kind: 'Stopped' }
   | { kind: 'SkippedCondition' }
   | { kind: 'SkippedResolution' }
   | { kind: 'FundingUnavailable' }
@@ -106,7 +117,7 @@ function increment(
   counts[key] = value;
 }
 
-export function simulateAaaLocally<State>(input: {
+export function simulateAaaLocally<State, Condition>(input: {
   artifact: AaaPlanArtifact;
   blockHash: AaaPlanHex;
   model: string;
@@ -116,8 +127,15 @@ export function simulateAaaLocally<State>(input: {
   startCursor: number;
   initialState: State;
   initialCounts?: AaaLocalSimulationCounts;
-  steps: AaaLocalStep[];
-  runStep: (step: AaaLocalStep, taskLocalState: State) => AaaLocalStepOutcome;
+  steps: AaaLocalStep<Condition>[];
+  evaluateCondition?: (
+    condition: Condition,
+    state: Readonly<State>,
+  ) => AaaLocalConditionOutcome;
+  runTask: (
+    step: AaaLocalStep<Condition>,
+    taskLocalState: State,
+  ) => AaaLocalStepOutcome;
 }): AaaLocalSimulationResult<State> {
   validateIndex(input.attempt, 'attempt');
   validateIndex(input.startCursor, 'startCursor');
@@ -140,6 +158,20 @@ export function simulateAaaLocally<State>(input: {
     ) {
       throw new Error('RetryLater remains Mutable-only');
     }
+    if (
+      step.conditionSet.type !== 'Always' &&
+      step.conditionSet.conditions.length === 0
+    ) {
+      throw new Error(
+        `${step.conditionSet.type} condition set must be non-empty`,
+      );
+    }
+    if (
+      step.conditionSet.type !== 'Always' &&
+      input.evaluateCondition == null
+    ) {
+      throw new Error('Grouped conditions require an evaluator');
+    }
   });
 
   let state = structuredClone(input.initialState);
@@ -155,13 +187,39 @@ export function simulateAaaLocally<State>(input: {
   for (let index = input.startCursor; index < input.steps.length; index += 1) {
     const step = input.steps[index];
     const taskLocalState = structuredClone(state);
-    const outcome = input.runStep(step, taskLocalState);
+    const outcome = (() => {
+      if (step.conditionSet.type !== 'Always') {
+        let truth = step.conditionSet.type === 'All';
+        let firstError: Extract<
+          AaaLocalConditionOutcome,
+          { kind: 'Error' }
+        > | null = null;
+        for (const condition of step.conditionSet.conditions) {
+          const current = input.evaluateCondition!(condition, state);
+          if (current.kind === 'Error') firstError ??= current;
+          else if (step.conditionSet.type === 'All') truth &&= current.value;
+          else truth ||= current.value;
+        }
+        if (firstError != null) {
+          return {
+            kind: 'Failed',
+            retry: firstError.retry,
+            error: firstError.error,
+          } as const;
+        }
+        if (!truth) return { kind: 'SkippedCondition' } as const;
+      }
+      if (step.taskControl === 'StopCycle') return { kind: 'Stopped' } as const;
+      return input.runTask(step, taskLocalState);
+    })();
     let stateCommitted = false;
     switch (outcome.kind) {
       case 'Executed':
         state = taskLocalState;
         stateCommitted = true;
         increment(cumulative, 'executedSteps');
+        break;
+      case 'Stopped':
         break;
       case 'SkippedCondition':
         increment(cumulative, 'skippedConditions');
@@ -187,6 +245,21 @@ export function simulateAaaLocally<State>(input: {
         throw new Error(`Unsupported step outcome at step ${index}`);
     }
     journal.push({ stepIndex: index, outcome, stateCommitted });
+
+    if (outcome.kind === 'Stopped') {
+      return {
+        provenance: provenance(input),
+        status: 'Completed',
+        cycleNonce: input.cycleNonce,
+        attempt: input.attempt,
+        startCursor: input.startCursor,
+        continuationCursor: null,
+        finalizedThrough: index,
+        state,
+        cumulative,
+        journal,
+      };
+    }
 
     if (outcome.kind === 'Failed') {
       if (step.onError === 'RetryLater' && outcome.retry === 'Temporary') {

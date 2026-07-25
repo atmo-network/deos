@@ -171,6 +171,7 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     asset: AssetId,
     shares: AmountResolution<Balance>,
   },
+  StopCycle,
 }
 
 impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get<u32>> Clone
@@ -256,6 +257,7 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         asset: asset.clone(),
         shares: shares.clone(),
       },
+      Self::StopCycle => Self::StopCycle,
     }
   }
 }
@@ -358,6 +360,7 @@ impl<
         .field("asset", asset)
         .field("shares", shares)
         .finish(),
+      Self::StopCycle => f.write_str("StopCycle"),
     }
   }
 }
@@ -517,6 +520,7 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
           shares: right_shares,
         },
       ) => left_asset == right_asset && left_shares == right_shares,
+      (Self::StopCycle, Self::StopCycle) => true,
       _ => false,
     }
   }
@@ -685,6 +689,7 @@ pub enum SimulationStepOutcome {
   Skipped(StepSkippedReason),
   Failed(crate::RetryClass),
   Suspended(SuspensionReason),
+  Stopped,
 }
 
 #[derive(
@@ -966,6 +971,67 @@ pub enum Condition<AssetId, Balance, BlockNumber = u32> {
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(MaxConditions))]
+pub enum ConditionSet<C, MaxConditions: Get<u32>> {
+  Always,
+  All(BoundedVec<C, MaxConditions>),
+  Any(BoundedVec<C, MaxConditions>),
+}
+
+impl<C, MaxConditions: Get<u32>> Default for ConditionSet<C, MaxConditions> {
+  fn default() -> Self {
+    Self::Always
+  }
+}
+
+impl<C, MaxConditions: Get<u32>> ConditionSet<C, MaxConditions> {
+  pub fn len(&self) -> u32 {
+    match self {
+      Self::Always => 0,
+      Self::All(conditions) | Self::Any(conditions) => conditions.len() as u32,
+    }
+  }
+
+  pub fn is_always(&self) -> bool {
+    matches!(self, Self::Always)
+  }
+}
+
+impl<C: Clone, MaxConditions: Get<u32>> Clone for ConditionSet<C, MaxConditions> {
+  fn clone(&self) -> Self {
+    match self {
+      Self::Always => Self::Always,
+      Self::All(conditions) => Self::All(conditions.clone()),
+      Self::Any(conditions) => Self::Any(conditions.clone()),
+    }
+  }
+}
+
+impl<C: core::fmt::Debug, MaxConditions: Get<u32>> core::fmt::Debug
+  for ConditionSet<C, MaxConditions>
+{
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::Always => f.write_str("Always"),
+      Self::All(conditions) => f.debug_tuple("All").field(conditions).finish(),
+      Self::Any(conditions) => f.debug_tuple("Any").field(conditions).finish(),
+    }
+  }
+}
+
+impl<C: PartialEq, MaxConditions: Get<u32>> PartialEq for ConditionSet<C, MaxConditions> {
+  fn eq(&self, other: &Self) -> bool {
+    match (self, other) {
+      (Self::Always, Self::Always) => true,
+      (Self::All(left), Self::All(right)) | (Self::Any(left), Self::Any(right)) => left == right,
+      _ => false,
+    }
+  }
+}
+
+impl<C: Eq, MaxConditions: Get<u32>> Eq for ConditionSet<C, MaxConditions> {}
+
+#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxConditionsPerStep, MaxSplitTransferLegs))]
 pub struct Step<
   AssetId,
@@ -974,7 +1040,7 @@ pub struct Step<
   MaxConditionsPerStep: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
 > {
-  pub conditions: BoundedVec<Condition<AssetId, Balance>, MaxConditionsPerStep>,
+  pub conditions: ConditionSet<Condition<AssetId, Balance>, MaxConditionsPerStep>,
   pub task: Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
   pub on_error: StepErrorPolicy,
 }

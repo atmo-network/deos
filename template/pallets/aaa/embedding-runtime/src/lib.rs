@@ -472,6 +472,10 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance> for FixtureBenchma
     }
   }
 
+  fn setup_condition_assets(_: &AccountId, max: u32) -> Result<Vec<AssetId>, DispatchError> {
+    Ok((0..max).map(|_| NATIVE_ASSET).collect())
+  }
+
   fn setup_address_event_ingress(
     _: &AccountId,
     _: &AccountId,
@@ -600,7 +604,7 @@ mod tests {
 
   fn execution_plan(task: pallet_aaa::TaskOf<Runtime>) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     BoundedVec::try_from(alloc::vec![pallet_aaa::StepOf::<Runtime> {
-      conditions: BoundedVec::default(),
+      conditions: pallet_aaa::ConditionSet::Always,
       task,
       on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
     }])
@@ -642,7 +646,7 @@ mod tests {
     on_error: pallet_aaa::StepErrorPolicy,
   ) -> pallet_aaa::StepOf<Runtime> {
     pallet_aaa::Step {
-      conditions: BoundedVec::default(),
+      conditions: pallet_aaa::ConditionSet::Always,
       task,
       on_error,
     }
@@ -688,6 +692,12 @@ mod tests {
       b"ContinuationState".as_slice(),
       b"QueuePages".as_slice(),
       b"WakeupPages".as_slice(),
+      b"ConditionSet".as_slice(),
+      b"Always".as_slice(),
+      b"All".as_slice(),
+      b"Any".as_slice(),
+      b"StopCycle".as_slice(),
+      b"EmptyConditionSet".as_slice(),
     ] {
       assert!(
         encoded
@@ -699,11 +709,47 @@ mod tests {
     }
   }
 
+  #[test]
+  fn condition_set_scale_round_trip_preserves_canonical_mode() {
+    let atom = pallet_aaa::Condition::BlockNumberAbove { threshold: 0 };
+    let grouped = BoundedVec::try_from(alloc::vec![atom]).expect("one condition fits");
+    let values: alloc::vec::Vec<pallet_aaa::ConditionSetOf<Runtime>> = alloc::vec![
+      pallet_aaa::ConditionSet::Always,
+      pallet_aaa::ConditionSet::All(grouped.clone()),
+      pallet_aaa::ConditionSet::Any(grouped),
+    ];
+    let encoded = alloc::vec![values[0].encode(), values[1].encode(), values[2].encode()];
+    assert_eq!([encoded[0][0], encoded[1][0], encoded[2][0]], [0, 1, 2]);
+    for (expected, bytes) in values.into_iter().zip(encoded) {
+      let decoded = pallet_aaa::ConditionSetOf::<Runtime>::decode(&mut &bytes[..])
+        .expect("ConditionSet decodes");
+      assert_eq!(decoded, expected);
+    }
+  }
+
   #[cfg(feature = "try-runtime")]
   #[test]
-  fn independent_runtime_try_state_accepts_fresh_genesis() {
+  fn independent_runtime_try_state_accepts_condition_aggregate_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
+      let conditions = BoundedVec::try_from(alloc::vec![pallet_aaa::Condition::BlockNumberAbove {
+        threshold: 0
+      },])
+      .expect("one condition fits");
+      let program = active_program(
+        pallet_aaa::Trigger::Manual,
+        0,
+        alloc::vec![pallet_aaa::Step {
+          conditions: pallet_aaa::ConditionSet::Any(conditions),
+          task: pallet_aaa::Task::StopCycle,
+          on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
+        }],
+      );
+      assert_ok!(AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        pallet_aaa::Mutability::Mutable,
+        program,
+      ));
       assert!(AAA::try_state(1).is_ok());
     });
   }
@@ -791,6 +837,78 @@ mod tests {
   }
 
   #[test]
+  fn executive_executes_always_all_and_any_as_one_linear_plan() {
+    new_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      let transfer = |amount| pallet_aaa::Task::Transfer {
+        to: BOB,
+        asset: NATIVE_ASSET,
+        amount: pallet_aaa::AmountResolution::Fixed(amount),
+      };
+      let all = BoundedVec::try_from(alloc::vec![
+        pallet_aaa::Condition::BlockNumberAbove { threshold: 0 },
+        pallet_aaa::Condition::BalanceAbove {
+          asset: NATIVE_ASSET,
+          threshold: 0,
+        },
+      ])
+      .expect("maximum All group fits");
+      let any = BoundedVec::try_from(alloc::vec![
+        pallet_aaa::Condition::BlockNumberBelow { threshold: 0 },
+        pallet_aaa::Condition::BlockNumberAbove { threshold: 0 },
+      ])
+      .expect("maximum Any group fits");
+      let program = active_program(
+        pallet_aaa::Trigger::Manual,
+        0,
+        alloc::vec![
+          pallet_aaa::Step {
+            conditions: pallet_aaa::ConditionSet::Always,
+            task: transfer(7),
+            on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
+          },
+          pallet_aaa::Step {
+            conditions: pallet_aaa::ConditionSet::All(all),
+            task: transfer(11),
+            on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
+          },
+          pallet_aaa::Step {
+            conditions: pallet_aaa::ConditionSet::Any(any),
+            task: transfer(13),
+            on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
+          },
+        ],
+      );
+      let create = RuntimeCall::AAA(pallet_aaa::Call::create_user_aaa {
+        mutability: pallet_aaa::Mutability::Mutable,
+        program,
+      });
+      assert!(matches!(
+        Executive::apply_extrinsic(signed_extrinsic(ALICE, 0, create)),
+        Ok(Ok(_))
+      ));
+      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      let actor = AAA::aaa_instances(aaa_id)
+        .expect("actor exists")
+        .sovereign_account;
+      assert_ok!(<Balances as Currency<AccountId>>::transfer(
+        &ALICE,
+        &actor,
+        10_000_000_000,
+        ExistenceRequirement::AllowDeath,
+      ));
+      let bob_before = Balances::free_balance(BOB);
+      let trigger = RuntimeCall::AAA(pallet_aaa::Call::manual_trigger { aaa_id });
+      assert!(matches!(
+        Executive::apply_extrinsic(signed_extrinsic(ALICE, 1, trigger)),
+        Ok(Ok(_))
+      ));
+      let _ = AAA::on_idle(1, Weight::MAX);
+      assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(31));
+    });
+  }
+
+  #[test]
   fn executive_balance_transfer_submits_direct_ingress_exact_once() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
@@ -857,7 +975,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let step = || pallet_aaa::StepOf::<Runtime> {
-        conditions: BoundedVec::default(),
+        conditions: pallet_aaa::ConditionSet::Always,
         task: pallet_aaa::Task::Transfer {
           to: BOB,
           asset: NATIVE_ASSET,
@@ -1442,7 +1560,7 @@ mod tests {
       System::set_block_number(1);
       let plan = BoundedVec::try_from(alloc::vec![
         pallet_aaa::StepOf::<Runtime> {
-          conditions: BoundedVec::default(),
+          conditions: pallet_aaa::ConditionSet::Always,
           task: pallet_aaa::Task::Stake {
             asset: NATIVE_ASSET,
             amount: pallet_aaa::AmountResolution::Fixed(10),
@@ -1450,7 +1568,7 @@ mod tests {
           on_error: pallet_aaa::StepErrorPolicy::ContinueNextStep,
         },
         pallet_aaa::StepOf::<Runtime> {
-          conditions: BoundedVec::default(),
+          conditions: pallet_aaa::ConditionSet::Always,
           task: pallet_aaa::Task::Transfer {
             to: BOB,
             asset: NATIVE_ASSET,

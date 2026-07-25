@@ -21,6 +21,7 @@ export const AAA_SIMULATION_RUNTIME_API_VERSION = 1 as const;
 
 export type AaaRuntimeStepOutcome =
   | { type: 'Executed' }
+  | { type: 'Stopped' }
   | { type: 'Skipped'; reason: string }
   | { type: 'Failed'; retryClass: string }
   | { type: 'Suspended'; reason: string };
@@ -142,6 +143,8 @@ function projectStepOutcome(value: unknown): AaaRuntimeStepOutcome {
   switch (variant.type) {
     case 'Executed':
       return { type: 'Executed' };
+    case 'Stopped':
+      return { type: 'Stopped' };
     case 'Skipped':
       return {
         type: 'Skipped',
