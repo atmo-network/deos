@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-aaa`
-- **Release line**: `0.7.4`
+- **Release line**: `0.7.5`
 - **Audience**: external runtime implementers embedding AAA without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](./README.md), [AAA Specification](https://github.com/atmo-network/deos/blob/main/docs/aaa.specification.en.md), [DEOS AAA Architecture](https://github.com/atmo-network/deos/blob/main/docs/aaa.architecture.en.md)
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System AAA catalog standardization, UI product flows
@@ -47,6 +47,7 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
 - Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxContinuationSnapshotEntries`, `MaxIdleStarvationBlocks`, and fee constants.
+- Bounded authority-service configuration: `PrioritySystemAaaIds`, `MaxPrioritySystemAaaIds`, `SystemAaaBudget`, and non-zero `UserAaaBudget`. An embedding with no priority policy supplies an empty id set; it must not add a second queue or owner-selected rank.
 - Under `runtime-benchmarks`, `setup_condition_assets` must provide enough valid distinct assets to measure the maximum condition group honestly; repeated keys do not establish worst-case ProofSize.
 
 The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no program or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
@@ -141,8 +142,9 @@ A runtime embedding AAA should add local tests for any adapter that mutates more
 - Exact-out never debits above the AAA-provided capacity, and Unstake dynamic modes resolve against shares rather than the base asset.
 - Healthy empty `on_idle` leaves no starvation-state key or recovery event; first starvation, one-time alert, prolonged alert, breaker clearing, and one-time recovery match the transition contract.
 - Mutable User and System plans suspend only on explicitly Temporary failures or `FundingUnavailable` under `RetryLater`; retry starts at the same cursor without prefix replay and uses one nonce across attempts.
-- Permanent and unsupported-adapter failures create no Continuation; Immutable admission rejects `RetryLater`, while User `SwapExactOut` and System-only `Mint` remain unchanged.
+- Permanent and unsupported-adapter failures create no Continuation; Immutable admission rejects `RetryLater`; User `SwapExactOut` requires a fixed non-zero input cap enforced together with current capacity; liquidity addition/removal require fixed non-zero output minima at every adapter boundary; System-only `Mint` remains unchanged.
 - Direct ingress during suspension preserves one queue ticket/wakeup, latches the next signal, and keeps new funding pending until full logical-run success.
+- Saturated opposing-group load preserves lowest-ticket FIFO within priority-System and ordinary groups, caps System Weight and execution count, leaves a non-zero ordinary/User share, and never executes one actor twice in a block.
 - Explicit cancellation, plan/policy/schedule replacement, deactivation, terminal transition, and pure close delete Continuation without compensation, prefix rollback, promotion, or sovereign-balance movement.
 
 ## 9. Non-Goals

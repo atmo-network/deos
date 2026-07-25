@@ -61,7 +61,9 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 `Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets or System AAA adapters for burn/liquidity actor swaps with automatic fee exemption and keep-alive awareness.
 
-`Authoritative View Surface`: `quote_exact_input(who, from, to, amount_in)` — FRAME view function returning a typed `RouterQuote { amount_in, router_fee, amount_after_fee, amount_out, mechanism, path, price_impact, total_fees }`. This surface mirrors caller-aware router fee handling plus canonical `find_optimal_route()` selection without mutating oracle state, giving clients a bounded on-chain route preview instead of forcing browser-side TMC-vs-XYK reconstruction. `amount_out` is recipient output; DirectMint quotes exclude the protocol/sink allocation.
+`Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes plus path execution returning actual input spent. `quote_exact_out` evaluates at most direct XYK and one reverse-quoted Native-anchored path, selects minimum required post-fee input, and adds the caller-aware router fee. `execute_exact_out_for` enforces the total-input cap transactionally and reports actual total spend. Direct TMC mint remains exact-input only because it cannot promise an exact recipient amount.
+
+`Authoritative View Surfaces`: `quote_exact_input(who, from, to, amount_in)` returns `RouterQuote`; `quote_exact_out(who, from, to, amount_out)` returns `ExactOutputQuote`. Both expose input, router fee, post-fee input, recipient output, mechanism, bounded path, price impact, and known fees without mutating state. Exact input compares maximum recipient output across XYK, TMC, and Native-anchored candidates; exact output compares minimum required input across its two native XYK candidates.
 
 ## Core Components
 
@@ -313,7 +315,7 @@ Those belong to events plus external indexing/materialization rather than extra 
 
 ### Current launch-line decision for quote and route discovery
 
-For the current launch line, exact-input router quote/route discovery is a bounded canonical on-chain projection through `quote_exact_input(who, from, to, amount_in)`.
+For the current launch line, exact-input and exact-output XYK route discovery are bounded canonical on-chain projections through `quote_exact_input(who, from, to, amount_in)` and `quote_exact_out(who, from, to, amount_out)`.
 
 Why:
 

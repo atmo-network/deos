@@ -11,3 +11,4 @@
 {"timestamp":"2026-04-24T21:27:21Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/runtime/examples/export_metadata.rs"}
 {"timestamp":"2026-07-21T02:39:05Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"./template/pallets/aaa/src/scheduler.rs"}
 {"timestamp":"2026-07-25T04:34:42Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/pallets/aaa/embedding-runtime/src/lib.rs"}
+{"timestamp":"2026-07-25T18:56:36Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"/home/llb/Repos/deos/template/runtime/src/configs/aaa_config.rs"}

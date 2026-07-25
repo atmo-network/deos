@@ -9,8 +9,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   import { onMount } from 'svelte';
 
   import AutomationStepEditor from '$lib/automation/AutomationStepEditor.svelte';
+  import AutomationTriggerEditor from '$lib/automation/AutomationTriggerEditor.svelte';
   import {
     type AaaAuthoringIssue,
+    type AaaAuthoringTrigger,
     appendAaaStep,
     createAaaArtifactFromAuthoring,
     createAaaAuthoringProgram,
@@ -83,6 +85,23 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   const rootIssues = $derived(
     validation.issues.filter((issue) => !issue.path.startsWith('steps[')),
   );
+  const draftTriggerSummary = $derived(triggerSummary(draft.trigger));
+
+  function triggerSourceSummary(source: { type: string }) {
+    return source.type === 'OnAddressEvent' ? 'Address event' : source.type;
+  }
+
+  function triggerSummary(trigger: AaaAuthoringTrigger) {
+    if (trigger.type === 'Immediate') {
+      return `Immediate · ${trigger.sources.map(triggerSourceSummary).join(' + ')}`;
+    }
+    if (trigger.mode.type === 'Always') {
+      return `Cadenced/${trigger.everyBlocks} · Always`;
+    }
+    return `Cadenced/${trigger.everyBlocks} · ${trigger.mode.sources
+      .map(triggerSourceSummary)
+      .join(' + ')}`;
+  }
 
   function issuesForStep(index: number): AaaAuthoringIssue[] {
     return validation.issues.filter((issue) =>
@@ -397,7 +416,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
           >
             <DetailRow
               label="Trigger"
-              value="Manual"
+              value={draftTriggerSummary}
               valueClass="text-(--mono-text)"
             />
             <DetailRow
@@ -407,6 +426,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
             />
           </div>
         </SectionCard>
+
+        <AutomationTriggerEditor
+          bind:trigger={draft.trigger}
+          compact={compactPane}
+        />
 
         <div class="flex flex-wrap items-end justify-between gap-2">
           <div>

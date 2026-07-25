@@ -1,17 +1,17 @@
 use crate::{
   AaaType, ActiveLifecycle, ActorClass, ActorHot, AmountResolution, AssetFilter, AssetFilterOf,
-  CancellationReason, CloseReason, Condition, ConditionSet, ContinuationStateStore, DeferReason,
-  Error, Event, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
+  CadenceMode, CancellationReason, CloseReason, Condition, ConditionSet, ContinuationStateStore,
+  DeferReason, Error, Event, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
   IdleStarvationState, Mutability, NextAaaId, OutcomeTotals, OwnerSlotMask, PauseReason,
   ProgramInput, QueueEntry, ResolutionSurface, RetryClass, RunState, SYSTEM_OWNER_SLOT_SENTINEL,
   Schedule, ScheduleOf, ScheduleWindow, SimulationError, SimulationMode, SimulationStatus,
   SimulationStepOutcome, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex,
   SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SuspensionReason,
-  Task, TaskFailure, TaskOf, Trigger, WakeupBucketState, WakeupEntry, WakeupPage, WakeupPointer,
-  adapters::AssetOps, mock::*, types::FundingBatch,
+  Task, TaskFailure, TaskOf, Trigger, TriggerPolicy, TriggerSource, WakeupBucketState, WakeupEntry,
+  WakeupPage, WakeupPointer, adapters::AssetOps, mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
-use codec::{Decode, Encode};
+use codec::{Decode, Encode, MaxEncodedLen};
 use polkadot_sdk::frame_support::{
   __private::metadata_ir::{
     StorageEntryMetadataIR, StorageEntryModifierIR, StorageEntryTypeIR, StorageHasherIR,
@@ -29,6 +29,20 @@ use scale_info::{TypeDef, TypeInfo};
 type RuntimeSchedule = ScheduleOf<Test>;
 type RuntimeSourceFilter = SourceFilterOf<Test>;
 type RuntimeAssetFilter = AssetFilterOf<Test>;
+type RuntimeTriggerSource =
+  TriggerSource<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>;
+type RuntimeCadenceMode = CadenceMode<
+  AccountId,
+  TestAsset,
+  <Test as crate::Config>::MaxWhitelistSize,
+  <Test as crate::Config>::MaxTriggerSources,
+>;
+type RuntimeTriggerPolicy = TriggerPolicy<
+  AccountId,
+  TestAsset,
+  <Test as crate::Config>::MaxWhitelistSize,
+  <Test as crate::Config>::MaxTriggerSources,
+>;
 type RuntimeTask = TaskOf<Test>;
 type RuntimeStep = StepOf<Test>;
 type RuntimeProgramInput = crate::ProgramInputOf<Test>;
@@ -77,6 +91,70 @@ fn assert_variant_contract<T: TypeInfo>(expected: &[(&str, u8)]) {
     .map(|variant| (variant.name, variant.index))
     .collect();
   assert_eq!(actual, expected);
+}
+
+#[test]
+fn trigger_policy_grammar_is_bounded_and_non_nested() {
+  let manual = RuntimeTriggerSource::Manual;
+  let address = RuntimeTriggerSource::OnAddressEvent {
+    source_filter: SourceFilter::OwnerOnly,
+    asset_filter: AssetFilter::Any,
+  };
+  let sources = BoundedVec::<_, <Test as crate::Config>::MaxTriggerSources>::try_from(vec![
+    manual.clone(),
+    address,
+  ])
+  .expect("two trigger sources fit the runtime bound");
+  let policy = RuntimeTriggerPolicy::Cadenced {
+    every_blocks: 10,
+    mode: RuntimeCadenceMode::WhenSignalled(sources),
+  };
+  assert!(policy.has_canonical_sources());
+  assert!(policy.manual_source_enabled());
+  assert_eq!(policy.cadence_blocks(), Some(10));
+  let encoded = policy.encode();
+  assert!(encoded.len() <= RuntimeTriggerPolicy::max_encoded_len());
+  assert_eq!(RuntimeTriggerPolicy::decode(&mut &encoded[..]), Ok(policy));
+
+  let empty = RuntimeTriggerPolicy::Immediate {
+    sources: BoundedVec::default(),
+  };
+  assert!(!empty.has_canonical_sources());
+  let duplicate = RuntimeTriggerPolicy::Immediate {
+    sources: BoundedVec::try_from(vec![manual.clone(), manual.clone()]).expect("within bound"),
+  };
+  assert!(!duplicate.has_canonical_sources());
+  let reverse = RuntimeTriggerPolicy::Immediate {
+    sources: BoundedVec::try_from(vec![
+      RuntimeTriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::OwnerOnly,
+        asset_filter: AssetFilter::Any,
+      },
+      manual.clone(),
+    ])
+    .expect("within bound"),
+  };
+  assert!(!reverse.has_canonical_sources());
+  let non_canonical_filter = RuntimeTriggerPolicy::Immediate {
+    sources: BoundedVec::try_from(vec![RuntimeTriggerSource::OnAddressEvent {
+      source_filter: SourceFilter::Whitelist(
+        BoundedVec::try_from(vec![2, 1]).expect("within whitelist bound"),
+      ),
+      asset_filter: AssetFilter::Any,
+    }])
+    .expect("within source bound"),
+  };
+  assert!(!non_canonical_filter.has_canonical_sources());
+  let always = RuntimeTriggerPolicy::Cadenced {
+    every_blocks: 5,
+    mode: RuntimeCadenceMode::Always,
+  };
+  assert!(always.has_canonical_sources());
+  assert!(!always.manual_source_enabled());
+
+  let too_many =
+    vec![manual; <<Test as crate::Config>::MaxTriggerSources as Get<u32>>::get() as usize + 1];
+  assert!(BoundedVec::<_, <Test as crate::Config>::MaxTriggerSources>::try_from(too_many).is_err());
 }
 
 #[test]
@@ -194,9 +272,17 @@ fn aaa_0_7_4_scale_variant_indices_are_explicit() {
   assert_variant_contract::<crate::ConditionSetOf<Test>>(&[("Always", 0), ("All", 1), ("Any", 2)]);
   assert_variant_contract::<RuntimeSourceFilter>(&[("Any", 0), ("OwnerOnly", 1), ("Whitelist", 2)]);
   assert_variant_contract::<RuntimeAssetFilter>(&[("Any", 0), ("Whitelist", 1)]);
-  assert_variant_contract::<Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>>(
-    &[("Timer", 0), ("OnAddressEvent", 1), ("Manual", 2)],
-  );
+  assert_variant_contract::<RuntimeTriggerSource>(&[("Manual", 0), ("OnAddressEvent", 1)]);
+  assert_variant_contract::<RuntimeCadenceMode>(&[("Always", 0), ("WhenSignalled", 1)]);
+  assert_variant_contract::<RuntimeTriggerPolicy>(&[("Immediate", 0), ("Cadenced", 1)]);
+  assert_variant_contract::<
+    Trigger<
+      AccountId,
+      TestAsset,
+      <Test as crate::Config>::MaxWhitelistSize,
+      <Test as crate::Config>::MaxTriggerSources,
+    >,
+  >(&[("Immediate", 0), ("Cadenced", 1)]);
   assert_variant_contract::<AaaType>(&[("User", 0), ("System", 1)]);
   assert_variant_contract::<ActorClass>(&[("User", 0), ("System", 1)]);
   assert_variant_contract::<Mutability>(&[("Mutable", 0), ("Immutable", 1)]);
@@ -343,6 +429,8 @@ fn aaa_0_7_4_scale_variant_indices_are_explicit() {
     ("ContinuationNotFound", 42),
     ("ContinuationInvariant", 43),
     ("EmptyConditionSet", 44),
+    ("ManualSourceDisabled", 45),
+    ("InvalidTradeBound", 46),
   ]);
   assert_variant_contract::<crate::Call<Test>>(&[
     ("create_user_aaa", 0),
@@ -1150,7 +1238,7 @@ fn ordinary_transfer_to_aaa(
 
 fn manual_schedule() -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::Manual,
+    trigger: Trigger::immediate_manual(),
     cooldown_blocks: 0,
   }
 }
@@ -1160,17 +1248,14 @@ fn on_address_event_schedule(
   asset_filter: RuntimeAssetFilter,
 ) -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::OnAddressEvent {
-      source_filter,
-      asset_filter,
-    },
+    trigger: Trigger::immediate_address_event(source_filter, asset_filter),
     cooldown_blocks: 0,
   }
 }
 
 fn timer_schedule(every_blocks: u32) -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::Timer { every_blocks },
+    trigger: Trigger::cadenced_always(every_blocks),
     cooldown_blocks: 0,
   }
 }
@@ -1825,7 +1910,10 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
     );
     let initial = AAA::aaa_instances(aaa_id).expect("AAA exists");
     assert_eq!(initial.actor_class.aaa_type(), AaaType::User);
-    assert!(matches!(initial.schedule.trigger, Trigger::Manual));
+    assert!(matches!(
+      initial.schedule.trigger,
+      Trigger::Immediate { .. }
+    ));
     assert_eq!(initial.lifecycle, ActiveLifecycle::Active);
     assert!(!initial.pending_signal);
     assert_eq!(initial.cycle_nonce, 0);
@@ -1846,7 +1934,7 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
       ActiveLifecycle::Paused(PauseReason::Manual)
     );
     let timer_schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 3 },
+      trigger: Trigger::cadenced_always(3),
       cooldown_blocks: 2,
     };
     frame_system::Pallet::<Test>::set_block_number(2);
@@ -1861,7 +1949,10 @@ fn canonical_instance_readiness_state_tracks_lifecycle_and_schedule() {
     assert_eq!(after_update.schedule.cooldown_blocks, 2);
     assert!(matches!(
       after_update.schedule.trigger,
-      Trigger::Timer { every_blocks: 3 }
+      Trigger::Cadenced {
+        every_blocks: 3,
+        mode: CadenceMode::Always
+      }
     ));
   });
 }
@@ -2304,6 +2395,30 @@ fn creation_fee_route_failure_rolls_back_actor_creation() {
     set_fail_fee_sink_transfer(false);
     assert_eq!(AAA::active_aaa_count(), active_before);
     assert_eq!(native_balance(&ALICE), owner_before);
+  });
+}
+
+#[test]
+fn create_rejects_duplicate_trigger_sources() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let sources = BoundedVec::try_from(vec![
+      RuntimeTriggerSource::Manual,
+      RuntimeTriggerSource::Manual,
+    ])
+    .expect("duplicate source fixture fits the type bound");
+    let schedule = Schedule {
+      trigger: RuntimeTriggerPolicy::Immediate { sources },
+      cooldown_blocks: 0,
+    };
+    assert_noop!(
+      AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        user_active_program(schedule, None, transfer_execution_plan(BOB, 1)),
+      ),
+      Error::<Test>::InvalidTriggerConfiguration
+    );
   });
 }
 
@@ -2785,11 +2900,32 @@ fn checkpoint_a_s4_paused_head_uses_hot_only_admission() {
 }
 
 #[test]
+fn manual_trigger_rejects_policy_without_manual_source() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      None,
+      transfer_execution_plan(BOB, 10),
+    );
+    assert_noop!(
+      AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id),
+      Error::<Test>::ManualSourceDisabled
+    );
+    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    assert!(!instance.pending_signal);
+    assert!(instance.queue_ticket.is_none());
+  });
+}
+
+#[test]
 fn manual_trigger_waits_through_cooldown_without_second_signal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 5,
     };
     let aaa_id = create_user_with(
@@ -2860,10 +2996,7 @@ fn address_event_waits_through_cooldown_without_second_signal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::OnAddressEvent {
-        source_filter: SourceFilter::Any,
-        asset_filter: AssetFilter::Any,
-      },
+      trigger: Trigger::immediate_address_event(SourceFilter::Any, AssetFilter::Any),
       cooldown_blocks: 5,
     };
     let aaa_id = create_user_with(
@@ -3814,15 +3947,19 @@ fn dormant_activation_anchors_first_eligibility_at_activation_time() {
 }
 
 #[test]
-fn early_reexecution_replaces_live_future_wakeup_instead_of_accumulating() {
+fn cadence_update_replaces_live_future_wakeup_instead_of_accumulating() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, timer_schedule(20), None, inert_execution_plan());
     let initial_block = scheduled_wakeup_block(aaa_id).expect("timer wakeup should be scheduled");
     assert_eq!(scheduled_wakeup_block(aaa_id), Some(initial_block));
     frame_system::Pallet::<Test>::set_block_number(2);
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
-    run_idle(Weight::MAX);
+    assert_ok!(AAA::update_schedule(
+      RuntimeOrigin::signed(ALICE),
+      aaa_id,
+      timer_schedule(5),
+      None,
+    ));
     let rescheduled_block = scheduled_wakeup_block(aaa_id).expect("replacement wakeup");
     assert_ne!(rescheduled_block, initial_block);
     assert!(AAA::wakeup_buckets(initial_block).is_none());
@@ -4222,7 +4359,7 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     assert_eq!(native_balance(&CHARLIE), charlie_before);
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
     run_idle(Weight::MAX);
 
     let completed = AAA::aaa_instances(aaa_id).expect("completed actor remains");
@@ -4745,8 +4882,8 @@ fn retry_later_inclusive_failure_cutoff_clears_continuation() {
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
 
-    for block in 2..=<Test as crate::Config>::MaxConsecutiveFailures::get() {
-      frame_system::Pallet::<Test>::set_block_number(block.into());
+    for block in [2, 4] {
+      frame_system::Pallet::<Test>::set_block_number(block);
       run_idle(Weight::MAX);
     }
 
@@ -4771,7 +4908,7 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 2,
     };
     let aaa_id = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
@@ -4802,6 +4939,134 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
     assert_eq!(completed.cycle_nonce, 1);
     assert_eq!(completed.run_state, RunState::Idle);
     assert!(AAA::continuation_state(aaa_id).is_none());
+  });
+}
+
+#[test]
+fn bounded_authority_service_preserves_group_fifo_and_user_minimum() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let user_a = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    let user_b = create_user_with(
+      BOB,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    fund_native(user_a, 1_000_000_000_000_000);
+    fund_native(user_b, 1_000_000_000_000_000);
+    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    set_authority_service_policy(
+      vec![system_a, system_b],
+      Perbill::from_percent(67),
+      Perbill::from_percent(33),
+    );
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), user_a));
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(BOB), user_b));
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), system_a));
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), system_b));
+    frame_system::Pallet::<Test>::reset_events();
+    run_idle(Weight::MAX);
+
+    let started: Vec<_> = frame_system::Pallet::<Test>::events()
+      .into_iter()
+      .filter_map(|record| match record.event {
+        RuntimeEvent::AAA(Event::CycleStarted { aaa_id, .. }) => Some(aaa_id),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(started, vec![system_a, system_b, user_a]);
+    assert_eq!(started.iter().filter(|id| **id == system_a).count(), 1);
+    assert_eq!(started.iter().filter(|id| **id == system_b).count(), 1);
+    assert_eq!(started.iter().filter(|id| **id == user_a).count(), 1);
+    assert_eq!(
+      AAA::aaa_instances(user_b)
+        .expect("second User remains")
+        .cycle_nonce,
+      0
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    frame_system::Pallet::<Test>::reset_events();
+    run_idle(Weight::MAX);
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleStarted { aaa_id, .. } if *aaa_id == user_b
+    )));
+  });
+}
+
+#[test]
+fn temporary_retry_backoff_is_one_two_four_eight_then_capped() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    set_max_consecutive_failures(10);
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, temporary_retry_swap_plan());
+    fund_native(aaa_id, 100);
+    let actor = sovereign_account(aaa_id);
+    let balance_before = native_balance(&actor);
+    set_temporary_dex_failure(true);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    let initial_hot = AAA::actor_hot(aaa_id).expect("suspended actor stays schedulable");
+    assert!(initial_hot.queue_ticket.is_some());
+    assert!(initial_hot.wakeup_pointer.is_none());
+    assert_eq!(
+      AAA::continuation_state(aaa_id)
+        .expect("attempt zero")
+        .cursor,
+      0
+    );
+    assert_eq!(native_balance(&actor), balance_before);
+
+    for (due, expected_attempt, next_due) in [(2, 1, 4), (4, 2, 8), (8, 3, 16), (16, 4, 24)] {
+      frame_system::Pallet::<Test>::set_block_number(due - 1);
+      run_idle(Weight::MAX);
+      assert_eq!(
+        AAA::continuation_state(aaa_id)
+          .expect("not eligible before due block")
+          .attempt,
+        expected_attempt - 1
+      );
+      frame_system::Pallet::<Test>::set_block_number(due);
+      run_idle(Weight::MAX);
+      let continuation = AAA::continuation_state(aaa_id).expect("temporary failure resuspends");
+      assert_eq!(continuation.attempt, expected_attempt);
+      assert_eq!(continuation.cursor, 0);
+      assert_eq!(scheduled_wakeup_block(aaa_id), Some(next_due));
+      assert_eq!(native_balance(&actor), balance_before);
+    }
+
+    frame_system::Pallet::<Test>::set_block_number(23);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::continuation_state(aaa_id)
+        .expect("capped delay holds")
+        .attempt,
+      4
+    );
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(24);
+    run_idle(Weight::MAX);
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert_eq!(native_balance(&actor), balance_before - 10);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id)
+        .expect("actor completed")
+        .run_state,
+      RunState::Idle
+    );
   });
 }
 
@@ -4867,12 +5132,112 @@ fn continuation_weight_deferral_does_not_admit_attempt() {
 }
 
 #[test]
+fn cadenced_address_signal_survives_pause_and_executes_once_at_gate() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: Trigger::cadenced_when_signalled_address_event(
+          4,
+          SourceFilter::Any,
+          AssetFilter::Any,
+        ),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_execution_plan(),
+    );
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(5));
+
+    frame_system::Pallet::<Test>::set_block_number(2);
+    assert_ok!(AAA::notify_address_event(
+      aaa_id,
+      TestAsset::Native,
+      10,
+      &ALICE
+    ));
+    assert!(AAA::pending_signal(aaa_id));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(5));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      0
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(3);
+    assert_ok!(AAA::pause_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_ok!(AAA::notify_address_event(
+      aaa_id,
+      TestAsset::Native,
+      20,
+      &ALICE
+    ));
+    assert!(AAA::pending_signal(aaa_id));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(5));
+
+    frame_system::Pallet::<Test>::set_block_number(4);
+    assert_ok!(AAA::resume_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(5));
+    frame_system::Pallet::<Test>::set_block_number(5);
+    run_idle(Weight::MAX);
+    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    assert_eq!(instance.cycle_nonce, 1);
+    assert!(!instance.pending_signal);
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      1
+    );
+  });
+}
+
+#[test]
+fn signal_after_missed_cadence_waits_for_next_gate() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      Schedule {
+        trigger: Trigger::cadenced_when_signalled_manual(4),
+        cooldown_blocks: 0,
+      },
+      None,
+      inert_execution_plan(),
+    );
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(5));
+
+    frame_system::Pallet::<Test>::set_block_number(5);
+    run_idle(Weight::MAX);
+    frame_system::Pallet::<Test>::set_block_number(6);
+    run_idle(Weight::MAX);
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(9));
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
+      0
+    );
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(9));
+
+    frame_system::Pallet::<Test>::set_block_number(9);
+    run_idle(Weight::MAX);
+    let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
+    assert_eq!(instance.cycle_nonce, 1);
+    assert!(!instance.pending_signal);
+  });
+}
+
+#[test]
 fn continuation_retry_omits_external_timer_cadence() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 100 },
+      trigger: Trigger::cadenced_when_signalled_manual(100),
       cooldown_blocks: 2,
     };
     let aaa_id = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
@@ -4880,13 +5245,91 @@ fn continuation_retry_omits_external_timer_cadence() {
     set_temporary_dex_failure(true);
 
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    let cadence_due = scheduled_wakeup_block(aaa_id).expect("cadenced signal wakeup");
+    frame_system::Pallet::<Test>::set_block_number(cadence_due);
     run_idle(Weight::MAX);
 
-    assert_eq!(scheduled_wakeup_block(aaa_id), Some(3));
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(cadence_due + 2));
     assert_eq!(
       AAA::continuation_state(aaa_id).expect("suspended").attempt,
       0
     );
+  });
+}
+
+#[test]
+fn cadenced_signals_during_continuation_coalesce_into_one_later_cycle() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let schedule = Schedule {
+      trigger: Trigger::cadenced_when_signalled_address_event(
+        4,
+        SourceFilter::Any,
+        AssetFilter::Any,
+      ),
+      cooldown_blocks: 2,
+    };
+    let aaa_id = create_system_with(ALICE, schedule, None, temporary_retry_swap_plan());
+    fund_native(aaa_id, 100);
+    set_temporary_dex_failure(true);
+    assert_ok!(AAA::notify_address_event(
+      aaa_id,
+      TestAsset::Native,
+      1,
+      &ALICE
+    ));
+
+    frame_system::Pallet::<Test>::set_block_number(5);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::aaa_instances(aaa_id).expect("suspended").cycle_nonce,
+      1
+    );
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(7));
+    assert!(
+      AAA::actor_hot(aaa_id)
+        .expect("suspended actor")
+        .queue_ticket
+        .is_none()
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(6);
+    assert_ok!(AAA::notify_address_event(
+      aaa_id,
+      TestAsset::Native,
+      2,
+      &ALICE
+    ));
+    let signal_ticket = AAA::actor_hot(aaa_id)
+      .expect("signalled suspended actor")
+      .queue_ticket;
+    assert!(signal_ticket.is_some());
+    assert_ok!(AAA::notify_address_event(
+      aaa_id,
+      TestAsset::Native,
+      3,
+      &ALICE
+    ));
+    let hot = AAA::actor_hot(aaa_id).expect("repeatedly signalled suspended actor");
+    assert!(hot.pending_signal);
+    assert_eq!(hot.queue_ticket, signal_ticket);
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(7));
+
+    set_temporary_dex_failure(false);
+    frame_system::Pallet::<Test>::set_block_number(7);
+    run_idle(Weight::MAX);
+    let after_retry = AAA::aaa_instances(aaa_id).expect("retry completes");
+    assert_eq!(after_retry.cycle_nonce, 1);
+    assert_eq!(after_retry.run_state, RunState::Idle);
+    assert!(after_retry.pending_signal);
+    assert_eq!(scheduled_wakeup_block(aaa_id), Some(9));
+
+    frame_system::Pallet::<Test>::set_block_number(9);
+    run_idle(Weight::MAX);
+    let after_later_cycle = AAA::aaa_instances(aaa_id).expect("later cycle completes");
+    assert_eq!(after_later_cycle.cycle_nonce, 2);
+    assert!(!after_later_cycle.pending_signal);
   });
 }
 
@@ -4999,7 +5442,7 @@ fn suspended_retry_wakes_for_window_expiry_before_cooldown() {
     frame_system::Pallet::<Test>::set_block_number(1);
     setup_temporary_retry_pool();
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 200,
     };
     let aaa_id = create_system_with(
@@ -5170,7 +5613,7 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
       1
     );
 
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
     set_temporary_dex_failure(false);
     run_idle(Weight::MAX);
     assert_eq!(
@@ -5260,7 +5703,7 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
     );
 
     set_asset_balance(&actor, asset_b, 100);
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
     run_idle(Weight::MAX);
     assert!(AAA::continuation_state(aaa_id).is_none());
     assert_eq!(asset_balance(&actor, asset_b), 80);
@@ -5338,6 +5781,7 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
           asset_b: TestAsset::Local(101 + index * 2),
           amount_a: AmountResolution::PercentageOfTrigger(Perbill::from_percent(10)),
           amount_b: AmountResolution::PercentageOfTrigger(Perbill::from_percent(10)),
+          min_lp_out: 1,
         },
         on_error: if index == 0 {
           StepErrorPolicy::RetryLater
@@ -5431,7 +5875,7 @@ fn suspended_funding_is_conserved_and_promoted_once_after_success() {
 
     set_asset_balance(&actor, asset_in, 100);
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
     run_idle(Weight::MAX);
     let promoted = actor_funding(aaa_id);
     let batch = promoted
@@ -5582,7 +6026,7 @@ fn cancelled_continuation_leaves_only_convergent_queue_and_wakeup_tombstones() {
     let aaa_id = create_system_with(
       ALICE,
       Schedule {
-        trigger: Trigger::Manual,
+        trigger: Trigger::immediate_manual(),
         cooldown_blocks: 10,
       },
       None,
@@ -5680,7 +6124,7 @@ fn continuation_attempt_events_keep_stable_nonce_and_order() {
     assert!(matches!(retry[2], Event::CycleSuspended { aaa_id: id, cycle_nonce: 1, attempt: 1, cursor: 0, .. } if id == aaa_id));
 
     set_temporary_dex_failure(false);
-    frame_system::Pallet::<Test>::set_block_number(3);
+    frame_system::Pallet::<Test>::set_block_number(4);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
     let completion: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -5731,7 +6175,7 @@ fn program_policy_schedule_deactivation_and_close_cancel_with_typed_reasons() {
       RuntimeOrigin::root(),
       schedule_id,
       Schedule {
-        trigger: Trigger::Manual,
+        trigger: Trigger::immediate_manual(),
         cooldown_blocks: 1,
       },
       None
@@ -5783,7 +6227,7 @@ fn window_expiry_and_failure_cutoff_cancel_before_close() {
     let window_id = create_system_with(
       ALICE,
       Schedule {
-        trigger: Trigger::Manual,
+        trigger: Trigger::immediate_manual(),
         cooldown_blocks: 200,
       },
       Some(ScheduleWindow { start: 1, end: 101 }),
@@ -5810,7 +6254,7 @@ fn window_expiry_and_failure_cutoff_cancel_before_close() {
     let cutoff_id = create_suspended_system_retry(103);
     frame_system::Pallet::<Test>::set_block_number(104);
     run_idle(Weight::MAX);
-    frame_system::Pallet::<Test>::set_block_number(105);
+    frame_system::Pallet::<Test>::set_block_number(106);
     frame_system::Pallet::<Test>::reset_events();
     run_idle(Weight::MAX);
     let cutoff_events: Vec<_> = frame_system::Pallet::<Test>::events()
@@ -6938,6 +7382,191 @@ fn create_accepts_swap_exact_in_with_slippage_tolerance() {
 }
 
 #[test]
+fn create_rejects_swap_exact_out_with_zero_input_cap() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let execution_plan = execution_plan_with_step(make_step(Task::SwapExactOut {
+      asset_in: TestAsset::Local(1),
+      asset_out: TestAsset::Local(2),
+      amount_out: AmountResolution::Fixed(10),
+      max_amount_in: 0,
+      slippage_tolerance: Perbill::zero(),
+    }));
+    assert_noop!(
+      AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        user_active_program(manual_schedule(), None, execution_plan),
+      ),
+      Error::<Test>::InvalidTradeBound
+    );
+  });
+}
+
+#[test]
+fn create_rejects_zero_liquidity_output_bounds() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let add_plan = execution_plan_with_step(make_step(Task::AddLiquidity {
+      asset_a: TestAsset::Local(1),
+      asset_b: TestAsset::Local(2),
+      amount_a: AmountResolution::Fixed(10),
+      amount_b: AmountResolution::Fixed(10),
+      min_lp_out: 0,
+    }));
+    assert_noop!(
+      AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        user_active_program(manual_schedule(), None, add_plan),
+      ),
+      Error::<Test>::InvalidTradeBound
+    );
+
+    let remove_plan = execution_plan_with_step(make_step(Task::RemoveLiquidity {
+      lp_asset: TestAsset::Local(3),
+      amount: AmountResolution::Fixed(10),
+      min_amount_a: 1,
+      min_amount_b: 0,
+    }));
+    assert_noop!(
+      AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        user_active_program(manual_schedule(), None, remove_plan),
+      ),
+      Error::<Test>::InvalidTradeBound
+    );
+  });
+}
+
+#[test]
+fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let add_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::AddLiquidity {
+        asset_a: TestAsset::Local(1),
+        asset_b: TestAsset::Local(2),
+        amount_a: AmountResolution::Fixed(4),
+        amount_b: AmountResolution::Fixed(4),
+        min_lp_out: 5,
+      })),
+    );
+    fund_native(add_id, 1_000);
+    let add_actor = sovereign_account(add_id);
+    set_asset_balance(&add_actor, TestAsset::Local(1), 10);
+    set_asset_balance(&add_actor, TestAsset::Local(2), 10);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), add_id));
+    run_idle(Weight::MAX);
+    assert!(!has_aaa_event(|event| matches!(
+      event,
+      Event::LiquidityAdded { aaa_id, .. } if *aaa_id == add_id
+    )));
+
+    let remove_id = create_user_with(
+      BOB,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::RemoveLiquidity {
+        lp_asset: TestAsset::Local(3),
+        amount: AmountResolution::Fixed(10),
+        min_amount_a: 6,
+        min_amount_b: 6,
+      })),
+    );
+    fund_native(remove_id, 1_000);
+    let remove_actor = sovereign_account(remove_id);
+    set_asset_balance(&remove_actor, TestAsset::Local(3), 20);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(BOB), remove_id));
+    run_idle(Weight::MAX);
+    assert!(!has_aaa_event(|event| matches!(
+      event,
+      Event::LiquidityRemoved { aaa_id, .. } if *aaa_id == remove_id
+    )));
+  });
+}
+
+#[test]
+fn runtime_system_trade_cap_clamps_every_market_task_before_dispatch() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_system_trade_cap(Some(10));
+    let swap_in = TestAsset::Local(81);
+    let swap_out = TestAsset::Local(82);
+    set_pool_reserves(swap_in, swap_out, 1_000, 1_000);
+    set_asset_balance(&u64::MAX, swap_out, 1_000);
+    let plan = BoundedVec::try_from(vec![
+      make_step(Task::SwapExactIn {
+        asset_in: swap_in,
+        asset_out: swap_out,
+        amount_in: AmountResolution::Fixed(100),
+        slippage_tolerance: Perbill::one(),
+      }),
+      make_step(Task::AddLiquidity {
+        asset_a: TestAsset::Local(83),
+        asset_b: TestAsset::Local(84),
+        amount_a: AmountResolution::Fixed(100),
+        amount_b: AmountResolution::Fixed(100),
+        min_lp_out: 1,
+      }),
+      make_step(Task::RemoveLiquidity {
+        lp_asset: TestAsset::Local(85),
+        amount: AmountResolution::Fixed(100),
+        min_amount_a: 1,
+        min_amount_b: 1,
+      }),
+      make_step(Task::DonateLiquidity {
+        asset_a: TestAsset::Local(86),
+        asset_b: TestAsset::Local(87),
+        amount: AmountResolution::Fixed(100),
+        max_ratio_error: Perbill::zero(),
+      }),
+    ])
+    .expect("four market tasks fit System plan");
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    let actor = sovereign_account(aaa_id);
+    fund_native(aaa_id, 1_000);
+    for asset in [
+      swap_in,
+      TestAsset::Local(83),
+      TestAsset::Local(84),
+      TestAsset::Local(85),
+      TestAsset::Local(86),
+      TestAsset::Local(87),
+    ] {
+      set_asset_balance(&actor, asset, 101);
+    }
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::SwapExecuted { aaa_id: id, amount_in: 10, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::LiquidityAdded { aaa_id: id, lp_minted: 10, .. } if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::LiquidityRemoved { aaa_id: id, amount_a: 5, amount_b: 5, .. }
+        if *id == aaa_id
+    )));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::LiquidityDonated { aaa_id: id, amount: 10, amount_a: 10, amount_b: 10, .. }
+        if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
 fn create_accepts_swap_exact_out_with_slippage_tolerance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -6945,6 +7574,7 @@ fn create_accepts_swap_exact_out_with_slippage_tolerance() {
       asset_in: TestAsset::Local(1),
       asset_out: TestAsset::Local(2),
       amount_out: AmountResolution::Fixed(10),
+      max_amount_in: 100,
       slippage_tolerance: Perbill::from_percent(5),
     }));
     assert_ok!(AAA::create_user_aaa(
@@ -6972,6 +7602,7 @@ fn swap_exact_out_executes_and_emits_swap_event() {
         asset_in,
         asset_out,
         amount_out: AmountResolution::Fixed(100),
+        max_amount_in: 200,
         slippage_tolerance: Perbill::from_percent(0),
       })),
     );
@@ -6990,10 +7621,55 @@ fn swap_exact_out_executes_and_emits_swap_event() {
           aaa_id: id,
           asset_in: in_asset,
           asset_out: out_asset,
+          amount_in,
           amount_out,
-          ..
-        } if *id == aaa_id && *in_asset == asset_in && *out_asset == asset_out && *amount_out >= 100
+        } if *id == aaa_id
+          && *in_asset == asset_in
+          && *out_asset == asset_out
+          && *amount_in <= 200
+          && *amount_out >= 100
       )
+    }));
+  });
+}
+
+#[test]
+fn swap_exact_out_never_spends_above_explicit_input_cap() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let asset_in = TestAsset::Local(1);
+    let asset_out = TestAsset::Local(2);
+    set_pool_reserves(asset_in, asset_out, 10_000, 10_000);
+    set_asset_balance(&u64::MAX, asset_out, 10_000);
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      execution_plan_with_step(make_step(Task::SwapExactOut {
+        asset_in,
+        asset_out,
+        amount_out: AmountResolution::Fixed(100),
+        max_amount_in: 50,
+        slippage_tolerance: Perbill::zero(),
+      })),
+    );
+    fund_native(aaa_id, 10_000);
+    let sovereign = sovereign_account(aaa_id);
+    set_asset_balance(&sovereign, asset_in, 1_000);
+    let input_before = asset_balance(&sovereign, asset_in);
+    let output_before = asset_balance(&sovereign, asset_out);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(asset_balance(&sovereign, asset_in), input_before);
+    assert_eq!(asset_balance(&sovereign, asset_out), output_before);
+    assert!(has_aaa_event(|event| {
+      matches!(event, Event::StepFailed { aaa_id: id, step_index: 0, .. } if *id == aaa_id)
+    }));
+    assert!(!has_aaa_event(|event| {
+      matches!(event, Event::SwapExecuted { aaa_id: id, .. } if *id == aaa_id)
     }));
   });
 }
@@ -7441,6 +8117,68 @@ fn any_source_accepts_all_verified_provenance_classes_but_not_missing_provenance
       event,
       Event::FundingSourcePolicyUpdated { aaa_id: id } if *id == aaa_id
     )));
+  });
+}
+
+#[test]
+fn one_ingress_matching_multiple_sources_mutates_funding_once() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let sources = BoundedVec::<_, <Test as crate::Config>::MaxTriggerSources>::try_from(vec![
+      RuntimeTriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::Any,
+        asset_filter: AssetFilter::Any,
+      },
+      RuntimeTriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::OwnerOnly,
+        asset_filter: AssetFilter::Any,
+      },
+    ])
+    .expect("two sources fit");
+    let trigger = Trigger::Immediate { sources };
+    assert!(trigger.has_canonical_sources());
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      Schedule {
+        trigger,
+        cooldown_blocks: 0,
+      },
+      None,
+      execution_plan_with_step(make_step(Task::Transfer {
+        to: BOB,
+        asset: TestAsset::Native,
+        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      })),
+    );
+
+    assert_ok!(AAA::notify_address_event(
+      aaa_id,
+      TestAsset::Native,
+      100,
+      &ALICE
+    ));
+
+    let hot = AAA::actor_hot(aaa_id).expect("actor hot state");
+    assert!(hot.pending_signal);
+    assert!(hot.queue_ticket.is_some());
+    let funding = actor_funding(aaa_id);
+    let batch = funding
+      .funding_snapshots
+      .get(&TestAsset::Native)
+      .expect("authoritative funding batch");
+    assert_eq!(batch.amount, 100);
+    assert_eq!(batch.pending_amount, 0);
+    assert_eq!(
+      frame_system::Pallet::<Test>::events()
+        .into_iter()
+        .filter(|record| matches!(
+          record.event,
+          RuntimeEvent::AAA(Event::FundingBatchActivated { aaa_id: id, .. }) if id == aaa_id
+        ))
+        .count(),
+      1
+    );
   });
 }
 
@@ -9362,6 +10100,7 @@ fn add_liquidity_uses_funding_unavailable_precedence_across_amount_fields() {
       asset_b,
       amount_a: AmountResolution::PercentageOfCurrent(Perbill::from_percent(1)),
       amount_b: AmountResolution::Fixed(50),
+      min_lp_out: 1,
     }));
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     let actor = sovereign_account(aaa_id);
@@ -10328,11 +11067,10 @@ fn timer_every_block_with_long_cooldown_uses_one_exact_wakeup() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 1 },
+      trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 10,
     };
     let aaa_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
     run_idle(Weight::MAX);
     assert_eq!(
       AAA::aaa_instances(aaa_id).expect("AAA exists").cycle_nonce,
@@ -10368,7 +11106,7 @@ fn timer_eligibility_uses_maximum_of_cadence_cooldown_and_window() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 4 },
+      trigger: Trigger::cadenced_always(4),
       cooldown_blocks: 10,
     };
     let aaa_id = create_system_with(
@@ -10396,11 +11134,10 @@ fn paused_timer_waits_for_resume_without_queue_churn_or_signal_loss() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 1 },
+      trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 5,
     };
     let aaa_id = create_system_with(ALICE, schedule, None, inert_execution_plan());
-    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
     run_idle(Weight::MAX);
     assert_eq!(scheduled_wakeup_block(aaa_id), Some(6));
     assert_ok!(AAA::pause_aaa(RuntimeOrigin::root(), aaa_id));
@@ -11493,7 +12230,7 @@ mod proptest_aaa {
 
   fn timer_schedule_pt(every_blocks: u32) -> RuntimeSchedule {
     Schedule {
-      trigger: Trigger::Timer { every_blocks },
+      trigger: Trigger::cadenced_always(every_blocks),
       cooldown_blocks: 0,
     }
   }
@@ -11545,6 +12282,7 @@ mod proptest_aaa {
             asset_b: TestAsset::Local(88),
             amount_a: AmountResolution::Fixed(5),
             amount_b: AmountResolution::Fixed(5),
+            min_lp_out: 1,
           },
           on_error: StepErrorPolicy::RetryLater,
         },
@@ -11585,7 +12323,7 @@ mod proptest_aaa {
       );
 
       set_temporary_add_liquidity_failure(false);
-      frame_system::Pallet::<Test>::set_block_number(3);
+      frame_system::Pallet::<Test>::set_block_number(4);
       run_idle(Weight::MAX);
       assert!(AAA::continuation_state(aaa_id).is_none());
       assert_eq!(native_balance(&actor), 70);
@@ -11742,7 +12480,12 @@ mod proptest_aaa {
   }
 
   fn system_program(
-    trigger: Trigger<AccountId, TestAsset, <Test as crate::Config>::MaxWhitelistSize>,
+    trigger: Trigger<
+      AccountId,
+      TestAsset,
+      <Test as crate::Config>::MaxWhitelistSize,
+      <Test as crate::Config>::MaxTriggerSources,
+    >,
   ) -> crate::ProgramInputOf<Test> {
     crate::ProgramInput::Active {
       schedule: Schedule {
@@ -12020,7 +12763,7 @@ mod proptest_aaa {
               let _ = AAA::activate_aaa(
                 RuntimeOrigin::root(),
                 system_id,
-                system_program(Trigger::Manual),
+                system_program(Trigger::immediate_manual()),
               );
             }
             ModelOp::Deactivate if !closed && ActorHot::<Test>::contains_key(system_id) => {
@@ -12069,10 +12812,10 @@ mod proptest_aaa {
             }
             ModelOp::Signal if !closed && ActorHot::<Test>::contains_key(system_id) => {
               let schedule = Schedule {
-                trigger: Trigger::OnAddressEvent {
-                  source_filter: SourceFilter::Any,
-                  asset_filter: AssetFilter::Any,
-                },
+                trigger: Trigger::immediate_address_event(
+                  SourceFilter::Any,
+                  AssetFilter::Any,
+                ),
                 cooldown_blocks: 0,
               };
               let _ = AAA::update_schedule(RuntimeOrigin::root(), system_id, schedule, None);

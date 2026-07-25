@@ -137,6 +137,7 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     asset_in: AssetId,
     asset_out: AssetId,
     amount_out: AmountResolution<Balance>,
+    max_amount_in: Balance,
     slippage_tolerance: Perbill,
   },
   AddLiquidity {
@@ -144,10 +145,13 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     asset_b: AssetId,
     amount_a: AmountResolution<Balance>,
     amount_b: AmountResolution<Balance>,
+    min_lp_out: Balance,
   },
   RemoveLiquidity {
     lp_asset: AssetId,
     amount: AmountResolution<Balance>,
+    min_amount_a: Balance,
+    min_amount_b: Balance,
   },
   Burn {
     asset: AssetId,
@@ -208,11 +212,13 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         asset_in,
         asset_out,
         amount_out,
+        max_amount_in,
         slippage_tolerance,
       } => Self::SwapExactOut {
         asset_in: asset_in.clone(),
         asset_out: asset_out.clone(),
         amount_out: amount_out.clone(),
+        max_amount_in: max_amount_in.clone(),
         slippage_tolerance: *slippage_tolerance,
       },
       Self::AddLiquidity {
@@ -220,15 +226,24 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         asset_b,
         amount_a,
         amount_b,
+        min_lp_out,
       } => Self::AddLiquidity {
         asset_a: asset_a.clone(),
         asset_b: asset_b.clone(),
         amount_a: amount_a.clone(),
         amount_b: amount_b.clone(),
+        min_lp_out: min_lp_out.clone(),
       },
-      Self::RemoveLiquidity { lp_asset, amount } => Self::RemoveLiquidity {
+      Self::RemoveLiquidity {
+        lp_asset,
+        amount,
+        min_amount_a,
+        min_amount_b,
+      } => Self::RemoveLiquidity {
         lp_asset: lp_asset.clone(),
         amount: amount.clone(),
+        min_amount_a: min_amount_a.clone(),
+        min_amount_b: min_amount_b.clone(),
       },
       Self::Burn { asset, amount } => Self::Burn {
         asset: asset.clone(),
@@ -303,12 +318,14 @@ impl<
         asset_in,
         asset_out,
         amount_out,
+        max_amount_in,
         slippage_tolerance,
       } => f
         .debug_struct("SwapExactOut")
         .field("asset_in", asset_in)
         .field("asset_out", asset_out)
         .field("amount_out", amount_out)
+        .field("max_amount_in", max_amount_in)
         .field("slippage_tolerance", slippage_tolerance)
         .finish(),
       Self::AddLiquidity {
@@ -316,17 +333,26 @@ impl<
         asset_b,
         amount_a,
         amount_b,
+        min_lp_out,
       } => f
         .debug_struct("AddLiquidity")
         .field("asset_a", asset_a)
         .field("asset_b", asset_b)
         .field("amount_a", amount_a)
         .field("amount_b", amount_b)
+        .field("min_lp_out", min_lp_out)
         .finish(),
-      Self::RemoveLiquidity { lp_asset, amount } => f
+      Self::RemoveLiquidity {
+        lp_asset,
+        amount,
+        min_amount_a,
+        min_amount_b,
+      } => f
         .debug_struct("RemoveLiquidity")
         .field("lp_asset", lp_asset)
         .field("amount", amount)
+        .field("min_amount_a", min_amount_a)
+        .field("min_amount_b", min_amount_b)
         .finish(),
       Self::Burn { asset, amount } => f
         .debug_struct("Burn")
@@ -418,18 +444,21 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
           asset_in: left_asset_in,
           asset_out: left_asset_out,
           amount_out: left_amount_out,
+          max_amount_in: left_max_amount_in,
           slippage_tolerance: left_slippage,
         },
         Self::SwapExactOut {
           asset_in: right_asset_in,
           asset_out: right_asset_out,
           amount_out: right_amount_out,
+          max_amount_in: right_max_amount_in,
           slippage_tolerance: right_slippage,
         },
       ) => {
         left_asset_in == right_asset_in
           && left_asset_out == right_asset_out
           && left_amount_out == right_amount_out
+          && left_max_amount_in == right_max_amount_in
           && left_slippage == right_slippage
       }
       (
@@ -438,29 +467,41 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
           asset_b: left_asset_b,
           amount_a: left_amount_a,
           amount_b: left_amount_b,
+          min_lp_out: left_min_lp_out,
         },
         Self::AddLiquidity {
           asset_a: right_asset_a,
           asset_b: right_asset_b,
           amount_a: right_amount_a,
           amount_b: right_amount_b,
+          min_lp_out: right_min_lp_out,
         },
       ) => {
         left_asset_a == right_asset_a
           && left_asset_b == right_asset_b
           && left_amount_a == right_amount_a
           && left_amount_b == right_amount_b
+          && left_min_lp_out == right_min_lp_out
       }
       (
         Self::RemoveLiquidity {
           lp_asset: left_lp_asset,
           amount: left_amount,
+          min_amount_a: left_min_amount_a,
+          min_amount_b: left_min_amount_b,
         },
         Self::RemoveLiquidity {
           lp_asset: right_lp_asset,
           amount: right_amount,
+          min_amount_a: right_min_amount_a,
+          min_amount_b: right_min_amount_b,
         },
-      ) => left_lp_asset == right_lp_asset && left_amount == right_amount,
+      ) => {
+        left_lp_asset == right_lp_asset
+          && left_amount == right_amount
+          && left_min_amount_a == right_min_amount_a
+          && left_min_amount_b == right_min_amount_b
+      }
       (
         Self::Burn {
           asset: left_asset,
@@ -786,6 +827,15 @@ impl<AccountId: PartialEq, MaxWhitelistSize: Get<u32>> PartialEq
 
 impl<AccountId: Eq, MaxWhitelistSize: Get<u32>> Eq for SourceFilter<AccountId, MaxWhitelistSize> {}
 
+impl<AccountId: Encode, MaxWhitelistSize: Get<u32>> SourceFilter<AccountId, MaxWhitelistSize> {
+  pub fn has_canonical_members(&self) -> bool {
+    match self {
+      Self::Any | Self::OwnerOnly => true,
+      Self::Whitelist(list) => is_non_empty_strictly_scale_ordered(list),
+    }
+  }
+}
+
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
 pub enum AssetFilter<AssetId, MaxWhitelistSize: Get<u32>> {
@@ -827,27 +877,40 @@ impl<AssetId: PartialEq, MaxWhitelistSize: Get<u32>> PartialEq
 
 impl<AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq for AssetFilter<AssetId, MaxWhitelistSize> {}
 
+impl<AssetId: Encode, MaxWhitelistSize: Get<u32>> AssetFilter<AssetId, MaxWhitelistSize> {
+  pub fn has_canonical_members(&self) -> bool {
+    match self {
+      Self::Any => true,
+      Self::Whitelist(list) => is_non_empty_strictly_scale_ordered(list),
+    }
+  }
+}
+
+fn is_non_empty_strictly_scale_ordered<Value: Encode, Bound: Get<u32>>(
+  values: &BoundedVec<Value, Bound>,
+) -> bool {
+  !values.is_empty()
+    && values
+      .windows(2)
+      .all(|pair| pair[0].encode() < pair[1].encode())
+}
+
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
-pub enum Trigger<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
-  Timer {
-    every_blocks: u32,
-  },
+pub enum TriggerSource<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
+  Manual,
   OnAddressEvent {
     source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
     asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
   },
-  Manual,
 }
 
 impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
-  for Trigger<AccountId, AssetId, MaxWhitelistSize>
+  for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
 {
   fn clone(&self) -> Self {
     match self {
-      Self::Timer { every_blocks } => Self::Timer {
-        every_blocks: *every_blocks,
-      },
+      Self::Manual => Self::Manual,
       Self::OnAddressEvent {
         source_filter,
         asset_filter,
@@ -855,20 +918,16 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
         source_filter: source_filter.clone(),
         asset_filter: asset_filter.clone(),
       },
-      Self::Manual => Self::Manual,
     }
   }
 }
 
 impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: Get<u32>>
-  core::fmt::Debug for Trigger<AccountId, AssetId, MaxWhitelistSize>
+  core::fmt::Debug for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
-      Self::Timer { every_blocks } => f
-        .debug_struct("Timer")
-        .field("every_blocks", every_blocks)
-        .finish(),
+      Self::Manual => f.write_str("Manual"),
       Self::OnAddressEvent {
         source_filter,
         asset_filter,
@@ -877,54 +936,329 @@ impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: G
         .field("source_filter", source_filter)
         .field("asset_filter", asset_filter)
         .finish(),
-      Self::Manual => f.write_str("Manual"),
     }
   }
 }
 
 impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> PartialEq
-  for Trigger<AccountId, AssetId, MaxWhitelistSize>
+  for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
 {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
-      (
-        Self::Timer {
-          every_blocks: left_every_blocks,
-        },
-        Self::Timer {
-          every_blocks: right_every_blocks,
-        },
-      ) => left_every_blocks == right_every_blocks,
-      (
-        Self::OnAddressEvent {
-          source_filter: left_source_filter,
-          asset_filter: left_asset_filter,
-        },
-        Self::OnAddressEvent {
-          source_filter: right_source_filter,
-          asset_filter: right_asset_filter,
-        },
-      ) => left_source_filter == right_source_filter && left_asset_filter == right_asset_filter,
       (Self::Manual, Self::Manual) => true,
+      (
+        Self::OnAddressEvent {
+          source_filter: left_source,
+          asset_filter: left_asset,
+        },
+        Self::OnAddressEvent {
+          source_filter: right_source,
+          asset_filter: right_asset,
+        },
+      ) => left_source == right_source && left_asset == right_asset,
       _ => false,
     }
   }
 }
 
 impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq
-  for Trigger<AccountId, AssetId, MaxWhitelistSize>
+  for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+{
+}
+
+impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>>
+  TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+{
+  pub fn has_canonical_filters(&self) -> bool {
+    match self {
+      Self::Manual => true,
+      Self::OnAddressEvent {
+        source_filter,
+        asset_filter,
+      } => source_filter.has_canonical_members() && asset_filter.has_canonical_members(),
+    }
+  }
+}
+
+pub type TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources> =
+  BoundedVec<TriggerSource<AccountId, AssetId, MaxWhitelistSize>, MaxTriggerSources>;
+
+#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
+pub enum CadenceMode<AccountId, AssetId, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> {
+  Always,
+  WhenSignalled(TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>),
+}
+
+impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
+  Clone for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  fn clone(&self) -> Self {
+    match self {
+      Self::Always => Self::Always,
+      Self::WhenSignalled(sources) => Self::WhenSignalled(sources.clone()),
+    }
+  }
+}
+
+impl<
+  AccountId: core::fmt::Debug,
+  AssetId: core::fmt::Debug,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+> core::fmt::Debug for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::Always => f.write_str("Always"),
+      Self::WhenSignalled(sources) => f.debug_tuple("WhenSignalled").field(sources).finish(),
+    }
+  }
+}
+
+impl<
+  AccountId: PartialEq,
+  AssetId: PartialEq,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+> PartialEq for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  fn eq(&self, other: &Self) -> bool {
+    match (self, other) {
+      (Self::Always, Self::Always) => true,
+      (Self::WhenSignalled(left), Self::WhenSignalled(right)) => left == right,
+      _ => false,
+    }
+  }
+}
+
+impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> Eq
+  for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
 {
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxWhitelistSize))]
-pub struct Schedule<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
-  pub trigger: Trigger<AccountId, AssetId, MaxWhitelistSize>,
+#[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
+pub enum TriggerPolicy<AccountId, AssetId, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
+{
+  Immediate {
+    sources: TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>,
+  },
+  Cadenced {
+    every_blocks: u32,
+    mode: CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>,
+  },
+}
+
+impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
+  Clone for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  fn clone(&self) -> Self {
+    match self {
+      Self::Immediate { sources } => Self::Immediate {
+        sources: sources.clone(),
+      },
+      Self::Cadenced { every_blocks, mode } => Self::Cadenced {
+        every_blocks: *every_blocks,
+        mode: mode.clone(),
+      },
+    }
+  }
+}
+
+impl<
+  AccountId: core::fmt::Debug,
+  AssetId: core::fmt::Debug,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+> core::fmt::Debug for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    match self {
+      Self::Immediate { sources } => f
+        .debug_struct("Immediate")
+        .field("sources", sources)
+        .finish(),
+      Self::Cadenced { every_blocks, mode } => f
+        .debug_struct("Cadenced")
+        .field("every_blocks", every_blocks)
+        .field("mode", mode)
+        .finish(),
+    }
+  }
+}
+
+impl<
+  AccountId: PartialEq,
+  AssetId: PartialEq,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+> PartialEq for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  fn eq(&self, other: &Self) -> bool {
+    match (self, other) {
+      (Self::Immediate { sources: left }, Self::Immediate { sources: right }) => left == right,
+      (
+        Self::Cadenced {
+          every_blocks: left_blocks,
+          mode: left_mode,
+        },
+        Self::Cadenced {
+          every_blocks: right_blocks,
+          mode: right_mode,
+        },
+      ) => left_blocks == right_blocks && left_mode == right_mode,
+      _ => false,
+    }
+  }
+}
+
+impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> Eq
+  for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+}
+
+impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
+  TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+{
+  pub fn immediate_manual() -> Self {
+    Self::Immediate {
+      sources: BoundedVec::try_from(alloc::vec![TriggerSource::Manual])
+        .unwrap_or_else(|_| panic!("MaxTriggerSources must admit Manual")),
+    }
+  }
+
+  pub fn immediate_address_event(
+    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
+    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
+  ) -> Self {
+    Self::Immediate {
+      sources: BoundedVec::try_from(alloc::vec![TriggerSource::OnAddressEvent {
+        source_filter,
+        asset_filter,
+      }])
+      .unwrap_or_else(|_| panic!("MaxTriggerSources must admit AddressEvent")),
+    }
+  }
+
+  pub fn immediate_manual_and_address_event(
+    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
+    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
+  ) -> Self {
+    Self::Immediate {
+      sources: BoundedVec::try_from(alloc::vec![
+        TriggerSource::Manual,
+        TriggerSource::OnAddressEvent {
+          source_filter,
+          asset_filter,
+        },
+      ])
+      .unwrap_or_else(|_| panic!("MaxTriggerSources must admit Manual and AddressEvent")),
+    }
+  }
+
+  pub fn cadenced_always(every_blocks: u32) -> Self {
+    Self::Cadenced {
+      every_blocks,
+      mode: CadenceMode::Always,
+    }
+  }
+
+  pub fn cadenced_when_signalled_manual(every_blocks: u32) -> Self {
+    Self::Cadenced {
+      every_blocks,
+      mode: CadenceMode::WhenSignalled(
+        BoundedVec::try_from(alloc::vec![TriggerSource::Manual])
+          .unwrap_or_else(|_| panic!("MaxTriggerSources must admit Manual")),
+      ),
+    }
+  }
+
+  pub fn cadenced_when_signalled_address_event(
+    every_blocks: u32,
+    source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
+    asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
+  ) -> Self {
+    Self::Cadenced {
+      every_blocks,
+      mode: CadenceMode::WhenSignalled(
+        BoundedVec::try_from(alloc::vec![TriggerSource::OnAddressEvent {
+          source_filter,
+          asset_filter,
+        }])
+        .unwrap_or_else(|_| panic!("MaxTriggerSources must admit AddressEvent")),
+      ),
+    }
+  }
+
+  pub fn sources(
+    &self,
+  ) -> Option<&TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>> {
+    match self {
+      Self::Immediate { sources }
+      | Self::Cadenced {
+        mode: CadenceMode::WhenSignalled(sources),
+        ..
+      } => Some(sources),
+      Self::Cadenced {
+        mode: CadenceMode::Always,
+        ..
+      } => None,
+    }
+  }
+
+  pub fn has_canonical_sources(&self) -> bool {
+    let Some(sources) = self.sources() else {
+      return true;
+    };
+    let filters_are_canonical = sources
+      .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds policy validation.
+      .all(TriggerSource::has_canonical_filters);
+    !sources.is_empty()
+      && filters_are_canonical
+      && sources.windows(2).all(|pair| {
+        let left = pair[0].encode();
+        let right = pair[1].encode();
+        left < right
+      })
+  }
+
+  pub fn cadence_blocks(&self) -> Option<u32> {
+    match self {
+      Self::Immediate { .. } => None,
+      Self::Cadenced { every_blocks, .. } => Some(*every_blocks),
+    }
+  }
+
+  pub fn manual_source_enabled(&self) -> bool {
+    self.sources().is_some_and(|sources| {
+      sources
+        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds source lookup.
+        .any(|source| matches!(source, TriggerSource::Manual))
+    })
+  }
+
+  pub fn address_event_source_enabled(&self) -> bool {
+    self.sources().is_some_and(|sources| {
+      sources
+        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds source lookup.
+        .any(|source| matches!(source, TriggerSource::OnAddressEvent { .. }))
+    })
+  }
+}
+
+pub type Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources> =
+  TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>;
+
+#[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
+#[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
+pub struct Schedule<AccountId, AssetId, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> {
+  pub trigger: Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>,
   pub cooldown_blocks: u32,
 }
 
-impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
-  for Schedule<AccountId, AssetId, MaxWhitelistSize>
+impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
+  Clone for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
 {
   fn clone(&self) -> Self {
     Self {
@@ -934,8 +1268,12 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
   }
 }
 
-impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: Get<u32>>
-  core::fmt::Debug for Schedule<AccountId, AssetId, MaxWhitelistSize>
+impl<
+  AccountId: core::fmt::Debug,
+  AssetId: core::fmt::Debug,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+> core::fmt::Debug for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Schedule")
@@ -945,16 +1283,20 @@ impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: G
   }
 }
 
-impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> PartialEq
-  for Schedule<AccountId, AssetId, MaxWhitelistSize>
+impl<
+  AccountId: PartialEq,
+  AssetId: PartialEq,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+> PartialEq for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
 {
   fn eq(&self, other: &Self) -> bool {
     self.trigger == other.trigger && self.cooldown_blocks == other.cooldown_blocks
   }
 }
 
-impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq
-  for Schedule<AccountId, AssetId, MaxWhitelistSize>
+impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> Eq
+  for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
 {
 }
 

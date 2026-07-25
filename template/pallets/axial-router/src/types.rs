@@ -67,7 +67,7 @@ pub trait AssetConversionApi<AccountId, Balance> {
   /// Get pool reserves
   fn get_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)>;
 
-  /// Quote price for exact tokens
+  /// Quote the output received from an exact input to one XYK pool.
   fn quote_price_exact_tokens_for_tokens(
     asset_in: AssetKind,
     asset_out: AssetKind,
@@ -75,12 +75,30 @@ pub trait AssetConversionApi<AccountId, Balance> {
     include_fee: bool,
   ) -> Option<Balance>;
 
-  /// Execute swap
+  /// Quote the input required to receive an exact output from one XYK pool.
+  fn quote_price_tokens_for_exact_tokens(
+    asset_in: AssetKind,
+    asset_out: AssetKind,
+    amount_out: Balance,
+    include_fee: bool,
+  ) -> Option<Balance>;
+
+  /// Execute an exact-input swap.
   fn swap_exact_tokens_for_tokens(
     who: AccountId,
     path: Vec<AssetKind>,
     amount_in: Balance,
     min_amount_out: Balance,
+    recipient: AccountId,
+    keep_alive: bool,
+  ) -> Result<Balance, DispatchError>;
+
+  /// Execute an exact-output swap and return the actual input spent.
+  fn swap_tokens_for_exact_tokens(
+    who: AccountId,
+    path: Vec<AssetKind>,
+    amount_out: Balance,
+    max_amount_in: Balance,
     recipient: AccountId,
     keep_alive: bool,
   ) -> Result<Balance, DispatchError>;

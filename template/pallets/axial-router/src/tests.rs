@@ -76,6 +76,124 @@ fn quote_exact_input_view_omits_router_fee_for_fee_exempt_accounts() {
 }
 
 #[test]
+fn asset_conversion_exact_output_boundary_quotes_and_executes_without_search() {
+  new_test_ext().execute_with(|| {
+    let user = 1u64;
+    let foreign = AssetKind::Local(2);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_out = 100 * PRECISION;
+    set_pool(foreign, native, reserve, reserve);
+    let required_in = <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::
+      quote_price_tokens_for_exact_tokens(foreign, native, amount_out, true)
+      .expect("direct exact output is quotable");
+    assert_eq!(
+      <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::swap_tokens_for_exact_tokens(
+        user,
+        vec![foreign, native],
+        amount_out,
+        required_in.saturating_sub(1),
+        user,
+        true,
+      ),
+      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+        "SlippageExceeded"
+      ))
+    );
+    let native_before = Balances::free_balance(user);
+    let spent =
+      <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::swap_tokens_for_exact_tokens(
+        user,
+        vec![foreign, native],
+        amount_out,
+        required_in,
+        user,
+        true,
+      )
+      .expect("native exact-output execution succeeds");
+    assert_eq!(spent, required_in);
+    assert!(Balances::free_balance(user) >= native_before.saturating_add(amount_out));
+  });
+}
+
+#[test]
+fn router_exact_output_quote_and_execution_enforce_total_input_cap() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let foreign = AssetKind::Local(2);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_out = 100 * PRECISION;
+    set_pool(foreign, native, reserve, reserve);
+
+    let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out)
+      .expect("exact-output route is quotable");
+    assert_eq!(quote.amount_out, amount_out);
+    assert_eq!(quote.mechanism, RouteMechanismKind::DirectXyk);
+    assert_eq!(quote.path, vec![foreign, native]);
+    assert_eq!(quote.amount_in, quote.amount_after_fee + quote.router_fee);
+    assert!(quote.router_fee > 0);
+
+    let input_before = Assets::balance(2, user);
+    let output_before = Balances::free_balance(user);
+    assert_noop!(
+      AxialRouter::execute_exact_out_for(
+        &user,
+        foreign,
+        native,
+        amount_out,
+        quote.amount_in - 1,
+        &user,
+      ),
+      Error::<Test>::SlippageExceeded
+    );
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Balances::free_balance(user), output_before);
+
+    let spent = AxialRouter::execute_exact_out_for(
+      &user,
+      foreign,
+      native,
+      amount_out,
+      quote.amount_in,
+      &user,
+    )
+    .expect("quoted exact-output route executes");
+    assert_eq!(spent, quote.amount_in);
+    assert_eq!(Balances::free_balance(user), output_before + amount_out);
+  });
+}
+
+#[test]
+fn router_exact_output_selects_bounded_native_anchored_path_without_search() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Local(3);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_out = 50 * PRECISION;
+    set_pool(from, native, reserve, reserve);
+    set_pool(native, to, reserve, reserve);
+
+    let quote = AxialRouter::quote_exact_out(user, from, to, amount_out)
+      .expect("Native-anchored exact-output route is quotable");
+    assert_eq!(quote.amount_out, amount_out);
+    assert_eq!(quote.mechanism, RouteMechanismKind::MultiHopNative);
+    assert_eq!(quote.path, vec![from, native, to]);
+    assert!(quote.amount_after_fee > amount_out);
+    let output_before = Assets::balance(3, user);
+    let spent =
+      AxialRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user)
+        .expect("Native-anchored exact-output route executes");
+    assert_eq!(spent, quote.amount_in);
+    assert_eq!(Assets::balance(3, user), output_before + amount_out);
+  });
+}
+
+#[test]
 fn precision_constant_validation() {
   // Test that PRECISION constant is correct (10^12)
   new_test_ext().execute_with(|| {

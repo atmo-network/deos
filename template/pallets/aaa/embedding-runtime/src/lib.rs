@@ -7,13 +7,13 @@ use codec::{Decode, DecodeWithMemTracking, Encode};
 use pallet_aaa::{AssetOps, FeeCollector};
 use polkadot_sdk::{
   frame_support::{
-    PalletId, construct_runtime,
+    BoundedVec, PalletId, construct_runtime,
     traits::{ConstU8, ConstU32, ConstU64, ConstU128, Currency, ExistenceRequirement, Get},
     weights::Weight,
   },
   frame_system::EnsureRoot,
   sp_runtime::{
-    DispatchError, DispatchResult, generic, impl_tx_ext_default,
+    DispatchError, DispatchResult, Perbill, generic, impl_tx_ext_default,
     traits::{
       BlakeTwo256, DispatchInfoOf, IdentifyAccount, IdentityLookup, Lazy, PostDispatchInfoOf,
       TransactionExtension, Verify,
@@ -285,6 +285,7 @@ impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
     _: AssetId,
     _: Balance,
     _: Balance,
+    _: Balance,
   ) -> Result<(Balance, Balance, Balance), pallet_aaa::TaskFailure> {
     Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
       "LiquidityUnsupported",
@@ -294,6 +295,8 @@ impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
   fn remove_liquidity(
     _: &AccountId,
     _: AssetId,
+    _: Balance,
+    _: Balance,
     _: Balance,
   ) -> Result<(Balance, Balance), pallet_aaa::TaskFailure> {
     Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
@@ -501,6 +504,20 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance> for FixtureBenchma
   }
 }
 
+pub struct NoPrioritySystemAaaIds;
+impl Get<BoundedVec<pallet_aaa::AaaId, ConstU32<1>>> for NoPrioritySystemAaaIds {
+  fn get() -> BoundedVec<pallet_aaa::AaaId, ConstU32<1>> {
+    BoundedVec::default()
+  }
+}
+
+pub struct FullServiceBudget;
+impl Get<Perbill> for FullServiceBudget {
+  fn get() -> Perbill {
+    Perbill::one()
+  }
+}
+
 impl pallet_aaa::Config for Runtime {
   type AssetId = AssetId;
   type Balance = Balance;
@@ -522,6 +539,10 @@ impl pallet_aaa::Config for Runtime {
   type MaxConditionsPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
+  type MaxPrioritySystemAaaIds = ConstU32<1>;
+  type PrioritySystemAaaIds = NoPrioritySystemAaaIds;
+  type SystemAaaBudget = FullServiceBudget;
+  type UserAaaBudget = FullServiceBudget;
   type MaxQueueLength = ConstU32<128>;
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
@@ -529,6 +550,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxWakeupsPerBlock = ConstU32<16>;
   type MaxSweepPerBlock = ConstU32<4>;
   type MaxWhitelistSize = ConstU32<4>;
+  type MaxTriggerSources = ConstU32<4>;
   type MaxSplitTransferLegs = ConstU32<4>;
   type MaxExecutionDelayBlocks = ConstU64<1_000>;
   type MaxTimerJitterBlocks = ConstU32<0>;
@@ -737,7 +759,7 @@ mod tests {
       },])
       .expect("one condition fits");
       let program = active_program(
-        pallet_aaa::Trigger::Manual,
+        pallet_aaa::Trigger::immediate_manual(),
         0,
         alloc::vec![pallet_aaa::Step {
           conditions: pallet_aaa::ConditionSet::Any(conditions),
@@ -783,7 +805,7 @@ mod tests {
       assert_ok!(AAA::activate_aaa(
         RuntimeOrigin::signed(ALICE),
         aaa_id,
-        transfer_program(pallet_aaa::Trigger::Manual, 5),
+        transfer_program(pallet_aaa::Trigger::immediate_manual(), 5),
       ));
       assert_ok!(<Balances as Currency<AccountId>>::transfer(
         &ALICE,
@@ -806,7 +828,7 @@ mod tests {
   fn independent_runtime_executes_a_native_transfer_plan() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let program = transfer_program(pallet_aaa::Trigger::Manual, 50);
+      let program = transfer_program(pallet_aaa::Trigger::immediate_manual(), 50);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -859,7 +881,7 @@ mod tests {
       ])
       .expect("maximum Any group fits");
       let program = active_program(
-        pallet_aaa::Trigger::Manual,
+        pallet_aaa::Trigger::immediate_manual(),
         0,
         alloc::vec![
           pallet_aaa::Step {
@@ -912,10 +934,10 @@ mod tests {
   fn executive_balance_transfer_submits_direct_ingress_exact_once() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_aaa::Trigger::OnAddressEvent {
-        source_filter: pallet_aaa::SourceFilter::Any,
-        asset_filter: pallet_aaa::AssetFilter::Any,
-      };
+      let trigger = pallet_aaa::Trigger::immediate_address_event(
+        pallet_aaa::SourceFilter::Any,
+        pallet_aaa::AssetFilter::Any,
+      );
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -945,10 +967,10 @@ mod tests {
   fn failed_executive_transfer_submits_neither_value_nor_signal() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_aaa::Trigger::OnAddressEvent {
-        source_filter: pallet_aaa::SourceFilter::Any,
-        asset_filter: pallet_aaa::AssetFilter::Any,
-      };
+      let trigger = pallet_aaa::Trigger::immediate_address_event(
+        pallet_aaa::SourceFilter::Any,
+        pallet_aaa::AssetFilter::Any,
+      );
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -987,7 +1009,7 @@ mod tests {
         .expect("four steps fit the global six-step bound");
       let oversized_program = pallet_aaa::ProgramInput::Active {
         schedule: pallet_aaa::Schedule {
-          trigger: pallet_aaa::Trigger::Manual,
+          trigger: pallet_aaa::Trigger::immediate_manual(),
           cooldown_blocks: 0,
         },
         schedule_window: None,
@@ -1010,7 +1032,7 @@ mod tests {
       assert!(admission.all_lte(GuaranteedOnIdleWeight::get()));
       let admitted_program = pallet_aaa::ProgramInput::Active {
         schedule: pallet_aaa::Schedule {
-          trigger: pallet_aaa::Trigger::Manual,
+          trigger: pallet_aaa::Trigger::immediate_manual(),
           cooldown_blocks: 0,
         },
         schedule_window: None,
@@ -1035,10 +1057,10 @@ mod tests {
   fn direct_runtime_ingress_is_exact_once() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_aaa::Trigger::OnAddressEvent {
-        source_filter: pallet_aaa::SourceFilter::Any,
-        asset_filter: pallet_aaa::AssetFilter::Any,
-      };
+      let trigger = pallet_aaa::Trigger::immediate_address_event(
+        pallet_aaa::SourceFilter::Any,
+        pallet_aaa::AssetFilter::Any,
+      );
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1076,21 +1098,17 @@ mod tests {
           RuntimeOrigin::root(),
           ALICE,
           pallet_aaa::Mutability::Mutable,
-          transfer_program(pallet_aaa::Trigger::Timer { every_blocks: 20 }, 1),
+          transfer_program(pallet_aaa::Trigger::cadenced_always(20), 1),
         ));
         let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
         assert_ok!(transfer_and_notify_actor(aaa_id, &ALICE, NATIVE_ASSET, 10,));
         actor_ids.push(aaa_id);
       }
       assert_eq!(pallet_aaa::WakeupPages::<Runtime>::iter().count(), 2);
-      for aaa_id in &actor_ids {
-        assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), *aaa_id));
+      for block in 21..=25 {
+        System::set_block_number(block);
+        let _ = AAA::on_idle(block, Weight::MAX);
       }
-      assert_eq!(pallet_aaa::WakeupPages::<Runtime>::iter().count(), 2);
-      assert_eq!(pallet_aaa::QueuePages::<Runtime>::iter().count(), 2);
-
-      System::set_block_number(2);
-      let _ = AAA::on_idle(2, Weight::MAX);
       assert!(
         actor_ids
           .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
@@ -1124,7 +1142,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_aaa::Mutability::Mutable,
-        transfer_program(pallet_aaa::Trigger::Manual, 5),
+        transfer_program(pallet_aaa::Trigger::immediate_manual(), 5),
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       let sovereign = AAA::aaa_instances(aaa_id)
@@ -1158,7 +1176,7 @@ mod tests {
         AAA::create_user_aaa(
           RuntimeOrigin::signed(ALICE),
           pallet_aaa::Mutability::Mutable,
-          program_with_task(pallet_aaa::Trigger::Manual, mint_task()),
+          program_with_task(pallet_aaa::Trigger::immediate_manual(), mint_task()),
         ),
         pallet_aaa::Error::<Runtime>::MintNotAllowedForUserAaa
       );
@@ -1172,14 +1190,14 @@ mod tests {
         AAA::activate_aaa(
           RuntimeOrigin::signed(ALICE),
           dormant_id,
-          program_with_task(pallet_aaa::Trigger::Manual, mint_task()),
+          program_with_task(pallet_aaa::Trigger::immediate_manual(), mint_task()),
         ),
         pallet_aaa::Error::<Runtime>::MintNotAllowedForUserAaa
       );
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        transfer_program(pallet_aaa::Trigger::Manual, 1),
+        transfer_program(pallet_aaa::Trigger::immediate_manual(), 1),
       ));
       let active_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       assert_noop!(
@@ -1195,7 +1213,7 @@ mod tests {
         RuntimeOrigin::root(),
         ALICE,
         pallet_aaa::Mutability::Mutable,
-        program_with_task(pallet_aaa::Trigger::Manual, mint_task()),
+        program_with_task(pallet_aaa::Trigger::immediate_manual(), mint_task()),
       ));
       let system_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       let sovereign = AAA::aaa_instances(system_id)
@@ -1219,7 +1237,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let plan = active_program(
-        pallet_aaa::Trigger::Manual,
+        pallet_aaa::Trigger::immediate_manual(),
         2,
         alloc::vec![
           step(
@@ -1293,7 +1311,7 @@ mod tests {
         ALICE,
         pallet_aaa::Mutability::Mutable,
         active_program(
-          pallet_aaa::Trigger::Manual,
+          pallet_aaa::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
         ),
@@ -1331,10 +1349,10 @@ mod tests {
   fn suspended_direct_ingress_latches_once_and_survives_cancellation() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let trigger = pallet_aaa::Trigger::OnAddressEvent {
-        source_filter: pallet_aaa::SourceFilter::Any,
-        asset_filter: pallet_aaa::AssetFilter::Any,
-      };
+      let trigger = pallet_aaa::Trigger::immediate_address_event(
+        pallet_aaa::SourceFilter::Any,
+        pallet_aaa::AssetFilter::Any,
+      );
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1407,7 +1425,7 @@ mod tests {
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
         active_program(
-          pallet_aaa::Trigger::Manual,
+          pallet_aaa::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
         ),
@@ -1445,7 +1463,7 @@ mod tests {
         ALICE,
         pallet_aaa::Mutability::Mutable,
         active_program(
-          pallet_aaa::Trigger::Manual,
+          pallet_aaa::Trigger::immediate_manual(),
           0,
           alloc::vec![step(
             pallet_aaa::Task::Stake {
@@ -1472,7 +1490,7 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let unsupported_retry = active_program(
-        pallet_aaa::Trigger::Manual,
+        pallet_aaa::Trigger::immediate_manual(),
         1,
         alloc::vec![step(
           pallet_aaa::Task::Stake {
@@ -1534,7 +1552,7 @@ mod tests {
         ALICE,
         pallet_aaa::Mutability::Mutable,
         active_program(
-          pallet_aaa::Trigger::Manual,
+          pallet_aaa::Trigger::immediate_manual(),
           1,
           alloc::vec![temporary_swap_step()],
         ),
@@ -1580,7 +1598,7 @@ mod tests {
       .expect("two-step plan fits");
       let program = pallet_aaa::ProgramInput::Active {
         schedule: pallet_aaa::Schedule {
-          trigger: pallet_aaa::Trigger::Manual,
+          trigger: pallet_aaa::Trigger::immediate_manual(),
           cooldown_blocks: 0,
         },
         schedule_window: None,
@@ -1621,12 +1639,13 @@ mod tests {
         asset_in: NATIVE_ASSET,
         asset_out: 1,
         amount_out: pallet_aaa::AmountResolution::Fixed(50),
+        max_amount_in: 100,
         slippage_tolerance: Perbill::zero(),
       };
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        program_with_task(pallet_aaa::Trigger::Manual, task),
+        program_with_task(pallet_aaa::Trigger::immediate_manual(), task),
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(

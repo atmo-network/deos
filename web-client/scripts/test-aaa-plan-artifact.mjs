@@ -38,7 +38,7 @@ test('canonical dormant artifact is deterministic and round-trips exact SCALE', 
   const artifact = dormantArtifact();
   assert.equal(
     artifact.planId,
-    '0x191f54c2fa3b3cb67b674cf6c519daa0a97e7ef839a717946967021139cda940',
+    '0x04192cf229400ac8e1ea7739ce8c877aaf278d7d82b71025a3c7d4d4316394dc',
   );
   const inspection = inspectAaaPlanArtifact(artifact, metadataBytes, runtime);
   assert.equal(inspection.valid, true);
@@ -55,7 +55,12 @@ test('active ProgramInput encodes and projects every nested value losslessly', (
     type: 'Active',
     value: {
       schedule: {
-        trigger: { type: 'Manual', value: undefined },
+        trigger: {
+          type: 'Immediate',
+          value: {
+            sources: [{ type: 'Manual', value: undefined }],
+          },
+        },
         cooldown_blocks: 5,
       },
       schedule_window: undefined,
@@ -114,7 +119,12 @@ test('condition aggregate mode changes canonical identity and remains diff-visib
         type: 'Active',
         value: {
           schedule: {
-            trigger: { type: 'Manual', value: undefined },
+            trigger: {
+              type: 'Immediate',
+              value: {
+                sources: [{ type: 'Manual', value: undefined }],
+              },
+            },
             cooldown_blocks: 0,
           },
           schedule_window: undefined,
@@ -155,6 +165,69 @@ test('condition aggregate mode changes canonical identity and remains diff-visib
           change.path.endsWith('/conditions/type') &&
           change.before === 'All' &&
           change.after === 'Any',
+      ),
+    );
+  }
+});
+
+test('trigger admission diff stays inside the trigger tree and never invents plan control', () => {
+  const inspectTrigger = (trigger) => {
+    const artifact = createAaaPlanArtifact({
+      metadataBytes,
+      runtime,
+      aaaType: 'User',
+      mutability: 'Mutable',
+      programScale: encodeAaaProgramValue(metadataBytes, {
+        type: 'Active',
+        value: {
+          schedule: { trigger, cooldown_blocks: 0 },
+          schedule_window: undefined,
+          execution_plan: [
+            {
+              conditions: { type: 'Always', value: undefined },
+              task: { type: 'StopCycle', value: undefined },
+              on_error: { type: 'AbortCycle', value: undefined },
+            },
+          ],
+          funding_source_policy: { type: 'OwnerOnly', value: undefined },
+        },
+      }),
+    });
+    const inspection = inspectAaaPlanArtifact(artifact, metadataBytes, runtime);
+    assert.equal(inspection.valid, true);
+    if (!inspection.valid) throw new Error('fixture must inspect');
+    return inspection;
+  };
+  const manual = [{ type: 'Manual', value: undefined }];
+  const immediate = inspectTrigger({
+    type: 'Immediate',
+    value: { sources: manual },
+  });
+  const cadenced = inspectTrigger({
+    type: 'Cadenced',
+    value: {
+      every_blocks: 10,
+      mode: { type: 'WhenSignalled', value: manual },
+    },
+  });
+  const diff = diffAaaPlanArtifacts(immediate, cadenced);
+  assert.equal(diff.compatible, true);
+  if (diff.compatible) {
+    assert(diff.changes.length > 0);
+    assert(
+      diff.changes.every((change) =>
+        ('path' in change ? change.path : change.from).startsWith(
+          '/value/schedule/trigger',
+        ),
+      ),
+    );
+    assert(
+      diff.changes.some(
+        (change) =>
+          change.kind === 'replace' &&
+          change.path === '/value/schedule/trigger/type' &&
+          change.before === 'Immediate' &&
+          change.after === 'Cadenced',
       ),
     );
   }

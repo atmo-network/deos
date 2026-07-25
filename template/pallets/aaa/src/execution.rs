@@ -71,10 +71,13 @@ enum PreparedTask<T: Config> {
     asset_b: T::AssetId,
     amount_a: T::Balance,
     amount_b: T::Balance,
+    min_lp_out: T::Balance,
   },
   RemoveLiquidity {
     lp_asset: T::AssetId,
     amount: T::Balance,
+    min_amount_a: T::Balance,
+    min_amount_b: T::Balance,
   },
   Stake {
     asset: T::AssetId,
@@ -1012,6 +1015,7 @@ impl<T: Config> Pallet<T> {
       | AaaTask::RemoveLiquidity {
         lp_asset: asset,
         amount,
+        ..
       } => Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces),
       AaaTask::SwapExactIn {
         asset_in,
@@ -1028,6 +1032,7 @@ impl<T: Config> Pallet<T> {
         asset_b,
         amount_a,
         amount_b,
+        ..
       } => {
         Self::push_trigger_surface(amount_a, ResolutionSurface::Asset(*asset_a), surfaces);
         Self::push_trigger_surface(amount_b, ResolutionSurface::Asset(*asset_b), surfaces);
@@ -1100,6 +1105,18 @@ impl<T: Config> Pallet<T> {
       .get(&surface)
       .copied()
       .ok_or(Error::<T>::SnapshotUnavailable.into())
+  }
+
+  fn cap_dex_trade(actor: &T::AccountId, amount: T::Balance) -> T::Balance {
+    T::DexOps::system_trade_cap(actor)
+      .map(|cap| amount.min(cap))
+      .unwrap_or(amount)
+  }
+
+  fn cap_liquidity_donation(actor: &T::AccountId, amount: T::Balance) -> T::Balance {
+    T::LiquidityDonationOps::system_trade_cap(actor)
+      .map(|cap| amount.min(cap))
+      .unwrap_or(amount)
   }
 
   fn prepare_task(
@@ -1236,7 +1253,7 @@ impl<T: Config> Pallet<T> {
         Ok(PreparedTaskOutcome::Executable(PreparedTask::SwapExactIn {
           asset_in: *asset_in,
           asset_out: *asset_out,
-          amount_in: resolved,
+          amount_in: Self::cap_dex_trade(actor, resolved),
           slippage_tolerance: *slippage_tolerance,
         }))
       }
@@ -1244,6 +1261,7 @@ impl<T: Config> Pallet<T> {
         asset_in,
         asset_out,
         amount_out,
+        max_amount_in,
         slippage_tolerance,
       } => {
         let resolved = match Self::resolve_for_task(
@@ -1262,7 +1280,9 @@ impl<T: Config> Pallet<T> {
           }
         };
         let max_amount_in = Self::spendable_balance(actor, *asset_in, reserved)
-          .saturating_sub(T::AssetOps::minimum_balance(*asset_in));
+          .saturating_sub(T::AssetOps::minimum_balance(*asset_in))
+          .min(*max_amount_in);
+        let max_amount_in = Self::cap_dex_trade(actor, max_amount_in);
         if max_amount_in.is_zero() {
           return Ok(PreparedTaskOutcome::FundingUnavailable);
         }
@@ -1281,6 +1301,7 @@ impl<T: Config> Pallet<T> {
         asset_b,
         amount_a,
         amount_b,
+        min_lp_out,
       } => {
         let outcome_a = Self::resolve_for_task(
           amount_a,
@@ -1312,13 +1333,19 @@ impl<T: Config> Pallet<T> {
             PreparedTask::AddLiquidity {
               asset_a: *asset_a,
               asset_b: *asset_b,
-              amount_a: resolved_a,
-              amount_b: resolved_b,
+              amount_a: Self::cap_dex_trade(actor, resolved_a),
+              amount_b: Self::cap_dex_trade(actor, resolved_b),
+              min_lp_out: *min_lp_out,
             },
           )),
         }
       }
-      AaaTask::RemoveLiquidity { lp_asset, amount } => {
+      AaaTask::RemoveLiquidity {
+        lp_asset,
+        amount,
+        min_amount_a,
+        min_amount_b,
+      } => {
         let resolved = match Self::resolve_for_task(
           amount,
           *lp_asset,
@@ -1337,7 +1364,9 @@ impl<T: Config> Pallet<T> {
         Ok(PreparedTaskOutcome::Executable(
           PreparedTask::RemoveLiquidity {
             lp_asset: *lp_asset,
-            amount: resolved,
+            amount: Self::cap_dex_trade(actor, resolved),
+            min_amount_a: *min_amount_a,
+            min_amount_b: *min_amount_b,
           },
         ))
       }
@@ -1387,7 +1416,7 @@ impl<T: Config> Pallet<T> {
           PreparedTask::DonateLiquidity {
             asset_a: *asset_a,
             asset_b: *asset_b,
-            amount: resolved,
+            amount: Self::cap_liquidity_donation(actor, resolved),
             max_ratio_error: *max_ratio_error,
           },
         ))
@@ -1525,9 +1554,10 @@ impl<T: Config> Pallet<T> {
             asset_b,
             amount_a,
             amount_b,
+            min_lp_out,
           } => {
             let (used_a, used_b, lp_minted) =
-              T::DexOps::add_liquidity(actor, asset_a, asset_b, amount_a, amount_b)?;
+              T::DexOps::add_liquidity(actor, asset_a, asset_b, amount_a, amount_b, min_lp_out)?;
             let _ = (used_a, used_b);
             Self::deposit_event(Event::LiquidityAdded {
               aaa_id,
@@ -1536,8 +1566,14 @@ impl<T: Config> Pallet<T> {
               lp_minted,
             });
           }
-          PreparedTask::RemoveLiquidity { lp_asset, amount } => {
-            let (out_a, out_b) = T::DexOps::remove_liquidity(actor, lp_asset, amount)?;
+          PreparedTask::RemoveLiquidity {
+            lp_asset,
+            amount,
+            min_amount_a,
+            min_amount_b,
+          } => {
+            let (out_a, out_b) =
+              T::DexOps::remove_liquidity(actor, lp_asset, amount, min_amount_a, min_amount_b)?;
             Self::deposit_event(Event::LiquidityRemoved {
               aaa_id,
               lp_asset,

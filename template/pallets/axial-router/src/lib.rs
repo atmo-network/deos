@@ -93,6 +93,35 @@ pub struct RouterQuote {
   pub total_fees: Balance,
 }
 
+/// Authoritative caller-aware exact-output quote.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+pub struct ExactOutputQuote {
+  /// Total input required, including the router fee.
+  pub amount_in: Balance,
+  /// Router fee charged in the input asset.
+  pub router_fee: Balance,
+  /// Maximum input passed into native route execution after fee collection.
+  pub amount_after_fee: Balance,
+  /// Exact recipient output requested by the caller.
+  pub amount_out: Balance,
+  /// Canonical exact-output mechanism.
+  pub mechanism: RouteMechanismKind,
+  /// Canonical direct or Native-anchored path.
+  pub path: Vec<AssetKind>,
+  /// Current route price-impact snapshot.
+  pub price_impact: Perbill,
+  /// Total known fee burden.
+  pub total_fees: Balance,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ExactOutputRoute {
+  required_input: Balance,
+  path: Vec<AssetKind>,
+  mechanism: RouteMechanism,
+  price_impact: Perbill,
+}
+
 impl RouteComparison {
   /// Create new route comparison
   pub fn new(
@@ -486,7 +515,7 @@ pub mod pallet {
     }
 
     /// Validate price protection before swap execution
-    fn validate_price_protection(
+    pub fn validate_price_protection(
       path: &[AssetKind],
       amount_in: Balance,
       min_amount_out: Balance,
@@ -637,6 +666,52 @@ pub mod pallet {
       Ok(amount_out)
     }
 
+    /// Execute a caller-aware native exact-output XYK route under a total input cap.
+    #[transactional]
+    pub fn execute_exact_out_for(
+      who: &T::AccountId,
+      from: AssetKind,
+      to: AssetKind,
+      amount_out: Balance,
+      max_amount_in: Balance,
+      recipient: &T::AccountId,
+    ) -> Result<Balance, DispatchError> {
+      ensure!(!max_amount_in.is_zero(), Error::<T>::ZeroAmount);
+      let quote = Self::prepare_exact_output_quote(who, from, to, amount_out)?;
+      ensure!(
+        quote.amount_in <= max_amount_in,
+        Error::<T>::SlippageExceeded
+      );
+      let keep_alive = !Self::is_fee_exempt(who);
+      Self::ensure_can_debit_input(who, from, quote.amount_in, keep_alive)?;
+      Self::validate_price_protection(&quote.path, quote.amount_after_fee, amount_out, amount_out)?;
+      Self::collect_router_fee(from, quote.router_fee, who)?;
+      Self::update_oracle_from_reserves(from, to)?;
+      let spent_after_fee = T::AssetConversion::swap_tokens_for_exact_tokens(
+        who.clone(),
+        quote.path.clone(),
+        amount_out,
+        quote.amount_after_fee,
+        recipient.clone(),
+        keep_alive,
+      )?;
+      ensure!(
+        spent_after_fee <= quote.amount_after_fee,
+        Error::<T>::SlippageExceeded
+      );
+      let amount_in = spent_after_fee.saturating_add(quote.router_fee);
+      ensure!(amount_in <= max_amount_in, Error::<T>::SlippageExceeded);
+      Self::deposit_event(Event::SwapExecuted {
+        who: who.clone(),
+        from,
+        to,
+        amount_in,
+        amount_out,
+        mechanism: quote.mechanism,
+      });
+      Ok(amount_in)
+    }
+
     /// Check whether an account is exempt from router fees (system actors)
     pub fn is_fee_exempt(who: &T::AccountId) -> bool {
       who == &Self::account_id()
@@ -779,6 +854,93 @@ pub mod pallet {
         .max_by_key(|route| route.expected_output)
     }
 
+    /// Select the exact-output XYK route requiring the least post-fee input.
+    /// Direct TMC minting remains exact-input only because its adapter cannot
+    /// promise an exact recipient amount without an inverse execution contract.
+    fn find_optimal_exact_output_route(
+      from: AssetKind,
+      to: AssetKind,
+      amount_out: Balance,
+    ) -> Option<ExactOutputRoute> {
+      let native_asset = T::NativeAsset::get();
+      let mut candidates = Vec::new();
+      if let Some(required_input) =
+        T::AssetConversion::quote_price_tokens_for_exact_tokens(from, to, amount_out, true)
+      {
+        candidates.push(ExactOutputRoute {
+          required_input,
+          path: vec![from, to],
+          mechanism: RouteMechanism::DirectXyk {
+            pool_id: (from, to),
+          },
+          price_impact: Self::calculate_price_impact(from, to, required_input, amount_out),
+        });
+      }
+      if from != native_asset && to != native_asset {
+        let native_required = T::AssetConversion::quote_price_tokens_for_exact_tokens(
+          native_asset,
+          to,
+          amount_out,
+          true,
+        );
+        if let Some(native_required) = native_required {
+          if let Some(required_input) = T::AssetConversion::quote_price_tokens_for_exact_tokens(
+            from,
+            native_asset,
+            native_required,
+            true,
+          ) {
+            let path = vec![from, native_asset, to];
+            candidates.push(ExactOutputRoute {
+              required_input,
+              price_impact: Self::calculate_multi_hop_price_impact(
+                &path,
+                required_input,
+                amount_out,
+              ),
+              mechanism: RouteMechanism::MultiHopNative { hops: path.clone() },
+              path,
+            });
+          }
+        }
+      }
+      candidates
+        .into_iter()
+        .min_by_key(|route| route.required_input)
+    }
+
+    fn exact_output_router_fee(who: &T::AccountId, required_input: Balance) -> Balance {
+      if Self::is_fee_exempt(who) {
+        return 0;
+      }
+      let retained = Perbill::one() - RouterFee::<T>::get();
+      let gross_input = retained.saturating_reciprocal_mul_ceil(required_input);
+      Self::calculate_router_fee(gross_input)
+    }
+
+    fn prepare_exact_output_quote(
+      who: &T::AccountId,
+      from: AssetKind,
+      to: AssetKind,
+      amount_out: Balance,
+    ) -> Result<ExactOutputQuote, Error<T>> {
+      ensure!(from != to, Error::<T>::IdenticalAssets);
+      ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmount);
+      let route = Self::find_optimal_exact_output_route(from, to, amount_out)
+        .ok_or(Error::<T>::NoRouteFound)?;
+      let router_fee = Self::exact_output_router_fee(who, route.required_input);
+      Ok(ExactOutputQuote {
+        amount_in: route.required_input.saturating_add(router_fee),
+        router_fee,
+        amount_after_fee: route.required_input,
+        amount_out,
+        mechanism: RouteMechanismKind::from(&route.mechanism),
+        path: route.path,
+        price_impact: route.price_impact,
+        total_fees: router_fee,
+      })
+    }
+
     /// Quote multi-hop route output
     fn quote_multi_hop_route(path: &[AssetKind], amount_in: Balance) -> Option<Balance> {
       if path.len() < 2 {
@@ -899,6 +1061,16 @@ pub mod pallet {
       let route =
         Self::find_optimal_route(from, to, amount_after_fee).ok_or(Error::<T>::NoRouteFound)?;
       Ok(route.into_router_quote(amount_in, router_fee))
+    }
+
+    /// Returns the least-input native XYK route for an exact recipient output.
+    pub fn quote_exact_out(
+      who: T::AccountId,
+      from: AssetKind,
+      to: AssetKind,
+      amount_out: Balance,
+    ) -> Result<ExactOutputQuote, Error<T>> {
+      Self::prepare_exact_output_quote(&who, from, to, amount_out)
     }
   }
 

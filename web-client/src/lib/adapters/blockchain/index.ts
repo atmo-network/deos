@@ -117,6 +117,27 @@ function automationContinuationSnapshot(
   };
 }
 
+function triggerSourceLabel(source: unknown): string {
+  const variant = triggerRecord(source);
+  switch (variant?.type) {
+    case 'Manual':
+      return 'Manual';
+    case 'OnAddressEvent':
+      return 'Address event';
+    default:
+      return typeof variant?.type === 'string'
+        ? variant.type
+        : 'Unknown source';
+  }
+}
+
+function triggerSourcesLabel(value: unknown): string {
+  const sources = Array.isArray(value) ? value : [];
+  return sources.length === 0
+    ? 'No sources'
+    : sources.map(triggerSourceLabel).join(' + ');
+}
+
 function automationTriggerLabel(trigger?: {
   type: string;
   value?: unknown;
@@ -124,18 +145,18 @@ function automationTriggerLabel(trigger?: {
   if (!trigger) {
     return 'Unavailable';
   }
+  const value = triggerRecord(trigger.value);
   switch (trigger.type) {
-    case 'Timer': {
-      const timer = triggerRecord(trigger.value);
-      const everyBlocks = timer?.every_blocks;
-      const timerLabel =
-        typeof everyBlocks === 'number' ? everyBlocks : 'unknown';
-      return `Timer/${timerLabel}`;
+    case 'Immediate':
+      return `Immediate · ${triggerSourcesLabel(value?.sources)}`;
+    case 'Cadenced': {
+      const everyBlocks = value?.every_blocks;
+      const cadence = typeof everyBlocks === 'number' ? everyBlocks : 'unknown';
+      const mode = triggerRecord(value?.mode);
+      return mode?.type === 'WhenSignalled'
+        ? `Cadenced/${cadence} · ${triggerSourcesLabel(mode.value)}`
+        : `Cadenced/${cadence} · Always`;
     }
-    case 'OnAddressEvent':
-      return 'Address event';
-    case 'Manual':
-      return 'Manual';
     default:
       return trigger.type;
   }

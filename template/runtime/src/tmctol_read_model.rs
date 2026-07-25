@@ -7,7 +7,7 @@
 //! historical metrics, dashboards, trend analysis, or alerting; those belong in external indexers,
 //! operator tooling, or test-only analytical helpers that may consume this projection.
 
-use pallet_aaa::{AaaType, Task, Trigger};
+use pallet_aaa::{AaaType, Task};
 use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
 use polkadot_sdk::pallet_asset_conversion::{self, PoolLocator};
 use polkadot_sdk::sp_runtime::traits::Zero;
@@ -250,8 +250,7 @@ impl TmctolReadModel {
       has_required_swap_step,
     ) = maybe_actor
       .map(|(hot, program)| {
-        let has_address_event_trigger =
-          matches!(program.schedule.trigger, Trigger::OnAddressEvent { .. });
+        let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
         let has_required_burn_step = program
           .execution_plan
           .iter()
@@ -337,8 +336,7 @@ impl TmctolReadModel {
     };
 
     let is_system = hot.actor_class.aaa_type() == AaaType::System;
-    let has_address_event_trigger =
-      matches!(program.schedule.trigger, Trigger::OnAddressEvent { .. });
+    let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;
     let mut configured_lp_asset: Option<AssetKind> = None;

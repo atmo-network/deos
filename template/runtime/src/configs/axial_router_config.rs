@@ -135,24 +135,54 @@ impl AssetConversionAdapter {
     amount2: Balance,
     max_ratio_error: Perbill,
   ) -> Result<(), DispatchError> {
+    Self::donate_balanced_liquidity_classified(
+      donor,
+      asset1,
+      asset2,
+      amount1,
+      amount2,
+      max_ratio_error,
+    )
+    .map_err(|failure| failure.error)
+  }
+
+  pub(crate) fn donate_balanced_liquidity_classified(
+    donor: &AccountId,
+    asset1: AssetKind,
+    asset2: AssetKind,
+    amount1: Balance,
+    amount2: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(), pallet_aaa::TaskFailure> {
     if amount1.is_zero() || amount2.is_zero() || asset1 == asset2 {
-      return Err(DispatchError::Other("InvalidDonation"));
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "InvalidDonation",
+      )));
     }
     let pool_account =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset1, &asset2)
-        .map_err(|_| DispatchError::Other("DonationPoolUnavailable"))?;
+        .map_err(|_| {
+          pallet_aaa::TaskFailure::temporary(DispatchError::Other("DonationPoolUnavailable"))
+        })?;
     let reserve1 = Self::asset_balance(asset1, &pool_account);
     let reserve2 = Self::asset_balance(asset2, &pool_account);
     if reserve1.is_zero() || reserve2.is_zero() {
-      return Err(DispatchError::Other("DonationPoolEmpty"));
+      return Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
+        "DonationPoolEmpty",
+      )));
     }
-    Self::ensure_ratio_within_tolerance(amount1, amount2, reserve1, reserve2, max_ratio_error)?;
+    Self::ensure_ratio_within_tolerance(amount1, amount2, reserve1, reserve2, max_ratio_error)
+      .map_err(pallet_aaa::TaskFailure::temporary)?;
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(error) = Self::transfer_asset(asset1, donor, &pool_account, amount1) {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          pallet_aaa::TaskFailure::permanent(error),
+        ));
       }
       if let Err(error) = Self::transfer_asset(asset2, donor, &pool_account, amount2) {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          pallet_aaa::TaskFailure::permanent(error),
+        ));
       }
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
     })
@@ -259,30 +289,38 @@ impl AssetConversionAdapter {
     donor: &AccountId,
     total_native: Balance,
     max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), DispatchError> {
+  ) -> Result<(Balance, Balance), pallet_aaa::TaskFailure> {
     if total_native.is_zero() {
-      return Err(DispatchError::Other("InvalidDonation"));
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "InvalidDonation",
+      )));
     }
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
-      .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id).ok_or_else(|| {
+      pallet_aaa::TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable"))
+    })?;
     let base_asset = AssetKind::Local(native_asset_id);
     let staked_asset = AssetKind::Local(staked_asset_id);
     let pool_account = <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(
       &base_asset,
       &staked_asset,
     )
-    .map_err(|_| DispatchError::Other("DonationPoolUnavailable"))?;
+    .map_err(|_| {
+      pallet_aaa::TaskFailure::temporary(DispatchError::Other("DonationPoolUnavailable"))
+    })?;
     let reserve_native = Self::asset_balance(base_asset, &pool_account);
     let reserve_staked = Self::asset_balance(staked_asset, &pool_account);
-    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id)
-      .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
+    let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id).ok_or_else(|| {
+      pallet_aaa::TaskFailure::temporary(DispatchError::Other("NativeStakingPoolUnavailable"))
+    })?;
     if reserve_native.is_zero()
       || reserve_staked.is_zero()
       || staking_pool.accounted_balance.is_zero()
       || staking_pool.total_shares.is_zero()
     {
-      return Err(DispatchError::Other("DonationPoolEmpty"));
+      return Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
+        "DonationPoolEmpty",
+      )));
     }
     let stake_amount = Self::native_stake_amount_for_balanced_donation(
       total_native,
@@ -290,28 +328,33 @@ impl AssetConversionAdapter {
       reserve_staked,
       staking_pool.accounted_balance,
       staking_pool.total_shares,
-    )?;
-    let native_donation = total_native
-      .checked_sub(stake_amount)
-      .ok_or(DispatchError::Other("DonationAmountOverflow"))?;
+    )
+    .map_err(pallet_aaa::TaskFailure::permanent)?;
+    let native_donation = total_native.checked_sub(stake_amount).ok_or_else(|| {
+      pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationAmountOverflow"))
+    })?;
     if stake_amount.is_zero() || native_donation.is_zero() {
-      return Err(DispatchError::Other("DonationAmountTooSmall"));
+      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "DonationAmountTooSmall",
+      )));
     }
     let staked_before = Self::asset_balance(staked_asset, donor);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(error) =
         crate::Staking::stake_native(RuntimeOrigin::signed(donor.clone()), stake_amount)
       {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          pallet_aaa::TaskFailure::permanent(error),
+        ));
       }
       let staked_after = Self::asset_balance(staked_asset, donor);
       let staked_donation = staked_after.saturating_sub(staked_before);
       if staked_donation.is_zero() {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          DispatchError::Other("DonationAmountTooSmall"),
+          pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationAmountTooSmall")),
         ));
       }
-      if let Err(error) = Self::donate_balanced_liquidity(
+      if let Err(error) = Self::donate_balanced_liquidity_classified(
         donor,
         base_asset,
         staked_asset,
@@ -436,6 +479,20 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     )
   }
 
+  fn quote_price_tokens_for_exact_tokens(
+    asset_in: AssetKind,
+    asset_out: AssetKind,
+    amount_out: Balance,
+    include_fee: bool,
+  ) -> Option<Balance> {
+    AssetConversion::quote_price_tokens_for_exact_tokens(
+      asset_in,
+      asset_out,
+      amount_out,
+      include_fee,
+    )
+  }
+
   fn swap_exact_tokens_for_tokens(
     who: AccountId,
     path: Vec<AssetKind>,
@@ -477,6 +534,44 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     let actual_amount_out = balance_after.saturating_sub(balance_before);
     // Return actual amount received instead of calculated quote
     Ok(actual_amount_out)
+  }
+
+  fn swap_tokens_for_exact_tokens(
+    who: AccountId,
+    path: Vec<AssetKind>,
+    amount_out: Balance,
+    max_amount_in: Balance,
+    recipient: AccountId,
+    keep_alive: bool,
+  ) -> Result<Balance, sp_runtime::DispatchError> {
+    if path.len() < 2usize {
+      return Err(DispatchError::Other("Invalid asset path"));
+    }
+    let input_asset = *path
+      .first()
+      .ok_or(DispatchError::Other("Invalid asset path"))?;
+    let balance_before = match input_asset {
+      AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&who),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &who)
+      }
+    };
+    let boxed_path: Vec<Box<AssetKind>> = path.into_iter().map(Box::new).collect();
+    AssetConversion::swap_tokens_for_exact_tokens(
+      RuntimeOrigin::signed(who.clone()),
+      boxed_path,
+      amount_out,
+      max_amount_in,
+      recipient,
+      keep_alive,
+    )?;
+    let balance_after = match input_asset {
+      AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&who),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &who)
+      }
+    };
+    Ok(balance_before.saturating_sub(balance_after))
   }
 }
 

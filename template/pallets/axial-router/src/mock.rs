@@ -436,6 +436,29 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
     Some(amount_out)
   }
 
+  fn quote_price_tokens_for_exact_tokens(
+    asset_in: AssetKind,
+    asset_out: AssetKind,
+    amount_out: u128,
+    _include_fee: bool,
+  ) -> Option<u128> {
+    let pool_id = Self::get_pool_id(asset_in, asset_out)?;
+    let (res_a, res_b) = Self::get_pool_reserves(pool_id)?;
+    let (reserve_in, reserve_out) = if pool_id.0 == asset_in {
+      (res_a, res_b)
+    } else {
+      (res_b, res_a)
+    };
+    if amount_out == 0 || reserve_in == 0 || amount_out >= reserve_out {
+      return None;
+    }
+    let denominator = reserve_out.checked_sub(amount_out)?;
+    let numerator = reserve_in.checked_mul(amount_out)?;
+    numerator
+      .checked_add(denominator.checked_sub(1)?)?
+      .checked_div(denominator)
+  }
+
   fn swap_exact_tokens_for_tokens(
     who: u64,
     path: vec::Vec<AssetKind>,
@@ -534,6 +557,30 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
     }
 
     Ok(current_amount)
+  }
+
+  fn swap_tokens_for_exact_tokens(
+    who: u64,
+    path: vec::Vec<AssetKind>,
+    amount_out: u128,
+    max_amount_in: u128,
+    recipient: u64,
+    keep_alive: bool,
+  ) -> Result<u128, DispatchError> {
+    if path.len() < 2 {
+      return Err(DispatchError::Other("Path too short"));
+    }
+    let mut required_in = amount_out;
+    for window in path.windows(2).rev() {
+      required_in =
+        Self::quote_price_tokens_for_exact_tokens(window[0], window[1], required_in, true)
+          .ok_or(DispatchError::Other("Pool not found for hop"))?;
+    }
+    if required_in > max_amount_in {
+      return Err(DispatchError::Other("SlippageExceeded"));
+    }
+    Self::swap_exact_tokens_for_tokens(who, path, required_in, amount_out, recipient, keep_alive)?;
+    Ok(required_in)
   }
 }
 

@@ -28,6 +28,13 @@ import { inspectAaaPlanArtifact } from '../src/lib/automation/plan-artifact.ts';
 const metadataBytes = new Uint8Array(
   await readFile(new URL('../.papi/metadata/deos.scale', import.meta.url)),
 );
+const triggerEditorSource = await readFile(
+  new URL(
+    '../src/lib/automation/AutomationTriggerEditor.svelte',
+    import.meta.url,
+  ),
+  'utf8',
+);
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -80,7 +87,7 @@ function program(steps = [authoringStep('step-0')], overrides = {}) {
   return {
     aaaType: 'User',
     mutability: 'Mutable',
-    trigger: { type: 'Manual' },
+    trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
     cooldownBlocks: 0,
     scheduleWindow: null,
     fundingPolicy: { type: 'OwnerOnly' },
@@ -112,6 +119,28 @@ test('authoring controls cover every current task and condition variant', () => 
   assert.equal(AAA_AUTHORING_CONDITION_TYPES.length, 6);
 });
 
+test('trigger editor exposes admission and bounded source controls without graph vocabulary', () => {
+  for (const control of [
+    'Immediate',
+    'Cadenced',
+    'Always',
+    'WhenSignalled',
+    'Manual',
+    'OnAddressEvent',
+    'OwnerOnly',
+    'Whitelist',
+  ]) {
+    assert(
+      triggerEditorSource.includes(control),
+      `${control} control is missing`,
+    );
+  }
+  assert(triggerEditorSource.includes('maxTriggerSources'));
+  for (const rejected of ['successor', 'callback', 'branch target']) {
+    assert(!triggerEditorSource.toLowerCase().includes(rejected));
+  }
+});
+
 test('typed authoring lowers to one deterministic exact canonical artifact', () => {
   const draft = program([
     authoringStep('swap', {
@@ -119,6 +148,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
       assetIn: native,
       assetOut: local,
       amountOut: fixed('25'),
+      maxAmountIn: '100',
       slippageParts: 10_000_000,
     }),
     authoringStep('transfer', transferTask({ type: 'AllBalance' }), {
@@ -142,6 +172,10 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
     assert.equal(inspection.projection.value.execution_plan.length, 2);
+    assert.deepEqual(
+      inspection.projection.value.execution_plan[0].task.value.max_amount_in,
+      { $runtimeType: 'bigint', $integer: '100' },
+    );
     assert.equal(
       inspection.projection.value.execution_plan[1].on_error.type,
       'RetryLater',
@@ -154,6 +188,10 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
     weightModel,
   });
   assert.equal(analysis.identity.planId, first.planId);
+  assert.deepEqual(analysis.steps[0].parameters.max_amount_in, {
+    $runtimeType: 'bigint',
+    $integer: '100',
+  });
   assert.deepEqual(
     analysis.steps.map((current) => current.task),
     ['SwapExactOut', 'Transfer'],
@@ -220,6 +258,7 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
       assetIn: native,
       assetOut: local,
       amountOut: fixed(),
+      maxAmountIn: '100',
       slippageParts: 0,
     },
     {
@@ -228,8 +267,15 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
       assetB: local,
       amountA: fixed(),
       amountB: fixed('20'),
+      minLpOut: '1',
     },
-    { type: 'RemoveLiquidity', lpAsset: local, amount: fixed() },
+    {
+      type: 'RemoveLiquidity',
+      lpAsset: local,
+      amount: fixed(),
+      minAmountA: '1',
+      minAmountB: '1',
+    },
     { type: 'Burn', asset: native, amount: fixed() },
     { type: 'Mint', asset: native, amount: fixed() },
     { type: 'Stake', asset: native, amount: fixed() },
@@ -341,6 +387,17 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     authoringStep('only', { type: 'Mint', asset: native, amount: fixed() }),
   ]);
   assert.equal(validateAaaAuthoringProgram(userMint).valid, false);
+  const zeroExactOutCap = program([
+    authoringStep('only', {
+      type: 'SwapExactOut',
+      assetIn: native,
+      assetOut: local,
+      amountOut: fixed(),
+      maxAmountIn: '0',
+      slippageParts: 0,
+    }),
+  ]);
+  assert.equal(validateAaaAuthoringProgram(zeroExactOutCap).valid, false);
   const duplicateSplit = program([
     authoringStep('only', {
       type: 'SplitTransfer',
@@ -363,6 +420,42 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     );
   }
   assert.equal(validateAaaAuthoringProgram(program([])).valid, false);
+  assert.equal(
+    validateAaaAuthoringProgram(
+      program(undefined, {
+        trigger: {
+          type: 'Immediate',
+          sources: [{ type: 'Manual' }, { type: 'Manual' }],
+        },
+      }),
+    ).valid,
+    false,
+  );
+  assert.equal(
+    validateAaaAuthoringProgram(
+      program(undefined, {
+        trigger: { type: 'Immediate', sources: [] },
+      }),
+    ).valid,
+    false,
+  );
+  for (const task of [
+    { ...createAaaAuthoringTask('AddLiquidity'), minLpOut: '0' },
+    { ...createAaaAuthoringTask('RemoveLiquidity'), minAmountA: '0' },
+    { ...createAaaAuthoringTask('RemoveLiquidity'), minAmountB: '0' },
+  ]) {
+    const validation = validateAaaAuthoringProgram(
+      program([authoringStep('bounded-liquidity', task)]),
+    );
+    assert.equal(validation.valid, false);
+    if (!validation.valid) {
+      assert(
+        validation.issues.some((issue) =>
+          /must be greater than zero/.test(issue.message),
+        ),
+      );
+    }
+  }
   assert.throws(() => lowerAaaAuthoringProgram(immutableRetry), /RetryLater/);
 });
 
@@ -430,6 +523,7 @@ test('scenario corpus lowers every expressible or partial execution core without
           assetB: local,
           amountA: fixed(),
           amountB: fixed(),
+          minLpOut: '1',
         }),
       ]),
       tasks: ['AddLiquidity'],
@@ -437,7 +531,11 @@ test('scenario corpus lowers every expressible or partial execution core without
     {
       name: 'Periodic DCA',
       program: program([authoringStep('dca', swap)], {
-        trigger: { type: 'Timer', everyBlocks: 10 },
+        trigger: {
+          type: 'Cadenced',
+          everyBlocks: 10,
+          mode: { type: 'Always' },
+        },
       }),
       tasks: ['SwapExactIn'],
     },
@@ -465,6 +563,7 @@ test('scenario corpus lowers every expressible or partial execution core without
             assetB: local,
             amountA: fixed(),
             amountB: fixed(),
+            minLpOut: '1',
           },
           { errorPolicy: 'RetryLater' },
         ),
@@ -517,27 +616,46 @@ test('scenario corpus lowers every expressible or partial execution core without
 test('trigger and funding policy variants lower as typed ProgramInput fields', () => {
   const drafts = [
     program(undefined, {
-      trigger: { type: 'Manual' },
+      trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
       fundingPolicy: { type: 'OwnerOnly' },
     }),
     program(undefined, {
-      trigger: { type: 'Timer', everyBlocks: 10 },
+      trigger: {
+        type: 'Cadenced',
+        everyBlocks: 10,
+        mode: { type: 'Always' },
+      },
       fundingPolicy: { type: 'RuntimePolicy' },
       aaaType: 'System',
     }),
     program(undefined, {
       trigger: {
-        type: 'OnAddressEvent',
-        sourceFilter: { type: 'Whitelist', accounts: [accountA] },
-        assetFilter: { type: 'Whitelist', assets: [native, local] },
+        type: 'Immediate',
+        sources: [
+          {
+            type: 'OnAddressEvent',
+            sourceFilter: { type: 'Whitelist', accounts: [accountA] },
+            assetFilter: { type: 'Whitelist', assets: [local, native] },
+          },
+          { type: 'Manual' },
+        ],
       },
       fundingPolicy: { type: 'SignedAllowlist', accounts: [accountA] },
     }),
     program(undefined, {
       trigger: {
-        type: 'OnAddressEvent',
-        sourceFilter: { type: 'Any' },
-        assetFilter: { type: 'Any' },
+        type: 'Cadenced',
+        everyBlocks: 10,
+        mode: {
+          type: 'WhenSignalled',
+          sources: [
+            {
+              type: 'OnAddressEvent',
+              sourceFilter: { type: 'Any' },
+              assetFilter: { type: 'Any' },
+            },
+          ],
+        },
       },
       fundingPolicy: { type: 'AnySource' },
     }),
@@ -549,4 +667,14 @@ test('trigger and funding policy variants lower as typed ProgramInput fields', (
       true,
     );
   }
+  const lowered = lowerAaaAuthoringProgram(drafts[2]);
+  const sources = lowered.value.schedule.trigger.value.sources;
+  assert.deepEqual(
+    sources.map((source) => source.type),
+    ['Manual', 'OnAddressEvent'],
+  );
+  assert.deepEqual(
+    sources[1].value.asset_filter.value.map((asset) => asset.type),
+    ['Native', 'Local'],
+  );
 });

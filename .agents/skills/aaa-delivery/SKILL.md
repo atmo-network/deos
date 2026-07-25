@@ -22,6 +22,7 @@ Use this skill when an AAA change needs validation scope selection, scheduler st
 - For package-readiness changes, validate fixture feature profiles and a local `cargo package` archive while keeping registry publication approval-gated.
 - After a meaningful slice, synchronize `BACKLOG.md` and shipped architecture truth before the repository completion gate.
 - For condition-composition changes, verify one non-nested package-owned aggregate, total configured atomic-condition fee/weight accounting, non-short-circuit evaluation, fixed successor topology, and exact metadata/artifact projection across runtime and client evidence.
+- For semantic-classification changes, keep `contract.rs` as the owner, regenerate the bounded client manifest, and require complete Rust-manifest-to-TypeScript-analysis equality through the canonical quick and full gates.
 
 ## Checkpoint Batching
 

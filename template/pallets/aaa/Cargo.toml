@@ -1,6 +1,6 @@
 [package]
 name = "pallet-aaa"
-version = "0.7.4"
+version = "0.7.5"
 description = "Deterministic Account Abstraction Actors and bounded runtime automation for FRAME"
 authors = ["DEOS Contributors"]
 license = "MIT-0"
@@ -12,7 +12,7 @@ keywords = ["substrate", "frame", "automation", "actors"]
 categories = ["cryptography::cryptocurrencies"]
 edition.workspace = true
 publish = false
-include = ["Cargo.toml", "README.md", "EMBEDDING.md", "src/**/*.rs"]
+include = ["Cargo.toml", "README.md", "EMBEDDING.md", "src/**/*.rs", "examples/**/*.rs"]
 
 [lints]
 workspace = true
@@ -34,7 +34,8 @@ polkadot-sdk = { workspace = true, features = [
 
 [dev-dependencies]
 proptest = { workspace = true }
-serde = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
 polkadot-sdk = { workspace = true, features = [
   "frame-support",
   "frame-system",

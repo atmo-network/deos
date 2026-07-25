@@ -96,6 +96,8 @@ mod benches {
       task: AaaTask::RemoveLiquidity {
         lp_asset,
         amount: AmountResolution::Fixed(amount),
+        min_amount_a: One::one(),
+        min_amount_b: One::one(),
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -137,7 +139,7 @@ mod benches {
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
     Pallet::<T>::create_user_aaa(
@@ -161,7 +163,7 @@ mod benches {
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
     #[extrinsic_call]
@@ -186,7 +188,7 @@ mod benches {
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
     #[extrinsic_call]
@@ -210,7 +212,7 @@ mod benches {
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 100,
     };
     #[extrinsic_call]
@@ -234,7 +236,7 @@ mod benches {
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient.clone());
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 100,
     };
     Pallet::<T>::create_system_aaa(
@@ -290,7 +292,7 @@ mod benches {
     let recipient: T::AccountId = account("activate-recipient", 0, 0);
     let program = system_program::<T>(
       Schedule {
-        trigger: Trigger::Manual,
+        trigger: Trigger::immediate_manual(),
         cooldown_blocks: 100,
       },
       make_execution_plan::<T>(recipient),
@@ -312,7 +314,7 @@ mod benches {
       Mutability::Mutable,
       system_program::<T>(
         Schedule {
-          trigger: Trigger::Manual,
+          trigger: Trigger::immediate_manual(),
           cooldown_blocks: 100,
         },
         execution_plan,
@@ -367,7 +369,7 @@ mod benches {
     let owner_slot = prefill_owner_slots_for_worst_case::<T>(&owner);
     let recipient: T::AccountId = account("close-recipient", 0, 0);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 1,
     };
     let execution_plan = make_execution_plan::<T>(recipient);
@@ -391,7 +393,7 @@ mod benches {
     let owner: T::AccountId = whitelisted_caller();
     let recipient: T::AccountId = account("system-close-recipient", 0, 0);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 1,
     };
     Pallet::<T>::create_system_aaa(
@@ -422,7 +424,7 @@ mod benches {
         .pending_signal = true;
     });
     let new_schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 20,
     };
     #[extrinsic_call]
@@ -531,7 +533,7 @@ mod benches {
     let caller: T::AccountId = whitelisted_caller();
     let mut aaa_ids: BoundedVec<AaaId, T::MaxSweepPerBlock> = BoundedVec::default();
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
     let bounded_n = n.min(T::MaxSweepPerBlock::get());
@@ -565,7 +567,7 @@ mod benches {
     let payer: T::AccountId = whitelisted_caller();
     let owner: T::AccountId = account("fee-sink-owner", 0, 0);
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 1 },
+      trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_aaa(
@@ -761,7 +763,7 @@ mod benches {
       .expect("benchmark helper must prepare add-liquidity state");
     #[block]
     {
-      T::DexOps::add_liquidity(&caller, asset_a, asset_b, amount_a, amount_b)
+      T::DexOps::add_liquidity(&caller, asset_a, asset_b, amount_a, amount_b, One::one())
         .expect("add-liquidity benchmark operation must succeed");
     }
   }
@@ -785,7 +787,7 @@ mod benches {
       .expect("benchmark helper must prepare indexed remove-liquidity state");
     #[block]
     {
-      T::DexOps::remove_liquidity(&caller, lp_asset, lp_amount)
+      T::DexOps::remove_liquidity(&caller, lp_asset, lp_amount, One::one(), One::one())
         .expect("remove-liquidity benchmark operation must succeed");
     }
   }
@@ -854,7 +856,7 @@ mod benches {
     let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity(&caller)
       .expect("benchmark helper must prepare indexed remove-liquidity state");
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
     let execution_plan = make_remove_liquidity_execution_plan::<T>(lp_asset, lp_amount);
@@ -899,7 +901,7 @@ mod benches {
   fn bench_create_system_manual<T: Config>(seed: u32) -> AaaId {
     let owner: T::AccountId = account("wakeup_owner", seed, 0);
     let schedule = Schedule {
-      trigger: Trigger::Manual,
+      trigger: Trigger::immediate_manual(),
       cooldown_blocks: 0,
     };
     let execution_plan = make_inert_execution_plan::<T>();
@@ -1028,11 +1030,35 @@ mod benches {
 
   fn prepare_saturated_address_actor<T: Config>(seed: u32) -> (AaaId, T::AccountId) {
     let owner: T::AccountId = account("ingress_owner", seed, 0);
-    let schedule = Schedule {
-      trigger: Trigger::OnAddressEvent {
+    let native = T::NativeAssetId::get();
+    let native_only =
+      BoundedVec::try_from(vec![native]).expect("one asset must fit the trigger filter bound");
+    let mut candidates = vec![
+      TriggerSource::Manual,
+      TriggerSource::OnAddressEvent {
         source_filter: SourceFilter::Any,
         asset_filter: AssetFilter::Any,
       },
+      TriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::OwnerOnly,
+        asset_filter: AssetFilter::Any,
+      },
+      TriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::Any,
+        asset_filter: AssetFilter::Whitelist(native_only),
+      },
+    ];
+    candidates.sort_by_key(Encode::encode);
+    let max_sources = T::MaxTriggerSources::get() as usize;
+    assert!(
+      (1..=candidates.len()).contains(&max_sources),
+      "benchmark source corpus must saturate MaxTriggerSources"
+    );
+    candidates.truncate(max_sources);
+    let sources = BoundedVec::try_from(candidates)
+      .expect("saturated trigger sources must fit the runtime bound");
+    let schedule = Schedule {
+      trigger: Trigger::Immediate { sources },
       cooldown_blocks: 0,
     };
     Pallet::<T>::create_system_aaa(
@@ -1069,7 +1095,7 @@ mod benches {
   fn scheduler_cooldown_ineligible_idle() {
     let owner: T::AccountId = whitelisted_caller();
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 1 },
+      trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 10,
     };
     Pallet::<T>::create_system_aaa(
@@ -1080,8 +1106,6 @@ mod benches {
     )
     .expect("System timer creation must succeed");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    Pallet::<T>::manual_trigger(RawOrigin::Signed(owner).into(), aaa_id)
-      .expect("manual trigger must succeed");
     let first_block: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(first_block);
     let _ = Pallet::<T>::on_idle(first_block, Weight::MAX);
@@ -1942,7 +1966,7 @@ mod benches {
     let initial_balance = T::MinUserBalance::get().saturating_mul(1_000_000u32.into());
     let native = T::NativeAssetId::get();
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 1 },
+      trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 0,
     };
     let mut sovereigns: alloc::vec::Vec<T::AccountId> = alloc::vec::Vec::with_capacity(n as usize);

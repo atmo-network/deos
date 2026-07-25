@@ -62,7 +62,12 @@ test('System AAA composition exposes exact Root call but denies current governan
     type: 'Active',
     value: {
       schedule: {
-        trigger: { type: 'Manual', value: undefined },
+        trigger: {
+          type: 'Immediate',
+          value: {
+            sources: [{ type: 'Manual', value: undefined }],
+          },
+        },
         cooldown_blocks: 5,
       },
       schedule_window: undefined,
