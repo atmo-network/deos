@@ -22,9 +22,11 @@ pub trait WeightInfo {
   fn manual_trigger() -> Weight;
   fn close_aaa() -> Weight;
   fn fee_collection() -> Weight;
+  fn condition_set_evaluation(conditions: u32) -> Weight;
   fn task_transfer() -> Weight;
   fn task_burn() -> Weight;
   fn task_mint() -> Weight;
+  fn task_stop_cycle() -> Weight;
   fn task_split_transfer(legs: u32) -> Weight;
   fn xcm_asset_deposit() -> Weight;
   fn task_add_liquidity() -> Weight;
@@ -87,6 +89,7 @@ pub trait TaskWeightInfo {
   fn remove_liquidity() -> Weight;
   fn stake() -> Weight;
   fn unstake() -> Weight;
+  fn stop_cycle() -> Weight;
 }
 
 pub struct SubstrateWeight<T>(PhantomData<T>);
@@ -158,6 +161,16 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
+  fn condition_set_evaluation(conditions: u32) -> Weight {
+    if conditions == 0 {
+      return Weight::zero();
+    }
+    let bounded = u64::from(conditions.min(4));
+    Weight::from_parts(8_660_000, 3_675)
+      .saturating_add(Weight::from_parts(8_102_000, 1_343).saturating_mul(bounded))
+      .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
+  }
+
   fn task_transfer() -> Weight {
     Weight::from_parts(159_800_000, 8_120)
       .saturating_add(T::DbWeight::get().reads(12))
@@ -173,6 +186,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(105_812_000, 8_120)
       .saturating_add(T::DbWeight::get().reads(10))
       .saturating_add(T::DbWeight::get().writes(6))
+  }
+
+  fn task_stop_cycle() -> Weight {
+    Weight::from_parts(5_238_000, 0)
   }
 
   fn task_split_transfer(legs: u32) -> Weight {
@@ -465,6 +482,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> TaskWeightInfo
   fn unstake() -> Weight {
     <T as crate::Config>::WeightInfo::task_unstake()
   }
+
+  fn stop_cycle() -> Weight {
+    <T as crate::Config>::WeightInfo::task_stop_cycle()
+  }
 }
 
 impl WeightInfo for () {
@@ -480,9 +501,19 @@ impl WeightInfo for () {
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
   fn close_aaa() -> Weight { Weight::from_parts(84_719_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
+  fn condition_set_evaluation(conditions: u32) -> Weight {
+    if conditions == 0 {
+      return Weight::zero();
+    }
+    let bounded = u64::from(conditions.min(4));
+    Weight::from_parts(8_660_000, 3_675)
+      .saturating_add(Weight::from_parts(8_102_000, 1_343).saturating_mul(bounded))
+      .saturating_add(RocksDbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
+  }
   fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
   fn task_burn() -> Weight { Weight::from_parts(23_397_000, 3_593) }
   fn task_mint() -> Weight { Weight::from_parts(105_812_000, 8_120) }
+  fn task_stop_cycle() -> Weight { Weight::from_parts(5_238_000, 0) }
   fn task_split_transfer(legs: u32) -> Weight {
     Weight::from_parts(50_000_000, 4_000)
       .saturating_add(Weight::from_parts(1_500_000_000, 800_000).saturating_mul(legs.min(8).into()))
@@ -572,4 +603,5 @@ impl TaskWeightInfo for () {
   fn remove_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
   fn stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
+  fn stop_cycle() -> Weight { <() as WeightInfo>::task_stop_cycle() }
 }

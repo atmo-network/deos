@@ -27,7 +27,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-07-24
+last_compiled: 2026-07-25
 confidence: 0.95
 ---
 
@@ -56,6 +56,14 @@ Actor balances can function like trigger messages: an asset arriving on an actor
 
 Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the logical run, pending funding promotes only after full success, and bounded events expose activation, accumulation, promotion, and policy updates.
 
+## Verifiable Straight-Line Composition
+
+Each plan remains an ordered list of typed steps. A step uses exactly one non-nested `ConditionSet`: `Always`, non-empty `All`, or non-empty `Any`. Every atomic condition is observed, any atomic error fails the whole group, and a false group only advances to the next fixed step. These aggregates do not introduce branches, jumps, loops, callbacks, arbitrary calls, or graph-authored successors.
+
+Fieldless `StopCycle` provides one explicit successful terminal operation after condition evaluation and ordinary User fee collection. It commits no task-local economic effect and leaves the suffix unreachable. Its pre-execution failures still obey `on_error`: `ContinueNextStep` can bypass the intended stop, execute the suffix, and later reach ordinary success, so authoring and analysis expose that fall-through.
+
+Canonical SCALE `ProgramInput` remains the source of truth across metadata-bound authoring, structural diff, static analysis, simulation, and governance composition. Visual blocks or neural proposals may project or propose this finite AST, but deterministic validation, human approval, encoding, and runtime execution stay authoritative.
+
 ## Progress-Preserving Continuation
 
 A Mutable actor may mark a step `RetryLater`. When that step reports an explicitly Temporary adapter failure, AAA keeps one sparse Continuation with the unresolved step cursor, attempt number, last-attempt block, frozen typed suffix inputs, and cumulative outcomes. Retries reuse the same logical-run nonce and the existing FIFO/wakeup scheduler. They start at the unresolved step instead of replaying the committed prefix.
@@ -68,7 +76,7 @@ Permanent and unsupported-adapter failures never create Continuation. Immutable 
 
 AAA keeps current starvation observability sparse. `IdleStarvationState` is absent/Healthy during normal operation, becomes `Starving { since }` on the first exhausted post-housekeeping budget, and becomes `Alerted { since }` at the configured threshold. Duration derives from block number, so unchanged starving or alerted blocks do not rewrite a counter.
 
-`IdleStarvationDetected` and `IdleStarvationRecovered` each emit once per alerted interval. The current phase is canonical chain state; long-term alert history and duration trends belong in an indexed view built from those events. The production-Wasm healthy-empty probe confirms five reads and zero writes.
+`IdleStarvationDetected` and `IdleStarvationRecovered` each emit once per alerted interval. The current phase is canonical chain state; long-term alert history and duration trends belong in an indexed view built from those events. The production-Wasm healthy-empty probe confirms five reads and zero writes. Distinct wakeup blocks live in a paged binary min-heap with exact reverse indices. Insert, pop-min, and exact removal use at most `ceil(log2(MaxActiveActors))` sift steps, covered by maximum-depth generated benchmarks.
 
 ## Embedding Boundary
 
@@ -76,7 +84,7 @@ External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL Syst
 
 The independent `template/pallets/aaa/embedding-runtime` external-consumer fixture makes this boundary executable. It starts with zero System AAAs, uses local account/asset types and smaller scheduler pages, and proves direct Executive ingress, fresh-genesis integrity, deterministic unsupported adapters, User/System Continuation, User exact-output swaps, System-only minting, try-state, and no-std operation. It is portability evidence, not a second product or prescribed topology.
 
-The `0.7.3` line keeps the unlaunched reference chain at fresh-baseline storage version `1`; it ships no historical migration. The independent Continuation embedding gate passes without a DEOS/TMCTOL helper or actor-topology dependency.
+The `0.7.4` line keeps the unlaunched reference chain at fresh-baseline storage version `1`; it ships no historical migration. The independent embedding gate executes `Always → All → Any`, `StopCycle`, and Continuation behavior without a DEOS/TMCTOL helper or actor-topology dependency.
 
 The DEOS reference runtime also owns `LpPairByTokenId` outside generic AAA, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded.
 
@@ -97,7 +105,7 @@ Task::Stake { asset, amount }
 Task::Unstake { asset, shares }
 ```
 
-AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic staking position means, expose its share balance, and optionally map it to a transferable share asset for last-funding resolution. In DEOS, the adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
+AAA does not encode DEOS-specific `StakeNative`, collator selection, `stNTVE` naming, or `NTVE/stNTVE` LP custody. Runtime adapters decide what a generic staking position means, expose its share balance, and optionally map it to a transferable share asset for last-funding resolution. That share-asset identity remains stable for the admitted position key; a runtime upgrade must introduce a new key rather than reinterpret an active plan. Execution fails closed if the mapping disappears. In DEOS, the adapter routes native staking into `pallet-staking::stake_native`, while nomination security remains a separate locked-LP staking/governance surface.
 
 This keeps AAA useful outside one tokenomic configuration.
 

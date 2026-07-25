@@ -38,7 +38,7 @@ test('canonical dormant artifact is deterministic and round-trips exact SCALE', 
   const artifact = dormantArtifact();
   assert.equal(
     artifact.planId,
-    '0xff832beabbac961192fdb21e93fec881424e4b42a1c291b06901248425014791',
+    '0x191f54c2fa3b3cb67b674cf6c519daa0a97e7ef839a717946967021139cda940',
   );
   const inspection = inspectAaaPlanArtifact(artifact, metadataBytes, runtime);
   assert.equal(inspection.valid, true);
@@ -61,7 +61,10 @@ test('active ProgramInput encodes and projects every nested value losslessly', (
       schedule_window: undefined,
       execution_plan: [
         {
-          conditions: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+          conditions: {
+            type: 'All',
+            value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+          },
           task: {
             type: 'Transfer',
             value: {
@@ -89,6 +92,70 @@ test('active ProgramInput encodes and projects every nested value losslessly', (
     assert.deepEqual(
       inspection.projection.value.execution_plan[0].task.value.amount.value,
       { $integer: '10', $runtimeType: 'bigint' },
+    );
+  }
+});
+
+test('condition aggregate mode changes canonical identity and remains diff-visible', () => {
+  const makeArtifact = (mode) => {
+    const conditions =
+      mode === 'Always'
+        ? { type: 'Always', value: undefined }
+        : {
+            type: mode,
+            value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+          };
+    return createAaaPlanArtifact({
+      metadataBytes,
+      runtime,
+      aaaType: 'User',
+      mutability: 'Mutable',
+      programScale: encodeAaaProgramValue(metadataBytes, {
+        type: 'Active',
+        value: {
+          schedule: {
+            trigger: { type: 'Manual', value: undefined },
+            cooldown_blocks: 0,
+          },
+          schedule_window: undefined,
+          execution_plan: [
+            {
+              conditions,
+              task: { type: 'StopCycle', value: undefined },
+              on_error: { type: 'AbortCycle', value: undefined },
+            },
+          ],
+          funding_source_policy: { type: 'OwnerOnly', value: undefined },
+        },
+      }),
+    });
+  };
+  const inspected = ['Always', 'All', 'Any'].map((mode) => {
+    const artifact = makeArtifact(mode);
+    const inspection = inspectAaaPlanArtifact(artifact, metadataBytes, runtime);
+    assert.equal(inspection.valid, true);
+    if (!inspection.valid) throw new Error('fixture must inspect');
+    assert.equal(
+      inspection.projection.value.execution_plan[0].conditions.type,
+      mode,
+    );
+    return inspection;
+  });
+  assert.equal(
+    new Set(inspected.map(({ artifact }) => artifact.planId)).size,
+    3,
+  );
+  const changedMode = diffAaaPlanArtifacts(inspected[1], inspected[2]);
+  assert.equal(changedMode.compatible, true);
+  if (changedMode.compatible) {
+    assert(
+      changedMode.changes.some(
+        (change) =>
+          change.kind === 'replace' &&
+          change.path.endsWith('/conditions/type') &&
+          change.before === 'All' &&
+          change.after === 'Any',
+      ),
     );
   }
 });

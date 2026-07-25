@@ -12,7 +12,7 @@ The 2606 upgrade did not require pallet-local semantic changes here; the relevan
 The current kernel/runtime slice provides:
 
 - User and system AAA creation with deterministic sovereign accounts
-- Bounded execution plans over adapter-driven tasks (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, etc.)
+- Bounded execution plans whose steps own one non-nested `ConditionSet::{Always, All, Any}` and one typed task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.)
 - Monotonic paged FIFO scheduler state (`QueueHead`, `QueueTail`, bounded `QueuePages`) plus time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
@@ -20,12 +20,15 @@ The current kernel/runtime slice provides:
 - Sparse progress-preserving Continuation for Mutable actors, with scalar suffix cursor, Temporary-only retry, deterministic cancellation, and no prefix replay
 - A bounded `simulate_current_program` rollback core and versioned `AaaSimulationApi` declaration that require exact stored-program identity, follow fresh/Continuation readiness, return ordered outcomes, and roll the entire attempt back
 - Runtime-configured adapters for assets, DEX, staking, liquidity donation, typed failure retryability, fee collection, direct ingress, and weights
+- Exhaustive package-owned instruction contracts for every task, condition, amount resolution, and error policy, with weight ownership delegated to `TaskWeightInfo`
 - Genesis provisioning of System actors through runtime configuration
 
 ## Key rule
 
 AAA is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
 Actors execute declarative plans against runtime adapters under explicit queue, scheduler, fee, weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
+
+`StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary, funding, and auto-close handling, and cannot select a cursor or mutate actor lifecycle.
 
 ## Reconfiguration rule
 

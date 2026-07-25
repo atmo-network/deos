@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-aaa`
-- **Release line**: `0.7.3`
+- **Release line**: `0.7.4`
 - **Audience**: external runtime implementers embedding AAA without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](./README.md), [AAA Specification](https://github.com/atmo-network/deos/blob/main/docs/aaa.specification.en.md), [DEOS AAA Architecture](https://github.com/atmo-network/deos/blob/main/docs/aaa.architecture.en.md)
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System AAA catalog standardization, UI product flows
@@ -41,11 +41,13 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `StakingOps`: Generic staking operations plus adapter-visible share balance and optional transferable share-asset mapping for Unstake amount resolution.
 - `LiquidityDonationOps`: Pair-scoped liquidity donation when the runtime wants donation without LP receipt minting.
 - `FundingAuthority`: Default-deny authorization for explicit actor/source pairs when an actor selects `RuntimePolicy`; pallet-owned policies do not delegate.
-- `TaskWeightInfo`: Runtime-derived worst-case task classes covering adapter, event, RefTime, and ProofSize costs. Transfer, Mint, and split fanout must include possible synchronous address-event ingress; Burn must remain independently priced without transfer-ingress proof. `WeightInfo::fee_collection` prices one possible User fee debit per attempted step.
+- `TaskWeightInfo`: Runtime-derived worst-case task classes covering adapter, event, RefTime, and ProofSize costs. Transfer, Mint, and split fanout must include possible synchronous address-event ingress; Burn must remain independently priced without transfer-ingress proof; adapter-free `StopCycle` must price its explicit stop event. `WeightInfo::fee_collection` prices one possible User fee debit per attempted step, while `condition_set_evaluation(c)` prices every configured atomic read independent of aggregate mode or truth position.
+- `contract`: Exhaustive read-only classification of each task, condition, amount resolution, and error policy. Its task weight owner delegates to `TaskWeightInfo`; it does not replace runtime measurement, capability configuration, or canonical task parameters.
 - `WeightToFee`: Deterministic conversion from task weight upper bound to fee-native execution charge.
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
 - Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxContinuationSnapshotEntries`, `MaxIdleStarvationBlocks`, and fee constants.
+- Under `runtime-benchmarks`, `setup_condition_assets` must provide enough valid distinct assets to measure the maximum condition group honestly; repeated keys do not establish worst-case ProofSize.
 
 The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no program or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
 

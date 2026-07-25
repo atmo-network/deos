@@ -522,12 +522,14 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
     let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
     let new_execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![
       pallet_aaa::Step {
-        conditions: alloc::vec![pallet_aaa::Condition::BalanceAbove {
-          asset: AssetKind::Local(super::common::ASSET_A),
-          threshold: dust,
-        }]
-        .try_into()
-        .unwrap(),
+        conditions: pallet_aaa::ConditionSet::All(
+          alloc::vec![pallet_aaa::Condition::BalanceAbove {
+            asset: AssetKind::Local(super::common::ASSET_A),
+            threshold: dust,
+          }]
+          .try_into()
+          .unwrap(),
+        ),
         task: Task::SwapExactIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
@@ -537,12 +539,14 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
         on_error: StepErrorPolicy::ContinueNextStep,
       },
       pallet_aaa::Step {
-        conditions: alloc::vec![pallet_aaa::Condition::BalanceAbove {
-          asset: AssetKind::Native,
-          threshold: dust,
-        }]
-        .try_into()
-        .unwrap(),
+        conditions: pallet_aaa::ConditionSet::All(
+          alloc::vec![pallet_aaa::Condition::BalanceAbove {
+            asset: AssetKind::Native,
+            threshold: dust,
+          }]
+          .try_into()
+          .unwrap(),
+        ),
         task: Task::Burn {
           asset: AssetKind::Native,
           amount: AmountResolution::AllBalance,
@@ -2022,7 +2026,7 @@ fn router_multi_hop_foreign_to_bldr() {
 
 #[test]
 fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
-  use polkadot_sdk::frame_support::{BoundedVec, assert_noop, traits::fungibles::Mutate};
+  use polkadot_sdk::frame_support::{assert_noop, traits::fungibles::Mutate};
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
@@ -2049,7 +2053,7 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
         1_000_000_000,
       ));
       let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_aaa::Step {
-        conditions: BoundedVec::default(),
+        conditions: pallet_aaa::ConditionSet::Always,
         task: Task::RemoveLiquidity {
           lp_asset,
           amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),

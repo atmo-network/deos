@@ -25,7 +25,7 @@ related:
   - TMCTOL Standard
   - Read-Model Split
   - Core Terms
-last_compiled: 2026-07-24
+last_compiled: 2026-07-25
 confidence: 0.9
 ---
 
@@ -63,7 +63,9 @@ The specification keeps a few guarantees central:
 
 - Deterministic behavior for identical state and block context
 - Bounded work with explicit limits
-- Static execution plans with no task-authored workflow memory; Mutable-only sparse Continuation records unresolved suffix progress
+- Static ordered plans whose `Always`, non-empty `All`, and non-empty `Any` conditions only admit or skip the current step; they cannot create branches or choose successors
+- Fieldless `StopCycle` as the sole explicit successful terminal task, with visible error-policy fall-through rather than hidden control flow
+- No task-authored workflow memory; Mutable-only sparse Continuation records unresolved suffix progress
 - Predictable outcomes such as deferred, skipped, failed, suspended, cancelled, or closed
 - No automatic refund fan-out when an actor is destroyed
 

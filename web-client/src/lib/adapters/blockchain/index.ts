@@ -7,6 +7,7 @@ Zone: Transport adapter boundary; consumes adapter contracts and runtime helpers
 import type { Adapter, AdapterRuntimeContext } from '$lib/adapters/contract';
 import type {
   AutomationActorSnapshot,
+  AutomationAuthoringContext,
   AutomationContinuationSnapshot,
   AutomationRunState,
 } from '$lib/automation/types';
@@ -24,6 +25,7 @@ import type {
 import type { SystemConfig, SystemSnapshot } from '$lib/system/types';
 import { DEFAULT_DEOS_DAPP_NAME } from '$lib/wallet/signer';
 
+import { getDeosAaaFinalizedAuthoringContext } from './aaa-simulation';
 import { BlockchainConnectionSession } from './connection';
 import type {
   DeosChainConnectionState,
@@ -371,6 +373,10 @@ export class BlockchainAdapter implements Adapter {
     } catch {
       return [];
     }
+  }
+
+  async getAutomationAuthoringContext(): Promise<AutomationAuthoringContext> {
+    return await getDeosAaaFinalizedAuthoringContext(await this.ensurePapi());
   }
 
   async getAutomationActors(): Promise<AutomationActorSnapshot[]> {

@@ -170,9 +170,19 @@ This is intentionally more concrete than the paired specification: the spec defi
 
 Each actor stores a bounded `ExecutionPlan` of ordered `Step`s:
 
-- `conditions: BoundedVec<Condition, MaxConditionsPerStep>`
+- `conditions: ConditionSet<Condition, MaxConditionsPerStep>`
 - `task: Task`
-- `on_error: StepErrorPolicy` (`AbortCycle` / `ContinueNextStep`)
+- `on_error: StepErrorPolicy` (`AbortCycle` / `ContinueNextStep` / Mutable-only `RetryLater`)
+
+`ConditionSet` is one non-nested `Always`, `All`, or `Any` aggregate per step. `Always` owns zero atoms; validated `All` and `Any` own one through `MaxConditionsPerStep`. The executor evaluates every atom without short-circuiting, aggregates once, and either prepares the one task or skips one cursor. Empty groups fail as `EmptyConditionSet`; `Any` never duplicates task execution or introduces successor data.
+
+Evaluation fee and cycle/suffix Weight accounting use `ConditionSet::len()`, so mode, order, and truth position cannot change the configured atomic-count bound. Existing runtime plans map empty vectors to `Always` and non-empty conjunctions to `All`; no storage or scheduler surface was added.
+
+Production-Wasm `50 × 20` maximum-group benchmarks use Native plus three distinct local assets. `All(4)` measures `40,788,000 / 9,045`, seven reads, and a `38,483,000` picosecond minimum; `Any(4)` measures `41,068,000 / 9,045`, seven reads, and a `39,042,000` minimum. The 0.7% RefTime difference does not justify separate production classes.
+
+`condition_set_evaluation(c)` uses the measured `Any` count regression plus a conservative envelope that component-wise covers both maximum results: zero for `Always`, then `8,660,000 + 8,102,000c` RefTime, `3,675 + 1,343c` ProofSize, and at least `1 + 2c` reads for `c = 1..4`. This replaces the former synthetic per-condition overhead in cycle and suffix admission.
+
+The frozen `0.7.3` cheap-cycle model is `74,382,000 + 49,964,691n`. The full `0.7.4` run and two focused runs measured slopes from `52,918,930n` to `53,822,079n`, a 5.9–7.8% large-`n` RefTime increase. ProofSize and database topology remain `4,203 + 2,705n`, `6 + 2n` reads, and `3 + n` writes. Explicit `ConditionSet::Always` decoding/dispatch and a ten-byte larger maximum `ActorProgram` explain the regression. Release weights use the component-wise envelope `111,747,000 + 53,822,079n`.
 
 Task set in implementation:
 
@@ -187,6 +197,11 @@ Task set in implementation:
 - `Stake`
 - `DonateLiquidity`
 - `Unstake`
+- `StopCycle` (User/System, fieldless, adapter-free)
+
+`StopCycle` executes only after its conditions and ordinary User fee collection succeed. It records `SimulationStepOutcome::Stopped`, emits `CycleStopped { aaa_id, cycle_nonce, step_index }`, and ends the logical run successfully at that cursor. The shared completion path emits the cumulative summary, promotes pending funding, evaluates auto-close, clears a resumed Continuation, and leaves the suffix unreachable.
+
+The instruction does not resolve an amount, invoke a runtime adapter, select a successor, or directly mutate actor lifecycle/scheduler state. A false condition advances normally; preparation or fee failure occurs before successful stop admission and follows the step's existing error policy.
 
 ### Amount Resolution
 
@@ -211,7 +226,7 @@ Resolution outcomes are deterministic:
 - `Skipped`
 - `FundingUnavailable`
 
-`FundingUnavailable` is a deterministic non-terminal skip outcome for both actor classes. It covers missing or zero tracked snapshots, tracked-balance overspend, staking-share overspend, and preserve-spend resolution that would cross the minimum-balance ceiling. Untracked assets remain `SnapshotUnavailable`.
+`FundingUnavailable` is a deterministic resolution outcome for both actor classes. It advances as a non-terminal skip under `AbortCycle` and `ContinueNextStep`, while valid Mutable `RetryLater` suspends at the current cursor. It covers missing or zero tracked snapshots, tracked-balance overspend, staking-share overspend, and preserve-spend resolution that would cross the minimum-balance ceiling. Untracked assets remain `SnapshotUnavailable`.
 
 Resolution and charging follow these rules:
 
@@ -222,6 +237,14 @@ Resolution and charging follow these rules:
 Pallet boundary tests cover fixed, current/trigger/last-funding percentages, split totals, and `AllBalance` across native, sufficient-asset, and staking-share surfaces. The DEOS adapter binds native/local/foreign position keys to live staking share state and receipt assets.
 
 Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier steps in the same execution plan remain committed.
+
+`template/pallets/aaa/src/contract.rs` is the package-owned semantic classification surface. Exhaustive matches derive task adapter/assets/recipients/effects/availability/weight ownership/bounded algorithms, condition observations and purity, amount dependency windows and retry behavior, and error-policy controls.
+
+`TaskWeightOwner::weight` delegates to the runtime's existing `TaskWeightInfo`; the module adds no codec, storage, runtime API, or parallel weight calculator. Package tests instantiate every current primitive, while a new enum variant makes its owning match non-exhaustive.
+
+The control-flow firewall combines closed types with adversarial evidence. `Step` metadata must expose exactly `conditions`, `task`, and `on_error`; exhaustive variant contracts admit no successor, nested program, callback, generic `RuntimeCall`, or opaque dispatch field. `ConditionSet` classification fixes full atomic observation, whole-group error, one admitted task, false advance, and no nesting. Atomic condition and amount classifiers expose only read dependencies and never a control target.
+
+`resolve_step_control` remains the only runtime transition owner, with the exhaustive policy/mutability/failure matrix and same-cursor Continuation regressions pinning retry identity. Task-local transactions forbid callback-visible partial mutation. Bounded vectors, adapter capability contracts, generated worst-case weights, maximum-plan tests, and circular scheduler stress bound adapter and cross-actor work without interpreting local plans recursively.
 
 ### DEX Adapter Realization
 
@@ -291,6 +314,8 @@ Pallet regressions cover each outcome, collection failure, one-call cardinality,
 
 Attempt `0` opens one logical run and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater` writes suspension at the unresolved cursor. Retry increments `attempt`, reuses the nonce, omits Timer cadence, and executes only the suffix. Permanent failure terminates without retry state; one-attempt success writes no Continuation.
 
+`resolve_step_control` is the private exhaustive transition owner for completed, funding-unavailable, Permanent-failure, and Temporary-failure results across both mutability modes and all three error policies. Production execution calls it for adapter and funding decisions, and `simulate_current_program` inherits the same decision because it invokes `execute_single_cycle_traced`; a pure matrix regression pins all combinations. Adapter-local TypeScript simulation remains a separately labeled projection and must prove parity rather than act as runtime truth.
+
 Task-scoped rollback leaves earlier successful steps committed. The named `SwapExactIn → AddLiquidity → Transfer` and Burn-prefix regressions prove same-cursor retry, prefix non-replay, cumulative outcomes, and no cancellation compensation. The fixed-seed model `0xDE05_0730` independently checks sparse state, cursor progress, queue/wakeup uniqueness, funding conservation, promotion, and cancellation after each transition.
 
 `simulate_current_program` is the package-owned rollback core behind versioned `AaaSimulationApi` runtime metadata. It requires exact stored Active program, actor type, mutability, mode/run-state, readiness, liveness, and User fee budget. It executes the production path with an optional bounded trace, exposes fresh or Continuation outcomes, and wraps the whole attempt in `TransactionOutcome::Rollback`; pallet and DEOS-runtime tests prove actor state, balances, events, fees, concrete adapter effects, and stored Continuation remain unchanged.
@@ -327,7 +352,7 @@ The production path uses the paged wakeup substrate and sparse cursor:
 
 - `WakeupPages<(block, page_id)>` and per-block `WakeupBuckets` own the paged topology.
 - `WakeupCursorPages` plus `WakeupCursorLen` provide the production paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
-- Heap insertion and minimum removal use a `MaxActiveActors`-derived height bound, preserve contiguous cursor pages, and avoid scanning empty intermediate blocks; try-state reconciles page shape, uniqueness, ordering, and reverse indices.
+- Heap insertion, pop-min, and exact removal use at most `ceil(log2(MaxActiveActors))` sift steps, preserve contiguous cursor pages, and avoid scanning empty intermediate blocks; try-state reconciles page shape, uniqueness, ordering, and reverse indices. Maximum-depth generated evidence belongs to `scheduler_wakeup_cursor_insert`, `scheduler_wakeup_cursor_pop_min`, and `scheduler_wakeup_cursor_remove_exact`.
 - `ActorHot` owns `WakeupPointer { block, page_id, slot }`.
 - Pages use optional slots, a live count, a scan cursor, and bidirectional links.
 - Transactional replacement invalidates the prior exact slot, removes an emptied block from the cursor, creates the replacement bucket and cursor entry atomically, and rolls back on reverse-index mismatch; bounded neighboring-page work unlinks empty pages.
@@ -374,7 +399,7 @@ Integrated worker evidence uses the same production-Wasm route:
 
 The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short.
 
-The current production artifacts use AAA weights `2c74e92a46727fa5ed359c9cdce14296885b22446be415fa0f0bd252ede18f38` and compressed Wasm `b858a8747ead30a5e2cda21f174d77f56ef7e9c1e063241682084fbe605717c9`. The 50-step/20-repeat production run includes simulation trace instrumentation in the measured runtime, while the runtime API itself remains outside dispatch and `on_idle` admission; these hashes bind measured paths to the built artifact without creating a throughput promise.
+The release artifacts use AAA weights `0e073a834ee54a6b5c5cf0d63b81b465a1b494af7a9b8f7ea80eb2173d6f4dd0`, compressed Wasm `06750bc0c5b880f38d4a72f8bd8b6e2b3aa6a953bb963d350535ce2eb0daaa56`, and metadata `0x328bf4ea335ec96417e37c4b69b9fa7932e8d4a1a3c46062881cbd575e100a35`. The 50-step/20-repeat suite and complete release gate bind measured paths, runtime code, and client descriptors without creating a throughput promise.
 
 ### Starvation Safeguard
 
@@ -489,6 +514,8 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 ### Pre-fork storage baseline
 
 The AAA `0.7.x` pre-launch line supports fresh genesis only; it does not claim an in-place state upgrade from `0.6.x`. Pallet genesis writes the reset baseline storage version `1`, and pallet, DEOS-runtime, and independent-runtime tests assert that current/on-chain versions and `try_state` agree on fresh state. No historical `OnRuntimeUpgrade` bridge ships on this pre-fork line; downstream live forks own bounded versioned migrations after launch.
+
+The independent zero-topology runtime pins `ConditionSet` variant indices `0/1/2`, exact SCALE round trips, metadata names, a non-empty aggregate `try_state`, and one Executive-submitted three-step `Always → All → Any` plan. Default, try-runtime, no-std, and runtime-benchmark profiles compile or execute independently. A DEOS-runtime integration runs the same three modes through the concrete native adapter; package tests own empty-group rejection and full-observation error semantics.
 
 ### Schema delta from the frozen `0.7.1` comparison baseline
 
@@ -627,6 +654,7 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
 - `StakingOps = TmctolStakingOps`
   - generic `Stake { asset, amount }` delegates to the runtime staking adapter for all staking assets
   - the DEOS adapter routes its native staking asset representation to `pallet-staking::stake_native(amount)` and routes other staking assets to `pallet-staking::stake(...)`
+  - `share_asset(position_asset)` resolves through the staking pallet's receipt index and forms a stable admitted-plan binding; execution rechecks it and fails before mutation when absent
   - collator nomination and LP custody remain outside AAA task semantics; they belong to staking/runtime-specific adapter or pallet surfaces, not to the portable AAA execution-plan shape
 - `LiquidityDonationOps = TmctolLiquidityDonationOps`
   - generic `DonateLiquidity { asset_a, asset_b, amount, max_ratio_error }` delegates pair-ratio, receipt-suppression, reserve-donation, and native-special-case semantics to the runtime adapter
@@ -640,6 +668,7 @@ Additional runtime bindings:
 - Frozen baseline hashes: generated weights `448f2fe1bee9d59bbdfd4cd1a85a6f20b0f90045e862f86984d2752941075b9d`; compressed Wasm `947ddc39ecb1e83ec32d8b1b1200865850d622aaa8def8ad43b5d15342c3e992`. These values provide comparison evidence, not the current paged representation.
 - Split-store metadata replaces the former 8,807-byte `AaaInstances` maximum with a 200-byte `ActorHot`, including run state, exact wakeup, terminal readiness, and compact funding counts, plus an independently loaded 4,655-byte `ActorProgram`. Physical decode/proof separation does not by itself claim end-to-end throughput.
 - Runtime `WeightInfo` uses frame omni bencher 0.22 / benchmark CLI 58 against shipped lifecycle, scheduler, ingress, funding, fee, and pure-close topology; generated storage annotations contain no retired active-list stores.
+- The fieldless `task_stop_cycle` class measures its single explicit event at production `50 × 20`: `5,238,000 / 0`, with zero storage reads or writes and a `3,632,000` picosecond minimum execution time.
 - Lifecycle benchmark evidence: dormant System creation is `45,816,000` RefTime, seven reads/five writes, and 999 measured/3,629 charged proof bytes.
 - Lifecycle benchmark evidence: activation remains independently generated; Continuation-aware deactivation is `60,623,000 / 8,120`, four reads, and six writes.
 - Continuation-aware pure close prices the worst-case User branch at `84,719,000 / 8,120`, eight reads, and eight writes.
@@ -671,8 +700,8 @@ Suffix-admission scan measurement spans one through ten unresolved steps from `1
 - Producer-owned transaction-extension ingress declares the matched notification envelope and refunds against an unmatched base. The negative path includes one populated proof witness plus the absent recipient lookup: `15,365,000 / 6,052`, two reads.
 - The matched ingress maximum uses a suspended actor and covers source evaluation, checked pending-batch accumulation, signal latching, queue saturation, and exact paged wakeup registration: `88,280,000 / 8,120`, nine reads, and six writes.
 - `scheduler_on_idle_base` is `15,296,000 / 1,493`, four reads, and one write after compatibility ingress removal. Actor admission uses separate generated hot-only and program-positive probes; paged scan and consume weights remain independent generated units.
-- Production-Wasm `50 x 20` `scheduler_paged_execute_cheap(n)` runs complete minimal one-step System cycles for `n = 1..1,000`. Its model is `91,075,000 + 64,544,609n` RefTime, `4,332 + 2,729n` estimated ProofSize, `6 + 3n` reads, and `4 + 2n` writes; measured proof is `873 + 253n`.
-- The 999-point sample took about 64.7 ms on the benchmark host. This cost curve supports a 1,000 defense-in-depth count ceiling, not a promise of 1,000 reference-block executions: the two-dimensional `WeightMeter` still admits each complete cached cycle bound, and runtime stress proves only that guaranteed reserve exceeds the retired 48-attempt ceiling.
+- Production-Wasm `50 x 20` `scheduler_paged_execute_cheap(n)` runs complete minimal one-step System cycles for `n = 1..1,000`. Its conservative repeated-run envelope is `111,747,000 + 53,822,079n` RefTime, `4,203 + 2,705n` estimated ProofSize, `6 + 2n` reads, and `3 + n` writes; measured proof is `754 + 229n`.
+- The 999-point envelope is about 53.9 ms on the benchmark host. This cost curve supports a 1,000 defense-in-depth count ceiling, not a promise of 1,000 reference-block executions: the two-dimensional `WeightMeter` still admits each complete cached cycle bound, and runtime stress proves only that guaranteed reserve exceeds the retired 48-attempt ceiling.
 - Continuation-aware funding-policy replacement is `93,239,000 / 8,120` with seven reads/seven writes. Schedule replacement is `84,020,000 / 8,120` with six reads/seven writes. Both include cancellation and pending-signal readiness restoration.
 - The pallet mock implements the complete runtime-benchmark helper surface, including opt-in ingress-aware asset operations isolated from ordinary pallet tests; this keeps standalone `runtime-benchmarks` compilation and its 281-test suite portable while production measurement remains runtime-owned
 - `FeeSink` account is the sovereign account of System AAA `aaa_id = 1` (`FEE_SINK_AAA_ID`)

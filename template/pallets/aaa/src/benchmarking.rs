@@ -52,9 +52,8 @@ mod benches {
   fn cycle_fee_upper<T: Config>(execution_plan: &ExecutionPlanOf<T>) -> T::Balance {
     let mut total = T::Balance::zero();
     for step in execution_plan.iter() {
-      let eval_fee = T::StepBaseFee::get().saturating_add(
-        T::ConditionReadFee::get().saturating_mul((step.conditions.len() as u32).into()),
-      );
+      let eval_fee = T::StepBaseFee::get()
+        .saturating_add(T::ConditionReadFee::get().saturating_mul(step.conditions.len().into()));
       total = total.saturating_add(eval_fee);
       let exec_fee = T::WeightToFee::weight_to_fee(&Pallet::<T>::weight_upper_bound(&step.task));
       total = total.saturating_add(exec_fee);
@@ -64,7 +63,7 @@ mod benches {
 
   fn make_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
     let step = Step {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: AaaTask::Transfer {
         to: recipient,
         asset: T::NativeAssetId::get(),
@@ -77,7 +76,7 @@ mod benches {
 
   fn make_tracked_funding_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
     BoundedVec::try_from(vec![Step {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: AaaTask::Transfer {
         to: recipient,
         asset: T::NativeAssetId::get(),
@@ -93,7 +92,7 @@ mod benches {
     amount: T::Balance,
   ) -> ExecutionPlanOf<T> {
     let step = Step {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: AaaTask::RemoveLiquidity {
         lp_asset,
         amount: AmountResolution::Fixed(amount),
@@ -639,6 +638,80 @@ mod benches {
   }
 
   #[benchmark]
+  fn condition_set_all_max() {
+    let actor: T::AccountId = account("condition-all", 0, 0);
+    let max_conditions = T::MaxConditionsPerStep::get();
+    let assets = T::BenchmarkHelper::setup_condition_assets(&actor, max_conditions)
+      .expect("condition benchmark assets must be available");
+    assert!(assets.len() >= max_conditions as usize);
+    let conditions = BoundedVec::try_from(
+      assets
+        .into_iter()
+        .take(max_conditions as usize)
+        .map(|asset| {
+          T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
+            .expect("condition benchmark asset must be funded");
+          Condition::BalanceAbove {
+            asset,
+            threshold: T::Balance::zero(),
+          }
+        })
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("maximum condition group fits");
+    let condition_set = ConditionSet::All(conditions);
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::evaluate_condition_set(&condition_set, &actor, T::Balance::zero()),
+        Ok(true)
+      );
+    }
+  }
+
+  #[benchmark]
+  fn condition_set_evaluation(c: Linear<1, 4>) {
+    let actor: T::AccountId = account("condition-any", 0, 0);
+    let bounded = c.min(T::MaxConditionsPerStep::get());
+    let assets = T::BenchmarkHelper::setup_condition_assets(&actor, bounded)
+      .expect("condition benchmark assets must be available");
+    assert!(assets.len() >= bounded as usize);
+    let conditions = BoundedVec::try_from(
+      assets
+        .into_iter()
+        .take(bounded as usize)
+        .map(|asset| {
+          T::AssetOps::mint(&actor, asset, T::MinUserBalance::get())
+            .expect("condition benchmark asset must be funded");
+          Condition::BalanceAbove {
+            asset,
+            threshold: T::Balance::zero(),
+          }
+        })
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("maximum condition group fits");
+    let condition_set = ConditionSet::Any(conditions);
+    #[block]
+    {
+      assert_eq!(
+        Pallet::<T>::evaluate_condition_set(&condition_set, &actor, T::Balance::zero()),
+        Ok(true)
+      );
+    }
+  }
+
+  #[benchmark]
+  fn task_stop_cycle() {
+    let before = frame_system::Pallet::<T>::event_count();
+    #[block]
+    {
+      Pallet::<T>::record_stop_cycle_event(1, 1, 0);
+    }
+    assert_eq!(frame_system::Pallet::<T>::event_count(), before + 1);
+  }
+
+  #[benchmark]
   fn task_split_transfer(l: Linear<2, 8>) {
     let caller: T::AccountId = whitelisted_caller();
     let bounded_legs = l.min(T::MaxSplitTransferLegs::get());
@@ -813,7 +886,7 @@ mod benches {
 
   fn make_inert_execution_plan<T: Config>() -> ExecutionPlanOf<T> {
     let step = Step {
-      conditions: BoundedVec::default(),
+      conditions: ConditionSet::Always,
       task: AaaTask::Stake {
         asset: T::NativeAssetId::get(),
         amount: AmountResolution::Fixed(T::Balance::zero()),
@@ -1747,7 +1820,7 @@ mod benches {
     for _ in 0..bounded {
       plan
         .try_push(Step {
-          conditions: BoundedVec::default(),
+          conditions: ConditionSet::Always,
           task: AaaTask::Transfer {
             to: recipient.clone(),
             asset: T::NativeAssetId::get(),
@@ -1893,7 +1966,7 @@ mod benches {
     for (i, aaa_id) in aaa_ids.iter().enumerate() {
       let next_sov = sovereigns[(i + 1) % sovereigns.len()].clone();
       let transfer_execution_plan: ExecutionPlanOf<T> = BoundedVec::try_from(alloc::vec![Step {
-        conditions: BoundedVec::default(),
+        conditions: ConditionSet::Always,
         task: AaaTask::Transfer {
           to: next_sov,
           asset: native,

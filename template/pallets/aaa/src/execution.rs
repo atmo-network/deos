@@ -90,6 +90,7 @@ enum PreparedTask<T: Config> {
     asset: T::AssetId,
     shares: T::Balance,
   },
+  StopCycle,
 }
 
 enum PreparedTaskOutcome<T: Config> {
@@ -99,10 +100,81 @@ enum PreparedTaskOutcome<T: Config> {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ErrorPolicyAction {
-  Abort,
-  Continue,
-  Suspend,
+enum StepResult {
+  Completed,
+  Stopped,
+  FundingUnavailable,
+  Failed(RetryClass),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StepControl {
+  Advance,
+  CompleteCycle,
+  Terminate,
+  SuspendCurrent,
+}
+
+fn evaluate_condition_set_with<C, MaxConditions, E, Evaluate>(
+  condition_set: &ConditionSet<C, MaxConditions>,
+  mut evaluate: Evaluate,
+) -> Result<bool, E>
+where
+  MaxConditions: Get<u32>,
+  Evaluate: FnMut(&C) -> Result<bool, E>,
+{
+  let (conditions, require_all) = match condition_set {
+    ConditionSet::Always => return Ok(true),
+    ConditionSet::All(conditions) => (conditions, true),
+    ConditionSet::Any(conditions) => (conditions, false),
+  };
+  let mut all_pass = true;
+  let mut any_pass = false;
+  let mut first_error = None;
+  for condition in conditions {
+    match evaluate(condition) {
+      Ok(pass) => {
+        all_pass &= pass;
+        any_pass |= pass;
+      }
+      Err(error) => {
+        if first_error.is_none() {
+          first_error = Some(error);
+        }
+      }
+    }
+  }
+  if let Some(error) = first_error {
+    return Err(error);
+  }
+  Ok(if require_all { all_pass } else { any_pass })
+}
+
+fn resolve_step_control(
+  mutability: Mutability,
+  result: StepResult,
+  error_policy: StepErrorPolicy,
+) -> StepControl {
+  match (result, error_policy, mutability) {
+    (StepResult::Completed, _, _) => StepControl::Advance,
+    (StepResult::Stopped, _, _) => StepControl::CompleteCycle,
+    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater, Mutability::Mutable) => {
+      StepControl::SuspendCurrent
+    }
+    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater, Mutability::Immutable) => {
+      StepControl::Terminate
+    }
+    (StepResult::FundingUnavailable, _, _) => StepControl::Advance,
+    (StepResult::Failed(_), StepErrorPolicy::ContinueNextStep, _) => StepControl::Advance,
+    (
+      StepResult::Failed(RetryClass::Temporary),
+      StepErrorPolicy::RetryLater,
+      Mutability::Mutable,
+    ) => StepControl::SuspendCurrent,
+    (StepResult::Failed(_), StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater, _) => {
+      StepControl::Terminate
+    }
+  }
 }
 
 impl<T: Config> Pallet<T> {
@@ -256,6 +328,14 @@ impl<T: Config> Pallet<T> {
     continuation
   }
 
+  pub(crate) fn record_stop_cycle_event(aaa_id: AaaId, cycle_nonce: u64, step_index: u32) {
+    Self::deposit_event(Event::CycleStopped {
+      aaa_id,
+      cycle_nonce,
+      step_index,
+    });
+  }
+
   fn record_simulation_step(
     trace: &mut Option<&mut alloc::vec::Vec<SimulationStepRecord>>,
     step_index: u32,
@@ -360,7 +440,7 @@ impl<T: Config> Pallet<T> {
       let step = &execution_plan[step_idx];
       let step_num = step_idx as u32;
       let eval_fee = if is_user {
-        Self::compute_eval_fee(step.conditions.len() as u32)
+        Self::compute_eval_fee(step.conditions.len())
       } else {
         T::Balance::zero()
       };
@@ -370,7 +450,7 @@ impl<T: Config> Pallet<T> {
         T::Balance::zero()
       };
       let reserved_step_fee = eval_fee.saturating_add(exec_fee);
-      match Self::evaluate_conditions(&step.conditions, &actor, reserved_fee_remaining) {
+      match Self::evaluate_condition_set(&step.conditions, &actor, reserved_fee_remaining) {
         Ok(true) => {}
         Ok(false) => {
           if is_user {
@@ -510,14 +590,28 @@ impl<T: Config> Pallet<T> {
               continue;
             }
           }
-          if step.on_error == StepErrorPolicy::RetryLater {
-            Self::record_simulation_step(
-              &mut trace,
-              step_num,
-              SimulationStepOutcome::Suspended(SuspensionReason::FundingUnavailable),
-            );
-            suspended_at = Some((step_num, SuspensionReason::FundingUnavailable));
-            break;
+          match resolve_step_control(
+            instance.mutability,
+            StepResult::FundingUnavailable,
+            step.on_error,
+          ) {
+            StepControl::Advance => {}
+            StepControl::CompleteCycle => {
+              unreachable!("FundingUnavailable cannot complete a cycle")
+            }
+            StepControl::Terminate => {
+              execution_plan_failed = true;
+              break;
+            }
+            StepControl::SuspendCurrent => {
+              Self::record_simulation_step(
+                &mut trace,
+                step_num,
+                SimulationStepOutcome::Suspended(SuspensionReason::FundingUnavailable),
+              );
+              suspended_at = Some((step_num, SuspensionReason::FundingUnavailable));
+              break;
+            }
           }
           skipped_funding_unavailable = skipped_funding_unavailable.saturating_add(1);
           Self::record_simulation_step(
@@ -588,7 +682,11 @@ impl<T: Config> Pallet<T> {
       if let Err(failure) = Self::execute_prepared_task(prepared_task, aaa_id, &actor) {
         failed_steps = failed_steps.saturating_add(1);
         let retry = failure.retry;
-        let action = Self::error_policy_action(step.on_error, failure.clone());
+        let control = resolve_step_control(
+          instance.mutability,
+          StepResult::Failed(retry),
+          step.on_error,
+        );
         Self::record_simulation_step(&mut trace, step_num, SimulationStepOutcome::Failed(retry));
         Self::deposit_event(Event::StepFailed {
           aaa_id,
@@ -596,21 +694,41 @@ impl<T: Config> Pallet<T> {
           step_index: step_num,
           error: failure.error,
         });
-        match action {
-          ErrorPolicyAction::Abort => {
+        match control {
+          StepControl::Advance => continue,
+          StepControl::CompleteCycle => {
+            unreachable!("task failure cannot complete a cycle")
+          }
+          StepControl::Terminate => {
             execution_plan_failed = true;
             break;
           }
-          ErrorPolicyAction::Continue => continue,
-          ErrorPolicyAction::Suspend => {
+          StepControl::SuspendCurrent => {
             suspended_at = Some((step_num, SuspensionReason::Temporary));
             break;
           }
         }
       }
-      Self::record_simulation_step(&mut trace, step_num, SimulationStepOutcome::Executed);
+      let successful_result = if matches!(&step.task, AaaTask::StopCycle) {
+        StepResult::Stopped
+      } else {
+        StepResult::Completed
+      };
+      let successful_control =
+        resolve_step_control(instance.mutability, successful_result, step.on_error);
+      let simulation_outcome = if successful_control == StepControl::CompleteCycle {
+        Self::record_stop_cycle_event(aaa_id, cycle_nonce, step_num);
+        SimulationStepOutcome::Stopped
+      } else {
+        debug_assert_eq!(successful_control, StepControl::Advance);
+        SimulationStepOutcome::Executed
+      };
+      Self::record_simulation_step(&mut trace, step_num, simulation_outcome);
       executed_steps = executed_steps.saturating_add(1);
       attempt_executed_steps = attempt_executed_steps.saturating_add(1);
+      if successful_control == StepControl::CompleteCycle {
+        break;
+      }
     }
     let attempt_weight = base_weight.saturating_add(Weight::from_parts(
       5_000_000u64.saturating_mul(attempt_executed_steps as u64 + 1),
@@ -794,7 +912,7 @@ impl<T: Config> Pallet<T> {
       let mut cumulative_outcomes = initial_outcomes;
       for record in &trace {
         match record.outcome {
-          SimulationStepOutcome::Executed => {
+          SimulationStepOutcome::Executed | SimulationStepOutcome::Stopped => {
             cumulative_outcomes.executed_steps =
               cumulative_outcomes.executed_steps.saturating_add(1);
           }
@@ -858,26 +976,18 @@ impl<T: Config> Pallet<T> {
       .map_err(|_| DispatchError::Other("StepFeeTransferFailed"))
   }
 
-  fn error_policy_action<E: Into<TaskFailure>>(
-    policy: StepErrorPolicy,
-    failure: E,
-  ) -> ErrorPolicyAction {
-    let failure = failure.into();
-    match (policy, failure.retry) {
-      (StepErrorPolicy::ContinueNextStep, _) => ErrorPolicyAction::Continue,
-      (StepErrorPolicy::RetryLater, RetryClass::Temporary) => ErrorPolicyAction::Suspend,
-      (StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater, _) => ErrorPolicyAction::Abort,
-    }
-  }
-
-  fn apply_error_policy<E: Into<TaskFailure>>(
+  fn apply_error_policy(
     _aaa_id: AaaId,
     _cycle_nonce: u64,
     _step: u32,
     policy: StepErrorPolicy,
-    failure: E,
+    _failure: DispatchError,
   ) -> bool {
-    Self::error_policy_action(policy, failure) != ErrorPolicyAction::Continue
+    resolve_step_control(
+      Mutability::Immutable,
+      StepResult::Failed(RetryClass::Permanent),
+      policy,
+    ) == StepControl::Terminate
   }
 
   fn push_trigger_surface(
@@ -933,6 +1043,7 @@ impl<T: Config> Pallet<T> {
       AaaTask::Unstake { asset, shares } => {
         Self::push_trigger_surface(shares, ResolutionSurface::StakingShares(*asset), surfaces)
       }
+      AaaTask::StopCycle => {}
     }
   }
 
@@ -1300,6 +1411,7 @@ impl<T: Config> Pallet<T> {
           shares: resolved,
         }))
       }
+      AaaTask::StopCycle => Ok(PreparedTaskOutcome::Executable(PreparedTask::StopCycle)),
     }
   }
 
@@ -1471,6 +1583,7 @@ impl<T: Config> Pallet<T> {
               shares,
             });
           }
+          PreparedTask::StopCycle => {}
         }
         Ok(())
       })();
@@ -1513,39 +1626,43 @@ impl<T: Config> Pallet<T> {
     )
   }
 
-  pub(crate) fn evaluate_conditions(
-    conditions: &BoundedVec<Condition<T::AssetId, T::Balance>, T::MaxConditionsPerStep>,
+  pub(crate) fn evaluate_condition_set(
+    condition_set: &ConditionSetOf<T>,
     who: &T::AccountId,
     reserved: T::Balance,
   ) -> Result<bool, DispatchError> {
-    for cond in conditions.iter() {
-      let pass = match cond {
-        Condition::BalanceAbove { asset, threshold } => {
-          Self::spendable_balance(who, *asset, reserved) > *threshold
-        }
-        Condition::BalanceBelow { asset, threshold } => {
-          Self::spendable_balance(who, *asset, reserved) < *threshold
-        }
-        Condition::BalanceEquals { asset, threshold } => {
-          Self::spendable_balance(who, *asset, reserved) == *threshold
-        }
-        Condition::BalanceNotEquals { asset, threshold } => {
-          Self::spendable_balance(who, *asset, reserved) != *threshold
-        }
-        Condition::BlockNumberAbove { threshold } => {
-          let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
-          now > *threshold
-        }
-        Condition::BlockNumberBelow { threshold } => {
-          let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
-          now < *threshold
-        }
-      };
-      if !pass {
-        return Ok(false);
+    evaluate_condition_set_with(condition_set, |condition| {
+      Self::evaluate_atomic_condition(condition, who, reserved)
+    })
+  }
+
+  fn evaluate_atomic_condition(
+    condition: &Condition<T::AssetId, T::Balance>,
+    who: &T::AccountId,
+    reserved: T::Balance,
+  ) -> Result<bool, DispatchError> {
+    Ok(match condition {
+      Condition::BalanceAbove { asset, threshold } => {
+        Self::spendable_balance(who, *asset, reserved) > *threshold
       }
-    }
-    Ok(true)
+      Condition::BalanceBelow { asset, threshold } => {
+        Self::spendable_balance(who, *asset, reserved) < *threshold
+      }
+      Condition::BalanceEquals { asset, threshold } => {
+        Self::spendable_balance(who, *asset, reserved) == *threshold
+      }
+      Condition::BalanceNotEquals { asset, threshold } => {
+        Self::spendable_balance(who, *asset, reserved) != *threshold
+      }
+      Condition::BlockNumberAbove { threshold } => {
+        let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
+        now > *threshold
+      }
+      Condition::BlockNumberBelow { threshold } => {
+        let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
+        now < *threshold
+      }
+    })
   }
 
   /// Balance visible to AAA resolution — adapter-visible balance minus AAA-local reserved fees
@@ -1658,5 +1775,197 @@ impl<T: Config> Pallet<T> {
       return Ok(AmountResolutionOutcome::FundingUnavailable);
     }
     Ok(AmountResolutionOutcome::Resolved(resolved))
+  }
+}
+
+#[cfg(test)]
+mod step_control_tests {
+  use super::*;
+
+  #[test]
+  fn step_control_matrix_is_exhaustive() {
+    let fixed_cases = [
+      (
+        StepResult::Completed,
+        StepErrorPolicy::ContinueNextStep,
+        StepControl::Advance,
+      ),
+      (
+        StepResult::Completed,
+        StepErrorPolicy::AbortCycle,
+        StepControl::Advance,
+      ),
+      (
+        StepResult::Completed,
+        StepErrorPolicy::RetryLater,
+        StepControl::Advance,
+      ),
+      (
+        StepResult::Stopped,
+        StepErrorPolicy::ContinueNextStep,
+        StepControl::CompleteCycle,
+      ),
+      (
+        StepResult::Stopped,
+        StepErrorPolicy::AbortCycle,
+        StepControl::CompleteCycle,
+      ),
+      (
+        StepResult::Stopped,
+        StepErrorPolicy::RetryLater,
+        StepControl::CompleteCycle,
+      ),
+      (
+        StepResult::Failed(RetryClass::Permanent),
+        StepErrorPolicy::ContinueNextStep,
+        StepControl::Advance,
+      ),
+      (
+        StepResult::Failed(RetryClass::Permanent),
+        StepErrorPolicy::AbortCycle,
+        StepControl::Terminate,
+      ),
+      (
+        StepResult::Failed(RetryClass::Permanent),
+        StepErrorPolicy::RetryLater,
+        StepControl::Terminate,
+      ),
+      (
+        StepResult::Failed(RetryClass::Temporary),
+        StepErrorPolicy::ContinueNextStep,
+        StepControl::Advance,
+      ),
+      (
+        StepResult::Failed(RetryClass::Temporary),
+        StepErrorPolicy::AbortCycle,
+        StepControl::Terminate,
+      ),
+    ];
+    for mutability in [Mutability::Mutable, Mutability::Immutable] {
+      for (result, policy, expected) in fixed_cases {
+        assert_eq!(resolve_step_control(mutability, result, policy), expected);
+      }
+      assert_eq!(
+        resolve_step_control(
+          mutability,
+          StepResult::Failed(RetryClass::Temporary),
+          StepErrorPolicy::RetryLater,
+        ),
+        if mutability == Mutability::Mutable {
+          StepControl::SuspendCurrent
+        } else {
+          StepControl::Terminate
+        },
+      );
+    }
+  }
+
+  #[test]
+  fn funding_unavailable_uses_the_same_control_owner() {
+    for mutability in [Mutability::Mutable, Mutability::Immutable] {
+      for policy in [
+        StepErrorPolicy::ContinueNextStep,
+        StepErrorPolicy::AbortCycle,
+      ] {
+        assert_eq!(
+          resolve_step_control(mutability, StepResult::FundingUnavailable, policy),
+          StepControl::Advance,
+        );
+      }
+    }
+    assert_eq!(
+      resolve_step_control(
+        Mutability::Mutable,
+        StepResult::FundingUnavailable,
+        StepErrorPolicy::RetryLater,
+      ),
+      StepControl::SuspendCurrent,
+    );
+    assert_eq!(
+      resolve_step_control(
+        Mutability::Immutable,
+        StepResult::FundingUnavailable,
+        StepErrorPolicy::RetryLater,
+      ),
+      StepControl::Terminate,
+    );
+  }
+
+  #[test]
+  fn condition_set_aggregation_never_short_circuits_truth_or_error() {
+    use polkadot_sdk::frame_support::traits::ConstU32;
+
+    let all = ConditionSet::<u8, ConstU32<4>>::All(
+      BoundedVec::try_from(alloc::vec![1, 2]).expect("two atoms fit"),
+    );
+    let mut all_visited = alloc::vec::Vec::new();
+    let all_result = evaluate_condition_set_with(&all, |atom| {
+      all_visited.push(*atom);
+      Ok::<_, &'static str>(*atom == 2)
+    });
+    assert_eq!(all_result, Ok(false));
+    assert_eq!(all_visited, alloc::vec![1, 2]);
+
+    let any = ConditionSet::<u8, ConstU32<4>>::Any(
+      BoundedVec::try_from(alloc::vec![1, 2, 3]).expect("three atoms fit"),
+    );
+    let mut any_visited = alloc::vec::Vec::new();
+    let any_result = evaluate_condition_set_with(&any, |atom| {
+      any_visited.push(*atom);
+      match atom {
+        1 => Ok(true),
+        2 => Err("condition failed"),
+        _ => Ok(false),
+      }
+    });
+    assert_eq!(any_result, Err("condition failed"));
+    assert_eq!(any_visited, alloc::vec![1, 2, 3]);
+  }
+
+  #[test]
+  fn conditions_and_amount_resolution_do_not_write_storage() {
+    use crate::mock::{ALICE, TEST_INITIAL_BALANCE, Test, TestAsset, new_test_ext};
+    use polkadot_sdk::sp_runtime::StateVersion;
+
+    new_test_ext().execute_with(|| {
+      let conditions = ConditionSet::All(
+        BoundedVec::try_from(alloc::vec![Condition::BalanceAbove {
+          asset: TestAsset::Native,
+          threshold: 1,
+        }])
+        .expect("one condition fits"),
+      );
+      let before_conditions = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+      assert_eq!(
+        Pallet::<Test>::evaluate_condition_set(&conditions, &ALICE, 0),
+        Ok(true),
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+        before_conditions,
+      );
+
+      let trigger_snapshot = ContinuationSnapshotOf::<Test>::default();
+      let funding_snapshots = FundingSnapshotsOf::<Test>::default();
+      let before_resolution = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
+      assert_eq!(
+        Pallet::<Test>::resolve_amount_with_policy(
+          &AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
+          TestAsset::Native,
+          &ALICE,
+          0,
+          &trigger_snapshot,
+          &funding_snapshots,
+          AmountResolutionPolicy::PreserveSpend,
+        ),
+        Ok(AmountResolutionOutcome::Resolved(
+          (TEST_INITIAL_BALANCE - 1) / 2,
+        )),
+      );
+      assert_eq!(
+        polkadot_sdk::sp_io::storage::root(StateVersion::V1),
+        before_resolution,
+      );
+    });
   }
 }

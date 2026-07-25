@@ -8,7 +8,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { runDeosAaaFinalizedSimulation } from '../src/lib/adapters/blockchain/aaa-simulation.ts';
+import {
+  getDeosAaaFinalizedAuthoringContext,
+  runDeosAaaFinalizedSimulation,
+} from '../src/lib/adapters/blockchain/aaa-simulation.ts';
 import { runAaaMatchingWasmSimulation } from '../src/lib/automation/matching-wasm.ts';
 import {
   createAaaPlanArtifact,
@@ -28,7 +31,10 @@ const runtime = {
   transactionVersion: 1,
 };
 const step = {
-  conditions: [],
+  conditions: {
+    type: 'All',
+    value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+  },
   task: {
     type: 'Stake',
     value: {
@@ -142,6 +148,36 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       resultScale,
     },
   );
+  const stoppedScale = encodeAaaRuntimeSimulationResult(metadataBytes, {
+    success: true,
+    value: {
+      status: { type: 'Completed', value: undefined },
+      cycle_nonce: 8n,
+      attempt: 0,
+      start_cursor: 0,
+      continuation_cursor: undefined,
+      finalized_through: 1,
+      cumulative_outcomes: {
+        executed_steps: 1,
+        skipped_conditions: 0,
+        skipped_resolution: 0,
+        skipped_funding_unavailable: 0,
+        failed_steps: 0,
+      },
+      steps: [
+        {
+          step_index: 1,
+          outcome: { type: 'Stopped', value: undefined },
+        },
+      ],
+    },
+  });
+  const stopped = decodeAaaRuntimeSimulationResult(metadataBytes, stoppedScale);
+  assert.equal(stopped.success, true);
+  if (stopped.success) {
+    assert.deepEqual(stopped.outcome.steps[0].outcome, { type: 'Stopped' });
+    assert.equal(stopped.outcome.status, 'Completed');
+  }
   const rejectedScale = encodeAaaRuntimeSimulationResult(metadataBytes, {
     success: false,
     value: { type: 'ProgramMismatch', value: undefined },
@@ -150,6 +186,51 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
     decodeAaaRuntimeSimulationResult(metadataBytes, rejectedScale),
     { success: false, error: 'ProgramMismatch', resultScale: rejectedScale },
   );
+});
+
+test('authoring context binds metadata and versions at one finalized block without runtime execution', async () => {
+  const at = base.snapshot.blockHash;
+  let transportRequests = 0;
+  const context = await getDeosAaaFinalizedAuthoringContext({
+    async ensureConnected() {
+      return {
+        client: {
+          async getFinalizedBlock() {
+            return { hash: at, number: 42 };
+          },
+          async getChainSpecData() {
+            return { genesisHash: runtime.genesisHash };
+          },
+          async _request() {
+            transportRequests += 1;
+            throw new Error('Authoring context must not fetch runtime code');
+          },
+        },
+        typedApi: {
+          apis: {
+            Core: {
+              async version(options) {
+                assert.deepEqual(options, { at });
+                return { spec_version: 1, transaction_version: 1 };
+              },
+            },
+            Metadata: {
+              async metadata_at_version(version, options) {
+                assert.equal(version, 16);
+                assert.deepEqual(options, { at });
+                return metadataBytes;
+              },
+            },
+          },
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(context.runtime, runtime);
+  assert.deepEqual(context.finalizedBlock, { hash: at, number: 42 });
+  assert.deepEqual(context.metadataBytes, metadataBytes);
+  assert.equal(transportRequests, 0);
 });
 
 test('finalized transport pins state and invokes the typed runtime API at one block', async () => {

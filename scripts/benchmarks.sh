@@ -221,6 +221,7 @@ verify_weight_file_contract() {
         "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
         "close_aaa_system_pure"
+        "condition_set_all_max"
     )
 
     for benchmark in "${diagnostic_benchmarks[@]}"; do
@@ -254,6 +255,7 @@ verify_weight_file_contract() {
         "scheduler_paged_mixed_scan"
         "transaction_extension_ingress_base"
         "transaction_extension_ingress_notify"
+        "condition_set_evaluation"
     )
     for benchmark in "${required_runtime_benchmarks[@]}"; do
         if ! grep -q "fn ${benchmark}" "$output_file"; then
@@ -291,6 +293,7 @@ run_pallet_benchmark() {
             "scheduler_cooldown_ineligible_idle"
             "scheduler_wakeup_sparse_gap_recovery"
             "close_aaa_system_pure"
+            "condition_set_all_max"
         )
         local benchmark
         for benchmark in "${diagnostic_benchmarks[@]}"; do

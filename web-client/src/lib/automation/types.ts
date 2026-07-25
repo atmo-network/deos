@@ -4,6 +4,8 @@ Owns: System AAA actor snapshots plus portable plan-authoring policy shapes.
 Excludes: Runtime actor scheduling, adapter transport, transaction composition, and widget rendering.
 Zone: Automation public contract; safe for adapters, stores, and widgets to import.
 */
+import type { AaaPlanHex, AaaPlanRuntimeIdentity } from './plan-artifact.ts';
+
 export const AUTOMATION_STEP_ERROR_POLICIES = [
   'AbortCycle',
   'ContinueNextStep',
@@ -27,6 +29,15 @@ export function automationPolicyAllowed(
 ): boolean {
   return mutability === 'Mutable' || policy !== 'RetryLater';
 }
+
+export type AutomationAuthoringContext = {
+  metadataBytes: Uint8Array;
+  runtime: AaaPlanRuntimeIdentity;
+  finalizedBlock: {
+    hash: AaaPlanHex;
+    number: number;
+  };
+};
 
 export type AutomationActorSnapshot = {
   aaaId: number;

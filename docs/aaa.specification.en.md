@@ -1,11 +1,11 @@
 # AAA Specification
 
 - **Component**: `pallet-aaa` (Account Abstraction Actors)
-- **Specification line**: `0.7.3`
+- **Specification line**: `0.7.4`
 - **Date**: July 2026
 - **Status**: Normative
-- **Release focus**: Progress-preserving AAA Continuation
-- **Source basis**: This accepted specification, verified `0.7.2` behavior, and the tested implementation. The referenced `aaa.resume.proposal.en.md` was unavailable and is not a release source.
+- **Release focus**: Verifiable Step Composition
+- **Source basis**: This accepted specification and the verified `0.7.3` implementation baseline.
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 
@@ -24,7 +24,7 @@ This specification MUST stay at or below **1280 lines** (formatting-preserving c
 3. **Destruction in Place**: On terminal conditions, actor state is removed atomically and balances remain on the sovereign account.
 4. **No-Refund Contract**: The protocol MUST NOT perform automatic asset refund fan-out on close; balance recovery is owner-operated.
 5. **Creation-Cost Internalization**: `create_user_aaa` MUST charge a non-refundable opening fee through the runtime `FeeCollector` into `FeeSink` to cover long-tail maintenance of abandoned actors.
-6. **Static Execution Plans**: Steps remain a bounded static program with no loops, dynamic branching, task-authored memory, arbitrary checkpoints, or whole-plan transaction. Continuation is scheduler-owned proof of committed-prefix progress, not mutable task state.
+6. **Static Execution Plans**: Steps remain a bounded static program with no loops, dynamic branching, task-authored memory, arbitrary checkpoints, or whole-plan transaction. Fieldless `StopCycle` may select only successful current-run terminal control; Continuation remains scheduler-owned proof of committed-prefix progress, not mutable task state.
 7. **Predictable Failure**: Failures MUST resolve into one of: `Deferred`, `StepSkipped`, `StepFailed`, `Suspended`, `Cancelled`, or `AaaClosed`.
 8. **Synchronous Mutations**: Slot-allocation mutations MUST be persisted in the same extrinsic execution to prevent intra-block races.
 9. **Saturating Arithmetic**: Intermediate fee/limit math MUST use saturating semantics. User-visible amount resolution MUST NOT silently overflow or underflow and MUST resolve deterministically (`Skipped` outcome or explicit failure).
@@ -33,6 +33,8 @@ This specification MUST stay at or below **1280 lines** (formatting-preserving c
 12. **Spec-Impl Lock**: Runtime behavior MUST conform to this document in the same release window, and release CI MUST block shipment unless invariant-mapped tests for Section 14 pass.
 13. **Pre-1.0 Compatibility**: The `0.7.x` pre-launch line remains fresh-genesis and MAY make an explicitly released breaking cleanup without historical migration ceremony. AAA `1.0` MUST remain blocked until the `0.7.3` Continuation line repeats the independent-runtime embedding gate.
 14. **Post-1.0 Compatibility**: Public discriminants and encoded call semantics become append-only. Storage shape changes require a bounded migration, incremented pallet `StorageVersion`, and runtime compatibility bump; removal or reinterpretation requires an AAA major version. Additive host adapters and conservative weight recalibration follow package/runtime policy without pretending a package version migrates a chain.
+
+---
 
 ## 2. Actor Model
 
@@ -197,6 +199,10 @@ Create/close transitions MUST synchronize actor identity/program stores and `Sov
 
 Execution-plan, funding-policy, schedule, or schedule-window replacement; window expiry; deactivation; terminal transition; and pure close MUST cancel through one internal routine before changed suffix meaning can apply. Pause/resume and breaker activation/recovery preserve Continuation and defer retry. Cancellation actor-locally invalidates queue/wakeup membership without shared-container scans. Explicit cancellation emits `CycleCancelled`, then one terminal `CycleSummary` with cumulative outcomes; internal invalidation uses the same terminal accounting and reasoned event contract.
 
+A runtime upgrade MAY preserve an open Continuation only when the upgrade owner proves semantic compatibility for every persisted part of its run image: step ordering, conditions, task and parameter meaning, amount resolution, adapter failure classification, error-policy transition, frozen observations, fee/weight admission, and scheduler eligibility. An upgrade that cannot prove this equivalence MUST cancel every affected Continuation through a bounded migration before the changed executor can admit another attempt. The reference `0.7.x` line supports fresh genesis rather than in-place framework upgrades, so it never claims cross-release Continuation compatibility; a launched downstream runtime owns this migration and compatibility proof. Default invalidation plus upgrade-owned migration closes the semantic boundary without a per-Continuation version field, program hash, or new runtime API.
+
+Adapter identity bindings belong to active-plan semantics even when no Continuation exists. In particular, `StakingOps::share_asset(position_asset)` MUST remain stable for the lifetime of an admitted position key. An upgrade MUST introduce a new position key rather than reinterpret an existing one; any exceptional migration MUST boundedly revalidate every affected active plan and recompute tracked-funding and admission caches before execution resumes.
+
 ### 2.6 Funding Batches
 
 The bounded per-asset `funding_snapshots` map is the canonical baseline for `PercentageOfLastFunding` resolution (Section 5.3). Each `FundingBatch` exposes the armed `amount` plus checked-add pending funding for the next successful operation; `funding_tracked_assets` bounds the map and producer work.
@@ -308,7 +314,7 @@ trait StakingOps<AccountId, AssetId, Balance> {
 }
 ```
 
-AAA MUST NOT encode collator, nomination, receipt, or native-staking topology. `Unstake.asset` is a runtime position key: current/trigger/all modes use `share_balance`; last-funding uses `funding_snapshots[share_asset(asset)].amount` and plan validation rejects absent transferable shares. Native routing remains adapter policy.
+AAA MUST NOT encode collator, nomination, receipt, or native-staking topology. `Unstake.asset` is a runtime position key: current/trigger/all modes use `share_balance`; last-funding uses `funding_snapshots[share_asset(asset)].amount` and plan validation rejects absent transferable shares. The returned share asset is a stable admitted-plan binding for that position key; runtime upgrades MUST NOT remap the key in place. Execution rechecks the binding and treats a missing mapping as a Permanent invalid-resolution failure. Native routing remains adapter policy.
 
 ### 3.4 LiquidityDonationOps
 
@@ -378,9 +384,12 @@ For User AAA, insufficient pre-flight fee budget yields immediate `AaaClosed(Fee
 
 Per-step formulas:
 
-- `eval_fee = StepBaseFee + ConditionReadFee × conditions.len()`
+- `condition_count(Always) = 0`; `condition_count(All(v) | Any(v)) = v.len()`
+- `eval_fee = StepBaseFee + ConditionReadFee × condition_count(step.conditions)`
 - `exec_fee_upper = WeightToFee(weight_upper_bound(task, params))`
 - `cycle_fee_upper = Σ(eval_fee_i + exec_fee_upper_i)`
+
+Fee reservation and cycle/suffix Weight bounds use total configured atomic count, independent of truth values, atom order, aggregate mode, or truth position. Maximum `All` and `Any` benchmarks MAY share one condition-count weight model when they execute identical bounded reads.
 
 | Step outcome after read-only evaluation/preparation | Single `FeeCollector` amount | Task dispatch |
 | --- | --- | --- |
@@ -420,27 +429,75 @@ Reservation rules:
 ### 4.5 Terminal Cleanup Admission
 
 Runtime MUST bind pure terminal cleanup to an independently generated two-dimensional production weight. The reference runtime prices the measured worst-case User branch; that bound MUST component-wise cover the System branch and every automatic lifecycle-touch use. A block with insufficient remaining RefTime or ProofSize defers scheduler-owned cleanup without mutating terminal state. Explicit dispatch declares the same conservative bound before execution.
+
 ---
+
 ## 5. Execution
 
-### 5.1 Step
+### 5.1 Step Composition Constitution
 
 ```rust
 struct Step {
-    conditions: BoundedVec<Condition, MaxConditionsPerStep>,
+    conditions: ConditionSet<Condition, MaxConditionsPerStep>,
     task: Task,
     on_error: StepErrorPolicy,
 }
 ```
 
+AAA composition has exactly four configurable surfaces:
+
+```text
+Pipeline composition  = ordered Step[]
+Admission composition = one ConditionSet per Step
+Task composition      = Task plus typed parameters
+Failure composition   = StepErrorPolicy
+```
+
+The pipeline has **topological linearity**: the successor of step `i` is fixed as `i + 1` or terminal. It permits **behavioral predication**, where current state determines whether the configured effect executes, and **forward data dependency**, where an earlier committed effect changes data observed by a later condition, amount resolution, or adapter. It prohibits **control-flow mutation**: any mechanism that changes the successor relation, selects an arbitrary next index, or changes the current logical run's ordered program image.
+
+For the current step `i`, control resolves exhaustively as follows:
+
+```text
+ConditionSet false                      -> i + 1
+Economic task success                   -> i + 1
+StopCycle success                       -> successful terminal
+Task failure + ContinueNextStep         -> i + 1
+Task failure + AbortCycle               -> terminal
+Temporary failure + valid RetryLater    -> i
+Permanent failure + RetryLater          -> terminal
+```
+
+Final amount-resolution skips advance. `FundingUnavailable` advances under `ContinueNextStep` or `AbortCycle` and suspends at `i` only under valid `RetryLater`, as Sections 2.6 and 5.3 define. Within one logical run, `cursor'` MUST belong to `{ cursor, cursor + 1, terminal }` and MUST NOT be less than `cursor`.
+
+The following rules constitute the control-flow firewall:
+
+1. The ordered program image remains frozen for the logical run.
+2. A ConditionSet returns only execute or skip for its current step; it never chooses a successor, task, recipient, asset, adapter, amount mode, or error policy.
+3. Task execution output never chooses a successor or mutates the current program image; task identity fixes economic success to `i + 1` and `StopCycle` success to terminal.
+4. Amount resolution returns a value or a closed resolution outcome; it never returns a task, recipient, asset, adapter, or successor index.
+5. Valid `RetryLater` retains the same unresolved step, logical-run nonce, actor program identity, and frozen trigger/funding inputs.
+6. Plan, schedule, funding-policy, deactivation, cancellation, terminal transition, or semantically incompatible runtime upgrade invalidates an open Continuation rather than mutating its meaning.
+7. Adapter-internal branching is valid only when closed over one typed task, task-atomic, statically bounded, and covered by one generated worst-case Weight contract.
+8. Local program linearity does not imply global actor-network acyclicity. Cross-actor feedback remains valid only through scheduler admission, the block-start FIFO cutoff, signal latching, cooldowns, and at-most-once execution per actor per block.
+
+These rules admit data-dependent economic composition and condition-gated successful termination while rejecting arbitrary branches, jumps, dynamic successors, loops, recursion, callbacks, nested programs, opaque dispatch, task-authored checkpoints, and synchronous cross-actor execution.
+
 ### 5.2 Conditions
 
-`Condition` type reference is normative in Section 12.1.
+`ConditionSet` and atomic `Condition` type references are normative in Section 12.1. Every step owns exactly one canonical aggregate:
 
-- Conditions are AND-composed.
-- Empty condition list = unconditional step.
-- Evaluation errors are fail-closed (`StepFailed`).
-- Balance conditions evaluate against **spendable balance** (adapter-visible balance minus `FeeNativeAsset` reserved fee budget where applicable), not against `balance()` alone. This ensures conditions and amount resolution share a unified view of available funds.
+- `Always` contains zero atomic conditions and executes unconditionally.
+- `All(v)` contains `1..=MaxConditionsPerStep` atoms and executes only when every atom is true.
+- `Any(v)` contains `1..=MaxConditionsPerStep` atoms and executes when one or more atoms are true; several true atoms still execute the task exactly once.
+- Empty `All` and `Any` are malformed and MUST fail program validation as `EmptyConditionSet`; decoding or execution MUST NOT normalize them to another form.
+
+Production and rollback-only runtime simulation MUST share one evaluator. It MUST evaluate every configured atom before aggregation without short-circuiting. Ordering MUST NOT mask an error or change fee/weight bounds; any atomic evaluation error fails the whole aggregate as a Permanent condition-evaluation failure even when another `Any` atom is true.
+
+A false aggregate emits `StepSkipped(ConditionsNotMet)` and advances exactly one cursor. A true aggregate prepares the one configured task. Aggregate mode never selects a successor or creates/mutates Continuation; retries re-evaluate the unresolved step's live atoms under existing attempt semantics.
+
+Arbitrary nesting, negation, XOR/threshold logic, references to earlier boolean results, condition-local policies, callbacks, and state-writing predicates are unsupported. Balance atoms evaluate against **spendable balance** (adapter-visible balance minus `FeeNativeAsset` reserved fee budget where applicable), not against `balance()` alone.
+
+This pre-launch line replaces the stored step field directly and resets the fresh-genesis baseline without migration ceremony. Metadata-bound artifacts from the prior shape are incompatible until rebound through the existing exact-metadata contract; no handwritten legacy decoder belongs in runtime or client.
 
 ### 5.3 Amount Resolution
 
@@ -513,7 +570,7 @@ If an early step mutates asset composition and a later step fails, post-mutation
 
 ### 5.6 Cursor, Necessity, and Sparse State
 
-At every suspension, one scalar `cursor` MUST satisfy: every index below it has exactly one final outcome; the cursor index is unresolved; no later index executed; retry starts at the cursor. Advance after success, `ConditionsNotMet`, final `ResolutionSkipped`, final `FundingUnavailable` under existing policies, or `ContinueNextStep` failure. A non-progressing skip followed by later execution is invalid; no completion bitmap may exist.
+At every suspension, one scalar `cursor` MUST satisfy: every index below it has exactly one final outcome; the cursor index is unresolved; no later index executed; retry starts at the cursor. Advance after economic success, `ConditionsNotMet`, final `ResolutionSkipped`, final `FundingUnavailable` under existing policies, or `ContinueNextStep` failure; `StopCycle` success finalizes at its own index and leaves every suffix index unreachable. A non-progressing skip followed by later execution is invalid; no completion bitmap may exist.
 
 Necessity witness: in `SwapExactIn → AddLiquidity → Transfer`, temporary middle-step failure after the swap commits makes fresh execution from step `0` invalid because it replays the swap. Splitting into balance-linked actors is valid and MUST be preferred when it is strictly simpler without material custody, scheduler, trigger, fee, latency, governance, or operational cost. Sparse Continuation earns state only when those seams are material. Single-step DCA is a zero-overhead product witness, not the consensus rationale.
 
@@ -538,6 +595,7 @@ Necessity witness: in `SwapExactIn → AddLiquidity → Transfer`, temporary mid
 - `Stake`: deposit declared asset into staking adapter; native support uses the runtime's chosen `AssetId`
 - `DonateLiquidity`: donate value into a pair without minting LP; adapters own pair-specific balancing
 - `Unstake`: withdraw shares from staking pool
+- `StopCycle`: fieldless successful termination of the current logical run (Section 6.3)
 
 `slippage_tolerance` is passed directly to `DexOps`; the adapter obtains a caller-aware executable quote after routing fees and computes `min_out = (1 - slippage_tolerance) × quoted_recipient_output`. `Perbill::zero()` requires that quoted output, `Perbill::one()` accepts any output, and unavailable routes return typed `TaskFailure` handled by `on_error`.
 
@@ -574,9 +632,23 @@ ED safety:
 
 The whole fan-out remains task-atomic for the final normalized transfer set.
 
-### 6.3 Task Contract
+### 6.3 StopCycle
 
-Each task MUST define: validation rules, deterministic error surface, deterministic `weight_upper_bound`, and explicit adapter side effects. Tasks MUST NOT dispatch arbitrary extrinsics.
+`StopCycle` is the sole task-level terminal instruction. When its conditions pass and ordinary User fee collection succeeds, runtime MUST record it as executed, emit `CycleStopped { aaa_id, cycle_nonce, step_index }`, skip every later step, and finalize the logical run as successful. Successful finalization MUST clear any active Continuation, reset failure accounting, emit the ordinary cumulative `CycleSummary`, promote eligible pending funding, and apply ordinary cycle-based auto-close policy.
+
+`StopCycle` has no parameters, amount resolution, adapter, asset/recipient surface, economic effect, failure class, retry state, lifecycle mutation, or scheduler mutation. A false condition skips it and advances normally. Pre-execution condition or fee failures still obey the step's `on_error`; after successful admission its configured error policy has no effect. It MUST NOT pause, cancel, close, deactivate, reschedule, signal, or synchronously execute another actor.
+
+`StopCycle + ContinueNextStep` does not guarantee termination. A pre-execution failure advances to the fixed successor, may execute the suffix, and may still produce ordinary logical-run success after plan exhaustion with a failed-step outcome. Authors SHOULD use `AbortCycle` unless deliberate fall-through is required; authoring and analysis surfaces MUST expose this behavior, especially when the suffix contains economic effects.
+
+### 6.4 Exhaustive Instruction Contract
+
+The package MUST expose one derived machine-readable contract for every current `Task`, `Condition`, `AmountResolution`, and `StepErrorPolicy`. Exhaustive Rust matches are the truth owner: adding an enum variant MUST fail compilation until its classification exists, and no second hand-maintained primitive registry may define runtime semantics.
+
+Each task classification MUST identify its required adapter or explicit adapter-free status, known and adapter-derived assets read/written, recipient surface, transfer/supply/liquidity/staking effects, User/System availability, possible committed non-compensated effects, fixed successful control, `TaskWeightInfo` owner, and pallet- or adapter-owned bounded internal algorithm. Each condition classification MUST identify observation kind, read surface, purity, step-attempt observation window, and bounded read count. Each amount classification MUST identify artifact/live/frozen data dependencies, contextual minimum-balance and fee-reserve checks, observation window, and retry re-observation behavior. Each error-policy classification MUST identify possible controls plus the Mutable and Temporary requirements for suspension.
+
+These descriptions are derived read-only package values. They add no consensus storage, runtime API, dispatch surface, task behavior, or independent weight model. Concrete task parameters remain in the canonical `Task`; the instruction contract describes their semantics and routes weight lookup back to `TaskWeightInfo`.
+
+Tasks MUST NOT dispatch arbitrary extrinsics.
 
 ---
 
@@ -712,7 +784,7 @@ The AAA runtime is a **deterministic event-driven actor runtime**. Actors are ne
 2. **Paged Physical Storage**: `QueuePages[page_id]` stores bounded consecutive entries, with the ticket derived from page and slot unless production-Wasm evidence justifies encoding it. The scheduler may stop mid-page or traverse many pages in one block; it persists the exact next head and deletes only fully consumed pages. `QueuePageSize` is I/O granularity, not throughput or execution capacity.
 3. **Actor-Local Membership**: `ActorHot.queue_ticket` is the actor's sole live queue membership. An entry is live only when its ticket equals that field; otherwise it is a tombstone. Enqueue coalesces while a live ticket exists. Cancellation, close, pause, dormancy, and replacement invalidate actor-local state without scanning pages.
 4. **Queue Continuation**: Cadence `every_blocks <= 1` re-admits actors through a new ticket beyond the captured cutoff rather than timer indexing.
-5. **Temporal Wakeup Layer**: Delayed timers use bounded `WakeupPages` and `WakeupBuckets`, a sparse paged minimum cursor, and one actor-keyed live pointer; stale entries without the matching pointer drop lazily when reached.
+5. **Temporal Wakeup Layer**: Delayed timers use bounded `WakeupPages` and `WakeupBuckets`, a sparse paged binary min-heap cursor, and one actor-keyed live pointer; stale entries without the matching pointer drop lazily when reached. `WakeupCursorPages` stores the heap's array representation over at most `MaxActiveActors` distinct blocks. Insert, pop-min, and exact removal perform at most `ceil(log2(MaxActiveActors))` sift steps, with each step touching bounded pages and indexed buckets. `scheduler_wakeup_cursor_insert`, `scheduler_wakeup_cursor_pop_min`, and `scheduler_wakeup_cursor_remove_exact` own maximum-depth generated Weight evidence.
 6. **Rejected Physical Extremes**: Production MUST use neither `StorageValue<BoundedRingBuffer<_, MaxQueueLength>>` nor `StorageMap<QueueTicket, QueueEntry>`. Algorithmic O(1) does not imply bounded physical trie I/O: the former inherits maximum-value decode/encode/proof behavior, while the latter pays one trie key and proof path per entry. A bounded intermediate page size amortizes trie overhead without coupling each touch to 10,000-entry capacity.
 
 For every block `B` and actor `A`, the consensus invariant is:
@@ -861,6 +933,7 @@ AutoCloseNonceSet { aaa_id, target: Option<u64> }
 BurnExecuted { aaa_id, asset, amount }
 CycleDeferred { aaa_id, reason: DeferReason }
 CycleStarted { aaa_id, cycle_nonce }
+CycleStopped { aaa_id, cycle_nonce, step_index }
 CycleSuspended { aaa_id, cycle_nonce, attempt, cursor, reason: SuspensionReason, cumulative_outcomes }
 CycleContinued { aaa_id, cycle_nonce, attempt, cursor }
 CycleCancelled { aaa_id, cycle_nonce, reason: CancellationReason }
@@ -895,8 +968,8 @@ Logical-run correlation is `(aaa_id, cycle_nonce)`; attempt correlation is `(aaa
 
 Event ordering:
 
-1. Opening: `CycleStarted` once, attempt-0 step events, then either `CycleSuspended` or terminal `CycleSummary`.
-2. Retry: `CycleContinued`, suffix step events, then either `CycleSuspended` or terminal `CycleSummary`; no second `CycleStarted`.
+1. Opening: `CycleStarted` once, attempt-0 step events, optional terminal `CycleStopped`, then either `CycleSuspended` or terminal `CycleSummary`.
+2. Retry: `CycleContinued`, suffix step events, optional terminal `CycleStopped`, then either `CycleSuspended` or terminal `CycleSummary`; no second `CycleStarted`.
 3. Cancellation: `CycleCancelled` then one terminal cumulative `CycleSummary`; no success accounting. Post-summary close may emit `AaaClosed`.
 4. Weight rejection emits `CycleDeferred` without changing attempt; direct pure close without an open run emits only `AaaClosed`.
 
@@ -924,6 +997,13 @@ enum AmountResolution<Balance> { Fixed(Balance), PercentageOfCurrent(Perbill), P
 
 struct SplitLeg<AccountId> { to: AccountId, share: Perbill }
 
+enum ConditionSet<C, MaxConditions> {
+    Always,
+    All(BoundedVec<C, MaxConditions>),
+    Any(BoundedVec<C, MaxConditions>),
+}
+
+// All and Any are valid only when non-empty; nesting is impossible because C is atomic Condition.
 enum Condition<AssetId, Balance, BlockNumber> {
     BalanceAbove { asset: AssetId, threshold: Balance },
     BalanceBelow { asset: AssetId, threshold: Balance },
@@ -947,6 +1027,7 @@ enum Task<AccountId, AssetId, Balance> {
     Stake { asset: AssetId, amount: AmountResolution<Balance> },
     DonateLiquidity { asset_a: AssetId, asset_b: AssetId, amount: AmountResolution<Balance>, max_ratio_error: Perbill },
     Unstake { asset: AssetId, shares: AmountResolution<Balance> },
+    StopCycle,
 }
 ```
 
@@ -971,6 +1052,7 @@ enum Error {
     AutoCloseNonceIncrementZero,
     AutoCloseNonceOverflow,
     EmptyExecutionPlan,
+    EmptyConditionSet,
     ExecutionDelayTooLong,
     ExecutionPlanExceedsOnIdleBudget,
     ExecutionPlanTooLong,
@@ -1078,6 +1160,12 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 34. One nonce spans every attempt; pre-admission deferral changes no attempt, and final success accounting/promotion occurs once after full logical-run completion (Section 2.7)
 35. Retry admission and User fees cover only the unresolved suffix; live spend/minimum checks remain current and frozen trigger inputs remain suffix-minimal (Sections 4.1–4.3; 5.4)
 36. Cancellation and pure close delete Continuation without compensation, promotion, prefix rollback, sovereign-balance movement, or shared scheduler scans (Sections 2.4–2.5)
+37. Every step has one fixed successor relation: economic success advances to `i + 1`, valid suspension remains at `i`, failure may terminate unsuccessfully, and `StopCycle` success terminates successfully; cursor never decreases and no task selects an arbitrary index (Sections 5.1 and 6.3)
+38. Each step owns one canonical non-nested `ConditionSet`: `Always`, non-empty bounded `All`, or non-empty bounded `Any`; every atom is evaluated, several true `Any` atoms execute one task once, and aggregate results only execute or skip without selecting tasks, parameters, adapters, recipients, assets, error policies, or successors (Sections 5.1–5.2)
+39. Amount resolution returns only a value or closed resolution outcome and remains unable to mutate effect identity or control flow (Sections 5.1 and 5.3)
+40. Task and adapter outputs cannot select a successor or rewrite the ordered program image; bounded adapter-internal algorithms remain atomic under one generated Weight contract (Sections 3.5, 5.1, and 5.5)
+41. `RetryLater` preserves the unresolved index, nonce, actor program identity, and frozen observations; administrative or semantically incompatible runtime changes invalidate rather than reinterpret the Continuation (Sections 2.5, 5.1, and 5.6)
+42. Actor-network feedback remains scheduler-mediated and obeys block-start cutoff, signal coalescing, cooldown, admission, and `executions(A, B) <= 1` even when the global actor graph contains a cycle (Sections 5.1 and 8.1)
 
 ---
 
@@ -1111,6 +1199,7 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 - `MinUserBalance`: runtime-specific, `>= FeeNativeAsset` ED; pre-cycle user safety floor
 - `MinWindowLength`: 100 blocks; minimum schedule window
 - `StepBaseFee`: runtime-specific; reference default 0.002 Native per-step evaluation base fee
+
 ---
 
 _End of specification._
