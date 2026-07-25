@@ -4097,7 +4097,7 @@ dependencies = [
 
 [[package]]
 name = "deos-runtime"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "cumulus-pallet-parachain-system",
  "docify",
@@ -8627,7 +8627,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8635,12 +8635,13 @@ dependencies = [
  "proptest",
  "scale-info",
  "serde",
+ "serde_json",
  "sp-api",
 ]
 
 [[package]]
 name = "pallet-aaa-embedding-fixture"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "pallet-aaa",
  "parity-scale-codec",
@@ -8771,7 +8772,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-asset-registry"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -8946,7 +8947,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-axial-router"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "pallet-tmc",
  "parity-scale-codec",
@@ -9438,7 +9439,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-governance"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9448,7 +9449,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-staking"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -10727,7 +10728,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-tmc"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -13245,7 +13246,7 @@ dependencies = [
 
 [[package]]
 name = "primitives"
-version = "0.7.4"
+version = "0.7.5"
 dependencies = [
  "parity-scale-codec",
  "scale-info",

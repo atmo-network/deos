@@ -209,26 +209,56 @@ Zone: Automation presentation helper; composes typed authoring fields without su
 
   <div class="grid gap-1 border-t border-(--mono-border) pt-3">
     <SelectField
-      label="On task error"
+      label="On failure"
       helper={step.errorPolicy === 'RetryLater'
-        ? 'Temporary failure preserves the committed prefix and stutters on this row.'
+        ? 'Temporary task failure or unavailable funding suspends a Mutable plan on this row.'
         : step.errorPolicy === 'ContinueNextStep'
-          ? 'Task-local failure rolls back and the cursor advances.'
-          : 'Task-local failure rolls back and terminates this logical run.'}
+          ? 'Task failure rolls back and advances to the next row.'
+          : 'Task failure rolls back and terminates this logical run; unavailable funding still skips forward.'}
       bind:value={step.errorPolicy}
       selectClass="h-9 py-1.5 text-xs"
     >
-      <option value="AbortCycle">Abort cycle</option>
-      <option value="ContinueNextStep">Continue next step</option>
+      <option value="AbortCycle">Abort on task failure</option>
+      <option value="ContinueNextStep">Continue after task failure</option>
       <option value="RetryLater" disabled={mutability === 'Immutable'}>
-        Retry later
+        Retry temporary failure
       </option>
     </SelectField>
+    <details class="group text-[11px] leading-relaxed text-(--mono-muted)">
+      <summary
+        class="w-fit cursor-pointer font-medium text-(--mono-fg) outline-none marker:text-(--mono-muted) focus-visible:ring-1 focus-visible:ring-(--mono-accent)"
+      >
+        Outcome semantics
+      </summary>
+      <ul class="mt-1.5 grid gap-1 border-l border-(--mono-border) pl-3">
+        <li>
+          <span class="text-(--mono-fg)">Condition false:</span> Skip this task and
+          advance; the failure policy does not run.
+        </li>
+        <li>
+          <span class="text-(--mono-fg)">Resolution skipped:</span> Record a non-failing
+          skip and advance.
+        </li>
+        <li>
+          <span class="text-(--mono-fg)">Funding unavailable:</span> Abort and Continue
+          advance; Mutable Retry suspends, while Immutable Retry terminates.
+        </li>
+        <li>
+          <span class="text-(--mono-fg)">Temporary task failure:</span> Continue advances,
+          Abort terminates, and Mutable Retry suspends.
+        </li>
+        <li>
+          <span class="text-(--mono-fg)">Permanent task failure:</span> Continue advances;
+          Abort and Retry terminate.
+        </li>
+      </ul>
+    </details>
     {#if step.task.type === 'StopCycle' && step.errorPolicy === 'ContinueNextStep'}
       <Notice variant="warn">
-        A condition or fee failure will bypass this stop, advance to the next
-        row, and may still end as an ordinary successful run. Use Abort cycle
-        unless that fall-through is deliberate.
+        False conditions skip this stop normally. An atomic condition or User
+        fee-collection failure can also advance to the next row and may still
+        end as an ordinary successful run. Use Abort on task failure unless that
+        fall-through is deliberate.
       </Notice>
     {/if}
   </div>

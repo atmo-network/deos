@@ -156,6 +156,10 @@ pub mod pallet {
     type MaxOwnerSlots: Get<u8>;
     #[pallet::constant]
     type MaxExecutionsPerBlock: Get<u32>;
+    type MaxPrioritySystemAaaIds: Get<u32>;
+    type PrioritySystemAaaIds: Get<BoundedVec<AaaId, Self::MaxPrioritySystemAaaIds>>;
+    type SystemAaaBudget: Get<Perbill>;
+    type UserAaaBudget: Get<Perbill>;
     #[pallet::constant]
     type MaxQueueLength: Get<u32>;
     /// Physical I/O granularity for the monotonic active FIFO.
@@ -173,6 +177,8 @@ pub mod pallet {
     type MaxSweepPerBlock: Get<u32>;
     #[pallet::constant]
     type MaxWhitelistSize: Get<u32>;
+    #[pallet::constant]
+    type MaxTriggerSources: Get<u32>;
     #[pallet::constant]
     type MaxSplitTransferLegs: Get<u32>;
     #[pallet::constant]
@@ -238,16 +244,31 @@ pub mod pallet {
 
   pub type AssetFilterOf<T> = AssetFilter<<T as Config>::AssetId, <T as Config>::MaxWhitelistSize>;
 
+  pub type TriggerSourceOf<T> = TriggerSource<
+    <T as frame_system::Config>::AccountId,
+    <T as Config>::AssetId,
+    <T as Config>::MaxWhitelistSize,
+  >;
+
+  pub type TriggerPolicyOf<T> = TriggerPolicy<
+    <T as frame_system::Config>::AccountId,
+    <T as Config>::AssetId,
+    <T as Config>::MaxWhitelistSize,
+    <T as Config>::MaxTriggerSources,
+  >;
+
   pub type TriggerOf<T> = Trigger<
     <T as frame_system::Config>::AccountId,
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
+    <T as Config>::MaxTriggerSources,
   >;
 
   pub type ScheduleOf<T> = Schedule<
     <T as frame_system::Config>::AccountId,
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
+    <T as Config>::MaxTriggerSources,
   >;
 
   pub type ConditionSetOf<T> = ConditionSet<
@@ -1054,6 +1075,8 @@ pub mod pallet {
     ContinuationNotFound,
     ContinuationInvariant,
     EmptyConditionSet,
+    ManualSourceDisabled,
+    InvalidTradeBound,
   }
 
   #[pallet::call]
@@ -1192,6 +1215,10 @@ pub mod pallet {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::AaaPaused);
+      ensure!(
+        snapshot.schedule.trigger.manual_source_enabled(),
+        Error::<T>::ManualSourceDisabled
+      );
       if !snapshot.pending_signal {
         ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
           let hot = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
@@ -1200,7 +1227,7 @@ pub mod pallet {
         })?;
         Self::deposit_event(Event::ManualTriggerSet { aaa_id });
       }
-      Self::enqueue(aaa_id);
+      Self::prime_actor_schedule(aaa_id);
       Ok(())
     }
 
@@ -2336,39 +2363,21 @@ pub mod pallet {
     }
 
     fn validate_schedule(schedule: &ScheduleOf<T>) -> DispatchResult {
-      match &schedule.trigger {
-        Trigger::Timer { every_blocks, .. } => {
-          ensure!(*every_blocks > 0, Error::<T>::InvalidTriggerConfiguration);
-          let max_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
-          let jitter_window = every_blocks
-            .saturating_div(4)
-            .min(T::MaxTimerJitterBlocks::get());
-          let worst_case_jitter = jitter_window.saturating_sub(1);
-          ensure!(
-            every_blocks.saturating_add(worst_case_jitter) <= max_delay,
-            Error::<T>::ExecutionDelayTooLong
-          );
-        }
-        Trigger::OnAddressEvent {
-          source_filter,
-          asset_filter,
-        } => {
-          if let SourceFilter::Whitelist(list) = source_filter {
-            ensure!(!list.is_empty(), Error::<T>::InvalidTriggerConfiguration);
-            ensure!(
-              (list.len() as u32) <= T::MaxWhitelistSize::get(),
-              Error::<T>::InvalidTriggerConfiguration
-            );
-          }
-          if let AssetFilter::Whitelist(list) = asset_filter {
-            ensure!(!list.is_empty(), Error::<T>::InvalidTriggerConfiguration);
-            ensure!(
-              (list.len() as u32) <= T::MaxWhitelistSize::get(),
-              Error::<T>::InvalidTriggerConfiguration
-            );
-          }
-        }
-        Trigger::Manual => {}
+      ensure!(
+        schedule.trigger.has_canonical_sources(),
+        Error::<T>::InvalidTriggerConfiguration
+      );
+      if let TriggerPolicy::Cadenced { every_blocks, .. } = &schedule.trigger {
+        ensure!(*every_blocks > 0, Error::<T>::InvalidTriggerConfiguration);
+        let max_delay: u32 = T::MaxExecutionDelayBlocks::get().saturated_into();
+        let jitter_window = every_blocks
+          .saturating_div(4)
+          .min(T::MaxTimerJitterBlocks::get());
+        let worst_case_jitter = jitter_window.saturating_sub(1);
+        ensure!(
+          every_blocks.saturating_add(worst_case_jitter) <= max_delay,
+          Error::<T>::ExecutionDelayTooLong
+        );
       }
       Ok(())
     }
@@ -2435,15 +2444,28 @@ pub mod pallet {
           AaaTask::Transfer { .. }
           | AaaTask::SplitTransfer { .. }
           | AaaTask::Burn { .. }
-          | AaaTask::Mint { .. }
-          | AaaTask::RemoveLiquidity { .. } => {
+          | AaaTask::Mint { .. } => {
             if let AaaTask::SplitTransfer { legs, .. } = &step.task {
               Self::validate_split_transfer_legs(legs)?;
             }
           }
+          AaaTask::SwapExactOut { max_amount_in, .. } => {
+            ensure!(!max_amount_in.is_zero(), Error::<T>::InvalidTradeBound);
+          }
+          AaaTask::AddLiquidity { min_lp_out, .. } => {
+            ensure!(!min_lp_out.is_zero(), Error::<T>::InvalidTradeBound);
+          }
+          AaaTask::RemoveLiquidity {
+            min_amount_a,
+            min_amount_b,
+            ..
+          } => {
+            ensure!(
+              !min_amount_a.is_zero() && !min_amount_b.is_zero(),
+              Error::<T>::InvalidTradeBound
+            );
+          }
           AaaTask::SwapExactIn { .. }
-          | AaaTask::SwapExactOut { .. }
-          | AaaTask::AddLiquidity { .. }
           | AaaTask::Stake { .. }
           | AaaTask::DonateLiquidity { .. }
           | AaaTask::Unstake { .. }
@@ -2473,6 +2495,7 @@ pub mod pallet {
           | AaaTask::RemoveLiquidity {
             lp_asset: asset,
             amount,
+            ..
           } => {
             check_amount(amount, *asset);
           }
@@ -2495,6 +2518,7 @@ pub mod pallet {
             asset_b,
             amount_a,
             amount_b,
+            ..
           } => {
             check_amount(amount_a, *asset_a);
             check_amount(amount_b, *asset_b);

@@ -76,6 +76,22 @@ pub enum RecipientSurface<AccountId> {
   AdapterDerived,
 }
 
+#[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
+pub enum TaskAmountRole {
+  Amount,
+  AmountIn,
+  AmountOut,
+  AmountA,
+  AmountB,
+  Shares,
+}
+
+#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
+pub struct TaskAmountSurface {
+  pub role: TaskAmountRole,
+  pub contract: AmountInstructionContract,
+}
+
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct TaskInstructionContract<AssetId, AccountId> {
   pub required_adapter: AdapterRequirement,
@@ -90,11 +106,49 @@ pub struct TaskInstructionContract<AssetId, AccountId> {
   pub successful_control: ClassifiedStepControl,
   pub weight_owner: TaskWeightOwner,
   pub bounded_internal_algorithm: BoundedInternalAlgorithm,
+  pub amount_surfaces: Vec<TaskAmountSurface>,
 }
 
 fn push_unique<T: PartialEq>(values: &mut Vec<T>, value: T) {
   if !values.contains(&value) {
     values.push(value);
+  }
+}
+
+fn task_amount_surfaces<AssetId, Balance, AccountId, MaxSplitTransferLegs>(
+  task: &Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
+) -> Vec<TaskAmountSurface>
+where
+  MaxSplitTransferLegs: Get<u32>,
+{
+  let surface = |role, amount| TaskAmountSurface {
+    role,
+    contract: describe_amount_resolution(amount),
+  };
+  match task {
+    Task::Transfer { amount, .. }
+    | Task::SplitTransfer { amount, .. }
+    | Task::RemoveLiquidity { amount, .. }
+    | Task::Burn { amount, .. }
+    | Task::Mint { amount, .. }
+    | Task::Stake { amount, .. }
+    | Task::DonateLiquidity { amount, .. } => {
+      alloc::vec![surface(TaskAmountRole::Amount, amount)]
+    }
+    Task::SwapExactIn { amount_in, .. } => {
+      alloc::vec![surface(TaskAmountRole::AmountIn, amount_in)]
+    }
+    Task::SwapExactOut { amount_out, .. } => {
+      alloc::vec![surface(TaskAmountRole::AmountOut, amount_out)]
+    }
+    Task::AddLiquidity {
+      amount_a, amount_b, ..
+    } => alloc::vec![
+      surface(TaskAmountRole::AmountA, amount_a),
+      surface(TaskAmountRole::AmountB, amount_b),
+    ],
+    Task::Unstake { shares, .. } => alloc::vec![surface(TaskAmountRole::Shares, shares)],
+    Task::StopCycle => alloc::vec![],
   }
 }
 
@@ -320,6 +374,7 @@ where
     },
     weight_owner,
     bounded_internal_algorithm,
+    amount_surfaces: task_amount_surfaces(task),
   }
 }
 
@@ -589,6 +644,7 @@ mod tests {
           asset_in: 1,
           asset_out: 2,
           amount_out: fixed(),
+          max_amount_in: 100,
           slippage_tolerance: Perbill::zero(),
         },
         AdapterRequirement::DexOps,
@@ -600,6 +656,7 @@ mod tests {
           asset_b: 2,
           amount_a: fixed(),
           amount_b: fixed(),
+          min_lp_out: 1,
         },
         AdapterRequirement::DexOps,
         TaskWeightOwner::AddLiquidity,
@@ -608,6 +665,8 @@ mod tests {
         Task::RemoveLiquidity {
           lp_asset: 3,
           amount: fixed(),
+          min_amount_a: 1,
+          min_amount_b: 1,
         },
         AdapterRequirement::DexOps,
         TaskWeightOwner::RemoveLiquidity,
@@ -668,6 +727,30 @@ mod tests {
       assert_eq!(contract.weight_owner, weight_owner);
       assert_eq!(contract.effects.is_empty(), is_stop);
       assert_eq!(contract.committed_non_compensated_effects, !is_stop);
+      let expected_amount_roles = match weight_owner {
+        TaskWeightOwner::Transfer
+        | TaskWeightOwner::SplitTransfer
+        | TaskWeightOwner::Burn
+        | TaskWeightOwner::Mint
+        | TaskWeightOwner::RemoveLiquidity
+        | TaskWeightOwner::Stake
+        | TaskWeightOwner::DonateLiquidity => alloc::vec![TaskAmountRole::Amount],
+        TaskWeightOwner::DexExactIn => alloc::vec![TaskAmountRole::AmountIn],
+        TaskWeightOwner::DexExactOut => alloc::vec![TaskAmountRole::AmountOut],
+        TaskWeightOwner::AddLiquidity => {
+          alloc::vec![TaskAmountRole::AmountA, TaskAmountRole::AmountB]
+        }
+        TaskWeightOwner::Unstake => alloc::vec![TaskAmountRole::Shares],
+        TaskWeightOwner::StopCycle => alloc::vec![],
+      };
+      assert_eq!(
+        contract
+          .amount_surfaces
+          .into_iter()
+          .map(|surface| surface.role)
+          .collect::<Vec<_>>(),
+        expected_amount_roles,
+      );
       assert_eq!(
         contract.successful_control,
         if is_stop {

@@ -73,6 +73,7 @@ export type AaaAuthoringTask =
       assetIn: AaaAuthoringAsset;
       assetOut: AaaAuthoringAsset;
       amountOut: AaaAuthoringAmount;
+      maxAmountIn: string;
       slippageParts: number;
     }
   | {
@@ -81,11 +82,14 @@ export type AaaAuthoringTask =
       assetB: AaaAuthoringAsset;
       amountA: AaaAuthoringAmount;
       amountB: AaaAuthoringAmount;
+      minLpOut: string;
     }
   | {
       type: 'RemoveLiquidity';
       lpAsset: AaaAuthoringAsset;
       amount: AaaAuthoringAmount;
+      minAmountA: string;
+      minAmountB: string;
     }
   | {
       type: 'Burn' | 'Mint' | 'Stake';
@@ -147,9 +151,8 @@ export type AaaAuthoringFundingPolicy =
   | { type: 'AnySource' }
   | { type: 'SignedAllowlist'; accounts: string[] };
 
-export type AaaAuthoringTrigger =
+export type AaaAuthoringTriggerSource =
   | { type: 'Manual' }
-  | { type: 'Timer'; everyBlocks: number }
   | {
       type: 'OnAddressEvent';
       sourceFilter:
@@ -159,6 +162,16 @@ export type AaaAuthoringTrigger =
       assetFilter:
         | { type: 'Any' }
         | { type: 'Whitelist'; assets: AaaAuthoringAsset[] };
+    };
+
+export type AaaAuthoringTrigger =
+  | { type: 'Immediate'; sources: AaaAuthoringTriggerSource[] }
+  | {
+      type: 'Cadenced';
+      everyBlocks: number;
+      mode:
+        | { type: 'Always' }
+        | { type: 'WhenSignalled'; sources: AaaAuthoringTriggerSource[] };
     };
 
 export type AaaAuthoringProgram = {
@@ -177,6 +190,7 @@ export type AaaAuthoringLimits = {
   maxConditionsPerStep: number;
   maxSplitTransferLegs: number;
   maxWhitelistSize: number;
+  maxTriggerSources: number;
 };
 
 export const DEOS_AAA_AUTHORING_LIMITS: AaaAuthoringLimits = {
@@ -185,6 +199,7 @@ export const DEOS_AAA_AUTHORING_LIMITS: AaaAuthoringLimits = {
   maxConditionsPerStep: 4,
   maxSplitTransferLegs: 8,
   maxWhitelistSize: 16,
+  maxTriggerSources: 4,
 };
 
 export type AaaAuthoringIssue = {
@@ -229,6 +244,7 @@ export function createAaaAuthoringTask(
         assetIn: native(),
         assetOut: local(),
         amountOut: fixed(),
+        maxAmountIn: '1',
         slippageParts: 10_000_000,
       };
     case 'AddLiquidity':
@@ -238,9 +254,16 @@ export function createAaaAuthoringTask(
         assetB: local(),
         amountA: fixed(),
         amountB: fixed(),
+        minLpOut: '1',
       };
     case 'RemoveLiquidity':
-      return { type, lpAsset: local(), amount: fixed() };
+      return {
+        type,
+        lpAsset: local(),
+        amount: fixed(),
+        minAmountA: '1',
+        minAmountB: '1',
+      };
     case 'Burn':
     case 'Mint':
     case 'Stake':
@@ -291,7 +314,7 @@ export function createAaaAuthoringProgram(): AaaAuthoringProgram {
   return {
     aaaType: 'User',
     mutability: 'Mutable',
-    trigger: { type: 'Manual' },
+    trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
     cooldownBlocks: 0,
     scheduleWindow: null,
     fundingPolicy: { type: 'OwnerOnly' },
@@ -383,6 +406,28 @@ function validateAmount(
       return;
     case 'AllBalance':
       return;
+  }
+}
+
+function validatePositiveBalanceBound(
+  value: string,
+  path: string,
+  label: string,
+  issues: AaaAuthoringIssue[],
+) {
+  if (!UNSIGNED_INTEGER.test(value)) {
+    issues.push({
+      path,
+      message: `${label} must be a canonical unsigned base-unit integer`,
+    });
+    return;
+  }
+  const bound = BigInt(value);
+  if (bound === 0n || bound > U128_MAX) {
+    issues.push({
+      path,
+      message: `${label} must be greater than zero and fit u128`,
+    });
   }
 }
 
@@ -483,6 +528,12 @@ function validateTask(
       validateAsset(task.assetIn, `${path}.assetIn`, issues);
       validateAsset(task.assetOut, `${path}.assetOut`, issues);
       validateAmount(task.amountOut, `${path}.amountOut`, issues);
+      validatePositiveBalanceBound(
+        task.maxAmountIn,
+        `${path}.maxAmountIn`,
+        'Maximum input',
+        issues,
+      );
       validatePerbill(task.slippageParts, `${path}.slippageParts`, issues);
       return;
     case 'AddLiquidity':
@@ -490,10 +541,28 @@ function validateTask(
       validateAsset(task.assetB, `${path}.assetB`, issues);
       validateAmount(task.amountA, `${path}.amountA`, issues);
       validateAmount(task.amountB, `${path}.amountB`, issues);
+      validatePositiveBalanceBound(
+        task.minLpOut,
+        `${path}.minLpOut`,
+        'Minimum LP output',
+        issues,
+      );
       return;
     case 'RemoveLiquidity':
       validateAsset(task.lpAsset, `${path}.lpAsset`, issues);
       validateAmount(task.amount, `${path}.amount`, issues);
+      validatePositiveBalanceBound(
+        task.minAmountA,
+        `${path}.minAmountA`,
+        'Minimum asset A output',
+        issues,
+      );
+      validatePositiveBalanceBound(
+        task.minAmountB,
+        `${path}.minAmountB`,
+        'Minimum asset B output',
+        issues,
+      );
       return;
     case 'Burn':
     case 'Stake':
@@ -538,7 +607,12 @@ function validateUniqueAddresses(
   const seen = new Set<string>();
   accounts.forEach((account, index) => {
     validateAddress(account, `${path}[${index}]`, issues);
-    const normalized = account.trim();
+    let normalized = account.trim();
+    try {
+      normalized = bytesKey(decodeAddress(normalized));
+    } catch {
+      // validateAddress owns the malformed-address diagnostic.
+    }
     if (seen.has(normalized)) {
       issues.push({
         path: `${path}[${index}]`,
@@ -549,43 +623,100 @@ function validateUniqueAddresses(
   });
 }
 
+function validateTriggerSources(
+  sources: AaaAuthoringTriggerSource[],
+  path: string,
+  issues: AaaAuthoringIssue[],
+  limits: AaaAuthoringLimits,
+) {
+  if (sources.length === 0 || sources.length > limits.maxTriggerSources) {
+    issues.push({
+      path,
+      message: `Trigger policy requires 1..${limits.maxTriggerSources} sources`,
+    });
+  }
+  const seen = new Set<string>();
+  sources.forEach((source, sourceIndex) => {
+    const sourcePath = `${path}[${sourceIndex}]`;
+    if (source.type === 'OnAddressEvent') {
+      if (source.sourceFilter.type === 'Whitelist') {
+        validateUniqueAddresses(
+          source.sourceFilter.accounts,
+          `${sourcePath}.sourceFilter.accounts`,
+          issues,
+          limits.maxWhitelistSize,
+        );
+      }
+      if (source.assetFilter.type === 'Whitelist') {
+        if (
+          source.assetFilter.assets.length === 0 ||
+          source.assetFilter.assets.length > limits.maxWhitelistSize
+        ) {
+          issues.push({
+            path: `${sourcePath}.assetFilter.assets`,
+            message: `Asset whitelist requires 1..${limits.maxWhitelistSize} entries`,
+          });
+        }
+        const assets = new Set<string>();
+        source.assetFilter.assets.forEach((asset, assetIndex) => {
+          validateAsset(
+            asset,
+            `${sourcePath}.assetFilter.assets[${assetIndex}]`,
+            issues,
+          );
+          const key = bytesKey(assetCanonicalBytes(asset));
+          if (assets.has(key)) {
+            issues.push({
+              path: `${sourcePath}.assetFilter.assets[${assetIndex}]`,
+              message: 'Asset whitelist entries must be unique',
+            });
+          }
+          assets.add(key);
+        });
+      }
+    }
+    try {
+      const key = bytesKey(triggerSourceCanonicalBytes(source));
+      if (seen.has(key)) {
+        issues.push({
+          path: sourcePath,
+          message: 'Trigger sources must be semantically unique',
+        });
+      }
+      seen.add(key);
+    } catch {
+      // Field-level validation owns malformed account diagnostics.
+    }
+  });
+}
+
 function validateTrigger(
   trigger: AaaAuthoringTrigger,
   issues: AaaAuthoringIssue[],
   limits: AaaAuthoringLimits,
 ) {
   switch (trigger.type) {
-    case 'Manual':
+    case 'Immediate':
+      validateTriggerSources(
+        trigger.sources,
+        'trigger.sources',
+        issues,
+        limits,
+      );
       return;
-    case 'Timer':
+    case 'Cadenced':
       if (!isU32(trigger.everyBlocks) || trigger.everyBlocks === 0) {
         issues.push({
           path: 'trigger.everyBlocks',
-          message: 'Timer cadence must be a positive u32',
+          message: 'Cadence must be a positive u32',
         });
       }
-      return;
-    case 'OnAddressEvent':
-      if (trigger.sourceFilter.type === 'Whitelist') {
-        validateUniqueAddresses(
-          trigger.sourceFilter.accounts,
-          'trigger.sourceFilter.accounts',
+      if (trigger.mode.type === 'WhenSignalled') {
+        validateTriggerSources(
+          trigger.mode.sources,
+          'trigger.mode.sources',
           issues,
-          limits.maxWhitelistSize,
-        );
-      }
-      if (trigger.assetFilter.type === 'Whitelist') {
-        if (
-          trigger.assetFilter.assets.length === 0 ||
-          trigger.assetFilter.assets.length > limits.maxWhitelistSize
-        ) {
-          issues.push({
-            path: 'trigger.assetFilter.assets',
-            message: `Asset whitelist requires 1..${limits.maxWhitelistSize} entries`,
-          });
-        }
-        trigger.assetFilter.assets.forEach((asset, index) =>
-          validateAsset(asset, `trigger.assetFilter.assets[${index}]`, issues),
+          limits,
         );
       }
   }
@@ -808,6 +939,7 @@ function lowerTask(task: AaaAuthoringTask) {
         asset_in: lowerAsset(task.assetIn),
         asset_out: lowerAsset(task.assetOut),
         amount_out: lowerAmount(task.amountOut),
+        max_amount_in: BigInt(task.maxAmountIn),
         slippage_tolerance: task.slippageParts,
       });
     case 'AddLiquidity':
@@ -816,11 +948,14 @@ function lowerTask(task: AaaAuthoringTask) {
         asset_b: lowerAsset(task.assetB),
         amount_a: lowerAmount(task.amountA),
         amount_b: lowerAmount(task.amountB),
+        min_lp_out: BigInt(task.minLpOut),
       });
     case 'RemoveLiquidity':
       return runtimeVariant('RemoveLiquidity', {
         lp_asset: lowerAsset(task.lpAsset),
         amount: lowerAmount(task.amount),
+        min_amount_a: BigInt(task.minAmountA),
+        min_amount_b: BigInt(task.minAmountB),
       });
     case 'Burn':
     case 'Mint':
@@ -846,28 +981,140 @@ function lowerTask(task: AaaAuthoringTask) {
   }
 }
 
-function lowerTrigger(trigger: AaaAuthoringTrigger) {
-  switch (trigger.type) {
+function compareBytes(
+  left: Uint8Array | number[],
+  right: Uint8Array | number[],
+) {
+  const length = Math.min(left.length, right.length);
+  for (let index = 0; index < length; index += 1) {
+    const difference = left[index] - right[index];
+    if (difference !== 0) return difference;
+  }
+  return left.length - right.length;
+}
+
+function bytesKey(bytes: Uint8Array | number[]) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join(
+    '',
+  );
+}
+
+function u32Le(value: number) {
+  return [
+    value & 0xff,
+    (value >>> 8) & 0xff,
+    (value >>> 16) & 0xff,
+    (value >>> 24) & 0xff,
+  ];
+}
+
+function boundedVecBytes(values: (Uint8Array | number[])[]) {
+  return [values.length << 2, ...values.flatMap((value) => Array.from(value))];
+}
+
+function assetCanonicalBytes(asset: AaaAuthoringAsset) {
+  switch (asset.type) {
+    case 'Native':
+      return [0];
+    case 'Local':
+      return [1, ...u32Le(asset.id)];
+    case 'Foreign':
+      return [2, ...u32Le(asset.id)];
+  }
+}
+
+function sourceFilterCanonicalBytes(
+  filter: Extract<
+    AaaAuthoringTriggerSource,
+    { type: 'OnAddressEvent' }
+  >['sourceFilter'],
+) {
+  switch (filter.type) {
+    case 'Any':
+      return [0];
+    case 'OwnerOnly':
+      return [1];
+    case 'Whitelist':
+      return [
+        2,
+        ...boundedVecBytes(
+          [...filter.accounts]
+            .sort(compareAccountBytes)
+            .map((account) => decodeAddress(account.trim())),
+        ),
+      ];
+  }
+}
+
+function assetFilterCanonicalBytes(
+  filter: Extract<
+    AaaAuthoringTriggerSource,
+    { type: 'OnAddressEvent' }
+  >['assetFilter'],
+) {
+  switch (filter.type) {
+    case 'Any':
+      return [0];
+    case 'Whitelist':
+      return [
+        1,
+        ...boundedVecBytes(
+          [...filter.assets]
+            .sort((left, right) =>
+              compareBytes(
+                assetCanonicalBytes(left),
+                assetCanonicalBytes(right),
+              ),
+            )
+            .map(assetCanonicalBytes),
+        ),
+      ];
+  }
+}
+
+function triggerSourceCanonicalBytes(source: AaaAuthoringTriggerSource) {
+  switch (source.type) {
+    case 'Manual':
+      return [0];
+    case 'OnAddressEvent':
+      return [
+        1,
+        ...sourceFilterCanonicalBytes(source.sourceFilter),
+        ...assetFilterCanonicalBytes(source.assetFilter),
+      ];
+  }
+}
+
+function lowerTriggerSource(source: AaaAuthoringTriggerSource) {
+  switch (source.type) {
     case 'Manual':
       return runtimeVariant('Manual');
-    case 'Timer':
-      return runtimeVariant('Timer', { every_blocks: trigger.everyBlocks });
     case 'OnAddressEvent': {
       const sourceFilter = (() => {
-        switch (trigger.sourceFilter.type) {
+        switch (source.sourceFilter.type) {
           case 'Any':
           case 'OwnerOnly':
-            return runtimeVariant(trigger.sourceFilter.type);
+            return runtimeVariant(source.sourceFilter.type);
           case 'Whitelist':
-            return runtimeVariant('Whitelist', trigger.sourceFilter.accounts);
+            return runtimeVariant(
+              'Whitelist',
+              [...source.sourceFilter.accounts].sort(compareAccountBytes),
+            );
         }
       })();
       const assetFilter =
-        trigger.assetFilter.type === 'Any'
+        source.assetFilter.type === 'Any'
           ? runtimeVariant('Any')
           : runtimeVariant(
               'Whitelist',
-              trigger.assetFilter.assets.map(lowerAsset),
+              [...source.assetFilter.assets]
+                .sort((left, right) =>
+                  compareBytes(
+                    assetCanonicalBytes(left),
+                    assetCanonicalBytes(right),
+                  ),
+                )
+                .map(lowerAsset),
             );
       return runtimeVariant('OnAddressEvent', {
         source_filter: sourceFilter,
@@ -877,14 +1124,39 @@ function lowerTrigger(trigger: AaaAuthoringTrigger) {
   }
 }
 
-function compareAccountBytes(left: string, right: string) {
-  const leftBytes = decodeAddress(left.trim());
-  const rightBytes = decodeAddress(right.trim());
-  for (let index = 0; index < leftBytes.length; index += 1) {
-    const difference = leftBytes[index] - rightBytes[index];
-    if (difference !== 0) return difference;
+function lowerTriggerSources(sources: AaaAuthoringTriggerSource[]) {
+  return [...sources]
+    .sort((left, right) =>
+      compareBytes(
+        triggerSourceCanonicalBytes(left),
+        triggerSourceCanonicalBytes(right),
+      ),
+    )
+    .map(lowerTriggerSource);
+}
+
+function lowerTrigger(trigger: AaaAuthoringTrigger) {
+  switch (trigger.type) {
+    case 'Immediate':
+      return runtimeVariant('Immediate', {
+        sources: lowerTriggerSources(trigger.sources),
+      });
+    case 'Cadenced':
+      return runtimeVariant('Cadenced', {
+        every_blocks: trigger.everyBlocks,
+        mode:
+          trigger.mode.type === 'Always'
+            ? runtimeVariant('Always')
+            : runtimeVariant(
+                'WhenSignalled',
+                lowerTriggerSources(trigger.mode.sources),
+              ),
+      });
   }
-  return 0;
+}
+
+function compareAccountBytes(left: string, right: string) {
+  return compareBytes(decodeAddress(left.trim()), decodeAddress(right.trim()));
 }
 
 function lowerFundingPolicy(policy: AaaAuthoringFundingPolicy) {

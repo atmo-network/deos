@@ -48,7 +48,12 @@ const programScale = encodeAaaProgramValue(metadataBytes, {
   type: 'Active',
   value: {
     schedule: {
-      trigger: { type: 'Manual', value: undefined },
+      trigger: {
+        type: 'Immediate',
+        value: {
+          sources: [{ type: 'Manual', value: undefined }],
+        },
+      },
       cooldown_blocks: 0,
     },
     schedule_window: undefined,

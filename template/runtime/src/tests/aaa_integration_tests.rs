@@ -7,7 +7,11 @@ use crate::{
   RuntimeEvent, RuntimeOrigin, Signature, Staking, System, TxExtension, UncheckedExtrinsic,
   configs::{
     AddressEventIngress, RuntimeAddressEventIngress,
-    aaa_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemAaas},
+    aaa_config::{
+      AaaMaxSystemTrade, AaaPrioritySystemAaaIds, AaaSystemAaaBudget, AaaUserAaaBudget,
+      TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemAaas, classify_router_failure,
+      is_priority_system_aaa, priority_system_aaa_id,
+    },
     address_event_ingress::AddressEventIngressExtension,
     pool_index::PoolIndexExtension,
   },
@@ -17,10 +21,10 @@ use codec::Encode;
 use pallet_aaa::{
   AaaId, AmountResolution, AssetFilter, AssetFilterOf, AssetOps, CloseReason, DeferReason, DexOps,
   Error, Event, ExecutionPlanOf, FeeCollector, FundingBatch, FundingSourcePolicy,
-  IdleStarvationPhase, IdleStarvationState, Mutability, Schedule, ScheduleOf, ScheduleWindow,
-  SimulationMode, SimulationStatus, SimulationStepOutcome, SourceFilter, SourceFilterOf, SplitLeg,
-  SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf, StepSkippedReason, Task, TaskOf,
-  Trigger, WeightInfo,
+  IdleStarvationPhase, IdleStarvationState, Mutability, ProgramInput, Schedule, ScheduleOf,
+  ScheduleWindow, SimulationMode, SimulationStatus, SimulationStepOutcome, SourceFilter,
+  SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
+  StepSkippedReason, Task, TaskOf, Trigger, TriggerSource, WeightInfo,
 };
 use pallet_axial_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::{
@@ -107,7 +111,7 @@ fn inert_task() -> RuntimeTask {
 
 fn manual_schedule() -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::Manual,
+    trigger: Trigger::immediate_manual(),
     cooldown_blocks: 0,
   }
 }
@@ -117,10 +121,7 @@ fn on_address_event_schedule(
   asset_filter: RuntimeAssetFilter,
 ) -> RuntimeSchedule {
   Schedule {
-    trigger: Trigger::OnAddressEvent {
-      source_filter,
-      asset_filter,
-    },
+    trigger: Trigger::immediate_manual_and_address_event(source_filter, asset_filter),
     cooldown_blocks: 0,
   }
 }
@@ -546,6 +547,25 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
     ));
     let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
       .expect("created pool must exist");
+    let lp_before_add_bound = Assets::balance(pool.lp_token, &ALICE);
+    assert_eq!(
+      <crate::configs::aaa_config::TmctolDexOps as DexOps<
+        AccountId,
+        AssetKind,
+        Balance,
+      >>::add_liquidity(
+        &ALICE,
+        pair.0,
+        pair.1,
+        liquidity / 10,
+        liquidity / 10,
+        Balance::MAX,
+      ),
+      Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
+        "MinimumLpOutputNotMet"
+      )))
+    );
+    assert_eq!(Assets::balance(pool.lp_token, &ALICE), lp_before_add_bound);
     let lp_amount = Assets::balance(pool.lp_token, &ALICE) / 2;
     pallet_axial_router::LpPairByTokenId::<Runtime>::remove(pool.lp_token);
     assert_noop!(
@@ -553,10 +573,37 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
         AccountId,
         AssetKind,
         Balance,
-      >>::remove_liquidity(&ALICE, AssetKind::Local(pool.lp_token), lp_amount),
+      >>::remove_liquidity(
+        &ALICE,
+        AssetKind::Local(pool.lp_token),
+        lp_amount,
+        1,
+        1,
+      ),
       DispatchError::Other("Pool not found for LP token")
     );
     assert_ok!(crate::AxialRouter::register_lp_pair(pool.lp_token, pair));
+    let lp_before_bound_failure = Assets::balance(pool.lp_token, &ALICE);
+    assert_eq!(
+      <crate::configs::aaa_config::TmctolDexOps as DexOps<
+        AccountId,
+        AssetKind,
+        Balance,
+      >>::remove_liquidity(
+        &ALICE,
+        AssetKind::Local(pool.lp_token),
+        lp_amount,
+        Balance::MAX,
+        Balance::MAX,
+      ),
+      Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
+        "MinimumLiquidityOutputNotMet"
+      )))
+    );
+    assert_eq!(
+      Assets::balance(pool.lp_token, &ALICE),
+      lp_before_bound_failure
+    );
     assert_ok!(<crate::configs::aaa_config::TmctolDexOps as DexOps<
       AccountId,
       AssetKind,
@@ -565,6 +612,8 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
       &ALICE,
       AssetKind::Local(pool.lp_token),
       lp_amount,
+      1,
+      1,
     ));
   });
 }
@@ -636,6 +685,17 @@ fn system_aaa_executes_native_staking_lp_donation_task() {
         .expect("NTVE/stNTVE pool account must resolve");
     let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(&pool_id)
       .expect("NTVE/stNTVE pool must exist");
+    let ratio_failure =
+      crate::configs::AssetConversionAdapter::donate_balanced_liquidity_classified(
+        &BOB,
+        base_asset,
+        staked_asset,
+        40,
+        20,
+        Perbill::from_percent(1),
+      )
+      .expect_err("ratio movement must fail before transfer");
+    assert_eq!(ratio_failure.retry, pallet_aaa::RetryClass::Temporary);
     let lp_supply_before =
       <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(
         pool.lp_token,
@@ -1049,33 +1109,14 @@ fn exact_out_nonzero_tolerance_requires_capacity_for_adjusted_bound() {
     System::set_block_number(1);
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
-    let quote_output = |gross_in: u128| -> u128 {
-      crate::AxialRouter::quote_exact_input(
-        ALICE,
-        AssetKind::Native,
-        AssetKind::Local(ASSET_A),
-        gross_in,
-      )
-      .map(|quote| quote.amount_out)
-      .unwrap_or_default()
-    };
-    let mut high = 1u128;
-    for _ in 0..128 {
-      if quote_output(high) >= target_out {
-        break;
-      }
-      high = high.checked_mul(2).expect("quote search stays bounded");
-    }
-    let mut low = 1u128;
-    while low < high {
-      let mid = low.saturating_add(high.saturating_sub(low) / 2);
-      if quote_output(mid) >= target_out {
-        high = mid;
-      } else {
-        low = mid.saturating_add(1);
-      }
-    }
-    let required_in = high;
+    let required_in = crate::AxialRouter::quote_exact_out(
+      ALICE,
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      target_out,
+    )
+    .expect("native exact-output route is quotable")
+    .amount_in;
     let balance_before = native_balance(&ALICE);
     assert_eq!(
       crate::configs::aaa_config::TmctolDexOps::swap_exact_out(
@@ -1086,7 +1127,7 @@ fn exact_out_nonzero_tolerance_requires_capacity_for_adjusted_bound() {
         required_in,
         Perbill::from_percent(1),
       ),
-      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+      Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
         "ExactOutInputCapacityExceeded",
       )))
     );
@@ -1105,6 +1146,7 @@ fn user_exact_out_zero_tolerance_preserves_later_step_fees() {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(ASSET_A),
         amount_out: AmountResolution::Fixed(target_out),
+        max_amount_in: 100_000_000_000_000,
         slippage_tolerance: Perbill::zero(),
       }),
       make_step(inert_task()),
@@ -1112,33 +1154,14 @@ fn user_exact_out_zero_tolerance_preserves_later_step_fees() {
     .expect("execution_plan fits");
     let aaa_id = create_user(ALICE, manual_schedule(), None, execution_plan);
     let sovereign = aaa_account(aaa_id);
-    let quote_output = |gross_in: u128| -> Option<u128> {
-      crate::AxialRouter::quote_exact_input(
-        sovereign.clone(),
-        AssetKind::Native,
-        AssetKind::Local(ASSET_A),
-        gross_in,
-      )
-      .ok()
-      .map(|quote| quote.amount_out)
-    };
-    let mut high = 1u128;
-    for _ in 0..128 {
-      if quote_output(high).unwrap_or_default() >= target_out {
-        break;
-      }
-      high = high.checked_mul(2).expect("quote search stays bounded");
-    }
-    let mut low = 1u128;
-    while low < high {
-      let mid = low.saturating_add(high.saturating_sub(low) / 2);
-      if quote_output(mid).unwrap_or_default() >= target_out {
-        high = mid;
-      } else {
-        low = mid.saturating_add(1);
-      }
-    }
-    let required_in = high;
+    let required_in = crate::AxialRouter::quote_exact_out(
+      sovereign.clone(),
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      target_out,
+    )
+    .expect("native exact-output route is quotable")
+    .amount_in;
     let instance = AAA::aaa_instances(aaa_id).expect("AAA exists");
     let fee_reserve = instance.cycle_fee_upper;
     fund_native(
@@ -1182,6 +1205,7 @@ fn swap_exact_out_rounding_boundary_uses_minimal_input_for_target_output() {
       asset_in: AssetKind::Native,
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(target_out),
+      max_amount_in: 100_000_000_000_000,
       slippage_tolerance: Perbill::zero(),
     })])
     .expect("execution_plan fits");
@@ -1276,6 +1300,7 @@ fn swap_exact_out_liquidity_boundary_fails_without_partial_execution() {
       asset_in: AssetKind::Native,
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(impossible_out),
+      max_amount_in: 100_000_000_000_000,
       slippage_tolerance: Perbill::zero(),
     })])
     .expect("execution_plan fits");
@@ -1320,6 +1345,7 @@ fn swap_exact_out_fails_when_required_input_exceeds_actor_balance() {
       asset_in: AssetKind::Native,
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(target_out),
+      max_amount_in: 100_000_000_000_000,
       slippage_tolerance: Perbill::zero(),
     })])
     .expect("execution_plan fits");
@@ -1417,10 +1443,245 @@ fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
     );
     assert_eq!(
       result,
-      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-        "InsufficientInputForExactOut",
+      Err(pallet_aaa::TaskFailure::permanent(
+        pallet_axial_router::Error::<Runtime>::InsufficientInputBalance
+      ))
+    );
+  });
+}
+
+#[test]
+fn router_failure_classifier_is_exhaustive_and_typed() {
+  use pallet_aaa::RetryClass;
+  use pallet_axial_router::Error as RouterError;
+
+  for error in [
+    RouterError::<Runtime>::SlippageExceeded,
+    RouterError::<Runtime>::PriceDeviationExceeded,
+    RouterError::<Runtime>::NoRouteFound,
+    RouterError::<Runtime>::InsufficientLiquidity,
+    RouterError::<Runtime>::InvalidOracleData,
+    RouterError::<Runtime>::NoMultiHopRoute,
+  ] {
+    assert_eq!(classify_router_failure(error).retry, RetryClass::Temporary);
+  }
+
+  for error in [
+    RouterError::<Runtime>::IdenticalAssets,
+    RouterError::<Runtime>::ZeroAmount,
+    RouterError::<Runtime>::AmountTooLow,
+    RouterError::<Runtime>::DeadlinePassed,
+    RouterError::<Runtime>::FeeRoutingFailed,
+    RouterError::<Runtime>::InsufficientInputBalance,
+    RouterError::<Runtime>::MaxTrackedAssetsExceeded,
+    RouterError::<Runtime>::RouterFeeTooHigh,
+    RouterError::<Runtime>::LpTokenPairCollision,
+  ] {
+    assert_eq!(classify_router_failure(error).retry, RetryClass::Permanent);
+  }
+}
+
+#[test]
+fn priority_system_market_whitelist_is_explicit_and_trade_cap_is_enforced() {
+  use primitives::ecosystem::aaa_ids;
+
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_eq!(
+      AaaPrioritySystemAaaIds::get().into_inner(),
+      aaa_ids::PRIORITY_SYSTEM_AAA_IDS.to_vec()
+    );
+    assert_eq!(AaaSystemAaaBudget::get(), Perbill::from_percent(20));
+    assert_eq!(AaaUserAaaBudget::get(), Perbill::from_percent(20));
+    assert!(AaaUserAaaBudget::get() > Perbill::zero());
+    assert!(AaaSystemAaaBudget::get() + AaaUserAaaBudget::get() <= Perbill::one());
+    for aaa_id in aaa_ids::PRIORITY_SYSTEM_AAA_IDS {
+      let account = AAA::sovereign_account_id_system(aaa_id);
+      assert_eq!(priority_system_aaa_id(&account), Some(aaa_id));
+      assert!(is_priority_system_aaa(&account));
+    }
+    let unlisted = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
+    assert!(!is_priority_system_aaa(&unlisted));
+    assert!(!is_priority_system_aaa(&ALICE));
+
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let actor = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
+    let cap = AaaMaxSystemTrade::get();
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, cap.saturating_mul(3));
+    let before = native_balance(&actor);
+    assert_ok!(crate::configs::aaa_config::TmctolDexOps::swap_exact_in(
+      &actor,
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      cap.saturating_mul(2),
+      Perbill::one(),
+    ));
+    assert_eq!(before.saturating_sub(native_balance(&actor)), cap);
+
+    let user_amount = cap.saturating_mul(2);
+    let user_before = native_balance(&ALICE);
+    assert_ok!(crate::configs::aaa_config::TmctolDexOps::swap_exact_in(
+      &ALICE,
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      user_amount,
+      Perbill::one(),
+    ));
+    assert_eq!(
+      user_before.saturating_sub(native_balance(&ALICE)),
+      user_amount
+    );
+  });
+}
+
+#[test]
+fn whitelisted_system_swap_uses_stricter_reference_deviation_than_user_swap() {
+  use primitives::ecosystem::{aaa_ids, params::PRECISION};
+
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let actor = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
+    let amount = 10 * PRECISION;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
+    pallet_axial_router::EmaPrices::<Runtime>::insert(
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      PRECISION.saturating_mul(110).saturating_div(100),
+    );
+    let actor_before = native_balance(&actor);
+    assert_eq!(
+      crate::configs::aaa_config::TmctolDexOps::swap_exact_in(
+        &actor,
+        AssetKind::Native,
+        AssetKind::Local(ASSET_A),
+        amount,
+        Perbill::one(),
+      ),
+      Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
+        "SystemPriceDeviationExceeded"
       )))
     );
+    assert_eq!(native_balance(&actor), actor_before);
+
+    assert_ok!(crate::configs::aaa_config::TmctolDexOps::swap_exact_in(
+      &ALICE,
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      amount,
+      Perbill::one(),
+    ));
+  });
+}
+
+#[test]
+fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
+  use primitives::ecosystem::{aaa_ids, params::PRECISION};
+
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let aaa_id = aaa_ids::TREASURY_B_AAA_ID;
+    let actor = AAA::sovereign_account_id_system(aaa_id);
+    let amount = 10 * PRECISION;
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
+    let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
+      conditions: pallet_aaa::ConditionSet::Always,
+      task: Task::SwapExactIn {
+        asset_in: AssetKind::Native,
+        asset_out: AssetKind::Local(ASSET_A),
+        amount_in: AmountResolution::Fixed(amount),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::RetryLater,
+    }])
+    .expect("single-step deviation retry plan fits");
+    assert_ok!(AAA::activate_aaa(
+      RuntimeOrigin::root(),
+      aaa_id,
+      ProgramInput::Active {
+        schedule: Schedule {
+          trigger: Trigger::immediate_manual(),
+          cooldown_blocks: 0,
+        },
+        schedule_window: None,
+        execution_plan: plan,
+        funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+      },
+    ));
+    pallet_axial_router::EmaPrices::<Runtime>::insert(
+      AssetKind::Native,
+      AssetKind::Local(ASSET_A),
+      PRECISION.saturating_mul(110).saturating_div(100),
+    );
+    let before = native_balance(&actor);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
+    run_idle(Weight::MAX);
+    let continuation = AAA::continuation_state(aaa_id).expect("deviation suspends");
+    assert_eq!(continuation.attempt, 0);
+    assert_eq!(continuation.cursor, 0);
+    assert_eq!(native_balance(&actor), before);
+    let first_retry = AAA::actor_hot(aaa_id).expect("actor stays hot");
+    assert!(first_retry.queue_ticket.is_some());
+    assert!(first_retry.wakeup_pointer.is_none());
+
+    System::set_block_number(2);
+    run_idle(Weight::MAX);
+    let continuation = AAA::continuation_state(aaa_id).expect("deviation resuspends");
+    assert_eq!(continuation.attempt, 1);
+    assert_eq!(continuation.cursor, 0);
+    assert_eq!(native_balance(&actor), before);
+    let second_retry = AAA::actor_hot(aaa_id).expect("actor stays hot");
+    assert!(second_retry.queue_ticket.is_none());
+    assert_eq!(
+      second_retry.wakeup_pointer.map(|pointer| pointer.block),
+      Some(4)
+    );
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSuspended {
+        aaa_id: id,
+        reason: pallet_aaa::SuspensionReason::Temporary,
+        ..
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn temporary_market_failure_opens_the_single_retry_continuation() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
+      conditions: pallet_aaa::ConditionSet::Always,
+      task: Task::SwapExactOut {
+        asset_in: AssetKind::Native,
+        asset_out: AssetKind::Local(ASSET_A),
+        amount_out: AmountResolution::Fixed(crate::EXISTENTIAL_DEPOSIT),
+        max_amount_in: 1,
+        slippage_tolerance: Perbill::zero(),
+      },
+      on_error: StepErrorPolicy::RetryLater,
+    }])
+    .expect("single-step retry plan fits");
+    let aaa_id = create_user(ALICE, manual_schedule(), None, plan);
+    fund_native(aaa_id, 1_000_000_000_000_000);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    let continuation = AAA::continuation_state(aaa_id).expect("Temporary failure suspends");
+    assert_eq!(continuation.cursor, 0);
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::CycleSuspended {
+        aaa_id: id,
+        cursor: 0,
+        reason: pallet_aaa::SuspensionReason::Temporary,
+        ..
+      } if *id == aaa_id
+    )));
   });
 }
 
@@ -1761,7 +2022,7 @@ fn timer_horizon_validation_includes_runtime_jitter_bound() {
       <<Runtime as pallet_aaa::Config>::MaxTimerJitterBlocks as Get<u32>>::get().saturating_sub(1);
     let largest_valid_cadence = max_delay.saturating_sub(max_jitter);
     let schedule = |every_blocks| Schedule {
-      trigger: Trigger::Timer { every_blocks },
+      trigger: Trigger::cadenced_always(every_blocks),
       cooldown_blocks: 0,
     };
     assert_ok!(AAA::create_user_aaa(
@@ -2562,6 +2823,8 @@ fn cycle_does_not_execute_when_budget_is_too_small() {
     let heavy_task = Task::RemoveLiquidity {
       lp_asset: AssetKind::Local(ASSET_A),
       amount: AmountResolution::Fixed(1),
+      min_amount_a: 1,
+      min_amount_b: 1,
     };
     let step = make_step(heavy_task);
     let execution_plan =
@@ -2597,6 +2860,8 @@ fn cycle_closes_with_fee_budget_exhausted_when_fee_reserve_is_missing() {
     let heavy_task = Task::RemoveLiquidity {
       lp_asset: AssetKind::Local(ASSET_A),
       amount: AmountResolution::Fixed(1),
+      min_amount_a: 1,
+      min_amount_b: 1,
     };
     let step = make_step(heavy_task.clone());
     let execution_plan =
@@ -2638,6 +2903,8 @@ fn fee_insufficiency_is_terminal_without_deferral_guard() {
     let heavy_task = Task::RemoveLiquidity {
       lp_asset: AssetKind::Local(ASSET_A),
       amount: AmountResolution::Fixed(1),
+      min_amount_a: 1,
+      min_amount_b: 1,
     };
     let step = make_step(heavy_task.clone());
     let execution_plan =
@@ -2671,7 +2938,7 @@ fn scheduler_fifo_order_is_deterministic_across_actor_types() {
       seeded_test_ext().execute_with(|| {
         System::set_block_number(1);
         let schedule = Schedule {
-          trigger: Trigger::Timer { every_blocks: 1 },
+          trigger: Trigger::cadenced_always(1),
           cooldown_blocks: 0,
         };
         let execution_plan =
@@ -2728,7 +2995,7 @@ fn exact_input_task_uses_measured_caller_aware_router_weight() {
 }
 
 #[test]
-fn exact_output_task_uses_measured_bounded_quote_search_weight() {
+fn exact_output_task_uses_generated_native_router_weight() {
   seeded_test_ext().execute_with(|| {
     let exact_in = Task::SwapExactIn {
       asset_in: AssetKind::Native,
@@ -2740,13 +3007,17 @@ fn exact_output_task_uses_measured_bounded_quote_search_weight() {
       asset_in: AssetKind::Native,
       asset_out: AssetKind::Local(ASSET_A),
       amount_out: AmountResolution::Fixed(1),
+      max_amount_in: 10,
       slippage_tolerance: Perbill::from_percent(1),
     };
     let exact_out_upper = AAA::weight_upper_bound(&exact_out);
     let measured =
       <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::task_dex_exact_out();
     assert_eq!(exact_out_upper, measured);
-    assert!(exact_out_upper.ref_time() > AAA::weight_upper_bound(&exact_in).ref_time());
+    assert_eq!(
+      AAA::weight_upper_bound(&exact_in),
+      <<Runtime as pallet_aaa::Config>::WeightInfo as WeightInfo>::task_dex_exact_in()
+    );
   });
 }
 
@@ -2783,6 +3054,7 @@ fn liquidity_tasks_use_separate_generated_runtime_weights() {
       asset_b: AssetKind::Local(ASSET_A),
       amount_a: AmountResolution::Fixed(1),
       amount_b: AmountResolution::Fixed(1),
+      min_lp_out: 1,
     };
     let donation = Task::DonateLiquidity {
       asset_a: AssetKind::Local(0),
@@ -2793,6 +3065,8 @@ fn liquidity_tasks_use_separate_generated_runtime_weights() {
     let remove = Task::RemoveLiquidity {
       lp_asset: AssetKind::Local(ASSET_A),
       amount: AmountResolution::Fixed(1),
+      min_amount_a: 1,
+      min_amount_b: 1,
     };
     assert_eq!(
       AAA::weight_upper_bound(&add),
@@ -3283,11 +3557,30 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       &signer_account,
       1_000_000_000_000_000_000_000_000,
     );
+    let sources = BoundedVec::try_from(vec![
+      TriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::Any,
+        asset_filter: AssetFilter::Any,
+      },
+      TriggerSource::OnAddressEvent {
+        source_filter: SourceFilter::OwnerOnly,
+        asset_filter: AssetFilter::Any,
+      },
+    ])
+    .expect("two trigger sources fit");
     let aaa_id = create_user(
-      ALICE,
-      on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
+      signer_account.clone(),
+      Schedule {
+        trigger: Trigger::Immediate { sources },
+        cooldown_blocks: 0,
+      },
       None,
-      transfer_execution_plan(BOB, AssetKind::Native, 1),
+      BoundedVec::try_from(vec![make_step(Task::Transfer {
+        to: BOB,
+        asset: AssetKind::Native,
+        amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
+      })])
+      .expect("execution plan fits"),
     );
     let sovereign = aaa_account(aaa_id);
     let notify_weight =
@@ -3306,6 +3599,13 @@ fn executive_pipeline_covers_transaction_extension_ingress_and_refunds() {
       .saturating_sub(native_balance(&signer_account))
       .saturating_sub(transfer_amount);
     assert!(AAA::pending_signal(aaa_id));
+    let funding = actor_funding(aaa_id);
+    let batch = funding
+      .funding_snapshots
+      .get(&AssetKind::Native)
+      .expect("multi-match ingress activates one funding batch");
+    assert_eq!(batch.amount, transfer_amount);
+    assert_eq!(batch.pending_amount, 0);
     let unmatched = RuntimeCall::Balances(
       polkadot_sdk::pallet_balances::Call::transfer_allow_death {
         dest: Address::Id(BOB),
@@ -3653,7 +3953,7 @@ fn user_dca_e2e_lifecycle_with_natural_close() {
     let create_fee = <Runtime as pallet_aaa::Config>::AaaCreationFee::get();
     let initial_alice_balance = Balances::free_balance(&ALICE);
     let schedule = Schedule {
-      trigger: Trigger::Timer { every_blocks: 5 },
+      trigger: Trigger::cadenced_always(5),
       cooldown_blocks: 0,
     };
     let foreign = AssetKind::Local(ASSET_A);
@@ -3743,7 +4043,7 @@ fn user_dca_e2e_lifecycle_with_natural_close() {
 fn inert_timer_program() -> pallet_aaa::ProgramInputOf<Runtime> {
   system_active_program(
     Schedule {
-      trigger: Trigger::Timer { every_blocks: 1 },
+      trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 0,
     },
     None,
@@ -5028,7 +5328,7 @@ fn dust_attack_min_balance_actors_preserve_scheduler_stability() {
         min_balance.saturating_mul(20),
       );
       let schedule = Schedule {
-        trigger: Trigger::Timer { every_blocks: 1 },
+        trigger: Trigger::cadenced_always(1),
         cooldown_blocks: 0,
       };
       let aaa_id = create_user(

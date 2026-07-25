@@ -1,7 +1,7 @@
 # AAA Specification
 
 - **Component**: `pallet-aaa` (Account Abstraction Actors)
-- **Specification line**: `0.7.4`
+- **Specification line**: `0.7.5`
 - **Date**: July 2026
 - **Status**: Normative
 - **Release focus**: Verifiable Step Composition
@@ -250,6 +250,8 @@ Closed disposition matrix:
 | Unsupported adapter/capability | Permanent under every policy; no retry state |
 | Authorization, configuration, identity, arithmetic, validation | Permanent; no retry state |
 
+Market adapters MUST classify only typed, owner-known conditions. Temporary includes current slippage/cap movement, reference-price deviation, unavailable or empty liquidity, and liquidity-output or donation-ratio movement. Permanent includes identical or unsupported assets, zero/malformed requests, forbidden capability, invalid LP/pool identity, funding/fee failure, and unknown dispatch failures. Classification by diagnostic string or encoded module index remains forbidden.
+
 ### 3.1 AssetOps
 
 ```rust
@@ -272,6 +274,7 @@ trait AssetOps<AccountId, AssetId, Balance> {
 
 ```rust
 trait DexOps<AccountId, AssetId, Balance> {
+    fn system_trade_cap(who: &AccountId) -> Option<Balance>;
     fn swap_exact_in(
         who: &AccountId,
         asset_in: AssetId,
@@ -287,9 +290,9 @@ trait DexOps<AccountId, AssetId, Balance> {
         max_amount_in: Balance,
         slippage_tolerance: Perbill,
     ) -> Result<Balance, TaskFailure>;
-    fn add_liquidity(who: &AccountId, asset_a: AssetId, asset_b: AssetId, amount_a: Balance, amount_b: Balance)
+    fn add_liquidity(who: &AccountId, asset_a: AssetId, asset_b: AssetId, amount_a: Balance, amount_b: Balance, min_lp_out: Balance)
         -> Result<(Balance, Balance, Balance), TaskFailure>;
-    fn remove_liquidity(who: &AccountId, lp_asset: AssetId, lp_amount: Balance)
+    fn remove_liquidity(who: &AccountId, lp_asset: AssetId, lp_amount: Balance, min_amount_a: Balance, min_amount_b: Balance)
         -> Result<(Balance, Balance), TaskFailure>;
 }
 ```
@@ -300,8 +303,9 @@ Adapter contract:
 2. Storage iteration (if any) MUST use canonical storage-key order.
 3. Rounding behavior MUST be fixed and deterministic per method.
 4. `SwapExactIn` MUST derive `min_out` from a caller-aware exact-input quote that includes runtime routing fees and selects by the same mechanism used for execution; `Perbill::zero()` accepts no deterioration from that executable quote.
-5. `SwapExactOut` receives policy-derived `max_amount_in` plus `slippage_tolerance`, MUST derive a caller-aware required-input quote, MUST reject when the tolerance-adjusted bound exceeds `max_amount_in`, and MUST never debit more than `max_amount_in`.
-6. Slippage/routing logic remains inside the DEX adapter; AAA supplies amount and spend-capacity bounds and handles typed `TaskFailure` through `on_error`.
+5. `SwapExactOut` receives the lesser of its explicit non-zero task `max_amount_in` and current policy-derived input capacity, plus `slippage_tolerance`; it MUST derive a caller-aware required-input quote, reject when the tolerance-adjusted bound exceeds the effective cap, and never debit more than either bound.
+6. `system_trade_cap` MUST return `Some(nonzero_cap)` only for an explicit runtime-owned System AAA sovereign-account whitelist; `None` preserves ordinary User and unlisted-System resolution. AAA applies the cap after successful amount resolution and before dispatch to exact-in input, exact-out maximum input, both add-liquidity inputs, remove-liquidity LP input, and donation input. Events report capped dispatched values rather than uncapped drafts.
+7. Slippage/routing logic remains inside the DEX adapter; AAA supplies explicit task and current spend-capacity bounds and handles typed `TaskFailure` through `on_error`.
 
 ### 3.3 StakingOps
 
@@ -320,6 +324,7 @@ AAA MUST NOT encode collator, nomination, receipt, or native-staking topology. `
 
 ```rust
 trait LiquidityDonationOps<AccountId, AssetId, Balance> {
+    fn system_trade_cap(who: &AccountId) -> Option<Balance>;
     fn donate_liquidity(
         who: &AccountId,
         asset_a: AssetId,
@@ -509,15 +514,17 @@ Semantics:
 2. `PercentageOfTrigger` uses the cycle-start snapshot (Section 5.4), then applies the task policy's current-capacity check.
 3. `PercentageOfLastFunding` uses `funding_snapshots[asset].amount` for the task's resolution surface (Section 2.6), then applies the current-capacity check; pending funding never changes an already armed amount.
 4. Under `ExpendableSpend` and `Mint`, `AllBalance` resolves to full `spendable_current`; Unstake resolves share amounts through `StakingOps` and permits full share withdrawal.
-5. Resolution outcomes are deterministic: `Resolved(amount)`, `Skipped` (e.g. tiny percentage rounds to zero), or `FundingUnavailable`; resolution MUST NOT silently clamp a requested amount to policy capacity.
+5. Resolution outcomes are deterministic: `Resolved(amount)`, `Skipped` (e.g. tiny percentage rounds to zero), or `FundingUnavailable`; resolution MUST NOT silently clamp a requested amount to spendability capacity. The only post-resolution reduction is the explicit runtime-owned `system_trade_cap` for whitelisted System AAA market tasks; execution events and adapter inputs use that capped value.
 
 Resolution policies — runtime MUST apply one per task:
 
 - `PreserveSpend`: `Transfer`, `SplitTransfer`, `SwapExactIn`, `AddLiquidity`, `RemoveLiquidity`, `Stake`, `DonateLiquidity`; subtract ED and require a spendable source; `DonateLiquidity` resolves only its declared `asset_a` amount, while the adapter derives `asset_b`
-- `Mint`: `Mint`, `SwapExactOut`; no ED subtraction or spendability requirement; for `SwapExactOut`, this policy applies only to target output, while the `DexOps` capacity contract (Section 3.2) and task input rule (Section 6.1) define the input-capacity bound
+- `Mint`: `Mint`, `SwapExactOut`; no ED subtraction or spendability requirement for target output; `SwapExactOut` separately carries a fixed explicit input cap and remains limited by current input spendability
 - `ExpendableSpend`: `Burn`, using full spendable balance; `ShareSpend`: `Unstake`, using adapter-visible shares with full withdrawal allowed; multi-amount tasks MUST resolve every field before dispatch and apply outcome precedence `FundingUnavailable > Skipped > Executable` independent of field order
 
-For `SwapExactOut`, `Mint` policy applies only to target output resolution. AAA MUST derive `max_amount_in` from the `asset_in` policy capacity, including `reserved_fee_remaining` and minimum-balance preservation for `FeeNativeAsset`, and the DEX adapter MUST enforce that bound atomically.
+For `SwapExactOut`, `Mint` policy applies only to target output resolution. The task MUST declare fixed `max_amount_in > 0`. AAA computes `effective_max_amount_in = min(task.max_amount_in, preservable asset_in capacity)` after User fee reservation, and the DEX adapter MUST enforce that effective bound atomically. No `AllBalance` or percentage mode may author the cap.
+
+`AddLiquidity` MUST declare fixed `min_lp_out > 0`; adapter success requires minted LP at or above that bound. `RemoveLiquidity` MUST declare fixed `min_amount_a > 0` and `min_amount_b > 0`; adapter success requires both received amounts to meet their respective minima. Bound failure MUST roll back the whole task mutation. Dynamic amount resolution may determine spend size but MUST NOT author or weaken any liquidity-output minimum.
 
 Execution mapping:
 
@@ -589,9 +596,9 @@ Necessity witness: in `SwapExactIn → AddLiquidity → Transfer`, temporary mid
 - `Burn`: asset burn
 - `Mint`: asset mint (System AAA only)
 - `SwapExactIn`: DEX exact-in with `Perbill` slippage tolerance
-- `SwapExactOut`: DEX exact-out target with deterministic input resolution
-- `AddLiquidity`: provide liquidity
-- `RemoveLiquidity`: withdraw liquidity
+- `SwapExactOut`: DEX exact-out target with deterministic output resolution and fixed non-zero `max_amount_in`
+- `AddLiquidity`: provide liquidity with fixed non-zero `min_lp_out`
+- `RemoveLiquidity`: withdraw liquidity with fixed non-zero `min_amount_a` and `min_amount_b`
 - `Stake`: deposit declared asset into staking adapter; native support uses the runtime's chosen `AssetId`
 - `DonateLiquidity`: donate value into a pair without minting LP; adapters own pair-specific balancing
 - `Unstake`: withdraw shares from staking pool
@@ -599,7 +606,7 @@ Necessity witness: in `SwapExactIn → AddLiquidity → Transfer`, temporary mid
 
 `slippage_tolerance` is passed directly to `DexOps`; the adapter obtains a caller-aware executable quote after routing fees and computes `min_out = (1 - slippage_tolerance) × quoted_recipient_output`. `Perbill::zero()` requires that quoted output, `Perbill::one()` accepts any output, and unavailable routes return typed `TaskFailure` handled by `on_error`.
 
-For `SwapExactOut`, AAA passes policy-derived input capacity and the adapter MUST resolve caller-aware required input deterministically, derive `quoted_max_in = (1 + slippage_tolerance) × quote_required_in`, require `quoted_max_in <= max_amount_in`, and never debit more than either bound.
+For `SwapExactOut`, AAA passes `min(task.max_amount_in, current preservable input capacity)`. The adapter MUST obtain one caller-aware native exact-output quote, derive `quoted_max_in = quote_required_in + ceil(slippage_tolerance × quote_required_in)`, require `quoted_max_in <= effective_max_amount_in`, and execute through the router's exact-output entrypoint with that effective cap. Quote and execution may evaluate only explicitly bounded exact-output mechanisms; they MUST NOT invert exact-input quotes across the balance width. No execution may debit more than the task cap or current capacity.
 
 ### 6.2 SplitTransfer
 
@@ -654,44 +661,70 @@ Tasks MUST NOT dispatch arbitrary extrinsics.
 
 ## 7. Triggers
 
-### 7.1 Deterministic Timer
+### 7.1 Trigger Policy
+
+AAA separates the source that marks an actor pending from the admission gate that decides when pending work may enter the scheduler:
 
 ```rust
-enum Trigger<AccountId, AssetId> {
-    Timer { every_blocks: u32 },
+enum TriggerSource<AccountId, AssetId> {
+    Manual,
     OnAddressEvent {
         source_filter: SourceFilter<AccountId>,
         asset_filter: AssetFilter<AssetId>,
     },
-    Manual,
+}
+
+enum CadenceMode<Sources> {
+    Always,
+    WhenSignalled(Sources),
+}
+
+enum TriggerPolicy<Sources> {
+    Immediate { sources: Sources },
+    Cadenced {
+        every_blocks: u32,
+        mode: CadenceMode<Sources>,
+    },
 }
 ```
 
-`Schedule` type reference is normative in Section 12.1.
+`Sources` MUST be a canonical non-empty bounded set for `Immediate` and `WhenSignalled`; `Cadenced::Always` owns no source set. At admission, source atoms MUST be unique and strictly ordered by their canonical SCALE bytes. Source composition is OR-only, non-nested, and fully evaluated without short-circuit so ingress Weight depends on configured source count rather than match position. Adding a source MUST NOT add a successor, task, condition, callback, event queue, timestamp map, source bitmask, or second scheduler.
+
+Canonical behavior:
+
+1. A matched source sets the existing actor-local pending latch only on `false -> true`; multiple matches and multiple source atoms coalesce into one pending state.
+2. `Immediate` requests bounded scheduler admission when the latch is set.
+3. `Cadenced::WhenSignalled` records pending work immediately but cannot admit it before the next cadence gate.
+4. `Cadenced::Always` admits on cadence without requiring a pending source and re-arms after each admitted run.
+5. One ingress evaluates every configured source atom; if several match, it sets one latch and applies funding and producer side effects exactly once.
+6. The admission policy applies uniformly to Manual and AddressEvent sources. Manual ingress does not bypass a configured cadence gate.
+7. Trigger policy does not select `AaaType`, task, parameter, adapter, runtime System policy, or successor.
+8. A source cannot bypass the canonical queue cutoff, complete-operation admission, at-most-once rule, or configured User/System service bounds.
 
 Schedule cooldown rules:
 
-1. `cooldown_blocks` MUST apply to all trigger classes (`Timer`, `OnAddressEvent`, `Manual`) after the first admitted cycle.
+1. `cooldown_blocks` MUST apply after the first admitted cycle to Immediate and Cadenced policies.
 2. The first logical-run admission, identified by stored `cycle_nonce == 0` before its opening increment, MUST NOT be blocked by cooldown.
-3. New-run eligibility is the maximum of applicable `last_cycle_block + cooldown_blocks`, timer cadence plus jitter, and `schedule_window.start`; cooldown is omitted before the first logical run.
-4. Retry eligibility is `max(ContinuationState.last_attempt_block + cooldown_blocks, schedule_window.start)` with absent terms omitted and saturating arithmetic. External Timer cadence MUST NOT apply to an open logical run.
-5. `last_cycle_block` updates only at `CycleStarted`; each admitted retry updates `ContinuationState.last_attempt_block` and increments attempt. Pre-admission weight deferral changes neither.
-6. A pending Manual or AddressEvent signal omits Timer cadence, retains cooldown/window gates, and while suspended remains latched for the next logical run rather than replacing Continuation.
+3. New-run eligibility is the maximum of applicable `last_cycle_block + cooldown_blocks`, cadence plus jitter, and `schedule_window.start`; cooldown is omitted before the first logical run.
+4. Retry backoff is `min(2^attempt, 8)` blocks for persisted attempt `0, 1, 2, ...`, yielding `1 → 2 → 4 → 8 → 8...`. Retry eligibility is `max(ContinuationState.last_attempt_block + max(cooldown_blocks, retry_backoff), schedule_window.start)` with absent terms omitted and saturating arithmetic. The same conservative delay applies to Temporary adapter failures and `FundingUnavailable` under `RetryLater`; an external cadence gate MUST NOT apply to an open logical run.
+5. Effective retry eligibility at or before the next block MUST use one live paged-FIFO ticket beyond the current block cutoff; later eligibility MUST persist exactly one live paged wakeup owned by `ActorHot.wakeup_pointer`. No retry-specific queue or timer may exist.
+6. `last_cycle_block` updates only at `CycleStarted`; each admitted retry updates `ContinuationState.last_attempt_block` and increments attempt. Pre-admission weight deferral changes neither.
+7. A source received while suspended remains latched for the next logical run rather than replacing Continuation.
 
-Timer rules:
+Cadence rules:
 
 1. `every_blocks` MUST satisfy `0 < every_blocks <= MaxExecutionDelayBlocks`; otherwise fail with `ExecutionDelayTooLong`.
-2. Timer cadence is deterministic and exposes no probability or entropy input.
-3. Effective timer eligibility at or before the next block MUST use one live paged-FIFO ticket beyond the current block cutoff; later eligibility MUST persist exactly one live paged wakeup owned by `ActorHot.wakeup_pointer`, including `every_blocks = 1` when cooldown or window delay dominates.
-4. Timer rearming, skipped-readiness preservation, and readiness checks MUST use the same effective-eligibility calculation rather than independent cadence/cooldown/window branches.
-5. Deterministic anti-storm jitter SHOULD be applied for delayed timers (`every_blocks > 1`):
+2. Cadence is deterministic and exposes no probability or entropy input.
+3. Effective cadence eligibility at or before the next block MUST use one live paged-FIFO ticket beyond the current block cutoff; later eligibility MUST persist exactly one live paged wakeup owned by `ActorHot.wakeup_pointer`, including `every_blocks = 1` when cooldown or window delay dominates.
+4. Cadence rearming, skipped-readiness preservation, and readiness checks MUST use the same effective-eligibility calculation rather than independent cadence/cooldown/window branches.
+5. Deterministic anti-storm jitter SHOULD be applied for delayed cadence (`every_blocks > 1`):
    `jitter_window = min(every_blocks / 4, MaxTimerJitterBlocks)`
    `jitter = Blake2_256(aaa_id) % jitter_window` when `jitter_window > 0`, else `0`; validation MUST require `every_blocks + max(jitter_window - 1, 0) <= MaxExecutionDelayBlocks`
-   `timer_eligible_at = admitted_run_anchor + every_blocks + jitter`.
+   `cadence_eligible_at = admitted_run_anchor + every_blocks + jitter`.
 
-A future probabilistic trigger requires a separate append-only trigger variant plus a concrete deterministic, financially secure runtime entropy contract; it MUST NOT reintroduce optional probability into `Timer` or hash-fallback sampling.
+A future probabilistic admission policy requires a separate append-only variant plus a concrete deterministic, financially secure runtime entropy contract; it MUST NOT add optional probability to deterministic cadence or use hash-fallback sampling.
 
-### 7.2 OnAddressEvent
+### 7.2 Trigger Sources
 
 ```rust
 // ActorHot.pending_signal is the canonical coalesced readiness latch.
@@ -709,15 +742,16 @@ enum AssetFilter<AssetId> {
 
 Signal model:
 
-1. `ActorHot.pending_signal` is one per-AAA readiness latch shared by Manual and AddressEvent ingress; multiple matched events coalesce without a separate storage key, generation, or timestamp metadata.
-2. A matched inbound balance-increase event sets the latch only on `false -> true`; an admitted cycle clears it atomically, while lifecycle cleanup removes it with `ActorHot`.
+1. `ActorHot.pending_signal` is one per-AAA readiness latch shared by every configured source; multiple matched events coalesce without a separate storage key, generation, source identity, bitmask, or timestamp metadata.
+2. A matched source sets the latch only on `false -> true`; an admitted signalled cycle clears it atomically, while lifecycle cleanup removes it with `ActorHot`.
 3. Coalescing is signal-level: one admitted cycle may consume balances accumulated from multiple matched events since the previous signal consumption.
+4. Source-set validation MUST reject duplicate Manual atoms and duplicate canonical AddressEvent filter pairs.
 
 Rules:
 
 - `SourceFilter::Whitelist` and `AssetFilter::Whitelist` MUST be non-empty and bounded by `MaxWhitelistSize`.
 - Events without a concrete source account identifier MUST match only `SourceFilter::Any`.
-- Scheduler readiness for this trigger MUST be `true` iff `ActorHot.pending_signal` is true.
+- Immediate readiness MUST require `ActorHot.pending_signal`; Cadenced readiness MUST additionally satisfy its cadence gate.
 - When any signalled cycle starts, `pending_signal` MUST be cleared atomically.
 - If a new matched event arrives after consumption, the actor MUST become ready again on subsequent scheduler passes.
 
@@ -734,15 +768,14 @@ Ingress contract:
 9. Every supported producer MUST submit directly through an explicit adapter, bounded transaction-extension candidate, or equivalent originating-path resolver. The originating transaction MUST propagate `preflight_funding_event` and fallible `notify_address_event*` failures; funding overflow MUST reject before value movement. Runtime event scanning and deferred compatibility ingress storage are outside the supported contract.
 10. Weight for funding/readiness mutation is paid by the originating transfer/mint path. Runtime integration evidence MUST exercise matched, unmatched, failed, source-less, repeated-identical, and post-dispatch refund behavior through the executive extrinsic pipeline.
 
-### 7.3 Manual Trigger
+### 7.3 Manual Source
 
-`manual_trigger` bypasses schedule timing only. It MUST NOT bypass admission or fee checks.
-
-1. Calling `manual_trigger` on an eligible unpaused actor MUST set `ActorHot.pending_signal = true` and perform a bounded enqueue/schedule request; calling it on a paused actor MUST fail with `AaaPaused`; calling it on System Immutable AAA MUST fail with `ImmutableAaa`.
-2. `pending_signal` MUST be cleared exactly when a cycle is admitted and `CycleStarted` is emitted.
-3. Deferrals MUST NOT clear `pending_signal`.
-4. If the actor closes before admission, the latch is removed with actor state deletion.
-5. If the actor is paused after the latch is set, `pending_signal` MUST persist across `pause_aaa` / `resume_aaa`; resume MUST re-enqueue a pending actor, and cooldown/window misses MUST schedule its earliest bounded eligibility without requiring another external signal.
+1. `manual_trigger` MUST fail with `ManualSourceDisabled` when Manual is absent from the policy's source set; it MUST NOT fabricate a source for `Cadenced::Always`.
+2. Calling `manual_trigger` on an eligible unpaused actor MUST set `ActorHot.pending_signal = true` and request admission under the configured Immediate or Cadenced gate; paused actors fail with `AaaPaused`, and System Immutable actors fail with `ImmutableAaa`.
+3. Manual ingress MUST NOT bypass cadence, cooldown, window, configured User/System service bounds, fee, or plan admission.
+4. `pending_signal` MUST be cleared exactly when a signalled cycle is admitted and `CycleStarted` is emitted. Deferrals MUST NOT clear it.
+5. If the actor closes before admission, the latch is removed with actor state deletion.
+6. If the actor is paused after the latch is set, `pending_signal` MUST persist across `pause_aaa` / `resume_aaa`; resume MUST restore the existing admission request without requiring another source.
 
 ### 7.4 Schedule Window
 
@@ -770,22 +803,24 @@ Deferred-horizon contract:
 - `MaxExecutionDelayBlocks` MUST represent exactly ten years in blocks for the runtime target block time.
 - At creation and `update_schedule`, runtime MUST ensure first eligible execution is not delayed beyond `current_block + MaxExecutionDelayBlocks`.
 - For `ScheduleWindow`, this bound is enforced via `start`.
-- For `Timer`, this bound is enforced via `every_blocks` (Section 7.1).
+- For `TriggerPolicy::Cadenced`, this bound is enforced via `every_blocks` (Section 7.1).
 
 ---
 
 ## 8. Scheduler
 
-The AAA runtime is a **deterministic event-driven actor runtime**. Actors are never polled globally; explicit Timer, AddressEvent, and Manual signals wake them. Asset ingress can function as a trigger-message, and larger workflows may emerge from actor graphs, but all work flows through one paged active FIFO plus a temporal wakeup layer and complete-operation admission.
+The AAA runtime is a **deterministic event-driven actor runtime**. Actors are never polled globally; bounded Manual and AddressEvent sources set one coalesced pending latch, while Immediate or Cadenced admission decides when work reaches the scheduler. Asset ingress can function as a trigger-message, and larger workflows may emerge from actor graphs, but all work flows through one paged active FIFO plus a temporal wakeup layer and complete-operation admission.
 
 ### 8.1 Architecture: Two-Layer Scheduler
 
 1. **Logical Active FIFO**: `QueueHead <= QueueTail` defines one monotonic ticket interval. Tickets are `u64`, never reused during active chain-state lifetime, and MUST fail closed rather than wrap. At scheduler-pass start, `block_cutoff = QueueTail`; only entries with `ticket < block_cutoff` may be considered. Enqueues during that pass receive later tickets and belong to a future block.
 2. **Paged Physical Storage**: `QueuePages[page_id]` stores bounded consecutive entries, with the ticket derived from page and slot unless production-Wasm evidence justifies encoding it. The scheduler may stop mid-page or traverse many pages in one block; it persists the exact next head and deletes only fully consumed pages. `QueuePageSize` is I/O granularity, not throughput or execution capacity.
 3. **Actor-Local Membership**: `ActorHot.queue_ticket` is the actor's sole live queue membership. An entry is live only when its ticket equals that field; otherwise it is a tombstone. Enqueue coalesces while a live ticket exists. Cancellation, close, pause, dormancy, and replacement invalidate actor-local state without scanning pages.
-4. **Queue Continuation**: Cadence `every_blocks <= 1` re-admits actors through a new ticket beyond the captured cutoff rather than timer indexing.
-5. **Temporal Wakeup Layer**: Delayed timers use bounded `WakeupPages` and `WakeupBuckets`, a sparse paged binary min-heap cursor, and one actor-keyed live pointer; stale entries without the matching pointer drop lazily when reached. `WakeupCursorPages` stores the heap's array representation over at most `MaxActiveActors` distinct blocks. Insert, pop-min, and exact removal perform at most `ceil(log2(MaxActiveActors))` sift steps, with each step touching bounded pages and indexed buckets. `scheduler_wakeup_cursor_insert`, `scheduler_wakeup_cursor_pop_min`, and `scheduler_wakeup_cursor_remove_exact` own maximum-depth generated Weight evidence.
-6. **Rejected Physical Extremes**: Production MUST use neither `StorageValue<BoundedRingBuffer<_, MaxQueueLength>>` nor `StorageMap<QueueTicket, QueueEntry>`. Algorithmic O(1) does not imply bounded physical trie I/O: the former inherits maximum-value decode/encode/proof behavior, while the latter pays one trie key and proof path per entry. A bounded intermediate page size amortizes trie overhead without coupling each touch to 10,000-entry capacity.
+4. **Queue Continuation**: Cadence `every_blocks <= 1` re-admits actors through a new ticket beyond the captured cutoff rather than temporal indexing.
+5. **Temporal Wakeup Layer**: Delayed cadence gates use bounded `WakeupPages` and `WakeupBuckets`, a sparse paged binary min-heap cursor, and one actor-keyed live pointer; stale entries without the matching pointer drop lazily when reached. `WakeupCursorPages` stores the heap's array representation over at most `MaxActiveActors` distinct blocks. Insert, pop-min, and exact removal perform at most `ceil(log2(MaxActiveActors))` sift steps, with each step touching bounded pages and indexed buckets. `scheduler_wakeup_cursor_insert`, `scheduler_wakeup_cursor_pop_min`, and `scheduler_wakeup_cursor_remove_exact` own maximum-depth generated Weight evidence.
+6. **Bounded Authority Service**: The runtime supplies one bounded, unique whitelist of System AAA ids, `SystemAaaBudget`, and non-zero `UserAaaBudget`. At block start the scheduler may inspect only those actor-local tickets and select the lowest live ticket first. Whitelisted System attempts consume at most `min(SystemAaaBudget, 1 - UserAaaBudget)` of both available Weight dimensions and the corresponding rounded-up non-zero share of `MaxExecutionsPerBlock`. Remaining capacity serves every non-whitelisted actor through the ordinary queue head. FIFO MUST hold within each group.
+7. **Single-Queue Extraction**: Priority selection clears the selected actor's one `queue_ticket`; its physical entry becomes an ordinary lazy tombstone. No priority queue, second ticket, owner-selected rank, or scheduler phase state may exist. Whitelisted entries left after the System cap are consumed and re-enqueued in ticket order only when they reach the ordinary head, preserving their group FIFO.
+8. **Rejected Physical Extremes**: Production MUST use neither `StorageValue<BoundedRingBuffer<_, MaxQueueLength>>` nor `StorageMap<QueueTicket, QueueEntry>`. Algorithmic O(1) does not imply bounded physical trie I/O: the former inherits maximum-value decode/encode/proof behavior, while the latter pays one trie key and proof path per entry. A bounded intermediate page size amortizes trie overhead without coupling each touch to 10,000-entry capacity.
 
 For every block `B` and actor `A`, the consensus invariant is:
 
@@ -797,22 +832,24 @@ Signals or funding arriving after A executes may update actor-local pending stat
 
 ### 8.2 Execution Flow
 
-Each block uses a two-dimensional `WeightMeter`; no ingress, wakeup, queue, close, or attempt unit begins unless it fits. New runs start at `0`; suspended runs load Continuation only after the hot marker and admit the suffix. Pause, breaker, window, cooldown, terminal state, User capacity, RefTime, and ProofSize gate retries. Continuation needs no external signal.
+Each block uses a two-dimensional `WeightMeter`; no ingress, wakeup, queue, close, or attempt unit begins unless it fits. New runs start at `0`; suspended runs load Continuation only after the hot marker and admit the suffix. Pause, breaker, window, cooldown, capped retry backoff, terminal state, User capacity, RefTime, and ProofSize gate retries. Continuation needs no external signal.
 
-FIFO processing stops when the next unit cannot fit, `MaxExecutionsPerBlock` is reached, or an evidenced scan ceiling is reached. The execution ceiling counts admitted attempts only and never becomes a global reservation; stale/paused/invalid/tombstoned entries do not consume it. The reference ceiling of 1,000 is not a throughput guarantee.
+The pass first probes the bounded runtime System whitelist and admits lowest-ticket members within the effective System Weight/count cap. It then processes ordinary queue heads with all remaining capacity, skipping selected tombstones and rotating capped whitelisted entries without changing within-group order. This grants bounded System service under ordinary-queue saturation while the non-zero User reserve prevents complete displacement. It provides no priority over ordinary extrinsics because all AAA work remains inside `on_idle`.
+
+FIFO processing stops when the next complete unit cannot fit, `MaxExecutionsPerBlock` is reached, or an evidenced scan ceiling is reached. The execution ceiling counts admitted attempts only and never becomes a global reservation; stale/paused/invalid/tombstoned entries do not consume it. The reference ceiling of 1,000 is not a throughput guarantee.
 
 ### 8.3 Scheduler Liveness Matrix
 
 - Queue carry-over: deferred, leftover, and execution-created late enqueues persist in deterministic FIFO order and MUST be revalidated at pop. A ready live head that fails admission only because the remaining block budget cannot fit its complete unit MUST retain its queue position and become the first candidate next block; carry-over MUST NOT move it behind a later entry or assign it a new FIFO identity.
-- Timer due: delayed wakeup moves to active queue; actor wakeup pointer clears when drained
-- AddressEvent matched: set/keep `ActorHot.pending_signal`; queue saturation defers through the exact paged wakeup substrate without clearing the latch
-- Manual trigger: set the same latch and enqueue/schedule; deferral preserves it until admitted cycle start
+- Cadence due: delayed wakeup moves to active queue; actor wakeup pointer clears when drained
+- AddressEvent matched: set/keep `ActorHot.pending_signal`; Immediate admission enqueues while Cadenced admission retains one bounded future eligibility without clearing the latch
+- Manual source: set the same latch and request Immediate or Cadenced admission; deferral preserves it until admitted cycle start
 - Queue full: retain exact actor-local readiness and retry through paged temporal scheduling without drop or spillover state
-- Paused/cooldown/pre-window actor: pop preserves the unified signal latch and MUST retain or schedule one future eligibility entry; resume re-enqueues pending non-timer signals
+- Paused/cooldown/pre-window actor: pop preserves the unified signal latch and MUST retain or schedule one future eligibility entry; resume restores pending source admission under the configured gate
 - Dormant/closed/missing actor: stale queue/wakeup entries are ignored; deactivate/close removes canonical readiness/pointers
 - Window expired at touch/pop: enter terminal close before normal mutation or execution
 - Breaker active: bounded housekeeping may continue; normal attempts and scheduler-owned terminal cleanup defer, while explicit lifecycle and sweep cleanup remain available
-- Suspended actor: preserve Continuation across pause/resume and breaker transitions; schedule retry through canonical effective eligibility without Timer cadence
+- Suspended actor: preserve Continuation across pause/resume and breaker transitions; schedule retry through canonical effective eligibility without external cadence
 - Signal during suspension: set/keep `pending_signal` for the next logical run; do not erase, replace, or fork the current Continuation
 - Funding during suspension: update canonical funding batches normally; keep new value pending until a later full logical-run success
 
@@ -992,7 +1029,7 @@ enum SuspensionReason { FundingUnavailable, Temporary }
 enum CancellationReason { Explicit, ExecutionPlanChanged, FundingPolicyChanged, ScheduleChanged, WindowExpired, Deactivated, Terminal, Closed }
 enum StepSkippedReason { ConditionsNotMet, FundingUnavailable, ResolutionSkipped }
 enum PauseReason { Manual, CycleNonceExhausted }
-struct Schedule<AccountId, AssetId> { trigger: Trigger<AccountId, AssetId>, cooldown_blocks: u32 }
+struct Schedule<AccountId, AssetId> { trigger_policy: TriggerPolicy<BoundedTriggerSources<AccountId, AssetId>>, cooldown_blocks: u32 }
 enum AmountResolution<Balance> { Fixed(Balance), PercentageOfCurrent(Perbill), PercentageOfTrigger(Perbill), PercentageOfLastFunding(Perbill), AllBalance }
 
 struct SplitLeg<AccountId> { to: AccountId, share: Perbill }
@@ -1019,11 +1056,11 @@ enum Task<AccountId, AssetId, Balance> {
     Transfer { to: AccountId, asset: AssetId, amount: AmountResolution<Balance> },
     SplitTransfer { asset: AssetId, amount: AmountResolution<Balance>, legs: BoundedVec<SplitLeg<AccountId>, MaxSplitTransferLegs> },
     SwapExactIn { asset_in: AssetId, asset_out: AssetId, amount_in: AmountResolution<Balance>, slippage_tolerance: Perbill },
-    SwapExactOut { asset_in: AssetId, asset_out: AssetId, amount_out: AmountResolution<Balance>, slippage_tolerance: Perbill },
+    SwapExactOut { asset_in: AssetId, asset_out: AssetId, amount_out: AmountResolution<Balance>, max_amount_in: Balance, slippage_tolerance: Perbill },
     Burn { asset: AssetId, amount: AmountResolution<Balance> },
     Mint { asset: AssetId, amount: AmountResolution<Balance> },
-    AddLiquidity { asset_a: AssetId, asset_b: AssetId, amount_a: AmountResolution<Balance>, amount_b: AmountResolution<Balance> },
-    RemoveLiquidity { lp_asset: AssetId, amount: AmountResolution<Balance> },
+    AddLiquidity { asset_a: AssetId, asset_b: AssetId, amount_a: AmountResolution<Balance>, amount_b: AmountResolution<Balance>, min_lp_out: Balance },
+    RemoveLiquidity { lp_asset: AssetId, amount: AmountResolution<Balance>, min_amount_a: Balance, min_amount_b: Balance },
     Stake { asset: AssetId, amount: AmountResolution<Balance> },
     DonateLiquidity { asset_a: AssetId, asset_b: AssetId, amount: AmountResolution<Balance>, max_ratio_error: Perbill },
     Unstake { asset: AssetId, shares: AmountResolution<Balance> },
@@ -1127,8 +1164,8 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 1. AAA admits each housekeeping, queue, wakeup, close, and cycle operation against both remaining Weight dimensions, and runtime enforces `MinOnIdleReservePct` dispatchable headroom (Section 8.4; Section 9.2)
 2. All loops and queues remain bounded by explicit `Max*` constants and no bounded operation executes unmetered (Section 1 item 2)
 3. Slot allocation and active-or-dormant identity occupancy mutations are synchronous and race-safe (Section 1 item 8; Section 2.3)
-4. Determinism holds for equal state/context, including deterministic timer jitter (Section 1 item 1; Section 7.1)
-5. AAA exposes no probability or entropy input in `Timer`, configuration, errors, events, or embedding obligations (Section 7.1)
+4. Determinism holds for equal state/context, including deterministic cadence jitter (Section 1 item 1; Section 7.1)
+5. AAA exposes no probability or entropy input in deterministic cadence, configuration, errors, events, or embedding obligations (Section 7.1)
 6. Adapters are deterministic and their runtime-derived upper bounds cover canonical iteration, quote search, storage proof, fee collection, and fixed rounding in both Weight dimensions (Section 3.2; Section 3.5)
 7. No recurring rent accrual or touch-based rent debit exists (Section 4.2)
 8. `create_user_aaa` charges non-refundable `AaaCreationFee` through one atomic runtime `FeeCollector` transaction (Section 1 item 5; Section 4.4)
@@ -1184,7 +1221,8 @@ Implementation is compliant iff all hold. Each invariant references its normativ
 - `MaxConditionsPerStep`: 4; condition bound per step
 - `MaxConsecutiveFailures`: 10; terminal threshold; `MaxAutoCloseNonceHorizon`: reference default 10,000; current-relative future-target bound
 - `MaxExecutionDelayBlocks`: 10 years in blocks; maximum first-execution deferral
-- `MaxTimerJitterBlocks`: 32–128; deterministic timer jitter cap
+- `MaxTimerJitterBlocks`: 32–128; deterministic cadence jitter cap
+- `MaxTriggerSources`: runtime-specific small bound for canonical Immediate or WhenSignalled source sets
 - `MaxExecutionsPerBlock`: configurable hard safety ceiling for successful actor execution attempts; DEOS reference value 1,000, with actual execution determined by remaining RefTime and ProofSize
 - `MaxQueueEntriesScannedPerBlock`: optional independent physical inspection ceiling only when benchmark evidence justifies it; MUST NOT alias `MaxExecutionsPerBlock`
 - `MaxFundingTrackedAssets`: 3–10; assets tracked by `PercentageOfLastFunding` per AAA

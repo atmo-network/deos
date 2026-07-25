@@ -38,10 +38,10 @@ fn activate_dormant_system(
     aaa_id,
     ProgramInput::Active {
       schedule: pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::OnAddressEvent {
-          source_filter: pallet_aaa::SourceFilter::Any,
-          asset_filter: pallet_aaa::AssetFilter::Any,
-        },
+        trigger: pallet_aaa::Trigger::immediate_manual_and_address_event(
+          pallet_aaa::SourceFilter::Any,
+          pallet_aaa::AssetFilter::Any,
+        ),
         cooldown_blocks: primitives::ecosystem::params::SYSTEM_AAA_COOLDOWN_BLOCKS,
       },
       schedule_window: None,
@@ -136,10 +136,10 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
       aaa_ids::TREASURY_B_AAA_ID,
       ProgramInput::Active {
         schedule: pallet_aaa::Schedule {
-          trigger: pallet_aaa::Trigger::OnAddressEvent {
-            source_filter: pallet_aaa::SourceFilter::Any,
-            asset_filter: pallet_aaa::AssetFilter::Any,
-          },
+          trigger: pallet_aaa::Trigger::immediate_manual_and_address_event(
+            pallet_aaa::SourceFilter::Any,
+            pallet_aaa::AssetFilter::Any,
+          ),
           cooldown_blocks: 5,
         },
         schedule_window: None,
@@ -232,6 +232,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
           asset_b: foreign,
           amount_a: AmountResolution::AllBalance,
           amount_b: AmountResolution::AllBalance,
+          min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
       },
@@ -354,13 +355,7 @@ fn genesis_value_driven_programs_use_omnivorous_address_event_triggers() {
     ] {
       let instance = AAA::aaa_instances(aaa_id).expect("genesis active actor exists");
       assert!(
-        matches!(
-          instance.schedule.trigger,
-          pallet_aaa::Trigger::OnAddressEvent {
-            source_filter: pallet_aaa::SourceFilter::Any,
-            asset_filter: pallet_aaa::AssetFilter::Any,
-          }
-        ),
+        instance.schedule.trigger.address_event_source_enabled(),
         "value-driven actor {aaa_id} must react to verified inbound value without polling"
       );
     }
@@ -452,10 +447,12 @@ fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
     let issuance_before_burn = Balances::total_issuance();
     let bm_before_signal = AAA::aaa_instances(bm_id).expect("BM must exist");
     let target_cycle_nonce = bm_before_signal.cycle_nonce.saturating_add(1);
-    assert!(matches!(
-      bm_before_signal.schedule.trigger,
-      pallet_aaa::Trigger::OnAddressEvent { .. }
-    ));
+    assert!(
+      bm_before_signal
+        .schedule
+        .trigger
+        .address_event_source_enabled()
+    );
     let max_wait_blocks = bm_before_signal.schedule.cooldown_blocks.saturating_add(2);
     let start_block = System::block_number();
     let mut ingress_cycle_observed = false;
@@ -1260,7 +1257,7 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
       RuntimeOrigin::root(),
       bucket_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Manual,
+        trigger: pallet_aaa::Trigger::immediate_manual(),
         cooldown_blocks: 0,
       },
       None,
@@ -1269,7 +1266,7 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
       RuntimeOrigin::root(),
       treasury_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer { every_blocks: 1 },
+        trigger: pallet_aaa::Trigger::cadenced_always(1),
         cooldown_blocks: 0,
       },
       None,
@@ -1644,10 +1641,10 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       RuntimeOrigin::root(),
       zm_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::OnAddressEvent {
-          source_filter: pallet_aaa::SourceFilter::Any,
-          asset_filter: pallet_aaa::AssetFilter::Any,
-        },
+        trigger: pallet_aaa::Trigger::immediate_manual_and_address_event(
+          pallet_aaa::SourceFilter::Any,
+          pallet_aaa::AssetFilter::Any,
+        ),
         cooldown_blocks: 0,
       },
       None,
@@ -1757,7 +1754,7 @@ fn treasury_b_buyback_burns_bldr() {
       RuntimeOrigin::root(),
       treasury_b_id,
       pallet_aaa::Schedule {
-        trigger: pallet_aaa::Trigger::Timer { every_blocks: 10 },
+        trigger: pallet_aaa::Trigger::cadenced_always(10),
         cooldown_blocks: 5,
       },
       None,
@@ -2057,6 +2054,8 @@ fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
         task: Task::RemoveLiquidity {
           lp_asset,
           amount: AmountResolution::PercentageOfCurrent(Perbill::from_percent(10)),
+          min_amount_a: 1,
+          min_amount_b: 1,
         },
         on_error: StepErrorPolicy::AbortCycle,
       }]

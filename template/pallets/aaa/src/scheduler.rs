@@ -2,7 +2,10 @@ use super::pallet::*;
 use super::{AssetOps, FundingAuthority, weights::WeightInfo};
 use alloc::vec::Vec;
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::traits::{One, Saturating, Zero};
+use polkadot_sdk::sp_runtime::{
+  Perbill,
+  traits::{One, Saturating, Zero},
+};
 use polkadot_sdk::sp_weights::WeightMeter;
 
 enum AdmissionDecision {
@@ -10,6 +13,13 @@ enum AdmissionDecision {
   Closed(Weight),
   Defer(DeferReason),
   Skip,
+}
+
+const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
+
+struct PriorityServiceResult {
+  executed: bool,
+  stop_group: bool,
 }
 
 impl<T: Config> Pallet<T> {
@@ -36,6 +46,45 @@ impl<T: Config> Pallet<T> {
     let mut executed = 0u32;
     let mut scanned = 0u32;
     let mut work_requeues: Vec<AaaId> = Vec::new();
+    let system_share = Self::effective_system_service_share();
+    let mut system_meter =
+      WeightMeter::with_limit(Self::service_budget(remaining_weight, system_share));
+    let system_execution_limit = Self::service_execution_limit(max_executions, system_share);
+    let mut system_executed = 0u32;
+
+    while executed < max_executions && system_executed < system_execution_limit {
+      let Some((aaa_id, ticket)) =
+        Self::earliest_priority_system_ticket(cutoff, now, &mut cycle_meter, hot_probe_weight)
+      else {
+        break;
+      };
+      if !cycle_meter.can_consume(consume_weight) {
+        break;
+      }
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        if let Some(hot) = maybe.as_mut()
+          && hot.queue_ticket == Some(ticket)
+        {
+          hot.queue_ticket = None;
+        }
+      });
+      cycle_meter.consume(consume_weight);
+      let service = Self::service_priority_system_actor(
+        aaa_id,
+        now,
+        &mut cycle_meter,
+        &mut system_meter,
+        hot_probe_weight,
+        program_probe_weight,
+        &mut work_requeues,
+      );
+      let execution_delta = u32::from(service.executed);
+      executed = executed.saturating_add(execution_delta);
+      system_executed = system_executed.saturating_add(execution_delta);
+      if service.stop_group {
+        break;
+      }
+    }
 
     while executed < max_executions && scanned < max_scanned {
       if QueueHead::<T>::get() >= cutoff || !cycle_meter.can_consume(scan_weight) {
@@ -67,6 +116,14 @@ impl<T: Config> Pallet<T> {
         break;
       }
       let aaa_id = entry.aaa_id;
+      if hot.actor_class.aaa_type() == AaaType::System && Self::is_priority_system_id(aaa_id) {
+        if !Self::paged_consume_head(ticket) {
+          break;
+        }
+        cycle_meter.consume(consume_weight);
+        work_requeues.push(aaa_id);
+        continue;
+      }
       if hot.run_state == RunState::Suspended {
         if ContinuationStateStore::<T>::get(entry.aaa_id)
           .is_some_and(|continuation| continuation.last_attempt_block == now)
@@ -133,6 +190,156 @@ impl<T: Config> Pallet<T> {
       Self::enqueue(aaa_id);
     }
     cycle_meter.consumed()
+  }
+
+  fn effective_system_service_share() -> Perbill {
+    T::SystemAaaBudget::get().min(Perbill::one() - T::UserAaaBudget::get())
+  }
+
+  fn service_execution_limit(max_executions: u32, share: Perbill) -> u32 {
+    if share.is_zero() || max_executions == 0 {
+      0
+    } else {
+      share.mul_floor(max_executions).max(1)
+    }
+  }
+
+  fn service_budget(limit: Weight, share: Perbill) -> Weight {
+    Weight::from_parts(
+      share.mul_floor(limit.ref_time()),
+      share.mul_floor(limit.proof_size()),
+    )
+  }
+
+  fn is_priority_system_id(aaa_id: AaaId) -> bool {
+    T::PrioritySystemAaaIds::get()
+      .into_iter()
+      .any(|configured| configured == aaa_id)
+  }
+
+  fn earliest_priority_system_ticket(
+    cutoff: QueueTicket,
+    _now: BlockNumberFor<T>,
+    meter: &mut WeightMeter,
+    probe_weight: Weight,
+  ) -> Option<(AaaId, QueueTicket)> {
+    let mut earliest = None;
+    for aaa_id in T::PrioritySystemAaaIds::get() {
+      if !meter.can_consume(probe_weight) {
+        return None;
+      }
+      let hot = ActorHot::<T>::get(aaa_id);
+      meter.consume(probe_weight);
+      let Some(hot) = hot else {
+        continue;
+      };
+      if hot.actor_class.aaa_type() != AaaType::System {
+        continue;
+      }
+      let Some(ticket) = hot.queue_ticket else {
+        continue;
+      };
+      if ticket >= cutoff {
+        continue;
+      }
+      if earliest.is_none_or(|(_, earliest_ticket)| ticket < earliest_ticket) {
+        earliest = Some((aaa_id, ticket));
+      }
+    }
+    earliest
+  }
+
+  fn service_priority_system_actor(
+    aaa_id: AaaId,
+    now: BlockNumberFor<T>,
+    cycle_meter: &mut WeightMeter,
+    system_meter: &mut WeightMeter,
+    hot_probe_weight: Weight,
+    program_probe_weight: Weight,
+    work_requeues: &mut Vec<AaaId>,
+  ) -> PriorityServiceResult {
+    if !cycle_meter.can_consume(hot_probe_weight) {
+      work_requeues.push(aaa_id);
+      return PriorityServiceResult {
+        executed: false,
+        stop_group: true,
+      };
+    }
+    let Some(hot) = ActorHot::<T>::get(aaa_id) else {
+      cycle_meter.consume(hot_probe_weight);
+      return PriorityServiceResult {
+        executed: false,
+        stop_group: false,
+      };
+    };
+    cycle_meter.consume(hot_probe_weight);
+    if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
+      return PriorityServiceResult {
+        executed: false,
+        stop_group: false,
+      };
+    }
+    if !cycle_meter.can_consume(program_probe_weight) {
+      work_requeues.push(aaa_id);
+      return PriorityServiceResult {
+        executed: false,
+        stop_group: true,
+      };
+    }
+    let Some(program) = ActorProgram::<T>::get(aaa_id) else {
+      cycle_meter.consume(program_probe_weight);
+      return PriorityServiceResult {
+        executed: false,
+        stop_group: false,
+      };
+    };
+    cycle_meter.consume(program_probe_weight);
+    let instance = Self::compose_active_actor(hot, program);
+    match Self::apply_admission(aaa_id, &instance, cycle_meter) {
+      AdmissionDecision::Admit(weight) => {
+        if !system_meter.can_consume(weight) {
+          work_requeues.push(aaa_id);
+          return PriorityServiceResult {
+            executed: false,
+            stop_group: true,
+          };
+        }
+        let _actual = Self::execute_single_cycle(aaa_id, instance, now);
+        cycle_meter.consume(weight);
+        system_meter.consume(weight);
+        if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
+          Self::schedule_next_work_local(aaa_id, &updated, now, work_requeues);
+        }
+        PriorityServiceResult {
+          executed: true,
+          stop_group: false,
+        }
+      }
+      AdmissionDecision::Closed(weight) => {
+        cycle_meter.consume(weight);
+        PriorityServiceResult {
+          executed: false,
+          stop_group: false,
+        }
+      }
+      AdmissionDecision::Defer(reason) => {
+        Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
+        work_requeues.push(aaa_id);
+        PriorityServiceResult {
+          executed: false,
+          stop_group: true,
+        }
+      }
+      AdmissionDecision::Skip => {
+        if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
+          Self::schedule_next_work_local(aaa_id, &updated, now, work_requeues);
+        }
+        PriorityServiceResult {
+          executed: false,
+          stop_group: false,
+        }
+      }
+    }
   }
 
   pub(crate) fn enqueue(aaa_id: AaaId) {
@@ -946,6 +1153,10 @@ impl<T: Config> Pallet<T> {
           .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future())
+      .saturating_add(
+        Self::scheduler_actor_hot_probe_weight_upper()
+          .saturating_mul(u64::from(T::MaxPrioritySystemAaaIds::get())),
+      )
       .saturating_add(Self::scheduler_actor_probe_weight_upper())
   }
 
@@ -1082,7 +1293,7 @@ impl<T: Config> Pallet<T> {
     let mut eligible_at = schedule_window
       .map(|window| now.max(window.start))
       .unwrap_or(now);
-    if let Trigger::Timer { every_blocks } = schedule.trigger
+    if let TriggerPolicy::Cadenced { every_blocks, .. } = schedule.trigger
       && every_blocks > 1
     {
       eligible_at = eligible_at.max(
@@ -1102,7 +1313,19 @@ impl<T: Config> Pallet<T> {
   ) -> BlockNumberFor<T> {
     if instance.cycle_nonce == 0 {
       if include_timer {
-        return now.max(instance.first_eligible_at);
+        let first = instance.first_eligible_at;
+        if now <= first {
+          return first;
+        }
+        if let TriggerPolicy::Cadenced { every_blocks, .. } = instance.schedule.trigger {
+          let cadence_span = every_blocks.saturating_add(
+            Self::timer_jitter_blocks(aaa_id, every_blocks).saturated_into::<u32>(),
+          );
+          let elapsed: u64 = now.saturating_sub(first).saturated_into();
+          let span = u64::from(cadence_span.max(1));
+          let periods = elapsed.saturating_add(span.saturating_sub(1)) / span;
+          return first.saturating_add(periods.saturating_mul(span).saturated_into());
+        }
       }
       return instance
         .schedule_window
@@ -1118,7 +1341,7 @@ impl<T: Config> Pallet<T> {
       eligible_at = eligible_at.max(instance.last_cycle_block.saturating_add(cooldown));
     }
     if include_timer && instance.cycle_nonce < u64::MAX {
-      if let Trigger::Timer { every_blocks } = instance.schedule.trigger {
+      if let TriggerPolicy::Cadenced { every_blocks, .. } = instance.schedule.trigger {
         let cadence: BlockNumberFor<T> = every_blocks.into();
         let jitter = Self::timer_jitter_blocks(aaa_id, every_blocks);
         eligible_at = eligible_at.max(
@@ -1132,11 +1355,22 @@ impl<T: Config> Pallet<T> {
     eligible_at
   }
 
+  fn retry_backoff_blocks(attempt: u32) -> u32 {
+    match attempt {
+      0 => 1,
+      1 => 2,
+      2 => 4,
+      _ => MAX_RETRY_BACKOFF_BLOCKS,
+    }
+  }
+
   fn retry_eligible_at(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> BlockNumberFor<T> {
     let continuation = ContinuationStateStore::<T>::get(aaa_id)
       .expect("Suspended run_state requires ContinuationState");
     let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
-    let mut eligible_at = continuation.last_attempt_block.saturating_add(cooldown);
+    let backoff: BlockNumberFor<T> = Self::retry_backoff_blocks(continuation.attempt).into();
+    let retry_delay = cooldown.max(backoff);
+    let mut eligible_at = continuation.last_attempt_block.saturating_add(retry_delay);
     if let Some(window) = instance.schedule_window {
       eligible_at = eligible_at.max(window.start);
     }
@@ -1156,9 +1390,14 @@ impl<T: Config> Pallet<T> {
     let eligible_at = if instance.run_state == RunState::Suspended {
       Self::retry_eligible_at(aaa_id, instance)
     } else if instance.pending_signal {
-      Self::next_eligible_at(aaa_id, instance, now, false)
-    } else if matches!(instance.schedule.trigger, Trigger::Timer { .. }) {
-      Self::next_eligible_at(aaa_id, instance, now, true)
+      Self::next_eligible_at(
+        aaa_id,
+        instance,
+        now,
+        instance.schedule.trigger.cadence_blocks().is_some(),
+      )
+    } else if matches!(instance.schedule.trigger, TriggerPolicy::Cadenced { .. }) {
+      Self::next_eligible_at(aaa_id, instance, now.saturating_add(One::one()), true)
     } else {
       Self::schedule_window_expiry(aaa_id, instance);
       return;
@@ -1385,8 +1624,7 @@ impl<T: Config> Pallet<T> {
     if instance.run_state == RunState::Suspended {
       return Self::retry_eligible_at(aaa_id, instance) <= now;
     }
-    let include_timer =
-      !instance.pending_signal && matches!(instance.schedule.trigger, Trigger::Timer { .. });
+    let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
     if Self::next_eligible_at(aaa_id, instance, now, include_timer) > now {
       return false;
     }
@@ -1394,13 +1632,16 @@ impl<T: Config> Pallet<T> {
   }
 
   fn evaluate_trigger(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
-    if instance.pending_signal {
-      return true;
-    }
     match instance.schedule.trigger {
-      Trigger::Manual => false,
-      Trigger::Timer { .. } => Self::evaluate_timer(aaa_id, instance),
-      Trigger::OnAddressEvent { .. } => false,
+      TriggerPolicy::Immediate { .. }
+      | TriggerPolicy::Cadenced {
+        mode: CadenceMode::WhenSignalled(_),
+        ..
+      } => instance.pending_signal,
+      TriggerPolicy::Cadenced {
+        mode: CadenceMode::Always,
+        ..
+      } => Self::evaluate_timer(aaa_id, instance),
     }
   }
 
@@ -1550,26 +1791,27 @@ impl<T: Config> Pallet<T> {
       return Ok(());
     }
     let mut signal_matched = false;
-    if apply_trigger
-      && let Trigger::OnAddressEvent {
-        source_filter,
-        asset_filter,
-      } = &instance.schedule.trigger
-    {
-      if Self::source_matches_filter(
-        source_filter,
-        &instance.owner,
-        provenance.map(FundingProvenance::account),
-      ) && Self::asset_matches_filter(asset_filter, asset)
-      {
-        signal_matched = true;
-        if !instance.pending_signal {
-          ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
-            if let Some(hot) = maybe_hot {
-              hot.pending_signal = true;
-            }
-          });
+    if apply_trigger && let Some(sources) = instance.schedule.trigger.sources() {
+      for source in sources {
+        // deos-bypass: bounded-iter — MaxTriggerSources bounds full source observation.
+        if let TriggerSource::OnAddressEvent {
+          source_filter,
+          asset_filter,
+        } = source
+        {
+          signal_matched |= Self::source_matches_filter(
+            source_filter,
+            &instance.owner,
+            provenance.map(FundingProvenance::account),
+          ) && Self::asset_matches_filter(asset_filter, asset);
         }
+      }
+      if signal_matched && !instance.pending_signal {
+        ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+          if let Some(hot) = maybe_hot {
+            hot.pending_signal = true;
+          }
+        });
       }
     }
     if apply_funding && amount > Zero::zero() {

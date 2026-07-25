@@ -54,11 +54,14 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands cargo
+    require_commands cargo npm
     log_success "Release gate prerequisites checked"
 }
 
 run_gate() {
+    run_shell_step "AAA gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-aaa --example semantic_manifest -- --check ../web-client/src/lib/automation/aaa-semantic-manifest.json"
+    run_shell_step "AAA gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
+
     if [[ "$QUICK_MODE" == "1" ]]; then
         run_shell_step "AAA quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-aaa -p deos-runtime -p pallet-aaa-embedding-fixture --all-targets -- -D warnings"
         run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-aaa --lib && cargo test -q -p pallet-aaa-embedding-fixture --lib"

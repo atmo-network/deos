@@ -178,6 +178,13 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
       bind:amount={task.amountOut}
       {compact}
     />
+    <TextField
+      label="Maximum input (base units)"
+      inputmode="numeric"
+      pattern="[0-9]*"
+      bind:value={task.maxAmountIn}
+      inputClass="h-9 py-1.5 text-xs tabnum"
+    />
     <NumberInput
       label="Slippage tolerance (perbill)"
       min={0}
@@ -211,6 +218,13 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
         compact={true}
       />
     </div>
+    <TextField
+      label="Minimum LP output (base units)"
+      inputmode="numeric"
+      pattern="[0-9]*"
+      bind:value={task.minLpOut}
+      inputClass="h-9 py-1.5 text-xs tabnum"
+    />
   {:else if task.type === 'RemoveLiquidity'}
     <AutomationAssetEditor
       label="LP asset"
@@ -218,6 +232,22 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
       {compact}
     />
     <AutomationAmountEditor bind:amount={task.amount} {compact} />
+    <div class={fieldGrid}>
+      <TextField
+        label="Minimum asset A output"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        bind:value={task.minAmountA}
+        inputClass="h-9 py-1.5 text-xs tabnum"
+      />
+      <TextField
+        label="Minimum asset B output"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        bind:value={task.minAmountB}
+        inputClass="h-9 py-1.5 text-xs tabnum"
+      />
+    </div>
   {:else if task.type === 'Burn' || task.type === 'Mint' || task.type === 'Stake'}
     <AutomationAssetEditor label="Asset" bind:asset={task.asset} {compact} />
     <AutomationAmountEditor bind:amount={task.amount} {compact} />

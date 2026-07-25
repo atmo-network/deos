@@ -143,6 +143,18 @@ pub mod aaa_ids {
   /// Native Staking LP Farmer — donates NTVE/stNTVE reserves without minting LP
   /// Created at genesis (`aaa_id = 14`), Noop until the canonical pool is activated
   pub const NATIVE_STAKING_LP_FARMER_AAA_ID: u64 = 14;
+
+  /// Explicit System AAA ids admitted to bounded market service and market caps.
+  pub const PRIORITY_SYSTEM_AAA_IDS: [u64; 8] = [
+    BURNING_MANAGER_AAA_ID,
+    FEE_SINK_AAA_ID,
+    LIQUIDITY_ACTOR_AAA_ID,
+    TREASURY_B_AAA_ID,
+    TREASURY_C_AAA_ID,
+    TREASURY_D_AAA_ID,
+    BLDR_ZM_AAA_ID,
+    NATIVE_STAKING_LP_FARMER_AAA_ID,
+  ];
 }
 
 /// Protocol-native token asset IDs.
@@ -232,6 +244,12 @@ pub mod params {
   /// by more than this percentage, the router rejects the trade to prevent
   /// manipulation or anomalies.
   pub const MAX_PRICE_DEVIATION: Perbill = Perbill::from_percent(20);
+
+  /// Stricter reference-price deviation admitted for whitelisted System AAA swaps.
+  pub const MAX_SYSTEM_PRICE_DEVIATION: Perbill = Perbill::from_percent(5);
+
+  /// Maximum input contributed by one whitelisted System AAA market task.
+  pub const MAX_SYSTEM_TRADE: Balance = 100 * PRECISION;
 
   /// Maximum hops in multi-asset routing paths (3).
   ///

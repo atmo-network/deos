@@ -17,8 +17,13 @@ import {
   type AaaPlanRuntimeIdentity,
   inspectAaaPlanArtifact,
 } from './plan-artifact.ts';
+import {
+  type AaaSemanticTask,
+  aaaAmountSemantics,
+  aaaTaskSemantics,
+} from './semantic-manifest.ts';
 
-export const AAA_STATIC_ANALYZER_VERSION = '1' as const;
+export const AAA_STATIC_ANALYZER_VERSION = '3' as const;
 
 export type AaaTaskName =
   | 'Transfer'
@@ -61,7 +66,21 @@ export type AaaStaticObservationWindow =
   | 'step-attempt-time'
   | 'retry-time';
 
-export type AaaStaticStepControl = 'advance' | 'terminate' | 'stutter-current';
+export type AaaStaticStepControl =
+  | 'advance'
+  | 'complete-cycle'
+  | 'terminate'
+  | 'stutter-current';
+
+export type AaaStaticSuccessfulControl = Extract<
+  AaaStaticStepControl,
+  'advance' | 'complete-cycle'
+>;
+
+export type AaaStaticFailureControl = Exclude<
+  AaaStaticStepControl,
+  'complete-cycle'
+>;
 
 export type AaaTemporaryFailureReachability = 'yes' | 'no' | 'unknown';
 
@@ -113,6 +132,11 @@ export type AaaStaticCost = {
   feeUpper: string;
 };
 
+export type AaaStaticRecipient =
+  | { kind: 'ActorSovereign' }
+  | { kind: 'Explicit'; value: AaaPlanProjection }
+  | { kind: 'AdapterDerived' };
+
 export type AaaStaticStepAnalysis = {
   index: number;
   conditionSet: {
@@ -136,7 +160,14 @@ export type AaaStaticStepAnalysis = {
   parameters: AaaPlanProjection;
   amounts: AaaAmountSemantics[];
   errorPolicy: 'AbortCycle' | 'ContinueNextStep' | 'RetryLater';
-  possibleControls: AaaStaticStepControl[];
+  successfulControl: AaaStaticSuccessfulControl;
+  failureControls: AaaStaticFailureControl[];
+  availability: 'UserAndSystem' | 'SystemOnly';
+  weightOwner: string;
+  boundedInternalAlgorithm:
+    | 'None'
+    | 'PalletSplitFanout'
+    | 'RuntimeAdapterContract';
   requiredAdapters: AaaRequiredAdapter[];
   costs: {
     evaluation: AaaStaticCost;
@@ -148,13 +179,13 @@ export type AaaStaticStepAnalysis = {
     assetsWritten: AaaPlanProjection[];
     adapterDerivedAssetsRead: boolean;
     adapterDerivedAssetsWritten: boolean;
-    recipients: AaaPlanProjection[];
+    recipients: AaaStaticRecipient[];
     transferExposure: boolean;
     mintExposure: boolean;
     burnExposure: boolean;
     liquidityMutation: boolean;
     stakingMutation: boolean;
-    possibleActorSignals: AaaPlanProjection[];
+    possibleActorSignals: AaaStaticRecipient[];
     committedNonCompensatedEffects: boolean;
   };
   failureSurface: {
@@ -192,7 +223,20 @@ export type AaaStaticSuffixEnvelope = {
   retryableSteps: number[];
 };
 
+export type AaaStaticTriggerAnalysis = {
+  admission: 'Immediate' | 'CadencedAlways' | 'CadencedWhenSignalled';
+  everyBlocks: number | null;
+  sourceCount: number;
+  sourceKinds: Array<'Manual' | 'AddressEvent'>;
+};
+
 export type AaaStaticFinding =
+  | {
+      kind: 'ExternallySignalledAdmission';
+      gate: 'Immediate' | 'Cadenced';
+      sourceKinds: Array<'Manual' | 'AddressEvent'>;
+    }
+  | { kind: 'PeriodicAdmission'; everyBlocks: number }
   | {
       kind: 'CommittedEffectBeforeRetryableStep';
       before: number;
@@ -220,7 +264,7 @@ export type AaaStaticFinding =
   | {
       kind: 'PotentialCrossActorFeedbackEdge';
       step: number;
-      recipient: AaaPlanProjection;
+      recipient: AaaStaticRecipient;
     }
   | { kind: 'ProofSizeDominantSuffix'; cursor: number }
   | {
@@ -253,6 +297,7 @@ export type ProgramStaticAnalysis = {
   program: 'Dormant' | 'Active';
   actorType: AaaPlanArtifact['aaaType'];
   mutability: AaaPlanArtifact['mutability'];
+  trigger: AaaStaticTriggerAnalysis | null;
   steps: AaaStaticStepAnalysis[];
   economicSurface: AaaStaticStepAnalysis['economicSurface'];
   dataDependencies: AaaForwardDataDependency[];
@@ -263,13 +308,20 @@ export type ProgramStaticAnalysis = {
 type ParsedVariant = { type: string; value: AaaPlanProjection };
 
 type TaskSemantics = {
+  task: AaaTaskName;
   adapter: AaaRequiredAdapter | null;
   assetsRead: AaaPlanProjection[];
   assetsWritten: AaaPlanProjection[];
   adapterDerivedAssetsRead: boolean;
   adapterDerivedAssetsWritten: boolean;
-  recipients: AaaPlanProjection[];
+  recipients: AaaStaticRecipient[];
   effects: Array<'transfer' | 'mint' | 'burn' | 'liquidity' | 'staking'>;
+  availability: AaaStaticStepAnalysis['availability'];
+  successfulControl: AaaStaticSuccessfulControl;
+  weightOwner: string;
+  boundedInternalAlgorithm: AaaStaticStepAnalysis['boundedInternalAlgorithm'];
+  committedNonCompensatedEffects: boolean;
+  amountSurfaces: AaaSemanticTask['amountSurfaces'];
 };
 
 function record(value: AaaPlanProjection, label: string) {
@@ -302,6 +354,19 @@ function member(
   return projected[key];
 }
 
+function safeInteger(value: AaaPlanProjection, label: string): number {
+  const projected = record(value, label);
+  const integer = projected.$integer;
+  if (typeof integer !== 'string' || !/^[0-9]+$/.test(integer)) {
+    throw new Error(`${label} must be an unsigned integer projection`);
+  }
+  const parsed = Number(integer);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} exceeds the safe integer range`);
+  }
+  return parsed;
+}
+
 function fingerprint(value: AaaPlanProjection) {
   return JSON.stringify(value);
 }
@@ -310,6 +375,16 @@ function uniqueProjection(values: AaaPlanProjection[]) {
   const seen = new Set<string>();
   return values.filter((value) => {
     const key = fingerprint(value);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function uniqueRecipients(values: AaaStaticRecipient[]) {
+  const seen = new Set<string>();
+  return values.filter((value) => {
+    const key = JSON.stringify(value);
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -359,26 +434,6 @@ function validateModel(model: AaaStaticWeightModel) {
   }
 }
 
-function asTaskName(value: string): AaaTaskName {
-  switch (value) {
-    case 'Transfer':
-    case 'SplitTransfer':
-    case 'SwapExactIn':
-    case 'SwapExactOut':
-    case 'AddLiquidity':
-    case 'RemoveLiquidity':
-    case 'Burn':
-    case 'Mint':
-    case 'Stake':
-    case 'DonateLiquidity':
-    case 'Unstake':
-    case 'StopCycle':
-      return value;
-    default:
-      throw new Error(`Unsupported Task variant: ${value}`);
-  }
-}
-
 function asConditionName(value: string): AaaConditionName {
   switch (value) {
     case 'BalanceAbove':
@@ -390,19 +445,6 @@ function asConditionName(value: string): AaaConditionName {
       return value;
     default:
       throw new Error(`Unsupported Condition variant: ${value}`);
-  }
-}
-
-function asAmountName(value: string): AaaAmountName | null {
-  switch (value) {
-    case 'Fixed':
-    case 'PercentageOfCurrent':
-    case 'PercentageOfTrigger':
-    case 'PercentageOfLastFunding':
-    case 'AllBalance':
-      return value;
-    default:
-      return null;
   }
 }
 
@@ -418,209 +460,157 @@ function errorPolicy(value: AaaPlanProjection) {
   }
 }
 
-function collectAmounts(
+function semanticPathValues(
   value: AaaPlanProjection,
-  path = '',
-): AaaAmountSemantics[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((child, index) =>
-      collectAmounts(child, `${path}/${index}`),
-    );
-  }
-  if (value == null || typeof value !== 'object') return [];
-  const projected = value as Record<string, AaaPlanProjection>;
-  const type = typeof projected.type === 'string' ? projected.type : null;
-  const amount = type == null ? null : asAmountName(type);
-  if (amount != null) {
-    const [dependency, valueObservation, retryObservation] = (() => {
-      switch (amount) {
-        case 'Fixed':
-          return [
-            'artifact-value',
-            'artifact-time',
-            'reuse-frozen-with-live-capacity',
-          ] as const;
-        case 'PercentageOfCurrent':
-        case 'AllBalance':
-          return [
-            'current-balance-or-shares',
-            'step-attempt-time',
-            'reobserve-live',
-          ] as const;
-        case 'PercentageOfTrigger':
-          return [
-            'trigger-snapshot',
-            'logical-run-start',
-            'reuse-frozen-with-live-capacity',
-          ] as const;
-        case 'PercentageOfLastFunding':
-          return [
-            'last-funding-snapshot',
-            'logical-run-start',
-            'reuse-frozen-with-live-capacity',
-          ] as const;
+  path: string,
+  label: string,
+): AaaPlanProjection[] {
+  if (!path.startsWith('/')) throw new Error(`${label} path must be absolute`);
+  let values = [value];
+  for (const segment of path.slice(1).split('/')) {
+    values = values.flatMap((current) => {
+      if (segment === '*') return array(current, label);
+      if (Array.isArray(current)) {
+        const index = Number(segment);
+        if (
+          !Number.isSafeInteger(index) ||
+          index < 0 ||
+          index >= current.length
+        ) {
+          throw new Error(`${label} has invalid array segment ${segment}`);
+        }
+        return [current[index]];
       }
-    })();
-    return [
-      {
-        path,
-        resolution: amount,
-        dataDependencies: [dependency, 'task-policy-capacity'],
-        minimumBalanceDependency: 'task-policy',
-        feeReserveDependency: 'task-policy',
-        valueObservation,
-        retryObservation,
-      },
-    ];
+      return [member(current, segment, label)];
+    });
   }
-  return Object.keys(projected)
-    .sort()
-    .flatMap((key) => collectAmounts(projected[key], `${path}/${key}`));
+  return values;
+}
+
+function semanticValue(
+  value: AaaPlanProjection,
+  path: string,
+  label: string,
+): AaaPlanProjection {
+  const values = semanticPathValues(value, path, label);
+  if (values.length !== 1) throw new Error(`${label} must resolve once`);
+  return values[0];
+}
+
+function taskAmounts(
+  semantics: TaskSemantics,
+  parameters: AaaPlanProjection,
+): AaaAmountSemantics[] {
+  return semantics.amountSurfaces.map((surface) => {
+    const projected = variant(
+      semanticValue(
+        parameters,
+        surface.path,
+        `${semantics.task}.${surface.role}`,
+      ),
+      `${semantics.task}.${surface.role}`,
+    );
+    const amount = aaaAmountSemantics(projected.type);
+    return {
+      path: surface.path,
+      resolution: amount.resolution,
+      dataDependencies: amount.dataDependencies.map((dependency) => {
+        switch (dependency) {
+          case 'ArtifactValue':
+            return 'artifact-value';
+          case 'CurrentBalanceOrShares':
+            return 'current-balance-or-shares';
+          case 'TriggerSnapshot':
+            return 'trigger-snapshot';
+          case 'LastFundingSnapshot':
+            return 'last-funding-snapshot';
+          case 'TaskPolicyCapacity':
+            return 'task-policy-capacity';
+        }
+      }),
+      minimumBalanceDependency: 'task-policy' as const,
+      feeReserveDependency: 'task-policy' as const,
+      valueObservation: (() => {
+        switch (amount.valueObservationWindow) {
+          case 'ArtifactTime':
+            return 'artifact-time' as const;
+          case 'LogicalRunStart':
+            return 'logical-run-start' as const;
+          case 'StepAttemptTime':
+            return 'step-attempt-time' as const;
+        }
+      })(),
+      retryObservation:
+        amount.retryObservation === 'ReobserveLiveValue'
+          ? ('reobserve-live' as const)
+          : ('reuse-frozen-with-live-capacity' as const),
+    };
+  });
 }
 
 function taskSemantics(
-  task: AaaTaskName,
+  task: string,
   parameters: AaaPlanProjection,
 ): TaskSemantics {
-  const asset = (key: string) => member(parameters, key, task);
-  const actorRecipient = (value: AaaPlanProjection) => [value];
-  switch (task) {
-    case 'Transfer': {
-      const current = asset('asset');
-      return {
-        adapter: 'AssetOps',
-        assetsRead: [current],
-        assetsWritten: [current],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: actorRecipient(member(parameters, 'to', task)),
-        effects: ['transfer'],
-      };
+  const contract = aaaTaskSemantics(task);
+  const effects = contract.effects.map((effect) => {
+    switch (effect) {
+      case 'Transfer':
+        return 'transfer' as const;
+      case 'SupplyBurn':
+        return 'burn' as const;
+      case 'SupplyMint':
+        return 'mint' as const;
+      case 'LiquidityMutation':
+        return 'liquidity' as const;
+      case 'StakingMutation':
+        return 'staking' as const;
     }
-    case 'SplitTransfer': {
-      const current = asset('asset');
-      const legs = array(member(parameters, 'legs', task), `${task}.legs`);
-      return {
-        adapter: 'AssetOps',
-        assetsRead: [current],
-        assetsWritten: [current],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: legs.map((leg) => member(leg, 'to', 'SplitTransfer.leg')),
-        effects: ['transfer'],
-      };
-    }
-    case 'SwapExactIn':
-    case 'SwapExactOut': {
-      const assetIn = asset('asset_in');
-      const assetOut = asset('asset_out');
-      return {
-        adapter: 'DexOps',
-        assetsRead: uniqueProjection([assetIn, assetOut]),
-        assetsWritten: uniqueProjection([assetIn, assetOut]),
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: [],
-        effects: ['transfer', 'liquidity'],
-      };
-    }
-    case 'AddLiquidity': {
-      const assetA = asset('asset_a');
-      const assetB = asset('asset_b');
-      return {
-        adapter: 'DexOps',
-        assetsRead: uniqueProjection([assetA, assetB]),
-        assetsWritten: uniqueProjection([assetA, assetB]),
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: true,
-        recipients: [],
-        effects: ['liquidity'],
-      };
-    }
-    case 'RemoveLiquidity': {
-      const lpAsset = asset('lp_asset');
-      return {
-        adapter: 'DexOps',
-        assetsRead: [lpAsset],
-        assetsWritten: [lpAsset],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: true,
-        recipients: [],
-        effects: ['liquidity'],
-      };
-    }
-    case 'Burn': {
-      const current = asset('asset');
-      return {
-        adapter: 'AssetOps',
-        assetsRead: [current],
-        assetsWritten: [current],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: [],
-        effects: ['burn'],
-      };
-    }
-    case 'Mint': {
-      const current = asset('asset');
-      return {
-        adapter: 'AssetOps',
-        assetsRead: [],
-        assetsWritten: [current],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: [],
-        effects: ['mint'],
-      };
-    }
-    case 'Stake': {
-      const current = asset('asset');
-      return {
-        adapter: 'StakingOps',
-        assetsRead: [current],
-        assetsWritten: [current],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: true,
-        recipients: [],
-        effects: ['staking'],
-      };
-    }
-    case 'DonateLiquidity': {
-      const assetA = asset('asset_a');
-      const assetB = asset('asset_b');
-      return {
-        adapter: 'LiquidityDonationOps',
-        assetsRead: uniqueProjection([assetA, assetB]),
-        assetsWritten: uniqueProjection([assetA, assetB]),
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: [],
-        effects: ['liquidity'],
-      };
-    }
-    case 'Unstake': {
-      const current = asset('asset');
-      return {
-        adapter: 'StakingOps',
-        assetsRead: [current],
-        assetsWritten: [current],
-        adapterDerivedAssetsRead: true,
-        adapterDerivedAssetsWritten: true,
-        recipients: [],
-        effects: ['staking'],
-      };
-    }
-    case 'StopCycle':
-      return {
-        adapter: null,
-        assetsRead: [],
-        assetsWritten: [],
-        adapterDerivedAssetsRead: false,
-        adapterDerivedAssetsWritten: false,
-        recipients: [],
-        effects: [],
-      };
-  }
+  });
+  const recipients = contract.recipients.flatMap(
+    (recipient): AaaStaticRecipient[] => {
+      switch (recipient.kind) {
+        case 'ActorSovereign':
+          return [{ kind: 'ActorSovereign' }];
+        case 'AdapterDerived':
+          return [{ kind: 'AdapterDerived' }];
+        case 'Explicit':
+          return semanticPathValues(
+            parameters,
+            recipient.path,
+            `${task}.recipient`,
+          ).map((value) => ({ kind: 'Explicit', value }));
+      }
+    },
+  );
+  return {
+    task: contract.task,
+    adapter:
+      contract.requiredAdapter === 'None' ? null : contract.requiredAdapter,
+    assetsRead: uniqueProjection(
+      contract.assetsRead.map((path) =>
+        semanticValue(parameters, path, `${task}.assetsRead`),
+      ),
+    ),
+    assetsWritten: uniqueProjection(
+      contract.assetsWritten.map((path) =>
+        semanticValue(parameters, path, `${task}.assetsWritten`),
+      ),
+    ),
+    adapterDerivedAssetsRead: contract.readsAdapterDerivedAssets,
+    adapterDerivedAssetsWritten: contract.writesAdapterDerivedAssets,
+    recipients,
+    effects,
+    availability: contract.availability,
+    successfulControl:
+      contract.successfulControl === 'CompleteCycle'
+        ? 'complete-cycle'
+        : 'advance',
+    weightOwner: contract.weightOwner,
+    boundedInternalAlgorithm: contract.boundedInternalAlgorithm,
+    committedNonCompensatedEffects: contract.committedNonCompensatedEffects,
+    amountSurfaces: contract.amountSurfaces,
+  };
 }
 
 function conditionAnalysis(condition: AaaPlanProjection) {
@@ -640,23 +630,19 @@ function conditionAnalysis(condition: AaaPlanProjection) {
   };
 }
 
-function controlsFor(
+function failureControlsFor(
   policy: AaaStaticStepAnalysis['errorPolicy'],
   mutability: AaaPlanArtifact['mutability'],
-) {
+): AaaStaticFailureControl[] {
   switch (policy) {
     case 'ContinueNextStep':
-      return ['advance'] as AaaStaticStepControl[];
+      return ['advance'];
     case 'AbortCycle':
-      return ['advance', 'terminate'] as AaaStaticStepControl[];
+      return ['advance', 'terminate'];
     case 'RetryLater':
       return mutability === 'Mutable'
-        ? ([
-            'advance',
-            'terminate',
-            'stutter-current',
-          ] as AaaStaticStepControl[])
-        : (['advance', 'terminate'] as AaaStaticStepControl[]);
+        ? ['terminate', 'stutter-current']
+        : ['terminate'];
   }
 }
 
@@ -770,12 +756,12 @@ function parseSteps(
         member(projectedStep, 'task', `Step ${index}`),
         `Step ${index}.task`,
       );
-      const task = asTaskName(parsedTask.type);
       const parameters = parsedTask.value;
+      const semantics = taskSemantics(parsedTask.type, parameters);
+      const task = semantics.task;
       const policy = errorPolicy(
         member(projectedStep, 'on_error', `Step ${index}`),
       );
-      const semantics = taskSemantics(task, parameters);
       const costs = stepCost(
         artifact,
         model,
@@ -808,12 +794,13 @@ function parseSteps(
         conditions,
         task,
         parameters,
-        amounts: collectAmounts(parameters),
+        amounts: taskAmounts(semantics, parameters),
         errorPolicy: policy,
-        possibleControls:
-          task === 'StopCycle'
-            ? ['advance', 'terminate']
-            : controlsFor(policy, artifact.mutability),
+        successfulControl: semantics.successfulControl,
+        failureControls: failureControlsFor(policy, artifact.mutability),
+        availability: semantics.availability,
+        weightOwner: semantics.weightOwner,
+        boundedInternalAlgorithm: semantics.boundedInternalAlgorithm,
         requiredAdapters: semantics.adapter == null ? [] : [semantics.adapter],
         costs: costs.output,
         economicSurface: {
@@ -827,8 +814,11 @@ function parseSteps(
           burnExposure: semantics.effects.includes('burn'),
           liquidityMutation: semantics.effects.includes('liquidity'),
           stakingMutation: semantics.effects.includes('staking'),
-          possibleActorSignals: semantics.recipients,
-          committedNonCompensatedEffects: semantics.effects.length > 0,
+          possibleActorSignals: semantics.recipients.filter(
+            (recipient) => recipient.kind !== 'ActorSovereign',
+          ),
+          committedNonCompensatedEffects:
+            semantics.committedNonCompensatedEffects,
         },
         failureSurface: {
           possibleContinue:
@@ -969,7 +959,7 @@ function aggregateEconomicSurface(steps: AaaStaticStepAnalysis[]) {
     adapterDerivedAssetsWritten: steps.some(
       (step) => step.economicSurface.adapterDerivedAssetsWritten,
     ),
-    recipients: uniqueProjection(
+    recipients: uniqueRecipients(
       steps.flatMap((step) => step.economicSurface.recipients),
     ),
     transferExposure: steps.some(
@@ -981,7 +971,7 @@ function aggregateEconomicSurface(steps: AaaStaticStepAnalysis[]) {
       (step) => step.economicSurface.liquidityMutation,
     ),
     stakingMutation: steps.some((step) => step.economicSurface.stakingMutation),
-    possibleActorSignals: uniqueProjection(
+    possibleActorSignals: uniqueRecipients(
       steps.flatMap((step) => step.economicSurface.possibleActorSignals),
     ),
     committedNonCompensatedEffects: steps.some(
@@ -990,7 +980,78 @@ function aggregateEconomicSurface(steps: AaaStaticStepAnalysis[]) {
   };
 }
 
+function parseTrigger(value: AaaPlanProjection): AaaStaticTriggerAnalysis {
+  const schedule = member(value, 'schedule', 'ProgramInput.Active');
+  const trigger = variant(
+    member(schedule, 'trigger', 'Schedule'),
+    'Schedule.trigger',
+  );
+  const parseSources = (
+    projected: AaaPlanProjection,
+    label: string,
+  ): Array<'Manual' | 'AddressEvent'> =>
+    array(projected, label).map((source, index) => {
+      const type = variant(source, `${label}[${index}]`).type;
+      if (type === 'Manual') return 'Manual';
+      if (type === 'OnAddressEvent') return 'AddressEvent';
+      throw new Error(`Unsupported TriggerSource variant: ${type}`);
+    });
+  if (trigger.type === 'Immediate') {
+    const sourceKinds = parseSources(
+      member(trigger.value, 'sources', 'TriggerPolicy.Immediate'),
+      'TriggerPolicy.Immediate.sources',
+    );
+    return {
+      admission: 'Immediate',
+      everyBlocks: null,
+      sourceCount: sourceKinds.length,
+      sourceKinds,
+    };
+  }
+  if (trigger.type !== 'Cadenced') {
+    throw new Error(`Unsupported TriggerPolicy variant: ${trigger.type}`);
+  }
+  const everyBlocks = member(
+    trigger.value,
+    'every_blocks',
+    'TriggerPolicy.Cadenced',
+  );
+  const everyBlocksNumber = safeInteger(
+    everyBlocks,
+    'TriggerPolicy.Cadenced.every_blocks',
+  );
+  if (everyBlocksNumber < 1) {
+    throw new Error('TriggerPolicy.Cadenced.every_blocks must be positive');
+  }
+  const mode = variant(
+    member(trigger.value, 'mode', 'TriggerPolicy.Cadenced'),
+    'TriggerPolicy.Cadenced.mode',
+  );
+  if (mode.type === 'Always') {
+    return {
+      admission: 'CadencedAlways',
+      everyBlocks: everyBlocksNumber,
+      sourceCount: 0,
+      sourceKinds: [],
+    };
+  }
+  if (mode.type !== 'WhenSignalled') {
+    throw new Error(`Unsupported CadenceMode variant: ${mode.type}`);
+  }
+  const sourceKinds = parseSources(
+    mode.value,
+    'CadenceMode.WhenSignalled.sources',
+  );
+  return {
+    admission: 'CadencedWhenSignalled',
+    everyBlocks: everyBlocksNumber,
+    sourceCount: sourceKinds.length,
+    sourceKinds,
+  };
+}
+
 function findings(
+  trigger: AaaStaticTriggerAnalysis | null,
   steps: AaaStaticStepAnalysis[],
   dependencies: AaaForwardDataDependency[],
   envelopes: AaaStaticSuffixEnvelope[],
@@ -998,6 +1059,18 @@ function findings(
   capabilities?: AaaAdapterCapabilityProfile,
 ): AaaStaticFinding[] {
   const results: AaaStaticFinding[] = [];
+  if (trigger?.admission === 'CadencedAlways') {
+    results.push({
+      kind: 'PeriodicAdmission',
+      everyBlocks: trigger.everyBlocks as number,
+    });
+  } else if (trigger != null) {
+    results.push({
+      kind: 'ExternallySignalledAdmission',
+      gate: trigger.admission === 'Immediate' ? 'Immediate' : 'Cadenced',
+      sourceKinds: trigger.sourceKinds,
+    });
+  }
   for (const step of steps) {
     if (step.task === 'StopCycle' && step.errorPolicy === 'ContinueNextStep') {
       results.push({
@@ -1133,9 +1206,11 @@ export function analyzeAaaProgram(input: {
     );
   }
   const program = variant(inspection.projection, 'ProgramInput');
+  let trigger: AaaStaticTriggerAnalysis | null = null;
   let steps: AaaStaticStepAnalysis[] = [];
   let forecastInputs: AaaStepCostInput[] = [];
   if (program.type === 'Active') {
+    trigger = parseTrigger(program.value);
     ({ steps, forecastInputs } = parseSteps(
       input.artifact,
       member(program.value, 'execution_plan', 'ProgramInput.Active'),
@@ -1168,11 +1243,13 @@ export function analyzeAaaProgram(input: {
     program: program.type,
     actorType: input.artifact.aaaType,
     mutability: input.artifact.mutability,
+    trigger,
     steps,
     economicSurface: aggregateEconomicSurface(steps),
     dataDependencies: dependencies,
     suffixEnvelopes: envelopes,
     findings: findings(
+      trigger,
       steps,
       dependencies,
       envelopes,

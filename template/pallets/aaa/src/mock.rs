@@ -151,6 +151,11 @@ thread_local! {
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
+  static SYSTEM_TRADE_CAP: RefCell<Option<Balance>> = RefCell::new(None);
+  static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
+  static PRIORITY_SYSTEM_AAA_IDS: RefCell<alloc::vec::Vec<crate::AaaId>> = RefCell::new(alloc::vec::Vec::new());
+  static SYSTEM_AAA_BUDGET: RefCell<Perbill> = RefCell::new(Perbill::one());
+  static USER_AAA_BUDGET: RefCell<Perbill> = RefCell::new(Perbill::one());
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
@@ -197,6 +202,11 @@ pub fn reset_mock_adapters() {
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
+  SYSTEM_TRADE_CAP.with(|v| *v.borrow_mut() = None);
+  MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
+  PRIORITY_SYSTEM_AAA_IDS.with(|ids| ids.borrow_mut().clear());
+  SYSTEM_AAA_BUDGET.with(|budget| *budget.borrow_mut() = Perbill::one());
+  USER_AAA_BUDGET.with(|budget| *budget.borrow_mut() = Perbill::one());
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
@@ -405,6 +415,24 @@ pub fn set_temporary_add_liquidity_failure(value: bool) {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = value);
 }
 
+pub fn set_system_trade_cap(value: Option<Balance>) {
+  SYSTEM_TRADE_CAP.with(|cap| *cap.borrow_mut() = value);
+}
+
+pub fn set_max_consecutive_failures(value: u32) {
+  MAX_CONSECUTIVE_FAILURES.with(|maximum| *maximum.borrow_mut() = value);
+}
+
+pub fn set_authority_service_policy(
+  priority_system_ids: alloc::vec::Vec<crate::AaaId>,
+  system_budget: Perbill,
+  user_budget: Perbill,
+) {
+  PRIORITY_SYSTEM_AAA_IDS.with(|ids| *ids.borrow_mut() = priority_system_ids);
+  SYSTEM_AAA_BUDGET.with(|budget| *budget.borrow_mut() = system_budget);
+  USER_AAA_BUDGET.with(|budget| *budget.borrow_mut() = user_budget);
+}
+
 pub fn set_fail_staking_ops(value: bool) {
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = value);
 }
@@ -428,6 +456,10 @@ pub fn set_fail_liquidity_donation_after_first_burn(value: bool) {
 pub struct MockDexOps;
 
 impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
+  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
+    SYSTEM_TRADE_CAP.with(|cap| *cap.borrow())
+  }
+
   fn swap_exact_in(
     who: &AccountId,
     asset_in: TestAsset,
@@ -496,6 +528,7 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     _asset_b: TestAsset,
     amount_a: Balance,
     amount_b: Balance,
+    min_lp_out: Balance,
   ) -> Result<(Balance, Balance, Balance), TaskFailure> {
     if TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow()) {
       return Err(TaskFailure::temporary(DispatchError::Other(
@@ -503,6 +536,9 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       )));
     }
     let lp_minted = integer_sqrt(amount_a.saturating_mul(amount_b));
+    if lp_minted < min_lp_out {
+      return Err(DispatchError::Other("MinimumLpOutputNotMet").into());
+    }
     Ok((amount_a, amount_b, lp_minted))
   }
 
@@ -510,8 +546,13 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     _who: &AccountId,
     _lp_asset: TestAsset,
     lp_amount: Balance,
+    min_amount_a: Balance,
+    min_amount_b: Balance,
   ) -> Result<(Balance, Balance), TaskFailure> {
     let half = lp_amount / 2;
+    if half < min_amount_a || half < min_amount_b {
+      return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
+    }
     Ok((half, half))
   }
 }
@@ -594,6 +635,10 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
 pub struct MockLiquidityDonationOps;
 
 impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonationOps {
+  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
+    SYSTEM_TRADE_CAP.with(|cap| *cap.borrow())
+  }
+
   fn donate_liquidity(
     who: &AccountId,
     asset_a: TestAsset,
@@ -858,10 +903,37 @@ impl Get<u64> for TestMaxAutoCloseNonceHorizon {
   }
 }
 
+pub struct TestPrioritySystemAaaIds;
+impl Get<BoundedVec<crate::AaaId, ConstU32<8>>> for TestPrioritySystemAaaIds {
+  fn get() -> BoundedVec<crate::AaaId, ConstU32<8>> {
+    PRIORITY_SYSTEM_AAA_IDS.with(|ids| {
+      ids
+        .borrow()
+        .clone()
+        .try_into()
+        .expect("test priority System AAA ids fit")
+    })
+  }
+}
+
+pub struct TestSystemAaaBudget;
+impl Get<Perbill> for TestSystemAaaBudget {
+  fn get() -> Perbill {
+    SYSTEM_AAA_BUDGET.with(|budget| *budget.borrow())
+  }
+}
+
+pub struct TestUserAaaBudget;
+impl Get<Perbill> for TestUserAaaBudget {
+  fn get() -> Perbill {
+    USER_AAA_BUDGET.with(|budget| *budget.borrow())
+  }
+}
+
 pub struct TestMaxConsecutiveFailures;
 impl Get<u32> for TestMaxConsecutiveFailures {
   fn get() -> u32 {
-    3
+    MAX_CONSECUTIVE_FAILURES.with(|maximum| *maximum.borrow())
   }
 }
 
@@ -908,6 +980,10 @@ impl pallet_aaa::Config for Test {
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<8>;
   type MaxExecutionsPerBlock = ConstU32<3>;
+  type MaxPrioritySystemAaaIds = ConstU32<8>;
+  type PrioritySystemAaaIds = TestPrioritySystemAaaIds;
+  type SystemAaaBudget = TestSystemAaaBudget;
+  type UserAaaBudget = TestUserAaaBudget;
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
@@ -915,6 +991,7 @@ impl pallet_aaa::Config for Test {
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;
+  type MaxTriggerSources = ConstU32<4>;
   type MaxSplitTransferLegs = ConstU32<8>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = ConstU32<64>;

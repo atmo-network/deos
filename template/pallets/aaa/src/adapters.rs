@@ -93,6 +93,11 @@ pub trait StakingOps<AccountId, AssetId, Balance> {
 
 /// Runtime protocol-liquidity donation operation.
 pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
+  /// Runtime-owned cap for explicitly admitted System AAA sovereign accounts.
+  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
+    None
+  }
+
   fn donate_liquidity(
     who: &AccountId,
     asset_a: AssetId,
@@ -104,6 +109,11 @@ pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
 
 /// Runtime DEX operations.
 pub trait DexOps<AccountId, AssetId, Balance> {
+  /// Runtime-owned cap for explicitly admitted System AAA sovereign accounts.
+  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
+    None
+  }
+
   fn swap_exact_in(
     who: &AccountId,
     asset_in: AssetId,
@@ -127,12 +137,15 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     asset_b: AssetId,
     amount_a: Balance,
     amount_b: Balance,
+    min_lp_out: Balance,
   ) -> Result<(Balance, Balance, Balance), TaskFailure>;
 
   fn remove_liquidity(
     who: &AccountId,
     lp_asset: AssetId,
     lp_amount: Balance,
+    min_amount_a: Balance,
+    min_amount_b: Balance,
   ) -> Result<(Balance, Balance), TaskFailure>;
 }
 
@@ -202,6 +215,7 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: AssetId,
     _: Balance,
     _: Balance,
+    _: Balance,
   ) -> Result<(Balance, Balance, Balance), TaskFailure> {
     Err(TaskFailure::permanent(DispatchError::Other(
       "DexOps not configured",
@@ -211,6 +225,8 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
   fn remove_liquidity(
     _: &AccountId,
     _: AssetId,
+    _: Balance,
+    _: Balance,
     _: Balance,
   ) -> Result<(Balance, Balance), TaskFailure> {
     Err(TaskFailure::permanent(DispatchError::Other(
