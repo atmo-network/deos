@@ -4,7 +4,7 @@ use pallet_aaa::contract::{
   RetryObservation, TaskAmountRole, TaskInstructionContract, TaskWeightOwner,
   describe_amount_resolution, describe_task,
 };
-use pallet_aaa::{AmountResolution, SplitLeg, Task};
+use pallet_aaa::{AmountResolution, InputLimit, SplitLeg, Task};
 use polkadot_sdk::frame_support::{BoundedVec, traits::ConstU32};
 use polkadot_sdk::sp_runtime::Perbill;
 use scale_info::{TypeDef, TypeInfo};
@@ -131,21 +131,21 @@ fn task_cases() -> Vec<(&'static str, ManifestTask)> {
       },
     ),
     (
-      "SwapExactIn",
-      Task::SwapExactIn {
+      "SwapIn",
+      Task::SwapIn {
         asset_in: ASSET_IN,
-        asset_out: ASSET_OUT,
         amount_in: fixed(),
+        asset_out: ASSET_OUT,
         slippage_tolerance: Perbill::zero(),
       },
     ),
     (
-      "SwapExactOut",
-      Task::SwapExactOut {
-        asset_in: ASSET_IN,
+      "SwapOut",
+      Task::SwapOut {
         asset_out: ASSET_OUT,
         amount_out: fixed(),
-        max_amount_in: 100,
+        asset_in: ASSET_IN,
+        input_limit: InputLimit::Absolute(100),
         slippage_tolerance: Perbill::zero(),
       },
     ),
@@ -273,8 +273,8 @@ fn weight_owner(value: TaskWeightOwner) -> &'static str {
     TaskWeightOwner::SplitTransfer => "SplitTransfer",
     TaskWeightOwner::Burn => "Burn",
     TaskWeightOwner::Mint => "Mint",
-    TaskWeightOwner::DexExactIn => "DexExactIn",
-    TaskWeightOwner::DexExactOut => "DexExactOut",
+    TaskWeightOwner::DexSwapIn => "DexSwapIn",
+    TaskWeightOwner::DexSwapOut => "DexSwapOut",
     TaskWeightOwner::AddLiquidity => "AddLiquidity",
     TaskWeightOwner::RemoveLiquidity => "RemoveLiquidity",
     TaskWeightOwner::Stake => "Stake",

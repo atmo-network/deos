@@ -14,7 +14,14 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   } from '$lib/automation/authoring';
   import type { AaaPlanType } from '$lib/automation/plan-artifact';
   import type { AutomationMutability } from '$lib/automation/types';
-  import { Badge, Button, IconButton, Notice, SelectField } from '$lib/ui';
+  import {
+    Badge,
+    Button,
+    IconButton,
+    Notice,
+    NumberInput,
+    SelectField,
+  } from '$lib/ui';
 
   import AutomationConditionEditor from './AutomationConditionEditor.svelte';
   import AutomationTaskEditor from './AutomationTaskEditor.svelte';
@@ -59,6 +66,26 @@ Zone: Automation presentation helper; composes typed authoring fields without su
                 conditions: [createAaaAuthoringCondition('BalanceAbove')],
               }
             : { type, conditions: step.conditionSet.conditions },
+    };
+  }
+
+  function selectErrorPolicy(event: Event) {
+    const type = (event.currentTarget as HTMLSelectElement).value as
+      | 'AbortCycle'
+      | 'ContinueNextStep'
+      | 'RetryLater';
+    step = {
+      ...step,
+      errorPolicy:
+        type === 'RetryLater'
+          ? {
+              type,
+              maxAttempts:
+                step.errorPolicy.type === 'RetryLater'
+                  ? step.errorPolicy.maxAttempts
+                  : 3,
+            }
+          : { type },
     };
   }
 
@@ -210,12 +237,13 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   <div class="grid gap-1 border-t border-(--mono-border) pt-3">
     <SelectField
       label="On failure"
-      helper={step.errorPolicy === 'RetryLater'
-        ? 'Temporary task failure or unavailable funding suspends a Mutable plan on this row.'
-        : step.errorPolicy === 'ContinueNextStep'
+      helper={step.errorPolicy.type === 'RetryLater'
+        ? 'Temporary task failure or unavailable funding retries this row up to the declared unsuccessful-attempt limit.'
+        : step.errorPolicy.type === 'ContinueNextStep'
           ? 'Task failure rolls back and advances to the next row.'
           : 'Task failure rolls back and terminates this logical run; unavailable funding still skips forward.'}
-      bind:value={step.errorPolicy}
+      value={step.errorPolicy.type}
+      onchange={selectErrorPolicy}
       selectClass="h-9 py-1.5 text-xs"
     >
       <option value="AbortCycle">Abort on task failure</option>
@@ -224,6 +252,17 @@ Zone: Automation presentation helper; composes typed authoring fields without su
         Retry temporary failure
       </option>
     </SelectField>
+    {#if step.errorPolicy.type === 'RetryLater'}
+      <NumberInput
+        label="Maximum unsuccessful attempts"
+        helper="Includes the initial unsuccessful attempt. A value of 1 closes immediately without suspension."
+        min={1}
+        max={4294967295}
+        step={1}
+        bind:value={step.errorPolicy.maxAttempts}
+        class="h-9 py-1.5 text-xs"
+      />
+    {/if}
     <details class="group text-[11px] leading-relaxed text-(--mono-muted)">
       <summary
         class="w-fit cursor-pointer font-medium text-(--mono-fg) outline-none marker:text-(--mono-muted) focus-visible:ring-1 focus-visible:ring-(--mono-accent)"
@@ -253,7 +292,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
         </li>
       </ul>
     </details>
-    {#if step.task.type === 'StopCycle' && step.errorPolicy === 'ContinueNextStep'}
+    {#if step.task.type === 'StopCycle' && step.errorPolicy.type === 'ContinueNextStep'}
       <Notice variant="warn">
         False conditions skip this stop normally. An atomic condition or User
         fee-collection failure can also advance to the next row and may still

@@ -107,7 +107,7 @@ _The intellectual layer atop raw liquidity._
   - `Complex Paths`: Multi-hop Native-anchored XYK routes.
 - `Multi-Curve Routing`: For any pair where `has_curve(to) && supports_collateral(to, from)`, the Router considers TMC as a candidate route. This generalizes beyond Native-only minting to support BLDR and future protocol tokens.
 - `Security mitigations (not complete MEV defense)`: **Direct** routes validate the candidate quote against the previously stored EMA, then snapshot current pre-execution pool reserves into the EMA before executing the swap; multi-hop routes rely on user `min_amount_out` / slippage only. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
-- `Execution`: Uses `Balance-Delta Verification` (Trustless Execution) — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
+- `Execution`: Uses `Balance-Delta Verification` — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
 
 #### TMC (Pallet — The Ceiling)
 
@@ -125,7 +125,7 @@ _The algorithmic issuer._
 _The deflationary engine._
 
 - `Function`: Passive accumulation and destruction. Omnivorous `OnAddressEvent` intake schedules one bounded pass after matched inbound value, subject to the configured cooldown.
-- `Execution Plan`: For each registered foreign asset — `SwapExactIn(foreign→native, AllBalance, 5% slippage)` with `BalanceAbove` dust guard. Final step — `Burn(native, AllBalance)`.
+- `Execution Plan`: For each registered foreign asset — `SwapIn(foreign→native, AllBalance, 5% slippage)` with `BalanceAbove` dust guard. Final step — `Burn(native, AllBalance)`.
 - `Resilience`: Swap failures → `ContinueNextStep` → skip to next asset or burn step. Cooldown prevents retry storms.
 
 #### Fee Sink (System AAA #1 — Unified Fee Collection and Phase 1 Redistribution)
@@ -148,7 +148,7 @@ _The liquidity compositor._
 - `Function`: Transforms raw capital into Protocol-Owned Liquidity.
 - `Execution Plan` (3 steps, activated by governance after pool creation):
   1. `AddLiquidity` — opportunistic, at current pool ratio (AllBalance native, AllBalance foreign)
-  2. `SwapExactIn(foreign→native)` — patriotic accumulation of surplus foreign with reserve-aware slippage derived from current native pool depth
+  2. `SwapIn(foreign→native)` — patriotic accumulation of surplus foreign with reserve-aware slippage derived from current native pool depth
   3. `SplitTransfer(LP → TOL buckets)` — 50/16.67/16.67/16.66% to bucket AAA sovereign accounts
 - `Launch Policy`: The current runtime freezes this reserve-aware slippage at execution-plan build time rather than recomputing it live on every cycle; richer live per-cycle recomputation remains a future opt-in refinement, not launch debt.
 - `Genesis`: Dormant System identity with no program. Activation installs the real execution plan after pools exist.
@@ -171,7 +171,7 @@ _The deflationary flywheel for protocol tokens._
 
 - `Function`: Receives LP through the optional admitted Bucket B transfer and can remove it into Treasury custody; the downstream buyback plan remains a separate optional policy stage.
 - `Execution Plan` (2-step policy target, not currently production-admissible):
-  1. `SwapExactIn(NTVE → BLDR, PercentageOfCurrent(~0.042%))` — hourly micro-buyback
+  1. `SwapIn(NTVE → BLDR, PercentageOfCurrent(~0.042%))` — hourly micro-buyback
   2. `Burn(BLDR, AllBalance)` — destroy all acquired BLDR
 - `Cadence`: `Timer { every_blocks: 600 }` (~1 hour). Compounding: `(1-0.000418)^24 ≈ 0.99` → ~1% of balance/day.
 - `Design`: Multiple small buybacks create smooth market pressure vs. single lumpy daily purchase.
@@ -200,7 +200,7 @@ Token onboarding follows a governance-gated process:
 
 1. `Asset Registration`: Register foreign asset in `pallet-asset-registry` (`Location → AssetId`).
 2. `Pool Creation`: Create AMM pool via `pallet-asset-conversion`.
-3. `Burn Actor Execution-Plan Extension`: Call `update_execution_plan` on AAA #0 to add `SwapExactIn(foreign→native)` step.
+3. `Burn Actor Execution-Plan Extension`: Call `update_execution_plan` on AAA #0 to add `SwapIn(foreign→native)` step.
 4. `Liquidity Actor Execution-Plan Activation`: Call `update_execution_plan` on AAA #2 with `build_zap_execution_plan(foreign, lp_asset, dust)`.
 5. `TMC Curve Activation` (optional): Create emission curve for the token.
 
@@ -309,7 +309,7 @@ fn swap_exact_tokens_for_tokens(...) -> Result<Balance, DispatchError> {
 
 ### 5.2 Direct-Route Deviation Validation and Pre-Execution Snapshot
 
-On direct routes the router first validates the selected quote against the previously stored EMA. After that validation succeeds, it snapshots the current pool reserves into the EMA before executing the swap. The current trade therefore cannot update the EMA before its own deviation check. This is a bounded manipulation mitigation on those paths, not a complete flash-loan or MEV defense (multi-hop relies on slippage; no ordering/commit protection on this launch line).
+On direct routes the router first validates the selected quote against the previously stored EMA. After that validation succeeds, it snapshots the current pool reserves into the EMA before executing the swap. The current trade therefore cannot update the EMA before its own deviation check. This is a bounded local deviation check, not an external fair-price proof or complete flash-loan/MEV defense. Prior transactions may already have moved the observed pool; multi-hop relies on slippage and this launch line has no ordering/commit protection.
 
 ```rust
 pub fn swap(from: AssetKind, to: AssetKind, ...) -> DispatchResult {
@@ -328,7 +328,7 @@ AAA-managed economic automation is expressed as production-admitted execution pl
 // Burn Actor execution plan: swap all foreign → native, then burn
 vec![
     Step { conditions: [BalanceAbove(foreign, dust)],
-           task: SwapExactIn { foreign → Native, AllBalance, 5% slippage },
+           task: SwapIn { asset_in: foreign, amount_in: AllBalance, asset_out: Native, slippage_tolerance: 5% },
            on_error: ContinueNextStep },
     Step { conditions: [BalanceAbove(Native, dust)],
            task: Burn { Native, AllBalance },
@@ -345,7 +345,7 @@ vec![
 // Treasury B buyback: buy BLDR with 0.042% of current NTVE balance, burn
 vec![
     Step { conditions: [BalanceAbove(Native, dust)],
-           task: SwapExactIn { Native → BLDR, PercentageOfCurrent(0.042%), 5% },
+           task: SwapIn { asset_in: Native, amount_in: PercentageOfCurrent(0.042%), asset_out: BLDR, slippage_tolerance: 5% },
            on_error: AbortCycle },
     Step { conditions: [BalanceAbove(BLDR, dust)],
            task: Burn { BLDR, AllBalance },

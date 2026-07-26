@@ -33,8 +33,8 @@ pub enum TaskWeightOwner {
   SplitTransfer,
   Burn,
   Mint,
-  DexExactIn,
-  DexExactOut,
+  DexSwapIn,
+  DexSwapOut,
   AddLiquidity,
   RemoveLiquidity,
   Stake,
@@ -50,8 +50,8 @@ impl TaskWeightOwner {
       Self::SplitTransfer => W::split_transfer(split_legs),
       Self::Burn => W::burn(),
       Self::Mint => W::mint(),
-      Self::DexExactIn => W::dex_exact_in(),
-      Self::DexExactOut => W::dex_exact_out(),
+      Self::DexSwapIn => W::dex_exact_in(),
+      Self::DexSwapOut => W::dex_exact_out(),
       Self::AddLiquidity => W::add_liquidity(),
       Self::RemoveLiquidity => W::remove_liquidity(),
       Self::Stake => W::stake(),
@@ -135,10 +135,10 @@ where
     | Task::DonateLiquidity { amount, .. } => {
       alloc::vec![surface(TaskAmountRole::Amount, amount)]
     }
-    Task::SwapExactIn { amount_in, .. } => {
+    Task::SwapIn { amount_in, .. } => {
       alloc::vec![surface(TaskAmountRole::AmountIn, amount_in)]
     }
-    Task::SwapExactOut { amount_out, .. } => {
+    Task::SwapOut { amount_out, .. } => {
       alloc::vec![surface(TaskAmountRole::AmountOut, amount_out)]
     }
     Task::AddLiquidity {
@@ -203,7 +203,7 @@ where
         false,
       )
     }
-    Task::SwapExactIn {
+    Task::SwapIn {
       asset_in,
       asset_out,
       ..
@@ -217,13 +217,13 @@ where
         AdapterRequirement::DexOps,
         alloc::vec![EffectClass::Transfer, EffectClass::LiquidityMutation],
         ActorAvailability::UserAndSystem,
-        TaskWeightOwner::DexExactIn,
+        TaskWeightOwner::DexSwapIn,
         BoundedInternalAlgorithm::RuntimeAdapterContract,
         false,
         false,
       )
     }
-    Task::SwapExactOut {
+    Task::SwapOut {
       asset_in,
       asset_out,
       ..
@@ -237,7 +237,7 @@ where
         AdapterRequirement::DexOps,
         alloc::vec![EffectClass::Transfer, EffectClass::LiquidityMutation],
         ActorAvailability::UserAndSystem,
-        TaskWeightOwner::DexExactOut,
+        TaskWeightOwner::DexSwapOut,
         BoundedInternalAlgorithm::RuntimeAdapterContract,
         false,
         false,
@@ -572,7 +572,7 @@ pub fn describe_error_policy(policy: StepErrorPolicy) -> ErrorPolicyInstructionC
       suspension_mutability_requirement: None,
       suspension_failure_requirement: None,
     },
-    StepErrorPolicy::RetryLater => ErrorPolicyInstructionContract {
+    StepErrorPolicy::RetryLater { .. } => ErrorPolicyInstructionContract {
       possible_controls: alloc::vec![
         ClassifiedStepControl::Advance,
         ClassifiedStepControl::Terminate,
@@ -630,25 +630,25 @@ mod tests {
         TaskWeightOwner::SplitTransfer,
       ),
       (
-        Task::SwapExactIn {
+        Task::SwapIn {
           asset_in: 1,
-          asset_out: 2,
           amount_in: fixed(),
+          asset_out: 2,
           slippage_tolerance: Perbill::zero(),
         },
         AdapterRequirement::DexOps,
-        TaskWeightOwner::DexExactIn,
+        TaskWeightOwner::DexSwapIn,
       ),
       (
-        Task::SwapExactOut {
-          asset_in: 1,
+        Task::SwapOut {
           asset_out: 2,
           amount_out: fixed(),
-          max_amount_in: 100,
+          asset_in: 1,
+          input_limit: crate::types::InputLimit::Absolute(100),
           slippage_tolerance: Perbill::zero(),
         },
         AdapterRequirement::DexOps,
-        TaskWeightOwner::DexExactOut,
+        TaskWeightOwner::DexSwapOut,
       ),
       (
         Task::AddLiquidity {
@@ -735,8 +735,8 @@ mod tests {
         | TaskWeightOwner::RemoveLiquidity
         | TaskWeightOwner::Stake
         | TaskWeightOwner::DonateLiquidity => alloc::vec![TaskAmountRole::Amount],
-        TaskWeightOwner::DexExactIn => alloc::vec![TaskAmountRole::AmountIn],
-        TaskWeightOwner::DexExactOut => alloc::vec![TaskAmountRole::AmountOut],
+        TaskWeightOwner::DexSwapIn => alloc::vec![TaskAmountRole::AmountIn],
+        TaskWeightOwner::DexSwapOut => alloc::vec![TaskAmountRole::AmountOut],
         TaskWeightOwner::AddLiquidity => {
           alloc::vec![TaskAmountRole::AmountA, TaskAmountRole::AmountB]
         }
@@ -869,7 +869,7 @@ mod tests {
         ClassifiedStepControl::Terminate,
       ],
     );
-    let retry_contract = describe_error_policy(StepErrorPolicy::RetryLater);
+    let retry_contract = describe_error_policy(StepErrorPolicy::RetryLater { max_attempts: 3 });
     assert_eq!(
       retry_contract.suspension_mutability_requirement,
       Some(Mutability::Mutable),

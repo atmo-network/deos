@@ -35,6 +35,14 @@ const triggerEditorSource = await readFile(
   ),
   'utf8',
 );
+const taskEditorSource = await readFile(
+  new URL('../src/lib/automation/AutomationTaskEditor.svelte', import.meta.url),
+  'utf8',
+);
+const stepEditorSource = await readFile(
+  new URL('../src/lib/automation/AutomationStepEditor.svelte', import.meta.url),
+  'utf8',
+);
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -78,7 +86,7 @@ function authoringStep(key, task = transferTask(), overrides = {}) {
     key,
     conditionSet: { type: 'Always' },
     task,
-    errorPolicy: 'AbortCycle',
+    errorPolicy: { type: 'AbortCycle' },
     ...overrides,
   };
 }
@@ -119,6 +127,27 @@ test('authoring controls cover every current task and condition variant', () => 
   assert.equal(AAA_AUTHORING_CONDITION_TYPES.length, 6);
 });
 
+test('SwapOut editor requires explicit live-market or absolute-ceiling intent', () => {
+  for (const disclosure of [
+    'LiveQuote',
+    'Absolute',
+    'may execute at any future market price',
+    'will not spend above this declared maximum input',
+  ]) {
+    assert(taskEditorSource.includes(disclosure), `${disclosure} is missing`);
+  }
+});
+
+test('RetryLater editor exposes explicit bounded unsuccessful-attempt semantics', () => {
+  for (const disclosure of [
+    'Maximum unsuccessful attempts',
+    'Includes the initial unsuccessful attempt',
+    'A value of 1 closes immediately without suspension',
+  ]) {
+    assert(stepEditorSource.includes(disclosure), `${disclosure} is missing`);
+  }
+});
+
 test('trigger editor exposes admission and bounded source controls without graph vocabulary', () => {
   for (const control of [
     'Immediate',
@@ -144,11 +173,11 @@ test('trigger editor exposes admission and bounded source controls without graph
 test('typed authoring lowers to one deterministic exact canonical artifact', () => {
   const draft = program([
     authoringStep('swap', {
-      type: 'SwapExactOut',
-      assetIn: native,
+      type: 'SwapOut',
       assetOut: local,
       amountOut: fixed('25'),
-      maxAmountIn: '100',
+      assetIn: native,
+      inputLimit: { type: 'Absolute', amount: '100' },
       slippageParts: 10_000_000,
     }),
     authoringStep('transfer', transferTask({ type: 'AllBalance' }), {
@@ -162,7 +191,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
           },
         ],
       },
-      errorPolicy: 'RetryLater',
+      errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
     }),
   ]);
   const first = artifact(draft);
@@ -173,12 +202,20 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
   if (inspection.valid) {
     assert.equal(inspection.projection.value.execution_plan.length, 2);
     assert.deepEqual(
-      inspection.projection.value.execution_plan[0].task.value.max_amount_in,
-      { $runtimeType: 'bigint', $integer: '100' },
+      inspection.projection.value.execution_plan[0].task.value.input_limit,
+      {
+        type: 'Absolute',
+        value: { $runtimeType: 'bigint', $integer: '100' },
+      },
     );
     assert.equal(
       inspection.projection.value.execution_plan[1].on_error.type,
       'RetryLater',
+    );
+    assert.equal(
+      inspection.projection.value.execution_plan[1].on_error.value.max_attempts
+        .$integer,
+      '3',
     );
   }
   const analysis = analyzeAaaProgram({
@@ -188,13 +225,13 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
     weightModel,
   });
   assert.equal(analysis.identity.planId, first.planId);
-  assert.deepEqual(analysis.steps[0].parameters.max_amount_in, {
-    $runtimeType: 'bigint',
-    $integer: '100',
+  assert.deepEqual(analysis.steps[0].parameters.input_limit, {
+    type: 'Absolute',
+    value: { $runtimeType: 'bigint', $integer: '100' },
   });
   assert.deepEqual(
     analysis.steps.map((current) => current.task),
-    ['SwapExactOut', 'Transfer'],
+    ['SwapOut', 'Transfer'],
   );
 });
 
@@ -247,18 +284,18 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
       ],
     },
     {
-      type: 'SwapExactIn',
+      type: 'SwapIn',
       assetIn: native,
-      assetOut: local,
       amountIn: fixed(),
+      assetOut: local,
       slippageParts: 0,
     },
     {
-      type: 'SwapExactOut',
-      assetIn: native,
+      type: 'SwapOut',
       assetOut: local,
       amountOut: fixed(),
-      maxAmountIn: '100',
+      assetIn: native,
+      inputLimit: { type: 'Absolute', amount: '100' },
       slippageParts: 0,
     },
     {
@@ -379,25 +416,40 @@ test('every Condition and AmountResolution lowers without changing step topology
 
 test('typed validation rejects control-flow-adjacent and runtime-invalid drafts', () => {
   const immutableRetry = program(
-    [authoringStep('only', transferTask(), { errorPolicy: 'RetryLater' })],
+    [
+      authoringStep('only', transferTask(), {
+        errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
+      }),
+    ],
     { mutability: 'Immutable' },
   );
   assert.equal(validateAaaAuthoringProgram(immutableRetry).valid, false);
+  for (const maxAttempts of [0, 4_294_967_296, 1.5]) {
+    const invalidRetryLimit = program([
+      authoringStep('only', transferTask(), {
+        errorPolicy: { type: 'RetryLater', maxAttempts },
+      }),
+    ]);
+    assert.equal(validateAaaAuthoringProgram(invalidRetryLimit).valid, false);
+  }
   const userMint = program([
     authoringStep('only', { type: 'Mint', asset: native, amount: fixed() }),
   ]);
   assert.equal(validateAaaAuthoringProgram(userMint).valid, false);
-  const zeroExactOutCap = program([
+  const zeroAbsoluteInputLimit = program([
     authoringStep('only', {
-      type: 'SwapExactOut',
-      assetIn: native,
+      type: 'SwapOut',
       assetOut: local,
       amountOut: fixed(),
-      maxAmountIn: '0',
+      assetIn: native,
+      inputLimit: { type: 'Absolute', amount: '0' },
       slippageParts: 0,
     }),
   ]);
-  assert.equal(validateAaaAuthoringProgram(zeroExactOutCap).valid, false);
+  assert.equal(
+    validateAaaAuthoringProgram(zeroAbsoluteInputLimit).valid,
+    false,
+  );
   const duplicateSplit = program([
     authoringStep('only', {
       type: 'SplitTransfer',
@@ -476,10 +528,10 @@ test('scenario corpus lowers every expressible or partial execution core without
     ],
   });
   const swap = {
-    type: 'SwapExactIn',
+    type: 'SwapIn',
     assetIn: local,
-    assetOut: native,
     amountIn: { type: 'AllBalance' },
+    assetOut: native,
     slippageParts: 10_000_000,
   };
   const scenarios = [
@@ -498,7 +550,7 @@ test('scenario corpus lowers every expressible or partial execution core without
         ],
         { aaaType: 'System', fundingPolicy: { type: 'RuntimePolicy' } },
       ),
-      tasks: ['SwapExactIn', 'Burn'],
+      tasks: ['SwapIn', 'Burn'],
     },
     {
       name: 'DEOS Fee Sink',
@@ -537,7 +589,7 @@ test('scenario corpus lowers every expressible or partial execution core without
           mode: { type: 'Always' },
         },
       }),
-      tasks: ['SwapExactIn'],
+      tasks: ['SwapIn'],
     },
     {
       name: 'Threshold payroll',
@@ -565,11 +617,11 @@ test('scenario corpus lowers every expressible or partial execution core without
             amountB: fixed(),
             minLpOut: '1',
           },
-          { errorPolicy: 'RetryLater' },
+          { errorPolicy: { type: 'RetryLater', maxAttempts: 3 } },
         ),
         authoringStep('remainder', transferTask()),
       ]),
-      tasks: ['SwapExactIn', 'AddLiquidity', 'Transfer'],
+      tasks: ['SwapIn', 'AddLiquidity', 'Transfer'],
     },
     {
       name: 'Stake and unstake execution core',

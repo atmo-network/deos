@@ -823,8 +823,14 @@ mod benches {
       .expect("benchmark helper must prepare exact-input swap state");
     #[block]
     {
-      T::DexOps::swap_exact_in(&caller, asset_in, asset_out, amount_in, Perbill::zero())
-        .expect("exact-input benchmark swap must succeed");
+      T::DexOps::swap_exact_in(
+        ExecutionContext::new(&caller, AaaType::User),
+        asset_in,
+        asset_out,
+        amount_in,
+        Perbill::zero(),
+      )
+      .expect("exact-input benchmark swap must succeed");
     }
   }
 
@@ -837,7 +843,7 @@ mod benches {
     #[block]
     {
       T::DexOps::swap_exact_out(
-        &caller,
+        ExecutionContext::new(&caller, AaaType::User),
         asset_in,
         asset_out,
         amount_out,
@@ -935,6 +941,15 @@ mod benches {
         .expect("benchmark snapshot staking entry fits");
     }
     assert_eq!(trigger_snapshot.len() as u32, bounded);
+    ActorProgram::<T>::mutate(aaa_id, |maybe_program| {
+      maybe_program
+        .as_mut()
+        .expect("benchmark actor program exists")
+        .execution_plan[0]
+        .on_error = StepErrorPolicy::RetryLater {
+        max_attempts: u32::MAX,
+      };
+    });
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       let hot = maybe_hot
         .as_mut()
@@ -950,6 +965,7 @@ mod benches {
       ContinuationState {
         cursor: 0,
         attempt: 0,
+        unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1u32.into(),
         trigger_snapshot,
         cumulative_outcomes: OutcomeTotals::default(),
@@ -1085,8 +1101,8 @@ mod benches {
         )
         .expect("tracked funding batch fits");
     });
-    QueueHead::<T>::put(0);
-    QueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
+    SystemQueueHead::<T>::put(0);
+    SystemQueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
     (aaa_id, recipient)
   }
 
@@ -1139,8 +1155,10 @@ mod benches {
     #[block]
     {
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      core::hint::black_box(QueueHead::<T>::get());
-      core::hint::black_box(QueueTail::<T>::get());
+      core::hint::black_box(SystemQueueHead::<T>::get());
+      core::hint::black_box(SystemQueueTail::<T>::get());
+      core::hint::black_box(UserQueueHead::<T>::get());
+      core::hint::black_box(UserQueueTail::<T>::get());
       Pallet::<T>::update_idle_starvation_state(now, breaker_active, Weight::zero());
     }
   }
@@ -1151,8 +1169,10 @@ mod benches {
     let now: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     GlobalCircuitBreaker::<T>::put(false);
-    QueueHead::<T>::put(0);
-    QueueTail::<T>::put(0);
+    SystemQueueHead::<T>::put(0);
+    SystemQueueTail::<T>::put(0);
+    UserQueueHead::<T>::put(0);
+    UserQueueTail::<T>::put(0);
     WakeupCursorLen::<T>::put(0);
     IdleStarvationState::<T>::kill();
     #[block]
@@ -1214,7 +1234,7 @@ mod benches {
     {
       assert!(Pallet::<T>::paged_enqueue(aaa_id));
     }
-    assert_eq!(QueueTail::<T>::get(), u64::from(page_size));
+    assert_eq!(SystemQueueTail::<T>::get(), u64::from(page_size));
     assert_eq!(
       ActorHot::<T>::get(aaa_id).and_then(|hot| hot.queue_ticket),
       Some(u64::from(page_size - 1))
@@ -1234,10 +1254,13 @@ mod benches {
       assert!(Pallet::<T>::paged_enqueue(aaa_id));
     }
     assert_eq!(
-      QueueTail::<T>::get(),
+      SystemQueueTail::<T>::get(),
       u64::from(page_size).saturating_add(1)
     );
-    assert_eq!(QueuePages::<T>::get(1).map(|page| page.len()), Some(1));
+    assert_eq!(
+      SystemQueuePages::<T>::get(1).map(|page| page.len()),
+      Some(1)
+    );
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1607,8 +1630,8 @@ mod benches {
     {
       assert!(Pallet::<T>::paged_consume_head(0));
     }
-    assert_eq!(QueueHead::<T>::get(), 1);
-    assert!(QueuePages::<T>::contains_key(0));
+    assert_eq!(SystemQueueHead::<T>::get(), 1);
+    assert!(SystemQueuePages::<T>::contains_key(0));
     assert_eq!(
       ActorHot::<T>::get(first).and_then(|hot| hot.queue_ticket),
       None
@@ -1623,9 +1646,15 @@ mod benches {
     {
       assert!(Pallet::<T>::paged_consume_head(0));
     }
-    assert_eq!(QueueHead::<T>::get(), u64::from(T::QueuePageSize::get()));
-    assert_eq!(QueueTail::<T>::get(), u64::from(T::QueuePageSize::get()));
-    assert!(!QueuePages::<T>::contains_key(0));
+    assert_eq!(
+      SystemQueueHead::<T>::get(),
+      u64::from(T::QueuePageSize::get())
+    );
+    assert_eq!(
+      SystemQueueTail::<T>::get(),
+      u64::from(T::QueuePageSize::get())
+    );
+    assert!(!SystemQueuePages::<T>::contains_key(0));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1639,27 +1668,30 @@ mod benches {
       let entries = remaining.min(u64::from(page_size));
       let page = (0..entries)
         .map(|offset| QueueEntry {
+          ticket: ticket.saturating_add(offset),
           aaa_id: 37_000_000u64.saturating_add(ticket).saturating_add(offset),
         })
         .collect::<alloc::vec::Vec<_>>();
-      QueuePages::<T>::insert(
+      SystemQueuePages::<T>::insert(
         page_id,
         BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
           .expect("benchmark queue page must fit configured page size"),
       );
       ticket = ticket.saturating_add(entries);
     }
-    QueueHead::<T>::put(0);
-    QueueTail::<T>::put(u64::from(bounded));
+    SystemQueueHead::<T>::put(0);
+    SystemQueueTail::<T>::put(u64::from(bounded));
+    NextQueueTicket::<T>::put(u64::from(bounded));
     #[block]
     {
-      core::hint::black_box(Pallet::<T>::paged_drain_tombstones(
+      core::hint::black_box(Pallet::<T>::paged_drain_group_tombstones(
+        QueueGroup::System,
         u64::from(bounded),
         bounded,
       ));
     }
-    assert!(QueueHead::<T>::get() >= u64::from(bounded));
-    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+    assert!(SystemQueueHead::<T>::get() >= u64::from(bounded));
+    assert_eq!(SystemQueueHead::<T>::get(), SystemQueueTail::<T>::get());
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1667,7 +1699,8 @@ mod benches {
     let bounded = n.min(T::MaxQueueLength::get());
     let page_size = T::QueuePageSize::get();
     let template_id = bench_create_system_manual::<T>(38_000_000);
-    let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    let mut hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    hot_template.actor_class = ActorClass::User { owner_slot: 0 };
     let mut ticket = 0u64;
     while ticket < u64::from(bounded) {
       let page_id = ticket / u64::from(page_size);
@@ -1682,10 +1715,13 @@ mod benches {
             hot.queue_ticket = Some(logical_ticket);
             ActorHot::<T>::insert(aaa_id, hot);
           }
-          QueueEntry { aaa_id }
+          QueueEntry {
+            ticket: logical_ticket,
+            aaa_id,
+          }
         })
         .collect::<alloc::vec::Vec<_>>();
-      QueuePages::<T>::insert(
+      UserQueuePages::<T>::insert(
         page_id,
         BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
           .expect("benchmark queue page must fit configured page size"),
@@ -1693,20 +1729,28 @@ mod benches {
       ticket = ticket.saturating_add(entries);
     }
     ActorHot::<T>::remove(template_id);
-    QueueHead::<T>::put(0);
-    QueueTail::<T>::put(u64::from(bounded));
+    UserQueueHead::<T>::put(0);
+    UserQueueTail::<T>::put(u64::from(bounded));
+    NextQueueTicket::<T>::put(u64::from(bounded));
     let cutoff = u64::from(bounded);
     #[block]
     {
-      while QueueHead::<T>::get() < cutoff {
-        core::hint::black_box(Pallet::<T>::paged_drain_tombstones(cutoff, bounded));
-        if let Some((head, _)) = Pallet::<T>::paged_head_entry() {
-          assert!(Pallet::<T>::paged_consume_head(head));
+      while UserQueueHead::<T>::get() < cutoff {
+        core::hint::black_box(Pallet::<T>::paged_drain_group_tombstones(
+          QueueGroup::User,
+          cutoff,
+          bounded,
+        ));
+        if let Some((head, _)) = Pallet::<T>::paged_group_head_entry(QueueGroup::User) {
+          assert!(Pallet::<T>::paged_consume_group_head(
+            QueueGroup::User,
+            head
+          ));
         }
       }
     }
-    assert!(QueueHead::<T>::get() >= cutoff);
-    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+    assert!(UserQueueHead::<T>::get() >= cutoff);
+    assert_eq!(UserQueueHead::<T>::get(), UserQueueTail::<T>::get());
   }
 
   /// Measures actual scheduler admission and complete execution for up to 1,000
@@ -1717,9 +1761,10 @@ mod benches {
   /// execution, and consumption rather than actor creation.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_execute_cheap(n: Linear<1, 1_000>) {
-    let _ = QueuePages::<T>::clear(u32::MAX, None);
-    QueueHead::<T>::put(0);
-    QueueTail::<T>::put(0);
+    let _ = SystemQueuePages::<T>::clear(u32::MAX, None);
+    SystemQueueHead::<T>::put(0);
+    SystemQueueTail::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
     GlobalCircuitBreaker::<T>::put(false);
     let bounded = n
       .min(T::MaxExecutionsPerBlock::get())
@@ -1763,7 +1808,85 @@ mod benches {
       executed, bounded,
       "unbounded diagnostic budget completed only {executed} of {bounded} requested cheap actors"
     );
-    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+    assert_eq!(SystemQueueHead::<T>::get(), SystemQueueTail::<T>::get());
+  }
+
+  /// Measures the full three-phase scheduler over alternating System/User actors.
+  /// Setup materializes both typed lanes outside the measured block; global tickets
+  /// alternate across lanes so shared service must compare current head ages.
+  #[benchmark(pov_mode = Measured)]
+  fn scheduler_paged_execute_cheap_mixed(n: Linear<2, 1_000>) {
+    let _ = SystemQueuePages::<T>::clear(u32::MAX, None);
+    let _ = UserQueuePages::<T>::clear(u32::MAX, None);
+    SystemQueueHead::<T>::put(0);
+    SystemQueueTail::<T>::put(0);
+    UserQueueHead::<T>::put(0);
+    UserQueueTail::<T>::put(0);
+    NextQueueTicket::<T>::put(0);
+    GlobalCircuitBreaker::<T>::put(false);
+    let bounded = n
+      .min(T::MaxExecutionsPerBlock::get())
+      .min(T::MaxQueueEntriesScannedPerBlock::get())
+      .min(T::MaxQueueLength::get());
+    assert!(bounded >= 2, "runtime limits must admit both typed lanes");
+
+    let system_template_id = bench_create_system_manual::<T>(42_000_000);
+    let system_hot = ActorHot::<T>::take(system_template_id).expect("System hot template");
+    let program_template =
+      ActorProgram::<T>::take(system_template_id).expect("System program template");
+    let funding_template =
+      ActorFunding::<T>::take(system_template_id).expect("System funding template");
+    let mut user_hot = system_hot.clone();
+    user_hot.actor_class = ActorClass::User { owner_slot: 0 };
+    let user_reserve = user_hot
+      .cycle_fee_upper
+      .saturating_add(T::MinUserBalance::get())
+      .saturating_add(One::one());
+    for _ in 0..bounded.div_ceil(2) {
+      let _ = T::AssetOps::mint(
+        &user_hot.sovereign_account,
+        T::NativeAssetId::get(),
+        user_reserve,
+      );
+    }
+
+    let first_id = 43_000_000u64;
+    for offset in 0..bounded {
+      let aaa_id = first_id.saturating_add(u64::from(offset));
+      let mut hot = if offset % 2 == 0 {
+        system_hot.clone()
+      } else {
+        user_hot.clone()
+      };
+      hot.cycle_nonce = 0;
+      hot.last_cycle_block = Zero::zero();
+      hot.pending_signal = true;
+      hot.queue_ticket = None;
+      ActorHot::<T>::insert(aaa_id, hot);
+      ActorProgram::<T>::insert(aaa_id, program_template.clone());
+      ActorFunding::<T>::insert(aaa_id, funding_template.clone());
+      assert!(Pallet::<T>::paged_enqueue(aaa_id));
+    }
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_cycle(Weight::MAX));
+    }
+    let executed = (0..bounded)
+      .filter(|offset| {
+        let aaa_id = first_id.saturating_add(u64::from(*offset));
+        ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.cycle_nonce == 1)
+      })
+      .count() as u32;
+    assert_eq!(
+      executed, bounded,
+      "mixed typed-lane benchmark must complete"
+    );
+    assert!((0..bounded).all(|offset| {
+      let aaa_id = first_id.saturating_add(u64::from(offset));
+      ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.queue_ticket.is_none())
+    }));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1850,7 +1973,7 @@ mod benches {
             asset: T::NativeAssetId::get(),
             amount: AmountResolution::Fixed(One::one()),
           },
-          on_error: StepErrorPolicy::RetryLater,
+          on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
         })
         .expect("benchmark suffix step fits");
     }

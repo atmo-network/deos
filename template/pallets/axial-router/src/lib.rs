@@ -234,7 +234,7 @@ pub mod pallet {
     #[pallet::constant]
     type LiquidityActorAccount: Get<Self::AccountId>;
 
-    /// Price oracle for manipulation-resistant pricing
+    /// Price-observation source for local deviation checks
     type PriceOracle: PriceOracle<Balance>;
 
     /// Minimum foreign amount for swapping (threshold for buffer processing)
@@ -549,7 +549,7 @@ pub mod pallet {
       Ok(())
     }
 
-    /// Update oracle using pre-swap pool reserves to prevent manipulation
+    /// Update the local EMA from pre-execution pool reserves
     fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Error<T>> {
       if let Some(pool_id) = T::AssetConversion::get_pool_id(from, to) {
         if let Some((res_a, res_b)) = T::AssetConversion::get_pool_reserves(pool_id) {

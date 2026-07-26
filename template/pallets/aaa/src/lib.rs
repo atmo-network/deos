@@ -12,9 +12,10 @@ mod scheduler;
 
 pub mod adapters;
 pub use adapters::{
-  AssetOps, DexOps, FundingAuthority, LiquidityDonationOps, RetryClass, StakingOps, TaskFailure,
+  AssetOps, DexOps, ExecutionContext, FundingAuthority, LiquidityDonationOps, RetryClass,
+  StakingOps, TaskFailure,
 };
-pub use types::{SYSTEM_OWNER_SLOT_SENTINEL, Task};
+pub use types::{InputLimit, SYSTEM_OWNER_SLOT_SENTINEL, Task};
 
 pub mod weights;
 pub use weights::{TaskWeightInfo, WeightInfo};
@@ -156,10 +157,10 @@ pub mod pallet {
     type MaxOwnerSlots: Get<u8>;
     #[pallet::constant]
     type MaxExecutionsPerBlock: Get<u32>;
-    type MaxPrioritySystemAaaIds: Get<u32>;
-    type PrioritySystemAaaIds: Get<BoundedVec<AaaId, Self::MaxPrioritySystemAaaIds>>;
-    type SystemAaaBudget: Get<Perbill>;
-    type UserAaaBudget: Get<Perbill>;
+    /// Maximum System actor-execution share offered before shared service.
+    type SystemExecutionReserve: Get<Perbill>;
+    /// Minimum User actor-execution share offered before shared service.
+    type UserExecutionGuarantee: Get<Perbill>;
     #[pallet::constant]
     type MaxQueueLength: Get<u32>;
     /// Physical I/O granularity for the monotonic active FIFO.
@@ -492,20 +493,41 @@ pub mod pallet {
   pub type ClosedSystemAaaIds<T: Config> =
     StorageMap<_, Blake2_128Concat, AaaId, Mutability, OptionQuery>;
 
-  /// Canonical head of the active monotonic paged FIFO.
+  /// Next never-used ticket shared by both typed service lanes.
   #[pallet::storage]
-  #[pallet::getter(fn queue_head)]
-  pub type QueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
+  #[pallet::getter(fn next_queue_ticket)]
+  pub type NextQueueTicket<T> = StorageValue<_, QueueTicket, ValueQuery>;
 
-  /// Next never-used ticket in the monotonic paged FIFO.
+  /// Physical head position of the User paged FIFO lane.
   #[pallet::storage]
-  #[pallet::getter(fn queue_tail)]
-  pub type QueueTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
+  #[pallet::getter(fn user_queue_head)]
+  pub type UserQueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
 
-  /// Bounded physical pages for the logical active FIFO.
+  /// Next physical position in the User paged FIFO lane.
   #[pallet::storage]
-  #[pallet::getter(fn queue_pages)]
-  pub type QueuePages<T: Config> =
+  #[pallet::getter(fn user_queue_tail)]
+  pub type UserQueueTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  /// Bounded physical pages for the User FIFO lane.
+  #[pallet::storage]
+  #[pallet::getter(fn user_queue_pages)]
+  pub type UserQueuePages<T: Config> =
+    StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
+
+  /// Physical head position of the System paged FIFO lane.
+  #[pallet::storage]
+  #[pallet::getter(fn system_queue_head)]
+  pub type SystemQueueHead<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  /// Next physical position in the System paged FIFO lane.
+  #[pallet::storage]
+  #[pallet::getter(fn system_queue_tail)]
+  pub type SystemQueueTail<T> = StorageValue<_, QueueTicket, ValueQuery>;
+
+  /// Bounded physical pages for the System FIFO lane.
+  #[pallet::storage]
+  #[pallet::getter(fn system_queue_pages)]
+  pub type SystemQueuePages<T: Config> =
     StorageMap<_, Blake2_128Concat, QueuePageId, QueuePageOf<T>, OptionQuery>;
 
   /// Fixed-size pages for the next temporal wakeup substrate.
@@ -770,6 +792,12 @@ pub mod pallet {
         "MaxContinuationSnapshotEntries must not exceed twice MaxSystemExecutionPlanSteps"
       );
       assert!(
+        !T::SystemExecutionReserve::get().is_zero()
+          && !T::UserExecutionGuarantee::get().is_zero()
+          && T::SystemExecutionReserve::get() + T::UserExecutionGuarantee::get() <= Perbill::one(),
+        "typed service reserves must be non-zero and leave a valid shared-capacity envelope"
+      );
+      assert!(
         T::QueuePageSize::get() > 0,
         "QueuePageSize must be non-zero"
       );
@@ -801,13 +829,19 @@ pub mod pallet {
       }
       let breaker_active = GlobalCircuitBreaker::<T>::get();
       let after_base = remaining_weight.saturating_sub(base_weight);
-      let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
-      let queue_occupancy = QueueTail::<T>::get().saturating_sub(QueueHead::<T>::get());
-      let saturated_cleanup_weight = if queue_occupancy >= u64::from(T::MaxQueueLength::get())
+      let cleanup_units = u32::from(SystemQueueHead::<T>::get() < SystemQueueTail::<T>::get())
+        .saturating_add(u32::from(
+          UserQueueHead::<T>::get() < UserQueueTail::<T>::get(),
+        ));
+      let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units);
+      let saturated_cleanup_weight = if cleanup_units > 0
+        && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get())
         && queue_cleanup_weight.all_lte(after_base)
       {
-        let stats = Self::paged_drain_tombstones(QueueTail::<T>::get(), 1);
-        if stats.entries_scanned > 0 {
+        let cutoff = NextQueueTicket::<T>::get();
+        let system = Self::paged_drain_group_tombstones(QueueGroup::System, cutoff, 1);
+        let user = Self::paged_drain_group_tombstones(QueueGroup::User, cutoff, 1);
+        if system.entries_scanned.saturating_add(user.entries_scanned) > 0 {
           queue_cleanup_weight
         } else {
           Weight::zero()
@@ -1077,6 +1111,8 @@ pub mod pallet {
     EmptyConditionSet,
     ManualSourceDisabled,
     InvalidTradeBound,
+    InvalidRetryAttemptLimit,
+    RecipientDepositUnavailable,
   }
 
   #[pallet::call]
@@ -1619,8 +1655,8 @@ pub mod pallet {
         AaaTask::Burn { .. } => T::TaskWeightInfo::burn(),
         AaaTask::Mint { .. } => T::TaskWeightInfo::mint(),
         AaaTask::SplitTransfer { legs, .. } => T::TaskWeightInfo::split_transfer(legs.len() as u32),
-        AaaTask::SwapExactIn { .. } => T::TaskWeightInfo::dex_exact_in(),
-        AaaTask::SwapExactOut { .. } => T::TaskWeightInfo::dex_exact_out(),
+        AaaTask::SwapIn { .. } => T::TaskWeightInfo::dex_exact_in(),
+        AaaTask::SwapOut { .. } => T::TaskWeightInfo::dex_exact_out(),
         AaaTask::AddLiquidity { .. } => T::TaskWeightInfo::add_liquidity(),
         AaaTask::RemoveLiquidity { .. } => T::TaskWeightInfo::remove_liquidity(),
         AaaTask::Stake { .. } => T::TaskWeightInfo::stake(),
@@ -1654,9 +1690,12 @@ pub mod pallet {
           upper = upper.saturating_add(T::WeightInfo::fee_collection());
         }
       }
-      if (start_cursor..execution_plan.len())
-        .any(|step_index| execution_plan[step_index].on_error == StepErrorPolicy::RetryLater)
-      {
+      if (start_cursor..execution_plan.len()).any(|step_index| {
+        execution_plan[step_index]
+          .on_error
+          .retry_max_attempts()
+          .is_some()
+      }) {
         let snapshot_entries = Self::trigger_surfaces(execution_plan, start_cursor).len() as u32;
         upper = upper.saturating_add(
           T::WeightInfo::continuation_suspend(snapshot_entries)
@@ -1788,9 +1827,12 @@ pub mod pallet {
       } else {
         T::WeightInfo::funding_batch_promotion(funding_count)
       };
-      let continuation_retry = if (0..execution_plan.len())
-        .any(|step_index| execution_plan[step_index].on_error == StepErrorPolicy::RetryLater)
-      {
+      let continuation_retry = if (0..execution_plan.len()).any(|step_index| {
+        execution_plan[step_index]
+          .on_error
+          .retry_max_attempts()
+          .is_some()
+      }) {
         let retry = T::WeightInfo::continuation_retry();
         let suffix = T::WeightInfo::continuation_suffix_admission(execution_plan.len() as u32);
         Weight::from_parts(retry.ref_time().saturating_add(suffix.ref_time()), 0)
@@ -2423,7 +2465,7 @@ pub mod pallet {
       if mutability == Mutability::Immutable {
         for step in execution_plan {
           ensure!(
-            step.on_error != StepErrorPolicy::RetryLater,
+            step.on_error.retry_max_attempts().is_none(),
             Error::<T>::RetryLaterNotAllowedForImmutableAaa
           );
         }
@@ -2433,6 +2475,9 @@ pub mod pallet {
 
     fn validate_execution_plan_shape(execution_plan: &ExecutionPlanOf<T>) -> DispatchResult {
       for step in execution_plan.iter() {
+        if let Some(max_attempts) = step.on_error.retry_max_attempts() {
+          ensure!(max_attempts > 0, Error::<T>::InvalidRetryAttemptLimit);
+        }
         ensure!(
           !matches!(
             &step.conditions,
@@ -2449,7 +2494,10 @@ pub mod pallet {
               Self::validate_split_transfer_legs(legs)?;
             }
           }
-          AaaTask::SwapExactOut { max_amount_in, .. } => {
+          AaaTask::SwapOut {
+            input_limit: InputLimit::Absolute(max_amount_in),
+            ..
+          } => {
             ensure!(!max_amount_in.is_zero(), Error::<T>::InvalidTradeBound);
           }
           AaaTask::AddLiquidity { min_lp_out, .. } => {
@@ -2465,7 +2513,11 @@ pub mod pallet {
               Error::<T>::InvalidTradeBound
             );
           }
-          AaaTask::SwapExactIn { .. }
+          AaaTask::SwapIn { .. }
+          | AaaTask::SwapOut {
+            input_limit: InputLimit::LiveQuote,
+            ..
+          }
           | AaaTask::Stake { .. }
           | AaaTask::DonateLiquidity { .. }
           | AaaTask::Unstake { .. }
@@ -2499,14 +2551,14 @@ pub mod pallet {
           } => {
             check_amount(amount, *asset);
           }
-          AaaTask::SwapExactIn {
+          AaaTask::SwapIn {
             asset_in,
             amount_in,
             ..
           } => {
             check_amount(amount_in, *asset_in);
           }
-          AaaTask::SwapExactOut {
+          AaaTask::SwapOut {
             asset_out,
             amount_out,
             ..
@@ -2674,7 +2726,8 @@ pub mod pallet {
         | CloseReason::ConsecutiveFailures
         | CloseReason::CycleNonceExhausted
         | CloseReason::FeeBudgetExhausted
-        | CloseReason::AutoCloseNonceReached => CancellationReason::Terminal,
+        | CloseReason::AutoCloseNonceReached
+        | CloseReason::RetryAttemptsExhausted => CancellationReason::Terminal,
       };
       Self::cancel_continuation_internal(aaa_id, cancellation_reason, None)?;
 
@@ -2932,6 +2985,19 @@ pub mod pallet {
             "ContinuationState violates run marker, mutability, or cursor bounds",
           ));
         }
+        let max_attempts = program.execution_plan[continuation.cursor as usize]
+          .on_error
+          .retry_max_attempts()
+          .ok_or(TryRuntimeError::Other(
+            "ContinuationState cursor does not own RetryLater",
+          ))?;
+        if continuation.unsuccessful_attempts_at_cursor == 0
+          || continuation.unsuccessful_attempts_at_cursor >= max_attempts
+        {
+          return Err(TryRuntimeError::Other(
+            "ContinuationState cursor-local attempt count is outside its live range",
+          ));
+        }
         let expected_surfaces =
           Self::trigger_surfaces(&program.execution_plan, continuation.cursor as usize);
         if expected_surfaces.len() != continuation.trigger_snapshot.len()
@@ -2989,39 +3055,60 @@ pub mod pallet {
           "MaxQueueLength is below effective active actor limit",
         ));
       }
-      let queue_head = QueueHead::<T>::get();
-      let queue_tail = QueueTail::<T>::get();
-      if queue_head > queue_tail {
-        return Err(TryRuntimeError::Other("QueueHead exceeds QueueTail"));
-      }
-      if queue_tail.saturating_sub(queue_head) > u64::from(queue_capacity) {
+      if Self::combined_queue_occupancy() > u64::from(queue_capacity) {
         return Err(TryRuntimeError::Other(
-          "paged queue physical occupancy exceeds MaxQueueLength",
+          "combined typed-lane physical occupancy exceeds MaxQueueLength",
         ));
       }
+      let next_ticket = NextQueueTicket::<T>::get();
       let page_size = u64::from(T::QueuePageSize::get());
-      let queue_pages = QueuePages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only paged-queue invariant audit
-      for (page_id, page) in queue_pages {
-        if page.is_empty() || page.len() > T::QueuePageSize::get() as usize {
-          return Err(TryRuntimeError::Other(
-            "QueuePages entry has invalid length",
-          ));
+      let mut physical_tickets = alloc::collections::BTreeMap::new();
+      for group in [QueueGroup::System, QueueGroup::User] {
+        let head = Self::queue_group_head(group);
+        let tail = Self::queue_group_tail(group);
+        if head > tail {
+          return Err(TryRuntimeError::Other("typed queue head exceeds tail"));
         }
-        let Some(page_start) = page_id.checked_mul(page_size) else {
-          return Err(TryRuntimeError::Other("QueuePage ticket range overflows"));
+        let pages: alloc::vec::Vec<_> = match group {
+          QueueGroup::System => SystemQueuePages::<T>::iter().collect(),
+          QueueGroup::User => UserQueuePages::<T>::iter().collect(),
         };
-        let Some(page_end) = page_start.checked_add(page.len() as u64) else {
-          return Err(TryRuntimeError::Other("QueuePage ticket range overflows"));
-        };
-        if page_end <= queue_head {
-          return Err(TryRuntimeError::Other(
-            "QueuePages contains a fully consumed page",
-          ));
-        }
-        if page_start >= queue_tail {
-          return Err(TryRuntimeError::Other(
-            "QueuePages contains a page beyond QueueTail",
-          ));
+        for (page_id, page) in pages {
+          if page.is_empty() || page.len() > T::QueuePageSize::get() as usize {
+            return Err(TryRuntimeError::Other(
+              "typed queue page has invalid length",
+            ));
+          }
+          let Some(page_start) = page_id.checked_mul(page_size) else {
+            return Err(TryRuntimeError::Other("typed queue page range overflows"));
+          };
+          let Some(page_end) = page_start.checked_add(page.len() as u64) else {
+            return Err(TryRuntimeError::Other("typed queue page range overflows"));
+          };
+          if page_end <= head || page_start >= tail {
+            return Err(TryRuntimeError::Other(
+              "typed queue page lies outside its live physical range",
+            ));
+          }
+          for (slot, entry) in page.into_iter().enumerate() {
+            let position = page_start.saturating_add(slot as u64);
+            if position < head {
+              continue;
+            }
+            if position >= tail || entry.ticket >= next_ticket {
+              return Err(TryRuntimeError::Other(
+                "typed queue entry lies beyond its physical or global ticket range",
+              ));
+            }
+            if physical_tickets
+              .insert(entry.ticket, (group, entry.aaa_id))
+              .is_some()
+            {
+              return Err(TryRuntimeError::Other(
+                "global queue ticket appears in more than one physical entry",
+              ));
+            }
+          }
         }
       }
       let mut live_queue_tickets = alloc::collections::BTreeSet::new();
@@ -3030,27 +3117,15 @@ pub mod pallet {
         let Some(ticket) = hot.queue_ticket else {
           continue;
         };
-        if ticket < queue_head || ticket >= queue_tail {
+        if ticket >= next_ticket || !live_queue_tickets.insert(ticket) {
           return Err(TryRuntimeError::Other(
-            "ActorHot owns an already-consumed or beyond-tail queue ticket",
+            "ActorHot owns an invalid or duplicate global queue ticket",
           ));
         }
-        if !live_queue_tickets.insert(ticket) {
+        let expected = (Self::queue_group(hot.actor_class.aaa_type()), aaa_id);
+        if physical_tickets.get(&ticket) != Some(&expected) {
           return Err(TryRuntimeError::Other(
-            "multiple actors own the same live queue ticket",
-          ));
-        }
-        let page_id = ticket / page_size;
-        let slot = (ticket % page_size) as usize;
-        let Some(entry) = QueuePages::<T>::get(page_id).and_then(|page| page.get(slot).copied())
-        else {
-          return Err(TryRuntimeError::Other(
-            "ActorHot live queue ticket does not resolve to a physical entry",
-          ));
-        };
-        if entry.aaa_id != aaa_id {
-          return Err(TryRuntimeError::Other(
-            "ActorHot live queue ticket resolves to a different actor",
+            "ActorHot live ticket does not resolve to its type-derived lane entry",
           ));
         }
       }

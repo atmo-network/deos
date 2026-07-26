@@ -45,6 +45,18 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
     return type.replace(/([a-z])([A-Z])/g, '$1 $2');
   }
 
+  function selectInputLimit(event: Event) {
+    if (task.type !== 'SwapOut') return;
+    const type = (event.currentTarget as HTMLSelectElement).value;
+    task = {
+      ...task,
+      inputLimit:
+        type === 'Absolute'
+          ? { type: 'Absolute', amount: '1' }
+          : { type: 'LiveQuote' },
+    };
+  }
+
   function addSplitLeg() {
     if (task.type !== 'SplitTransfer' || task.legs.length >= 8) return;
     task = {
@@ -88,6 +100,11 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
   {:else if task.type === 'SplitTransfer'}
     <AutomationAssetEditor label="Asset" bind:asset={task.asset} {compact} />
     <AutomationAmountEditor bind:amount={task.amount} {compact} />
+    <p class="text-[10px] leading-relaxed text-(--mono-muted)">
+      Every non-zero leg must accept its allocation at execution time. One
+      ineligible recipient fails the whole task atomically as a temporary error;
+      rejected value never becomes retained remainder.
+    </p>
     <div class="grid gap-2">
       <div class="flex items-center justify-between gap-2">
         <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
@@ -134,7 +151,7 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
         </div>
       {/each}
     </div>
-  {:else if task.type === 'SwapExactIn'}
+  {:else if task.type === 'SwapIn'}
     <div class={fieldGrid}>
       <AutomationAssetEditor
         label="Asset in"
@@ -160,31 +177,53 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
       bind:value={task.slippageParts}
       class="h-9 py-1.5 text-xs tabnum"
     />
-  {:else if task.type === 'SwapExactOut'}
-    <div class={fieldGrid}>
-      <AutomationAssetEditor
-        label="Asset in"
-        bind:asset={task.assetIn}
-        compact={true}
-      />
-      <AutomationAssetEditor
-        label="Asset out"
-        bind:asset={task.assetOut}
-        compact={true}
-      />
-    </div>
+    <p class="text-[11px] leading-relaxed text-muted-foreground">
+      System execution also checks a fresh EMA or direct-pool reserve reference.
+      This local guard may reflect manipulated pool state and proves neither
+      fair price nor transaction-order protection.
+    </p>
+  {:else if task.type === 'SwapOut'}
+    <AutomationAssetEditor
+      label="Asset out"
+      bind:asset={task.assetOut}
+      compact={true}
+    />
     <AutomationAmountEditor
       label="Output amount mode"
       bind:amount={task.amountOut}
       {compact}
     />
-    <TextField
-      label="Maximum input (base units)"
-      inputmode="numeric"
-      pattern="[0-9]*"
-      bind:value={task.maxAmountIn}
-      inputClass="h-9 py-1.5 text-xs tabnum"
+    <AutomationAssetEditor
+      label="Asset in"
+      bind:asset={task.assetIn}
+      compact={true}
     />
+    <SelectField
+      label="Input protection"
+      value={task.inputLimit.type}
+      onchange={selectInputLimit}
+      selectClass="h-9 py-1.5 text-xs font-medium"
+    >
+      <option value="LiveQuote">Live market quote</option>
+      <option value="Absolute">Absolute input ceiling</option>
+    </SelectField>
+    {#if task.inputLimit.type === 'Absolute'}
+      <TextField
+        label="Absolute input ceiling (base units)"
+        inputmode="numeric"
+        pattern="[0-9]*"
+        bind:value={task.inputLimit.amount}
+        inputClass="h-9 py-1.5 text-xs tabnum"
+      />
+      <p class="text-[11px] leading-relaxed text-muted-foreground">
+        Execution will not spend above this declared maximum input.
+      </p>
+    {:else}
+      <p class="text-[11px] leading-relaxed text-warning-foreground">
+        Live-market mode may execute at any future market price, subject only to
+        attempt-time quote-relative slippage and available balance.
+      </p>
+    {/if}
     <NumberInput
       label="Slippage tolerance (perbill)"
       min={0}
@@ -193,6 +232,11 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
       bind:value={task.slippageParts}
       class="h-9 py-1.5 text-xs tabnum"
     />
+    <p class="text-[11px] leading-relaxed text-muted-foreground">
+      System execution also checks a fresh EMA or direct-pool reserve reference.
+      This local guard may reflect manipulated pool state and proves neither
+      fair price nor transaction-order protection.
+    </p>
   {:else if task.type === 'AddLiquidity'}
     <div class={fieldGrid}>
       <AutomationAssetEditor

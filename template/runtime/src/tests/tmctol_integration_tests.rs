@@ -12,8 +12,8 @@ use super::common::{
 };
 use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_aaa::{
-  AmountResolution, AssetOps, DexOps, Event, ExecutionPlanOf, FundingSourcePolicy, ProgramInput,
-  StepErrorPolicy, Task,
+  AaaType, AmountResolution, AssetOps, DexOps, Event, ExecutionContext, ExecutionPlanOf,
+  FundingSourcePolicy, ProgramInput, StepErrorPolicy, Task,
 };
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
@@ -238,7 +238,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
       },
       pallet_aaa::Step {
         conditions: Default::default(),
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: foreign,
           asset_out: AssetKind::Native,
           amount_in: AmountResolution::AllBalance,
@@ -527,7 +527,7 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
           .try_into()
           .unwrap(),
         ),
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
           amount_in: AmountResolution::AllBalance,
@@ -620,7 +620,7 @@ fn dexops_can_swap_foreign_to_native() {
       )
     );
     let result = <Runtime as pallet_aaa::Config>::DexOps::swap_exact_in(
-      &bm,
+      ExecutionContext::new(&bm, AaaType::System),
       AssetKind::Local(super::common::ASSET_A),
       AssetKind::Native,
       foreign_amount,
@@ -654,7 +654,7 @@ fn dexops_normal_swap_succeeds() {
     );
     use pallet_aaa::DexOps;
     let result = <Runtime as pallet_aaa::Config>::DexOps::swap_exact_in(
-      &bm,
+      ExecutionContext::new(&bm, AaaType::System),
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       amount,
@@ -725,7 +725,7 @@ fn oracle_deviation_rejects_swap_via_dexops() {
       deviated_price,
     );
     let result = <Runtime as pallet_aaa::Config>::DexOps::swap_exact_in(
-      &bm,
+      ExecutionContext::new(&bm, AaaType::System),
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       amount,
@@ -762,7 +762,7 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
     );
     let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_aaa::Step {
       conditions: Default::default(),
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(super::common::ASSET_A),
         amount_in: AmountResolution::Fixed(amount),
@@ -801,7 +801,7 @@ fn swap_without_pool_fails_execution_plan() {
     let bm = AAA::sovereign_account_id_system(bm_id);
     let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_aaa::Step {
       conditions: Default::default(),
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: AssetKind::Native,
         asset_out: AssetKind::Local(ASSET_A),
         amount_in: AmountResolution::Fixed(1_000_000_000_000),
@@ -866,7 +866,7 @@ fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
       2,
       "AddLiquidity needs dual dust guard"
     );
-    if let Task::SwapExactIn {
+    if let Task::SwapIn {
       asset_in,
       asset_out,
       ..
@@ -875,7 +875,7 @@ fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
       assert_eq!(*asset_in, foreign);
       assert_eq!(*asset_out, AssetKind::Native);
     } else {
-      panic!("Step 2 must be SwapExactIn");
+      panic!("Step 2 must be SwapIn");
     }
     if let Task::SplitTransfer { asset, legs, .. } = &execution_plan[2].task {
       assert_eq!(*asset, lp_asset);
@@ -960,16 +960,16 @@ fn zap_execution_plan_tightens_slippage_as_native_depth_grows() {
       dust,
     );
     let shallow_slippage = match &shallow_plan[1].task {
-      Task::SwapExactIn {
+      Task::SwapIn {
         slippage_tolerance, ..
       } => *slippage_tolerance,
-      _ => panic!("Step 2 must be SwapExactIn"),
+      _ => panic!("Step 2 must be SwapIn"),
     };
     let deep_slippage = match &deep_plan[1].task {
-      Task::SwapExactIn {
+      Task::SwapIn {
         slippage_tolerance, ..
       } => *slippage_tolerance,
-      _ => panic!("Step 2 must be SwapExactIn"),
+      _ => panic!("Step 2 must be SwapIn"),
     };
     assert_eq!(
       shallow_slippage,

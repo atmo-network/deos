@@ -134,8 +134,9 @@ Each subsystem below uses the same two buckets:
 - Bounded readiness, queue, wakeup, and overflow surfaces
 - Account ownership/control slots
 - Live balances and execution-side effects
+- Finalized point-in-time asset minimum and recipient-balance evidence when fetched directly at one bound block hash; downstream static findings must retain that evidence identity and block hash
 - Current sparse `IdleStarvationState` and bounded detection/recovery events when scheduler observability changes phase
-- Current sparse Continuation for a suspended actor, including cursor, attempt, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
+- Current sparse Continuation for a suspended actor, including cursor, logical-run attempt, unsuccessful-attempt count at that cursor, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
 
 #### Indexed / Materialized View
 

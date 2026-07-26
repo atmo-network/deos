@@ -93,6 +93,7 @@ const suspendedRuntimeValue = {
     attempt: 1,
     start_cursor: 0,
     continuation_cursor: 1,
+    unsuccessful_attempts_at_cursor: 2,
     finalized_through: 0,
     cumulative_outcomes: {
       executed_steps: 3,
@@ -118,10 +119,12 @@ const suspendedRuntimeValue = {
 };
 const suspendedOutcome = {
   status: 'Suspended',
+  closeReason: null,
   cycleNonce: 7n,
   attempt: 1,
   startCursor: 0,
   continuationCursor: 1,
+  unsuccessfulAttemptsAtCursor: 2,
   finalizedThrough: 0,
   cumulativeOutcomes: {
     executedSteps: 3,
@@ -182,6 +185,26 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   if (stopped.success) {
     assert.deepEqual(stopped.outcome.steps[0].outcome, { type: 'Stopped' });
     assert.equal(stopped.outcome.status, 'Completed');
+  }
+  const closedScale = encodeAaaRuntimeSimulationResult(metadataBytes, {
+    success: true,
+    value: {
+      ...suspendedRuntimeValue.value,
+      status: {
+        type: 'Closed',
+        value: { type: 'RetryAttemptsExhausted', value: undefined },
+      },
+      continuation_cursor: undefined,
+      unsuccessful_attempts_at_cursor: undefined,
+    },
+  });
+  const closed = decodeAaaRuntimeSimulationResult(metadataBytes, closedScale);
+  assert.equal(closed.success, true);
+  if (closed.success) {
+    assert.equal(closed.outcome.status, 'Closed');
+    assert.equal(closed.outcome.closeReason, 'RetryAttemptsExhausted');
+    assert.equal(closed.outcome.continuationCursor, null);
+    assert.equal(closed.outcome.unsuccessfulAttemptsAtCursor, null);
   }
   const rejectedScale = encodeAaaRuntimeSimulationResult(metadataBytes, {
     success: false,

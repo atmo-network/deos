@@ -2,15 +2,20 @@ use crate::{
   AaaType, ActiveLifecycle, ActorClass, ActorHot, AmountResolution, AssetFilter, AssetFilterOf,
   CadenceMode, CancellationReason, CloseReason, Condition, ConditionSet, ContinuationStateStore,
   DeferReason, Error, Event, FundingSourcePolicy, GlobalCircuitBreaker, IdleStarvationPhase,
-  IdleStarvationState, Mutability, NextAaaId, OutcomeTotals, OwnerSlotMask, PauseReason,
-  ProgramInput, QueueEntry, ResolutionSurface, RetryClass, RunState, SYSTEM_OWNER_SLOT_SENTINEL,
-  Schedule, ScheduleOf, ScheduleWindow, SimulationError, SimulationMode, SimulationStatus,
-  SimulationStepOutcome, SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex,
-  SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SuspensionReason,
-  Task, TaskFailure, TaskOf, Trigger, TriggerPolicy, TriggerSource, WakeupBucketState, WakeupEntry,
-  WakeupPage, WakeupPointer, adapters::AssetOps, mock::*, types::FundingBatch,
+  IdleStarvationState, InputLimit, Mutability, NextAaaId, OutcomeTotals, OwnerSlotMask,
+  PauseReason, ProgramInput, QueueEntry, ResolutionSurface, RetryClass, RunState,
+  SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow, SimulationError,
+  SimulationMode, SimulationStatus, SimulationStepOutcome, SimulationStepRecord, SourceFilter,
+  SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf,
+  StepSkippedReason, SuspensionReason, Task, TaskFailure, TaskOf, Trigger, TriggerPolicy,
+  TriggerSource, WakeupBucketState, WakeupEntry, WakeupPage, WakeupPointer, adapters::AssetOps,
+  mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
+
+const RETRY_LATER: StepErrorPolicy = StepErrorPolicy::RetryLater {
+  max_attempts: u32::MAX,
+};
 use codec::{Decode, Encode, MaxEncodedLen};
 use polkadot_sdk::frame_support::{
   __private::metadata_ir::{
@@ -239,12 +244,12 @@ fn task_failure_defaults_unknown_errors_to_permanent() {
 }
 
 #[test]
-fn aaa_0_7_4_scale_variant_indices_are_explicit() {
+fn aaa_0_7_6_scale_variant_indices_are_explicit() {
   assert_variant_contract::<RuntimeTask>(&[
     ("Transfer", 0),
     ("SplitTransfer", 1),
-    ("SwapExactIn", 2),
-    ("SwapExactOut", 3),
+    ("SwapIn", 2),
+    ("SwapOut", 3),
     ("AddLiquidity", 4),
     ("RemoveLiquidity", 5),
     ("Burn", 6),
@@ -261,6 +266,7 @@ fn aaa_0_7_4_scale_variant_indices_are_explicit() {
     ("PercentageOfLastFunding", 3),
     ("AllBalance", 4),
   ]);
+  assert_variant_contract::<InputLimit<u128>>(&[("LiveQuote", 0), ("Absolute", 1)]);
   assert_variant_contract::<Condition<TestAsset, u128>>(&[
     ("BalanceAbove", 0),
     ("BalanceBelow", 1),
@@ -294,6 +300,7 @@ fn aaa_0_7_4_scale_variant_indices_are_explicit() {
     ("Completed", 0),
     ("Aborted", 1),
     ("Suspended", 2),
+    ("Closed", 3),
   ]);
   assert_variant_contract::<SimulationStepOutcome>(&[
     ("Executed", 0),
@@ -311,6 +318,7 @@ fn aaa_0_7_4_scale_variant_indices_are_explicit() {
     ("CycleNonceExhausted", 4),
     ("FeeBudgetExhausted", 5),
     ("AutoCloseNonceReached", 6),
+    ("RetryAttemptsExhausted", 7),
   ]);
   assert_variant_contract::<StepErrorPolicy>(&[
     ("AbortCycle", 0),
@@ -431,6 +439,8 @@ fn aaa_0_7_4_scale_variant_indices_are_explicit() {
     ("EmptyConditionSet", 44),
     ("ManualSourceDisabled", 45),
     ("InvalidTradeBound", 46),
+    ("InvalidRetryAttemptLimit", 47),
+    ("RecipientDepositUnavailable", 48),
   ]);
   assert_variant_contract::<crate::Call<Test>>(&[
     ("create_user_aaa", 0),
@@ -964,7 +974,7 @@ fn paged_wakeup_cursor_orders_sparse_blocks_across_page_boundaries() {
 }
 
 #[test]
-fn aaa_0_7_3_storage_schema_is_explicit() {
+fn aaa_0_7_6_storage_schema_is_explicit() {
   let storage_info = AAA::storage_info();
   assert!(storage_info.iter().all(|entry| entry.pallet_name == b"AAA"));
   let actual: alloc::vec::Vec<_> = storage_info
@@ -983,9 +993,13 @@ fn aaa_0_7_3_storage_schema_is_explicit() {
       "ActorIdentityCount",
       "ActiveAaaCount",
       "ClosedSystemAaaIds",
-      "QueueHead",
-      "QueueTail",
-      "QueuePages",
+      "NextQueueTicket",
+      "UserQueueHead",
+      "UserQueueTail",
+      "UserQueuePages",
+      "SystemQueueHead",
+      "SystemQueueTail",
+      "SystemQueuePages",
       "WakeupPages",
       "WakeupBuckets",
       "WakeupCursorPages",
@@ -1027,9 +1041,13 @@ fn aaa_0_7_3_storage_schema_is_explicit() {
       ("ActorIdentityCount", false, false),
       ("ActiveAaaCount", false, false),
       ("ClosedSystemAaaIds", true, true),
-      ("QueueHead", false, false),
-      ("QueueTail", false, false),
-      ("QueuePages", true, true),
+      ("NextQueueTicket", false, false),
+      ("UserQueueHead", false, false),
+      ("UserQueueTail", false, false),
+      ("UserQueuePages", true, true),
+      ("SystemQueueHead", false, false),
+      ("SystemQueueTail", false, false),
+      ("SystemQueuePages", true, true),
       ("WakeupPages", true, true),
       ("WakeupBuckets", true, true),
       ("WakeupCursorPages", true, true),
@@ -1054,22 +1072,26 @@ fn aaa_0_7_3_storage_schema_is_explicit() {
   assert_map_storage_types::<u64, Mutability>(&entries[8]);
   assert_plain_storage_type::<u64>(&entries[9]);
   assert_plain_storage_type::<u64>(&entries[10]);
-  assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[11]);
-  assert_map_storage_types::<(MockBlockNumber, u64), crate::WakeupPageOf<Test>>(&entries[12]);
-  assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[13]);
-  assert_map_storage_types::<u64, crate::WakeupCursorPageOf<Test>>(&entries[14]);
-  assert_plain_storage_type::<u32>(&entries[15]);
-  assert_map_storage_types::<AccountId, u8>(&entries[16]);
-  assert_map_storage_types::<AccountId, u64>(&entries[17]);
-  assert_plain_storage_type::<u32>(&entries[18]);
-  assert_plain_storage_type::<bool>(&entries[19]);
-  assert_plain_storage_type::<IdleStarvationPhase<MockBlockNumber>>(&entries[20]);
+  assert_plain_storage_type::<u64>(&entries[11]);
+  assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[12]);
+  assert_plain_storage_type::<u64>(&entries[13]);
+  assert_plain_storage_type::<u64>(&entries[14]);
+  assert_map_storage_types::<u64, crate::QueuePageOf<Test>>(&entries[15]);
+  assert_map_storage_types::<(MockBlockNumber, u64), crate::WakeupPageOf<Test>>(&entries[16]);
+  assert_map_storage_types::<MockBlockNumber, WakeupBucketState>(&entries[17]);
+  assert_map_storage_types::<u64, crate::WakeupCursorPageOf<Test>>(&entries[18]);
+  assert_plain_storage_type::<u32>(&entries[19]);
+  assert_map_storage_types::<AccountId, u8>(&entries[20]);
+  assert_map_storage_types::<AccountId, u64>(&entries[21]);
+  assert_plain_storage_type::<u32>(&entries[22]);
+  assert_plain_storage_type::<bool>(&entries[23]);
+  assert_plain_storage_type::<IdleStarvationPhase<MockBlockNumber>>(&entries[24]);
 }
 
 #[test]
 fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
   new_test_ext().execute_with(|| {
-    let execution_plan = BoundedVec::try_from(vec![
+    let mut execution_plan = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
         to: BOB,
         asset: TestAsset::Native,
@@ -1081,6 +1103,7 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
       }),
     ])
     .expect("two-step plan fits");
+    execution_plan[0].on_error = RETRY_LATER;
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     let mut trigger_snapshot: BoundedBTreeMap<
       ResolutionSurface<TestAsset>,
@@ -1096,6 +1119,7 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
     let continuation = RuntimeContinuationState {
       cursor: 0,
       attempt: 0,
+      unsuccessful_attempts_at_cursor: 1,
       last_attempt_block: 1,
       trigger_snapshot,
       cumulative_outcomes: OutcomeTotals {
@@ -1108,6 +1132,7 @@ fn continuation_schema_round_trips_attempts_and_typed_snapshot_surfaces() {
       RuntimeContinuationState::decode(&mut &encoded[..]).expect("continuation decodes");
     assert_eq!(decoded.cursor, 0);
     assert_eq!(decoded.attempt, 0);
+    assert_eq!(decoded.unsuccessful_attempts_at_cursor, 1);
     assert_eq!(decoded.last_attempt_block, 1);
     assert_eq!(decoded.trigger_snapshot.len(), 2);
     assert_eq!(decoded.cumulative_outcomes.executed_steps, 1);
@@ -1168,17 +1193,15 @@ fn ordinary_one_attempt_run_keeps_continuation_sparse() {
 #[test]
 fn continuation_try_state_rejects_marker_and_cursor_drift() {
   new_test_ext().execute_with(|| {
-    let aaa_id = create_system_with(
-      ALICE,
-      manual_schedule(),
-      None,
-      transfer_execution_plan(BOB, 1),
-    );
+    let mut plan = transfer_execution_plan(BOB, 1);
+    plan[0].on_error = RETRY_LATER;
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, plan);
     ContinuationStateStore::<Test>::insert(
       aaa_id,
       RuntimeContinuationState {
         cursor: 0,
         attempt: 0,
+        unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1,
         trigger_snapshot: Default::default(),
         cumulative_outcomes: Default::default(),
@@ -1430,13 +1453,13 @@ fn setup_pool(asset_a: TestAsset, asset_b: TestAsset, reserve_a: Balance, reserv
 fn temporary_retry_swap_plan() -> crate::ExecutionPlanOf<Test> {
   BoundedVec::try_from(vec![StepOf::<Test> {
     conditions: ConditionSet::Always,
-    task: Task::SwapExactIn {
+    task: Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(77),
       amount_in: AmountResolution::Fixed(10),
       slippage_tolerance: Perbill::one(),
     },
-    on_error: StepErrorPolicy::RetryLater,
+    on_error: RETRY_LATER,
   }])
   .expect("single retry step fits")
 }
@@ -2531,6 +2554,37 @@ fn split_transfer_rejects_share_sum_above_one() {
 }
 
 #[test]
+fn split_transfer_rejects_duplicate_recipients() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let legs = BoundedVec::try_from(vec![
+      SplitLeg {
+        to: BOB,
+        share: Perbill::from_percent(50),
+      },
+      SplitLeg {
+        to: BOB,
+        share: Perbill::from_percent(50),
+      },
+    ])
+    .expect("legs fit");
+    let execution_plan = execution_plan_with_step(make_step(Task::SplitTransfer {
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(100),
+      legs,
+    }));
+    assert_noop!(
+      AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        user_active_program(manual_schedule(), None, execution_plan),
+      ),
+      Error::<Test>::InvalidSplitTransfer
+    );
+  });
+}
+
+#[test]
 fn split_transfer_leg_count_is_bounded_by_runtime_type_limit() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -2601,6 +2655,83 @@ fn split_transfer_executes_and_remainder_is_retained() {
           && *retained == 1
       )
     }));
+  });
+}
+
+#[test]
+fn split_transfer_rejects_five_ineligible_legs_atomically_then_retries() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_asset_minimum_balance(11);
+    let recipients = [ALICE, BOB, CHARLIE, 4, 5, 6, 7, 8];
+    let legs = recipients
+      .iter()
+      .map(|to| SplitLeg {
+        to: *to,
+        share: Perbill::from_parts(125_000_000),
+      })
+      .collect::<Vec<_>>()
+      .try_into()
+      .expect("eight legs fit");
+    let mut step = make_step(Task::SplitTransfer {
+      asset: TestAsset::Native,
+      amount: AmountResolution::Fixed(80),
+      legs,
+    });
+    step.on_error = StepErrorPolicy::RetryLater { max_attempts: 2 };
+    let execution_plan = execution_plan_with_step(step);
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    fund_native(aaa_id, 1_000);
+    let actor = sovereign_account(aaa_id);
+    let actor_before = native_balance(&actor);
+    let recipient_balances = recipients.map(|recipient| native_balance(&recipient));
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(native_balance(&actor), actor_before);
+    assert_eq!(
+      recipients.map(|recipient| native_balance(&recipient)),
+      recipient_balances
+    );
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::StepFailed { aaa_id: id, error, .. }
+        if *id == aaa_id
+          && *error == Error::<Test>::RecipientDepositUnavailable.into()
+    )));
+    assert!(!has_aaa_event(|event| matches!(
+      event,
+      Event::SplitTransferExecuted { aaa_id: id, .. } if *id == aaa_id
+    )));
+    let continuation = AAA::continuation_state(aaa_id).expect("temporary rejection suspends");
+    assert_eq!(continuation.cursor, 0);
+    assert_eq!(continuation.unsuccessful_attempts_at_cursor, 1);
+
+    for recipient in recipients.iter().skip(3) {
+      fund_native_raw(recipient, 1);
+    }
+    let retry_balances = recipients.map(|recipient| native_balance(&recipient));
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+
+    assert_eq!(native_balance(&actor), actor_before - 80);
+    for (recipient, before) in recipients.iter().zip(retry_balances) {
+      assert_eq!(native_balance(recipient), before + 10);
+    }
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::SplitTransferExecuted {
+        aaa_id: id,
+        total: 80,
+        distributed: 80,
+        retained: 0,
+        legs: 8,
+        effective_legs: 8,
+        ..
+      } if *id == aaa_id
+    )));
   });
 }
 
@@ -3303,7 +3434,7 @@ fn consecutive_failures_close_actor_at_inclusive_threshold() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
@@ -3383,7 +3514,7 @@ fn system_immutable_actor_closes_internally_at_failure_threshold_without_tasks()
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
@@ -3623,7 +3754,10 @@ fn paged_queue_uses_one_live_actor_ticket_and_lazy_invalidation() {
       AAA::actor_hot(aaa_id).expect("hot state").queue_ticket,
       None
     );
-    assert_eq!(AAA::paged_head_entry(), Some((0, QueueEntry { aaa_id })));
+    assert_eq!(
+      AAA::paged_head_entry(),
+      Some((0, QueueEntry { ticket: 0, aaa_id }))
+    );
     assert!(AAA::paged_consume_head(0));
     assert_eq!(AAA::queue_head(), 32);
     assert_eq!(AAA::queue_tail(), 32);
@@ -3648,7 +3782,13 @@ fn paged_queue_crosses_and_reclaims_page_boundaries_without_prefix_rewrites() {
     for (ticket, aaa_id) in actors.iter().take(32).copied().enumerate() {
       assert_eq!(
         AAA::paged_head_entry(),
-        Some((ticket as u64, QueueEntry { aaa_id }))
+        Some((
+          ticket as u64,
+          QueueEntry {
+            ticket: ticket as u64,
+            aaa_id,
+          },
+        ))
       );
       assert!(AAA::paged_consume_head(ticket as u64));
     }
@@ -3686,7 +3826,13 @@ fn paged_queue_replacement_ticket_leaves_old_entry_as_tombstone() {
     );
     assert_eq!(
       AAA::paged_head_entry(),
-      Some((0, QueueEntry { aaa_id: actor_a }))
+      Some((
+        0,
+        QueueEntry {
+          ticket: 0,
+          aaa_id: actor_a,
+        },
+      ))
     );
     assert!(AAA::paged_consume_head(0));
     assert_eq!(
@@ -3695,7 +3841,13 @@ fn paged_queue_replacement_ticket_leaves_old_entry_as_tombstone() {
     );
     assert_eq!(
       AAA::paged_head_entry(),
-      Some((1, QueueEntry { aaa_id: actor_b }))
+      Some((
+        1,
+        QueueEntry {
+          ticket: 1,
+          aaa_id: actor_b,
+        },
+      ))
     );
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
@@ -3751,18 +3903,20 @@ fn saturated_tombstone_queue_reclaims_head_before_ingress_and_recovers_deferred_
       let len = page_size.min(capacity.saturating_sub(first_ticket));
       let entries = (0..len)
         .map(|offset| QueueEntry {
+          ticket: u64::from(first_ticket).saturating_add(u64::from(offset)),
           aaa_id: 10_000_000u64
             .saturating_add(u64::from(first_ticket))
             .saturating_add(u64::from(offset)),
         })
         .collect::<Vec<_>>();
-      crate::pallet::QueuePages::<Test>::insert(
+      crate::pallet::SystemQueuePages::<Test>::insert(
         u64::from(page_id),
         BoundedVec::try_from(entries).expect("saturated queue page fits"),
       );
     }
-    crate::pallet::QueueHead::<Test>::put(0);
-    crate::pallet::QueueTail::<Test>::put(u64::from(capacity));
+    crate::pallet::SystemQueueHead::<Test>::put(0);
+    crate::pallet::SystemQueueTail::<Test>::put(u64::from(capacity));
+    crate::pallet::NextQueueTicket::<Test>::put(u64::from(capacity));
 
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
@@ -3867,7 +4021,7 @@ fn paged_wakeup_uses_the_exact_requested_block_without_spillover() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    crate::pallet::QueueTail::<Test>::put(u64::from(
+    crate::pallet::SystemQueueTail::<Test>::put(u64::from(
       <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
     ));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
@@ -3885,7 +4039,7 @@ fn defer_wakeup_deduplicates_repeated_manual_trigger_for_same_actor() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    crate::pallet::QueueTail::<Test>::put(u64::from(
+    crate::pallet::SystemQueueTail::<Test>::put(u64::from(
       <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
     ));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
@@ -3979,7 +4133,7 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
       transfer_execution_plan(BOB, 10),
     );
     fund_native(aaa_id, 1_000);
-    crate::pallet::QueueTail::<Test>::put(u64::from(
+    crate::pallet::UserQueueTail::<Test>::put(u64::from(
       <<Test as crate::Config>::MaxQueueLength as Get<u32>>::get(),
     ));
     assert_ok!(AAA::notify_address_event(
@@ -3990,8 +4144,8 @@ fn paged_wakeup_recovery_is_independent_of_sparse_actor_ids() {
     ));
     assert_eq!(scheduled_wakeup_block(aaa_id), Some(2));
     NextAaaId::<Test>::put(10_000_000);
-    crate::pallet::QueueHead::<Test>::put(0);
-    crate::pallet::QueueTail::<Test>::put(0);
+    crate::pallet::UserQueueHead::<Test>::put(0);
+    crate::pallet::UserQueueTail::<Test>::put(0);
     let bob_before = native_balance(&BOB);
     frame_system::Pallet::<Test>::set_block_number(2);
     run_idle(Weight::MAX);
@@ -4200,7 +4354,7 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut retry_plan = transfer_execution_plan(BOB, 1);
-    retry_plan[0].on_error = StepErrorPolicy::RetryLater;
+    retry_plan[0].on_error = RETRY_LATER;
 
     assert_noop!(
       AAA::create_user_aaa(
@@ -4241,18 +4395,34 @@ fn retry_later_is_mutable_only_at_creation_and_update() {
 }
 
 #[test]
+fn retry_later_rejects_zero_attempt_limit() {
+  new_test_ext().execute_with(|| {
+    let mut plan = transfer_execution_plan(BOB, 1);
+    plan[0].on_error = StepErrorPolicy::RetryLater { max_attempts: 0 };
+    assert_noop!(
+      AAA::create_user_aaa(
+        RuntimeOrigin::signed(ALICE),
+        Mutability::Mutable,
+        user_active_program(manual_schedule(), None, plan),
+      ),
+      Error::<Test>::InvalidRetryAttemptLimit
+    );
+  });
+}
+
+#[test]
 fn retry_later_aborts_permanent_failure_without_executing_suffix() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let succeeding_step = make_step(Task::Transfer {
       to: CHARLIE,
@@ -4299,13 +4469,13 @@ fn retry_later_resumes_same_cursor_without_replaying_committed_prefix() {
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(20),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let execution_plan = BoundedVec::try_from(vec![
       make_step(Task::Transfer {
@@ -4407,7 +4577,7 @@ fn stop_cycle_commits_prefix_and_completes_before_unreachable_suffix() {
       StepOf::<Test> {
         conditions: ConditionSet::Always,
         task: Task::StopCycle,
-        on_error: StepErrorPolicy::RetryLater,
+        on_error: RETRY_LATER,
       },
       make_step(Task::Transfer {
         to: CHARLIE,
@@ -4696,13 +4866,13 @@ fn continuation_can_complete_at_stop_cycle_without_replaying_prefix() {
       }),
       StepOf::<Test> {
         conditions: ConditionSet::Always,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
           amount_in: AmountResolution::Fixed(20),
           slippage_tolerance: Perbill::one(),
         },
-        on_error: StepErrorPolicy::RetryLater,
+        on_error: RETRY_LATER,
       },
       make_step(Task::StopCycle),
       make_step(Task::Transfer {
@@ -4764,7 +4934,7 @@ fn temporary_failure_keeps_continue_next_step_semantics() {
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let failing_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
@@ -4817,7 +4987,7 @@ fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let mut execution_plan = transfer_execution_plan(BOB, 50);
-    execution_plan[0].on_error = StepErrorPolicy::RetryLater;
+    execution_plan[0].on_error = RETRY_LATER;
     let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
     let actor = sovereign_account(aaa_id);
     let bob_before = native_balance(&BOB);
@@ -4847,20 +5017,21 @@ fn retry_later_funding_unavailable_resumes_without_new_logical_run() {
 }
 
 #[test]
-fn retry_later_inclusive_failure_cutoff_clears_continuation() {
+fn retry_later_local_attempt_cutoff_closes_without_prefix_replay() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
+    set_max_consecutive_failures(10);
     setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
     set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
     let retry_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
     };
     let aaa_id = create_system_with(
       ALICE,
@@ -4881,11 +5052,30 @@ fn retry_later_inclusive_failure_cutoff_clears_continuation() {
     set_temporary_dex_failure(true);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
     run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::continuation_state(aaa_id)
+        .expect("first unsuccessful attempt persists")
+        .unsuccessful_attempts_at_cursor,
+      1
+    );
 
-    for block in [2, 4] {
-      frame_system::Pallet::<Test>::set_block_number(block);
-      run_idle(Weight::MAX);
-    }
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    assert_eq!(
+      AAA::continuation_state(aaa_id)
+        .expect("second unsuccessful attempt persists")
+        .unsuccessful_attempts_at_cursor,
+      2
+    );
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert!(
+      AAA::aaa_instances(aaa_id)
+        .expect("suspended actor remains")
+        .pending_signal
+    );
+
+    frame_system::Pallet::<Test>::set_block_number(4);
+    run_idle(Weight::MAX);
 
     assert!(AAA::aaa_instances(aaa_id).is_none());
     assert!(AAA::continuation_state(aaa_id).is_none());
@@ -4895,10 +5085,133 @@ fn retry_later_inclusive_failure_cutoff_clears_continuation() {
         event,
         Event::AaaClosed {
           aaa_id: id,
-          reason: CloseReason::ConsecutiveFailures,
+          reason: CloseReason::RetryAttemptsExhausted,
         } if *id == aaa_id
       )
     }));
+  });
+}
+
+#[test]
+fn retry_later_resets_local_attempt_count_after_cursor_advancement() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_max_consecutive_failures(10);
+    setup_temporary_retry_pool();
+    let plan = BoundedVec::try_from(vec![
+      StepOf::<Test> {
+        conditions: ConditionSet::Always,
+        task: Task::SwapIn {
+          asset_in: TestAsset::Native,
+          asset_out: TestAsset::Local(77),
+          amount_in: AmountResolution::Fixed(10),
+          slippage_tolerance: Perbill::one(),
+        },
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+      },
+      StepOf::<Test> {
+        conditions: ConditionSet::Always,
+        task: Task::AddLiquidity {
+          asset_a: TestAsset::Local(77),
+          asset_b: TestAsset::Local(88),
+          amount_a: AmountResolution::Fixed(1),
+          amount_b: AmountResolution::Fixed(1),
+          min_lp_out: 1,
+        },
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+      },
+    ])
+    .expect("two retry steps fit");
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    let actor = sovereign_account(aaa_id);
+    fund_native(aaa_id, 100);
+    set_asset_balance(&actor, TestAsset::Local(88), 10);
+    set_temporary_dex_failure(true);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    let first = AAA::continuation_state(aaa_id).expect("first cursor suspends");
+    assert_eq!(
+      (first.cursor, first.unsuccessful_attempts_at_cursor),
+      (0, 1)
+    );
+
+    set_temporary_dex_failure(false);
+    set_temporary_add_liquidity_failure(true);
+    frame_system::Pallet::<Test>::set_block_number(2);
+    run_idle(Weight::MAX);
+    let advanced = AAA::continuation_state(aaa_id).expect("later cursor suspends");
+    assert_eq!((advanced.cursor, advanced.attempt), (1, 1));
+    assert_eq!(advanced.unsuccessful_attempts_at_cursor, 1);
+  });
+}
+
+#[test]
+fn retry_later_one_attempt_closes_without_persisting_continuation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_max_consecutive_failures(1);
+    setup_temporary_retry_pool();
+    let plan = execution_plan_with_step(StepOf::<Test> {
+      conditions: ConditionSet::Always,
+      task: Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 1 },
+    });
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    fund_native(aaa_id, 100);
+    set_temporary_dex_failure(true);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert!(AAA::aaa_instances(aaa_id).is_none());
+    assert!(AAA::continuation_state(aaa_id).is_none());
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::AaaClosed {
+        aaa_id: id,
+        reason: CloseReason::RetryAttemptsExhausted,
+      } if *id == aaa_id
+    )));
+  });
+}
+
+#[test]
+fn global_failure_limit_can_close_before_local_retry_limit() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    set_max_consecutive_failures(1);
+    setup_temporary_retry_pool();
+    let plan = execution_plan_with_step(StepOf::<Test> {
+      conditions: ConditionSet::Always,
+      task: Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 2 },
+    });
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, plan);
+    fund_native(aaa_id, 100);
+    set_temporary_dex_failure(true);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert!(AAA::aaa_instances(aaa_id).is_none());
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::AaaClosed {
+        aaa_id: id,
+        reason: CloseReason::ConsecutiveFailures,
+      } if *id == aaa_id
+    )));
   });
 }
 
@@ -4943,7 +5256,40 @@ fn scheduler_retries_manual_continuation_after_cooldown_without_new_signal() {
 }
 
 #[test]
-fn bounded_authority_service_preserves_group_fifo_and_user_minimum() {
+fn execution_share_math_is_two_dimensional_and_excludes_common_scheduler_weight() {
+  new_test_ext().execute_with(|| {
+    set_execution_service_shares(Perbill::from_percent(20), Perbill::from_percent(20));
+    let actor_execution_envelope = Weight::from_parts(1_000, 500);
+    assert_eq!(
+      AAA::service_budget(
+        actor_execution_envelope,
+        AAA::effective_system_service_share()
+      ),
+      Weight::from_parts(200, 100)
+    );
+    assert_eq!(
+      AAA::service_execution_limit(10, AAA::effective_system_service_share()),
+      2
+    );
+    assert_eq!(
+      AAA::service_execution_limit(3, AAA::effective_system_service_share()),
+      1,
+      "a non-zero typed share must offer one actor when the count ceiling is non-zero"
+    );
+    let common_scheduler_weight = Weight::from_parts(100, 50);
+    assert_eq!(
+      AAA::service_budget(
+        actor_execution_envelope.saturating_sub(common_scheduler_weight),
+        AAA::effective_system_service_share(),
+      ),
+      Weight::from_parts(180, 90),
+      "subtracting common work would incorrectly shrink the actor-execution share"
+    );
+  });
+}
+
+#[test]
+fn execution_reserves_preserve_lane_fifo_and_user_count_guarantee() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let user_a = create_user_with(
@@ -4964,11 +5310,7 @@ fn bounded_authority_service_preserves_group_fifo_and_user_minimum() {
     fund_native(user_b, 1_000_000_000_000_000);
     let system_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
     let system_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
-    set_authority_service_policy(
-      vec![system_a, system_b],
-      Perbill::from_percent(67),
-      Perbill::from_percent(33),
-    );
+    set_execution_service_shares(Perbill::from_percent(67), Perbill::from_percent(33));
 
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), user_a));
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(BOB), user_b));
@@ -5002,6 +5344,157 @@ fn bounded_authority_service_preserves_group_fifo_and_user_minimum() {
       event,
       Event::CycleStarted { aaa_id, .. } if *aaa_id == user_b
     )));
+  });
+}
+
+#[test]
+fn typed_lanes_share_one_global_ticket_namespace() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let user_a = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let user_b = create_user_with(
+      BOB,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+
+    for (owner, aaa_id) in [
+      (ALICE, system_a),
+      (ALICE, user_a),
+      (ALICE, system_b),
+      (BOB, user_b),
+    ] {
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(owner), aaa_id));
+    }
+
+    assert_eq!(
+      AAA::actor_hot(system_a).and_then(|hot| hot.queue_ticket),
+      Some(0)
+    );
+    assert_eq!(
+      AAA::actor_hot(user_a).and_then(|hot| hot.queue_ticket),
+      Some(1)
+    );
+    assert_eq!(
+      AAA::actor_hot(system_b).and_then(|hot| hot.queue_ticket),
+      Some(2)
+    );
+    assert_eq!(
+      AAA::actor_hot(user_b).and_then(|hot| hot.queue_ticket),
+      Some(3)
+    );
+    assert_eq!(AAA::next_queue_ticket(), 4);
+    let system_tickets: Vec<_> = AAA::system_queue_pages(0)
+      .expect("System lane page")
+      .iter()
+      .map(|entry| entry.ticket)
+      .collect();
+    let user_tickets: Vec<_> = AAA::user_queue_pages(0)
+      .expect("User lane page")
+      .iter()
+      .map(|entry| entry.ticket)
+      .collect();
+    assert_eq!(system_tickets, vec![0, 2]);
+    assert_eq!(user_tickets, vec![1, 3]);
+    assert_eq!(AAA::combined_queue_occupancy(), 4);
+  });
+}
+
+#[test]
+fn shared_phase_uses_global_head_age_after_both_reserves() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let user_a = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    let system_a = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    let user_b = create_user_with(
+      BOB,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      inert_execution_plan(),
+    );
+    let system_b = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+    for aaa_id in [user_a, user_b] {
+      fund_native(aaa_id, 1_000_000_000_000_000);
+    }
+    for (owner, aaa_id) in [
+      (ALICE, user_a),
+      (ALICE, system_a),
+      (BOB, user_b),
+      (ALICE, system_b),
+    ] {
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(owner), aaa_id));
+    }
+    frame_system::Pallet::<Test>::reset_events();
+    run_idle(Weight::MAX);
+    let started: Vec<_> = frame_system::Pallet::<Test>::events()
+      .into_iter()
+      .filter_map(|record| match record.event {
+        RuntimeEvent::AAA(Event::CycleStarted { aaa_id, .. }) => Some(aaa_id),
+        _ => None,
+      })
+      .collect();
+    assert_eq!(started, vec![system_a, user_a, user_b]);
+    assert_eq!(
+      AAA::aaa_instances(system_b)
+        .expect("System B remains")
+        .cycle_nonce,
+      0
+    );
+  });
+}
+
+#[test]
+fn shared_phase_borrows_unused_typed_reserve_in_both_directions() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut users = Vec::new();
+    for owner in [ALICE, BOB, CHARLIE] {
+      let user = create_user_with(
+        owner,
+        Mutability::Mutable,
+        manual_schedule(),
+        None,
+        inert_execution_plan(),
+      );
+      fund_native(user, 1_000_000_000_000_000);
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(owner), user));
+      users.push(user);
+    }
+    run_idle(Weight::MAX);
+    assert!(users.into_iter().all(|aaa_id| {
+      AAA::aaa_instances(aaa_id).is_some_and(|instance| instance.cycle_nonce == 1)
+    }));
+  });
+
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let mut systems = Vec::new();
+    for _ in 0..3 {
+      let system = create_system_with(ALICE, manual_schedule(), None, inert_execution_plan());
+      assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), system));
+      systems.push(system);
+    }
+    run_idle(Weight::MAX);
+    assert!(systems.into_iter().all(|aaa_id| {
+      AAA::aaa_instances(aaa_id).is_some_and(|instance| instance.cycle_nonce == 1)
+    }));
   });
 }
 
@@ -5484,7 +5977,7 @@ fn funding_arrival_during_suspension_stays_pending() {
         asset: TestAsset::Native,
         amount: AmountResolution::PercentageOfLastFunding(Perbill::one()),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let aaa_id = create_system_with(
       ALICE,
@@ -5559,13 +6052,13 @@ fn user_retry_admits_and_charges_only_the_unresolved_suffix() {
       }),
       StepOf::<Test> {
         conditions: ConditionSet::Always,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
           amount_in: AmountResolution::Fixed(10),
           slippage_tolerance: Perbill::one(),
         },
-        on_error: StepErrorPolicy::RetryLater,
+        on_error: RETRY_LATER,
       },
       make_step(Task::Transfer {
         to: CHARLIE,
@@ -5644,13 +6137,13 @@ fn continuation_snapshot_is_trimmed_frozen_and_capacity_checked_live() {
       }),
       StepOf::<Test> {
         conditions: ConditionSet::Always,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: asset_b,
           asset_out,
           amount_in: AmountResolution::PercentageOfTrigger(Perbill::from_percent(50)),
           slippage_tolerance: Perbill::one(),
         },
-        on_error: StepErrorPolicy::RetryLater,
+        on_error: RETRY_LATER,
       },
       make_step(Task::Transfer {
         to: CHARLIE,
@@ -5722,13 +6215,13 @@ fn missing_frozen_snapshot_is_a_permanent_invariant_failure() {
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in,
         asset_out,
         amount_in: AmountResolution::PercentageOfTrigger(Perbill::from_percent(50)),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let aaa_id = create_system_with(
       ALICE,
@@ -5784,7 +6277,7 @@ fn maximal_continuation_snapshot_stays_bounded_to_unresolved_surfaces() {
           min_lp_out: 1,
         },
         on_error: if index == 0 {
-          StepErrorPolicy::RetryLater
+          RETRY_LATER
         } else {
           StepErrorPolicy::AbortCycle
         },
@@ -5824,13 +6317,13 @@ fn suspended_funding_is_conserved_and_promoted_once_after_success() {
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in,
         asset_out,
         amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let aaa_id = create_system_with(
       ALICE,
@@ -5916,13 +6409,13 @@ fn explicit_cancellation_preserves_committed_effects_and_emits_terminal_summary(
       }),
       StepOf::<Test> {
         conditions: ConditionSet::Always,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
           amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(50)),
           slippage_tolerance: Perbill::one(),
         },
-        on_error: StepErrorPolicy::RetryLater,
+        on_error: RETRY_LATER,
       },
     ])
     .expect("two-step plan fits");
@@ -6761,7 +7254,7 @@ fn adapter_failure_retains_one_combined_step_fee() {
     setup_pool(TestAsset::Native, foreign, 10_000, 10_000);
     fund_native_raw(&pool_account, 10_000);
     set_asset_balance(&pool_account, foreign, 10_000);
-    let task = Task::SwapExactIn {
+    let task = Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: foreign,
       amount_in: AmountResolution::Fixed(100),
@@ -6829,7 +7322,7 @@ fn cycle_summary_tracks_step_outcomes() {
       }),
       StepOf::<Test> {
         conditions: ConditionSet::Always,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
           amount_in: AmountResolution::Fixed(10),
@@ -6878,7 +7371,7 @@ fn cycle_success_predicate_drives_failure_reset_auto_close_and_event_order() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = |on_error| StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
@@ -7364,10 +7857,10 @@ fn user_keeps_running_on_last_funding_exhaustion() {
 }
 
 #[test]
-fn create_accepts_swap_exact_in_with_slippage_tolerance() {
+fn create_accepts_swap_in_with_slippage_tolerance() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapExactIn {
+    let execution_plan = execution_plan_with_step(make_step(Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(1),
       amount_in: AmountResolution::Fixed(10),
@@ -7382,14 +7875,43 @@ fn create_accepts_swap_exact_in_with_slippage_tolerance() {
 }
 
 #[test]
-fn create_rejects_swap_exact_out_with_zero_input_cap() {
+fn dex_adapter_receives_authoritative_actor_type() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapExactOut {
-      asset_in: TestAsset::Local(1),
+    setup_temporary_retry_pool();
+    let aaa_id = create_user_with(
+      ALICE,
+      Mutability::Mutable,
+      manual_schedule(),
+      None,
+      temporary_retry_swap_plan(),
+    );
+    fund_native(aaa_id, 1_000_000_000_000);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(last_dex_aaa_type(), Some(AaaType::User));
+  });
+
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, temporary_retry_swap_plan());
+    fund_native(aaa_id, 1_000_000_000_000);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+    assert_eq!(last_dex_aaa_type(), Some(AaaType::System));
+  });
+}
+
+#[test]
+fn create_rejects_swap_out_with_zero_input_cap() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let execution_plan = execution_plan_with_step(make_step(Task::SwapOut {
       asset_out: TestAsset::Local(2),
       amount_out: AmountResolution::Fixed(10),
-      max_amount_in: 0,
+      asset_in: TestAsset::Local(1),
+      input_limit: InputLimit::Absolute(0),
       slippage_tolerance: Perbill::zero(),
     }));
     assert_noop!(
@@ -7493,16 +8015,15 @@ fn liquidity_tasks_fail_before_effects_when_output_minima_are_unmet() {
 }
 
 #[test]
-fn runtime_system_trade_cap_clamps_every_market_task_before_dispatch() {
+fn market_tasks_dispatch_their_resolved_task_local_amounts_without_a_system_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    set_system_trade_cap(Some(10));
     let swap_in = TestAsset::Local(81);
     let swap_out = TestAsset::Local(82);
     set_pool_reserves(swap_in, swap_out, 1_000, 1_000);
     set_asset_balance(&u64::MAX, swap_out, 1_000);
     let plan = BoundedVec::try_from(vec![
-      make_step(Task::SwapExactIn {
+      make_step(Task::SwapIn {
         asset_in: swap_in,
         asset_out: swap_out,
         amount_in: AmountResolution::Fixed(100),
@@ -7547,34 +8068,34 @@ fn runtime_system_trade_cap_clamps_every_market_task_before_dispatch() {
     run_idle(Weight::MAX);
     assert!(has_aaa_event(|event| matches!(
       event,
-      Event::SwapExecuted { aaa_id: id, amount_in: 10, .. } if *id == aaa_id
+      Event::SwapExecuted { aaa_id: id, amount_in: 100, .. } if *id == aaa_id
     )));
     assert!(has_aaa_event(|event| matches!(
       event,
-      Event::LiquidityAdded { aaa_id: id, lp_minted: 10, .. } if *id == aaa_id
+      Event::LiquidityAdded { aaa_id: id, lp_minted: 100, .. } if *id == aaa_id
     )));
     assert!(has_aaa_event(|event| matches!(
       event,
-      Event::LiquidityRemoved { aaa_id: id, amount_a: 5, amount_b: 5, .. }
+      Event::LiquidityRemoved { aaa_id: id, amount_a: 50, amount_b: 50, .. }
         if *id == aaa_id
     )));
     assert!(has_aaa_event(|event| matches!(
       event,
-      Event::LiquidityDonated { aaa_id: id, amount: 10, amount_a: 10, amount_b: 10, .. }
+      Event::LiquidityDonated { aaa_id: id, amount: 100, amount_a: 100, amount_b: 100, .. }
         if *id == aaa_id
     )));
   });
 }
 
 #[test]
-fn create_accepts_swap_exact_out_with_slippage_tolerance() {
+fn create_accepts_swap_out_with_optional_absolute_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapExactOut {
-      asset_in: TestAsset::Local(1),
+    let execution_plan = execution_plan_with_step(make_step(Task::SwapOut {
       asset_out: TestAsset::Local(2),
       amount_out: AmountResolution::Fixed(10),
-      max_amount_in: 100,
+      asset_in: TestAsset::Local(1),
+      input_limit: InputLimit::Absolute(100),
       slippage_tolerance: Perbill::from_percent(5),
     }));
     assert_ok!(AAA::create_user_aaa(
@@ -7586,7 +8107,7 @@ fn create_accepts_swap_exact_out_with_slippage_tolerance() {
 }
 
 #[test]
-fn swap_exact_out_executes_and_emits_swap_event() {
+fn swap_out_live_market_mode_uses_preservable_capacity_and_emits_swap_event() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_in = TestAsset::Local(1);
@@ -7598,11 +8119,11 @@ fn swap_exact_out_executes_and_emits_swap_event() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::SwapExactOut {
-        asset_in,
+      execution_plan_with_step(make_step(Task::SwapOut {
         asset_out,
         amount_out: AmountResolution::Fixed(100),
-        max_amount_in: 200,
+        asset_in,
+        input_limit: InputLimit::LiveQuote,
         slippage_tolerance: Perbill::from_percent(0),
       })),
     );
@@ -7626,7 +8147,7 @@ fn swap_exact_out_executes_and_emits_swap_event() {
         } if *id == aaa_id
           && *in_asset == asset_in
           && *out_asset == asset_out
-          && *amount_in <= 200
+          && *amount_in > 0
           && *amount_out >= 100
       )
     }));
@@ -7634,7 +8155,7 @@ fn swap_exact_out_executes_and_emits_swap_event() {
 }
 
 #[test]
-fn swap_exact_out_never_spends_above_explicit_input_cap() {
+fn swap_out_never_spends_above_explicit_input_cap() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let asset_in = TestAsset::Local(1);
@@ -7646,11 +8167,11 @@ fn swap_exact_out_never_spends_above_explicit_input_cap() {
       Mutability::Mutable,
       manual_schedule(),
       None,
-      execution_plan_with_step(make_step(Task::SwapExactOut {
-        asset_in,
+      execution_plan_with_step(make_step(Task::SwapOut {
         asset_out,
         amount_out: AmountResolution::Fixed(100),
-        max_amount_in: 50,
+        asset_in,
+        input_limit: InputLimit::Absolute(50),
         slippage_tolerance: Perbill::zero(),
       })),
     );
@@ -9175,7 +9696,7 @@ fn funding_unavailable_releases_exec_fee_reservation_for_later_step_spend() {
 fn failed_executable_step_charges_eval_and_exec_fee_without_refund() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
-    let execution_plan = execution_plan_with_step(make_step(Task::SwapExactIn {
+    let execution_plan = execution_plan_with_step(make_step(Task::SwapIn {
       asset_in: TestAsset::Native,
       asset_out: TestAsset::Local(99),
       amount_in: AmountResolution::Fixed(10),
@@ -9497,13 +10018,13 @@ fn any_skip_cannot_create_continuation() {
         Condition::BlockNumberBelow { threshold: 1 },
         Condition::BlockNumberAbove { threshold: 10 },
       ]),
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let aaa_id = create_system_with(
       ALICE,
@@ -9534,13 +10055,13 @@ fn retry_re_evaluates_live_any_conditions_at_the_same_cursor() {
         Condition::BlockNumberBelow { threshold: 2 },
         Condition::BlockNumberAbove { threshold: 100 },
       ]),
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
         slippage_tolerance: Perbill::one(),
       },
-      on_error: StepErrorPolicy::RetryLater,
+      on_error: RETRY_LATER,
     };
     let aaa_id = create_system_with(
       ALICE,
@@ -9715,7 +10236,7 @@ fn continue_next_step_error_policy_proceeds_after_failure() {
     frame_system::Pallet::<Test>::set_block_number(1);
     let failing_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in: TestAsset::Native,
         asset_out: TestAsset::Local(77),
         amount_in: AmountResolution::Fixed(10),
@@ -9759,7 +10280,7 @@ fn dex_adapter_late_failure_rolls_back_input_transfer() {
     set_asset_balance(&u64::MAX, asset_out, 10_000);
     let failing_step = StepOf::<Test> {
       conditions: ConditionSet::Always,
-      task: Task::SwapExactIn {
+      task: Task::SwapIn {
         asset_in,
         asset_out,
         amount_in: AmountResolution::Fixed(40),
@@ -11316,14 +11837,14 @@ fn user_dca_swap_then_cold_storage_transfer() {
     let pool_account: AccountId = u64::MAX;
     set_asset_balance(&pool_account, foreign, 10_000);
     fund_native_raw(&pool_account, 10_000);
-    // ExecutionPlan: SwapExactIn(foreign → native) → Transfer(native → cold wallet)
+    // ExecutionPlan: SwapIn(foreign → native) → Transfer(native → cold wallet)
     let execution_plan = BoundedVec::try_from(vec![
       StepOf::<Test> {
         conditions: all_conditions(vec![Condition::BalanceAbove {
           asset: foreign,
           threshold: 50,
         }]),
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: foreign,
           asset_out: TestAsset::Native,
           amount_in: AmountResolution::Fixed(100),
@@ -12205,14 +12726,15 @@ fn pure_close_does_not_start_normal_cycle_or_execute_tasks() {
 #[cfg(test)]
 mod proptest_aaa {
   use super::{
-    asset_balance, create_system_with, fund_native, make_step, manual_schedule, native_balance,
-    run_idle, set_asset_balance, setup_pool, setup_temporary_retry_pool, sovereign_account,
+    RETRY_LATER, asset_balance, create_system_with, fund_native, make_step, manual_schedule,
+    native_balance, run_idle, set_asset_balance, setup_pool, setup_temporary_retry_pool,
+    sovereign_account,
   };
   use crate::{
-    ActorFunding, ActorHot, ActorProgram, AmountResolution, AssetFilter, ClosedSystemAaaIds,
-    ConditionSet, ContinuationStateStore, DormantAaaIdentities, Event, FundingSourcePolicy,
-    Mutability, QueuePages, RunState, Schedule, ScheduleOf, SourceFilter, StepErrorPolicy, StepOf,
-    Task, Trigger, WakeupPages, mock::*,
+    AaaType, ActorFunding, ActorHot, ActorProgram, AmountResolution, AssetFilter,
+    ClosedSystemAaaIds, ConditionSet, ContinuationStateStore, DormantAaaIdentities, Event,
+    FundingSourcePolicy, Mutability, RunState, Schedule, ScheduleOf, SourceFilter, StepErrorPolicy,
+    StepOf, SystemQueuePages, Task, Trigger, UserQueuePages, WakeupPages, mock::*,
   };
   use codec::Encode;
   use polkadot_sdk::frame_support::{
@@ -12269,7 +12791,7 @@ mod proptest_aaa {
       setup_pool(TestAsset::Native, TestAsset::Local(77), 10_000, 10_000);
       set_asset_balance(&u64::MAX, TestAsset::Local(77), 10_000);
       let plan = BoundedVec::try_from(vec![
-        make_step(Task::SwapExactIn {
+        make_step(Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
           amount_in: AmountResolution::Fixed(20),
@@ -12284,7 +12806,7 @@ mod proptest_aaa {
             amount_b: AmountResolution::Fixed(5),
             min_lp_out: 1,
           },
-          on_error: StepErrorPolicy::RetryLater,
+          on_error: RETRY_LATER,
         },
         make_step(Task::Transfer {
           to: BOB,
@@ -12363,13 +12885,13 @@ mod proptest_aaa {
         }),
         StepOf::<Test> {
           conditions: ConditionSet::Always,
-          task: Task::SwapExactIn {
+          task: Task::SwapIn {
             asset_in: TestAsset::Native,
             asset_out: TestAsset::Local(77),
             amount_in: AmountResolution::Fixed(10),
             slippage_tolerance: Perbill::one(),
           },
-          on_error: StepErrorPolicy::RetryLater,
+          on_error: RETRY_LATER,
         },
       ])
       .expect("two-step pipeline fits");
@@ -12467,13 +12989,13 @@ mod proptest_aaa {
       },
       RuntimeStep {
         conditions: ConditionSet::Always,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: TestAsset::Native,
           asset_out: TestAsset::Local(77),
           amount_in: AmountResolution::PercentageOfLastFunding(Perbill::from_percent(10)),
           slippage_tolerance: Perbill::one(),
         },
-        on_error: StepErrorPolicy::RetryLater,
+        on_error: RETRY_LATER,
       },
     ])
     .expect("model retry plan fits")
@@ -12554,13 +13076,21 @@ mod proptest_aaa {
           live_tickets.insert(ticket),
           "duplicate live queue ticket {ticket}"
         );
-        let page_size = u64::from(<<Test as crate::Config>::QueuePageSize as Get<u32>>::get());
-        let page = QueuePages::<Test>::get(ticket / page_size).expect("live queue page exists");
-        assert_eq!(
-          page
-            .get((ticket % page_size) as usize)
-            .map(|entry| entry.aaa_id),
-          Some(*aaa_id)
+        let resolves = match hot.actor_class.aaa_type() {
+          AaaType::System => SystemQueuePages::<Test>::iter().any(|(_, page)| {
+            page
+              .iter()
+              .any(|entry| entry.ticket == ticket && entry.aaa_id == *aaa_id)
+          }),
+          AaaType::User => UserQueuePages::<Test>::iter().any(|(_, page)| {
+            page
+              .iter()
+              .any(|entry| entry.ticket == ticket && entry.aaa_id == *aaa_id)
+          }),
+        };
+        assert!(
+          resolves,
+          "live ticket resolves inside its type-derived lane"
         );
       }
       if let Some(pointer) = hot.wakeup_pointer {
@@ -13036,6 +13566,7 @@ fn fresh_current_plan_simulation_returns_runtime_trace_and_rolls_back_every_writ
     assert_eq!(result.attempt, 0);
     assert_eq!(result.start_cursor, 0);
     assert_eq!(result.continuation_cursor, None);
+    assert_eq!(result.unsuccessful_attempts_at_cursor, None);
     assert_eq!(result.finalized_through, Some(0));
     assert_eq!(result.cumulative_outcomes.executed_steps, 1);
     assert_eq!(
@@ -13088,6 +13619,14 @@ fn continuation_simulation_preserves_stored_cursor_attempt_and_committed_state()
     assert_eq!(result.attempt, continuation_before.attempt + 1);
     assert_eq!(result.start_cursor, continuation_before.cursor);
     assert_eq!(result.continuation_cursor, Some(continuation_before.cursor));
+    assert_eq!(
+      result.unsuccessful_attempts_at_cursor,
+      Some(
+        continuation_before
+          .unsuccessful_attempts_at_cursor
+          .saturating_add(1)
+      )
+    );
     assert_eq!(result.finalized_through, None);
     assert_eq!(result.cumulative_outcomes.failed_steps, 2);
     assert_eq!(
@@ -13101,6 +13640,49 @@ fn continuation_simulation_preserves_stored_cursor_attempt_and_committed_state()
       AAA::continuation_state(aaa_id).map(|state| state.encode()),
       Some(continuation_before.encode())
     );
+    assert_eq!(AAA::aaa_instances(aaa_id), Some(actor_before));
+    assert_eq!(frame_system::Pallet::<Test>::event_count(), events_before);
+  });
+}
+
+#[test]
+fn simulation_projects_retry_exhaustion_close_and_rolls_back_actor_removal() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    setup_temporary_retry_pool();
+    let execution_plan = execution_plan_with_step(StepOf::<Test> {
+      conditions: ConditionSet::Always,
+      task: Task::SwapIn {
+        asset_in: TestAsset::Native,
+        asset_out: TestAsset::Local(77),
+        amount_in: AmountResolution::Fixed(10),
+        slippage_tolerance: Perbill::one(),
+      },
+      on_error: StepErrorPolicy::RetryLater { max_attempts: 1 },
+    });
+    let expected_program = system_active_program(manual_schedule(), None, execution_plan.clone());
+    let aaa_id = create_system_with(ALICE, manual_schedule(), None, execution_plan);
+    fund_native(aaa_id, 100);
+    set_temporary_dex_failure(true);
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    let actor_before = AAA::aaa_instances(aaa_id).expect("actor exists");
+    let events_before = frame_system::Pallet::<Test>::event_count();
+
+    let result = AAA::simulate_current_program(
+      aaa_id,
+      AaaType::System,
+      Mutability::Mutable,
+      expected_program,
+      SimulationMode::FreshCurrentPlan,
+    )
+    .expect("retry exhaustion simulates");
+
+    assert_eq!(
+      result.status,
+      SimulationStatus::Closed(CloseReason::RetryAttemptsExhausted)
+    );
+    assert_eq!(result.continuation_cursor, None);
+    assert_eq!(result.unsuccessful_attempts_at_cursor, None);
     assert_eq!(AAA::aaa_instances(aaa_id), Some(actor_before));
     assert_eq!(frame_system::Pallet::<Test>::event_count(), events_before);
   });

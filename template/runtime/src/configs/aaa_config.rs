@@ -9,21 +9,19 @@
 use super::*;
 use primitives::{AssetKind, ecosystem};
 
-use polkadot_sdk::frame_support::{
-  BoundedVec,
-  traits::{
-    Currency, Get,
-    fungible::Inspect as NativeInspect,
-    fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
-    tokens::{Fortitude, Precision, Preservation},
-  },
+use polkadot_sdk::frame_support::traits::{
+  Currency, Get,
+  fungible::Inspect as NativeInspect,
+  fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
+  tokens::{Fortitude, Precision, Preservation},
 };
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
 use pallet_aaa::{
-  AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps, TaskFailure,
+  AaaType, AssetOps, DexOps, ExecutionContext, FeeCollector, FundingAuthority,
+  LiquidityDonationOps, TaskFailure,
 };
 
 parameter_types! {
@@ -56,9 +54,10 @@ parameter_types! {
 
   /// Defense-in-depth count ceiling; RefTime and ProofSize admission remain primary.
   pub const AaaMaxExecutionsPerBlock: u32 = 1_000;
-  pub const AaaMaxPrioritySystemAaaIds: u32 = 16;
-  pub const AaaSystemAaaBudget: Perbill = Perbill::from_percent(20);
-  pub const AaaUserAaaBudget: Perbill = Perbill::from_percent(20);
+  /// Maximum share of admitted actor-execution Weight/count offered to System first.
+  pub const AaaSystemExecutionReserve: Perbill = Perbill::from_percent(20);
+  /// Minimum share of admitted actor-execution Weight/count offered to User next.
+  pub const AaaUserExecutionGuarantee: Perbill = Perbill::from_percent(20);
   pub const AaaMaxQueueLength: u32 = 10_000;
   /// Balanced production granularity selected from 32/64/128 production-Wasm evidence.
   pub const AaaQueuePageSize: u32 = 64;
@@ -84,9 +83,10 @@ parameter_types! {
   pub const AaaMaxActiveActors: u32 = 10_000;
   // --- Economic parameters ---
 
-  pub const AaaMaxSystemTrade: Balance = ecosystem::params::MAX_SYSTEM_TRADE;
   pub const AaaMaxSystemPriceDeviation: Perbill =
     ecosystem::params::MAX_SYSTEM_PRICE_DEVIATION;
+  pub const AaaMaxSystemReferenceAgeBlocks: u32 =
+    ecosystem::params::MAX_SYSTEM_REFERENCE_AGE_BLOCKS;
 
   /// Per-step flat evaluation fee
   pub const AaaStepBaseFee: u128 = 2_000_000_000;
@@ -94,16 +94,6 @@ parameter_types! {
   pub const AaaConditionReadFee: u128 = 500_000_000;
   /// Non-refundable opening fee routed to `FeeSink`
   pub const AaaCreationFee: Balance = ExistentialDeposit::get();
-}
-
-pub struct AaaPrioritySystemAaaIds;
-impl Get<BoundedVec<pallet_aaa::AaaId, AaaMaxPrioritySystemAaaIds>> for AaaPrioritySystemAaaIds {
-  fn get() -> BoundedVec<pallet_aaa::AaaId, AaaMaxPrioritySystemAaaIds> {
-    ecosystem::aaa_ids::PRIORITY_SYSTEM_AAA_IDS
-      .to_vec()
-      .try_into()
-      .expect("priority System AAA id whitelist fits runtime bound")
-  }
 }
 
 pub struct AaaMinUserBalanceGuard;
@@ -347,14 +337,30 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
 
 pub struct TmctolDexOps;
 
-pub(crate) fn priority_system_aaa_id(who: &AccountId) -> Option<pallet_aaa::AaaId> {
-  ecosystem::aaa_ids::PRIORITY_SYSTEM_AAA_IDS
-    .into_iter()
-    .find(|aaa_id| pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(*aaa_id) == *who)
+pub(crate) fn validate_remove_liquidity_output(
+  amount_a: Balance,
+  amount_b: Balance,
+  min_amount_a: Balance,
+  min_amount_b: Balance,
+) -> Result<(), TaskFailure> {
+  if amount_a < min_amount_a || amount_b < min_amount_b {
+    return Err(TaskFailure::temporary(DispatchError::Other(
+      "MinimumLiquidityOutputNotMet",
+    )));
+  }
+  Ok(())
 }
 
-pub(crate) fn is_priority_system_aaa(who: &AccountId) -> bool {
-  priority_system_aaa_id(who).is_some()
+pub(crate) fn classify_remove_liquidity_failure(error: DispatchError) -> TaskFailure {
+  let first_minimum: DispatchError =
+    pallet_asset_conversion::Error::<Runtime>::AssetOneWithdrawalDidNotMeetMinimum.into();
+  let second_minimum: DispatchError =
+    pallet_asset_conversion::Error::<Runtime>::AssetTwoWithdrawalDidNotMeetMinimum.into();
+  if error == first_minimum || error == second_minimum {
+    TaskFailure::temporary(error)
+  } else {
+    TaskFailure::permanent(error)
+  }
 }
 
 pub(crate) fn classify_router_failure(error: pallet_axial_router::Error<Runtime>) -> TaskFailure {
@@ -380,10 +386,6 @@ pub(crate) fn classify_router_failure(error: pallet_axial_router::Error<Runtime>
 
 pub struct TmctolLiquidityDonationOps;
 impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDonationOps {
-  fn system_trade_cap(who: &AccountId) -> Option<Balance> {
-    is_priority_system_aaa(who).then(AaaMaxSystemTrade::get)
-  }
-
   fn donate_liquidity(
     who: &AccountId,
     asset_a: AssetKind,
@@ -391,9 +393,6 @@ impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDona
     amount: Balance,
     max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure> {
-    let amount = Self::system_trade_cap(who)
-      .map(|cap| amount.min(cap))
-      .unwrap_or(amount);
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
       .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable")))?;
@@ -415,20 +414,14 @@ impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDona
 }
 
 impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
-  fn system_trade_cap(who: &AccountId) -> Option<Balance> {
-    is_priority_system_aaa(who).then(AaaMaxSystemTrade::get)
-  }
-
   fn swap_exact_in(
-    who: &AccountId,
+    context: ExecutionContext<'_, AccountId>,
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<Balance, TaskFailure> {
-    let amount_in = Self::system_trade_cap(who)
-      .map(|cap| amount_in.min(cap))
-      .unwrap_or(amount_in);
+    let who = context.actor;
     let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
       who.clone(),
       asset_in,
@@ -439,7 +432,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     let min_out =
       (polkadot_sdk::sp_runtime::Perbill::one() - slippage_tolerance).mul_floor(quote.amount_out);
     Self::ensure_system_reference_price(
-      who,
+      &context,
       asset_in,
       asset_out,
       quote.amount_after_fee,
@@ -459,16 +452,14 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
   }
 
   fn swap_exact_out(
-    who: &AccountId,
+    context: ExecutionContext<'_, AccountId>,
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<Balance, TaskFailure> {
-    let max_amount_in = Self::system_trade_cap(who)
-      .map(|cap| max_amount_in.min(cap))
-      .unwrap_or(max_amount_in);
+    let who = context.actor;
     let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_out(
       who.clone(),
       asset_in,
@@ -485,7 +476,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       )));
     }
     Self::ensure_system_reference_price(
-      who,
+      &context,
       asset_in,
       asset_out,
       quote.amount_after_fee,
@@ -517,12 +508,6 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     amount_b: Balance,
     min_lp_out: Balance,
   ) -> Result<(Balance, Balance, Balance), TaskFailure> {
-    let amount_a = Self::system_trade_cap(who)
-      .map(|cap| amount_a.min(cap))
-      .unwrap_or(amount_a);
-    let amount_b = Self::system_trade_cap(who)
-      .map(|cap| amount_b.min(cap))
-      .unwrap_or(amount_b);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       use alloc::boxed::Box;
       let result = (|| -> Result<(Balance, Balance, Balance), TaskFailure> {
@@ -573,9 +558,6 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     min_amount_a: Balance,
     min_amount_b: Balance,
   ) -> Result<(Balance, Balance), TaskFailure> {
-    let lp_amount = Self::system_trade_cap(who)
-      .map(|cap| lp_amount.min(cap))
-      .unwrap_or(lp_amount);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       use alloc::boxed::Box;
       let result = (|| -> Result<(Balance, Balance), TaskFailure> {
@@ -598,20 +580,16 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
           Box::new(asset_a),
           Box::new(asset_b),
           lp_amount,
-          0,
-          0,
+          min_amount_a,
+          min_amount_b,
           who.clone(),
         )
-        .map_err(TaskFailure::permanent)?;
+        .map_err(classify_remove_liquidity_failure)?;
         let after_a = TmctolAssetOps::balance(who, asset_a);
         let after_b = TmctolAssetOps::balance(who, asset_b);
         let amount_a = after_a.saturating_sub(before_a);
         let amount_b = after_b.saturating_sub(before_b);
-        if amount_a < min_amount_a || amount_b < min_amount_b {
-          return Err(TaskFailure::temporary(DispatchError::Other(
-            "MinimumLiquidityOutputNotMet",
-          )));
-        }
+        validate_remove_liquidity_output(amount_a, amount_b, min_amount_a, min_amount_b)?;
         Ok((amount_a, amount_b))
       })();
       match result {
@@ -625,14 +603,14 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
 }
 
 impl TmctolDexOps {
-  fn ensure_system_reference_price(
-    who: &AccountId,
+  pub(crate) fn ensure_system_reference_price(
+    context: &ExecutionContext<'_, AccountId>,
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_in: Balance,
     amount_out: Balance,
   ) -> Result<(), TaskFailure> {
-    if !is_priority_system_aaa(who) {
+    if context.aaa_type != AaaType::System {
       return Ok(());
     }
     if amount_in == 0 || amount_out == 0 {
@@ -640,8 +618,14 @@ impl TmctolDexOps {
         "InvalidSystemMarketQuote",
       )));
     }
-    let ema_reference =
-      crate::AxialRouter::get_oracle_price(asset_in, asset_out).filter(|price| *price > 0);
+    let current_block = System::block_number();
+    let ema_reference = crate::AxialRouter::get_oracle_price(asset_in, asset_out)
+      .filter(|price| *price > 0)
+      .filter(|_| {
+        let last_update = pallet_axial_router::EmaLastUpdate::<Runtime>::get(asset_in, asset_out);
+        !last_update.is_zero()
+          && current_block.saturating_sub(last_update) <= AaaMaxSystemReferenceAgeBlocks::get()
+      });
     let reserve_reference = AssetConversion::get_reserves(asset_in, asset_out)
       .ok()
       .and_then(|(reserve_in, reserve_out)| {
@@ -865,7 +849,7 @@ impl TmctolGenesisSystemAaas {
   }
 
   /// Builds the Burn Actor execution_plan: for each known foreign asset, add a
-  /// conditional SwapExactIn step (skip if balance < dust), then a final Burn step.
+  /// conditional SwapIn step (skip if balance < dust), then a final Burn step.
   pub fn build_burn_execution_plan(
     foreign_assets: alloc::vec::Vec<AssetKind>,
     dust_threshold: Balance,
@@ -881,10 +865,10 @@ impl TmctolGenesisSystemAaas {
     for foreign in foreign_assets {
       steps.push(Step {
         conditions: dust_guard(foreign),
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: foreign,
-          asset_out: AssetKind::Native,
           amount_in: AmountResolution::AllBalance,
+          asset_out: AssetKind::Native,
           slippage_tolerance: ecosystem::params::SYSTEM_AAA_MAX_SWAP_SLIPPAGE,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -911,7 +895,7 @@ impl TmctolGenesisSystemAaas {
   ///
   /// ExecutionPlan steps:
   /// 1. If Native > dust AND Foreign > dust → AddLiquidity (opportunistic)
-  /// 2. If Foreign > dust → SwapExactIn Foreign→Native with reserve-aware slippage
+  /// 2. If Foreign > dust → SwapIn Foreign→Native with reserve-aware slippage
   /// 3. If LP > dust → SplitTransfer LP to TOL buckets (50/16.67/16.67/16.66)
   pub fn build_zap_execution_plan(
     foreign: AssetKind,
@@ -955,10 +939,10 @@ impl TmctolGenesisSystemAaas {
       // Step 2: Patriotic accumulation — convert leftover Foreign to Native
       Step {
         conditions: dust_guard(foreign),
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: foreign,
-          asset_out: AssetKind::Native,
           amount_in: AmountResolution::AllBalance,
+          asset_out: AssetKind::Native,
           slippage_tolerance,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -1248,7 +1232,7 @@ impl TmctolGenesisSystemAaas {
   /// Builds the Treasury B BLDR buyback-and-burn execution_plan.
   ///
   /// ExecutionPlan steps:
-  /// 1. SwapExactIn(NTVE → target) — amount resolved as % of current NTVE balance
+  /// 1. SwapIn(NTVE → target) — amount resolved as % of current NTVE balance
   /// 2. Burn(target, AllBalance) — destroy all acquired tokens
   ///
   /// Multiple small buybacks per day create smooth market pressure.
@@ -1271,10 +1255,10 @@ impl TmctolGenesisSystemAaas {
       // Step 1: Swap NTVE → target (% of current balance)
       Step {
         conditions: native_dust,
-        task: Task::SwapExactIn {
+        task: Task::SwapIn {
           asset_in: AssetKind::Native,
-          asset_out: target_asset,
           amount_in: AmountResolution::PercentageOfCurrent(buyback_pct),
+          asset_out: target_asset,
           slippage_tolerance: slippage,
         },
         on_error: StepErrorPolicy::AbortCycle,
@@ -1386,10 +1370,8 @@ impl pallet_aaa::Config for Runtime {
   type MaxExecutionDelayBlocks = AaaMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = AaaMaxTimerJitterBlocks;
   type MaxExecutionsPerBlock = AaaMaxExecutionsPerBlock;
-  type MaxPrioritySystemAaaIds = AaaMaxPrioritySystemAaaIds;
-  type PrioritySystemAaaIds = AaaPrioritySystemAaaIds;
-  type SystemAaaBudget = AaaSystemAaaBudget;
-  type UserAaaBudget = AaaUserAaaBudget;
+  type SystemExecutionReserve = AaaSystemExecutionReserve;
+  type UserExecutionGuarantee = AaaUserExecutionGuarantee;
   type MaxQueueLength = AaaMaxQueueLength;
   type QueuePageSize = AaaQueuePageSize;
   type WakeupPageSize = AaaWakeupPageSize;

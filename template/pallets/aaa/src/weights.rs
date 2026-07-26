@@ -58,6 +58,7 @@ pub trait WeightInfo {
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight;
   fn scheduler_paged_mixed_scan(entries: u32) -> Weight;
   fn scheduler_paged_execute_cheap(executions: u32) -> Weight;
+  fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
   fn scheduler_actor_hot_probe() -> Weight;
   fn scheduler_actor_program_probe() -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
@@ -244,8 +245,8 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn scheduler_on_idle_base() -> Weight {
-    Weight::from_parts(15_645_000, 1_493)
-      .saturating_add(T::DbWeight::get().reads(4))
+    Weight::from_parts(20_534_000, 1_493)
+      .saturating_add(T::DbWeight::get().reads(6))
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
@@ -344,13 +345,18 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(Weight::from_parts(100_000_000, 8_000).saturating_mul(executions.into()))
   }
 
+  fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight {
+    Weight::from_parts(75_000_000, 16_000)
+      .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
+  }
+
   fn scheduler_actor_hot_probe() -> Weight {
-    Weight::from_parts(10_616_000, 3_651)
+    Weight::from_parts(10_756_000, 3_665)
       .saturating_add(T::DbWeight::get().reads(1))
   }
 
   fn scheduler_actor_program_probe() -> Weight {
-    Weight::from_parts(17_600_000, 12_141)
+    Weight::from_parts(18_648_000, 9_928)
       .saturating_add(T::DbWeight::get().reads(2))
   }
 
@@ -526,7 +532,7 @@ impl WeightInfo for () {
   fn task_unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
-  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(15_645_000, 1_493) }
+  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(20_534_000, 1_493) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }
@@ -557,8 +563,12 @@ impl WeightInfo for () {
     Weight::from_parts(50_000_000, 8_000)
       .saturating_add(Weight::from_parts(100_000_000, 8_000).saturating_mul(executions.into()))
   }
-  fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_616_000, 3_651) }
-  fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(17_600_000, 12_141) }
+  fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight {
+    Weight::from_parts(75_000_000, 16_000)
+      .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
+  }
+  fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
+  fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
   fn funding_batch_promotion(assets: u32) -> Weight {

@@ -25,6 +25,10 @@ const stepEditorSource = await readFile(
   new URL('../src/lib/automation/AutomationStepEditor.svelte', import.meta.url),
   'utf8',
 );
+const taskEditorSource = await readFile(
+  new URL('../src/lib/automation/AutomationTaskEditor.svelte', import.meta.url),
+  'utf8',
+);
 const runtime = {
   genesisHash: `0x${'11'.repeat(32)}`,
   specVersion: 1,
@@ -40,8 +44,8 @@ const variant = (type) => ({ type, value: undefined });
 const taskNames = [
   'Transfer',
   'SplitTransfer',
-  'SwapExactIn',
-  'SwapExactOut',
+  'SwapIn',
+  'SwapOut',
   'AddLiquidity',
   'RemoveLiquidity',
   'Burn',
@@ -116,19 +120,19 @@ function taskValue(name, amount = fixed()) {
           { to: account, share: 600_000_000 },
         ],
       };
-    case 'SwapExactIn':
+    case 'SwapIn':
       return {
         asset_in: native,
-        asset_out: local,
         amount_in: amount,
+        asset_out: local,
         slippage_tolerance: 10_000_000,
       };
-    case 'SwapExactOut':
+    case 'SwapOut':
       return {
-        asset_in: native,
         asset_out: local,
         amount_out: amount,
-        max_amount_in: 100n,
+        asset_in: native,
+        input_limit: { type: 'Absolute', value: 100n },
         slippage_tolerance: 10_000_000,
       };
     case 'AddLiquidity':
@@ -179,7 +183,10 @@ function step({
       value: conditionMode === 'Always' ? undefined : conditions,
     },
     task: { type: task, value: taskValue(task, amount) },
-    on_error: variant(onError),
+    on_error:
+      onError === 'RetryLater'
+        ? { type: onError, value: { max_attempts: 3 } }
+        : variant(onError),
   };
 }
 
@@ -261,7 +268,7 @@ function manifestRecipients(contract, parameters) {
 test('analysis is deterministic, exactly bound, and produces every cursor envelope', () => {
   const artifact = artifactFor({
     steps: [
-      step({ task: 'SwapExactIn' }),
+      step({ task: 'SwapIn' }),
       step({
         task: 'Transfer',
         amount: { type: 'AllBalance', value: undefined },
@@ -438,7 +445,7 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
     { kind: 'Explicit', value: account },
     { kind: 'ActorSovereign' },
   ]);
-  assert.deepEqual(analyzeTask('SwapExactIn').economicSurface.recipients, [
+  assert.deepEqual(analyzeTask('SwapIn').economicSurface.recipients, [
     { kind: 'ActorSovereign' },
   ]);
   assert.deepEqual(analyzeTask('DonateLiquidity').economicSurface.recipients, [
@@ -455,6 +462,184 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
   assert.throws(
     () => parseAaaSemanticManifest(unknownTask),
     /Task variants are unknown/,
+  );
+});
+
+test('split transfer analysis exposes atomic temporary deposit preflight', () => {
+  const result = analyze(
+    artifactFor({ steps: [step({ task: 'SplitTransfer' })] }),
+  );
+  assert.deepEqual(
+    result.findings.filter(
+      (finding) => finding.kind === 'SplitTransferDepositPreflight',
+    ),
+    [
+      {
+        kind: 'SplitTransferDepositPreflight',
+        step: 0,
+        failureClass: 'Temporary',
+        atomic: true,
+      },
+    ],
+  );
+});
+
+test('System swap analysis exposes local reference limits without fair-price claims', () => {
+  const steps = [step({ task: 'SwapIn' }), step({ task: 'SwapOut' })];
+  const system = analyze(artifactFor({ aaaType: 'System', steps }));
+  assert.deepEqual(
+    system.findings.filter(
+      (finding) => finding.kind === 'SystemReferenceDeviationGuard',
+    ),
+    [0, 1].map((stepIndex) => ({
+      kind: 'SystemReferenceDeviationGuard',
+      step: stepIndex,
+      reference: 'FreshEmaOrDirectReserve',
+      localExecutionGuard: true,
+      fairPriceProof: false,
+      orderingProtection: false,
+    })),
+  );
+  const user = analyze(artifactFor({ steps }));
+  assert.equal(
+    user.findings.some(
+      (finding) => finding.kind === 'SystemReferenceDeviationGuard',
+    ),
+    false,
+  );
+  for (const disclosure of [
+    'fresh EMA or direct-pool reserve reference',
+    'manipulated pool state',
+    'fair price nor transaction-order protection',
+  ]) {
+    assert(taskEditorSource.includes(disclosure));
+  }
+});
+
+test('fixed split warnings require provenance-bound minimum and zero-balance evidence', () => {
+  const nativeArtifact = artifactFor({
+    steps: [step({ task: 'SplitTransfer', amount: fixed(20n) })],
+  });
+  const baseline = analyze(nativeArtifact);
+  const nativeParameters = baseline.steps[0].parameters;
+  const nativeEvidence = {
+    provenance: 'FinalizedStateProjection',
+    identity: 'finalized-minimums@native-1',
+    blockHash: `0x${'22'.repeat(32)}`,
+    entries: [
+      {
+        asset: nativeParameters.asset,
+        minimumBalance: '9',
+        recipientBalances: [
+          { recipient: nativeParameters.legs[0].to, balance: '0' },
+        ],
+      },
+    ],
+  };
+  const below = analyze(nativeArtifact, {
+    minimumBalanceEvidence: nativeEvidence,
+  });
+  assert.deepEqual(
+    below.findings.filter(
+      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+    ),
+    [
+      {
+        kind: 'SplitTransferLegBelowKnownMinimum',
+        step: 0,
+        leg: 0,
+        asset: nativeParameters.asset,
+        recipient: nativeParameters.legs[0].to,
+        amount: '8',
+        minimumBalance: '9',
+        evidenceIdentity: nativeEvidence.identity,
+        evidenceBlockHash: nativeEvidence.blockHash,
+      },
+    ],
+  );
+  assert.equal(
+    below.identity.minimumBalanceEvidenceIdentity,
+    nativeEvidence.identity,
+  );
+  assert.equal(
+    below.identity.minimumBalanceEvidenceBlockHash,
+    nativeEvidence.blockHash,
+  );
+
+  for (const minimumBalance of ['8', '7']) {
+    const result = analyze(nativeArtifact, {
+      minimumBalanceEvidence: {
+        ...nativeEvidence,
+        entries: [{ ...nativeEvidence.entries[0], minimumBalance }],
+      },
+    });
+    assert.equal(
+      result.findings.some(
+        (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+      ),
+      false,
+    );
+  }
+  assert.equal(
+    baseline.findings.some(
+      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+    ),
+    false,
+  );
+  assert.equal(baseline.identity.minimumBalanceEvidenceIdentity, null);
+  assert.equal(baseline.identity.minimumBalanceEvidenceBlockHash, null);
+  const funded = analyze(nativeArtifact, {
+    minimumBalanceEvidence: {
+      ...nativeEvidence,
+      entries: [
+        {
+          ...nativeEvidence.entries[0],
+          recipientBalances: [
+            { recipient: nativeParameters.legs[0].to, balance: '1' },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(
+    funded.findings.some(
+      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+    ),
+    false,
+  );
+
+  const localStep = step({ task: 'SplitTransfer', amount: fixed(20n) });
+  localStep.task.value.asset = local;
+  const localArtifact = artifactFor({ steps: [localStep] });
+  const localParameters = analyze(localArtifact).steps[0].parameters;
+  const localResult = analyze(localArtifact, {
+    minimumBalanceEvidence: {
+      provenance: 'FinalizedStateProjection',
+      identity: 'finalized-minimums@local-7',
+      blockHash: `0x${'33'.repeat(32)}`,
+      entries: [
+        {
+          asset: localParameters.asset,
+          minimumBalance: '9',
+          recipientBalances: [
+            { recipient: localParameters.legs[0].to, balance: '0' },
+          ],
+        },
+      ],
+    },
+  });
+  assert.equal(
+    localResult.findings.filter(
+      (finding) => finding.kind === 'SplitTransferLegBelowKnownMinimum',
+    ).length,
+    1,
+  );
+  assert.throws(
+    () =>
+      analyze(nativeArtifact, {
+        minimumBalanceEvidence: { ...nativeEvidence, identity: '' },
+      }),
+    /evidence identity is required/,
   );
 });
 
@@ -587,6 +772,10 @@ test('every error policy, actor type, and mutability has only linear controls', 
         });
         const projected = analyze(artifact).steps[0];
         assert.equal(projected.errorPolicy, onError);
+        assert.equal(
+          projected.retryMaxAttempts,
+          onError === 'RetryLater' ? 3 : null,
+        );
         assert.equal(projected.successfulControl, 'advance');
         const expectedFailureControls =
           onError === 'ContinueNextStep'
@@ -718,7 +907,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
 
 test('unknown capabilities remain factual and no state-specific claim appears', () => {
   const artifact = artifactFor({
-    steps: [step({ task: 'SwapExactOut', onError: 'RetryLater' })],
+    steps: [step({ task: 'SwapOut', onError: 'RetryLater' })],
   });
   const result = analyze(artifact, {
     adapterCapabilities: { identity: 'unknown-profile' },

@@ -64,13 +64,19 @@ Owner pages: [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/
 
 ## Temporary Middle-Step Failure
 
-1. A Mutable plan executes `SwapExactIn`, then attempts `AddLiquidity`, then intends to `Transfer` the result.
+1. A Mutable plan executes `SwapIn`, then attempts `AddLiquidity`, then intends to `Transfer` the result.
 2. The swap succeeds and commits. The liquidity adapter reports an explicitly Temporary failure.
 3. `RetryLater` rolls back only the failed task and stores a sparse Continuation at the `AddLiquidity` cursor.
 4. Cooldown re-enters the same FIFO/wakeup scheduler without a new external trigger. Retry charges and admits only `AddLiquidity → Transfer`.
 5. Success removes Continuation and emits one cumulative summary for the original logical-run nonce. Cancellation instead keeps the swap committed and performs no compensation.
 
 Current cursor and attempt are bounded chain truth. A long attempt timeline belongs to a materialized event index.
+
+## Swap Intent Boundaries
+
+- `SwapIn` fixes the authored input; the attempt-time executable quote determines output, and slippage limits deterioration from that quote.
+- `SwapOut` fixes the authored output; the attempt-time executable quote determines input.
+- `InputLimit::LiveQuote` intentionally accepts future market-price movement within preservable balance, while `InputLimit::Absolute(nonzero)` adds a fixed input ceiling.
 
 ## TOL Bucket and Treasury Lane
 

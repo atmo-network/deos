@@ -17,9 +17,10 @@ enum AdmissionDecision {
 
 const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 
-struct PriorityServiceResult {
-  executed: bool,
-  stop_group: bool,
+enum LaneStepResult {
+  NoWork,
+  Progress { executed: bool },
+  Blocked,
 }
 
 impl<T: Config> Pallet<T> {
@@ -29,174 +30,132 @@ impl<T: Config> Pallet<T> {
     }
     let mut cycle_meter = WeightMeter::with_limit(remaining_weight);
     let now = frame_system::Pallet::<T>::block_number();
-    // Materialize already-due temporal readiness before taking the block-start
-    // run-queue snapshot. Every later append, including actor self-enqueue during
-    // execution, receives a ticket at or beyond this cutoff and waits one block.
     Self::drain_overdue_wakeups_cursor(now, &mut cycle_meter);
-    let cutoff = QueueTail::<T>::get();
-
+    let cutoff = NextQueueTicket::<T>::get();
     let max_executions = T::MaxExecutionsPerBlock::get();
     let max_scanned = T::MaxQueueEntriesScannedPerBlock::get();
-    let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
-    let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
-      .max(T::WeightInfo::scheduler_paged_consume_delete_page());
-    let hot_probe_weight = Self::scheduler_actor_hot_probe_weight_upper();
-    let program_probe_weight = Self::scheduler_actor_program_probe_weight_upper();
-    let hot_admission_weight = hot_probe_weight.saturating_add(consume_weight);
     let mut executed = 0u32;
     let mut scanned = 0u32;
     let mut work_requeues: Vec<AaaId> = Vec::new();
+    // Typed phase meters consume admitted actor-execution Weight only. Discovery,
+    // cleanup, wakeups, probes, admission, and page bookkeeping consume cycle_meter.
     let system_share = Self::effective_system_service_share();
     let mut system_meter =
       WeightMeter::with_limit(Self::service_budget(remaining_weight, system_share));
-    let system_execution_limit = Self::service_execution_limit(max_executions, system_share);
+    let system_limit = Self::service_execution_limit(max_executions, system_share);
     let mut system_executed = 0u32;
-
-    while executed < max_executions && system_executed < system_execution_limit {
-      let Some((aaa_id, ticket)) =
-        Self::earliest_priority_system_ticket(cutoff, now, &mut cycle_meter, hot_probe_weight)
-      else {
-        break;
-      };
-      if !cycle_meter.can_consume(consume_weight) {
-        break;
-      }
-      ActorHot::<T>::mutate(aaa_id, |maybe| {
-        if let Some(hot) = maybe.as_mut()
-          && hot.queue_ticket == Some(ticket)
-        {
-          hot.queue_ticket = None;
-        }
-      });
-      cycle_meter.consume(consume_weight);
-      let service = Self::service_priority_system_actor(
-        aaa_id,
+    while executed < max_executions && system_executed < system_limit {
+      match Self::service_lane_head(
+        QueueGroup::System,
+        cutoff,
         now,
         &mut cycle_meter,
-        &mut system_meter,
-        hot_probe_weight,
-        program_probe_weight,
+        Some(&mut system_meter),
+        &mut scanned,
+        max_scanned,
         &mut work_requeues,
-      );
-      let execution_delta = u32::from(service.executed);
-      executed = executed.saturating_add(execution_delta);
-      system_executed = system_executed.saturating_add(execution_delta);
-      if service.stop_group {
-        break;
+      ) {
+        LaneStepResult::Progress {
+          executed: did_execute,
+        } => {
+          let delta = u32::from(did_execute);
+          executed = executed.saturating_add(delta);
+          system_executed = system_executed.saturating_add(delta);
+        }
+        LaneStepResult::NoWork | LaneStepResult::Blocked => break,
+      }
+    }
+
+    let user_share = T::UserExecutionGuarantee::get();
+    let mut user_meter =
+      WeightMeter::with_limit(Self::service_budget(remaining_weight, user_share));
+    let user_limit = Self::service_execution_limit(max_executions, user_share);
+    let mut user_executed = 0u32;
+    while executed < max_executions && user_executed < user_limit {
+      match Self::service_lane_head(
+        QueueGroup::User,
+        cutoff,
+        now,
+        &mut cycle_meter,
+        Some(&mut user_meter),
+        &mut scanned,
+        max_scanned,
+        &mut work_requeues,
+      ) {
+        LaneStepResult::Progress {
+          executed: did_execute,
+        } => {
+          let delta = u32::from(did_execute);
+          executed = executed.saturating_add(delta);
+          user_executed = user_executed.saturating_add(delta);
+        }
+        LaneStepResult::NoWork | LaneStepResult::Blocked => break,
       }
     }
 
     while executed < max_executions && scanned < max_scanned {
-      if QueueHead::<T>::get() >= cutoff || !cycle_meter.can_consume(scan_weight) {
+      let shared_discovery_weight =
+        T::WeightInfo::scheduler_paged_tombstone_drain(1).saturating_mul(2);
+      if max_scanned.saturating_sub(scanned) < 2
+        || !cycle_meter.can_consume(shared_discovery_weight)
+      {
         break;
       }
-      let before = QueueHead::<T>::get();
-      let drain = Self::paged_drain_tombstones(cutoff, 1);
-      if drain.entries_scanned == 0 {
-        break;
-      }
-      cycle_meter.consume(scan_weight);
-      scanned = scanned.saturating_add(drain.entries_scanned);
-      if QueueHead::<T>::get() != before {
-        continue;
-      }
-
-      let Some((ticket, entry)) = Self::paged_head_entry() else {
-        break;
-      };
-      if ticket >= cutoff || !cycle_meter.can_consume(hot_admission_weight) {
-        break;
-      }
-      let Some(hot) = ActorHot::<T>::get(entry.aaa_id) else {
-        cycle_meter.consume(hot_probe_weight);
-        break;
-      };
-      cycle_meter.consume(hot_probe_weight);
-      if hot.queue_ticket != Some(ticket) {
-        break;
-      }
-      let aaa_id = entry.aaa_id;
-      if hot.actor_class.aaa_type() == AaaType::System && Self::is_priority_system_id(aaa_id) {
-        if !Self::paged_consume_head(ticket) {
-          break;
-        }
-        cycle_meter.consume(consume_weight);
-        work_requeues.push(aaa_id);
-        continue;
-      }
-      if hot.run_state == RunState::Suspended {
-        if ContinuationStateStore::<T>::get(entry.aaa_id)
-          .is_some_and(|continuation| continuation.last_attempt_block == now)
-        {
-          break;
-        }
-      } else if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
-        break;
-      }
-      if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
-        if !Self::paged_consume_head(ticket) {
-          break;
-        }
-        cycle_meter.consume(consume_weight);
-        continue;
-      }
-      if !cycle_meter.can_consume(program_probe_weight.saturating_add(consume_weight)) {
-        break;
-      }
-      cycle_meter.consume(consume_weight);
-      let Some(program) = ActorProgram::<T>::get(aaa_id) else {
-        cycle_meter.consume(program_probe_weight);
-        if !Self::paged_consume_head(ticket) {
-          break;
-        }
-        continue;
-      };
-      cycle_meter.consume(program_probe_weight);
-      let instance = Self::compose_active_actor(hot, program);
-      let cycle_weight_upper = match Self::apply_admission(aaa_id, &instance, &cycle_meter) {
-        AdmissionDecision::Admit(weight) => {
-          if !Self::paged_consume_head(ticket) {
-            break;
+      let system = Self::live_lane_head(
+        QueueGroup::System,
+        cutoff,
+        &mut cycle_meter,
+        &mut scanned,
+        max_scanned,
+      );
+      let user = Self::live_lane_head(
+        QueueGroup::User,
+        cutoff,
+        &mut cycle_meter,
+        &mut scanned,
+        max_scanned,
+      );
+      let (group, head) = match (system, user) {
+        (Some(system_head), Some(user_head)) => {
+          if system_head.1.ticket < user_head.1.ticket {
+            (QueueGroup::System, system_head)
+          } else {
+            (QueueGroup::User, user_head)
           }
-          weight
         }
-        AdmissionDecision::Closed(weight) => {
-          let _ = Self::paged_consume_head(ticket);
-          cycle_meter.consume(weight);
-          continue;
-        }
-        AdmissionDecision::Defer(reason) => {
-          Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
-          break;
-        }
-        AdmissionDecision::Skip => {
-          if !Self::paged_consume_head(ticket) {
-            break;
-          }
-          if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
-            Self::schedule_next_work_local(aaa_id, &updated, now, &mut work_requeues);
-          }
-          continue;
-        }
+        (Some(system_head), None) => (QueueGroup::System, system_head),
+        (None, Some(user_head)) => (QueueGroup::User, user_head),
+        (None, None) => break,
       };
-      let _actual = Self::execute_single_cycle(aaa_id, instance, now);
-      cycle_meter.consume(cycle_weight_upper);
-      executed = executed.saturating_add(1);
-      if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
-        Self::schedule_next_work_local(aaa_id, &updated, now, &mut work_requeues);
+      match Self::service_live_lane_entry(
+        group,
+        head,
+        now,
+        &mut cycle_meter,
+        None,
+        &mut work_requeues,
+      ) {
+        LaneStepResult::Progress {
+          executed: did_execute,
+        } => {
+          executed = executed.saturating_add(u32::from(did_execute));
+        }
+        LaneStepResult::NoWork => continue,
+        LaneStepResult::Blocked => break,
       }
     }
+
     for aaa_id in work_requeues {
       Self::enqueue(aaa_id);
     }
     cycle_meter.consumed()
   }
 
-  fn effective_system_service_share() -> Perbill {
-    T::SystemAaaBudget::get().min(Perbill::one() - T::UserAaaBudget::get())
+  pub(crate) fn effective_system_service_share() -> Perbill {
+    T::SystemExecutionReserve::get().min(Perbill::one() - T::UserExecutionGuarantee::get())
   }
 
-  fn service_execution_limit(max_executions: u32, share: Perbill) -> u32 {
+  pub(crate) fn service_execution_limit(max_executions: u32, share: Perbill) -> u32 {
     if share.is_zero() || max_executions == 0 {
       0
     } else {
@@ -204,140 +163,160 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn service_budget(limit: Weight, share: Perbill) -> Weight {
+  pub(crate) fn service_budget(limit: Weight, share: Perbill) -> Weight {
     Weight::from_parts(
       share.mul_floor(limit.ref_time()),
       share.mul_floor(limit.proof_size()),
     )
   }
 
-  fn is_priority_system_id(aaa_id: AaaId) -> bool {
-    T::PrioritySystemAaaIds::get()
-      .into_iter()
-      .any(|configured| configured == aaa_id)
-  }
-
-  fn earliest_priority_system_ticket(
+  fn live_lane_head(
+    group: QueueGroup,
     cutoff: QueueTicket,
-    _now: BlockNumberFor<T>,
-    meter: &mut WeightMeter,
-    probe_weight: Weight,
-  ) -> Option<(AaaId, QueueTicket)> {
-    let mut earliest = None;
-    for aaa_id in T::PrioritySystemAaaIds::get() {
-      if !meter.can_consume(probe_weight) {
+    cycle_meter: &mut WeightMeter,
+    scanned: &mut u32,
+    max_scanned: u32,
+  ) -> Option<(QueueTicket, QueueEntry)> {
+    let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
+    while *scanned < max_scanned && cycle_meter.can_consume(scan_weight) {
+      let before = Self::queue_group_head(group);
+      let stats = Self::paged_drain_group_tombstones(group, cutoff, 1);
+      if stats.entries_scanned == 0 {
         return None;
       }
-      let hot = ActorHot::<T>::get(aaa_id);
-      meter.consume(probe_weight);
-      let Some(hot) = hot else {
-        continue;
-      };
-      if hot.actor_class.aaa_type() != AaaType::System {
+      cycle_meter.consume(scan_weight);
+      *scanned = scanned.saturating_add(stats.entries_scanned);
+      if Self::queue_group_head(group) != before {
         continue;
       }
-      let Some(ticket) = hot.queue_ticket else {
-        continue;
-      };
-      if ticket >= cutoff {
-        continue;
-      }
-      if earliest.is_none_or(|(_, earliest_ticket)| ticket < earliest_ticket) {
-        earliest = Some((aaa_id, ticket));
-      }
+      let (position, entry) = Self::paged_group_head_entry(group)?;
+      return (entry.ticket < cutoff).then_some((position, entry));
     }
-    earliest
+    None
   }
 
-  fn service_priority_system_actor(
-    aaa_id: AaaId,
+  #[allow(clippy::too_many_arguments)]
+  fn service_lane_head(
+    group: QueueGroup,
+    cutoff: QueueTicket,
     now: BlockNumberFor<T>,
     cycle_meter: &mut WeightMeter,
-    system_meter: &mut WeightMeter,
-    hot_probe_weight: Weight,
-    program_probe_weight: Weight,
+    phase_meter: Option<&mut WeightMeter>,
+    scanned: &mut u32,
+    max_scanned: u32,
     work_requeues: &mut Vec<AaaId>,
-  ) -> PriorityServiceResult {
-    if !cycle_meter.can_consume(hot_probe_weight) {
-      work_requeues.push(aaa_id);
-      return PriorityServiceResult {
-        executed: false,
-        stop_group: true,
-      };
+  ) -> LaneStepResult {
+    let Some(head) = Self::live_lane_head(group, cutoff, cycle_meter, scanned, max_scanned) else {
+      return LaneStepResult::NoWork;
+    };
+    Self::service_live_lane_entry(group, head, now, cycle_meter, phase_meter, work_requeues)
+  }
+
+  fn service_live_lane_entry(
+    group: QueueGroup,
+    (position, entry): (QueueTicket, QueueEntry),
+    now: BlockNumberFor<T>,
+    cycle_meter: &mut WeightMeter,
+    mut phase_meter: Option<&mut WeightMeter>,
+    work_requeues: &mut Vec<AaaId>,
+  ) -> LaneStepResult {
+    let consume_weight = T::WeightInfo::scheduler_paged_consume_preserve_page()
+      .max(T::WeightInfo::scheduler_paged_consume_delete_page());
+    let hot_probe_weight = Self::scheduler_actor_hot_probe_weight_upper();
+    let program_probe_weight = Self::scheduler_actor_program_probe_weight_upper();
+    if !cycle_meter.can_consume(hot_probe_weight.saturating_add(consume_weight)) {
+      return LaneStepResult::Blocked;
     }
-    let Some(hot) = ActorHot::<T>::get(aaa_id) else {
+    let Some(hot) = ActorHot::<T>::get(entry.aaa_id) else {
       cycle_meter.consume(hot_probe_weight);
-      return PriorityServiceResult {
-        executed: false,
-        stop_group: false,
-      };
+      return LaneStepResult::NoWork;
     };
     cycle_meter.consume(hot_probe_weight);
+    if hot.queue_ticket != Some(entry.ticket)
+      || Self::queue_group(hot.actor_class.aaa_type()) != group
+    {
+      return LaneStepResult::NoWork;
+    }
+    if hot.run_state == RunState::Suspended {
+      if ContinuationStateStore::<T>::get(entry.aaa_id)
+        .is_some_and(|continuation| continuation.last_attempt_block == now)
+      {
+        return LaneStepResult::Blocked;
+      }
+    } else if hot.cycle_nonce > 0 && hot.last_cycle_block == now {
+      return LaneStepResult::Blocked;
+    }
     if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
-      return PriorityServiceResult {
-        executed: false,
-        stop_group: false,
-      };
+      if !Self::paged_consume_group_head(group, position) {
+        return LaneStepResult::Blocked;
+      }
+      cycle_meter.consume(consume_weight);
+      return LaneStepResult::Progress { executed: false };
     }
-    if !cycle_meter.can_consume(program_probe_weight) {
-      work_requeues.push(aaa_id);
-      return PriorityServiceResult {
-        executed: false,
-        stop_group: true,
-      };
+    if !cycle_meter.can_consume(program_probe_weight.saturating_add(consume_weight)) {
+      return LaneStepResult::Blocked;
     }
-    let Some(program) = ActorProgram::<T>::get(aaa_id) else {
+    let Some(program) = ActorProgram::<T>::get(entry.aaa_id) else {
       cycle_meter.consume(program_probe_weight);
-      return PriorityServiceResult {
-        executed: false,
-        stop_group: false,
-      };
+      if !Self::paged_consume_group_head(group, position) {
+        return LaneStepResult::Blocked;
+      }
+      cycle_meter.consume(consume_weight);
+      return LaneStepResult::Progress { executed: false };
     };
     cycle_meter.consume(program_probe_weight);
+    let aaa_id = entry.aaa_id;
     let instance = Self::compose_active_actor(hot, program);
     match Self::apply_admission(aaa_id, &instance, cycle_meter) {
       AdmissionDecision::Admit(weight) => {
-        if !system_meter.can_consume(weight) {
-          work_requeues.push(aaa_id);
-          return PriorityServiceResult {
-            executed: false,
-            stop_group: true,
-          };
+        if !cycle_meter.can_consume(consume_weight.saturating_add(weight)) {
+          Self::deposit_event(Event::CycleDeferred {
+            aaa_id,
+            reason: DeferReason::InsufficientWeightBudget,
+          });
+          return LaneStepResult::Blocked;
         }
+        if phase_meter
+          .as_ref()
+          .is_some_and(|meter| !meter.can_consume(weight))
+        {
+          return LaneStepResult::Blocked;
+        }
+        if !Self::paged_consume_group_head(group, position) {
+          return LaneStepResult::Blocked;
+        }
+        cycle_meter.consume(consume_weight);
         let _actual = Self::execute_single_cycle(aaa_id, instance, now);
         cycle_meter.consume(weight);
-        system_meter.consume(weight);
+        if let Some(meter) = phase_meter.as_mut() {
+          meter.consume(weight);
+        }
         if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
           Self::schedule_next_work_local(aaa_id, &updated, now, work_requeues);
         }
-        PriorityServiceResult {
-          executed: true,
-          stop_group: false,
-        }
+        LaneStepResult::Progress { executed: true }
       }
       AdmissionDecision::Closed(weight) => {
-        cycle_meter.consume(weight);
-        PriorityServiceResult {
-          executed: false,
-          stop_group: false,
+        if !cycle_meter.can_consume(consume_weight.saturating_add(weight)) {
+          return LaneStepResult::Blocked;
         }
+        let _ = Self::paged_consume_group_head(group, position);
+        cycle_meter.consume(consume_weight.saturating_add(weight));
+        LaneStepResult::Progress { executed: false }
       }
       AdmissionDecision::Defer(reason) => {
         Self::deposit_event(Event::CycleDeferred { aaa_id, reason });
-        work_requeues.push(aaa_id);
-        PriorityServiceResult {
-          executed: false,
-          stop_group: true,
-        }
+        LaneStepResult::Blocked
       }
       AdmissionDecision::Skip => {
+        if !Self::paged_consume_group_head(group, position) {
+          return LaneStepResult::Blocked;
+        }
+        cycle_meter.consume(consume_weight);
         if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
           Self::schedule_next_work_local(aaa_id, &updated, now, work_requeues);
         }
-        PriorityServiceResult {
-          executed: false,
-          stop_group: false,
-        }
+        LaneStepResult::Progress { executed: false }
       }
     }
   }
@@ -353,14 +332,74 @@ impl<T: Config> Pallet<T> {
     u64::from(T::QueuePageSize::get())
   }
 
-  fn queue_page_and_slot(ticket: QueueTicket) -> (QueuePageId, usize) {
+  fn queue_page_and_slot(position: QueueTicket) -> (QueuePageId, usize) {
     let page_size = Self::queue_page_size();
-    ((ticket / page_size), (ticket % page_size) as usize)
+    ((position / page_size), (position % page_size) as usize)
   }
 
-  /// Append one actor to the monotonic paged-FIFO substrate.
-  ///
-  /// The block-start tail cutoff keeps entries appended during a pass in a later block.
+  pub(crate) fn queue_group(aaa_type: AaaType) -> QueueGroup {
+    match aaa_type {
+      AaaType::System => QueueGroup::System,
+      AaaType::User => QueueGroup::User,
+    }
+  }
+
+  pub(crate) fn queue_group_head(group: QueueGroup) -> QueueTicket {
+    match group {
+      QueueGroup::System => SystemQueueHead::<T>::get(),
+      QueueGroup::User => UserQueueHead::<T>::get(),
+    }
+  }
+
+  pub(crate) fn queue_group_tail(group: QueueGroup) -> QueueTicket {
+    match group {
+      QueueGroup::System => SystemQueueTail::<T>::get(),
+      QueueGroup::User => UserQueueTail::<T>::get(),
+    }
+  }
+
+  fn set_queue_group_head(group: QueueGroup, position: QueueTicket) {
+    match group {
+      QueueGroup::System => SystemQueueHead::<T>::put(position),
+      QueueGroup::User => UserQueueHead::<T>::put(position),
+    }
+  }
+
+  fn set_queue_group_tail(group: QueueGroup, position: QueueTicket) {
+    match group {
+      QueueGroup::System => SystemQueueTail::<T>::put(position),
+      QueueGroup::User => UserQueueTail::<T>::put(position),
+    }
+  }
+
+  fn queue_group_page(group: QueueGroup, page_id: QueuePageId) -> Option<QueuePageOf<T>> {
+    match group {
+      QueueGroup::System => SystemQueuePages::<T>::get(page_id),
+      QueueGroup::User => UserQueuePages::<T>::get(page_id),
+    }
+  }
+
+  fn insert_queue_group_page(group: QueueGroup, page_id: QueuePageId, page: QueuePageOf<T>) {
+    match group {
+      QueueGroup::System => SystemQueuePages::<T>::insert(page_id, page),
+      QueueGroup::User => UserQueuePages::<T>::insert(page_id, page),
+    }
+  }
+
+  fn remove_queue_group_page(group: QueueGroup, page_id: QueuePageId) {
+    match group {
+      QueueGroup::System => SystemQueuePages::<T>::remove(page_id),
+      QueueGroup::User => UserQueuePages::<T>::remove(page_id),
+    }
+  }
+
+  pub fn combined_queue_occupancy() -> u64 {
+    UserQueueTail::<T>::get()
+      .saturating_sub(UserQueueHead::<T>::get())
+      .saturating_add(SystemQueueTail::<T>::get().saturating_sub(SystemQueueHead::<T>::get()))
+  }
+
+  /// Append one actor to its immutable type-derived lane using one global ticket allocator.
   pub fn paged_enqueue(aaa_id: AaaId) -> bool {
     let Some(hot) = ActorHot::<T>::get(aaa_id) else {
       return false;
@@ -368,24 +407,30 @@ impl<T: Config> Pallet<T> {
     if hot.queue_ticket.is_some() {
       return true;
     }
-    let head = QueueHead::<T>::get();
-    let tail = QueueTail::<T>::get();
-    if tail < head || tail.saturating_sub(head) >= u64::from(T::MaxQueueLength::get()) {
+    let group = Self::queue_group(hot.actor_class.aaa_type());
+    let head = Self::queue_group_head(group);
+    let tail = Self::queue_group_tail(group);
+    if tail < head || Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get()) {
       return false;
     }
+    let ticket = NextQueueTicket::<T>::get();
+    let Some(next_ticket) = ticket.checked_add(1) else {
+      return false;
+    };
     let Some(next_tail) = tail.checked_add(1) else {
       return false;
     };
     let (page_id, slot) = Self::queue_page_and_slot(tail);
-    let mut page = QueuePages::<T>::get(page_id).unwrap_or_default();
-    if page.len() != slot || page.try_push(QueueEntry { aaa_id }).is_err() {
+    let mut page = Self::queue_group_page(group, page_id).unwrap_or_default();
+    if page.len() != slot || page.try_push(QueueEntry { ticket, aaa_id }).is_err() {
       return false;
     }
-    QueuePages::<T>::insert(page_id, page);
-    QueueTail::<T>::put(next_tail);
+    Self::insert_queue_group_page(group, page_id, page);
+    Self::set_queue_group_tail(group, next_tail);
+    NextQueueTicket::<T>::put(next_ticket);
     ActorHot::<T>::mutate(aaa_id, |maybe| {
       if let Some(hot) = maybe.as_mut() {
-        hot.queue_ticket = Some(tail);
+        hot.queue_ticket = Some(ticket);
       }
     });
     true
@@ -397,27 +442,58 @@ impl<T: Config> Pallet<T> {
     })
   }
 
-  pub fn paged_head_entry() -> Option<(QueueTicket, QueueEntry)> {
-    let head = QueueHead::<T>::get();
-    if head >= QueueTail::<T>::get() {
+  pub fn paged_group_head_entry(group: QueueGroup) -> Option<(QueueTicket, QueueEntry)> {
+    let head = Self::queue_group_head(group);
+    if head >= Self::queue_group_tail(group) {
       return None;
     }
     let (page_id, slot) = Self::queue_page_and_slot(head);
-    QueuePages::<T>::get(page_id)
+    Self::queue_group_page(group, page_id)
       .and_then(|page| page.get(slot).copied())
       .map(|entry| (head, entry))
   }
 
-  /// Commit physical consumption only after the scheduler has decided that the
-  /// current head may advance. Matching live membership clears actor-local state;
-  /// mismatches remain distinguishable tombstones.
-  pub fn paged_consume_head(ticket: QueueTicket) -> bool {
-    let head = QueueHead::<T>::get();
-    let tail = QueueTail::<T>::get();
-    if ticket != head || head >= tail {
+  pub fn queue_head() -> QueueTicket {
+    if UserQueueHead::<T>::get() < UserQueueTail::<T>::get() {
+      UserQueueHead::<T>::get()
+    } else {
+      SystemQueueHead::<T>::get()
+    }
+  }
+
+  pub fn queue_tail() -> QueueTicket {
+    if UserQueueHead::<T>::get() < UserQueueTail::<T>::get() {
+      UserQueueTail::<T>::get()
+    } else {
+      SystemQueueTail::<T>::get()
+    }
+  }
+
+  pub fn queue_pages(page_id: QueuePageId) -> Option<QueuePageOf<T>> {
+    UserQueuePages::<T>::get(page_id).or_else(|| SystemQueuePages::<T>::get(page_id))
+  }
+
+  pub fn paged_head_entry() -> Option<(QueueTicket, QueueEntry)> {
+    let system = Self::paged_group_head_entry(QueueGroup::System);
+    let user = Self::paged_group_head_entry(QueueGroup::User);
+    match (system, user) {
+      (Some((_, system)), Some((_, user))) => Some(if system.ticket < user.ticket {
+        (system.ticket, system)
+      } else {
+        (user.ticket, user)
+      }),
+      (Some((_, entry)), None) | (None, Some((_, entry))) => Some((entry.ticket, entry)),
+      (None, None) => None,
+    }
+  }
+
+  pub fn paged_consume_group_head(group: QueueGroup, position: QueueTicket) -> bool {
+    let head = Self::queue_group_head(group);
+    let tail = Self::queue_group_tail(group);
+    if position != head || head >= tail {
       return false;
     }
-    let Some((_, entry)) = Self::paged_head_entry() else {
+    let Some((_, entry)) = Self::paged_group_head_entry(group) else {
       return false;
     };
     let Some(next_head) = head.checked_add(1) else {
@@ -435,18 +511,18 @@ impl<T: Config> Pallet<T> {
         };
         aligned
       };
-      QueuePages::<T>::remove(page_id);
-      QueueHead::<T>::put(aligned);
-      QueueTail::<T>::put(aligned);
+      Self::remove_queue_group_page(group, page_id);
+      Self::set_queue_group_head(group, aligned);
+      Self::set_queue_group_tail(group, aligned);
     } else {
-      QueueHead::<T>::put(next_head);
+      Self::set_queue_group_head(group, next_head);
       if next_head % page_size == 0 {
-        QueuePages::<T>::remove(page_id);
+        Self::remove_queue_group_page(group, page_id);
       }
     }
     ActorHot::<T>::mutate(entry.aaa_id, |maybe| {
       if let Some(hot) = maybe.as_mut()
-        && hot.queue_ticket == Some(ticket)
+        && hot.queue_ticket == Some(entry.ticket)
       {
         hot.queue_ticket = None;
       }
@@ -454,32 +530,48 @@ impl<T: Config> Pallet<T> {
     true
   }
 
-  /// Drain only stale physical entries before `cutoff`, stopping at the first
-  /// live actor ticket. Scanning and successful execution therefore remain
-  /// independent resources, and a caller can snapshot `QueueTail` at block start.
-  pub fn paged_drain_tombstones(cutoff: QueueTicket, scan_limit: u32) -> QueueDrainStats {
+  pub fn paged_consume_head(ticket: QueueTicket) -> bool {
+    for group in [QueueGroup::System, QueueGroup::User] {
+      if let Some((position, entry)) = Self::paged_group_head_entry(group)
+        && entry.ticket == ticket
+      {
+        return Self::paged_consume_group_head(group, position);
+      }
+    }
+    false
+  }
+
+  pub fn paged_drain_group_tombstones(
+    group: QueueGroup,
+    cutoff: QueueTicket,
+    scan_limit: u32,
+  ) -> QueueDrainStats {
     let mut stats = QueueDrainStats::default();
     if scan_limit == 0 {
       return stats;
     }
-    let original_head = QueueHead::<T>::get();
-    let tail = QueueTail::<T>::get();
-    let cutoff = cutoff.min(tail);
+    let original_head = Self::queue_group_head(group);
+    let tail = Self::queue_group_tail(group);
     let page_size = Self::queue_page_size();
     let mut head = original_head;
     let mut last_deleted_page = None;
 
-    'pages: while head < cutoff && stats.entries_scanned < scan_limit {
+    'pages: while head < tail && stats.entries_scanned < scan_limit {
       let (page_id, mut slot) = Self::queue_page_and_slot(head);
-      let Some(page) = QueuePages::<T>::get(page_id) else {
+      let Some(page) = Self::queue_group_page(group, page_id) else {
         break;
       };
       stats.pages_touched = stats.pages_touched.saturating_add(1);
-      while head < cutoff && stats.entries_scanned < scan_limit && slot < page.len() {
+      while head < tail && stats.entries_scanned < scan_limit && slot < page.len() {
         let entry = page[slot];
+        if entry.ticket >= cutoff {
+          break 'pages;
+        }
         stats.entries_scanned = stats.entries_scanned.saturating_add(1);
-        let is_live =
-          ActorHot::<T>::get(entry.aaa_id).is_some_and(|hot| hot.queue_ticket == Some(head));
+        let is_live = ActorHot::<T>::get(entry.aaa_id).is_some_and(|hot| {
+          hot.queue_ticket == Some(entry.ticket)
+            && Self::queue_group(hot.actor_class.aaa_type()) == group
+        });
         if is_live {
           break 'pages;
         }
@@ -488,7 +580,7 @@ impl<T: Config> Pallet<T> {
         slot = slot.saturating_add(1);
       }
       if slot == page.len() {
-        QueuePages::<T>::remove(page_id);
+        Self::remove_queue_group_page(group, page_id);
         last_deleted_page = Some(page_id);
         stats.pages_deleted = stats.pages_deleted.saturating_add(1);
       } else if slot < page.len() {
@@ -509,16 +601,29 @@ impl<T: Config> Pallet<T> {
       if remainder != 0 {
         let (page_id, _) = Self::queue_page_and_slot(head.saturating_sub(1));
         if last_deleted_page != Some(page_id) {
-          QueuePages::<T>::remove(page_id);
+          Self::remove_queue_group_page(group, page_id);
           stats.pages_deleted = stats.pages_deleted.saturating_add(1);
         }
       }
-      QueueHead::<T>::put(aligned);
-      QueueTail::<T>::put(aligned);
+      Self::set_queue_group_head(group, aligned);
+      Self::set_queue_group_tail(group, aligned);
     } else {
-      QueueHead::<T>::put(head);
+      Self::set_queue_group_head(group, head);
     }
     stats
+  }
+
+  pub fn paged_drain_tombstones(cutoff: QueueTicket, scan_limit: u32) -> QueueDrainStats {
+    let group = match (
+      Self::paged_group_head_entry(QueueGroup::System),
+      Self::paged_group_head_entry(QueueGroup::User),
+    ) {
+      (Some((_, system)), Some((_, user))) if system.ticket < user.ticket => QueueGroup::System,
+      (Some(_), Some(_)) | (None, Some(_)) => QueueGroup::User,
+      (Some(_), None) => QueueGroup::System,
+      (None, None) => return QueueDrainStats::default(),
+    };
+    Self::paged_drain_group_tombstones(group, cutoff, scan_limit)
   }
 
   pub(crate) fn wakeup_page_entry_matches(
@@ -1143,7 +1248,7 @@ impl<T: Config> Pallet<T> {
   /// guaranteed scheduler envelope.
   pub fn scheduler_admission_overhead() -> Weight {
     T::WeightInfo::scheduler_on_idle_base()
-      .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(1))
+      .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(2))
       .saturating_add(
         T::WeightInfo::scheduler_paged_consume_preserve_page()
           .max(T::WeightInfo::scheduler_paged_consume_delete_page()),
@@ -1153,10 +1258,7 @@ impl<T: Config> Pallet<T> {
           .max(T::WeightInfo::scheduler_paged_append_new_page()),
       )
       .saturating_add(T::WeightInfo::scheduler_wakeup_cursor_worker_future())
-      .saturating_add(
-        Self::scheduler_actor_hot_probe_weight_upper()
-          .saturating_mul(u64::from(T::MaxPrioritySystemAaaIds::get())),
-      )
+      .saturating_add(Self::scheduler_actor_hot_probe_weight_upper().saturating_mul(2))
       .saturating_add(Self::scheduler_actor_probe_weight_upper())
   }
 
@@ -1237,8 +1339,7 @@ impl<T: Config> Pallet<T> {
         block
       };
       let base_weight = Self::wakeup_cursor_drain_unit_weight_upper(false);
-      if QueueTail::<T>::get().saturating_sub(QueueHead::<T>::get())
-        >= u64::from(T::MaxActiveActors::get())
+      if Self::combined_queue_occupancy() >= u64::from(T::MaxActiveActors::get())
         || !meter.can_consume(base_weight)
       {
         break;
@@ -1490,8 +1591,29 @@ impl<T: Config> Pallet<T> {
       .map(|_| CloseReason::AutoCloseNonceReached)
   }
 
-  fn cycle_may_close_on_failure(instance: &AaaInstanceOf<T>) -> bool {
+  fn cycle_may_close_on_failure(
+    instance: &AaaInstanceOf<T>,
+    start_cursor: usize,
+    prior_unsuccessful_attempts_at_cursor: Option<u32>,
+  ) -> bool {
     Self::failure_limit_reached(instance.consecutive_failures.saturating_add(1))
+      || instance
+        .execution_plan
+        .iter() // deos-bypass: bounded-iter — plan length is bounded by runtime execution-plan constants
+        .enumerate()
+        .skip(start_cursor)
+        .any(|(index, step)| {
+          step.on_error.retry_max_attempts().is_some_and(|limit| {
+            let next_attempt = if index == start_cursor {
+              prior_unsuccessful_attempts_at_cursor
+                .unwrap_or_default()
+                .saturating_add(1)
+            } else {
+              1
+            };
+            next_attempt >= limit
+          })
+        })
   }
 
   fn cycle_may_auto_close_on_success(instance: &AaaInstanceOf<T>) -> bool {
@@ -1501,13 +1623,29 @@ impl<T: Config> Pallet<T> {
       .unwrap_or(false)
   }
 
-  fn cycle_requires_terminal_cleanup_budget(instance: &AaaInstanceOf<T>) -> bool {
-    Self::cycle_may_close_on_failure(instance) || Self::cycle_may_auto_close_on_success(instance)
+  fn cycle_requires_terminal_cleanup_budget(
+    instance: &AaaInstanceOf<T>,
+    start_cursor: usize,
+    prior_unsuccessful_attempts_at_cursor: Option<u32>,
+  ) -> bool {
+    Self::cycle_may_close_on_failure(
+      instance,
+      start_cursor,
+      prior_unsuccessful_attempts_at_cursor,
+    ) || Self::cycle_may_auto_close_on_success(instance)
   }
 
-  fn cycle_admission_weight_upper(instance: &AaaInstanceOf<T>, start_cursor: usize) -> Weight {
+  fn cycle_admission_weight_upper(
+    instance: &AaaInstanceOf<T>,
+    start_cursor: usize,
+    prior_unsuccessful_attempts_at_cursor: Option<u32>,
+  ) -> Weight {
     let mut weight = Self::attempt_weight_upper_bound(instance, start_cursor);
-    if Self::cycle_requires_terminal_cleanup_budget(instance) {
+    if Self::cycle_requires_terminal_cleanup_budget(
+      instance,
+      start_cursor,
+      prior_unsuccessful_attempts_at_cursor,
+    ) {
       weight = weight.saturating_add(Self::close_cycle_weight_upper_bound(instance));
     }
     weight
@@ -1542,20 +1680,30 @@ impl<T: Config> Pallet<T> {
     if let Some(reason) = Self::user_resource_close_reason(instance, false) {
       return Self::close_within_budget(aaa_id, instance, reason, meter);
     }
-    let start_cursor = if instance.run_state == RunState::Suspended {
-      ContinuationStateStore::<T>::get(aaa_id)
-        .expect("Suspended run_state requires ContinuationState")
-        .cursor as usize
+    let continuation = if instance.run_state == RunState::Suspended {
+      Some(
+        ContinuationStateStore::<T>::get(aaa_id)
+          .expect("Suspended run_state requires ContinuationState"),
+      )
     } else {
-      0
+      None
     };
+    let start_cursor = continuation
+      .as_ref()
+      .map_or(0, |state| state.cursor as usize);
     if instance.actor_class.aaa_type() == AaaType::User
       && T::AssetOps::balance(&instance.sovereign_account, T::NativeAssetId::get())
         < Self::attempt_fee_upper_bound(instance, start_cursor)
     {
       return Self::close_within_budget(aaa_id, instance, CloseReason::FeeBudgetExhausted, meter);
     }
-    let cycle_weight_upper = Self::cycle_admission_weight_upper(instance, start_cursor);
+    let cycle_weight_upper = Self::cycle_admission_weight_upper(
+      instance,
+      start_cursor,
+      continuation
+        .as_ref()
+        .map(|state| state.unsuccessful_attempts_at_cursor),
+    );
     if !meter.can_consume(cycle_weight_upper) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }

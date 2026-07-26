@@ -18,26 +18,16 @@ import {
   inspectAaaPlanArtifact,
 } from './plan-artifact.ts';
 import {
+  type AaaAmountName,
   type AaaSemanticTask,
+  type AaaTaskName,
   aaaAmountSemantics,
   aaaTaskSemantics,
 } from './semantic-manifest.ts';
 
-export const AAA_STATIC_ANALYZER_VERSION = '3' as const;
+export type { AaaAmountName, AaaTaskName } from './semantic-manifest.ts';
 
-export type AaaTaskName =
-  | 'Transfer'
-  | 'SplitTransfer'
-  | 'SwapExactIn'
-  | 'SwapExactOut'
-  | 'AddLiquidity'
-  | 'RemoveLiquidity'
-  | 'Burn'
-  | 'Mint'
-  | 'Stake'
-  | 'DonateLiquidity'
-  | 'Unstake'
-  | 'StopCycle';
+export const AAA_STATIC_ANALYZER_VERSION = '6' as const;
 
 export type AaaConditionName =
   | 'BalanceAbove'
@@ -46,13 +36,6 @@ export type AaaConditionName =
   | 'BalanceNotEquals'
   | 'BlockNumberAbove'
   | 'BlockNumberBelow';
-
-export type AaaAmountName =
-  | 'Fixed'
-  | 'PercentageOfCurrent'
-  | 'PercentageOfTrigger'
-  | 'PercentageOfLastFunding'
-  | 'AllBalance';
 
 export type AaaRequiredAdapter =
   | 'AssetOps'
@@ -98,6 +81,20 @@ export type AaaStaticWeightModel = {
   lifecycleOverhead: AaaCostSegment;
   fundingPromotionOverhead: AaaCostSegment;
   referenceBudget?: AaaWeight;
+};
+
+export type AaaMinimumBalanceEvidence = {
+  provenance: 'FinalizedStateProjection';
+  identity: string;
+  blockHash: AaaPlanHex;
+  entries: Array<{
+    asset: AaaPlanProjection;
+    minimumBalance: string;
+    recipientBalances: Array<{
+      recipient: AaaPlanProjection;
+      balance: string;
+    }>;
+  }>;
 };
 
 export type AaaAdapterCapabilityProfile = {
@@ -160,6 +157,7 @@ export type AaaStaticStepAnalysis = {
   parameters: AaaPlanProjection;
   amounts: AaaAmountSemantics[];
   errorPolicy: 'AbortCycle' | 'ContinueNextStep' | 'RetryLater';
+  retryMaxAttempts: number | null;
   successfulControl: AaaStaticSuccessfulControl;
   failureControls: AaaStaticFailureControl[];
   availability: 'UserAndSystem' | 'SystemOnly';
@@ -257,6 +255,31 @@ export type AaaStaticFinding =
     }
   | { kind: 'UnknownTemporaryFailureClassification'; step: number }
   | {
+      kind: 'SystemReferenceDeviationGuard';
+      step: number;
+      reference: 'FreshEmaOrDirectReserve';
+      localExecutionGuard: true;
+      fairPriceProof: false;
+      orderingProtection: false;
+    }
+  | {
+      kind: 'SplitTransferDepositPreflight';
+      step: number;
+      failureClass: 'Temporary';
+      atomic: true;
+    }
+  | {
+      kind: 'SplitTransferLegBelowKnownMinimum';
+      step: number;
+      leg: number;
+      asset: AaaPlanProjection;
+      recipient: AaaPlanProjection;
+      amount: string;
+      minimumBalance: string;
+      evidenceIdentity: string;
+      evidenceBlockHash: AaaPlanHex;
+    }
+  | {
       kind: 'StopCycleFailureMayFallThrough';
       step: number;
       suffixHasEconomicEffects: boolean;
@@ -292,6 +315,8 @@ export type ProgramStaticAnalysis = {
     runtimeModelIdentity: string;
     weightModelIdentity: string;
     adapterCapabilityIdentity: string | null;
+    minimumBalanceEvidenceIdentity: string | null;
+    minimumBalanceEvidenceBlockHash: AaaPlanHex | null;
     analyzerVersion: typeof AAA_STATIC_ANALYZER_VERSION;
   };
   program: 'Dormant' | 'Active';
@@ -369,6 +394,62 @@ function safeInteger(value: AaaPlanProjection, label: string): number {
 
 function fingerprint(value: AaaPlanProjection) {
   return JSON.stringify(value);
+}
+
+function unsignedBigInt(value: AaaPlanProjection, label: string): bigint {
+  const projected = record(value, label);
+  const integer = projected.$integer;
+  if (typeof integer !== 'string' || !/^[0-9]+$/.test(integer)) {
+    throw new Error(`${label} must be an unsigned integer projection`);
+  }
+  return BigInt(integer);
+}
+
+function evidenceBalance(value: string, label: string): bigint {
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error(`${label} must be an unsigned decimal string`);
+  }
+  return BigInt(value);
+}
+
+function validateMinimumBalanceEvidence(evidence: AaaMinimumBalanceEvidence) {
+  if (evidence.provenance !== 'FinalizedStateProjection') {
+    throw new Error(
+      'Minimum-balance evidence must be a finalized state projection',
+    );
+  }
+  if (evidence.identity.trim().length === 0) {
+    throw new Error('Minimum-balance evidence identity is required');
+  }
+  if (!/^0x[0-9a-fA-F]{64}$/.test(evidence.blockHash)) {
+    throw new Error('Minimum-balance evidence blockHash must be 32-byte hex');
+  }
+  const assets = new Set<string>();
+  evidence.entries.forEach((entry, entryIndex) => {
+    const assetKey = fingerprint(entry.asset);
+    if (assets.has(assetKey)) {
+      throw new Error('Minimum-balance evidence assets must be unique');
+    }
+    assets.add(assetKey);
+    evidenceBalance(
+      entry.minimumBalance,
+      `minimumBalanceEvidence.entries[${entryIndex}].minimumBalance`,
+    );
+    const recipients = new Set<string>();
+    entry.recipientBalances.forEach((recipient, recipientIndex) => {
+      const recipientKey = fingerprint(recipient.recipient);
+      if (recipients.has(recipientKey)) {
+        throw new Error(
+          'Minimum-balance evidence recipients must be unique per asset',
+        );
+      }
+      recipients.add(recipientKey);
+      evidenceBalance(
+        recipient.balance,
+        `minimumBalanceEvidence.entries[${entryIndex}].recipientBalances[${recipientIndex}].balance`,
+      );
+    });
+  });
 }
 
 function uniqueProjection(values: AaaPlanProjection[]) {
@@ -449,14 +530,25 @@ function asConditionName(value: string): AaaConditionName {
 }
 
 function errorPolicy(value: AaaPlanProjection) {
-  const type = variant(value, 'StepErrorPolicy').type;
-  switch (type) {
+  const parsed = variant(value, 'StepErrorPolicy');
+  switch (parsed.type) {
     case 'AbortCycle':
     case 'ContinueNextStep':
-    case 'RetryLater':
-      return type;
+      return { type: parsed.type, maxAttempts: null } as const;
+    case 'RetryLater': {
+      const maxAttempts = safeInteger(
+        member(parsed.value, 'max_attempts', 'StepErrorPolicy.RetryLater'),
+        'StepErrorPolicy.RetryLater.max_attempts',
+      );
+      if (maxAttempts === 0) {
+        throw new Error(
+          'StepErrorPolicy.RetryLater.max_attempts must be nonzero',
+        );
+      }
+      return { type: parsed.type, maxAttempts } as const;
+    }
     default:
-      throw new Error(`Unsupported StepErrorPolicy variant: ${type}`);
+      throw new Error(`Unsupported StepErrorPolicy variant: ${parsed.type}`);
   }
 }
 
@@ -759,9 +851,10 @@ function parseSteps(
       const parameters = parsedTask.value;
       const semantics = taskSemantics(parsedTask.type, parameters);
       const task = semantics.task;
-      const policy = errorPolicy(
+      const parsedPolicy = errorPolicy(
         member(projectedStep, 'on_error', `Step ${index}`),
       );
+      const policy = parsedPolicy.type;
       const costs = stepCost(
         artifact,
         model,
@@ -796,6 +889,7 @@ function parseSteps(
         parameters,
         amounts: taskAmounts(semantics, parameters),
         errorPolicy: policy,
+        retryMaxAttempts: parsedPolicy.maxAttempts,
         successfulControl: semantics.successfulControl,
         failureControls: failureControlsFor(policy, artifact.mutability),
         availability: semantics.availability,
@@ -1056,7 +1150,9 @@ function findings(
   dependencies: AaaForwardDataDependency[],
   envelopes: AaaStaticSuffixEnvelope[],
   model: AaaStaticWeightModel,
+  actorType: AaaPlanArtifact['aaaType'],
   capabilities?: AaaAdapterCapabilityProfile,
+  minimumBalanceEvidence?: AaaMinimumBalanceEvidence,
 ): AaaStaticFinding[] {
   const results: AaaStaticFinding[] = [];
   if (trigger?.admission === 'CadencedAlways') {
@@ -1072,6 +1168,88 @@ function findings(
     });
   }
   for (const step of steps) {
+    if (
+      actorType === 'System' &&
+      (step.task === 'SwapIn' || step.task === 'SwapOut')
+    ) {
+      results.push({
+        kind: 'SystemReferenceDeviationGuard',
+        step: step.index,
+        reference: 'FreshEmaOrDirectReserve',
+        localExecutionGuard: true,
+        fairPriceProof: false,
+        orderingProtection: false,
+      });
+    }
+    if (step.task === 'SplitTransfer') {
+      results.push({
+        kind: 'SplitTransferDepositPreflight',
+        step: step.index,
+        failureClass: 'Temporary',
+        atomic: true,
+      });
+      const amount = variant(
+        member(step.parameters, 'amount', 'SplitTransfer'),
+        'SplitTransfer.amount',
+      );
+      if (amount.type === 'Fixed' && minimumBalanceEvidence != null) {
+        const asset = member(step.parameters, 'asset', 'SplitTransfer');
+        const evidence = minimumBalanceEvidence.entries.find(
+          (entry) => fingerprint(entry.asset) === fingerprint(asset),
+        );
+        if (evidence != null) {
+          const total = unsignedBigInt(
+            amount.value,
+            'SplitTransfer.amount.Fixed',
+          );
+          const minimumBalance = evidenceBalance(
+            evidence.minimumBalance,
+            'SplitTransfer minimum balance',
+          );
+          array(
+            member(step.parameters, 'legs', 'SplitTransfer'),
+            'SplitTransfer.legs',
+          ).forEach((leg, legIndex) => {
+            const recipient = member(
+              leg,
+              'to',
+              `SplitTransfer.legs[${legIndex}]`,
+            );
+            const recipientEvidence = evidence.recipientBalances.find(
+              (candidate) =>
+                fingerprint(candidate.recipient) === fingerprint(recipient),
+            );
+            if (
+              recipientEvidence == null ||
+              evidenceBalance(
+                recipientEvidence.balance,
+                `SplitTransfer.legs[${legIndex}] recipient balance`,
+              ) !== 0n
+            ) {
+              return;
+            }
+            const share = unsignedBigInt(
+              member(leg, 'share', `SplitTransfer.legs[${legIndex}]`),
+              `SplitTransfer.legs[${legIndex}].share`,
+            );
+            const legAmount = (total * share) / 1_000_000_000n;
+            if (legAmount > 0n && legAmount < minimumBalance) {
+              results.push({
+                kind: 'SplitTransferLegBelowKnownMinimum',
+                step: step.index,
+                leg: legIndex,
+                asset,
+                recipient,
+                amount: legAmount.toString(),
+                minimumBalance: minimumBalance.toString(),
+                evidenceIdentity: minimumBalanceEvidence.identity,
+                evidenceBlockHash: minimumBalanceEvidence.blockHash,
+              });
+            }
+          });
+        }
+      }
+    }
     if (step.task === 'StopCycle' && step.errorPolicy === 'ContinueNextStep') {
       results.push({
         kind: 'StopCycleFailureMayFallThrough',
@@ -1190,8 +1368,12 @@ export function analyzeAaaProgram(input: {
   runtime: AaaPlanRuntimeIdentity & { modelIdentity: string };
   weightModel: AaaStaticWeightModel;
   adapterCapabilities?: AaaAdapterCapabilityProfile;
+  minimumBalanceEvidence?: AaaMinimumBalanceEvidence;
 }): ProgramStaticAnalysis {
   validateModel(input.weightModel);
+  if (input.minimumBalanceEvidence != null) {
+    validateMinimumBalanceEvidence(input.minimumBalanceEvidence);
+  }
   if (input.runtime.modelIdentity.length === 0) {
     throw new Error('Runtime model identity is required');
   }
@@ -1238,6 +1420,10 @@ export function analyzeAaaProgram(input: {
       runtimeModelIdentity: input.runtime.modelIdentity,
       weightModelIdentity: `${input.weightModel.identity}@${input.weightModel.version}`,
       adapterCapabilityIdentity: input.adapterCapabilities?.identity ?? null,
+      minimumBalanceEvidenceIdentity:
+        input.minimumBalanceEvidence?.identity ?? null,
+      minimumBalanceEvidenceBlockHash:
+        input.minimumBalanceEvidence?.blockHash ?? null,
       analyzerVersion: AAA_STATIC_ANALYZER_VERSION,
     },
     program: program.type,
@@ -1254,7 +1440,9 @@ export function analyzeAaaProgram(input: {
       dependencies,
       envelopes,
       input.weightModel,
+      input.artifact.aaaType,
       input.adapterCapabilities,
+      input.minimumBalanceEvidence,
     ),
   };
 }

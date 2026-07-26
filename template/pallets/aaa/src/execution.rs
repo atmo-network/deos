@@ -1,5 +1,5 @@
 use super::pallet::*;
-use super::types::Task as AaaTask;
+use super::types::{InputLimit, Task as AaaTask};
 use super::{
   AssetOps, DexOps, FeeCollector, LiquidityDonationOps, RetryClass, StakingOps, TaskFailure,
 };
@@ -53,16 +53,16 @@ enum PreparedTask<T: Config> {
     asset: T::AssetId,
     amount: T::Balance,
   },
-  SwapExactIn {
+  SwapIn {
     asset_in: T::AssetId,
-    asset_out: T::AssetId,
     amount_in: T::Balance,
+    asset_out: T::AssetId,
     slippage_tolerance: Perbill,
   },
-  SwapExactOut {
-    asset_in: T::AssetId,
+  SwapOut {
     asset_out: T::AssetId,
     amount_out: T::Balance,
+    asset_in: T::AssetId,
     max_amount_in: T::Balance,
     slippage_tolerance: Perbill,
   },
@@ -161,22 +161,24 @@ fn resolve_step_control(
   match (result, error_policy, mutability) {
     (StepResult::Completed, _, _) => StepControl::Advance,
     (StepResult::Stopped, _, _) => StepControl::CompleteCycle,
-    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater, Mutability::Mutable) => {
+    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater { .. }, Mutability::Mutable) => {
       StepControl::SuspendCurrent
     }
-    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater, Mutability::Immutable) => {
+    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater { .. }, Mutability::Immutable) => {
       StepControl::Terminate
     }
     (StepResult::FundingUnavailable, _, _) => StepControl::Advance,
     (StepResult::Failed(_), StepErrorPolicy::ContinueNextStep, _) => StepControl::Advance,
     (
       StepResult::Failed(RetryClass::Temporary),
-      StepErrorPolicy::RetryLater,
+      StepErrorPolicy::RetryLater { .. },
       Mutability::Mutable,
     ) => StepControl::SuspendCurrent,
-    (StepResult::Failed(_), StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater, _) => {
-      StepControl::Terminate
-    }
+    (
+      StepResult::Failed(_),
+      StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater { .. },
+      _,
+    ) => StepControl::Terminate,
   }
 }
 
@@ -264,6 +266,15 @@ impl<T: Config> Pallet<T> {
       ensure!(
         hot.mutability == Mutability::Mutable
           && continuation.cursor < program.execution_plan.len() as u32,
+        Error::<T>::ContinuationInvariant
+      );
+      let max_attempts = program.execution_plan[continuation.cursor as usize]
+        .on_error
+        .retry_max_attempts()
+        .ok_or(Error::<T>::ContinuationInvariant)?;
+      ensure!(
+        continuation.unsuccessful_attempts_at_cursor > 0
+          && continuation.unsuccessful_attempts_at_cursor < max_attempts,
         Error::<T>::ContinuationInvariant
       );
     }
@@ -365,17 +376,24 @@ impl<T: Config> Pallet<T> {
     instance: AaaInstanceOf<T>,
     now: BlockNumberFor<T>,
     mut trace: Option<&mut alloc::vec::Vec<SimulationStepRecord>>,
-  ) -> (Weight, bool) {
+  ) -> (Weight, bool, Option<CloseReason>) {
     let base_weight = T::DbWeight::get().writes(1);
     let is_continuation = instance.run_state == RunState::Suspended;
     let mut persisted_trigger_snapshot = None;
-    let (cycle_nonce, start_cursor, attempt, cumulative_outcomes) = if is_continuation {
+    let (
+      cycle_nonce,
+      start_cursor,
+      attempt,
+      prior_unsuccessful_attempts_at_cursor,
+      cumulative_outcomes,
+    ) = if is_continuation {
       let continuation = Self::begin_continuation_attempt(aaa_id, instance.cycle_nonce, now);
       persisted_trigger_snapshot = Some(continuation.trigger_snapshot);
       (
         instance.cycle_nonce,
         continuation.cursor,
         continuation.attempt,
+        continuation.unsuccessful_attempts_at_cursor,
         continuation.cumulative_outcomes,
       )
     } else {
@@ -394,7 +412,12 @@ impl<T: Config> Pallet<T> {
             reason: PauseReason::CycleNonceExhausted,
           });
         }
-        return (base_weight, true);
+        return (
+          base_weight,
+          true,
+          (instance.actor_class.aaa_type() == AaaType::User)
+            .then_some(CloseReason::CycleNonceExhausted),
+        );
       }
       let Some(cycle_nonce) = ActorHot::<T>::mutate(aaa_id, |maybe| {
         let inst = maybe.as_mut()?;
@@ -403,13 +426,13 @@ impl<T: Config> Pallet<T> {
         inst.last_cycle_block = now;
         Some(inst.cycle_nonce)
       }) else {
-        return (base_weight, true);
+        return (base_weight, true, None);
       };
       Self::deposit_event(Event::CycleStarted {
         aaa_id,
         cycle_nonce,
       });
-      (cycle_nonce, 0, 0, OutcomeTotals::default())
+      (cycle_nonce, 0, 0, 0, OutcomeTotals::default())
     };
     let funding = if instance.funding_tracked_count == 0 {
       None
@@ -430,6 +453,7 @@ impl<T: Config> Pallet<T> {
     let mut failed_steps = cumulative_outcomes.failed_steps;
     let mut attempt_executed_steps: u32 = 0;
     let mut execution_plan_failed = false;
+    let mut failure_close_reason = None;
     let mut suspended_at: Option<(u32, SuspensionReason)> = None;
     let mut reserved_fee_remaining = if is_user {
       Self::attempt_fee_upper_bound(&instance, start_cursor as usize)
@@ -682,7 +706,12 @@ impl<T: Config> Pallet<T> {
           continue;
         }
       }
-      if let Err(failure) = Self::execute_prepared_task(prepared_task, aaa_id, &actor) {
+      if let Err(failure) = Self::execute_prepared_task(
+        prepared_task,
+        aaa_id,
+        &actor,
+        instance.actor_class.aaa_type(),
+      ) {
         failed_steps = failed_steps.saturating_add(1);
         let retry = failure.retry;
         let control = resolve_step_control(
@@ -747,7 +776,18 @@ impl<T: Config> Pallet<T> {
         hot.consecutive_failures
       });
       failure_already_recorded = true;
-      if !Self::failure_limit_reached(consecutive_failures) {
+      let unsuccessful_attempts_at_cursor = if is_continuation && cursor == start_cursor {
+        prior_unsuccessful_attempts_at_cursor.saturating_add(1)
+      } else {
+        1
+      };
+      let max_attempts = execution_plan[cursor as usize]
+        .on_error
+        .retry_max_attempts()
+        .expect("suspension requires bounded RetryLater");
+      let local_limit_reached = unsuccessful_attempts_at_cursor >= max_attempts;
+      let global_limit_reached = Self::failure_limit_reached(consecutive_failures);
+      if !local_limit_reached && !global_limit_reached {
         let cumulative_outcomes = OutcomeTotals {
           executed_steps,
           skipped_conditions,
@@ -761,6 +801,7 @@ impl<T: Config> Pallet<T> {
           ContinuationState {
             cursor,
             attempt,
+            unsuccessful_attempts_at_cursor,
             last_attempt_block: now,
             trigger_snapshot: Self::trim_trigger_snapshot(
               execution_plan,
@@ -772,8 +813,13 @@ impl<T: Config> Pallet<T> {
           suspension_reason,
         )
         .expect("admitted mutable RetryLater plan has a valid unresolved cursor");
-        return (attempt_weight, false);
+        return (attempt_weight, false, None);
       }
+      failure_close_reason = Some(if local_limit_reached {
+        CloseReason::RetryAttemptsExhausted
+      } else {
+        CloseReason::ConsecutiveFailures
+      });
       execution_plan_failed = true;
     }
     let terminal_outcomes = OutcomeTotals {
@@ -825,11 +871,19 @@ impl<T: Config> Pallet<T> {
     if should_promote_funding {
       Self::promote_pending_funding(aaa_id);
     }
+    let mut terminal_close_reason = None;
     if execution_plan_failed {
       if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
-        if !inst.lifecycle.is_paused() && Self::failure_limit_reached(inst.consecutive_failures) {
-          Self::close_actor(aaa_id, &inst, CloseReason::ConsecutiveFailures)
-            .expect("fresh execution snapshot satisfies terminal preconditions");
+        let close_reason = failure_close_reason.or_else(|| {
+          Self::failure_limit_reached(inst.consecutive_failures)
+            .then_some(CloseReason::ConsecutiveFailures)
+        });
+        if !inst.lifecycle.is_paused() {
+          if let Some(reason) = close_reason {
+            Self::close_actor(aaa_id, &inst, reason)
+              .expect("fresh execution snapshot satisfies terminal preconditions");
+            terminal_close_reason = Some(reason);
+          }
         }
       }
     } else if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
@@ -837,10 +891,11 @@ impl<T: Config> Pallet<T> {
         if cycle_nonce >= target_nonce {
           Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached)
             .expect("fresh execution snapshot satisfies terminal preconditions");
+          terminal_close_reason = Some(CloseReason::AutoCloseNonceReached);
         }
       }
     }
-    (attempt_weight, execution_plan_failed)
+    (attempt_weight, execution_plan_failed, terminal_close_reason)
   }
 
   pub fn simulate_current_program(
@@ -898,16 +953,22 @@ impl<T: Config> Pallet<T> {
     let now = frame_system::Pallet::<T>::block_number();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let mut trace = alloc::vec::Vec::new();
-      let (_, failed) = Self::execute_single_cycle_traced(aaa_id, instance, now, Some(&mut trace));
+      let (_, failed, close_reason) =
+        Self::execute_single_cycle_traced(aaa_id, instance, now, Some(&mut trace));
       let continuation = ContinuationStateStore::<T>::get(aaa_id);
       let status = if continuation.is_some() {
         SimulationStatus::Suspended
+      } else if let Some(reason) = close_reason {
+        SimulationStatus::Closed(reason)
       } else if failed {
         SimulationStatus::Aborted
       } else {
         SimulationStatus::Completed
       };
       let continuation_cursor = continuation.as_ref().map(|state| state.cursor);
+      let unsuccessful_attempts_at_cursor = continuation
+        .as_ref()
+        .map(|state| state.unsuccessful_attempts_at_cursor);
       let finalized_through = continuation_cursor
         .map(|cursor| cursor.checked_sub(1))
         .unwrap_or_else(|| trace.last().map(|record| record.step_index))
@@ -948,6 +1009,7 @@ impl<T: Config> Pallet<T> {
         attempt,
         start_cursor,
         continuation_cursor,
+        unsuccessful_attempts_at_cursor,
         finalized_through,
         cumulative_outcomes,
         steps: trace,
@@ -1017,12 +1079,12 @@ impl<T: Config> Pallet<T> {
         amount,
         ..
       } => Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces),
-      AaaTask::SwapExactIn {
+      AaaTask::SwapIn {
         asset_in,
         amount_in,
         ..
       } => Self::push_trigger_surface(amount_in, ResolutionSurface::Asset(*asset_in), surfaces),
-      AaaTask::SwapExactOut {
+      AaaTask::SwapOut {
         asset_out,
         amount_out,
         ..
@@ -1105,18 +1167,6 @@ impl<T: Config> Pallet<T> {
       .get(&surface)
       .copied()
       .ok_or(Error::<T>::SnapshotUnavailable.into())
-  }
-
-  fn cap_dex_trade(actor: &T::AccountId, amount: T::Balance) -> T::Balance {
-    T::DexOps::system_trade_cap(actor)
-      .map(|cap| amount.min(cap))
-      .unwrap_or(amount)
-  }
-
-  fn cap_liquidity_donation(actor: &T::AccountId, amount: T::Balance) -> T::Balance {
-    T::LiquidityDonationOps::system_trade_cap(actor)
-      .map(|cap| amount.min(cap))
-      .unwrap_or(amount)
   }
 
   fn prepare_task(
@@ -1229,10 +1279,10 @@ impl<T: Config> Pallet<T> {
           amount: resolved,
         }))
       }
-      AaaTask::SwapExactIn {
+      AaaTask::SwapIn {
         asset_in,
-        asset_out,
         amount_in,
+        asset_out,
         slippage_tolerance,
       } => {
         let resolved = match Self::resolve_for_task(
@@ -1250,18 +1300,18 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
-        Ok(PreparedTaskOutcome::Executable(PreparedTask::SwapExactIn {
+        Ok(PreparedTaskOutcome::Executable(PreparedTask::SwapIn {
           asset_in: *asset_in,
+          amount_in: resolved,
           asset_out: *asset_out,
-          amount_in: Self::cap_dex_trade(actor, resolved),
           slippage_tolerance: *slippage_tolerance,
         }))
       }
-      AaaTask::SwapExactOut {
-        asset_in,
+      AaaTask::SwapOut {
         asset_out,
         amount_out,
-        max_amount_in,
+        asset_in,
+        input_limit,
         slippage_tolerance,
       } => {
         let resolved = match Self::resolve_for_task(
@@ -1279,22 +1329,22 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
-        let max_amount_in = Self::spendable_balance(actor, *asset_in, reserved)
-          .saturating_sub(T::AssetOps::minimum_balance(*asset_in))
-          .min(*max_amount_in);
-        let max_amount_in = Self::cap_dex_trade(actor, max_amount_in);
+        let preservable_input_capacity = Self::spendable_balance(actor, *asset_in, reserved)
+          .saturating_sub(T::AssetOps::minimum_balance(*asset_in));
+        let max_amount_in = match input_limit {
+          InputLimit::LiveQuote => preservable_input_capacity,
+          InputLimit::Absolute(authored_max) => (*authored_max).min(preservable_input_capacity),
+        };
         if max_amount_in.is_zero() {
           return Ok(PreparedTaskOutcome::FundingUnavailable);
         }
-        Ok(PreparedTaskOutcome::Executable(
-          PreparedTask::SwapExactOut {
-            asset_in: *asset_in,
-            asset_out: *asset_out,
-            amount_out: resolved,
-            max_amount_in,
-            slippage_tolerance: *slippage_tolerance,
-          },
-        ))
+        Ok(PreparedTaskOutcome::Executable(PreparedTask::SwapOut {
+          asset_out: *asset_out,
+          amount_out: resolved,
+          asset_in: *asset_in,
+          max_amount_in,
+          slippage_tolerance: *slippage_tolerance,
+        }))
       }
       AaaTask::AddLiquidity {
         asset_a,
@@ -1333,8 +1383,8 @@ impl<T: Config> Pallet<T> {
             PreparedTask::AddLiquidity {
               asset_a: *asset_a,
               asset_b: *asset_b,
-              amount_a: Self::cap_dex_trade(actor, resolved_a),
-              amount_b: Self::cap_dex_trade(actor, resolved_b),
+              amount_a: resolved_a,
+              amount_b: resolved_b,
               min_lp_out: *min_lp_out,
             },
           )),
@@ -1364,7 +1414,7 @@ impl<T: Config> Pallet<T> {
         Ok(PreparedTaskOutcome::Executable(
           PreparedTask::RemoveLiquidity {
             lp_asset: *lp_asset,
-            amount: Self::cap_dex_trade(actor, resolved),
+            amount: resolved,
             min_amount_a: *min_amount_a,
             min_amount_b: *min_amount_b,
           },
@@ -1416,7 +1466,7 @@ impl<T: Config> Pallet<T> {
           PreparedTask::DonateLiquidity {
             asset_a: *asset_a,
             asset_b: *asset_b,
-            amount: Self::cap_liquidity_donation(actor, resolved),
+            amount: resolved,
             max_ratio_error: *max_ratio_error,
           },
         ))
@@ -1448,6 +1498,7 @@ impl<T: Config> Pallet<T> {
     task: PreparedTask<T>,
     aaa_id: AaaId,
     actor: &T::AccountId,
+    aaa_type: AaaType,
   ) -> Result<(), TaskFailure> {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let result = (|| -> Result<(), TaskFailure> {
@@ -1475,7 +1526,9 @@ impl<T: Config> Pallet<T> {
                 continue;
               }
               if !T::AssetOps::can_deposit(&leg.to, asset, leg_amount) {
-                continue;
+                return Err(TaskFailure::temporary(
+                  Error::<T>::RecipientDepositUnavailable,
+                ));
               }
               effective_distributed = effective_distributed.saturating_add(leg_amount);
               normalized_transfers.push((leg.to.clone(), leg_amount));
@@ -1510,14 +1563,19 @@ impl<T: Config> Pallet<T> {
               amount,
             });
           }
-          PreparedTask::SwapExactIn {
+          PreparedTask::SwapIn {
             asset_in,
-            asset_out,
             amount_in,
+            asset_out,
             slippage_tolerance,
           } => {
-            let amount_out =
-              T::DexOps::swap_exact_in(actor, asset_in, asset_out, amount_in, slippage_tolerance)?;
+            let amount_out = T::DexOps::swap_exact_in(
+              crate::ExecutionContext::new(actor, aaa_type),
+              asset_in,
+              asset_out,
+              amount_in,
+              slippage_tolerance,
+            )?;
             Self::deposit_event(Event::SwapExecuted {
               aaa_id,
               asset_in,
@@ -1526,15 +1584,15 @@ impl<T: Config> Pallet<T> {
               amount_out,
             });
           }
-          PreparedTask::SwapExactOut {
-            asset_in,
+          PreparedTask::SwapOut {
             asset_out,
             amount_out,
+            asset_in,
             max_amount_in,
             slippage_tolerance,
           } => {
             let amount_in = T::DexOps::swap_exact_out(
-              actor,
+              crate::ExecutionContext::new(actor, aaa_type),
               asset_in,
               asset_out,
               amount_out,
@@ -1818,6 +1876,8 @@ impl<T: Config> Pallet<T> {
 mod step_control_tests {
   use super::*;
 
+  const RETRY: StepErrorPolicy = StepErrorPolicy::RetryLater { max_attempts: 3 };
+
   #[test]
   fn step_control_matrix_is_exhaustive() {
     let fixed_cases = [
@@ -1831,11 +1891,7 @@ mod step_control_tests {
         StepErrorPolicy::AbortCycle,
         StepControl::Advance,
       ),
-      (
-        StepResult::Completed,
-        StepErrorPolicy::RetryLater,
-        StepControl::Advance,
-      ),
+      (StepResult::Completed, RETRY, StepControl::Advance),
       (
         StepResult::Stopped,
         StepErrorPolicy::ContinueNextStep,
@@ -1846,11 +1902,7 @@ mod step_control_tests {
         StepErrorPolicy::AbortCycle,
         StepControl::CompleteCycle,
       ),
-      (
-        StepResult::Stopped,
-        StepErrorPolicy::RetryLater,
-        StepControl::CompleteCycle,
-      ),
+      (StepResult::Stopped, RETRY, StepControl::CompleteCycle),
       (
         StepResult::Failed(RetryClass::Permanent),
         StepErrorPolicy::ContinueNextStep,
@@ -1863,7 +1915,7 @@ mod step_control_tests {
       ),
       (
         StepResult::Failed(RetryClass::Permanent),
-        StepErrorPolicy::RetryLater,
+        RETRY,
         StepControl::Terminate,
       ),
       (
@@ -1882,11 +1934,7 @@ mod step_control_tests {
         assert_eq!(resolve_step_control(mutability, result, policy), expected);
       }
       assert_eq!(
-        resolve_step_control(
-          mutability,
-          StepResult::Failed(RetryClass::Temporary),
-          StepErrorPolicy::RetryLater,
-        ),
+        resolve_step_control(mutability, StepResult::Failed(RetryClass::Temporary), RETRY,),
         if mutability == Mutability::Mutable {
           StepControl::SuspendCurrent
         } else {
@@ -1910,19 +1958,11 @@ mod step_control_tests {
       }
     }
     assert_eq!(
-      resolve_step_control(
-        Mutability::Mutable,
-        StepResult::FundingUnavailable,
-        StepErrorPolicy::RetryLater,
-      ),
+      resolve_step_control(Mutability::Mutable, StepResult::FundingUnavailable, RETRY,),
       StepControl::SuspendCurrent,
     );
     assert_eq!(
-      resolve_step_control(
-        Mutability::Immutable,
-        StepResult::FundingUnavailable,
-        StepErrorPolicy::RetryLater,
-      ),
+      resolve_step_control(Mutability::Immutable, StepResult::FundingUnavailable, RETRY,),
       StepControl::Terminate,
     );
   }
