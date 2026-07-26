@@ -34,7 +34,10 @@ const localStep = (stepIndex, onError = 'AbortCycle', overrides = {}) => ({
   stepIndex,
   conditionSet: { type: 'Always' },
   taskControl: 'Execute',
-  onError,
+  onError:
+    onError === 'RetryLater'
+      ? { type: onError, maxAttempts: 3 }
+      : { type: onError },
   ...overrides,
 });
 
@@ -103,12 +106,14 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
   assert.equal(suspended.status, 'Suspended');
   assert.equal(suspended.state.balance, 90n);
   assert.equal(suspended.continuationCursor, 1);
+  assert.equal(suspended.unsuccessfulAttemptsAtCursor, 1);
   assert.equal(suspended.finalizedThrough, 0);
 
   const resumed = simulateAaaLocally({
     ...provenance,
     attempt: 1,
     startCursor: suspended.continuationCursor,
+    unsuccessfulAttemptsAtCursor: suspended.unsuccessfulAttemptsAtCursor,
     initialState: suspended.state,
     initialCounts: suspended.cumulative,
     steps: [localStep(0), localStep(1, 'RetryLater'), localStep(2)],
@@ -127,6 +132,81 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
     resumed.journal.map(({ stepIndex }) => stepIndex),
     [1, 2],
   );
+});
+
+test('RetryLater closes exactly on its local bound and counts funding unavailability', () => {
+  const closedImmediately = simulateAaaLocally({
+    ...provenance,
+    initialState: {},
+    steps: [
+      localStep(0, 'RetryLater', {
+        onError: { type: 'RetryLater', maxAttempts: 1 },
+      }),
+    ],
+    runTask() {
+      return { kind: 'Failed', retry: 'Temporary', error: 'unavailable' };
+    },
+  });
+  assert.equal(closedImmediately.status, 'Closed');
+  assert.equal(closedImmediately.closeReason, 'RetryAttemptsExhausted');
+  assert.equal(closedImmediately.continuationCursor, null);
+
+  const suspended = simulateAaaLocally({
+    ...provenance,
+    initialState: {},
+    steps: [
+      localStep(0, 'RetryLater', {
+        onError: { type: 'RetryLater', maxAttempts: 2 },
+      }),
+    ],
+    runTask() {
+      return { kind: 'FundingUnavailable' };
+    },
+  });
+  assert.equal(suspended.status, 'Suspended');
+  assert.equal(suspended.unsuccessfulAttemptsAtCursor, 1);
+
+  const exhausted = simulateAaaLocally({
+    ...provenance,
+    attempt: 1,
+    startCursor: 0,
+    unsuccessfulAttemptsAtCursor: 1,
+    initialState: suspended.state,
+    initialCounts: suspended.cumulative,
+    steps: [
+      localStep(0, 'RetryLater', {
+        onError: { type: 'RetryLater', maxAttempts: 2 },
+      }),
+    ],
+    runTask() {
+      return { kind: 'FundingUnavailable' };
+    },
+  });
+  assert.equal(exhausted.status, 'Closed');
+  assert.equal(exhausted.closeReason, 'RetryAttemptsExhausted');
+  assert.equal(exhausted.cumulative.skippedFundingUnavailable, 2);
+});
+
+test('cursor advancement resets the local unsuccessful-attempt count', () => {
+  const result = simulateAaaLocally({
+    ...provenance,
+    unsuccessfulAttemptsAtCursor: 2,
+    initialState: {},
+    steps: [
+      localStep(0),
+      localStep(1, 'RetryLater', {
+        onError: { type: 'RetryLater', maxAttempts: 2 },
+      }),
+    ],
+    runTask(step) {
+      return step.stepIndex === 0
+        ? { kind: 'Executed' }
+        : { kind: 'Failed', retry: 'Temporary', error: 'later-cursor' };
+    },
+  });
+  assert.equal(result.status, 'Suspended');
+  assert.equal(result.continuationCursor, 1);
+  assert.equal(result.unsuccessfulAttemptsAtCursor, 1);
 });
 
 test('permanent RetryLater aborts, and Immutable plans reject retry policy', () => {

@@ -3,6 +3,18 @@
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::Perbill;
 
+/// Minimal authoritative actor context for adapter operations whose policy depends on AAA type.
+pub struct ExecutionContext<'a, AccountId> {
+  pub actor: &'a AccountId,
+  pub aaa_type: crate::AaaType,
+}
+
+impl<'a, AccountId> ExecutionContext<'a, AccountId> {
+  pub const fn new(actor: &'a AccountId, aaa_type: crate::AaaType) -> Self {
+    Self { actor, aaa_type }
+  }
+}
+
 /// Closed retryability classification supplied by runtime mutation adapters.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
@@ -80,6 +92,10 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
 
   fn minimum_balance(asset: AssetId) -> Balance;
 
+  /// Returns whether the recipient can accept this exact amount now.
+  ///
+  /// `SplitTransfer` treats `false` as a temporary recipient-deposit condition, preflights every
+  /// non-zero leg before mutation, and retries the whole task rather than dropping one leg.
   fn can_deposit(who: &AccountId, asset: AssetId, amount: Balance) -> bool;
 }
 
@@ -93,11 +109,6 @@ pub trait StakingOps<AccountId, AssetId, Balance> {
 
 /// Runtime protocol-liquidity donation operation.
 pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
-  /// Runtime-owned cap for explicitly admitted System AAA sovereign accounts.
-  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
-    None
-  }
-
   fn donate_liquidity(
     who: &AccountId,
     asset_a: AssetId,
@@ -109,13 +120,8 @@ pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
 
 /// Runtime DEX operations.
 pub trait DexOps<AccountId, AssetId, Balance> {
-  /// Runtime-owned cap for explicitly admitted System AAA sovereign accounts.
-  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
-    None
-  }
-
   fn swap_exact_in(
-    who: &AccountId,
+    context: ExecutionContext<'_, AccountId>,
     asset_in: AssetId,
     asset_out: AssetId,
     amount_in: Balance,
@@ -123,7 +129,7 @@ pub trait DexOps<AccountId, AssetId, Balance> {
   ) -> Result<Balance, TaskFailure>;
 
   fn swap_exact_out(
-    who: &AccountId,
+    context: ExecutionContext<'_, AccountId>,
     asset_in: AssetId,
     asset_out: AssetId,
     amount_out: Balance,
@@ -185,7 +191,7 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
 /// Fail-closed `DexOps` fallback for runtimes without DEX support.
 impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> for () {
   fn swap_exact_in(
-    _: &AccountId,
+    _: ExecutionContext<'_, AccountId>,
     _: AssetId,
     _: AssetId,
     _: Balance,
@@ -197,7 +203,7 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
   }
 
   fn swap_exact_out(
-    _: &AccountId,
+    _: ExecutionContext<'_, AccountId>,
     _: AssetId,
     _: AssetId,
     _: Balance,

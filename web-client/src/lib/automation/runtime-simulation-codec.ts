@@ -27,11 +27,13 @@ export type AaaRuntimeStepOutcome =
   | { type: 'Suspended'; reason: string };
 
 export type AaaDecodedRuntimeSimulationOutcome = {
-  status: 'Completed' | 'Aborted' | 'Suspended';
+  status: 'Completed' | 'Aborted' | 'Suspended' | 'Closed';
+  closeReason: string | null;
   cycleNonce: bigint;
   attempt: number;
   startCursor: number;
   continuationCursor: number | null;
+  unsuccessfulAttemptsAtCursor: number | null;
   finalizedThrough: number | null;
   cumulativeOutcomes: {
     executedSteps: number;
@@ -167,10 +169,15 @@ function projectStepOutcome(value: unknown): AaaRuntimeStepOutcome {
 
 function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
   const outcome = asRecord(value, 'simulation outcome');
-  const status = asVariant(outcome.status, 'simulation status').type;
-  if (!['Completed', 'Aborted', 'Suspended'].includes(status)) {
+  const parsedStatus = asVariant(outcome.status, 'simulation status');
+  const status = parsedStatus.type;
+  if (!['Completed', 'Aborted', 'Suspended', 'Closed'].includes(status)) {
     throw new Error(`Unsupported runtime simulation status ${status}`);
   }
+  const closeReason =
+    status === 'Closed'
+      ? asVariant(parsedStatus.value, 'simulation close reason').type
+      : null;
   if (typeof outcome.cycle_nonce !== 'bigint' || outcome.cycle_nonce < 0n) {
     throw new Error('cycle_nonce must be a non-negative bigint');
   }
@@ -180,12 +187,17 @@ function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
   }
   return {
     status: status as AaaDecodedRuntimeSimulationOutcome['status'],
+    closeReason,
     cycleNonce: outcome.cycle_nonce,
     attempt: asIndex(outcome.attempt, 'attempt'),
     startCursor: asIndex(outcome.start_cursor, 'start_cursor'),
     continuationCursor: asOptionalIndex(
       outcome.continuation_cursor,
       'continuation_cursor',
+    ),
+    unsuccessfulAttemptsAtCursor: asOptionalIndex(
+      outcome.unsuccessful_attempts_at_cursor,
+      'unsuccessful_attempts_at_cursor',
     ),
     finalizedThrough: asOptionalIndex(
       outcome.finalized_through,

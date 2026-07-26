@@ -143,18 +143,6 @@ pub mod aaa_ids {
   /// Native Staking LP Farmer — donates NTVE/stNTVE reserves without minting LP
   /// Created at genesis (`aaa_id = 14`), Noop until the canonical pool is activated
   pub const NATIVE_STAKING_LP_FARMER_AAA_ID: u64 = 14;
-
-  /// Explicit System AAA ids admitted to bounded market service and market caps.
-  pub const PRIORITY_SYSTEM_AAA_IDS: [u64; 8] = [
-    BURNING_MANAGER_AAA_ID,
-    FEE_SINK_AAA_ID,
-    LIQUIDITY_ACTOR_AAA_ID,
-    TREASURY_B_AAA_ID,
-    TREASURY_C_AAA_ID,
-    TREASURY_D_AAA_ID,
-    BLDR_ZM_AAA_ID,
-    NATIVE_STAKING_LP_FARMER_AAA_ID,
-  ];
 }
 
 /// Protocol-native token asset IDs.
@@ -240,16 +228,16 @@ pub mod params {
 
   /// Maximum allowed price deviation from EMA price (20%).
   ///
-  /// Circuit breaker threshold: if market price deviates from the oracle price
-  /// by more than this percentage, the router rejects the trade to prevent
-  /// manipulation or anomalies.
+  /// Local deviation threshold: if execution price differs from the stored EMA
+  /// by more than this percentage, the router rejects the direct trade. This is
+  /// not an external fair-price or transaction-ordering guarantee.
   pub const MAX_PRICE_DEVIATION: Perbill = Perbill::from_percent(20);
 
-  /// Stricter reference-price deviation admitted for whitelisted System AAA swaps.
+  /// Stricter reference-price deviation guard for every System AAA swap.
   pub const MAX_SYSTEM_PRICE_DEVIATION: Perbill = Perbill::from_percent(5);
 
-  /// Maximum input contributed by one whitelisted System AAA market task.
-  pub const MAX_SYSTEM_TRADE: Balance = 100 * PRECISION;
+  /// Maximum age of an EMA used by the System AAA reference-deviation guard.
+  pub const MAX_SYSTEM_REFERENCE_AGE_BLOCKS: u32 = 100;
 
   /// Maximum hops in multi-asset routing paths (3).
   ///
@@ -316,12 +304,12 @@ pub mod params {
 
   /// Maximum tolerated slippage for generic System AAA swap operations (5%).
   /// Maximum swap slippage tolerance for generic System AAA execution plans.
-  /// Used directly as `SwapExactIn.slippage_tolerance` unless a runtime-specific
+  /// Used directly as `SwapIn.slippage_tolerance` unless a runtime-specific
   /// builder chooses a stricter policy.
   pub const SYSTEM_AAA_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(5);
 
   /// Maximum tolerated slippage for Liquidity Actor swap steps (3%).
-  /// Liquidity Actor execution plans derive their concrete `SwapExactIn.slippage_tolerance`
+  /// Liquidity Actor execution plans derive their concrete `SwapIn.slippage_tolerance`
   /// from the current native reserve depth and clamp it to this upper bound.
   pub const LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(3);
   /// Legacy alias for [`LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE`].

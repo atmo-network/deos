@@ -67,7 +67,7 @@ impl polkadot_sdk::frame_support::traits::Get<AccountId> for LiquidityActorAccou
 /// TMC pallet adapter for Axial Router integration
 pub struct TmcPalletAdapter<T: pallet_axial_router::pallet::Config>(core::marker::PhantomData<T>);
 
-/// Price oracle implementation for manipulation-resistant pricing
+/// Price-observation implementation for local deviation checks
 pub struct PriceOracleImpl<T: pallet_axial_router::pallet::Config>(core::marker::PhantomData<T>);
 
 /// Token-driven fee manager implementation with account-based coordination

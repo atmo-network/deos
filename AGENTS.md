@@ -90,8 +90,8 @@
 - `Reusable Pallet Packaging`: Treat a reusable pallet as an independently consumable package; keep its public host contract and separate external-consumer fixtures under the pallet ownership boundary, while concrete DEOS adapters and topology remain in the reference runtime composition.
 - `Deterministic Mechanics`: Runtime-managed economic reactions must use explicit triggers, typed payloads, bounded state, and weight-accounted execution.
 - `AAA Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `docs/aaa.specification.en.md` owns the full contract.
-- `AAA Authority Simplicity`: Keep consensus authority at `AaaType::{User, System}` until a concrete shipped need proves two types insufficient; bounded System service uses runtime constants plus an explicit AAA-id whitelist, not owner-authored priority, a generic policy object, or pre-extrinsic execution.
-- `AAA Market Loss Bounds`: Every market task must carry explicit spend/output bounds; whitelisted System trading additionally obeys runtime maximum trade amount and reference-price deviation, and temporary market rejection uses one capped retry/wakeup path rather than accepting an adverse fill.
+- `AAA Authority Simplicity`: Keep consensus authority at immutable `AaaType::{User, System}` until a concrete shipped need proves two types insufficient; every System actor receives bounded service through type-derived paged FIFO lanes under one scheduler, one global ticket allocator/cutoff, one actor-local ticket, and one wakeup/Continuation/lifecycle owner, not an AAA-id whitelist, owner-authored priority, a generic policy object, or pre-extrinsic execution.
+- `AAA Market Loss Bounds`: Every market task carries its owning spend/output bound; generic AAA must not impose an asset-agnostic raw-balance System cap. Every System swap additionally obeys the typed reference-deviation guard, and temporary market rejection uses one capped retry/wakeup path rather than accepting an adverse fill.
 - `Token-Driven Coordination`: Prefer asset movement and runtime hooks over privileged signed calls when token ingress itself defines the event.
 - `Bounded Consensus State`: Every storage collection, iteration, history surface, retry path, and projection must have a defensible bound.
 - `Read-Model Honesty`: Public data must be classified as bounded authoritative on-chain truth or externally indexed/materialized truth; canonical UX must not hide an indexer dependency.
@@ -107,6 +107,7 @@
 - `Protected Complexity`: Preserve complexity earned by real constraints and invariants; remove accidental complexity and speculative indirection.
 - `No Premature Optimization`: Prefer contract correctness and honest product flows over speculative loading, bundle, storage, or scheduler indirection.
 - `Pre-Fork Storage Lineage`: Before a downstream chain launches, reset fresh-baseline storage versions and remove historical migration ceremony; deployed forks own their migrations.
+- `Pre-Launch Contract Coherence`: Before any network launches and before a stability declaration, prefer one semantically ordered canonical SCALE/API contract over append-only compatibility, legacy aliases, or migration ceremony; group fields by domain meaning and hierarchy, then regenerate metadata, control-plane, client, tests, weights, and Wasm evidence together.
 
 ## 6. TMCTOL Economic Invariants
 

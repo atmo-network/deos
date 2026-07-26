@@ -7,7 +7,7 @@ use codec::{Decode, DecodeWithMemTracking, Encode};
 use pallet_aaa::{AssetOps, FeeCollector};
 use polkadot_sdk::{
   frame_support::{
-    BoundedVec, PalletId, construct_runtime,
+    PalletId, construct_runtime,
     traits::{ConstU8, ConstU32, ConstU64, ConstU128, Currency, ExistenceRequirement, Get},
     weights::Weight,
   },
@@ -236,12 +236,13 @@ pub struct FixedRateDex;
 #[cfg(feature = "dex-fixture")]
 impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
   fn swap_exact_in(
-    who: &AccountId,
+    context: pallet_aaa::ExecutionContext<'_, AccountId>,
     asset_in: AssetId,
     asset_out: AssetId,
     amount_in: Balance,
     _: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<Balance, pallet_aaa::TaskFailure> {
+    let who = context.actor;
     if asset_in != NATIVE_ASSET || asset_out != 2 {
       return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
         "UnsupportedPair",
@@ -257,13 +258,14 @@ impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
   }
 
   fn swap_exact_out(
-    who: &AccountId,
+    context: pallet_aaa::ExecutionContext<'_, AccountId>,
     asset_in: AssetId,
     asset_out: AssetId,
     amount_out: Balance,
     max_amount_in: Balance,
     _: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<Balance, pallet_aaa::TaskFailure> {
+    let who = context.actor;
     if asset_in != NATIVE_ASSET || asset_out != 1 {
       return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
         "UnsupportedPair",
@@ -504,17 +506,10 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance> for FixtureBenchma
   }
 }
 
-pub struct NoPrioritySystemAaaIds;
-impl Get<BoundedVec<pallet_aaa::AaaId, ConstU32<1>>> for NoPrioritySystemAaaIds {
-  fn get() -> BoundedVec<pallet_aaa::AaaId, ConstU32<1>> {
-    BoundedVec::default()
-  }
-}
-
-pub struct FullServiceBudget;
-impl Get<Perbill> for FullServiceBudget {
+pub struct ExecutionServiceShare;
+impl Get<Perbill> for ExecutionServiceShare {
   fn get() -> Perbill {
-    Perbill::one()
+    Perbill::from_percent(20)
   }
 }
 
@@ -539,10 +534,8 @@ impl pallet_aaa::Config for Runtime {
   type MaxConditionsPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
-  type MaxPrioritySystemAaaIds = ConstU32<1>;
-  type PrioritySystemAaaIds = NoPrioritySystemAaaIds;
-  type SystemAaaBudget = FullServiceBudget;
-  type UserAaaBudget = FullServiceBudget;
+  type SystemExecutionReserve = ExecutionServiceShare;
+  type UserExecutionGuarantee = ExecutionServiceShare;
   type MaxQueueLength = ConstU32<128>;
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
@@ -693,13 +686,13 @@ mod tests {
   #[cfg(feature = "dex-fixture")]
   fn temporary_swap_step() -> pallet_aaa::StepOf<Runtime> {
     step(
-      pallet_aaa::Task::SwapExactIn {
+      pallet_aaa::Task::SwapIn {
         asset_in: NATIVE_ASSET,
-        asset_out: 2,
         amount_in: pallet_aaa::AmountResolution::Fixed(10),
+        asset_out: 2,
         slippage_tolerance: Perbill::zero(),
       },
-      pallet_aaa::StepErrorPolicy::RetryLater,
+      pallet_aaa::StepErrorPolicy::RetryLater { max_attempts: 3 },
     )
   }
 
@@ -1119,7 +1112,8 @@ mod tests {
               == 1
           })
       );
-      assert_eq!(pallet_aaa::QueuePages::<Runtime>::iter().count(), 0);
+      assert_eq!(pallet_aaa::SystemQueuePages::<Runtime>::iter().count(), 0);
+      assert_eq!(pallet_aaa::UserQueuePages::<Runtime>::iter().count(), 0);
       assert!(
         actor_ids
           .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
@@ -1497,7 +1491,7 @@ mod tests {
             asset: NATIVE_ASSET,
             amount: pallet_aaa::AmountResolution::Fixed(10),
           },
-          pallet_aaa::StepErrorPolicy::RetryLater,
+          pallet_aaa::StepErrorPolicy::RetryLater { max_attempts: 3 },
         )],
       );
       assert_noop!(
@@ -1635,11 +1629,11 @@ mod tests {
   fn exact_output_swap_remains_available_with_a_runtime_adapter() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
-      let task = pallet_aaa::Task::SwapExactOut {
-        asset_in: NATIVE_ASSET,
+      let task = pallet_aaa::Task::SwapOut {
         asset_out: 1,
         amount_out: pallet_aaa::AmountResolution::Fixed(50),
-        max_amount_in: 100,
+        asset_in: NATIVE_ASSET,
+        input_limit: pallet_aaa::InputLimit::Absolute(100),
         slippage_tolerance: Perbill::zero(),
       };
       assert_ok!(AAA::create_user_aaa(
@@ -1675,7 +1669,7 @@ mod tests {
   fn optional_domain_adapters_fail_deterministically() {
     assert_eq!(
       <() as pallet_aaa::DexOps<AccountId, AssetId, Balance>>::swap_exact_out(
-        &ALICE,
+        pallet_aaa::ExecutionContext::new(&ALICE, pallet_aaa::AaaType::User),
         NATIVE_ASSET,
         1,
         10,

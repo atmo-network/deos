@@ -2,12 +2,12 @@
 
 > Open framework work only; durable protocol lives in `AGENTS.md`, and completed delivery history lives in `CHANGELOG.md`.
 >
-> Release boundary: `DEOS 0.7.5 — AAA Market Safety` is the current framework line. Completed semantics and evidence live in `CHANGELOG.md` and the owning AAA specification, package, architecture, and control-plane documents.
+> Release boundary: `DEOS 0.7.6 — AAA Intent, Failure, and Service Semantics` is the current framework line. Completed semantics and evidence live in `CHANGELOG.md` and the owning AAA specification, package, architecture, and control-plane documents.
 
-## Post-0.7.5 AAA Possibilities
+## Post-0.7.6 AAA Possibilities
 
-- [~] `Execution Classes`: Introduce an authority-independent consensus execution class only after a concrete shipped requirement cannot be expressed by `AaaType::{User, System}`, runtime constants, and an explicit System AAA whitelist; avoid speculative phase or priority taxonomy.
-- [~] `Batch Settlement`: Consider intent or frequent-batch settlement with one clearing rule only as a DEX-level `0.8` design after `0.7.5` closes service and loss envelopes; do not claim that scheduler priority alone removes order-based extraction.
+- [~] `AAA 0.7.7 / Price-Observation Ownership`: Reconsider a thin price-only pallet after a concrete second producer or consumer justifies extraction. First define bounded pair admission and typed unavailable/uninitialized/fresh/stale/degraded reads with local-pool provenance; preserve directional EMA math, pre-execution ordering, Router and System-AAA outcomes, rollback, weights, and metadata. Do not expand into generalized feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, history storage, or AAA oracle predicates without separate demand.
+- [~] `Batch Settlement`: Consider intent or frequent-batch settlement with one clearing rule only as a DEX-level later design after the `0.7.6` service and loss envelopes close; scheduler priority alone does not remove order-based extraction.
 - [~] `Probabilistic Trigger Extension`: Consider probability only as a future append-only progressive trigger extension after a concrete deterministic and financially secure entropy capability exists, has an owned runtime ingress/security model, and carries production ProofSize/weight evidence; `0.7.2` contract contraction does not permanently reject the capability.
 - [~] `Immutable Continuation`: Consider `RetryLater` for Immutable actors only after a concrete constitutional need defines non-intervention, cancellation, permanent adapter failure, terminal handling, and upgrade semantics beyond the validated Mutable-only baseline.
 - [~] `AAA 1.0 Declaration Gate`: Consider the append-only `1.0` line only after maintainers explicitly choose a stability declaration using the completed `0.7.3` independent-runtime evidence; any newly discovered breaking correction must revise the pre-`1.0` candidate and repeat the gate.

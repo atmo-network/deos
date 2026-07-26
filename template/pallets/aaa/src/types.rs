@@ -74,7 +74,14 @@ pub struct WakeupBucketState {
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub struct QueueEntry {
+  pub ticket: QueueTicket,
   pub aaa_id: AaaId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QueueGroup {
+  System,
+  User,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -107,6 +114,14 @@ pub enum AmountResolution<Balance> {
 }
 
 #[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum InputLimit<Balance> {
+  LiveQuote,
+  Absolute(Balance),
+}
+
+#[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub struct SplitLeg<AccountId> {
@@ -127,17 +142,17 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
     amount: AmountResolution<Balance>,
     legs: BoundedVec<SplitLeg<AccountId>, MaxSplitTransferLegs>,
   },
-  SwapExactIn {
+  SwapIn {
     asset_in: AssetId,
-    asset_out: AssetId,
     amount_in: AmountResolution<Balance>,
+    asset_out: AssetId,
     slippage_tolerance: Perbill,
   },
-  SwapExactOut {
-    asset_in: AssetId,
+  SwapOut {
     asset_out: AssetId,
     amount_out: AmountResolution<Balance>,
-    max_amount_in: Balance,
+    asset_in: AssetId,
+    input_limit: InputLimit<Balance>,
     slippage_tolerance: Perbill,
   },
   AddLiquidity {
@@ -197,28 +212,28 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
         amount: amount.clone(),
         legs: legs.clone(),
       },
-      Self::SwapExactIn {
+      Self::SwapIn {
         asset_in,
-        asset_out,
         amount_in,
+        asset_out,
         slippage_tolerance,
-      } => Self::SwapExactIn {
+      } => Self::SwapIn {
         asset_in: asset_in.clone(),
-        asset_out: asset_out.clone(),
         amount_in: amount_in.clone(),
+        asset_out: asset_out.clone(),
         slippage_tolerance: *slippage_tolerance,
       },
-      Self::SwapExactOut {
-        asset_in,
+      Self::SwapOut {
         asset_out,
         amount_out,
-        max_amount_in,
+        asset_in,
+        input_limit,
         slippage_tolerance,
-      } => Self::SwapExactOut {
-        asset_in: asset_in.clone(),
+      } => Self::SwapOut {
         asset_out: asset_out.clone(),
         amount_out: amount_out.clone(),
-        max_amount_in: max_amount_in.clone(),
+        asset_in: asset_in.clone(),
+        input_limit: input_limit.clone(),
         slippage_tolerance: *slippage_tolerance,
       },
       Self::AddLiquidity {
@@ -302,30 +317,30 @@ impl<
         .field("amount", amount)
         .field("legs", legs)
         .finish(),
-      Self::SwapExactIn {
+      Self::SwapIn {
         asset_in,
-        asset_out,
         amount_in,
+        asset_out,
         slippage_tolerance,
       } => f
-        .debug_struct("SwapExactIn")
+        .debug_struct("SwapIn")
         .field("asset_in", asset_in)
-        .field("asset_out", asset_out)
         .field("amount_in", amount_in)
+        .field("asset_out", asset_out)
         .field("slippage_tolerance", slippage_tolerance)
         .finish(),
-      Self::SwapExactOut {
-        asset_in,
+      Self::SwapOut {
         asset_out,
         amount_out,
-        max_amount_in,
+        asset_in,
+        input_limit,
         slippage_tolerance,
       } => f
-        .debug_struct("SwapExactOut")
-        .field("asset_in", asset_in)
+        .debug_struct("SwapOut")
         .field("asset_out", asset_out)
         .field("amount_out", amount_out)
-        .field("max_amount_in", max_amount_in)
+        .field("asset_in", asset_in)
+        .field("input_limit", input_limit)
         .field("slippage_tolerance", slippage_tolerance)
         .finish(),
       Self::AddLiquidity {
@@ -421,16 +436,16 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
         },
       ) => left_asset == right_asset && left_amount == right_amount && left_legs == right_legs,
       (
-        Self::SwapExactIn {
+        Self::SwapIn {
           asset_in: left_asset_in,
-          asset_out: left_asset_out,
           amount_in: left_amount_in,
+          asset_out: left_asset_out,
           slippage_tolerance: left_slippage,
         },
-        Self::SwapExactIn {
+        Self::SwapIn {
           asset_in: right_asset_in,
-          asset_out: right_asset_out,
           amount_in: right_amount_in,
+          asset_out: right_asset_out,
           slippage_tolerance: right_slippage,
         },
       ) => {
@@ -440,25 +455,25 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
           && left_slippage == right_slippage
       }
       (
-        Self::SwapExactOut {
-          asset_in: left_asset_in,
+        Self::SwapOut {
           asset_out: left_asset_out,
           amount_out: left_amount_out,
-          max_amount_in: left_max_amount_in,
+          asset_in: left_asset_in,
+          input_limit: left_input_limit,
           slippage_tolerance: left_slippage,
         },
-        Self::SwapExactOut {
-          asset_in: right_asset_in,
+        Self::SwapOut {
           asset_out: right_asset_out,
           amount_out: right_amount_out,
-          max_amount_in: right_max_amount_in,
+          asset_in: right_asset_in,
+          input_limit: right_input_limit,
           slippage_tolerance: right_slippage,
         },
       ) => {
         left_asset_in == right_asset_in
           && left_asset_out == right_asset_out
           && left_amount_out == right_amount_out
-          && left_max_amount_in == right_max_amount_in
+          && left_input_limit == right_input_limit
           && left_slippage == right_slippage
       }
       (
@@ -656,6 +671,7 @@ pub enum CloseReason {
   CycleNonceExhausted,
   FeeBudgetExhausted,
   AutoCloseNonceReached,
+  RetryAttemptsExhausted,
 }
 
 #[derive(
@@ -664,7 +680,16 @@ pub enum CloseReason {
 pub enum StepErrorPolicy {
   AbortCycle,
   ContinueNextStep,
-  RetryLater,
+  RetryLater { max_attempts: u32 },
+}
+
+impl StepErrorPolicy {
+  pub fn retry_max_attempts(self) -> Option<u32> {
+    match self {
+      Self::RetryLater { max_attempts } => Some(max_attempts),
+      Self::AbortCycle | Self::ContinueNextStep => None,
+    }
+  }
 }
 
 #[derive(
@@ -720,6 +745,7 @@ pub enum SimulationStatus {
   Completed,
   Aborted,
   Suspended,
+  Closed(CloseReason),
 }
 
 #[derive(
@@ -775,6 +801,7 @@ pub struct SimulationResult {
   pub attempt: u32,
   pub start_cursor: u32,
   pub continuation_cursor: Option<u32>,
+  pub unsuccessful_attempts_at_cursor: Option<u32>,
   pub finalized_through: Option<u32>,
   pub cumulative_outcomes: OutcomeTotals,
   pub steps: alloc::vec::Vec<SimulationStepRecord>,
@@ -1594,6 +1621,7 @@ pub struct OutcomeTotals {
 pub struct ContinuationState<AssetId, Balance, BlockNumber, MaxSnapshotEntries: Get<u32>> {
   pub cursor: u32,
   pub attempt: u32,
+  pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub trigger_snapshot: BoundedBTreeMap<ResolutionSurface<AssetId>, Balance, MaxSnapshotEntries>,
   pub cumulative_outcomes: OutcomeTotals,

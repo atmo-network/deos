@@ -356,7 +356,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   <DetailRow
                     label="Continuation"
                     value={actor.continuation
-                      ? `Attempt ${actor.continuation.attempt} · step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
+                      ? `Attempt ${actor.continuation.attempt} · unsuccessful ${actor.continuation.unsuccessfulAttemptsAtCursor} on step ${actor.continuation.cursor + 1} · block ${actor.continuation.lastAttemptBlock}`
                       : 'None'}
                     valueClass="tabnum text-(--mono-text)"
                   />

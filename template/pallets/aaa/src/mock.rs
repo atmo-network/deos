@@ -15,7 +15,10 @@ use polkadot_sdk::{
 use alloc::vec;
 use core::cell::RefCell;
 
-use crate::{AssetOps, DexOps, FeeCollector, LiquidityDonationOps, StakingOps, TaskFailure};
+use crate::{
+  AaaType, AssetOps, DexOps, ExecutionContext, FeeCollector, LiquidityDonationOps, StakingOps,
+  TaskFailure,
+};
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
 pub type AccountId = u64;
@@ -148,14 +151,14 @@ thread_local! {
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
+  static ASSET_MINIMUM_BALANCE: RefCell<Balance> = RefCell::new(1);
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
-  static SYSTEM_TRADE_CAP: RefCell<Option<Balance>> = RefCell::new(None);
+  static LAST_DEX_AAA_TYPE: RefCell<Option<AaaType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
-  static PRIORITY_SYSTEM_AAA_IDS: RefCell<alloc::vec::Vec<crate::AaaId>> = RefCell::new(alloc::vec::Vec::new());
-  static SYSTEM_AAA_BUDGET: RefCell<Perbill> = RefCell::new(Perbill::one());
-  static USER_AAA_BUDGET: RefCell<Perbill> = RefCell::new(Perbill::one());
+  static SYSTEM_EXECUTION_RESERVE: RefCell<Perbill> = RefCell::new(Perbill::from_percent(20));
+  static USER_EXECUTION_GUARANTEE: RefCell<Perbill> = RefCell::new(Perbill::from_percent(20));
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
@@ -165,6 +168,10 @@ thread_local! {
   static BENCHMARK_INGRESS: RefCell<Option<(AccountId, AccountId, Balance)>> = RefCell::new(None);
   #[cfg(feature = "runtime-benchmarks")]
   static BENCHMARK_ASSET_OPS_INGRESS: RefCell<bool> = RefCell::new(false);
+}
+
+pub fn set_asset_minimum_balance(amount: Balance) {
+  ASSET_MINIMUM_BALANCE.with(|value| *value.borrow_mut() = amount);
 }
 
 pub fn set_pool_reserves(
@@ -199,14 +206,14 @@ pub fn reset_mock_adapters() {
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
+  ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
-  SYSTEM_TRADE_CAP.with(|v| *v.borrow_mut() = None);
+  LAST_DEX_AAA_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
-  PRIORITY_SYSTEM_AAA_IDS.with(|ids| ids.borrow_mut().clear());
-  SYSTEM_AAA_BUDGET.with(|budget| *budget.borrow_mut() = Perbill::one());
-  USER_AAA_BUDGET.with(|budget| *budget.borrow_mut() = Perbill::one());
+  SYSTEM_EXECUTION_RESERVE.with(|share| *share.borrow_mut() = Perbill::from_percent(20));
+  USER_EXECUTION_GUARANTEE.with(|share| *share.borrow_mut() = Perbill::from_percent(20));
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
@@ -357,7 +364,7 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
   }
 
   fn minimum_balance(_asset: TestAsset) -> Balance {
-    1
+    ASSET_MINIMUM_BALANCE.with(|value| *value.borrow())
   }
 
   fn can_deposit(who: &AccountId, asset: TestAsset, amount: Balance) -> bool {
@@ -415,22 +422,17 @@ pub fn set_temporary_add_liquidity_failure(value: bool) {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = value);
 }
 
-pub fn set_system_trade_cap(value: Option<Balance>) {
-  SYSTEM_TRADE_CAP.with(|cap| *cap.borrow_mut() = value);
+pub fn last_dex_aaa_type() -> Option<AaaType> {
+  LAST_DEX_AAA_TYPE.with(|value| *value.borrow())
 }
 
 pub fn set_max_consecutive_failures(value: u32) {
   MAX_CONSECUTIVE_FAILURES.with(|maximum| *maximum.borrow_mut() = value);
 }
 
-pub fn set_authority_service_policy(
-  priority_system_ids: alloc::vec::Vec<crate::AaaId>,
-  system_budget: Perbill,
-  user_budget: Perbill,
-) {
-  PRIORITY_SYSTEM_AAA_IDS.with(|ids| *ids.borrow_mut() = priority_system_ids);
-  SYSTEM_AAA_BUDGET.with(|budget| *budget.borrow_mut() = system_budget);
-  USER_AAA_BUDGET.with(|budget| *budget.borrow_mut() = user_budget);
+pub fn set_execution_service_shares(system_reserve: Perbill, user_guarantee: Perbill) {
+  SYSTEM_EXECUTION_RESERVE.with(|share| *share.borrow_mut() = system_reserve);
+  USER_EXECUTION_GUARANTEE.with(|share| *share.borrow_mut() = user_guarantee);
 }
 
 pub fn set_fail_staking_ops(value: bool) {
@@ -456,17 +458,15 @@ pub fn set_fail_liquidity_donation_after_first_burn(value: bool) {
 pub struct MockDexOps;
 
 impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
-  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
-    SYSTEM_TRADE_CAP.with(|cap| *cap.borrow())
-  }
-
   fn swap_exact_in(
-    who: &AccountId,
+    context: ExecutionContext<'_, AccountId>,
     asset_in: TestAsset,
     asset_out: TestAsset,
     amount_in: Balance,
     slippage_tolerance: Perbill,
   ) -> Result<Balance, TaskFailure> {
+    let who = context.actor;
+    LAST_DEX_AAA_TYPE.with(|value| *value.borrow_mut() = Some(context.aaa_type));
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
     let amount_out = amount_in.saturating_mul(ro) / (ri.saturating_add(amount_in));
     let quote = amount_in.saturating_mul(ro) / ri.saturating_add(amount_in);
@@ -488,13 +488,15 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
   }
 
   fn swap_exact_out(
-    who: &AccountId,
+    context: ExecutionContext<'_, AccountId>,
     asset_in: TestAsset,
     asset_out: TestAsset,
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: Perbill,
   ) -> Result<Balance, TaskFailure> {
+    let who = context.actor;
+    LAST_DEX_AAA_TYPE.with(|value| *value.borrow_mut() = Some(context.aaa_type));
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
     if amount_out >= ro {
       return Err(DispatchError::Other("InsufficientPoolLiquidity").into());
@@ -635,10 +637,6 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
 pub struct MockLiquidityDonationOps;
 
 impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonationOps {
-  fn system_trade_cap(_: &AccountId) -> Option<Balance> {
-    SYSTEM_TRADE_CAP.with(|cap| *cap.borrow())
-  }
-
   fn donate_liquidity(
     who: &AccountId,
     asset_a: TestAsset,
@@ -903,30 +901,17 @@ impl Get<u64> for TestMaxAutoCloseNonceHorizon {
   }
 }
 
-pub struct TestPrioritySystemAaaIds;
-impl Get<BoundedVec<crate::AaaId, ConstU32<8>>> for TestPrioritySystemAaaIds {
-  fn get() -> BoundedVec<crate::AaaId, ConstU32<8>> {
-    PRIORITY_SYSTEM_AAA_IDS.with(|ids| {
-      ids
-        .borrow()
-        .clone()
-        .try_into()
-        .expect("test priority System AAA ids fit")
-    })
+pub struct TestSystemExecutionReserve;
+impl Get<Perbill> for TestSystemExecutionReserve {
+  fn get() -> Perbill {
+    SYSTEM_EXECUTION_RESERVE.with(|share| *share.borrow())
   }
 }
 
-pub struct TestSystemAaaBudget;
-impl Get<Perbill> for TestSystemAaaBudget {
+pub struct TestUserExecutionGuarantee;
+impl Get<Perbill> for TestUserExecutionGuarantee {
   fn get() -> Perbill {
-    SYSTEM_AAA_BUDGET.with(|budget| *budget.borrow())
-  }
-}
-
-pub struct TestUserAaaBudget;
-impl Get<Perbill> for TestUserAaaBudget {
-  fn get() -> Perbill {
-    USER_AAA_BUDGET.with(|budget| *budget.borrow())
+    USER_EXECUTION_GUARANTEE.with(|share| *share.borrow())
   }
 }
 
@@ -980,10 +965,8 @@ impl pallet_aaa::Config for Test {
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<8>;
   type MaxExecutionsPerBlock = ConstU32<3>;
-  type MaxPrioritySystemAaaIds = ConstU32<8>;
-  type PrioritySystemAaaIds = TestPrioritySystemAaaIds;
-  type SystemAaaBudget = TestSystemAaaBudget;
-  type UserAaaBudget = TestUserAaaBudget;
+  type SystemExecutionReserve = TestSystemExecutionReserve;
+  type UserExecutionGuarantee = TestUserExecutionGuarantee;
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;

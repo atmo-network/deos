@@ -16,9 +16,9 @@ export type AaaLocalSimulationProvenance = {
 };
 
 export type AaaStepErrorPolicy =
-  | 'AbortCycle'
-  | 'ContinueNextStep'
-  | 'RetryLater';
+  | { type: 'AbortCycle' }
+  | { type: 'ContinueNextStep' }
+  | { type: 'RetryLater'; maxAttempts: number };
 
 export type AaaLocalConditionSet<Condition> =
   | { type: 'Always' }
@@ -59,11 +59,13 @@ export type AaaLocalSimulationJournalEntry = {
 
 export type AaaLocalSimulationResult<State> = {
   provenance: AaaLocalSimulationProvenance;
-  status: 'Completed' | 'Aborted' | 'Suspended';
+  status: 'Completed' | 'Aborted' | 'Suspended' | 'Closed';
+  closeReason: 'RetryAttemptsExhausted' | null;
   cycleNonce: bigint;
   attempt: number;
   startCursor: number;
   continuationCursor: number | null;
+  unsuccessfulAttemptsAtCursor: number | null;
   finalizedThrough: number | null;
   state: State;
   cumulative: AaaLocalSimulationCounts;
@@ -125,6 +127,7 @@ export function simulateAaaLocally<State, Condition>(input: {
   cycleNonce: bigint;
   attempt: number;
   startCursor: number;
+  unsuccessfulAttemptsAtCursor?: number;
   initialState: State;
   initialCounts?: AaaLocalSimulationCounts;
   steps: AaaLocalStep<Condition>[];
@@ -143,20 +146,35 @@ export function simulateAaaLocally<State, Condition>(input: {
   if (input.startCursor > input.steps.length) {
     throw new Error('startCursor exceeds the plan length');
   }
+  const priorUnsuccessfulAttempts = input.unsuccessfulAttemptsAtCursor ?? 0;
+  validateIndex(priorUnsuccessfulAttempts, 'unsuccessfulAttemptsAtCursor');
+  if (priorUnsuccessfulAttempts > 0xffff_ffff) {
+    throw new Error('unsuccessfulAttemptsAtCursor exceeds u32');
+  }
   input.steps.forEach((step, index) => {
     if (step.stepIndex !== index) {
       throw new Error('steps must use contiguous ordered indices');
     }
     if (
-      !['AbortCycle', 'ContinueNextStep', 'RetryLater'].includes(step.onError)
+      !['AbortCycle', 'ContinueNextStep', 'RetryLater'].includes(
+        step.onError.type,
+      )
     ) {
       throw new Error(`Unsupported error policy at step ${index}`);
     }
     if (
       input.artifact.mutability === 'Immutable' &&
-      step.onError === 'RetryLater'
+      step.onError.type === 'RetryLater'
     ) {
       throw new Error('RetryLater remains Mutable-only');
+    }
+    if (
+      step.onError.type === 'RetryLater' &&
+      (!Number.isSafeInteger(step.onError.maxAttempts) ||
+        step.onError.maxAttempts <= 0 ||
+        step.onError.maxAttempts > 0xffff_ffff)
+    ) {
+      throw new Error('RetryLater maxAttempts must be a nonzero u32');
     }
     if (
       step.conditionSet.type !== 'Always' &&
@@ -250,10 +268,12 @@ export function simulateAaaLocally<State, Condition>(input: {
       return {
         provenance: provenance(input),
         status: 'Completed',
+        closeReason: null,
         cycleNonce: input.cycleNonce,
         attempt: input.attempt,
         startCursor: input.startCursor,
         continuationCursor: null,
+        unsuccessfulAttemptsAtCursor: null,
         finalizedThrough: index,
         state,
         cumulative,
@@ -261,35 +281,47 @@ export function simulateAaaLocally<State, Condition>(input: {
       };
     }
 
-    if (outcome.kind === 'Failed') {
-      if (step.onError === 'RetryLater' && outcome.retry === 'Temporary') {
-        return {
-          provenance: provenance(input),
-          status: 'Suspended',
-          cycleNonce: input.cycleNonce,
-          attempt: input.attempt,
-          startCursor: input.startCursor,
-          continuationCursor: index,
-          finalizedThrough: index === 0 ? null : index - 1,
-          state,
-          cumulative,
-          journal,
-        };
-      }
-      if (step.onError !== 'ContinueNextStep') {
-        return {
-          provenance: provenance(input),
-          status: 'Aborted',
-          cycleNonce: input.cycleNonce,
-          attempt: input.attempt,
-          startCursor: input.startCursor,
-          continuationCursor: null,
-          finalizedThrough: index,
-          state,
-          cumulative,
-          journal,
-        };
-      }
+    const retryable =
+      outcome.kind === 'FundingUnavailable' ||
+      (outcome.kind === 'Failed' && outcome.retry === 'Temporary');
+    if (step.onError.type === 'RetryLater' && retryable) {
+      const nextUnsuccessfulAttempts =
+        index === input.startCursor
+          ? Math.min(priorUnsuccessfulAttempts + 1, 0xffff_ffff)
+          : 1;
+      const exhausted = nextUnsuccessfulAttempts >= step.onError.maxAttempts;
+      return {
+        provenance: provenance(input),
+        status: exhausted ? 'Closed' : 'Suspended',
+        closeReason: exhausted ? 'RetryAttemptsExhausted' : null,
+        cycleNonce: input.cycleNonce,
+        attempt: input.attempt,
+        startCursor: input.startCursor,
+        continuationCursor: exhausted ? null : index,
+        unsuccessfulAttemptsAtCursor: exhausted
+          ? null
+          : nextUnsuccessfulAttempts,
+        finalizedThrough: index === 0 ? null : index - 1,
+        state,
+        cumulative,
+        journal,
+      };
+    }
+    if (outcome.kind === 'Failed' && step.onError.type !== 'ContinueNextStep') {
+      return {
+        provenance: provenance(input),
+        status: 'Aborted',
+        closeReason: null,
+        cycleNonce: input.cycleNonce,
+        attempt: input.attempt,
+        startCursor: input.startCursor,
+        continuationCursor: null,
+        unsuccessfulAttemptsAtCursor: null,
+        finalizedThrough: index,
+        state,
+        cumulative,
+        journal,
+      };
     }
     finalizedThrough = index;
   }
@@ -297,10 +329,12 @@ export function simulateAaaLocally<State, Condition>(input: {
   return {
     provenance: provenance(input),
     status: 'Completed',
+    closeReason: null,
     cycleNonce: input.cycleNonce,
     attempt: input.attempt,
     startCursor: input.startCursor,
     continuationCursor: null,
+    unsuccessfulAttemptsAtCursor: null,
     finalizedThrough,
     state,
     cumulative,

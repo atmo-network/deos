@@ -13,13 +13,13 @@ The current kernel/runtime slice provides:
 
 - User and system AAA creation with deterministic sovereign accounts
 - Bounded execution plans whose steps own one non-nested `ConditionSet::{Always, All, Any}` and one typed task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.)
-- Monotonic paged FIFO scheduler state (`QueueHead`, `QueueTail`, bounded `QueuePages`) plus time-ordered wakeup storage
+- One scheduler over type-derived `SystemQueue`/`UserQueue` paged FIFO lanes with a shared monotonic `NextQueueTicket`, common block cutoff, one actor-local live ticket, and shared time-ordered wakeup storage
 - Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Sparse progress-preserving Continuation for Mutable actors, with scalar suffix cursor, Temporary-only retry, deterministic cancellation, and no prefix replay
 - A bounded `simulate_current_program` rollback core and versioned `AaaSimulationApi` declaration that require exact stored-program identity, follow fresh/Continuation readiness, return ordered outcomes, and roll the entire attempt back
-- Runtime-configured adapters for assets, DEX, staking, liquidity donation, typed failure retryability, fee collection, direct ingress, and weights
+- Runtime-configured adapters for assets, DEX, staking, liquidity donation, typed failure retryability, fee collection, direct ingress, and weights; swap adapters receive only the actor account and authoritative immutable `AaaType` through a minimal execution context
 - Exhaustive package-owned instruction contracts for every task, condition, amount resolution, and error policy, with weight ownership delegated to `TaskWeightInfo`
 - Genesis provisioning of System actors through runtime configuration
 
@@ -67,7 +67,7 @@ Minimal checklist:
 - Provide deterministic genesis System AAA definitions only for actor roles the runtime actually wants to ship.
 - Treat example execution plans as reusable task-language patterns; treat the DEOS/TMCTOL System AAA catalog as one runtime's topology, not as the pallet's required deployment shape.
 - Classify adapter mutation failures explicitly as Permanent or Temporary; unknown and unsupported failures stay Permanent.
-- Bind `MaxContinuationSnapshotEntries` plus generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater`.
+- Bind `MaxContinuationSnapshotEntries` plus generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose nonzero `RetryLater { max_attempts }`.
 - Validate adapter failure atomicity and Mutable User/System Continuation with runtime-local tests when adapters perform multi-step mutations.
 
 ## Non-goals of the current slice

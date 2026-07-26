@@ -10,7 +10,7 @@ pub trait FeeRoutingAdapter<AccountId, Balance> {
   fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> DispatchResult;
 }
 
-/// Price oracle interface for manipulation-resistant pricing
+/// Price-observation interface for local deviation checks
 pub trait PriceOracle<Balance> {
   /// Update EMA price for an asset pair
   fn update_ema_price(

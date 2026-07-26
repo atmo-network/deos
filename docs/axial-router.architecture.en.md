@@ -16,8 +16,8 @@ It enforces a `Mechanism-Over-Policy` routing rule: it evaluates every viable pa
 ### Design Philosophy
 
 1.  `Stateless Execution` - Zero intermediate buffers; logic operates purely on input balances.
-2.  `Oracle-First Security` - EMA prices are updated _before_ execution to prevent intra-block manipulation.
-3.  `Trustless Verification` - Execution results are verified via physical balance deltas, not theoretical quotes.
+2.  `Pre-Execution Observation` - EMA inputs snapshot pool reserves before the current execution; they do not prove an external fair price or unmanipulated prior state.
+3.  `Balance-Delta Verification` - Execution results are verified via physical balance deltas rather than theoretical quotes.
 4.  `Native-Only Anchor` - Reduces graph complexity by using Native token as the universal hub.
 5.  `Anti-Self-Taxation` - Router's own account is exempt from fees to prevent recursive deductions during system operations.
 
@@ -53,7 +53,7 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 3. `Fee Calculation`: Zero for fee-exempt system accounts (Burn Actor, liquidity actors, Router); `Perbill`-based for users.
 4. `Gross-Debit Preflight`: Users must be able to pay the full `amount_in` under the selected preservation policy before any state-mutating swap path begins.
 5. `Route Selection`: `find_optimal_route()` evaluates all candidates and selects the route with the highest `expected_output` (pure mechanism: best price to the user).
-6. `Price Protection`: Validate recipient output against EMA oracle and slippage bounds.
+6. `Price Protection`: Validate recipient output against local EMA-reference and slippage bounds; neither proves an external fair price.
 7. `Fee Collection`: One-hop transfer from user to the Burn Actor via `FeeAdapter::route_fee()`, inside the same transactional flow as the swap.
 8. `Pre-Swap Oracle Update`: Snapshot pool reserves and update EMA prices _before_ trade execution.
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
@@ -188,7 +188,7 @@ Where `α = elapsed_blocks / (EmaHalfLife + elapsed_blocks)` using `Perbill` ari
 
 ### Pre-Swap Oracle Invariant
 
-Oracle updates execute `before` the swap modifies reserves, recording the "fair" pre-manipulation price:
+Oracle updates execute before the current swap modifies reserves and record that pre-execution pool ratio. Prior transactions may already have moved or manipulated the pool, so this snapshot is not a fair-price or ordering guarantee:
 
 ```rust
 fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Error<T>> {
@@ -217,7 +217,27 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ### Tracked Assets
 
-`TrackedAssets<T>` is a `BoundedVec<AssetKind, MaxTrackedAssets>` managed via governance extrinsic `add_tracked_asset`. Maximum capacity: 64 assets. Used for external oracle monitoring; the pre-swap update operates on the actual swap pair regardless of this list.
+`TrackedAssets<T>` is a `BoundedVec<AssetKind, MaxTrackedAssets>` managed via governance extrinsic `add_tracked_asset`. Maximum capacity: 64 assets. Used for bounded local price-observation monitoring; the pre-swap update operates on the actual swap pair regardless of this list.
+
+## Price-Observation Ownership Decision
+
+The `0.7.6` extraction gate is a no-go. Router behavior remains unchanged, and no generalized `pallet-oracle` enters this release. Extraction would require new pair-admission, status, freshness, provenance, storage, weight, metadata, and consumer contracts rather than a mechanical ownership move. No second producer exists, and the one runtime-local consumer outside Router is the System-AAA guard; that topology does not justify the release expansion.
+
+| Dimension | Current owner and contract |
+| --- | --- |
+| Values | Router `EmaPrices`, directional `(asset_in, asset_out)`, `Balance`, zero by `ValueQuery` |
+| Time | Router `EmaLastUpdate`, same directional key, zero by `ValueQuery` |
+| Cardinality | Actual pre-swap pairs write maps; `TrackedAssets <= 64` does not gate writes, so Router exposes no independent maximum pair count |
+| Initialization | First nonzero observation replaces zero EMA directly |
+| Update | `elapsed = max(current - last, 1)`; `alpha = elapsed / (EmaHalfLife + elapsed)`; spot ratio uses saturating `Balance` multiplication and division |
+| Ordering | Direct route validates against the previous EMA, collects fee, snapshots pre-execution reserves into EMA, then executes; transaction rollback covers failure |
+| Direction | Only the executed `from -> to` key updates; reverse state remains independent |
+| Router consumers | Direct-route deviation and informational direct-route price impact; multi-hop deviation uses slippage rather than EMA |
+| AAA consumer | System reference guard accepts a nonzero EMA through age 100, otherwise direct-reserve fallback, then fails closed if neither exists |
+| Governance | `add_tracked_asset` appends one unique bounded asset; it neither authorizes pairs nor configures feeds or EMA values |
+| History | No bounded history store or observation event; archive/history remains materialized-provider work |
+
+A future extraction must first define one bounded pair-admission owner and typed reads that distinguish unavailable, zero/uninitialized, fresh, stale, and degraded reserve fallback with explicit local-pool provenance. It must preserve exact pre-execution ordering, directional math, Router quote/execution outcomes, AAA freshness behavior, and rollback while regenerating pallet/runtime weights and metadata. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and AAA oracle predicates remain outside that price-only candidate.
 
 ## Storage Summary
 
@@ -375,7 +395,7 @@ Located in `runtime/src/tests/axial_router_integration_tests.rs`:
 
 ## Conclusion
 
-Axial Router is the central nervous system of the TMCTOL economic model. By enforcing `Pre-Swap Oracle Updates` and `One-Hop Fee Routing`, it mitigates intra-block price manipulation and keeps fee routing atomic and cheap. Every trade flows through the path that delivers the best price to the user. Note: the pre-swap EMA snapshot and bounded deviation guard are mitigations on direct routes, not a complete MEV/flash-loan defense; multi-hop routes rely on user slippage tolerance, and full sandwich resistance would require additional ordering/commit mechanisms not present on this launch line.
+Axial Router is the central execution gateway of the TMCTOL economic model. `Pre-Swap Oracle Updates` provide bounded local observations, and `One-Hop Fee Routing` keeps fee collection atomic. Viable routes compete by maximum recipient output. The EMA snapshot and deviation guard do not establish external fair price, prevent prior pool manipulation, or protect transaction ordering; user slippage and authored output/input bounds remain independent controls.
 
 ---
 

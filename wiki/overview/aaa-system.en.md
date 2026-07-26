@@ -66,9 +66,11 @@ Canonical SCALE `ProgramInput` remains the source of truth across metadata-bound
 
 ## Progress-Preserving Continuation
 
-A Mutable actor may mark a step `RetryLater`. When that step reports an explicitly Temporary adapter failure, AAA keeps one sparse Continuation with the unresolved step cursor, attempt number, last-attempt block, frozen typed suffix inputs, and cumulative outcomes. Retries reuse the same logical-run nonce and the existing FIFO/wakeup scheduler. They start at the unresolved step instead of replaying the committed prefix.
+A Mutable actor may mark a step `RetryLater { max_attempts }` with a nonzero `u32` limit. Temporary adapter failure or unavailable funding increments the unsuccessful-attempt count at the unresolved cursor; the initial failure counts as `1`, and advancing to a later cursor resets the local count. AAA keeps one sparse Continuation with that count, the logical-run-wide attempt, last-attempt block, frozen typed suffix inputs, and cumulative outcomes.
 
-Permanent and unsupported-adapter failures never create Continuation. Immutable actors cannot use `RetryLater`. Cancellation deletes current progress without compensation, prefix rollback, funding promotion, or balance movement; pause and the global breaker preserve it. Incoming signals during suspension remain latched for the next logical run.
+Retries reuse the same logical-run nonce and FIFO/wakeup scheduler. They start at the unresolved step instead of replaying the committed prefix. Reaching the local limit closes the actor with `RetryAttemptsExhausted`; a simultaneous actor-wide failure cutoff does not replace that more precise reason.
+
+Permanent and unsupported-adapter failures never create Continuation. Immutable actors cannot use bounded `RetryLater`. Cancellation deletes current progress without compensation, prefix rollback, funding promotion, or balance movement; pause and the global breaker preserve it. Incoming signals during suspension remain latched for the next logical run.
 
 `CycleStarted` appears once. `CycleContinued` and `CycleSuspended` identify attempts with `(aaa_id, cycle_nonce, attempt)`, while one cumulative `CycleSummary` terminates the logical run. Current Continuation is canonical chain state. Long attempt timelines require a materialized event index.
 
@@ -78,6 +80,8 @@ AAA keeps current starvation observability sparse. `IdleStarvationState` is abse
 
 `IdleStarvationDetected` and `IdleStarvationRecovered` each emit once per alerted interval. The current phase is canonical chain state; long-term alert history and duration trends belong in an indexed view built from those events. The production-Wasm healthy-empty probe confirms five reads and zero writes. Distinct wakeup blocks live in a paged binary min-heap with exact reverse indices. Insert, pop-min, and exact removal use at most `ceil(log2(MaxActiveActors))` sift steps, covered by maximum-depth generated benchmarks.
 
+Every DEOS System swap also applies a local reference-deviation guard. A nonzero EMA remains eligible through age 100 blocks; zero, missing, or older EMA falls back to the direct-pool reserve ratio, and absence of both references fails Temporary before mutation. The observed pool may already have been manipulated, so this guard proves neither external fair price nor transaction-order protection and does not replace task slippage or output bounds.
+
 ## Embedding Boundary
 
 External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into `FeeSink`; downstream allocation remains outside AAA. The DEOS reference Fee Sink currently applies the 50/50 staking/liquidity plan; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
@@ -86,9 +90,9 @@ The independent `template/pallets/aaa/embedding-runtime` external-consumer fixtu
 
 The `0.7.4` line keeps the unlaunched reference chain at fresh-baseline storage version `1`; it ships no historical migration. The independent embedding gate executes `Always → All → Any`, `StopCycle`, and Continuation behavior without a DEOS/TMCTOL helper or actor-topology dependency.
 
-The DEOS reference runtime also owns `LpPairByTokenId` outside generic AAA, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded.
+The DEOS reference runtime also owns `LpPairByTokenId` outside generic AAA, so liquidity removal resolves one exact LP-to-pair entry instead of scanning pools. Internal adapters and the transaction extension maintain that index when pools are created or first funded. Both authored minimum outputs reach Asset Conversion directly; an outer transactional balance-delta check remains as defense in depth.
 
-The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `ContinueNextStep`, `AbortCycle`, or Mutable-only `RetryLater` then decides whether the attempt proceeds, terminates, or suspends at the same step.
+The atomicity guarantee is task-scoped, not whole-plan scoped. If an adapter fails after partial mutation, the failed task rolls back its local effects and success event; earlier successful steps remain committed. `SplitTransfer` preflights every non-zero recipient before mutation; one deposit-ineligible leg fails the whole task Temporary, while successful retained value contains only undeclared share and integer-division dust. `ContinueNextStep`, `AbortCycle`, or Mutable-only bounded `RetryLater` then decides whether the attempt proceeds, terminates, or suspends at the same step.
 
 ## Control-Plane Boundary
 

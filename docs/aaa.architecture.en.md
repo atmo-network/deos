@@ -172,7 +172,7 @@ Each actor stores a bounded `ExecutionPlan` of ordered `Step`s:
 
 - `conditions: ConditionSet<Condition, MaxConditionsPerStep>`
 - `task: Task`
-- `on_error: StepErrorPolicy` (`AbortCycle` / `ContinueNextStep` / Mutable-only `RetryLater`)
+- `on_error: StepErrorPolicy` (`AbortCycle` / `ContinueNextStep` / Mutable-only `RetryLater { max_attempts }`)
 
 `ConditionSet` is one non-nested `Always`, `All`, or `Any` aggregate per step. `Always` owns zero atoms; validated `All` and `Any` own one through `MaxConditionsPerStep`. The executor evaluates every atom without short-circuiting, aggregates once, and either prepares the one task or skips one cursor. Empty groups fail as `EmptyConditionSet`; `Any` never duplicates task execution or introduces successor data.
 
@@ -182,14 +182,14 @@ Production-Wasm `50 × 20` maximum-group benchmarks use Native plus three distin
 
 `condition_set_evaluation(c)` uses the measured `Any` count regression plus a conservative envelope that component-wise reaches the `All(4)` maximum: zero for `Always`, then `12,524,232 + 7,031,192c` RefTime, `6,353 + 673c` ProofSize, and `3 + c` reads for `c = 1..4`. This envelope replaces the generated raw model after every production regeneration.
 
-The accepted cheap-cycle model is `98,059,000 + 52,124,345n` RefTime and `21,773 + 2,707n` estimated ProofSize, with `14 + 2n` reads and `3 + n` writes. Its fixed term includes the runtime priority-System probes; the model remains bounded production evidence rather than a whole-block throughput claim.
+Production-Wasm `50 × 20` scheduler evidence covers the expanded `QueueEntry`, both physical lanes, and shared-head comparison. System-only cheap execution is `81,856,000 + 52,467,024n` RefTime and `4,253 + 2,717n` ProofSize; alternating System/User execution is `267,777,000 + 99,462,004n` RefTime and `8,560 + 2,718n` ProofSize. Neither model establishes ordinary-block throughput.
 
 Task set in implementation:
 
 - `Transfer`
 - `SplitTransfer`
-- `SwapExactIn`
-- `SwapExactOut`
+- `SwapIn`
+- `SwapOut`
 - `AddLiquidity`
 - `RemoveLiquidity`
 - `Burn`
@@ -199,9 +199,11 @@ Task set in implementation:
 - `Unstake`
 - `StopCycle` (User/System, fieldless, adapter-free)
 
-`SwapExactOut` stores a fixed non-zero `max_amount_in` in the canonical task image. Preparation clamps it by live preservable input capacity after User fee reservation, and `DexOps::swap_exact_out` receives only the lesser bound. Zero-cap plans fail before storage; an insufficient cap produces task failure without a partial debit.
+`SwapOut` groups authored output before explicit `InputLimit::{LiveQuote, Absolute(Balance)}` protection. `Absolute(0)` fails before storage; `Absolute(nonzero)` composes its ceiling with live preservable input capacity, while `LiveQuote` intentionally uses that capacity without an authored long-horizon ceiling. `DexOps::swap_exact_out` always receives the resulting finite bound.
 
-Liquidity tasks also carry fixed non-zero outputs. `AddLiquidity.min_lp_out` reaches `DexOps::add_liquidity`; the DEOS adapter compares measured LP balance delta and returns failure below the bound. `RemoveLiquidity.min_amount_a` and `min_amount_b` pass directly into Asset Conversion. The task transaction rolls any failed minimum check back, so no success event or partial liquidity mutation survives.
+Liquidity tasks also carry fixed non-zero outputs. `AddLiquidity.min_lp_out` reaches `DexOps::add_liquidity`; the DEOS adapter compares measured LP balance delta and returns failure below the bound.
+
+`RemoveLiquidity.min_amount_a` and `min_amount_b` pass directly into Asset Conversion. Its two exact withdrawal-minimum errors classify as Temporary; malformed pair identity, missing indexed topology, and unknown downstream failures remain Permanent. The outer adapter transaction retains post-call balance-delta checks as defense in depth, so no success event or partial liquidity mutation survives either enforcement layer.
 
 `StopCycle` executes only after its conditions and ordinary User fee collection succeed. It records `SimulationStepOutcome::Stopped`, emits `CycleStopped { aaa_id, cycle_nonce, step_index }`, and ends the logical run successfully at that cursor. The shared completion path emits the cumulative summary, promotes pending funding, evaluates auto-close, clears a resumed Continuation, and leaves the suffix unreachable.
 
@@ -230,7 +232,7 @@ Resolution outcomes are deterministic:
 - `Skipped`
 - `FundingUnavailable`
 
-`FundingUnavailable` is a deterministic resolution outcome for both actor classes. It advances as a non-terminal skip under `AbortCycle` and `ContinueNextStep`, while valid Mutable `RetryLater` suspends at the current cursor. It covers missing or zero tracked snapshots, tracked-balance overspend, staking-share overspend, and preserve-spend resolution that would cross the minimum-balance ceiling. Untracked assets remain `SnapshotUnavailable`.
+`FundingUnavailable` is a deterministic resolution outcome for both actor classes. It advances as a non-terminal skip under `AbortCycle` and `ContinueNextStep`, while valid Mutable `RetryLater { max_attempts }` suspends at the current cursor. It covers missing or zero tracked snapshots, tracked-balance overspend, staking-share overspend, and preserve-spend resolution that would cross the minimum-balance ceiling. Untracked assets remain `SnapshotUnavailable`.
 
 Resolution and charging follow these rules:
 
@@ -254,17 +256,20 @@ The control-flow firewall combines closed types with adversarial evidence. `Step
 
 `TmctolDexOps` realizes swaps through the caller-aware Axial Router quote surface:
 
-- Exact input derives `min_out` from `quote_exact_input`, including the caller's router-fee status and the same maximum-output mechanism selection used by execution. Zero tolerance binds execution to that quote.
-- Exact output calls `quote_exact_out` once, computes `quoted_max_in = required_in + ceil(tolerance × required_in)`, requires that envelope to fit the task and live-capacity bound, then calls `execute_exact_out_for` with the explicit total-input cap.
+- Exact input receives `ExecutionContext { actor, aaa_type }`, derives `min_out` from the actor's `quote_exact_input`, includes the actor's router-fee status and the same maximum-output mechanism selection used by execution, and binds zero tolerance to that quote.
+- Exact output receives the same minimal typed context, calls the actor's `quote_exact_out` once, computes `quoted_max_in = required_in + ceil(tolerance × required_in)`, requires that envelope to fit the task and live-capacity bound, then calls `execute_exact_out_for` with the explicit total-input cap.
+- AAA constructs the context from stored immutable actor state at execution. The adapter uses `aaa_type` only where swap protection depends on User/System authority and does not infer it from the sovereign-account catalog.
 - Axial Router evaluates at most the direct XYK candidate and one reverse-quoted Native-anchored XYK path, selects minimum required input, includes the caller-aware router fee, and dispatches native exact-output execution. Direct TMC mint remains exact-input only because it has no exact-recipient-output execution contract.
 
 Runtime regressions cover fee-inclusive zero-tolerance exact input, tolerance rejection without mutation, minimal exact-output input, and exact funding for required input, later-step fees, and the preserved minimum.
 
 `classify_router_failure` exhaustively matches the typed Axial Router error enum: route/liquidity unavailability, slippage, oracle deviation/data unavailability, and missing multi-hop capacity are Temporary; malformed, forbidden, funding, fee, and configuration cases are Permanent. Liquidity and donation adapters emit owner-typed Temporary failures at explicit LP/output/ratio checks inside local transactions. Every unclassified downstream `DispatchError` remains Permanent.
 
-The runtime owns `PRIORITY_SYSTEM_AAA_IDS`, `AaaMaxSystemTrade = 100 × PRECISION`, and `AaaMaxSystemPriceDeviation = 5%` as separate constants rather than a policy object. The whitelist contains only Burn, Fee Sink, reference liquidity/treasury, BLDR liquidity, and native-staking liquidity roles. Generic AAA asks existing DEX/donation adapters for an optional cap and applies it after resolution to every market input; User and unlisted System accounts receive `None`.
+The runtime owns `AaaMaxSystemPriceDeviation = 5%` as a swap execution guard, not a generic market-policy object. No scheduler or market AAA-id whitelist and no asset-agnostic raw-balance System trade cap remain. Generic AAA dispatches task-local resolved market amounts unchanged except for exact output's authored maximum composed with live preservable input capacity.
 
-Before a whitelisted System swap, `TmctolDexOps` compares recipient-output/input price against nonzero pair EMA or, before EMA initialization, the direct pool reserve ratio. Deviation above 5% and unavailable reference are typed Temporary failures before mutation. User swaps retain Axial Router's ordinary 20% direct-pair guard. Native-anchored System routes without a pair reference fail closed rather than bypassing the guard.
+Before a swap whose authoritative execution context carries `AaaType::System`, `TmctolDexOps` compares recipient-output/input price against a nonzero pair EMA updated no more than `MAX_SYSTEM_REFERENCE_AGE_BLOCKS = 100` blocks ago. The exact age boundary remains eligible. Zero, missing, or stale EMA falls back to the direct pool reserve ratio; unavailable fallback and deviation above 5% are Temporary failures before mutation. User swaps retain Axial Router's ordinary 20% direct-pair guard. Native-anchored System routes without a pair reference fail closed rather than bypassing the guard.
+
+The guard is local execution protection, not an external oracle, fair-price proof, or ordering defense. EMA and reserve state may already reflect manipulated pool activity; Router slippage and authored task bounds remain independent.
 
 ---
 
@@ -316,21 +321,25 @@ The generic pallet collects opening and per-step User fees through one runtime-s
 - `ContinueNextStep` and `AbortCycle` do not alter the selected charge or trigger another collection.
 - `TmctolFeeCollector` atomically transfers each full charge into the Fee Sink System AAA; authorship and downstream allocation do not participate in collection.
 
-Pallet regressions cover each outcome, collection failure, one-call cardinality, and task rollback. Runtime integration proves that payer debit and Fee Sink credit equal the full collected amount. With final generated database weight, one indexed RemoveLiquidity step resolves to `978,587,000 / 8,817`, a `2,007,828,696` fee upper bound; a three-step User plan reserves `6,023,486,088`.
+Pallet regressions cover each outcome, collection failure, one-call cardinality, and task rollback. Runtime integration proves that payer debit and Fee Sink credit equal the full collected amount. User fee admission derives each step and complete-plan reserve from the current runtime-bound generated weight plus `StepBaseFee`; tests reject execution immediately below that exact reserve rather than pinning a stale copied fee number.
 
 ### Progress-Preserving Continuation
 
-`ActorHot.run_state` is the sole discovery marker. `Idle` reads no Continuation value; `Suspended` requires exactly one `ContinuationState[aaa_id]`. The sparse value stores only scalar `cursor`, `attempt`, `last_attempt_block`, frozen typed suffix snapshots, and cumulative outcomes. Try-state enforces marker/store equivalence, cursor bounds, Mutable-only policy, and snapshot-surface validity.
+`ActorHot.run_state` is the sole discovery marker. `Idle` reads no Continuation value; `Suspended` requires exactly one `ContinuationState[aaa_id]`. The sparse value stores scalar `cursor`, logical-run-wide `attempt`, `unsuccessful_attempts_at_cursor`, `last_attempt_block`, frozen typed suffix snapshots, and cumulative outcomes. Try-state enforces marker/store equivalence, cursor bounds, Mutable-only bounded retry policy, a live cursor-local count below its nonzero limit, and snapshot-surface validity.
 
-Attempt `0` opens one logical run and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater` writes suspension at the unresolved cursor. Retry increments `attempt`, reuses the nonce, omits the external cadence gate, and executes only the suffix. Permanent failure terminates without retry state; one-attempt success writes no Continuation.
+Attempt `0` opens one logical run and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater { max_attempts }` increments both global failure state and the cursor-local count. The first suspension stores `1`; same-cursor suspension increments saturatingly, while a later cursor resets to `1`.
+
+Inclusive local exhaustion closes with `RetryAttemptsExhausted`. If both cutoffs land together this explicit reason wins, while an already-nearer global cutoff closes with `ConsecutiveFailures`. A persisted retry still increments `attempt`, reuses the nonce, omits the external cadence gate, and executes only the suffix; Permanent failure terminates without retry state.
 
 `scheduler::retry_backoff_blocks` maps persisted attempt `0, 1, 2, ...` to `1, 2, 4, 8, 8...` blocks. Eligibility uses the larger of this delay and schedule cooldown, then respects window start. A one-block delay uses the existing next-block FIFO ticket; longer delays use the existing paged wakeup pointer. Repeated System reference-deviation failures therefore retain one cursor, perform no fill, and move from queue to wakeup without creating retry-specific scheduler state.
 
 `resolve_step_control` is the private exhaustive transition owner for completed, funding-unavailable, Permanent-failure, and Temporary-failure results across both mutability modes and all three error policies. Production execution calls it for adapter and funding decisions, and `simulate_current_program` inherits the same decision because it invokes `execute_single_cycle_traced`; a pure matrix regression pins all combinations. Adapter-local TypeScript simulation remains a separately labeled projection and must prove parity rather than act as runtime truth.
 
-Task-scoped rollback leaves earlier successful steps committed. The named `SwapExactIn → AddLiquidity → Transfer` and Burn-prefix regressions prove same-cursor retry, prefix non-replay, cumulative outcomes, and no cancellation compensation. The fixed-seed model `0xDE05_0730` independently checks sparse state, cursor progress, queue/wakeup uniqueness, funding conservation, promotion, and cancellation after each transition.
+Task-scoped rollback leaves earlier successful steps committed. The named `SwapIn → AddLiquidity → Transfer` and Burn-prefix regressions prove same-cursor retry, prefix non-replay, cumulative outcomes, and no cancellation compensation. The fixed-seed model `0xDE05_0730` independently checks sparse state, cursor progress, queue/wakeup uniqueness, funding conservation, promotion, and cancellation after each transition.
 
-`simulate_current_program` is the package-owned rollback core behind versioned `AaaSimulationApi` runtime metadata. It requires exact stored Active program, actor type, mutability, mode/run-state, readiness, liveness, and User fee budget. It executes the production path with an optional bounded trace, exposes fresh or Continuation outcomes, and wraps the whole attempt in `TransactionOutcome::Rollback`; pallet and DEOS-runtime tests prove actor state, balances, events, fees, concrete adapter effects, and stored Continuation remain unchanged.
+`simulate_current_program` is the package-owned rollback core behind versioned `AaaSimulationApi` runtime metadata. It requires exact stored Active program, actor type, mutability, mode/run-state, readiness, liveness, and User fee budget.
+
+The API executes the production path with an optional bounded trace and exposes fresh or Continuation outcomes including `unsuccessful_attempts_at_cursor`. Terminal closure returns `SimulationStatus::Closed(CloseReason)`. The whole attempt runs inside `TransactionOutcome::Rollback`; pallet and DEOS-runtime tests prove actor state, balances, events, fees, concrete adapter effects, and stored Continuation remain unchanged.
 
 Execution-plan, funding-policy, schedule, window, deactivation, terminal, and close transitions share `cancel_continuation_internal`. Pause and breaker preserve the run. Explicit call `23` is Mutable-only and emits `CycleCancelled` before one cumulative terminal `CycleSummary`; cancellation moves no balance, promotes no funding, and rolls back no prefix.
 
@@ -344,16 +353,19 @@ It uses two scheduler layers: a monotonic paged FIFO for work that can execute n
 
 1. **Wakeup drain**: the cursor exposes the earliest due block without scanning sparse gaps; one admitted unit consumes one slot, preserves a partial bucket at the same minimum, and either appends live readiness to the active FIFO or lazily discards a stale pointer
 2. **Ingress admission**: each matched producer call applies funding independently and sets the unified boolean signal latch; actor-local queue/wakeup membership remains bounded and may join the active run queue in the same `on_idle` pass
-3. **Block-start cutoff**: after already-due wakeups materialize, the scheduler snapshots `QueueTail`; every later append receives a ticket at or beyond that cutoff and cannot execute in the current block
-4. **Bounded System extraction**: the scheduler probes only `AaaPrioritySystemAaaIds`, chooses the lowest live pre-cutoff ticket, clears that sole actor-local membership, and leaves its physical entry as a lazy tombstone. System attempts stop at both the effective Weight share and rounded-up execution-count share.
-5. **Ordinary scan and admission**: the scheduler advances `QueueHead` across stale tickets under the independent scan ceiling and two-dimensional `WeightMeter`, stops at the first ordinary live ticket that cannot be admitted, and consumes a live ticket only after admission succeeds or a terminal/skip transition owns progress. Capped priority entries rotate in ticket order.
-6. **Execution ceiling**: System and ordinary actors each retain FIFO within their authority group. `last_cycle_block` and the cutoff prevent a second scheduler invocation or circular/self-enqueue graph from executing one actor twice in the same block, while untouched suffix entries remain physically in place without reconstruction.
+3. **Block-start cutoff**: after already-due wakeups materialize, the scheduler snapshots global `NextQueueTicket`; every later append receives a ticket at or beyond that cutoff and cannot execute in the current block
+4. **System reserve**: the scheduler drains the oldest live `SystemQueue` head under the configured System RefTime, ProofSize, and count reserve without scanning actors or configured ids
+5. **User guarantee**: the scheduler offers the oldest live `UserQueue` head its independently bounded non-zero RefTime, ProofSize, and count guarantee
+6. **Shared phase**: remaining capacity compares only the current live System/User heads and serves the lower global ticket; an inadmissible shared head terminates the phase rather than triggering a search behind it
+7. **Execution ceiling**: each lane retains FIFO. `last_cycle_block` and the common cutoff prevent a second scheduler invocation or circular/self-enqueue graph from executing one actor twice in the same block, while untouched suffix entries remain physically in place without reconstruction.
 
-`ActorHot.queue_ticket` is the sole live-membership marker. Replacement, close, pause, cancellation, and bounded System extraction use actor-local invalidation; stale page entries drain lazily. Scheduler admission reserves the generated hot probe before reading `ActorHot`; paused or negative readiness consumes no `ActorProgram` or `ContinuationState` proof. Only a hot-positive actor reserves the separate program/admission probe.
+`ActorHot.queue_ticket` is the sole live-membership marker. Immutable stored `AaaType` derives the only lane where that ticket can remain live. Replacement, close, pause, and cancellation use actor-local invalidation; stale page entries drain lazily. Scheduler admission reserves the generated hot probe before reading `ActorHot`; paused or negative readiness consumes no `ActorProgram` or `ContinuationState` proof. Only a hot-positive actor reserves the separate program/admission probe.
 
-The reference runtime binds the same eight-id `PRIORITY_SYSTEM_AAA_IDS` used by market policy through `AaaPrioritySystemAaaIds`, with `AaaMaxPrioritySystemAaaIds = 16`, `AaaSystemAaaBudget = 20%`, and `AaaUserAaaBudget = 20%`. Effective System service is capped at `min(20%, 1 - 20%)`; ordinary actors may use all capacity left unused by System service. This policy exists only inside `on_idle` and therefore gives no ordering claim over ordinary extrinsics.
+The reference runtime binds `AaaSystemExecutionReserve = 20%` and `AaaUserExecutionGuarantee = 20%`; no scheduler AAA-id whitelist remains. System actors may exceed their execution reserve only through globally age-ordered shared service after the User guarantee offer. User actors may consume unused System reserve, and unused User guarantee becomes shared only after eligible User work receives its offer.
 
-Production-Wasm `50 × 20` measures the hot probe at `10,966,000 / 3,665` with one read and the program-positive probe at `18,159,000 / 9,928` with two reads. The latter benchmark asserts absent Continuation state, preserving the ordinary readiness storage envelope.
+These percentages cover admitted actor-execution Weight/count, not discovery, wakeup, cleanup, probing, admission, or bookkeeping. The policy exists only inside `on_idle`; it does not reorder ordinary extrinsics or prevent frontrunning, backrunning, sandwiching, or other order-based extraction.
+
+Production-Wasm `50 × 20` measures the hot probe at `10,965,000 / 3,665` with one read and the program-positive probe at `18,368,000 / 9,968` with two reads. The latter benchmark asserts absent Continuation state, preserving the ordinary readiness storage envelope.
 
 Wakeup draining, paged queue operations, actor probes, normal cycles, and pure terminal cleanup use two-dimensional `WeightMeter` fit checks. Direct ingress is charged at its originating producer. Close admission uses the generated worst-case User cleanup bound and performs no shared-container scan.
 
@@ -516,12 +528,13 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 
 - `NextAaaId`: monotonic AAA id allocator
 - `ActorHot`: active/paused identity, lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, direct `terminal_at`, optional User queue-mutation block guard, compact admission bounds, and measured `funding_tracked_count` / `pending_funding_count` caches; the metadata maximum is 199 bytes
-- `ActorProgram`: active schedule/window plus the bounded run plan; the metadata maximum is 4,655 bytes
+- `ActorProgram`: active schedule/window plus the bounded run plan; the metadata maximum is 6,503 bytes
 - `ActorFunding`: active-only canonical funding-source policy, bounded tracked-asset set, and `funding_snapshots[asset] = FundingBatch { amount, pending_amount }`; ingress, promotion, and policy mutation update detailed state here while bounded hot counts avoid ordinary funding decode, and try-state reconciles both directions
 - `DormantAaaIdentities`: identity-only records with no executable or scheduler state
 - `ActorIdentityCount`: transactionally maintained O(1) cardinality across `ActorHot` plus `DormantAaaIdentities`, bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorProgram`, and `ActorFunding`
-- `QueueHead` / `QueueTail` / `QueuePages`: active monotonic paged FIFO with append, block-start cutoff, exact-head admission/consume, actor-local live-ticket dedup/invalidation, tombstone draining, full-page reclamation, and empty partial-tail alignment. Page entries contain only `aaa_id`, with logical tickets derived from page/slot, so replacement tickets leave old entries physically distinguishable as tombstones without page rewrites.
+- `NextQueueTicket`: shared monotonic global age allocator and common block-start cutoff source
+- `UserQueueHead` / `UserQueueTail` / `UserQueuePages` and `SystemQueueHead` / `SystemQueueTail` / `SystemQueuePages`: type-derived physical FIFO lanes with exact-head admission/consume, combined `MaxQueueLength` occupancy, actor-local live-ticket dedup/invalidation, tombstone draining, full-page reclamation, and empty partial-tail alignment. Entries store global `ticket` plus `aaa_id`; physical positions remain lane-local.
 - `WakeupPages` / `WakeupBuckets` / `WakeupCursorPages` / `WakeupCursorLen`: exact paged temporal topology and sparse minimum cursor; each live actor points to at most one page slot through `ActorHot.wakeup_pointer`
 - `ActiveActorLimit`: governance-configurable operational active cap
 - `OwnerSlotMask`: user owner-slot occupancy bitmask; System AAA never consumes it
@@ -599,7 +612,7 @@ The current pallet already provides chain-native bounded reads for live actor an
 - `actor_funding(aaa_id)` for funding policy, tracked assets, batches, and pending indication
 - `owner_slot_mask(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(aaa_id)` for System AAA addressing against the known runtime catalog
-- Bounded scheduler / readiness / breaker surfaces such as `ActorHot.pending_signal`, `ActorHot.wakeup_pointer`, `QueueHead`, `QueueTail`, `QueuePages`, paged wakeup stores, `ActiveActorLimit`, `GlobalCircuitBreaker`, and `IdleStarvationState`
+- Bounded scheduler / readiness / breaker surfaces such as `ActorHot.pending_signal`, `ActorHot.queue_ticket`, `ActorHot.wakeup_pointer`, `NextQueueTicket`, both typed lane heads/tails/pages, paged wakeup stores, `ActiveActorLimit`, `GlobalCircuitBreaker`, and `IdleStarvationState`
 - Live execution-side effects and bounded operational events
 
 These are the authoritative bounded surfaces for known-actor inspection, per-owner recovery, scheduler state, and current operator observability.
@@ -665,6 +678,8 @@ Runtime binds `pallet-aaa` in `runtime/src/configs/aaa_config.rs`:
   - Local/Foreign: `pallet-assets`
   - `balance()` is adapter-visible transferable balance; AAA derives `spendable_balance` by subtracting only transient native fee reservation
   - includes `minimum_balance` / `can_deposit` semantics
+  - `SplitTransfer` computes every non-zero leg in declared order, preflights all recipients before mutation, and returns Temporary `RecipientDepositUnavailable` if any leg cannot deposit; task rollback prevents partial fan-out or a success event
+  - successful `retained` value contains only undeclared share plus integer-division dust, never a rejected recipient allocation
   - exposes only queries used by portable AAA execution; total issuance remains a runtime-local ledger query
 - `DexOps = TmctolDexOps`
   - swaps via Axial Router (`execute_swap_for`)
@@ -685,43 +700,46 @@ Additional runtime bindings:
 - Frozen pre-paged baseline `6ec457c`: `scheduler_queue_bootstrap(n)` charges `10,965,000 + 273,852n` RefTime, two reads/three writes, and `1,827 + 16n` ProofSize for `n = 0..10,000`; each physical queue has an 80,002-byte maximum value.
 - Frozen baseline sample points (`RefTime / ProofSize`, before database weight): `n=32` is `19,728,264 / 2,339`; `64` is `28,491,528 / 2,851`; `128` is `46,018,056 / 3,875`; `10,000` is `2,749,485,000 / 161,827`.
 - Frozen baseline hashes: generated weights `448f2fe1bee9d59bbdfd4cd1a85a6f20b0f90045e862f86984d2752941075b9d`; compressed Wasm `947ddc39ecb1e83ec32d8b1b1200865850d622aaa8def8ad43b5d15342c3e992`. These values provide comparison evidence, not the current paged representation.
-- Split-store metadata replaces the former 8,807-byte `AaaInstances` maximum with a 200-byte `ActorHot`, including run state, exact wakeup, terminal readiness, and compact funding counts, plus an independently loaded 6,463-byte `ActorProgram`. Physical decode/proof separation does not by itself claim end-to-end throughput.
+- Split-store metadata replaces the former 8,807-byte `AaaInstances` maximum with a 200-byte `ActorHot`, including run state, exact wakeup, terminal readiness, and compact funding counts, plus an independently loaded 6,503-byte `ActorProgram`. Physical decode/proof separation does not by itself claim end-to-end throughput.
 - Runtime `WeightInfo` uses frame omni bencher 0.22 / benchmark CLI 58 against shipped lifecycle, scheduler, ingress, funding, fee, and pure-close topology; generated storage annotations contain no retired active-list stores.
-- The fieldless `task_stop_cycle` class measures its single explicit event at production `50 × 20`: `5,238,000 / 0`, with zero storage reads or writes and a `3,701,000` picosecond minimum execution time.
-- Lifecycle benchmark evidence: dormant System creation is `45,816,000` RefTime, seven reads/five writes, and 999 measured/3,629 charged proof bytes.
-- Lifecycle benchmark evidence: activation remains independently generated; Continuation-aware deactivation is `60,554,000 / 9,928`, four reads, and six writes.
-- Continuation-aware pure close prices the worst-case User branch at `84,998,000 / 9,928`, eight reads, and eight writes.
+- The fieldless `task_stop_cycle` class measures its single explicit event at production `50 × 20`: `5,308,000 / 0`, with zero storage reads or writes and a `3,702,000` picosecond minimum execution time.
+- Lifecycle benchmark evidence: active System creation is `54,896,000 / 3,665`, eight reads, and seven writes.
+- Lifecycle benchmark evidence: activation remains independently generated; Continuation-aware deactivation is `62,579,000 / 9,968`, four reads, and six writes.
+- Continuation-aware pure close prices the worst-case User branch at `91,563,000 / 9,968`, eight reads, and eight writes.
 - Explicit and automatic close admission use the measured User bound; cleanup charges no fee and executes no plan. When a run is open, cancellation and its cumulative summary precede `AaaClosed`.
 
 | Continuation class | RefTime / ProofSize | Reads / writes |
 | --- | ---: | ---: |
-| Suspend, 0 snapshots | `28,944,390 / 4,180` | `2 / 2` |
-| Suspend, 20 snapshots | `29,737,170 / 4,180` | `2 / 2` |
-| Retry opening | `21,930,000 / 4,266` | `1 / 1` |
-| Successful completion | `18,299,000 / 4,030` | `1 / 2` |
-| Explicit cancel and re-enqueue | `58,668,000 / 9,928` | `6 / 4` |
+| Suspend, 0 snapshots | `29,047,777 / 4,188` | `2 / 2` |
+| Suspend, 20 snapshots | `29,536,557 / 4,188` | `2 / 2` |
+| Retry opening | `22,420,000 / 4,270` | `1 / 1` |
+| Successful completion | `18,229,000 / 4,032` | `1 / 2` |
+| Explicit cancel and re-enqueue | `68,656,000 / 9,968` | `9 / 5` |
 
-Suffix-admission scan measurement spans one through ten unresolved steps from `1,439,006` to `1,442,894` RefTime with zero storage proof. Runtime admission composes its incremental RefTime with suffix task bounds while one transition envelope carries the shared Continuation proof, avoiding duplicated maximum-key proof accounting.
+Suffix-admission scan measurement spans one through ten unresolved steps from `1,489,963` to `1,566,139` RefTime with zero storage proof. Runtime admission composes its incremental RefTime with suffix task bounds while one transition envelope carries the shared Continuation proof, avoiding duplicated maximum-key proof accounting.
 
-- `Transfer`, `Burn`, and System-only `Mint` bind independent generated classes. Transfer and Mint cover possible direct ingress; Burn measures only its ledger mutation and therefore inherits no queue/wakeup proof. `SplitTransfer` retains its generated `task_split_transfer(l)` model over `2..=8` independently notified recipients.
-- Full production-Wasm evidence is Transfer `160,777,000 / 9,928` with 12 reads/8 writes, Burn `22,908,000 / 3,593` with one read/write, and Mint `106,440,000 / 9,928` with 10 reads/6 writes.
+- `Transfer`, `Burn`, and System-only `Mint` bind independent generated classes. Transfer and Mint cover possible direct ingress; Burn measures only its ledger mutation and therefore inherits no queue/wakeup proof. `SplitTransfer` retains its generated `task_split_transfer(l)` model over `2..=8` independently notified recipients: `51,201,645 + 121,667,173l` RefTime and `3,675 + 8,978l` proof bytes, with `8 + 5l` reads and `4 + 3l` writes.
+- Full production-Wasm evidence is Transfer `166,993,000 / 9,968` with 14 reads/8 writes, Burn `23,398,000 / 3,593` with one read/write, and Mint `108,884,000 / 9,968` with 12 reads/6 writes.
 - XCM `UnitWeightCost` binds generated `xcm_asset_deposit` measurement of one registered foreign asset through registry conversion, pallet-assets mutation, funding/signal updates, and paged readiness registration; the fixed weigher remains sound by restricting holding to one asset
-- `SwapExactIn` and `SwapExactOut` have separate generated runtime task models covering caller-aware router execution, fee routing, reference-price protection, and ingress effects. Exact-input is `328,120,000 / 9,928` with 16 reads/10 writes; native exact-output is `317,014,000 / 9,928` with 15 reads/10 writes.
+- `SwapIn` and `SwapOut` retain separate runtime task-weight owners covering typed actor context, caller-aware routing, fee routing, reference-deviation protection, and ingress effects. Bounded-retry production models are `330,494,000 / 9,968` with 19 reads/11 writes for input and `327,073,000 / 9,968` with 18 reads/11 writes for output.
 - `Stake` and `Unstake` have separate generated runtime task models covering the shipped staking pool, transferable receipt, account, position-query, and reward-touch paths.
-- Liquidity bounds are measured at the adapter boundary: add liquidity is `266,239,000 / 11,426` with 11 reads/10 writes, remove liquidity is `186,689,000 / 8,817` with eight reads/six writes, and donation is `208,060,000 / 14,035` with ten reads/nine writes.
+- Liquidity bounds are measured at the adapter boundary: add liquidity is `264,214,000 / 11,426` with 11 reads/10 writes, remove liquidity is `185,571,000 / 8,817` with eight reads/six writes, and donation is `207,432,000 / 14,035` with ten reads/nine writes.
 - `AxialRouter::LpPairByTokenId` owns the reference runtime's `LP token -> canonical pool pair` index outside generic AAA. Runtime adapters index internal pool creation directly, while `PoolIndexExtension` indexes successful top-level Asset Conversion pool creation or liquidity addition without event scanning; conflicting reuse fails closed.
-- Full indexed removal evidence is `186,689,000 / 8,817`, eight reads and six writes, replacing the former scan-shaped 38-read / `81,150` ProofSize envelope.
+- Full indexed removal evidence is `185,571,000 / 8,817`, eight reads and six writes, replacing the former scan-shaped 38-read / `81,150` ProofSize envelope.
 - All runtime-backed task adapter classes use generated measurements
 - Wakeup placement uses generated append/replacement/invalidation classes over fixed-size pages plus sparse-cursor insertion or exact removal; `MaxActiveActors` bounds global live entries without spillover or drop/retry state
 - Due-wakeup work uses separate generated partial-unit, full-depth removal, and future-minimum classes; each admitted slot reserves its exact queue append and possible cursor repair before mutation
 - `ActorHot` stores bounded tracked/pending funding counts while `ActorFunding` retains canonical policy and full batches. `pending_funding_count > 0` is the sole hot indication. Funding-free cycles skip the funding read and reserve no promotion work; successful cycles add `funding_batch_promotion(K)` only for actual pending `K`, including a zero-cost `K = 0` path.
-- Continuation-aware mutable plan replacement benchmarks cancellation, pending-signal re-enqueue, and a prepopulated bounded funding map. It charges `98,687,000 / 9,928`, seven reads, and eight writes.
-- Producer-owned transaction-extension ingress declares the matched notification envelope and refunds against an unmatched base. The negative path includes one populated proof witness plus the absent recipient lookup: `15,156,000 / 6,052`, two reads.
-- The matched ingress maximum saturates all four canonical trigger sources on a suspended actor and covers full source evaluation, checked pending-batch accumulation, signal latching, queue saturation, and exact paged wakeup registration: `91,563,000 / 9,928`, nine reads, and six writes.
-- `scheduler_on_idle_base` is `15,296,000 / 1,493`, four reads, and one write. Authority-service probing is charged separately through up to `MaxPrioritySystemAaaIds` generated hot probes in `scheduler_admission_overhead`; actor admission retains separate hot-only and program-positive units.
-- Production-Wasm `50 × 20` `scheduler_paged_execute_cheap(n)` runs complete minimal one-step ordinary System cycles for `n = 1..1,000` while paying configured priority-id probes. Its model is `98,059,000 + 52,124,345n` RefTime, `21,773 + 2,707n` estimated ProofSize, `14 + 2n` reads, and `3 + n` writes; measured proof is `999 + 231n`.
-- The model supports the 1,000 defense-in-depth count ceiling, not a promise of 1,000 reference-block executions. The two-dimensional `WeightMeter`, 20% priority-System cap, non-zero User reserve, and complete-attempt admission remain authoritative.
-- Continuation-aware funding-policy replacement is `93,099,000 / 9,928` with seven reads/seven writes. Schedule replacement is `88,211,000 / 9,928` with six reads/seven writes. Both include cancellation and pending-signal readiness restoration.
+- Continuation-aware mutable plan replacement benchmarks cancellation, pending-signal re-enqueue, and a prepopulated bounded funding map. It charges `109,932,000 / 9,968`, seven reads, and eight writes.
+- Producer-owned transaction-extension ingress declares the matched notification envelope and refunds against an unmatched base. The negative path includes one populated proof witness plus the absent recipient lookup: `16,692,000 / 6,052`, two reads.
+- The matched ingress maximum saturates all four canonical trigger sources on a suspended actor and covers full source evaluation, checked pending-batch accumulation, signal latching, queue saturation, and exact paged wakeup registration: `96,313,000 / 9,968`, 11 reads, and six writes.
+- Current `0.7.6` production-Wasm `50 × 20` generation produced weights SHA-256 `26600b7ad6a1b68e59d695e7b95e4fcc85c64d1dbe2b46b5c2b169ed6bb8c95d`, compact runtime Wasm SHA-256 `24f48e839da13c311d17061300025758bf492005b1a0829816dca8358b261030`, and V16 metadata SHA-256 `116143db40f172dc3a3adc24ebc12849a7b5f2289cecea9195fb747f7aae7bd6`.
+- `scheduler_on_idle_base` is `19,905,000 / 1,493`, six reads, and one write. System-page append is `44,699,000 / 5,749` when preserving a page and `39,671,000 / 4,731` when opening one, each with seven reads/four writes. Consume is `24,794,000 / 4,178` with four reads/two writes when preserving a page and `26,190,000 / 4,160` with four reads/four writes when deleting one.
+- System tombstone drain is `19,695,000 + 2,369,058n` RefTime and `2,922 + 2,492n` ProofSize with `3 + n` reads and three writes. Alternating live/tombstone User scan is `21,860,000 + 13,207,189n` RefTime and `3,047 + 2,575n` ProofSize with `3 + n` reads and `2 + n` writes.
+- System-only cheap execution uses `9 + 2n` reads and `3 + n` writes. The alternating System/User model uses `16 + 2n` reads and `10 + n` writes and exercises reserve phases plus shared global-age comparison across both physical page maps; the generated proof slopes are `2,717n` and `2,718n`, respectively.
+- `scheduler_admission_overhead` reserves two typed head probes rather than a configured-id scan. Actor admission retains separate hot-only and program-positive units, while common discovery/cleanup remains outside the actor execution-share claim.
+- `MaxExecutionsPerBlock = 1,000` remains a defense-in-depth count ceiling, not a throughput promise. Two-dimensional phase meters, the System reserve, User guarantee, shared global-age phase, and complete-attempt admission remain authoritative.
+- Continuation-aware funding-policy replacement is `98,548,000 / 9,968` with seven reads/seven writes. Schedule replacement is `92,402,000 / 9,968` with six reads/seven writes. Both include cancellation and pending-signal readiness restoration.
 - The pallet mock implements the complete runtime-benchmark helper surface, including opt-in ingress-aware asset operations isolated from ordinary pallet tests; this keeps standalone `runtime-benchmarks` compilation and its 308-test suite portable while production measurement remains runtime-owned
 - `FeeSink` account is the sovereign account of System AAA `aaa_id = 1` (`FEE_SINK_AAA_ID`)
 - `GenesisSystemAaas = TmctolGenesisSystemAaas`
@@ -851,8 +869,8 @@ Implementation is covered by:
 - `template/pallets/aaa/src/tests.rs` — pallet-level unit/regression suite
 - `template/runtime/src/tests/aaa_integration_tests.rs` — runtime integration suite with explicit fast/stress scheduler lanes
 - `template/pallets/aaa/src/benchmarking.rs` — FRAME v2 benchmarks for all dispatchables + scheduler/close-path diagnostic benchmarks
-- `aaa_0_7_3_scale_variant_indices_are_explicit` — pins core type discriminants, `RetryLater = 2`, `RunState`, suspension/cancellation reasons, Continuation events/errors, retained calls, retired indices `17..=20`, lifecycle calls `21..=22`, and `cancel_continuation = 23`
-- `aaa_0_7_3_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 21 entry names, including sparse `ContinuationState`, split actor state, paged queue/wakeup topology, modifiers, map hashers, and concrete SCALE types
+- `aaa_0_7_6_scale_variant_indices_are_explicit` — pins core type discriminants, payload-bearing `RetryLater = 2`, `RunState`, suspension/cancellation reasons, Continuation events/errors, retained calls, retired indices `17..=20`, lifecycle calls `21..=22`, and `cancel_continuation = 23`
+- `aaa_0_7_6_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 21 entry names, including sparse `ContinuationState`, split actor state, paged queue/wakeup topology, modifiers, map hashers, and concrete SCALE types
 - `seeded_state_machine_preserves_cross_store_and_scheduler_invariants` — runs replayable traces including Suspend, Continue, and Cancel with seed `0xDE05_0730`; every transition reconciles cursor progress, sparse state, queue/wakeup uniqueness, funding conservation/promotion, owner slots, and balances
 
 Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, funding semantics, lifecycle transitions, and emergency starvation path.
@@ -861,7 +879,7 @@ Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, fund
 
 Current runtime exposes enough state/events to treat queue pressure as an operational signal rather than an inferred guess:
 
-- Queue pressure: `QueueHead`, `QueueTail`, bounded `QueuePages`, and `ActiveActorLimit`
+- Queue pressure: `NextQueueTicket`, both typed lane heads/tails, combined bounded lane occupancy/pages, and `ActiveActorLimit`
 - Wakeup backlog: `WakeupCursorLen`, `WakeupBuckets.live_entries`, paged cursor minimum, and actor-local `wakeup_pointer`
 - Deferred-cycle rate: `CycleDeferred`
 - Starvation signals: `IdleStarvationDetected` and `IdleStarvationRecovered`
@@ -876,7 +894,7 @@ Ignored runtime profilers measure scheduler behavior under isolated actor-set sc
 - `profile_scheduler_wallclock_matrix` prints actor count, block count, elapsed ms, ms/block, total executions
 - `profile_scheduler_queue_wakeup_occupancy_10k` prints max queue/wakeup occupancy under 10k over-capacity pressure
 
-Companion stress-lane checks: `scheduler_stress_lane_over_capacity_fairness_matrix`, `scheduler_stress_lane_dense_vs_sparse_topology_matrix`, `scheduler_stress_lane_sparse_topology_long_run_liveness`, `stress_10k_actors_queue_scheduler`.
+Companion stress-lane checks: `scheduler_stress_lane_over_capacity_fairness_matrix`, `scheduler_stress_lane_dense_vs_sparse_topology_matrix`, `scheduler_stress_lane_sparse_topology_long_run_liveness`, and `stress_10k_actors_queue_scheduler`. The 10,000-actor fixture alternates System/User creation while retaining paused genesis actors, then verifies no starvation, nonce spread `<= 3`, the execution ceiling, and high diagnostic utilization over 500 blocks.
 
 Reproducible commands:
 

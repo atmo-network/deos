@@ -48,6 +48,10 @@ export type AaaAuthoringCondition =
       threshold: number;
     };
 
+export type AaaAuthoringInputLimit =
+  | { type: 'LiveQuote' }
+  | { type: 'Absolute'; amount: string };
+
 export type AaaAuthoringTask =
   | {
       type: 'Transfer';
@@ -62,18 +66,18 @@ export type AaaAuthoringTask =
       legs: Array<{ to: string; shareParts: number }>;
     }
   | {
-      type: 'SwapExactIn';
+      type: 'SwapIn';
       assetIn: AaaAuthoringAsset;
-      assetOut: AaaAuthoringAsset;
       amountIn: AaaAuthoringAmount;
+      assetOut: AaaAuthoringAsset;
       slippageParts: number;
     }
   | {
-      type: 'SwapExactOut';
-      assetIn: AaaAuthoringAsset;
+      type: 'SwapOut';
       assetOut: AaaAuthoringAsset;
       amountOut: AaaAuthoringAmount;
-      maxAmountIn: string;
+      assetIn: AaaAuthoringAsset;
+      inputLimit: AaaAuthoringInputLimit;
       slippageParts: number;
     }
   | {
@@ -113,8 +117,8 @@ export type AaaAuthoringTask =
 export const AAA_AUTHORING_TASK_TYPES = [
   'Transfer',
   'SplitTransfer',
-  'SwapExactIn',
-  'SwapExactOut',
+  'SwapIn',
+  'SwapOut',
   'AddLiquidity',
   'RemoveLiquidity',
   'Burn',
@@ -230,21 +234,21 @@ export function createAaaAuthoringTask(
           { to: '', shareParts: 500_000_000 },
         ],
       };
-    case 'SwapExactIn':
+    case 'SwapIn':
       return {
         type,
         assetIn: native(),
-        assetOut: local(),
         amountIn: fixed(),
+        assetOut: local(),
         slippageParts: 10_000_000,
       };
-    case 'SwapExactOut':
+    case 'SwapOut':
       return {
         type,
-        assetIn: native(),
         assetOut: local(),
         amountOut: fixed(),
-        maxAmountIn: '1',
+        assetIn: native(),
+        inputLimit: { type: 'LiveQuote' },
         slippageParts: 10_000_000,
       };
     case 'AddLiquidity':
@@ -306,7 +310,7 @@ export function createAaaAuthoringStep(
     key,
     conditionSet: { type: 'Always' },
     task,
-    errorPolicy: 'AbortCycle',
+    errorPolicy: { type: 'AbortCycle' },
   };
 }
 
@@ -518,22 +522,24 @@ function validateTask(
       }
       return;
     }
-    case 'SwapExactIn':
+    case 'SwapIn':
       validateAsset(task.assetIn, `${path}.assetIn`, issues);
       validateAsset(task.assetOut, `${path}.assetOut`, issues);
       validateAmount(task.amountIn, `${path}.amountIn`, issues);
       validatePerbill(task.slippageParts, `${path}.slippageParts`, issues);
       return;
-    case 'SwapExactOut':
-      validateAsset(task.assetIn, `${path}.assetIn`, issues);
+    case 'SwapOut':
       validateAsset(task.assetOut, `${path}.assetOut`, issues);
       validateAmount(task.amountOut, `${path}.amountOut`, issues);
-      validatePositiveBalanceBound(
-        task.maxAmountIn,
-        `${path}.maxAmountIn`,
-        'Maximum input',
-        issues,
-      );
+      validateAsset(task.assetIn, `${path}.assetIn`, issues);
+      if (task.inputLimit.type === 'Absolute') {
+        validatePositiveBalanceBound(
+          task.inputLimit.amount,
+          `${path}.inputLimit.amount`,
+          'Absolute input ceiling',
+          issues,
+        );
+      }
       validatePerbill(task.slippageParts, `${path}.slippageParts`, issues);
       return;
     case 'AddLiquidity':
@@ -795,11 +801,23 @@ export function validateAaaAuthoringProgram(
     );
     if (
       program.mutability === 'Immutable' &&
-      step.errorPolicy === 'RetryLater'
+      step.errorPolicy.type === 'RetryLater'
     ) {
       issues.push({
         path: `${path}.errorPolicy`,
         message: 'RetryLater requires a Mutable actor',
+      });
+    }
+    if (
+      step.errorPolicy.type === 'RetryLater' &&
+      (!Number.isSafeInteger(step.errorPolicy.maxAttempts) ||
+        step.errorPolicy.maxAttempts <= 0 ||
+        step.errorPolicy.maxAttempts > 0xffff_ffff)
+    ) {
+      issues.push({
+        path: `${path}.errorPolicy.maxAttempts`,
+        message:
+          'RetryLater max attempts must be an integer from 1 to 4294967295',
       });
     }
     validateTask(step.task, `${path}.task`, issues, limits, program.aaaType);
@@ -927,19 +945,22 @@ function lowerTask(task: AaaAuthoringTask) {
           share: leg.shareParts,
         })),
       });
-    case 'SwapExactIn':
-      return runtimeVariant('SwapExactIn', {
+    case 'SwapIn':
+      return runtimeVariant('SwapIn', {
         asset_in: lowerAsset(task.assetIn),
-        asset_out: lowerAsset(task.assetOut),
         amount_in: lowerAmount(task.amountIn),
+        asset_out: lowerAsset(task.assetOut),
         slippage_tolerance: task.slippageParts,
       });
-    case 'SwapExactOut':
-      return runtimeVariant('SwapExactOut', {
-        asset_in: lowerAsset(task.assetIn),
+    case 'SwapOut':
+      return runtimeVariant('SwapOut', {
         asset_out: lowerAsset(task.assetOut),
         amount_out: lowerAmount(task.amountOut),
-        max_amount_in: BigInt(task.maxAmountIn),
+        asset_in: lowerAsset(task.assetIn),
+        input_limit:
+          task.inputLimit.type === 'LiveQuote'
+            ? runtimeVariant('LiveQuote')
+            : runtimeVariant('Absolute', BigInt(task.inputLimit.amount)),
         slippage_tolerance: task.slippageParts,
       });
     case 'AddLiquidity':
@@ -1206,7 +1227,12 @@ export function lowerAaaAuthoringProgram(
               step.conditionSet.conditions.map(lowerCondition),
             ),
       task: lowerTask(step.task),
-      on_error: runtimeVariant(step.errorPolicy),
+      on_error:
+        step.errorPolicy.type === 'RetryLater'
+          ? runtimeVariant('RetryLater', {
+              max_attempts: step.errorPolicy.maxAttempts,
+            })
+          : runtimeVariant(step.errorPolicy.type),
     })),
     funding_source_policy: lowerFundingPolicy(program.fundingPolicy),
   });

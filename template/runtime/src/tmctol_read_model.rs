@@ -221,7 +221,7 @@ impl TmctolReadModel {
       |task| {
         matches!(
           task,
-          Task::SwapExactIn { asset_in, asset_out, .. }
+          Task::SwapIn { asset_in, asset_out, .. }
             if *asset_in == AssetKind::Native && *asset_out == target_asset
         )
       },
@@ -361,7 +361,7 @@ impl TmctolReadModel {
           has_add_liquidity_step = true;
           foreign_from_add = Some(*asset_a);
         }
-        Task::SwapExactIn {
+        Task::SwapIn {
           asset_in,
           asset_out,
           ..

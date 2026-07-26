@@ -13,13 +13,16 @@ export const AUTOMATION_STEP_ERROR_POLICIES = [
 ] as const;
 
 export type AutomationStepErrorPolicy =
-  (typeof AUTOMATION_STEP_ERROR_POLICIES)[number];
+  | { type: 'AbortCycle' }
+  | { type: 'ContinueNextStep' }
+  | { type: 'RetryLater'; maxAttempts: number };
 export type AutomationMutability = 'Mutable' | 'Immutable';
 export type AutomationRunState = 'idle' | 'suspended';
 
 export type AutomationContinuationSnapshot = {
   cursor: number;
   attempt: number;
+  unsuccessfulAttemptsAtCursor: number;
   lastAttemptBlock: number;
 };
 
@@ -27,7 +30,7 @@ export function automationPolicyAllowed(
   mutability: AutomationMutability,
   policy: AutomationStepErrorPolicy,
 ): boolean {
-  return mutability === 'Mutable' || policy !== 'RetryLater';
+  return mutability === 'Mutable' || policy.type !== 'RetryLater';
 }
 
 export type AutomationAuthoringContext = {
