@@ -164,7 +164,7 @@ node simulator/tests.js
 | Поведение web client | `npm --prefix web-client run validate` |
 | Boundaries web client | `npm --prefix web-client run validate:dag` |
 | Tokenomics/formulas | `node simulator/tests.js` |
-| TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-tmc --locked` |
+| TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-deos-tmc --locked` |
 | Broad runtime | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
 | Междоменный change | Simulator, cargo tests, client validation, completion gate |
 

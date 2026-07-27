@@ -3,6 +3,7 @@ pub mod address_event_ingress;
 pub(crate) mod assets_config;
 pub mod axial_router_config;
 pub mod governance_config;
+pub mod oracle_config;
 pub mod pool_index;
 pub mod preimage_config;
 pub mod staking_config;

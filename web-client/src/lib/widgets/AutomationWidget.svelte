@@ -26,6 +26,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     AutomationActorSnapshot,
     AutomationAuthoringContext,
   } from '$lib/automation/types';
+  import ObservationInspector from '$lib/observation/ObservationInspector.svelte';
+  import type { ObservationFeedIdentity } from '$lib/observation/types';
   import { fromClientBoundedProjection } from '$lib/read-model';
   import { systemStore } from '$lib/system/index.svelte';
   import {
@@ -40,7 +42,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   } from '$lib/ui';
   import { fmt, toFloat } from '$lib/ui/format';
 
-  type AutomationView = 'actors' | 'compose';
+  type AutomationView = 'actors' | 'observe' | 'compose';
 
   let rootEl = $state<HTMLDivElement | null>(null);
   let viewport = $state({ width: 0, height: 0 });
@@ -178,6 +180,21 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     return `${value.slice(0, 10)}…${value.slice(-8)}`;
   }
 
+  async function loadObservationFeeds() {
+    const load = systemStore.adapter.getObservationFeeds;
+    if (!load) throw new Error('Canonical observation registry unavailable');
+    return await load.call(systemStore.adapter);
+  }
+
+  async function loadObservationInspection(
+    feed: ObservationFeedIdentity,
+    maxAgeBlocks: number,
+  ) {
+    const load = systemStore.adapter.getObservationInspection;
+    if (!load) throw new Error('Canonical observation state unavailable');
+    return await load.call(systemStore.adapter, feed, maxAgeBlocks);
+  }
+
   $effect(() => {
     const currentFingerprint = draftFingerprint();
     if (
@@ -248,7 +265,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         </div>
       </div>
       <div
-        class="grid grid-cols-2 gap-1 rounded-xl bg-(--mono-bg) p-1"
+        class="grid grid-cols-3 gap-1 rounded-xl bg-(--mono-bg) p-1"
         aria-label="Automation view"
       >
         <Button
@@ -258,6 +275,14 @@ Zone: Presentation widget; composes system projections, automation capabilities,
           onclick={() => (view = 'actors')}
         >
           Actors
+        </Button>
+        <Button
+          size="sm"
+          variant={view === 'observe' ? 'primary' : 'ghost'}
+          aria-pressed={view === 'observe'}
+          onclick={() => (view = 'observe')}
+        >
+          Observe
         </Button>
         <Button
           size="sm"
@@ -349,6 +374,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
+                    label="Completion"
+                    value={actor.completionPolicy === 'CloseAfterProductiveRun'
+                      ? 'Close after committed effect'
+                      : (actor.completionPolicy ?? 'Unavailable')}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
                     label="Logical run"
                     value={`#${actor.cycleNonce}`}
                     valueClass="tabnum text-(--mono-text)"
@@ -371,6 +403,17 @@ Zone: Presentation widget; composes system projections, automation capabilities,
           {/each}
         {/if}
       </div>
+    {:else if view === 'observe'}
+      <ObservationInspector
+        refreshKey={systemStore.snapshot?.blockNumber ?? 0}
+        compact={compactPane}
+        loadFeeds={systemStore.adapter.getObservationFeeds
+          ? loadObservationFeeds
+          : null}
+        loadInspection={systemStore.adapter.getObservationInspection
+          ? loadObservationInspection
+          : null}
+      />
     {:else}
       <div class="grid gap-3 p-3 text-xs">
         <Notice variant="muted">
@@ -380,9 +423,9 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
         <SectionCard
           title="Plan context"
-          subtitle="Choose the actor class; this surface keeps trigger and funding policy explicit but narrow."
+          subtitle="Choose the actor class and terminal intent; productive closure requires a committed effectful task."
         >
-          <div class={compactPane ? 'grid gap-2' : 'grid grid-cols-3 gap-2'}>
+          <div class={compactPane ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
             <SelectField
               label="AAA class"
               value={draft.aaaType}
@@ -399,6 +442,16 @@ Zone: Presentation widget; composes system projections, automation capabilities,
             >
               <option value="Mutable">Mutable</option>
               <option value="Immutable">Immutable</option>
+            </SelectField>
+            <SelectField
+              label="Completion"
+              bind:value={draft.completionPolicy}
+              selectClass="h-9 py-1.5 text-xs"
+            >
+              <option value="Persistent">Persistent</option>
+              <option value="CloseAfterProductiveRun"
+                >Close after productive run</option
+              >
             </SelectField>
             <NumberInput
               label="Cooldown (blocks)"
@@ -417,6 +470,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
             <DetailRow
               label="Trigger"
               value={draftTriggerSummary}
+              valueClass="text-(--mono-text)"
+            />
+            <DetailRow
+              label="Completion"
+              value={draft.completionPolicy === 'Persistent'
+                ? 'Persistent'
+                : 'Close after committed effect'}
               valueClass="text-(--mono-text)"
             />
             <DetailRow

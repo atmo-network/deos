@@ -9,6 +9,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
 
   import {
     type AaaAuthoringAsset,
+    type AaaAuthoringObservationFeed,
     type AaaAuthoringTrigger,
     type AaaAuthoringTriggerSource,
     DEOS_AAA_AUTHORING_LIMITS,
@@ -21,6 +22,8 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     SelectField,
     TextArea,
   } from '$lib/ui';
+
+  import AutomationAssetEditor from './AutomationAssetEditor.svelte';
 
   type Props = {
     trigger: AaaAuthoringTrigger;
@@ -102,17 +105,47 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     };
   }
 
-  function addSource(type: 'Manual' | 'OnAddressEvent') {
+  function defaultObservationFeed(): AaaAuthoringObservationFeed {
+    return {
+      assetIn: { type: 'Native' },
+      assetOut: { type: 'Local', id: 0 },
+      method: 'PreExecutionSpot',
+      aggregation: { type: 'Ema', halfLifeBlocks: 100 },
+      scale: 12,
+    };
+  }
+
+  function addSource(
+    type: 'Manual' | 'OnAddressEvent' | 'OnObservationChange',
+  ) {
     if (!canAddSource || (type === 'Manual' && hasManual)) return;
     const source: AaaAuthoringTriggerSource =
       type === 'Manual'
         ? { type }
-        : {
-            type,
-            sourceFilter: { type: 'Any' },
-            assetFilter: { type: 'Any' },
-          };
+        : type === 'OnAddressEvent'
+          ? {
+              type,
+              sourceFilter: { type: 'Any' },
+              assetFilter: { type: 'Any' },
+            }
+          : { type, feed: defaultObservationFeed() };
     setSources([...sources, source]);
+  }
+
+  function selectObservationAggregation(index: number, event: Event) {
+    const source = sources[index];
+    if (source?.type !== 'OnObservationChange') return;
+    const type = (event.currentTarget as HTMLSelectElement).value;
+    replaceSource(index, {
+      ...source,
+      feed: {
+        ...source.feed,
+        aggregation:
+          type === 'Ema'
+            ? { type, halfLifeBlocks: 100 }
+            : { type: 'LastValue' },
+      },
+    });
   }
 
   function replaceSource(index: number, source: AaaAuthoringTriggerSource) {
@@ -316,6 +349,14 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
           >
             <Plus size={12} /> Address event
           </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            disabled={!canAddSource}
+            onclick={() => addSource('OnObservationChange')}
+          >
+            <Plus size={12} /> Observation
+          </Button>
         </div>
       </div>
 
@@ -323,7 +364,11 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
         <article class="grid gap-2 rounded-xl bg-(--mono-bg) p-2.5">
           <div class="flex items-center justify-between gap-2">
             <div class="text-xs font-medium text-(--mono-text)">
-              {source.type === 'Manual' ? 'Manual' : 'Address event'}
+              {source.type === 'Manual'
+                ? 'Manual'
+                : source.type === 'OnAddressEvent'
+                  ? 'Address event'
+                  : 'Observation change'}
             </div>
             <IconButton
               label={`Remove source ${sourceIndex + 1}`}
@@ -426,6 +471,53 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
                 {/each}
               </div>
             {/if}
+          {:else if source.type === 'OnObservationChange'}
+            <p class="text-[10px] text-(--mono-muted)">
+              Latest-state reconsideration only. Thresholds belong to plan
+              conditions; this source carries no amount or revision payload.
+            </p>
+            <div class="grid gap-2 sm:grid-cols-2">
+              <AutomationAssetEditor
+                label="Input asset"
+                bind:asset={source.feed.assetIn}
+                {compact}
+              />
+              <AutomationAssetEditor
+                label="Output asset"
+                bind:asset={source.feed.assetOut}
+                {compact}
+              />
+            </div>
+            <div class="grid gap-2 sm:grid-cols-3">
+              <SelectField
+                label="Aggregation"
+                value={source.feed.aggregation.type}
+                onchange={(event) =>
+                  selectObservationAggregation(sourceIndex, event)}
+                selectClass="h-9 py-1.5 text-xs"
+              >
+                <option value="LastValue">Last value</option>
+                <option value="Ema">EMA</option>
+              </SelectField>
+              <NumberInput
+                label="Scale"
+                min={0}
+                max={255}
+                step={1}
+                bind:value={source.feed.scale}
+                class="h-9 py-1.5 text-xs tabnum"
+              />
+              {#if source.feed.aggregation.type === 'Ema'}
+                <NumberInput
+                  label="EMA half-life"
+                  min={1}
+                  max={4294967295}
+                  step={1}
+                  bind:value={source.feed.aggregation.halfLifeBlocks}
+                  class="h-9 py-1.5 text-xs tabnum"
+                />
+              {/if}
+            </div>
           {/if}
         </article>
       {/each}

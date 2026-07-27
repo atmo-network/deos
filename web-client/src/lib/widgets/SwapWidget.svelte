@@ -274,7 +274,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     if (!snapshot.hasNativeCurve) {
       return { text: 'Native curve not bootstrapped', disabled: true };
     }
-    if (snapshot.trackedForeignAssetCount === 0) {
+    if (snapshot.registeredForeignAssetCount === 0) {
       return { text: 'No foreign collateral registered', disabled: true };
     }
     if (walletStore.state.signerStatus === 'readonly') {
@@ -424,13 +424,16 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
           : 'Open the sidebar and connect an injected wallet or local dev signer before submitting a live swap',
       );
     }
-    if (snapshot.trackedForeignAssetCount === 0) {
+    if (snapshot.registeredForeignAssetCount === 0) {
       items.push('No foreign collateral is registered yet');
     }
     if (!isBuy && !snapshot.hasPool) {
       items.push('Pool not initialized yet');
     }
-    if (!foreignAssetIsCanonical() && snapshot.trackedForeignAssetCount > 0) {
+    if (
+      !foreignAssetIsCanonical() &&
+      snapshot.registeredForeignAssetCount > 0
+    ) {
       items.push(`Showing fallback foreign surface for ${nativeSymbol()}`);
     }
     if (safeInputBalance === 0n) {
@@ -474,7 +477,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     }
     const quoteEligible =
       snapshot.hasNativeCurve &&
-      snapshot.trackedForeignAssetCount > 0 &&
+      snapshot.registeredForeignAssetCount > 0 &&
       (isBuy || snapshot.hasPool) &&
       parsedInput.amount !== null &&
       parsedInput.amount <= inBalance &&
@@ -485,7 +488,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
       quoteEligible &&
       quoteLoading &&
       snapshot.hasNativeCurve &&
-      snapshot.trackedForeignAssetCount > 0
+      snapshot.registeredForeignAssetCount > 0
     ) {
       items.push('Fetching a live route quote from chain state');
     }
@@ -630,7 +633,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
       if (!snapshot.hasNativeCurve) {
         throw new Error('Local chain has no native curve yet');
       }
-      if (snapshot.trackedForeignAssetCount === 0) {
+      if (snapshot.registeredForeignAssetCount === 0) {
         throw new Error('No foreign collateral is registered yet');
       }
       if (walletStore.state.signerStatus === 'readonly') {
@@ -714,7 +717,7 @@ Zone: Presentation widget; consumes market/portfolio/system state and UI Kit wit
     }
     const quoteEligible =
       snapshot.hasNativeCurve &&
-      snapshot.trackedForeignAssetCount > 0 &&
+      snapshot.registeredForeignAssetCount > 0 &&
       (isBuy || snapshot.hasPool) &&
       amount <= inBalance &&
       (!isBuy || amount >= snapshot.minForeignSwapAmount) &&

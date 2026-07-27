@@ -38,7 +38,7 @@ test('canonical dormant artifact is deterministic and round-trips exact SCALE', 
   const artifact = dormantArtifact();
   assert.equal(
     artifact.planId,
-    '0x37a065155747d98b1479f489878a604996c57939db99e483e1e15ba4631a005b',
+    '0x33ce9d385896cf500aa13d4ff51b96efa5361e16d5c3130dbd06c571e08f3750',
   );
   const inspection = inspectAaaPlanArtifact(artifact, metadataBytes, runtime);
   assert.equal(inspection.valid, true);
@@ -81,6 +81,7 @@ test('active ProgramInput encodes and projects every nested value losslessly', (
           on_error: { type: 'AbortCycle', value: undefined },
         },
       ],
+      completion_policy: { type: 'Persistent', value: undefined },
       funding_source_policy: { type: 'OwnerOnly', value: undefined },
     },
   });
@@ -135,6 +136,7 @@ test('condition aggregate mode changes canonical identity and remains diff-visib
               on_error: { type: 'AbortCycle', value: undefined },
             },
           ],
+          completion_policy: { type: 'Persistent', value: undefined },
           funding_source_policy: { type: 'OwnerOnly', value: undefined },
         },
       }),
@@ -189,6 +191,7 @@ test('trigger admission diff stays inside the trigger tree and never invents pla
               on_error: { type: 'AbortCycle', value: undefined },
             },
           ],
+          completion_policy: { type: 'Persistent', value: undefined },
           funding_source_policy: { type: 'OwnerOnly', value: undefined },
         },
       }),
@@ -203,6 +206,49 @@ test('trigger admission diff stays inside the trigger tree and never invents pla
     type: 'Immediate',
     value: { sources: manual },
   });
+  const observation = inspectTrigger({
+    type: 'Immediate',
+    value: {
+      sources: [
+        {
+          type: 'OnObservationChange',
+          value: {
+            feed: {
+              asset_in: { type: 'Native', value: undefined },
+              asset_out: { type: 'Local', value: 7 },
+              method: { type: 'PreExecutionSpot', value: undefined },
+              aggregation: {
+                type: 'Ema',
+                value: { half_life_blocks: 100 },
+              },
+              scale: 12,
+            },
+          },
+        },
+      ],
+    },
+  });
+  const observationSource =
+    observation.projection.value.schedule.trigger.value.sources[0];
+  assert.equal(observationSource.type, 'OnObservationChange');
+  assert.deepEqual(Object.keys(observationSource.value), ['feed']);
+  assert.equal(observationSource.value.feed.aggregation.type, 'Ema');
+  assert.equal(
+    observationSource.value.feed.aggregation.value.half_life_blocks.$integer,
+    '100',
+  );
+  assert.equal(observationSource.value.feed.scale.$integer, '12');
+  const observationDiff = diffAaaPlanArtifacts(immediate, observation);
+  assert.equal(observationDiff.compatible, true);
+  if (observationDiff.compatible) {
+    assert(
+      observationDiff.changes.every((change) =>
+        ('path' in change ? change.path : change.from).startsWith(
+          '/value/schedule/trigger',
+        ),
+      ),
+    );
+  }
   const cadenced = inspectTrigger({
     type: 'Cadenced',
     value: {

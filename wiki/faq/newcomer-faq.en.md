@@ -12,9 +12,9 @@ sources:
   - ../../README.md
   - ../../docs/README.md
   - ../../docs/manifesto.en.md
-  - ../../docs/aaa.specification.en.md
-  - ../../docs/governance.specification.en.md
-  - ../../docs/staking.specification.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
+  - ../../template/pallets/staking/docs/specification.en.md
   - ../../docs/read-model.contract.en.md
   - ../../docs/web-client.architecture.en.md
   - ../../web-client/README.md

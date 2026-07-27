@@ -215,8 +215,8 @@ Zone: Presentation widget; consumes domain stores and UI Kit visualization primi
       { label: 'Foreign reserve', value: fmt(toFloat(snap.reserveForeign)) },
       { label: 'LP supply', value: fmt(toFloat(snap.supplyLp)) },
       {
-        label: 'Tracked foreign',
-        value: snap.trackedForeignAssetCount.toString(),
+        label: 'Registered foreign',
+        value: snap.registeredForeignAssetCount.toString(),
       },
       {
         label: 'Active proposals',

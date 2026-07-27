@@ -9,10 +9,10 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/aaa.specification.en.md
-  - ../../docs/aaa.architecture.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/aaa/docs/architecture.en.md
   - ../../docs/aaa-control-plane.contract.en.md
-  - ../../template/pallets/aaa/EMBEDDING.md
+  - ../../template/pallets/aaa/docs/embedding.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -27,7 +27,7 @@ related:
   - Routing and Minting Loop
   - Governance Overview
   - Core Terms
-last_compiled: 2026-07-25
+last_compiled: 2026-07-27
 confidence: 0.95
 ---
 
@@ -35,7 +35,7 @@ confidence: 0.95
 
 ## Summary
 
-`AAA` means `Account Abstraction Actors`. In DEOS, it names the whole runtime system: `pallet-aaa`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
+`AAA` means `Account Abstraction Actors`. In DEOS, it names the whole runtime system: `pallet-deos-aaa`, scheduler, lifecycle rules, fee model, actor accounts, and typed execution environment for bounded protocol flows.
 
 An [AA-Actor](aa-actor.en.md) is one concrete instance inside that system. This page explains the system-level contract.
 
@@ -52,17 +52,23 @@ The normative system contract requires:
 - Lifecycle rules for identity-only dormancy, atomic activation/deactivation, pause, failure, auto-close, manual close, and mandatory internal terminal transitions;
 - Adapter boundaries with runtime-derived worst-case weights so AAA orchestrates mechanics without owning DEX, staking, or asset logic.
 
-Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it.
+Actor balances can function like trigger messages: an asset arriving on an actor account can wake the next bounded execution plan, and that pending signal must retain a bounded path to eventual eligibility. Manual and matched address events coalesce through the single `ActorHot.pending_signal` latch; admitted execution clears it atomically while deferral, pause, and scheduler movement preserve it. `OnObservationChange { feed }` now declares reconsideration against one exact typed feed without threshold, callback, payload, or per-revision execution semantics; AAA derives a duplicate-free bounded subscriber index from that source, and the Oracle hook now coalesces only the latest changed revision into reusable dirty-feed state without reading subscribers. An independently metered deferred worker traverses bounded subscriber pages, binds that state to the same latch, and leaves execution to the existing queue/wakeup scheduler. Observation, Manual, periodic-only, and mixed source sets cannot author `PercentageOfTrigger`; only applicable AddressEvent-only sources establish its exact cycle-start balance snapshot contract.
+
+The Automation Observe view reads the bounded feed registry and one selected feed at a finalized block. It shows exact directional identity, scale-formatted scalar, producer/provenance, aggregation, lifecycle, update block, revision, authored age, and Fresh/Stale/Unavailable/Uninitialized status. It also states latest-state coalescing and warns that local pre-execution pool reserves provide neither external fair price nor MEV/ordering protection; history remains materialized.
 
 Funding uses ordinary inbound transfers rather than a dedicated value-transfer call. Pallet-owned source policy or the default-deny `FundingAuthority` decides whether a tracked transfer activates or accumulates a two-stage funding batch; rejected, source-less, and post-expiry deposits remain spendable balance-only donations. Each supported producer preflights before value movement and submits one direct fallible notification in the same transaction, so overflow rolls back rather than silently losing funding state. Armed funding stays frozen for the logical run, pending funding promotes only after full success, and bounded events expose activation, accumulation, promotion, and policy updates.
 
 ## Verifiable Straight-Line Composition
 
-Each plan remains an ordered list of typed steps. A step uses exactly one non-nested `ConditionSet`: `Always`, non-empty `All`, or non-empty `Any`. Every atomic condition is observed, any atomic error fails the whole group, and a false group only advances to the next fixed step. These aggregates do not introduce branches, jumps, loops, callbacks, arbitrary calls, or graph-authored successors.
+Each plan remains an ordered list of typed steps. A step uses exactly one non-nested `ConditionSet`: `Always`, non-empty `All`, or non-empty `Any`. Every atomic condition is observed, any atomic error fails the whole group, and a false group only advances to the next fixed step. Typed observation atoms compare only Fresh scalar values through a generic provider; unavailable, uninitialized, or stale state remains an ordinary false condition. These aggregates do not introduce branches, jumps, loops, callbacks, arbitrary calls, or graph-authored successors. Authoring preserves the complete directional feed identity, raw scalar threshold, and nonzero maximum age; the Rust-generated manifest pins all ten condition variants to exact SCALE indices `0..9`, and static analysis fails closed on identity or ordering drift.
 
 Fieldless `StopCycle` provides one explicit successful terminal operation after condition evaluation and ordinary User fee collection. It commits no task-local economic effect and leaves the suffix unreachable. Its pre-execution failures still obey `on_error`: `ContinueNextStep` can bypass the intended stop, execute the suffix, and later reach ordinary success, so authoring and analysis expose that fall-through.
 
+An Active program chooses `Persistent` or `CloseAfterProductiveRun`. The latter closes only after successful logical-run completion with at least one committed effectful task, including a committed prefix resumed through Continuation. False latest-state conditions, skips, rolled-back failures, suspension, abort, retry exhaustion, and bare `StopCycle` leave the one-shot policy unconsumed.
+
 Canonical SCALE `ProgramInput` remains the source of truth across metadata-bound authoring, structural diff, static analysis, simulation, and governance composition. Visual blocks or neural proposals may project or propose this finite AST, but deterministic validation, human approval, encoding, and runtime execution stay authoritative.
+
+The control-plane corpus models descending buy and ascending sell buckets as independent bounded one-shot actors over directional local-pool observations. It does not mislabel those price feeds as treasury reserve ratios or absolute liquidity depth: only the manual execution cores exist for those reactions until typed producers and meanings ship. A block-height release demonstrates an available non-price scalar strategy using runtime-owned current block truth.
 
 ## Progress-Preserving Continuation
 
@@ -84,7 +90,7 @@ Every DEOS System swap also applies a local reference-deviation guard. A nonzero
 
 ## Embedding Boundary
 
-External runtimes can reuse `pallet-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into `FeeSink`; downstream allocation remains outside AAA. The DEOS reference Fee Sink currently applies the 50/50 staking/liquidity plan; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
+External runtimes can reuse `pallet-deos-aaa` without inheriting the DEOS/TMCTOL System actor catalog. The host runtime provides bounded adapters for assets, caller-aware DEX quotes, staking shares, liquidity donation, funding authority, atomic fee collection, fallible ingress, and two-dimensional task weights. AAA owns scheduling, lifecycle, policy-aware amount resolution, fee reservation, and task orchestration. After read-only evaluation, each attempted User step calls `FeeCollector` at most once: non-executable outcomes charge evaluation-only, while executable outcomes charge evaluation plus execution together. The collector transfers the full charge into `FeeSink`; downstream allocation remains outside AAA. The DEOS reference Fee Sink currently applies the 50/50 staking/liquidity plan; equal security/staking/liquidity thirds remain gated on permissionless collators and bounded security settlement.
 
 The independent `template/pallets/aaa/embedding-runtime` external-consumer fixture makes this boundary executable. It starts with zero System AAAs, uses local account/asset types and smaller scheduler pages, and proves direct Executive ingress, fresh-genesis integrity, deterministic unsupported adapters, User/System Continuation, User exact-output swaps, System-only minting, try-state, and no-std operation. It is portability evidence, not a second product or prescribed topology.
 

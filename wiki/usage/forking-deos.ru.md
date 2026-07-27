@@ -13,7 +13,7 @@ sources:
   - ../../AGENTS.md
   - ../../README.md
   - ../../docs/README.md
-  - ../../template/pallets/aaa/EMBEDDING.md
+  - ../../template/pallets/aaa/docs/embedding.md
   - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md
@@ -106,7 +106,7 @@ DEOS fork не должен запускаться простой заменой
 3. Задайте launch parameters и считайте launch physics immutable, если только более сильный constitutional contract не говорит иначе.
 4. Проверьте System AAA actor roles и уберите assumptions, подходящие только reference ecosystem.
 5. Считайте builder invoices и bucket policies opt-in механизмами: решите, что ваш инстанс включает, переименовывает, финансирует или отключает.
-6. Для переиспользования AAA реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в core `pallet-aaa`.
+6. Для переиспользования AAA реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в ядре `pallet_aaa`.
 7. Классифицируйте каждый client datum как direct on-chain projection или materialized/indexed view.
 8. Обновите scripts, metadata export, endpoints и operator documentation.
 9. Запускайте минимально достаточную validation, затем поднимайтесь выше, если пересекаются math/runtime/client boundaries.

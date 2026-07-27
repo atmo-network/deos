@@ -277,45 +277,6 @@ fn l2_parameter_change_rejects_router_fee_above_runtime_bound() {
 }
 
 #[test]
-fn l2_parameter_change_adds_tracked_asset_via_governance_executor() {
-  new_test_ext().execute_with(|| {
-    let approved_epoch = 1;
-    let executed_epoch = ordinary_enactment_epoch(approved_epoch);
-    let asset = primitives::AssetKind::Local(0x2000_0010);
-    let call: crate::RuntimeCall =
-      pallet_axial_router::Call::<Runtime>::add_tracked_asset { asset }.into();
-    let encoded_call = call.encode();
-    let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_call);
-    assert_ok!(Preimage::note_preimage(
-      RuntimeOrigin::signed(ALICE),
-      encoded_call,
-    ));
-    assert!(!pallet_axial_router::TrackedAssets::<Runtime>::get().contains(&asset));
-    assert_ok!(Governance::submit_proposal(
-      RuntimeOrigin::root(),
-      PROTOCOL_GOVERNANCE_DOMAIN,
-      106,
-      ALICE,
-      pallet_governance::ProposalCadenceMode::Ordinary,
-      pallet_governance::ProposalPayloadKind::L2ParameterChange,
-      payload_hash,
-    ));
-    resolve_root_action_proposal(106);
-    assert!(pallet_axial_router::TrackedAssets::<Runtime>::get().contains(&asset));
-    assert!(System::events().iter().any(|record| {
-      record.event
-        == RuntimeEvent::Governance(pallet_governance::Event::ProposalParameterChangeExecuted {
-          domain: PROTOCOL_GOVERNANCE_DOMAIN,
-          item_id: 106,
-          approved_epoch,
-          executed_epoch,
-          surface: pallet_governance::ProposalParameterChangeSurface::TrackedAsset,
-        })
-    }));
-  });
-}
-
-#[test]
 fn l2_signal_to_l1_finalizes_with_explicit_advisory_kind() {
   new_test_ext().execute_with(|| {
     let approved_epoch = 1;

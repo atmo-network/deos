@@ -589,17 +589,6 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
         let call = RuntimeCall::decode(&mut &bytes[..])
           .map_err(|_| pallet_governance::ProposalExecutionFailureReason::InvalidPreimage)?;
         match call {
-          RuntimeCall::AxialRouter(pallet_axial_router::Call::add_tracked_asset { asset })
-            if domain == protocol_governance_domain() =>
-          {
-            crate::AxialRouter::apply_add_tracked_asset(asset)
-              .map(
-                |_| pallet_governance::ProposalExecutionReceipt::ParameterChangeExecuted {
-                  surface: pallet_governance::ProposalParameterChangeSurface::TrackedAsset,
-                },
-              )
-              .map_err(|_| pallet_governance::ProposalExecutionFailureReason::DispatchFailed)
-          }
           RuntimeCall::AxialRouter(pallet_axial_router::Call::update_router_fee { new_fee })
             if domain == protocol_governance_domain() =>
           {

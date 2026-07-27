@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-07-20",
+  "generated_at": "2026-07-27",
   "mode": "incremental-sync",
   "source_root": "../docs",
   "default_locale": "en",
@@ -64,17 +64,17 @@
       "confidence": 0.95,
       "sources": {
         "en": [
-          "../docs/aaa.specification.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/aaa-control-plane.contract.en.md",
-          "../template/pallets/aaa/EMBEDDING.md",
+          "../template/pallets/aaa/docs/embedding.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../docs/aaa.specification.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/aaa-control-plane.contract.en.md",
-          "../template/pallets/aaa/EMBEDDING.md",
+          "../template/pallets/aaa/docs/embedding.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -94,13 +94,13 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/aaa.specification.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../docs/aaa.specification.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -120,11 +120,11 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/axial-router.architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../docs/axial-router.architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -144,11 +144,11 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/tmc.architecture.en.md",
+          "../template/pallets/tmc/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md"
         ],
         "ru": [
-          "../docs/tmc.architecture.en.md",
+          "../template/pallets/tmc/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md"
         ]
       }
@@ -168,13 +168,13 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
           "../docs/manifesto.en.md"
         ],
         "ru": [
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
           "../docs/manifesto.en.md"
         ]
       }
@@ -194,11 +194,11 @@
       "confidence": 0.95,
       "sources": {
         "en": [
-          "../docs/asset-registry.architecture.en.md",
+          "../template/pallets/asset-registry/docs/architecture.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../docs/asset-registry.architecture.en.md",
+          "../template/pallets/asset-registry/docs/architecture.en.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -397,12 +397,12 @@
       "sources": {
         "en": [
           "../docs/core.architecture.en.md",
-          "../docs/aaa.specification.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
           "../README.md"
         ],
         "ru": [
           "../docs/core.architecture.en.md",
-          "../docs/aaa.specification.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
           "../README.md"
         ]
       }
@@ -422,13 +422,13 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/axial-router.architecture.en.md",
-          "../docs/tmc.architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/tmc/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md"
         ],
         "ru": [
-          "../docs/axial-router.architecture.en.md",
-          "../docs/tmc.architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/tmc/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md"
         ]
       }
@@ -448,14 +448,14 @@
       "confidence": 0.85,
       "sources": {
         "en": [
-          "../docs/staking.specification.en.md",
-          "../docs/staking.architecture.en.md",
-          "../docs/governance.specification.en.md"
+          "../template/pallets/staking/docs/specification.en.md",
+          "../template/pallets/staking/docs/architecture.en.md",
+          "../template/pallets/governance/docs/specification.en.md"
         ],
         "ru": [
-          "../docs/staking.specification.en.md",
-          "../docs/staking.architecture.en.md",
-          "../docs/governance.specification.en.md"
+          "../template/pallets/staking/docs/specification.en.md",
+          "../template/pallets/staking/docs/architecture.en.md",
+          "../template/pallets/governance/docs/specification.en.md"
         ]
       }
     },
@@ -498,14 +498,14 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/staking.specification.en.md"
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
+          "../template/pallets/staking/docs/specification.en.md"
         ],
         "ru": [
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/staking.specification.en.md"
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
+          "../template/pallets/staking/docs/specification.en.md"
         ]
       }
     },
@@ -619,12 +619,12 @@
       "sources": {
         "en": [
           "../docs/manifesto.en.md",
-          "../docs/governance.specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
           "../docs/tmctol.specification.en.md"
         ],
         "ru": [
           "../docs/manifesto.en.md",
-          "../docs/governance.specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
           "../docs/tmctol.specification.en.md"
         ]
       }
@@ -647,9 +647,9 @@
           "../README.md",
           "../docs/README.md",
           "../docs/manifesto.en.md",
-          "../docs/aaa.specification.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/staking.specification.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/staking/docs/specification.en.md",
           "../docs/read-model.contract.en.md",
           "../docs/web-client.architecture.en.md",
           "../web-client/README.md"
@@ -658,9 +658,9 @@
           "../README.md",
           "../docs/README.md",
           "../docs/manifesto.en.md",
-          "../docs/aaa.specification.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/staking.specification.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/staking/docs/specification.en.md",
           "../docs/read-model.contract.en.md",
           "../docs/web-client.architecture.en.md",
           "../web-client/README.md"
@@ -716,9 +716,9 @@
           "../CHANGELOG.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/aaa.specification.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
           "../docs/web-client.architecture.en.md",
           "../web-client/README.md"
@@ -730,9 +730,9 @@
           "../CHANGELOG.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/aaa.specification.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
           "../docs/web-client.architecture.en.md",
           "../web-client/README.md"
@@ -754,16 +754,16 @@
       "confidence": 0.85,
       "sources": {
         "en": [
-          "../docs/axial-router.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md",
-          "../docs/staking.architecture.en.md"
+          "../template/pallets/staking/docs/architecture.en.md"
         ],
         "ru": [
-          "../docs/axial-router.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md",
-          "../docs/staking.architecture.en.md"
+          "../template/pallets/staking/docs/architecture.en.md"
         ]
       }
     },
@@ -783,17 +783,17 @@
       "sources": {
         "en": [
           "../docs/core.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/staking.architecture.en.md"
+          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
+          "../template/pallets/staking/docs/architecture.en.md"
         ],
         "ru": [
           "../docs/core.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/staking.architecture.en.md"
+          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
+          "../template/pallets/staking/docs/architecture.en.md"
         ]
       }
     },
@@ -813,14 +813,14 @@
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/staking.specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/staking/docs/specification.en.md",
           "../template/primitives/src/ecosystem.rs"
         ],
         "ru": [
           "../docs/tmctol.specification.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/staking.specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/staking/docs/specification.en.md",
           "../template/primitives/src/ecosystem.rs"
         ]
       }
@@ -843,21 +843,21 @@
           "../docs/README.md",
           "../docs/manifesto.en.md",
           "../docs/framework-instance.contract.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/tmc.architecture.en.md"
+          "../template/pallets/tmc/docs/architecture.en.md"
         ],
         "ru": [
           "../docs/README.md",
           "../docs/manifesto.en.md",
           "../docs/framework-instance.contract.en.md",
-          "../docs/governance.specification.en.md",
-          "../docs/governance.architecture.en.md",
-          "../docs/aaa.architecture.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
+          "../template/pallets/governance/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/tmc.architecture.en.md"
+          "../template/pallets/tmc/docs/architecture.en.md"
         ]
       }
     },
@@ -905,7 +905,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
-          "../template/pallets/aaa/EMBEDDING.md",
+          "../template/pallets/aaa/docs/embedding.md",
           "../template/README.md",
           "../web-client/README.md"
         ],
@@ -913,7 +913,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
-          "../template/pallets/aaa/EMBEDDING.md",
+          "../template/pallets/aaa/docs/embedding.md",
           "../template/README.md",
           "../web-client/README.md"
         ]
@@ -964,14 +964,14 @@
         "en": [
           "../AGENTS.md",
           "../docs/core.architecture.en.md",
-          "../docs/asset-registry.architecture.en.md",
+          "../template/pallets/asset-registry/docs/architecture.en.md",
           "../docs/randomness.strategy.en.md",
           "../template/README.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/core.architecture.en.md",
-          "../docs/asset-registry.architecture.en.md",
+          "../template/pallets/asset-registry/docs/architecture.en.md",
           "../docs/randomness.strategy.en.md",
           "../template/README.md"
         ]
@@ -993,14 +993,14 @@
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
-          "../docs/aaa.architecture.en.md",
-          "../docs/aaa.specification.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
           "../AGENTS.md"
         ],
         "ru": [
           "../docs/tmctol.specification.en.md",
-          "../docs/aaa.architecture.en.md",
-          "../docs/aaa.specification.en.md",
+          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
           "../AGENTS.md"
         ]
       }
@@ -1023,18 +1023,18 @@
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/aaa.specification.en.md",
-          "../docs/governance.specification.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
           "../docs/web-client.architecture.en.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../docs/axial-router.architecture.en.md",
-          "../docs/aaa.specification.en.md",
-          "../docs/governance.specification.en.md",
+          "../template/pallets/router/docs/architecture.en.md",
+          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
           "../docs/web-client.architecture.en.md"
         ]
       }
@@ -1317,7 +1317,7 @@
           "../BACKLOG.md",
           "../CHANGELOG.md",
           "../docs/manifesto.en.md",
-          "../docs/governance.specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
           "../docs/tmctol.specification.en.md"
         ],
         "ru": [
@@ -1326,7 +1326,7 @@
           "../BACKLOG.md",
           "../CHANGELOG.md",
           "../docs/manifesto.en.md",
-          "../docs/governance.specification.en.md",
+          "../template/pallets/governance/docs/specification.en.md",
           "../docs/tmctol.specification.en.md"
         ]
       }

@@ -52,6 +52,7 @@ export type AutomationActorSnapshot = {
   cycleNonce: bigint;
   continuation: AutomationContinuationSnapshot | null;
   lastCycleBlock: number | null;
+  completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null;
   triggerLabel: string;
   nativeBalance: bigint;
 };

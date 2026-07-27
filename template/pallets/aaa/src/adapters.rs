@@ -57,6 +57,30 @@ impl From<DispatchError> for TaskFailure {
 ///
 /// The pallet handles `OwnerOnly`, `SignedAllowlist`, and `AnySource` itself. This adapter must
 /// default deny and authorize only explicit actor/source pairs over runtime-verified provenance.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub enum ScalarObservationState {
+  Unavailable,
+  Uninitialized,
+  Fresh { value: u128 },
+  Stale,
+}
+
+/// Bounded current-scalar observation reads supplied by the host runtime.
+///
+/// The provider classifies availability and freshness. AAA never depends on a concrete oracle,
+/// history store, producer, or off-chain service through this boundary.
+pub trait ObservationProvider<FeedId> {
+  fn observation(feed: FeedId, max_age_blocks: u32) -> ScalarObservationState;
+}
+
+impl<FeedId> ObservationProvider<FeedId> for () {
+  fn observation(_: FeedId, _: u32) -> ScalarObservationState {
+    ScalarObservationState::Unavailable
+  }
+}
+
 pub trait FundingAuthority<AccountId> {
   fn allows(
     aaa_id: crate::AaaId,
@@ -92,11 +116,17 @@ pub trait AssetOps<AccountId, AssetId, Balance> {
 
   fn minimum_balance(asset: AssetId) -> Balance;
 
-  /// Returns whether the recipient can accept this exact amount now.
+  /// Preflights the exact transfer consequence under unchanged ledger state.
   ///
-  /// `SplitTransfer` treats `false` as a temporary recipient-deposit condition, preflights every
-  /// non-zero leg before mutation, and retries the whole task rather than dropping one leg.
-  fn can_deposit(who: &AccountId, asset: AssetId, amount: Balance) -> bool;
+  /// Implementations must account for source withdrawal rules and recipient depositability,
+  /// including provider/reference semantics for native balances. `SplitTransfer` preflights every
+  /// non-zero leg before mutation and retries the whole task on an explicitly temporary result.
+  fn preflight_transfer(
+    from: &AccountId,
+    to: &AccountId,
+    asset: AssetId,
+    amount: Balance,
+  ) -> Result<(), TaskFailure>;
 }
 
 /// Runtime staking operations. Required only when Stake or Unstake appears in a plan.
@@ -107,18 +137,7 @@ pub trait StakingOps<AccountId, AssetId, Balance> {
   fn share_asset(asset: AssetId) -> Option<AssetId>;
 }
 
-/// Runtime protocol-liquidity donation operation.
-pub trait LiquidityDonationOps<AccountId, AssetId, Balance> {
-  fn donate_liquidity(
-    who: &AccountId,
-    asset_a: AssetId,
-    asset_b: AssetId,
-    amount: Balance,
-    max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), TaskFailure>;
-}
-
-/// Runtime DEX operations.
+/// Runtime DEX swap operations.
 pub trait DexOps<AccountId, AssetId, Balance> {
   fn swap_exact_in(
     context: ExecutionContext<'_, AccountId>,
@@ -136,7 +155,10 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     max_amount_in: Balance,
     slippage_tolerance: Perbill,
   ) -> Result<Balance, TaskFailure>;
+}
 
+/// Runtime liquidity operations. Required when a liquidity task appears in a plan.
+pub trait LiquidityOps<AccountId, AssetId, Balance> {
   fn add_liquidity(
     who: &AccountId,
     asset_a: AssetId,
@@ -152,6 +174,14 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     lp_amount: Balance,
     min_amount_a: Balance,
     min_amount_b: Balance,
+  ) -> Result<(Balance, Balance), TaskFailure>;
+
+  fn donate_liquidity(
+    who: &AccountId,
+    asset_a: AssetId,
+    asset_b: AssetId,
+    amount: Balance,
+    max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure>;
 }
 
@@ -183,8 +213,15 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
     Balance::default()
   }
 
-  fn can_deposit(_: &AccountId, _: AssetId, _: Balance) -> bool {
-    false
+  fn preflight_transfer(
+    _: &AccountId,
+    _: &AccountId,
+    _: AssetId,
+    _: Balance,
+  ) -> Result<(), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "AssetOps not configured",
+    )))
   }
 }
 
@@ -214,7 +251,10 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
       "DexOps not configured",
     )))
   }
+}
 
+/// Fail-closed `LiquidityOps` fallback for runtimes without liquidity support.
+impl<AccountId, AssetId, Balance: Default> LiquidityOps<AccountId, AssetId, Balance> for () {
   fn add_liquidity(
     _: &AccountId,
     _: AssetId,
@@ -224,7 +264,7 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: Balance,
   ) -> Result<(Balance, Balance, Balance), TaskFailure> {
     Err(TaskFailure::permanent(DispatchError::Other(
-      "DexOps not configured",
+      "LiquidityOps not configured",
     )))
   }
 
@@ -236,7 +276,19 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: Balance,
   ) -> Result<(Balance, Balance), TaskFailure> {
     Err(TaskFailure::permanent(DispatchError::Other(
-      "DexOps not configured",
+      "LiquidityOps not configured",
+    )))
+  }
+
+  fn donate_liquidity(
+    _: &AccountId,
+    _: AssetId,
+    _: AssetId,
+    _: Balance,
+    _: Perbill,
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "LiquidityOps not configured",
     )))
   }
 }
@@ -261,22 +313,5 @@ impl<AccountId, AssetId, Balance: Default> StakingOps<AccountId, AssetId, Balanc
 
   fn share_asset(_: AssetId) -> Option<AssetId> {
     None
-  }
-}
-
-/// Fail-closed fallback for runtimes without protocol-liquidity donation support.
-impl<AccountId, AssetId, Balance: Default> LiquidityDonationOps<AccountId, AssetId, Balance>
-  for ()
-{
-  fn donate_liquidity(
-    _: &AccountId,
-    _: AssetId,
-    _: AssetId,
-    _: Balance,
-    _: Perbill,
-  ) -> Result<(Balance, Balance), TaskFailure> {
-    Err(TaskFailure::permanent(DispatchError::Other(
-      "LiquidityDonationOps not configured",
-    )))
   }
 }

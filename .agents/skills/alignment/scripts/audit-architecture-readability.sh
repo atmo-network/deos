@@ -13,7 +13,7 @@ Rejects oversized prose paragraphs, list items, and table rows in English
 architecture Markdown. Fenced code, headings, and generated HTML are excluded.
 The default maximum semantic block length is 600 characters.
 
-With no arguments, audits docs/*.architecture.en.md.
+With no arguments, audits root and package-owned *.architecture.en.md files.
 
 Options:
   -h, --help  Show this help message
@@ -50,7 +50,10 @@ check_prerequisites() {
         exit 2
     }
     if (( ${#FILES[@]} == 0 )); then
-        mapfile -t FILES < <(find "$PROJECT_ROOT/docs" -maxdepth 1 -type f -name '*.architecture.en.md' -print | sort)
+        mapfile -t FILES < <({
+            find "$PROJECT_ROOT/docs" -maxdepth 1 -type f -name '*.architecture.en.md' -print
+            find "$PROJECT_ROOT/template/pallets" -path '*/docs/architecture.en.md' -type f -print
+        } | sort)
     fi
     local file
     for file in "${FILES[@]}"; do

@@ -10,7 +10,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/asset-registry.architecture.en.md
+  - ../../template/pallets/asset-registry/docs/architecture.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer

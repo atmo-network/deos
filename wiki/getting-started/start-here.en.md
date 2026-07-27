@@ -163,7 +163,7 @@ Use the smallest meaningful gate first. You do not need every gate for every cha
 | Web client behavior | `npm --prefix web-client run validate` |
 | Web client boundaries | `npm --prefix web-client run validate:dag` |
 | Tokenomics/formulas | `node simulator/tests.js` |
-| TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-tmc --locked` |
+| TMC runtime | `cargo test --manifest-path template/Cargo.toml -p pallet-deos-tmc --locked` |
 | Broad runtime | `cargo test --manifest-path template/Cargo.toml --workspace --locked` |
 | Cross-domain change | Simulator, cargo tests, client validation, completion gate |
 

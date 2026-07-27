@@ -14,6 +14,7 @@ import type {
 import { PRECISION } from '$lib/economics';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
+import type { ObservationFeedIdentity } from '$lib/observation/types';
 import type {
   AssetBalanceProjection,
   TransferAssetKey,
@@ -38,6 +39,7 @@ import {
   formatChainEventMessage,
   unwrapEventRecord,
 } from './events';
+import { BlockchainObservationReader } from './observations';
 import {
   quoteBuyAtSnapshot,
   quoteSellAtSnapshot,
@@ -175,6 +177,7 @@ export class BlockchainAdapter implements Adapter {
   private readonly snapshotBuilder = new BlockchainSnapshotBuilder(() =>
     this.selectedAddress(),
   );
+  private readonly observationReader = new BlockchainObservationReader();
 
   private async resolvePrimaryForeignAsset(
     snapshot: DeosChainSnapshot,
@@ -322,7 +325,7 @@ export class BlockchainAdapter implements Adapter {
         supplyLp: 0n,
         hasPool: false,
         hasNativeCurve: false,
-        trackedForeignAssetCount: 0,
+        registeredForeignAssetCount: 0,
         minForeignSwapAmount: PRECISION,
         gravityWellRatio: 0,
         buckets: new Map(),
@@ -402,6 +405,23 @@ export class BlockchainAdapter implements Adapter {
     return await getDeosAaaFinalizedAuthoringContext(await this.ensurePapi());
   }
 
+  async getObservationFeeds() {
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    return await this.observationReader.feeds(snapshot);
+  }
+
+  async getObservationInspection(
+    feed: ObservationFeedIdentity,
+    maxAgeBlocks: number,
+  ) {
+    const snapshot = await (await this.ensurePapi()).snapshot();
+    return await this.observationReader.inspection(
+      snapshot,
+      feed,
+      maxAgeBlocks,
+    );
+  }
+
   async getAutomationActors(): Promise<AutomationActorSnapshot[]> {
     try {
       const snapshot = await (await this.ensurePapi()).snapshot();
@@ -438,6 +458,7 @@ export class BlockchainAdapter implements Adapter {
             cycleNonce: hot?.cycle_nonce ?? 0n,
             continuation: automationContinuationSnapshot(continuation),
             lastCycleBlock: hot?.last_cycle_block ?? null,
+            completionPolicy: program?.completion_policy.type ?? null,
             triggerLabel: automationTriggerLabel(program?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,
           } satisfies AutomationActorSnapshot;

@@ -1,7 +1,8 @@
 use super::pallet::*;
 use super::types::{InputLimit, Task as AaaTask};
 use super::{
-  AssetOps, DexOps, FeeCollector, LiquidityDonationOps, RetryClass, StakingOps, TaskFailure,
+  AssetOps, DexOps, FeeCollector, LiquidityOps, ObservationProvider as _, RetryClass,
+  ScalarObservationState, StakingOps, TaskFailure,
 };
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
@@ -17,7 +18,6 @@ use polkadot_sdk::sp_weights::WeightToFee as _;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AmountResolutionPolicy {
   PreserveSpend,
-  ExpendableSpend,
   Mint,
 }
 
@@ -248,6 +248,7 @@ impl<T: Config> Pallet<T> {
       aaa_id,
       cycle_nonce: hot.cycle_nonce,
       executed_steps: totals.executed_steps,
+      committed_effectful_tasks: totals.committed_effectful_tasks,
       skipped_conditions: totals.skipped_conditions,
       skipped_resolution: totals.skipped_resolution,
       skipped_funding_unavailable: totals.skipped_funding_unavailable,
@@ -447,6 +448,7 @@ impl<T: Config> Pallet<T> {
       .as_ref()
       .map_or(&empty_funding_snapshots, |state| &state.funding_snapshots);
     let mut executed_steps = cumulative_outcomes.executed_steps;
+    let mut committed_effectful_tasks = cumulative_outcomes.committed_effectful_tasks;
     let mut skipped_conditions = cumulative_outcomes.skipped_conditions;
     let mut skipped_resolution = cumulative_outcomes.skipped_resolution;
     let mut skipped_funding_unavailable = cumulative_outcomes.skipped_funding_unavailable;
@@ -758,6 +760,9 @@ impl<T: Config> Pallet<T> {
       Self::record_simulation_step(&mut trace, step_num, simulation_outcome);
       executed_steps = executed_steps.saturating_add(1);
       attempt_executed_steps = attempt_executed_steps.saturating_add(1);
+      if successful_control != StepControl::CompleteCycle {
+        committed_effectful_tasks = committed_effectful_tasks.saturating_add(1);
+      }
       if successful_control == StepControl::CompleteCycle {
         break;
       }
@@ -790,6 +795,7 @@ impl<T: Config> Pallet<T> {
       if !local_limit_reached && !global_limit_reached {
         let cumulative_outcomes = OutcomeTotals {
           executed_steps,
+          committed_effectful_tasks,
           skipped_conditions,
           skipped_resolution,
           skipped_funding_unavailable,
@@ -824,6 +830,7 @@ impl<T: Config> Pallet<T> {
     }
     let terminal_outcomes = OutcomeTotals {
       executed_steps,
+      committed_effectful_tasks,
       skipped_conditions,
       skipped_resolution,
       skipped_funding_unavailable,
@@ -862,6 +869,7 @@ impl<T: Config> Pallet<T> {
         aaa_id,
         cycle_nonce,
         executed_steps,
+        committed_effectful_tasks,
         skipped_conditions,
         skipped_resolution,
         skipped_funding_unavailable,
@@ -887,7 +895,13 @@ impl<T: Config> Pallet<T> {
         }
       }
     } else if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
-      if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
+      if inst.completion_policy == CompletionPolicy::CloseAfterProductiveRun
+        && committed_effectful_tasks > 0
+      {
+        Self::close_actor(aaa_id, &inst, CloseReason::ProductiveRunCompleted)
+          .expect("fresh productive execution snapshot satisfies terminal preconditions");
+        terminal_close_reason = Some(CloseReason::ProductiveRunCompleted);
+      } else if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
         if cycle_nonce >= target_nonce {
           Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached)
             .expect("fresh execution snapshot satisfies terminal preconditions");
@@ -916,6 +930,7 @@ impl<T: Config> Pallet<T> {
       schedule,
       schedule_window,
       execution_plan,
+      completion_policy,
       funding_source_policy,
     } = expected_program
     else {
@@ -926,6 +941,7 @@ impl<T: Config> Pallet<T> {
     if stored_program.schedule != schedule
       || stored_program.schedule_window != schedule_window
       || stored_program.execution_plan != execution_plan
+      || stored_program.completion_policy != completion_policy
       || stored_funding.funding_source_policy != funding_source_policy
     {
       return Err(SimulationError::ProgramMismatch);
@@ -976,7 +992,14 @@ impl<T: Config> Pallet<T> {
       let mut cumulative_outcomes = initial_outcomes;
       for record in &trace {
         match record.outcome {
-          SimulationStepOutcome::Executed | SimulationStepOutcome::Stopped => {
+          SimulationStepOutcome::Executed => {
+            cumulative_outcomes.executed_steps =
+              cumulative_outcomes.executed_steps.saturating_add(1);
+            cumulative_outcomes.committed_effectful_tasks = cumulative_outcomes
+              .committed_effectful_tasks
+              .saturating_add(1);
+          }
+          SimulationStepOutcome::Stopped => {
             cumulative_outcomes.executed_steps =
               cumulative_outcomes.executed_steps.saturating_add(1);
           }
@@ -1241,7 +1264,7 @@ impl<T: Config> Pallet<T> {
           reserved,
           trigger_balances,
           funding_snapshots,
-          AmountResolutionPolicy::ExpendableSpend,
+          AmountResolutionPolicy::PreserveSpend,
         )? {
           Ok(value) => value,
           Err(TaskResolutionOutcome::Skipped) => return Ok(PreparedTaskOutcome::Skipped),
@@ -1525,11 +1548,7 @@ impl<T: Config> Pallet<T> {
               if leg_amount.is_zero() {
                 continue;
               }
-              if !T::AssetOps::can_deposit(&leg.to, asset, leg_amount) {
-                return Err(TaskFailure::temporary(
-                  Error::<T>::RecipientDepositUnavailable,
-                ));
-              }
+              T::AssetOps::preflight_transfer(actor, &leg.to, asset, leg_amount)?;
               effective_distributed = effective_distributed.saturating_add(leg_amount);
               normalized_transfers.push((leg.to.clone(), leg_amount));
             }
@@ -1614,8 +1633,9 @@ impl<T: Config> Pallet<T> {
             amount_b,
             min_lp_out,
           } => {
-            let (used_a, used_b, lp_minted) =
-              T::DexOps::add_liquidity(actor, asset_a, asset_b, amount_a, amount_b, min_lp_out)?;
+            let (used_a, used_b, lp_minted) = T::LiquidityOps::add_liquidity(
+              actor, asset_a, asset_b, amount_a, amount_b, min_lp_out,
+            )?;
             let _ = (used_a, used_b);
             Self::deposit_event(Event::LiquidityAdded {
               aaa_id,
@@ -1630,8 +1650,13 @@ impl<T: Config> Pallet<T> {
             min_amount_a,
             min_amount_b,
           } => {
-            let (out_a, out_b) =
-              T::DexOps::remove_liquidity(actor, lp_asset, amount, min_amount_a, min_amount_b)?;
+            let (out_a, out_b) = T::LiquidityOps::remove_liquidity(
+              actor,
+              lp_asset,
+              amount,
+              min_amount_a,
+              min_amount_b,
+            )?;
             Self::deposit_event(Event::LiquidityRemoved {
               aaa_id,
               lp_asset,
@@ -1653,13 +1678,8 @@ impl<T: Config> Pallet<T> {
             amount,
             max_ratio_error,
           } => {
-            let (amount_a, amount_b) = T::LiquidityDonationOps::donate_liquidity(
-              actor,
-              asset_a,
-              asset_b,
-              amount,
-              max_ratio_error,
-            )?;
+            let (amount_a, amount_b) =
+              T::LiquidityOps::donate_liquidity(actor, asset_a, asset_b, amount, max_ratio_error)?;
             Self::deposit_event(Event::LiquidityDonated {
               aaa_id,
               asset_a,
@@ -1731,7 +1751,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn evaluate_atomic_condition(
-    condition: &Condition<T::AssetId, T::Balance>,
+    condition: &Condition<T::AssetId, T::Balance, u32, T::ObservationFeedId>,
     who: &T::AccountId,
     reserved: T::Balance,
   ) -> Result<bool, DispatchError> {
@@ -1756,7 +1776,40 @@ impl<T: Config> Pallet<T> {
         let now: u32 = frame_system::Pallet::<T>::block_number().saturated_into();
         now < *threshold
       }
+      Condition::ObservationAbove {
+        feed,
+        threshold,
+        max_age_blocks,
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+        .is_some_and(|value| value > *threshold),
+      Condition::ObservationBelow {
+        feed,
+        threshold,
+        max_age_blocks,
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+        .is_some_and(|value| value < *threshold),
+      Condition::ObservationEquals {
+        feed,
+        threshold,
+        max_age_blocks,
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+        .is_some_and(|value| value == *threshold),
+      Condition::ObservationNotEquals {
+        feed,
+        threshold,
+        max_age_blocks,
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+        .is_some_and(|value| value != *threshold),
     })
+  }
+
+  fn fresh_observation_value(feed: T::ObservationFeedId, max_age_blocks: u32) -> Option<u128> {
+    match T::ObservationProvider::observation(feed, max_age_blocks) {
+      ScalarObservationState::Fresh { value } => Some(value),
+      ScalarObservationState::Unavailable
+      | ScalarObservationState::Uninitialized
+      | ScalarObservationState::Stale => None,
+    }
   }
 
   /// Balance visible to AAA resolution — adapter-visible balance minus AAA-local reserved fees

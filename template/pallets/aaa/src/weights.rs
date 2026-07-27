@@ -20,6 +20,15 @@ pub trait WeightInfo {
   fn pause_aaa() -> Weight;
   fn resume_aaa() -> Weight;
   fn manual_trigger() -> Weight;
+  fn observation_change_ingress() -> Weight {
+    Weight::from_parts(75_000_000, 24_000)
+  }
+  fn observation_fanout_base() -> Weight {
+    Weight::from_parts(15_000_000, 4_000)
+  }
+  fn observation_fanout_page() -> Weight {
+    Weight::from_parts(8_000_000_000, 750_000)
+  }
   fn close_aaa() -> Weight;
   fn fee_collection() -> Weight;
   fn condition_set_evaluation(conditions: u32) -> Weight;
@@ -168,7 +177,7 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     }
     let bounded = u64::from(conditions.min(4));
     Weight::from_parts(8_660_000, 3_675)
-      .saturating_add(Weight::from_parts(8_102_000, 1_343).saturating_mul(bounded))
+      .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
       .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
   }
 
@@ -245,8 +254,8 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn scheduler_on_idle_base() -> Weight {
-    Weight::from_parts(20_534_000, 1_493)
-      .saturating_add(T::DbWeight::get().reads(6))
+    Weight::from_parts(25_000_000, 2_500)
+      .saturating_add(T::DbWeight::get().reads(7))
       .saturating_add(T::DbWeight::get().writes(1))
   }
 
@@ -513,7 +522,7 @@ impl WeightInfo for () {
     }
     let bounded = u64::from(conditions.min(4));
     Weight::from_parts(8_660_000, 3_675)
-      .saturating_add(Weight::from_parts(8_102_000, 1_343).saturating_mul(bounded))
+      .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
       .saturating_add(RocksDbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
   }
   fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
@@ -532,7 +541,7 @@ impl WeightInfo for () {
   fn task_unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
   fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
   fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
-  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(20_534_000, 1_493) }
+  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
   fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }

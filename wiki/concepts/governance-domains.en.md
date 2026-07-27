@@ -9,9 +9,9 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/governance.specification.en.md
-  - ../../docs/governance.architecture.en.md
-  - ../../docs/staking.specification.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
+  - ../../template/pallets/governance/docs/architecture.en.md
+  - ../../template/pallets/staking/docs/specification.en.md
 status: active
 audience: newcomer
 tags:

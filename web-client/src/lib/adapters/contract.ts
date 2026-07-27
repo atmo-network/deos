@@ -11,6 +11,7 @@ import type {
 } from '$lib/automation/types';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
+import type { ObservationInspectionProvider } from '$lib/observation/types';
 import type {
   AssetBalanceProjection,
   TransferAssetKey,
@@ -146,6 +147,7 @@ export type Adapter = AdapterLifecycle &
   SystemReadAdapter &
   PortfolioAdapter &
   AutomationAdapter &
+  ObservationInspectionProvider &
   MarketAdapter &
   StakingAdapter &
   LogFeedAdapter;

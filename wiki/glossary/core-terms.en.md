@@ -15,9 +15,9 @@ sources:
   - ../../CHANGELOG.md
   - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
-  - ../../docs/aaa.specification.en.md
-  - ../../docs/governance.specification.en.md
-  - ../../docs/governance.architecture.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
+  - ../../template/pallets/governance/docs/architecture.en.md
   - ../../docs/read-model.contract.en.md
   - ../../docs/web-client.architecture.en.md
   - ../../web-client/README.md

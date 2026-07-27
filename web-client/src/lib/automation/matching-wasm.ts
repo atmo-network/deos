@@ -213,7 +213,9 @@ function validateOutcome(
   outcome: AaaRuntimeSimulationOutcome,
   maxSteps: number,
 ) {
-  if (!['Completed', 'Aborted', 'Suspended'].includes(outcome.status)) {
+  if (
+    !['Completed', 'Aborted', 'Suspended', 'Closed'].includes(outcome.status)
+  ) {
     throw new Error('Unsupported runtime simulation status');
   }
   validateIndex(outcome.attempt, 'outcome.attempt');

@@ -80,25 +80,37 @@ The automation domain validates metadata-bound plan artifacts. It discovers `Pro
 
 Its static forecast mirrors pallet amount-resolution policy over an explicitly supplied state pin: fee reserve, minimum balance, trigger snapshot, last funding, and staking shares remain distinct inputs. Cost output keeps RefTime, ProofSize, evaluation fee, execution upper fee, and lifecycle overhead separate. `StaticAllStepsReached` does not simulate adapter quotes, mutations, failures, or early aborts.
 
-`automation/semantic-manifest.ts` owns canonical task and amount names so generated-manifest validation does not depend back on its analysis consumer. `automation/analysis.ts` consumes canonical artifact inspection, that Rust-generated versioned semantic manifest, and the existing forecast aggregator. It emits identity-bound `StaticStructuralProjection` trigger admission, ordered rows, economic/failure/data-dependency surfaces, factual unscored findings, and one bounded suffix envelope for every cursor.
+`automation/semantic-manifest.ts` owns canonical task, condition, and amount names so generated-manifest validation does not depend back on its analysis consumer. `automation/analysis.ts` consumes canonical artifact inspection, that Rust-generated versioned semantic manifest, and the existing forecast aggregator. It emits identity-bound `StaticStructuralProjection` trigger admission, ordered rows, economic/failure/data-dependency surfaces, factual unscored findings, and one bounded suffix envelope for every cursor.
+
+Trigger projection keeps admission independent from source identity. Manual and AddressEvent remain source kinds; every `OnObservationChange` entry additionally preserves its exact metadata-decoded feed projection without inventing a threshold, condition, callback, or execution result.
 
 Optional minimum-balance evidence carries its own identity and finalized block hash. Fixed SplitTransfer warnings require exact asset, zero recipient-balance, and below-minimum leg evidence; absent evidence produces no state claim.
 
-Task adapters, assets, typed recipient surfaces, effects, availability, successful control, weight owner, bounded algorithm, and amount roles come from the manifest; unknown versions or variants fail closed. Each row preserves exact aggregate semantics and separate success/failure controls, including `StopCycle` cycle completion.
+Task adapters, assets, typed recipient surfaces, effects, availability, successful control, weight owner, bounded algorithm, amount roles, condition read surfaces, and exact Condition SCALE indices come from manifest format `2`; unknown versions, variants, or index drift fail closed. Each row preserves exact aggregate semantics and separate success/failure controls, including `StopCycle` cycle completion.
 
 `automation/authoring.ts` owns the typed linear draft and immutable add/replace/remove/reorder operations. It validates runtime bounds, trigger-source canonicality, and class rules; lowers every trigger/condition/task/amount/policy directly to metadata-shaped `ProgramInput`; and delegates exact SCALE and `planId` production to `plan-artifact.ts`. Authoring-only row keys disappear during lowering; no graph, recipe identity, generic call, or successor field enters the artifact.
+
+Observation predicates author the complete typed feed identity, raw `u128` threshold, and nonzero `max_age_blocks`. Static analysis labels their read as fresh-only and records unavailable, uninitialized, and stale states as ordinary false.
+
+`observation/` owns the inspection contract. The blockchain adapter reads bounded `Oracle.FeedIds`, then fetches only the selected exact `Oracle.Feeds` and `Oracle.Observations` keys at one finalized hash. It projects scale-preserving formatting, producer, provenance, aggregation, lifecycle, update block, revision, authored maximum age, and the four current statuses under direct canonical-chain provenance. It never reconstructs history.
+
+The Observe view states latest-state coalescing and the equal-value refresh/revision distinction. It labels Axial Router pre-execution reserve feeds as local execution references rather than fair-price, manipulation-resistance, MEV, or ordering proofs. Observation history remains a materialized-provider concern and appears as unavailable rather than browser-derived archive truth.
 
 The step editor presents output-authored `SwapOut` first and requires explicit `InputLimit::LiveQuote` or `InputLimit::Absolute` intent. Live mode discloses future-price exposure; absolute mode requires a positive canonical base-unit ceiling. Liquidity minima remain fixed positive runtime `u128` fields, and invalid bounds fail before artifact construction.
 
 The step editor presents `AbortCycle` as “Abort on task failure” without changing encoded identity. A compact disclosure separates condition-false advance, resolution skip, funding unavailability, Temporary task failure, and Permanent task failure; the `StopCycle` warning names false-condition skip separately from atomic-condition and User fee-collection failure.
 
-`AutomationWidget` keeps actor monitoring and composition in separate views. `AutomationTriggerEditor` exposes Immediate/Cadenced admission, Always/WhenSignalled mode, and up to four Manual or filtered AddressEvent sources. Composition renders stable numbered rows with explicit `Always`, `All conditions`, or `Any condition` mode plus task-parameter, amount, and error-policy controls for every current primitive. Removing the final grouped atom returns the row to `Always`; `StopCycle` renders terminal completion without adding an edge. The widget creates artifacts but has no submission action.
+`AutomationWidget` keeps actor monitoring, observation inspection, and composition in separate views. `AutomationTriggerEditor` exposes Immediate/Cadenced admission, Always/WhenSignalled mode, and up to four Manual or filtered AddressEvent sources.
+
+Composition renders stable numbered rows with explicit `Always`, `All conditions`, or `Any condition` mode plus task-parameter, amount, and error-policy controls for every current primitive. Removing the final grouped atom returns the row to `Always`; `StopCycle` renders terminal completion without adding an edge. The widget creates artifacts but has no submission action.
 
 Automation amount, asset, condition, task, and step editors live in `src/lib/automation/` as domain-owned presentation components. `src/lib/widgets/AutomationWidget.svelte` remains the layout entrypoint and composes those controls; the widget directory does not own automation internals.
 
 The blockchain adapter supplies V16 metadata and runtime identity at one finalized block without fetching runtime code or invoking the simulation API. After validation, the widget displays exact `planId`, metadata/genesis/runtime pins, finalized context, and SCALE size. Forecast, adapter-local, and matching-Wasm lanes remain separately labeled `Not run` until their own required model or provider executes.
 
 The adapter-local simulation kernel evaluates every `All`/`Any` atom without short-circuiting, propagates the first observed atomic error after the full group, and skips only the current task when aggregate truth fails. It clones state per task, commits successful effects, discards failed effects, preserves prior prefixes, and models abort, continue, Mutable-only Temporary retry, and successful `StopCycle` suffix termination. Every result says `AdapterLocalProjection`; only matching-runtime Wasm may claim runtime-level simulation.
+
+Matching-Wasm response validation accepts the runtime's bounded `Completed`, `Aborted`, `Suspended`, and `Closed` states. A `Closed(ProductiveRunCompleted)` response must retain the requested artifact/state pin and round-trip through canonical runtime SCALE before the client accepts it.
 
 AAA call composition discovers the pallet and outer `RuntimeCall` from the artifact metadata, then exposes exact SCALE bytes, hash, `planId`, runtime identity, and required origin. User calls remain direct owner-signed actions. Root-required System calls report `UnsupportedAaaRootCall`: current strategic `L1RootAction` decodes only the dedicated runtime-upgrade payload, so call-byte composition does not imply governance admission.
 
@@ -117,6 +129,7 @@ Primary slices:
 - `staking/` — staking-facing types/contracts.
 - `governance/` — proposal store, labels, payload helpers, review helpers, projections.
 - `automation/` — automation authoring policy, canonical plan artifacts/diffs, and bounded actor/Continuation projection contracts.
+- `observation/` — typed feed identity, exact scalar formatting, current Fresh/Stale/Unavailable/Uninitialized classification, and inspection UI.
 - `log/` — transaction progress, receipts, account log, network feed.
 - `wallet/` — wallet session, signer discovery, address validation, local-dev signer routing.
 - `system/` — chain snapshot, endpoint/session wiring, adapter runtime context, persistence.

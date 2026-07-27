@@ -8,7 +8,10 @@ use pallet_aaa::{AssetOps, FeeCollector};
 use polkadot_sdk::{
   frame_support::{
     PalletId, construct_runtime,
-    traits::{ConstU8, ConstU32, ConstU64, ConstU128, Currency, ExistenceRequirement, Get},
+    traits::{
+      ConstU8, ConstU32, ConstU64, ConstU128, Currency, ExistenceRequirement, Get,
+      fungible::Inspect as NativeInspect, tokens::Provenance,
+    },
     weights::Weight,
   },
   frame_system::EnsureRoot,
@@ -197,8 +200,19 @@ impl AssetOps<AccountId, AssetId, Balance> for NativeAssetOps {
     if asset == NATIVE_ASSET { 1 } else { 0 }
   }
 
-  fn can_deposit(_: &AccountId, asset: AssetId, _: Balance) -> bool {
-    asset == NATIVE_ASSET
+  fn preflight_transfer(
+    from: &AccountId,
+    to: &AccountId,
+    asset: AssetId,
+    amount: Balance,
+  ) -> Result<(), pallet_aaa::TaskFailure> {
+    Self::ensure_native(asset)?;
+    <Balances as NativeInspect<AccountId>>::can_withdraw(from, amount)
+      .into_result(false)
+      .map_err(pallet_aaa::TaskFailure::permanent)?;
+    <Balances as NativeInspect<AccountId>>::can_deposit(to, amount, Provenance::Extant)
+      .into_result()
+      .map_err(pallet_aaa::TaskFailure::permanent)
   }
 }
 
@@ -279,31 +293,6 @@ impl pallet_aaa::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
     }
     NativeAssetOps::transfer(who, &DEX_SINK, asset_in, amount_in)?;
     Ok(amount_in)
-  }
-
-  fn add_liquidity(
-    _: &AccountId,
-    _: AssetId,
-    _: AssetId,
-    _: Balance,
-    _: Balance,
-    _: Balance,
-  ) -> Result<(Balance, Balance, Balance), pallet_aaa::TaskFailure> {
-    Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-      "LiquidityUnsupported",
-    )))
-  }
-
-  fn remove_liquidity(
-    _: &AccountId,
-    _: AssetId,
-    _: Balance,
-    _: Balance,
-    _: Balance,
-  ) -> Result<(Balance, Balance), pallet_aaa::TaskFailure> {
-    Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-      "LiquidityUnsupported",
-    )))
   }
 }
 
@@ -409,6 +398,13 @@ impl Get<PalletId> for AaaPalletId {
   }
 }
 
+pub struct ObservationFanoutWeightLimit;
+impl Get<Weight> for ObservationFanoutWeightLimit {
+  fn get() -> Weight {
+    Weight::MAX
+  }
+}
+
 pub struct GuaranteedOnIdleWeight;
 impl Get<Weight> for GuaranteedOnIdleWeight {
   fn get() -> Weight {
@@ -436,7 +432,7 @@ impl Get<AccountId> for FeeSink {
 pub struct FixtureBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance> for FixtureBenchmarkHelper {
+impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance, u32> for FixtureBenchmarkHelper {
   fn setup_add_liquidity(
     _: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance, Balance), DispatchError> {
@@ -481,6 +477,10 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance> for FixtureBenchma
     Ok((0..max).map(|_| NATIVE_ASSET).collect())
   }
 
+  fn setup_observation_feeds(max: u32) -> Result<Vec<u32>, DispatchError> {
+    Ok((1..=max).collect())
+  }
+
   fn setup_address_event_ingress(
     _: &AccountId,
     _: &AccountId,
@@ -518,10 +518,12 @@ impl pallet_aaa::Config for Runtime {
   type Balance = Balance;
   type NativeAssetId = ConstU32<NATIVE_ASSET>;
   type AssetOps = NativeAssetOps;
+  type ObservationFeedId = u32;
+  type ObservationProvider = ();
   type FundingAuthority = ();
   type DexOps = RuntimeDexOps;
   type StakingOps = ();
-  type LiquidityDonationOps = ();
+  type LiquidityOps = ();
   type MinWindowLength = ConstU64<2>;
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
@@ -540,6 +542,8 @@ impl pallet_aaa::Config for Runtime {
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<128>;
+  type MaxObservationFanoutPagesPerBlock = ConstU32<8>;
+  type ObservationFanoutWeightLimit = ObservationFanoutWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<16>;
   type MaxSweepPerBlock = ConstU32<4>;
   type MaxWhitelistSize = ConstU32<4>;
@@ -601,6 +605,14 @@ mod tests {
   };
   use polkadot_sdk::sp_runtime::Perbill;
 
+  #[test]
+  fn observation_boundary_is_independently_fail_closed() {
+    assert_eq!(
+      <() as pallet_aaa::ObservationProvider<u32>>::observation(7, 10),
+      pallet_aaa::ScalarObservationState::Unavailable
+    );
+  }
+
   fn signed_extrinsic(signer: AccountId, nonce: u64, call: RuntimeCall) -> UncheckedExtrinsic {
     let tx_ext = (
       polkadot_sdk::frame_system::CheckNonZeroSender::<Runtime>::new(),
@@ -638,6 +650,7 @@ mod tests {
       },
       schedule_window: None,
       execution_plan: plan,
+      completion_policy: pallet_aaa::CompletionPolicy::Persistent,
       funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
     }
   }
@@ -679,6 +692,7 @@ mod tests {
       },
       schedule_window: None,
       execution_plan: BoundedVec::try_from(steps).expect("fixture plan fits"),
+      completion_policy: pallet_aaa::CompletionPolicy::Persistent,
       funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
     }
   }
@@ -1007,6 +1021,7 @@ mod tests {
         },
         schedule_window: None,
         execution_plan: oversized,
+        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
       };
       assert_noop!(
@@ -1030,6 +1045,7 @@ mod tests {
         },
         schedule_window: None,
         execution_plan: admitted,
+        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
       };
       assert_ok!(AAA::create_user_aaa(
@@ -1597,6 +1613,7 @@ mod tests {
         },
         schedule_window: None,
         execution_plan: plan,
+        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
       };
       assert_ok!(AAA::create_user_aaa(
@@ -1687,7 +1704,32 @@ mod tests {
       )))
     );
     assert_eq!(
-      <() as pallet_aaa::LiquidityDonationOps<AccountId, AssetId, Balance>>::donate_liquidity(
+      <() as pallet_aaa::LiquidityOps<AccountId, AssetId, Balance>>::add_liquidity(
+        &ALICE,
+        NATIVE_ASSET,
+        1,
+        10,
+        10,
+        1,
+      ),
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "LiquidityOps not configured",
+      )))
+    );
+    assert_eq!(
+      <() as pallet_aaa::LiquidityOps<AccountId, AssetId, Balance>>::remove_liquidity(
+        &ALICE,
+        NATIVE_ASSET,
+        10,
+        1,
+        1,
+      ),
+      Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
+        "LiquidityOps not configured",
+      )))
+    );
+    assert_eq!(
+      <() as pallet_aaa::LiquidityOps<AccountId, AssetId, Balance>>::donate_liquidity(
         &ALICE,
         NATIVE_ASSET,
         1,
@@ -1695,7 +1737,7 @@ mod tests {
         Perbill::zero(),
       ),
       Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-        "LiquidityDonationOps not configured",
+        "LiquidityOps not configured",
       )))
     );
   }

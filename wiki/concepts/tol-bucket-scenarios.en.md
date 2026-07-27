@@ -10,8 +10,8 @@ available_locales:
   - ru
 sources:
   - ../../docs/tmctol.specification.en.md
-  - ../../docs/aaa.architecture.en.md
-  - ../../docs/aaa.specification.en.md
+  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
   - ../../AGENTS.md
 status: active
 audience: newcomer

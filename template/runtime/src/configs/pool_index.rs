@@ -15,7 +15,14 @@ pub struct PoolIndexExtension;
 
 impl PoolIndexExtension {
   fn index_weight() -> Weight {
-    <Runtime as frame_system::Config>::DbWeight::get().reads_writes(2, 1)
+    let feed_registration =
+      <crate::weights::pallet_oracle::SubstrateWeight<Runtime> as pallet_oracle::WeightInfo>::register_feed_existing_producer()
+        .max(
+          <crate::weights::pallet_oracle::SubstrateWeight<Runtime> as pallet_oracle::WeightInfo>::register_feed_new_producer(),
+        );
+    <Runtime as frame_system::Config>::DbWeight::get()
+      .reads_writes(5, 1)
+      .saturating_add(feed_registration.saturating_mul(2))
   }
 
   fn pair(call: &RuntimeCall) -> Option<(AssetKind, AssetKind)> {

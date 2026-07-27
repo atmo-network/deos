@@ -14,7 +14,7 @@ Deterministic account-abstraction actor runtime for bounded execution plans, sch
 
 Governance-controlled registry for foreign assets and XCM location mappings.
 
-### [Axial Router](./axial-router/README.md)
+### [Axial Router](./router/README.md)
 
 Multi-AMM trading infrastructure providing intelligent routing across different automated market makers. Implements trait-based architecture for extensible AMM support with optimal price discovery and execution.
 
@@ -43,9 +43,9 @@ Our pallets implement several key architectural patterns:
 
 For detailed technical implementation, architectural decisions, and production deployment patterns, see the comprehensive guides in the [documentation directory](../../docs/):
 
-- **[Axial Router Architecture Guide](../../docs/axial-router.architecture.en.md)** - Modern multi-token routing system optimized for TMC ecosystems
+- **[Axial Router Architecture Guide](./router/docs/architecture.en.md)** - Modern multi-token routing system optimized for TMC ecosystems
 - **[Randomness Strategy](../../docs/randomness.strategy.en.md)** - Post-VRF simplification note covering the relay-beacon-first direction and the conditions for replacing local entropy logic with a relay-chain beacon adapter
-- **[Staking Specification](../../docs/staking.specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, share-based ownership accounting, native liquid staking, locked native LP nomination, and governance-conditioned reward channels
+- **[Staking Specification](./staking/docs/specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, share-based ownership accounting, native liquid staking, locked native LP nomination, and governance-conditioned reward channels
 
 ## 🚀 Quick Start
 
@@ -59,7 +59,7 @@ Direct local entrypoints:
 
 - [AAA README](./aaa/README.md)
 - [Asset Registry README](./asset-registry/README.md)
-- [Axial Router README](./axial-router/README.md)
+- [Axial Router README](./router/README.md)
 - [Governance README](./governance/README.md)
 - [Staking README](./staking/README.md)
 - [TMC README](./tmc/README.md)

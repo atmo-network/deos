@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/tmc.architecture.en.md
+  - ../../template/pallets/tmc/docs/architecture.en.md
   - ../../docs/tmctol.specification.en.md
 status: active
 audience: newcomer

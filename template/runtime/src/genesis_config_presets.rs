@@ -78,13 +78,6 @@ fn local_web_client_asset_accounts(owner: &AccountId) -> Vec<(u32, AccountId, u1
   ]
 }
 
-fn local_web_client_tracked_assets() -> Vec<AssetKind> {
-  vec![
-    AssetKind::Native,
-    AssetKind::Foreign(LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID),
-  ]
-}
-
 fn local_web_client_curves() -> Vec<(AssetKind, AssetKind, u128, u128)> {
   vec![(
     AssetKind::Native,
@@ -141,7 +134,6 @@ fn testnet_genesis(
       safe_xcm_version: Some(SAFE_XCM_VERSION)
     },
     axial_router: pallet_axial_router::GenesisConfig {
-      tracked_assets: local_web_client_tracked_assets(),
       _marker: Default::default(),
     },
     token_minting_curve: pallet_tmc::GenesisConfig {
@@ -283,13 +275,6 @@ mod tests {
     assert_eq!(
       genesis["staking"]["registeredAssets"],
       serde_json::json!([LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID])
-    );
-    assert_eq!(
-      genesis["axialRouter"]["trackedAssets"],
-      serde_json::json!([
-        "Native",
-        { "Foreign": LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID }
-      ])
     );
     assert_eq!(
       genesis["tokenMintingCurve"]["curves"],

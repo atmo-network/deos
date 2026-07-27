@@ -16,8 +16,8 @@ Exclude political decisions, concrete proposal advocacy, account actions, signin
 
 ## Truth Owners
 
-- `docs/governance.specification.en.md` owns intended governance semantics.
-- `docs/governance.architecture.en.md` owns shipped implementation mapping.
+- `template/pallets/governance/docs/specification.en.md` owns intended governance semantics.
+- `template/pallets/governance/docs/architecture.en.md` owns shipped implementation mapping.
 - `template/pallets/governance/` owns executable pallet behavior, tests, benchmarks, and weights.
 - Runtime configuration and integration tests own DEOS payload/origin composition.
 - `docs/read-model.contract.en.md` and the governance client slice own provenance and browser realization.

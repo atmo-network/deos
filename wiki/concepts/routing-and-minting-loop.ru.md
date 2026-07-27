@@ -10,8 +10,8 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/axial-router.architecture.en.md
-  - ../../docs/tmc.architecture.en.md
+  - ../../template/pallets/router/docs/architecture.en.md
+  - ../../template/pallets/tmc/docs/architecture.en.md
   - ../../docs/tmctol.specification.en.md
 status: active
 audience: newcomer

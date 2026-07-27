@@ -13,9 +13,9 @@ sources:
   - ../../AGENTS.md
   - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
-  - ../../docs/axial-router.architecture.en.md
-  - ../../docs/aaa.specification.en.md
-  - ../../docs/governance.specification.en.md
+  - ../../template/pallets/router/docs/architecture.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
   - ../../docs/web-client.architecture.en.md
 status: active
 audience: developer

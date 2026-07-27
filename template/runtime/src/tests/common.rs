@@ -4,7 +4,7 @@
 //! ensuring consistent test environment initialization and reducing code duplication.
 
 use crate::{
-  AccountId, AssetConversion, Assets, Balance, Balances, EXISTENTIAL_DEPOSIT, Runtime,
+  AccountId, AssetConversion, Assets, Balance, Balances, EXISTENTIAL_DEPOSIT, Oracle, Runtime,
   RuntimeOrigin, Staking, System, configs::AssetKind,
 };
 use alloc::vec;
@@ -32,6 +32,28 @@ pub const EVE: AccountId = AccountId::new([5u8; 32]);
 // Axial Router account from pallet configuration
 pub fn axial_router_account() -> AccountId {
   crate::AxialRouter::account_id()
+}
+
+pub fn publish_axial_router_observation(
+  asset_in: AssetKind,
+  asset_out: AssetKind,
+  value: Balance,
+) -> DispatchResult {
+  crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out)?;
+  Oracle::publish(
+    RuntimeOrigin::signed(axial_router_account()),
+    crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out),
+    value,
+  )
+}
+
+pub fn publish_bidirectional_axial_router_observation(
+  asset_a: AssetKind,
+  asset_b: AssetKind,
+  value: Balance,
+) -> DispatchResult {
+  publish_axial_router_observation(asset_a, asset_b, value)?;
+  publish_axial_router_observation(asset_b, asset_a, value)
 }
 
 // Standard test constants
@@ -83,13 +105,18 @@ pub fn new_test_ext() -> TestExternalities {
     .build_storage()
     .unwrap();
   // Initialize balances for test accounts (sufficient for asset deposits)
-  let initial_balances = vec![
+  let mut initial_balances = vec![
     (ALICE, INITIAL_BALANCE),
     (BOB, INITIAL_BALANCE),
     (CHARLIE, INITIAL_BALANCE),
     (DAVE, INITIAL_BALANCE),
     (EVE, INITIAL_BALANCE),
   ];
+  initial_balances.extend(
+    crate::configs::aaa_config::TmctolGenesisSystemAaas::native_flow_anchor_accounts()
+      .into_iter()
+      .map(|account| (account, EXISTENTIAL_DEPOSIT)),
+  );
   polkadot_sdk::pallet_balances::GenesisConfig::<Runtime> {
     balances: initial_balances,
     ..Default::default()
@@ -105,7 +132,7 @@ pub fn new_test_ext() -> TestExternalities {
   }
   .assimilate_storage(&mut t)
   .unwrap();
-  // Pallet genesis configs: ED-free accounts + tracked assets
+  // Pallet genesis configs: anchored runtime-topology accounts + tracked assets
   pallet_axial_router::GenesisConfig::<Runtime>::default()
     .assimilate_storage(&mut t)
     .unwrap();
@@ -362,9 +389,9 @@ pub fn ensure_asset_conversion_pool(asset1: AssetKind, asset2: AssetKind) {
     .expect("created pool must be indexed");
 }
 
-/// Creates BLDR protocol token and funds BLDR domain AAA sovereigns with ED.
+/// Creates the BLDR protocol token; runtime-topology sovereigns already hold native ED anchors.
 fn setup_bldr_domain() {
-  use primitives::ecosystem::{aaa_ids, protocol_tokens};
+  use primitives::ecosystem::protocol_tokens;
   let bldr_id = protocol_tokens::BLDR_ASSET_ID;
   create_test_asset(bldr_id, &ALICE).unwrap();
   let _ = Assets::set_team(
@@ -374,16 +401,6 @@ fn setup_bldr_domain() {
     ALICE.into(),
     ALICE.into(),
   );
-  let bldr_sovereigns = [
-    aaa_ids::BLDR_SPLITTER_AAA_ID,
-    aaa_ids::BLDR_ZM_AAA_ID,
-    aaa_ids::BLDR_BUCKET_A_AAA_ID,
-    aaa_ids::BLDR_TREASURY_AAA_ID,
-  ];
-  for id in bldr_sovereigns {
-    let sov = crate::AAA::sovereign_account_id_system(id);
-    let _ = <Balances as Currency<AccountId>>::deposit_creating(&sov, EXISTENTIAL_DEPOSIT);
-  }
 }
 
 /// Creates NTVE-BLDR XYK pool and seeds it with initial liquidity.

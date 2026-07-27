@@ -121,24 +121,33 @@ check_legacy_wallet_helper_aliases() {
     fi
 }
 
+check_legacy_aaa_liquidity_adapter() {
+    local matches
+    matches="$(rg -n 'LiquidityDonationOps' "$TEMPLATE_DIR" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client" || true)"
+    if [[ -n "$matches" ]]; then
+        record_finding "legacy AAA LiquidityDonationOps alias detected"
+        echo "$matches"
+    fi
+}
+
 check_aaa_embedding_links() {
-    local guide="$TEMPLATE_DIR/pallets/aaa/EMBEDDING.md"
+    local guide="$TEMPLATE_DIR/pallets/aaa/docs/embedding.md"
     local redirect="$PROJECT_ROOT/docs/aaa.embedding.en.md"
     if [[ ! -f "$guide" ]]; then
         record_finding "package-owned AAA embedding guide is missing"
         return 0
     fi
     local missing=()
-    if ! rg -q 'template/pallets/aaa/EMBEDDING\.md' "$PROJECT_ROOT/docs/README.md"; then
+    if ! rg -q 'template/pallets/aaa/docs/embedding\.md' "$PROJECT_ROOT/docs/README.md"; then
         missing+=("docs/README.md")
     fi
-    if ! rg -q 'template/pallets/aaa/EMBEDDING\.md' "$PROJECT_ROOT/README.md"; then
+    if ! rg -q 'template/pallets/aaa/docs/embedding\.md' "$PROJECT_ROOT/README.md"; then
         missing+=("README.md")
     fi
-    if ! rg -q 'EMBEDDING\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
+    if ! rg -q 'docs/embedding\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
         missing+=("template/pallets/aaa/README.md")
     fi
-    if [[ ! -f "$redirect" ]] || ! rg -q 'template/pallets/aaa/EMBEDDING\.md' "$redirect"; then
+    if [[ ! -f "$redirect" ]] || ! rg -q 'template/pallets/aaa/docs/embedding\.md' "$redirect"; then
         missing+=("docs/aaa.embedding.en.md")
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
@@ -158,6 +167,7 @@ main() {
     check_asset_conversion_name
     check_legacy_framework_artifact_names
     check_legacy_wallet_helper_aliases
+    check_legacy_aaa_liquidity_adapter
     check_aaa_embedding_links
     if [[ ${#FINDINGS[@]} -eq 0 ]]; then
         log_success "Template readiness audit passed"

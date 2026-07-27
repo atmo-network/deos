@@ -53,4 +53,4 @@ The current kernel does not yet include:
 - Router/zap/burning behavior beyond optional runtime glue hooks
 - Broader orchestration of the full token lifecycle
 
-See `docs/asset-registry.architecture.en.md` for the current contract.
+See [`docs/architecture.en.md`](./docs/architecture.en.md) for the current contract.

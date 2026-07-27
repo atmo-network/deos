@@ -13,6 +13,7 @@ polkadot_sdk::frame_benchmarking::define_benchmarks!(
   [pallet_tmc, TokenMintingCurve]
   [pallet_asset_registry, AssetRegistry]
   [pallet_governance, Governance]
+  [pallet_oracle, Oracle]
   [pallet_staking, Staking]
   [pallet_aaa, AAA]
 );

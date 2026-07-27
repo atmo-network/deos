@@ -355,7 +355,6 @@ function mapProposalTiming(
 function mapProposalParameterChangeSurface(
   surface: GovernanceEnum<{
     RouterFee: undefined;
-    TrackedAsset: undefined;
   }>,
 ): GovernanceProposalParameterChangeSurface {
   return surface.type;
@@ -389,7 +388,6 @@ function mapProposalExecutionSuccessDetail(
     ParameterChangeExecuted: {
       surface: GovernanceEnum<{
         RouterFee: undefined;
-        TrackedAsset: undefined;
       }>;
     };
     TreasurySpendExecuted: {
@@ -463,7 +461,6 @@ function mapProposalExecutionDetail(
             ParameterChangeExecuted: {
               surface: GovernanceEnum<{
                 RouterFee: undefined;
-                TrackedAsset: undefined;
               }>;
             };
             TreasurySpendExecuted: {

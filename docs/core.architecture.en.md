@@ -6,7 +6,7 @@ The DEOS (Deterministic Economic Operating System) framework, currently instanti
 
 The runtime remains a deterministic state machine. AAA actors become eligible through typed balance ingress, timers, or manual governance/owner signals, then execute only fully admitted work through runtime adapters. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
 
-Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-aaa` execution plans. Fifteen genesis System actors consolidate the reference topology, while TMC, routing, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
+Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-deos-aaa` execution plans. Fifteen genesis System actors consolidate the reference topology, while TMC, routing, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
 
 ## 2. Core Philosophy: The "Omnivorous" Machine
 
@@ -55,7 +55,7 @@ The reference constellation below uses System AAA instances; the pallet also sup
 | BLDR Bucket A | 12 | Custody-only account | No generic AAA identity or program |
 | BLDR Treasury | 13 | Dormant System identity | No program until explicit activation |
 
-See [`aaa.architecture.en.md`](./aaa.architecture.en.md#current-tmctol-system-aaa-topology-on-deos) for the integrated System AAA topology, execution-plan families, and governance activation flows.
+See [AAA architecture](../template/pallets/aaa/docs/architecture.en.md#current-tmctol-system-aaa-topology-on-deos) for the integrated System AAA topology, execution-plan families, and governance activation flows.
 
 ### 3.2 Type System Foundation: The Bitmask Architecture
 
@@ -224,7 +224,7 @@ Each step is independently reversible and governance-gated. No implicit cross-pa
 
 ### 4.1 The Unified Execution Model
 
-AAA-managed recurring automation executes through one `pallet-aaa` scheduler; task adapters call the dedicated pallets that own minting, routing, staking, balances, and AMM state.
+AAA-managed recurring automation executes through one `pallet-deos-aaa` scheduler; task adapters call the dedicated pallets that own minting, routing, staking, balances, and AMM state.
 
 #### Execution Architecture
 
@@ -266,12 +266,12 @@ The system implements "Economic Backpressure" to handle volatility gracefully.
 AAA delegates host behavior through typed runtime contracts:
 
 - `AssetOps`: transferable balances, transfer, burn, mint, minimum-balance, and deposit checks
-- `DexOps`: caller-aware swaps plus liquidity addition and removal
+- `DexOps`: caller-aware exact-input and exact-output swaps
+- `LiquidityOps`: liquidity addition/removal plus adapter-owned donation balancing and receipt-suppression semantics
 - `StakingOps`: runtime-defined stake positions, shares, and transferable share assets
-- `LiquidityDonationOps`: adapter-owned pair balancing and receipt-suppression semantics
 - `FeeCollector`, `FundingAuthority`, direct ingress, task-failure retry class, task weights, and atomicity hooks: host-owned authority, metering, provenance, and lifecycle integration
 
-Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The detailed portable contract lives in `aaa.specification.en.md` and the package-owned `../template/pallets/aaa/EMBEDDING.md`; the current DEOS binding lives in `aaa.architecture.en.md`.
+Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The detailed portable contract lives in `aaa.specification.en.md` and the package-owned `../template/pallets/aaa/docs/embedding.md`; the current DEOS binding lives in `aaa.architecture.en.md`.
 
 ### 4.4 Amount Resolution
 
@@ -426,9 +426,9 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 
 | Pallet | Role | Hooks |
 | --- | --- | --- |
-| `pallet-aaa` | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
-| `pallet-axial-router` | Routing, fees, oracle | Extrinsic-driven |
-| `pallet-tmc` | Multi-curve native emission | Extrinsic-driven |
+| `pallet-deos-aaa` | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
+| `pallet-deus-router` | Routing, fees, oracle | Extrinsic-driven |
+| `pallet-deos-tmc` | Multi-curve native emission | Extrinsic-driven |
 | `pallet-asset-registry` | Foreign asset registry | Extrinsic-driven |
 | `pallet-asset-conversion` | Uniswap V2-like AMM pools | Extrinsic-driven |
 | `pallet-assets` | Fungible asset ledger | — |
@@ -448,7 +448,7 @@ Additional cleanup: the former TMC-to-liquidity adapter traits were removed from
 
 The DEOS architecture transforms the blockchain from a passive ledger into an `Active Economic Automaton`.
 
-By separating dedicated economic mechanisms from production-admitted `pallet-aaa` automation, the system provides:
+By separating dedicated economic mechanisms from production-admitted `pallet-deos-aaa` automation, the system provides:
 
 1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see Axial Router architecture).
 2. `Composable Automation`: bounded AAA tasks and runtime adapters compose reconfigurable flows only when the resulting plan fits production admission and preserves custody/atomicity. New actor graphs avoid runtime code changes when existing primitives satisfy that contract; new mechanics require an admitted adapter or core-task review.

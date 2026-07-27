@@ -13,6 +13,7 @@
     "src/lib/layout/types.ts",
     "src/lib/log/types.ts",
     "src/lib/market/types.ts",
+    "src/lib/observation/types.ts",
     "src/lib/portfolio/types.ts",
     "src/lib/staking/types.ts",
     "src/lib/system/types.ts"
@@ -64,6 +65,12 @@
     },
     {
       "from": "src/lib/portfolio/**",
+      "to": "src/lib/widgets/**",
+      "severity": "error",
+      "message": "Domain slices must not import presentation widgets"
+    },
+    {
+      "from": "src/lib/observation/**",
       "to": "src/lib/widgets/**",
       "severity": "error",
       "message": "Domain slices must not import presentation widgets"
@@ -131,6 +138,12 @@
     {
       "from": "src/lib/ui/**",
       "to": "src/lib/portfolio/**",
+      "severity": "error",
+      "message": "UI-kit primitives must stay foundation-only and not import product domains"
+    },
+    {
+      "from": "src/lib/ui/**",
+      "to": "src/lib/observation/**",
       "severity": "error",
       "message": "UI-kit primitives must stay foundation-only and not import product domains"
     },

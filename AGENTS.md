@@ -50,12 +50,12 @@
 
 ## 3. Repository Topology
 
-- `/docs`: Conceptual control plane containing specifications, contracts, architecture maps, strategy notes, and the canonical documentation index.
-- `/template`: Rust reference implementation containing the parachain runtime, pallets, primitives, weights, tests, and runtime-adjacent research.
+- `/docs`: Cross-system conceptual control plane containing framework contracts, strategy notes, and the canonical documentation index; package-owned documents are linked directly from `docs/README.md` rather than mirrored as redirect stubs.
+- `/template`: Rust reference implementation containing the parachain runtime, pallets, primitives, weights, tests, runtime-adjacent research, and package-owned pallet specifications/architecture under each pallet's `docs/` directory.
 - `/web-client`: SvelteKit reference client for browser-facing DEOS and current TMCTOL flows.
 - `/scripts`: Shared human/CI/skill automation; numbered scripts are independent atoms, while named scripts are deterministic compositions or admin utilities.
 - `/simulator`: Historical TMCTOL hypothesis lab and authoritative mathematical reference for formulas, thresholds, conservation, floor/compression scenarios, and parameter behavior.
-- `/wiki`: Generated bilingual semantic projection of `/docs` for onboarding, frontend rendering, and agent navigation.
+- `/wiki`: Generated bilingual semantic projection of canonical root and package-owned documentation for onboarding, frontend rendering, and agent navigation.
 - `/.agents/skills`: Repository-local agent workflow control plane; its README owns the skill graph map, each `SKILL.md` owns one domain contract, and project-specific audits belong in `alignment`.
 - `Support Priority`: Routine stabilization starts with `/docs`, then `/template`, `/web-client`, and `/scripts`; consult `/simulator` whenever tokenomics or invariant math moves.
 - `Core Entry`: Start system-wide architecture work with `docs/core.architecture.en.md`.
@@ -89,9 +89,10 @@
 - `Framework Forkability`: Changes under `/template` must preserve generic utility and avoid hardcoding downstream ecosystem identity or business policy.
 - `Reusable Pallet Packaging`: Treat a reusable pallet as an independently consumable package; keep its public host contract and separate external-consumer fixtures under the pallet ownership boundary, while concrete DEOS adapters and topology remain in the reference runtime composition.
 - `Deterministic Mechanics`: Runtime-managed economic reactions must use explicit triggers, typed payloads, bounded state, and weight-accounted execution.
-- `AAA Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `docs/aaa.specification.en.md` owns the full contract.
+- `AAA Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `template/pallets/aaa/docs/specification.en.md` owns the full contract.
 - `AAA Authority Simplicity`: Keep consensus authority at immutable `AaaType::{User, System}` until a concrete shipped need proves two types insufficient; every System actor receives bounded service through type-derived paged FIFO lanes under one scheduler, one global ticket allocator/cutoff, one actor-local ticket, and one wakeup/Continuation/lifecycle owner, not an AAA-id whitelist, owner-authored priority, a generic policy object, or pre-extrinsic execution.
 - `AAA Market Loss Bounds`: Every market task carries its owning spend/output bound; generic AAA must not impose an asset-agnostic raw-balance System cap. Every System swap additionally obeys the typed reference-deviation guard, and temporary market rejection uses one capped retry/wakeup path rather than accepting an adverse fill.
+- `AAA Observation Reactions`: Derive duplicate-free subscriptions from admitted typed trigger sources into actor-owned reusable slot-addressed pages; Oracle change context may mark bounded dirty state only, deferred fanout may set the existing pending latch, and the existing scheduler alone executes actors.
 - `Token-Driven Coordination`: Prefer asset movement and runtime hooks over privileged signed calls when token ingress itself defines the event.
 - `Bounded Consensus State`: Every storage collection, iteration, history surface, retry path, and projection must have a defensible bound.
 - `Read-Model Honesty`: Public data must be classified as bounded authoritative on-chain truth or externally indexed/materialized truth; canonical UX must not hide an indexer dependency.
@@ -151,6 +152,7 @@
 - `Liquidity Slippage`: Derive Liquidity Actor swap tolerance from current reserve depth and clamp it between explicit runtime bounds.
 - `Fee Collection`: Keep Axial Router trading fees on the Burn Actor path; collect 100% of transaction, AAA, governance-opening, and XCM-execution fees into the Fee Sink System AAA independently of actor execution liveness, and name the generic AAA boundary by collection rather than trading-route semantics.
 - `Fee Allocation Phases`: While collators remain permissioned, the Fee Sink distributes its available native balance 50/50 to staking ingress and liquidity provisioning; a future equal-thirds security/staking/liquidity plan requires permissionless collators and an explicit bounded security-reward contract, with indivisible remainder retained in Fee Sink for a later cycle.
+- `Native Flow Anchors`: The DEOS runtime endows System AAA, custody, and staking-ingress accounts admitted for arbitrarily small native flows with one persistent free-balance ED, preserves that anchor through spend resolution, and converts only newly received value. Generic AAA follows exact host-ledger consequences and does not promise provider-only or reserved-only zero-free sub-ED ingress.
 - `Collator Reward Gate`: Treat `CollatorRewardPot` as an unresolved design placeholder, not an accepted pallet or storage topology, until eligibility, contribution accounting, settlement cadence, custody, payout, leftovers, and failure behavior have explicit owners and bounds.
 
 ## 8. Engineering and Validation
@@ -185,7 +187,7 @@
 - `Architecture Readability`: Keep each architecture-doc prose paragraph, list item, or table row independently addressable and at most 600 characters; decompose mixed claims rather than hiding growth through hard line wrapping.
 - `Dimensional Tables`: Use a compact table when multiple peer entities repeat the same dimensions or attributes; keep cells fact-dense and short, and place rationale, exceptions, or procedural flow outside the table instead of turning cells into prose paragraphs.
 - `README Neutrality`: Entrypoint READMEs explain current purpose, setup, navigation, and validation; release history belongs in `CHANGELOG.md`.
-- `Canonical Consolidation`: Merge extension specs into stronger canonical contracts when ownership converges; retire old files as redirect stubs when necessary.
+- `Canonical Consolidation`: Merge extension specs into stronger canonical contracts when ownership converges; delete empty redirect stubs and route readers directly through the owning README or documentation index.
 - `Economic Claims`: Load-bearing architecture claims require code anchors and falsification tests that would fail if behavior regressed.
 - `Read-Model Classification`: New specs and public query surfaces state whether each client-facing datum is canonical-chain or materialized.
 - `Rename Gate`: Public domain renames must update runtime, tests, benchmarks, docs, wiki, context, and stale-alias audits in one pass.
@@ -214,7 +216,7 @@
 - `Skill Domain DAG`: Keep skills independently portable and acyclic: orchestration routes to documented capability contracts, never sibling internals; split only for a distinct owner, trigger, exclusion boundary, or reusable capability that reduces context/interface pressure, not for folder theater or file size.
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.
 - `Durable Ledgers`: Record reusable hallucinations, ambiguities, dead ends, and boundary drifts only; bare tool failures remain transient output.
-- `Wiki Role`: `/wiki` is a concise, provenance-aware learning lens over current project truth, not a release-note mirror or docs dump.
+- `Wiki Role`: `/wiki` is a concise, provenance-aware learning lens over canonical root and package-owned project truth, not a release-note mirror or docs dump.
 - `Wiki Locales`: Human pages use explicit locale suffixes and mirrored page IDs/topology; shared metadata represents localized fields; Russian prose prefers natural Russian terminology and minimizes English borrowings except canonical identifiers, code symbols, and terms whose translation would reduce precision.
 - `Wiki Navigation`: New pages need provenance, related links, locale mirrors, and graph/index reachability; merge weak leaflets into stronger owner pages.
 - `Wiki Trust`: Treat repo-local wiki Markdown as reviewed content and enforce the trust boundary with the wiki validation skill.

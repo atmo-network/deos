@@ -248,6 +248,8 @@ mod runtime {
   pub type AxialRouter = pallet_axial_router;
   #[runtime::pallet_index(51)]
   pub type TokenMintingCurve = pallet_tmc;
+  #[runtime::pallet_index(52)]
+  pub type Oracle = pallet_oracle;
   #[runtime::pallet_index(55)]
   pub type AAA = pallet_aaa;
 }

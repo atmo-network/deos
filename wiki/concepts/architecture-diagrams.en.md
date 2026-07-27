@@ -10,10 +10,10 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
-  - ../../docs/aaa.architecture.en.md
-  - ../../docs/axial-router.architecture.en.md
-  - ../../docs/governance.architecture.en.md
-  - ../../docs/staking.architecture.en.md
+  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/router/docs/architecture.en.md
+  - ../../template/pallets/governance/docs/architecture.en.md
+  - ../../template/pallets/staking/docs/architecture.en.md
 status: active
 audience: newcomer
 tags:

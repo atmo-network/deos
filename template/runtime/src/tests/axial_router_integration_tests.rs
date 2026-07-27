@@ -396,27 +396,6 @@ fn test_axial_router_fee_calculation_accuracy() {
 fn test_axial_router_minimum_amount_out_protection() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    // Initialize EMA prices to avoid deviation errors
-    pallet_axial_router::pallet::EmaPrices::<Runtime>::insert(
-      AssetKind::Local(ASSET_A),
-      AssetKind::Local(ASSET_B),
-      SWAP_AMOUNT,
-    );
-    pallet_axial_router::pallet::EmaPrices::<Runtime>::insert(
-      AssetKind::Local(ASSET_B),
-      AssetKind::Local(ASSET_A),
-      SWAP_AMOUNT,
-    );
-    pallet_axial_router::pallet::EmaPrices::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(ASSET_A),
-      SWAP_AMOUNT,
-    );
-    pallet_axial_router::pallet::EmaPrices::<Runtime>::insert(
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
-      SWAP_AMOUNT,
-    );
     let unreasonably_high_min = SWAP_AMOUNT * 10;
     assert_noop!(
       AxialRouter::swap(

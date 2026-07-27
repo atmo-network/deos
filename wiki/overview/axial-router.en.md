@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Axial Router
-summary: The Axial Router is DEOS's max-output routing engine. It compares bounded route candidates by recipient output across market liquidity and protocol liquidity, updates its local EMA observation before direct execution, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
+summary: The Axial Router is DEOS's max-output routing engine. It compares bounded route candidates, publishes pre-execution pool samples to typed standalone observations, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
 locale: en
 canonical_page_id: axial-router
 translation_status: source
@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/axial-router.architecture.en.md
+  - ../../template/pallets/router/docs/architecture.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -24,7 +24,7 @@ related:
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-07-20
+last_compiled: 2026-07-26
 confidence: 0.9
 ---
 
@@ -44,7 +44,7 @@ The router is deliberately opinionated:
 
 - It uses the native asset as the main routing anchor
 - It compares XYK pool routes with mint-side protocol routes
-- It updates its EMA oracle before direct execution paths
+- It publishes pre-execution pool samples to typed standalone Oracle feeds
 - It verifies exact-input outcomes by recipient balance delta rather than by quote math alone
 
 That makes it a coordination layer, not just a convenience helper.
@@ -55,7 +55,7 @@ The current implementation evaluates a small candidate set such as direct XYK ro
 
 It then ranks those routes by recipient expected output and executes the best one. Price impact and fee fields on quotes stay informational. Direct routes also apply pre-swap EMA deviation guards; multi-hop routes rely on user slippage only. That is a local deviation surface, not a fair-price proof or flash-loan, ordering, or sandwich immunity.
 
-The `0.7.6` extraction gate keeps directional EMA storage in the Router. A separate price-only pallet would require bounded pair admission, typed freshness/status/provenance, and concrete multi-producer or multi-consumer demand; generalized feeds and on-chain history remain out of scope.
+Directional pool observations now live in the standalone Oracle pallet. Canonical pool admission creates both typed directions with immutable producer, scale, aggregation, and provenance; the Router publishes the executed direction before direct execution. Router-local EMA and tracked-asset storage no longer exist. Generalized feeds and unbounded on-chain history remain out of scope.
 
 The router is not optional glue around canonical product swaps. It is the reference protocol gateway for fee-bearing route comparison, while the runtime does not claim that every lower-level Asset Conversion call is technically unreachable.
 

@@ -35,6 +35,17 @@ const triggerEditorSource = await readFile(
   ),
   'utf8',
 );
+const conditionEditorSource = await readFile(
+  new URL(
+    '../src/lib/automation/AutomationConditionEditor.svelte',
+    import.meta.url,
+  ),
+  'utf8',
+);
+const automationWidgetSource = await readFile(
+  new URL('../src/lib/widgets/AutomationWidget.svelte', import.meta.url),
+  'utf8',
+);
 const taskEditorSource = await readFile(
   new URL('../src/lib/automation/AutomationTaskEditor.svelte', import.meta.url),
   'utf8',
@@ -52,7 +63,28 @@ const accountA = encodeAddress(new Uint8Array(32).fill(1), 42);
 const accountB = encodeAddress(new Uint8Array(32).fill(2), 42);
 const native = { type: 'Native' };
 const local = { type: 'Local', id: 7 };
+const observationFeed = {
+  assetIn: native,
+  assetOut: local,
+  method: 'PreExecutionSpot',
+  aggregation: { type: 'Ema', halfLifeBlocks: 100 },
+  scale: 12,
+};
 const fixed = (value = '10') => ({ type: 'Fixed', value });
+const addressTrigger = {
+  type: 'Immediate',
+  sources: [
+    {
+      type: 'OnAddressEvent',
+      sourceFilter: { type: 'Any' },
+      assetFilter: { type: 'Any' },
+    },
+  ],
+};
+const observationTrigger = {
+  type: 'Immediate',
+  sources: [{ type: 'OnObservationChange', feed: observationFeed }],
+};
 
 const weightModel = {
   identity: 'authoring-test-weights',
@@ -95,6 +127,7 @@ function program(steps = [authoringStep('step-0')], overrides = {}) {
   return {
     aaaType: 'User',
     mutability: 'Mutable',
+    completionPolicy: 'Persistent',
     trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
     cooldownBlocks: 0,
     scheduleWindow: null,
@@ -124,7 +157,54 @@ test('authoring controls cover every current task and condition variant', () => 
     AAA_AUTHORING_CONDITION_TYPES,
   );
   assert.equal(AAA_AUTHORING_TASK_TYPES.length, 12);
-  assert.equal(AAA_AUTHORING_CONDITION_TYPES.length, 6);
+  assert.equal(AAA_AUTHORING_CONDITION_TYPES.length, 10);
+});
+
+test('completion policy lowers exactly and rejects unknown lifecycle values', () => {
+  const persistent = lowerAaaAuthoringProgram(program());
+  assert.deepEqual(persistent.value.completion_policy, {
+    type: 'Persistent',
+    value: undefined,
+  });
+  const oneShot = lowerAaaAuthoringProgram(
+    program(undefined, { completionPolicy: 'CloseAfterProductiveRun' }),
+  );
+  assert.deepEqual(oneShot.value.completion_policy, {
+    type: 'CloseAfterProductiveRun',
+    value: undefined,
+  });
+  assert.equal(
+    validateAaaAuthoringProgram(
+      program(undefined, { completionPolicy: 'UnknownLifecycle' }),
+    ).valid,
+    false,
+  );
+  assert.match(automationWidgetSource, /Close after productive run/);
+  assert.match(automationWidgetSource, /committed effectful task/);
+});
+
+test('observation authoring exposes freshness and validates bounded identity', () => {
+  for (const disclosure of [
+    'Observation feed identity',
+    'Maximum age (blocks)',
+    'Only a fresh typed observation compares true',
+  ]) {
+    assert(
+      conditionEditorSource.includes(disclosure),
+      `${disclosure} is missing`,
+    );
+  }
+  const invalid = createAaaAuthoringCondition('ObservationBelow');
+  invalid.maxAgeBlocks = 0;
+  const result = validateAaaAuthoringProgram(
+    program([
+      authoringStep('observation', transferTask(), {
+        conditionSet: { type: 'All', conditions: [invalid] },
+      }),
+    ]),
+  );
+  assert.equal(result.valid, false);
+  assert(result.issues.some((issue) => issue.path.endsWith('.maxAgeBlocks')));
 });
 
 test('SwapOut editor requires explicit live-market or absolute-ceiling intent', () => {
@@ -156,6 +236,7 @@ test('trigger editor exposes admission and bounded source controls without graph
     'WhenSignalled',
     'Manual',
     'OnAddressEvent',
+    'OnObservationChange',
     'OwnerOnly',
     'Whitelist',
   ]) {
@@ -165,35 +246,104 @@ test('trigger editor exposes admission and bounded source controls without graph
     );
   }
   assert(triggerEditorSource.includes('maxTriggerSources'));
+  assert(triggerEditorSource.includes('this source carries no amount'));
   for (const rejected of ['successor', 'callback', 'branch target']) {
     assert(!triggerEditorSource.toLowerCase().includes(rejected));
   }
 });
 
-test('typed authoring lowers to one deterministic exact canonical artifact', () => {
-  const draft = program([
-    authoringStep('swap', {
-      type: 'SwapOut',
-      assetOut: local,
-      amountOut: fixed('25'),
-      assetIn: native,
-      inputLimit: { type: 'Absolute', amount: '100' },
-      slippageParts: 10_000_000,
-    }),
-    authoringStep('transfer', transferTask({ type: 'AllBalance' }), {
-      conditionSet: {
-        type: 'All',
-        conditions: [
-          {
-            type: 'BalanceAbove',
-            asset: local,
-            threshold: '0',
-          },
-        ],
+test('observation sources lower exactly and cannot supply PercentageOfTrigger', () => {
+  const observationOnly = program([authoringStep('only', transferTask())], {
+    trigger: observationTrigger,
+  });
+  assert.equal(validateAaaAuthoringProgram(observationOnly).valid, true);
+  const lowered = lowerAaaAuthoringProgram(observationOnly);
+  assert.deepEqual(lowered.value.schedule.trigger.value.sources[0], {
+    type: 'OnObservationChange',
+    value: {
+      feed: {
+        asset_in: { type: 'Native', value: undefined },
+        asset_out: { type: 'Local', value: 7 },
+        method: { type: 'PreExecutionSpot', value: undefined },
+        aggregation: { type: 'Ema', value: { half_life_blocks: 100 } },
+        scale: 12,
       },
-      errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
-    }),
-  ]);
+    },
+  });
+
+  const triggerAmountStep = authoringStep(
+    'trigger-amount',
+    transferTask({ type: 'PercentageOfTrigger', parts: 500_000_000 }),
+  );
+  const observationAmount = program([triggerAmountStep], {
+    trigger: observationTrigger,
+  });
+  const observationValidation = validateAaaAuthoringProgram(observationAmount);
+  assert.equal(observationValidation.valid, false);
+  assert(
+    observationValidation.issues.some((issue) =>
+      issue.message.includes('provide no trigger amount'),
+    ),
+  );
+  const mixed = program([triggerAmountStep], {
+    trigger: {
+      type: 'Immediate',
+      sources: [addressTrigger.sources[0], observationTrigger.sources[0]],
+    },
+  });
+  assert.equal(validateAaaAuthoringProgram(mixed).valid, false);
+  assert.equal(
+    validateAaaAuthoringProgram(
+      program([triggerAmountStep], { trigger: addressTrigger }),
+    ).valid,
+    true,
+  );
+  assert.equal(
+    validateAaaAuthoringProgram(
+      program([triggerAmountStep], {
+        trigger: {
+          type: 'Immediate',
+          sources: [
+            {
+              type: 'OnAddressEvent',
+              sourceFilter: { type: 'Any' },
+              assetFilter: { type: 'Whitelist', assets: [local] },
+            },
+          ],
+        },
+      }),
+    ).valid,
+    false,
+  );
+});
+
+test('typed authoring lowers to one deterministic exact canonical artifact', () => {
+  const draft = program(
+    [
+      authoringStep('swap', {
+        type: 'SwapOut',
+        assetOut: local,
+        amountOut: fixed('25'),
+        assetIn: native,
+        inputLimit: { type: 'Absolute', amount: '100' },
+        slippageParts: 10_000_000,
+      }),
+      authoringStep('transfer', transferTask({ type: 'AllBalance' }), {
+        conditionSet: {
+          type: 'All',
+          conditions: [
+            {
+              type: 'BalanceAbove',
+              asset: local,
+              threshold: '0',
+            },
+          ],
+        },
+        errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
+      }),
+    ],
+    { completionPolicy: 'CloseAfterProductiveRun' },
+  );
   const first = artifact(draft);
   const second = artifact(structuredClone(draft));
   assert.deepEqual(first, second);
@@ -201,6 +351,10 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
   assert.equal(inspection.valid, true);
   if (inspection.valid) {
     assert.equal(inspection.projection.value.execution_plan.length, 2);
+    assert.equal(
+      inspection.projection.value.completion_policy.type,
+      'CloseAfterProductiveRun',
+    );
     assert.deepEqual(
       inspection.projection.value.execution_plan[0].task.value.input_limit,
       {
@@ -225,6 +379,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
     weightModel,
   });
   assert.equal(analysis.identity.planId, first.planId);
+  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveRun');
   assert.deepEqual(analysis.steps[0].parameters.input_limit, {
     type: 'Absolute',
     value: { $runtimeType: 'bigint', $integer: '100' },
@@ -380,6 +535,30 @@ test('every Condition and AmountResolution lowers without changing step topology
     { type: 'BalanceNotEquals', asset: native, threshold: '1' },
     { type: 'BlockNumberAbove', threshold: 1 },
     { type: 'BlockNumberBelow', threshold: 1 },
+    {
+      type: 'ObservationAbove',
+      feed: observationFeed,
+      threshold: '1',
+      maxAgeBlocks: 12,
+    },
+    {
+      type: 'ObservationBelow',
+      feed: observationFeed,
+      threshold: '1',
+      maxAgeBlocks: 12,
+    },
+    {
+      type: 'ObservationEquals',
+      feed: observationFeed,
+      threshold: '1',
+      maxAgeBlocks: 12,
+    },
+    {
+      type: 'ObservationNotEquals',
+      feed: observationFeed,
+      threshold: '1',
+      maxAgeBlocks: 12,
+    },
   ];
   for (const current of conditions) {
     const lowered = lowerAaaAuthoringProgram(
@@ -395,6 +574,25 @@ test('every Condition and AmountResolution lowers without changing step topology
       lowered.value.execution_plan[0].conditions.value[0].type,
       current.type,
     );
+    if (current.type.startsWith('Observation')) {
+      assert.deepEqual(
+        lowered.value.execution_plan[0].conditions.value[0].value,
+        {
+          feed: {
+            asset_in: { type: 'Native', value: undefined },
+            asset_out: { type: 'Local', value: 7 },
+            method: { type: 'PreExecutionSpot', value: undefined },
+            aggregation: {
+              type: 'Ema',
+              value: { half_life_blocks: 100 },
+            },
+            scale: 12,
+          },
+          threshold: 1n,
+          max_age_blocks: 12,
+        },
+      );
+    }
   }
   const amounts = [
     fixed(),
@@ -405,7 +603,12 @@ test('every Condition and AmountResolution lowers without changing step topology
   ];
   for (const amount of amounts) {
     const lowered = lowerAaaAuthoringProgram(
-      program([authoringStep('only', transferTask(amount))]),
+      program(
+        [authoringStep('only', transferTask(amount))],
+        amount.type === 'PercentageOfTrigger'
+          ? { trigger: addressTrigger }
+          : {},
+      ),
     );
     assert.equal(
       lowered.value.execution_plan[0].task.value.amount.type,
@@ -665,7 +868,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   assert.equal(AAA_AUTHORING_TASK_TYPES.includes('Rebalance'), false);
 });
 
-test('trigger and funding policy variants lower as typed ProgramInput fields', () => {
+test('trigger, completion, and funding policy variants lower as typed ProgramInput fields', () => {
   const drafts = [
     program(undefined, {
       trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },

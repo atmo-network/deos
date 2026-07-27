@@ -125,6 +125,24 @@ Each subsystem below uses the same two buckets:
 - Ecosystem catalog browsing/search beyond the bounded reverse projection
 - Operational asset onboarding dashboards
 
+### Typed Observation Oracle
+
+#### On-Chain Canonical Projection
+
+- Bounded `FeedIds` registry and immutable typed feed identity
+- Current feed configuration: producer, meaning, provenance, scale, aggregation, zero policy, and lifecycle
+- Current scalar value, update block, and change-only revision
+- Fresh/Stale/Unavailable/Uninitialized classification for one explicitly authored nonzero maximum age at a finalized block
+
+#### Indexed / Materialized View
+
+- Per-feed sample and revision history
+- Intermediate revisions coalesced before subscriber execution
+- Price charts, manipulation analysis, route-quality comparison, and historical producer availability
+- Any archive, search, alert, or time-series surface beyond current bounded Oracle state
+
+Local-pool feed provenance describes Axial Router pre-execution reserves only. Canonical status and scalar truth do not constitute an external fair-price, manipulation-resistance, MEV-protection, or ordering proof.
+
 ### AAA / Automation Kernel
 
 #### On-Chain Canonical Projection

@@ -33,7 +33,25 @@ const runtime = {
 const step = {
   conditions: {
     type: 'All',
-    value: [{ type: 'BlockNumberAbove', value: { threshold: 1 } }],
+    value: [
+      {
+        type: 'ObservationBelow',
+        value: {
+          feed: {
+            asset_in: { type: 'Native', value: undefined },
+            asset_out: { type: 'Local', value: 7 },
+            method: { type: 'PreExecutionSpot', value: undefined },
+            aggregation: {
+              type: 'Ema',
+              value: { half_life_blocks: 100 },
+            },
+            scale: 12,
+          },
+          threshold: 1n,
+          max_age_blocks: 12,
+        },
+      },
+    ],
   },
   task: {
     type: 'Stake',
@@ -58,6 +76,7 @@ const programScale = encodeAaaProgramValue(metadataBytes, {
     },
     schedule_window: undefined,
     execution_plan: [step, step],
+    completion_policy: { type: 'Persistent', value: undefined },
     funding_source_policy: { type: 'RuntimePolicy', value: undefined },
   },
 });
@@ -97,6 +116,7 @@ const suspendedRuntimeValue = {
     finalized_through: 0,
     cumulative_outcomes: {
       executed_steps: 3,
+      committed_effectful_tasks: 3,
       skipped_conditions: 0,
       skipped_resolution: 0,
       skipped_funding_unavailable: 0,
@@ -128,6 +148,7 @@ const suspendedOutcome = {
   finalizedThrough: 0,
   cumulativeOutcomes: {
     executedSteps: 3,
+    committedEffectfulTasks: 3,
     skippedConditions: 0,
     skippedResolution: 0,
     skippedFundingUnavailable: 0,
@@ -167,6 +188,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       finalized_through: 1,
       cumulative_outcomes: {
         executed_steps: 1,
+        committed_effectful_tasks: 0,
         skipped_conditions: 0,
         skipped_resolution: 0,
         skipped_funding_unavailable: 0,
@@ -185,6 +207,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   if (stopped.success) {
     assert.deepEqual(stopped.outcome.steps[0].outcome, { type: 'Stopped' });
     assert.equal(stopped.outcome.status, 'Completed');
+    assert.equal(stopped.outcome.cumulativeOutcomes.committedEffectfulTasks, 0);
   }
   const closedScale = encodeAaaRuntimeSimulationResult(metadataBytes, {
     success: true,
@@ -192,7 +215,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       ...suspendedRuntimeValue.value,
       status: {
         type: 'Closed',
-        value: { type: 'RetryAttemptsExhausted', value: undefined },
+        value: { type: 'ProductiveRunCompleted', value: undefined },
       },
       continuation_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
@@ -202,7 +225,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   assert.equal(closed.success, true);
   if (closed.success) {
     assert.equal(closed.outcome.status, 'Closed');
-    assert.equal(closed.outcome.closeReason, 'RetryAttemptsExhausted');
+    assert.equal(closed.outcome.closeReason, 'ProductiveRunCompleted');
     assert.equal(closed.outcome.continuationCursor, null);
     assert.equal(closed.outcome.unsuccessfulAttemptsAtCursor, null);
   }

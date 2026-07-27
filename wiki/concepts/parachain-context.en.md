@@ -11,7 +11,7 @@ available_locales:
 sources:
   - ../../AGENTS.md
   - ../../docs/core.architecture.en.md
-  - ../../docs/asset-registry.architecture.en.md
+  - ../../template/pallets/asset-registry/docs/architecture.en.md
   - ../../docs/randomness.strategy.en.md
   - ../../template/README.md
 status: active

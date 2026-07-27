@@ -10,7 +10,7 @@ use polkadot_sdk::sp_weights::WeightMeter;
 
 enum AdmissionDecision {
   Admit(Weight),
-  Closed(Weight),
+  Close { reason: CloseReason, weight: Weight },
   Defer(DeferReason),
   Skip,
 }
@@ -20,6 +20,12 @@ const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 enum LaneStepResult {
   NoWork,
   Progress { executed: bool },
+  Blocked,
+}
+
+enum HeadDiscovery {
+  Empty,
+  Head(QueueTicket, QueueEntry),
   Blocked,
 }
 
@@ -35,7 +41,6 @@ impl<T: Config> Pallet<T> {
     let max_executions = T::MaxExecutionsPerBlock::get();
     let max_scanned = T::MaxQueueEntriesScannedPerBlock::get();
     let mut executed = 0u32;
-    let mut scanned = 0u32;
     let mut work_requeues: Vec<AaaId> = Vec::new();
     // Typed phase meters consume admitted actor-execution Weight only. Discovery,
     // cleanup, wakeups, probes, admission, and page bookkeeping consume cycle_meter.
@@ -43,7 +48,10 @@ impl<T: Config> Pallet<T> {
     let mut system_meter =
       WeightMeter::with_limit(Self::service_budget(remaining_weight, system_share));
     let system_limit = Self::service_execution_limit(max_executions, system_share);
+    let system_scan_limit = Self::service_execution_limit(max_scanned, system_share);
     let mut system_executed = 0u32;
+    let mut system_scanned = 0u32;
+    let mut system_proven_empty = false;
     while executed < max_executions && system_executed < system_limit {
       match Self::service_lane_head(
         QueueGroup::System,
@@ -51,8 +59,8 @@ impl<T: Config> Pallet<T> {
         now,
         &mut cycle_meter,
         Some(&mut system_meter),
-        &mut scanned,
-        max_scanned,
+        &mut system_scanned,
+        system_scan_limit,
         &mut work_requeues,
       ) {
         LaneStepResult::Progress {
@@ -62,7 +70,11 @@ impl<T: Config> Pallet<T> {
           executed = executed.saturating_add(delta);
           system_executed = system_executed.saturating_add(delta);
         }
-        LaneStepResult::NoWork | LaneStepResult::Blocked => break,
+        LaneStepResult::NoWork => {
+          system_proven_empty = true;
+          break;
+        }
+        LaneStepResult::Blocked => break,
       }
     }
 
@@ -70,7 +82,10 @@ impl<T: Config> Pallet<T> {
     let mut user_meter =
       WeightMeter::with_limit(Self::service_budget(remaining_weight, user_share));
     let user_limit = Self::service_execution_limit(max_executions, user_share);
+    let user_scan_limit = Self::service_execution_limit(max_scanned, user_share);
     let mut user_executed = 0u32;
+    let mut user_scanned = 0u32;
+    let mut user_proven_empty = false;
     while executed < max_executions && user_executed < user_limit {
       match Self::service_lane_head(
         QueueGroup::User,
@@ -78,8 +93,8 @@ impl<T: Config> Pallet<T> {
         now,
         &mut cycle_meter,
         Some(&mut user_meter),
-        &mut scanned,
-        max_scanned,
+        &mut user_scanned,
+        user_scan_limit,
         &mut work_requeues,
       ) {
         LaneStepResult::Progress {
@@ -89,43 +104,66 @@ impl<T: Config> Pallet<T> {
           executed = executed.saturating_add(delta);
           user_executed = user_executed.saturating_add(delta);
         }
-        LaneStepResult::NoWork | LaneStepResult::Blocked => break,
+        LaneStepResult::NoWork => {
+          user_proven_empty = true;
+          break;
+        }
+        LaneStepResult::Blocked => break,
       }
     }
 
+    let mut scanned = system_scanned.saturating_add(user_scanned);
     while executed < max_executions && scanned < max_scanned {
+      let required_probes =
+        u32::from(!system_proven_empty).saturating_add(u32::from(!user_proven_empty));
       let shared_discovery_weight =
-        T::WeightInfo::scheduler_paged_tombstone_drain(1).saturating_mul(2);
-      if max_scanned.saturating_sub(scanned) < 2
+        T::WeightInfo::scheduler_paged_tombstone_drain(1).saturating_mul(required_probes.into());
+      if max_scanned.saturating_sub(scanned) < required_probes
         || !cycle_meter.can_consume(shared_discovery_weight)
       {
         break;
       }
-      let system = Self::live_lane_head(
-        QueueGroup::System,
-        cutoff,
-        &mut cycle_meter,
-        &mut scanned,
-        max_scanned,
-      );
-      let user = Self::live_lane_head(
-        QueueGroup::User,
-        cutoff,
-        &mut cycle_meter,
-        &mut scanned,
-        max_scanned,
-      );
+      let system = if system_proven_empty {
+        HeadDiscovery::Empty
+      } else {
+        Self::live_lane_head(
+          QueueGroup::System,
+          cutoff,
+          &mut cycle_meter,
+          &mut scanned,
+          max_scanned,
+        )
+      };
+      let user = if user_proven_empty {
+        HeadDiscovery::Empty
+      } else {
+        Self::live_lane_head(
+          QueueGroup::User,
+          cutoff,
+          &mut cycle_meter,
+          &mut scanned,
+          max_scanned,
+        )
+      };
       let (group, head) = match (system, user) {
-        (Some(system_head), Some(user_head)) => {
-          if system_head.1.ticket < user_head.1.ticket {
-            (QueueGroup::System, system_head)
+        (HeadDiscovery::Blocked, _) | (_, HeadDiscovery::Blocked) => break,
+        (
+          HeadDiscovery::Head(system_position, system_entry),
+          HeadDiscovery::Head(user_position, user_entry),
+        ) => {
+          if system_entry.ticket < user_entry.ticket {
+            (QueueGroup::System, (system_position, system_entry))
           } else {
-            (QueueGroup::User, user_head)
+            (QueueGroup::User, (user_position, user_entry))
           }
         }
-        (Some(system_head), None) => (QueueGroup::System, system_head),
-        (None, Some(user_head)) => (QueueGroup::User, user_head),
-        (None, None) => break,
+        (HeadDiscovery::Head(position, entry), HeadDiscovery::Empty) => {
+          (QueueGroup::System, (position, entry))
+        }
+        (HeadDiscovery::Empty, HeadDiscovery::Head(position, entry)) => {
+          (QueueGroup::User, (position, entry))
+        }
+        (HeadDiscovery::Empty, HeadDiscovery::Empty) => break,
       };
       match Self::service_live_lane_entry(
         group,
@@ -139,6 +177,10 @@ impl<T: Config> Pallet<T> {
           executed: did_execute,
         } => {
           executed = executed.saturating_add(u32::from(did_execute));
+          if did_execute {
+            system_proven_empty = false;
+            user_proven_empty = false;
+          }
         }
         LaneStepResult::NoWork => continue,
         LaneStepResult::Blocked => break,
@@ -170,29 +212,63 @@ impl<T: Config> Pallet<T> {
     )
   }
 
+  fn classify_current_lane(group: QueueGroup, cutoff: QueueTicket) -> HeadDiscovery {
+    if Self::queue_group_head(group) >= Self::queue_group_tail(group) {
+      return HeadDiscovery::Empty;
+    }
+    match Self::paged_group_head_entry(group) {
+      Some((_, entry)) if entry.ticket >= cutoff => HeadDiscovery::Empty,
+      _ => HeadDiscovery::Blocked,
+    }
+  }
+
   fn live_lane_head(
     group: QueueGroup,
     cutoff: QueueTicket,
     cycle_meter: &mut WeightMeter,
     scanned: &mut u32,
     max_scanned: u32,
-  ) -> Option<(QueueTicket, QueueEntry)> {
+  ) -> HeadDiscovery {
     let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
-    while *scanned < max_scanned && cycle_meter.can_consume(scan_weight) {
+    while *scanned < max_scanned {
+      if !cycle_meter.can_consume(scan_weight) {
+        return HeadDiscovery::Blocked;
+      }
+      cycle_meter.consume(scan_weight);
       let before = Self::queue_group_head(group);
       let stats = Self::paged_drain_group_tombstones(group, cutoff, 1);
       if stats.entries_scanned == 0 {
-        return None;
+        return Self::classify_current_lane(group, cutoff);
       }
-      cycle_meter.consume(scan_weight);
       *scanned = scanned.saturating_add(stats.entries_scanned);
       if Self::queue_group_head(group) != before {
         continue;
       }
-      let (position, entry) = Self::paged_group_head_entry(group)?;
-      return (entry.ticket < cutoff).then_some((position, entry));
+      return match Self::paged_group_head_entry(group) {
+        Some((position, entry)) if entry.ticket < cutoff => HeadDiscovery::Head(position, entry),
+        Some(_) => HeadDiscovery::Empty,
+        None => Self::classify_current_lane(group, cutoff),
+      };
     }
-    None
+    HeadDiscovery::Blocked
+  }
+
+  #[cfg(test)]
+  pub(crate) fn test_head_discovery(
+    group: QueueGroup,
+    cutoff: QueueTicket,
+    scan_limit: u32,
+    scanned_start: u32,
+    weight: Weight,
+  ) -> (u8, Option<QueueEntry>, u32) {
+    let mut meter = WeightMeter::with_limit(weight);
+    let mut scanned = scanned_start;
+    let discovery = Self::live_lane_head(group, cutoff, &mut meter, &mut scanned, scan_limit);
+    match discovery {
+      HeadDiscovery::Empty => (0, None, scanned),
+      HeadDiscovery::Head(_, entry) => (1, Some(entry), scanned),
+      HeadDiscovery::Blocked => (2, None, scanned),
+    }
   }
 
   #[allow(clippy::too_many_arguments)]
@@ -206,10 +282,18 @@ impl<T: Config> Pallet<T> {
     max_scanned: u32,
     work_requeues: &mut Vec<AaaId>,
   ) -> LaneStepResult {
-    let Some(head) = Self::live_lane_head(group, cutoff, cycle_meter, scanned, max_scanned) else {
-      return LaneStepResult::NoWork;
-    };
-    Self::service_live_lane_entry(group, head, now, cycle_meter, phase_meter, work_requeues)
+    match Self::live_lane_head(group, cutoff, cycle_meter, scanned, max_scanned) {
+      HeadDiscovery::Empty => LaneStepResult::NoWork,
+      HeadDiscovery::Head(position, entry) => Self::service_live_lane_entry(
+        group,
+        (position, entry),
+        now,
+        cycle_meter,
+        phase_meter,
+        work_requeues,
+      ),
+      HeadDiscovery::Blocked => LaneStepResult::Blocked,
+    }
   }
 
   fn service_live_lane_entry(
@@ -296,12 +380,24 @@ impl<T: Config> Pallet<T> {
         }
         LaneStepResult::Progress { executed: true }
       }
-      AdmissionDecision::Closed(weight) => {
-        if !cycle_meter.can_consume(consume_weight.saturating_add(weight)) {
+      AdmissionDecision::Close { reason, weight } => {
+        let atomic_weight = consume_weight.saturating_add(weight);
+        if !cycle_meter.can_consume(atomic_weight) {
           return LaneStepResult::Blocked;
         }
-        let _ = Self::paged_consume_group_head(group, position);
-        cycle_meter.consume(consume_weight.saturating_add(weight));
+        polkadot_sdk::frame_support::storage::with_transaction(|| {
+          if let Err(error) = Self::close_actor(aaa_id, &instance, reason) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+          if !Self::paged_consume_group_head(group, position) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+              polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue head changed"),
+            ));
+          }
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+        })
+        .expect("fresh scheduler snapshot and queue head satisfy terminal preconditions");
+        cycle_meter.consume(atomic_weight);
         LaneStepResult::Progress { executed: false }
       }
       AdmissionDecision::Defer(reason) => {
@@ -1248,7 +1344,7 @@ impl<T: Config> Pallet<T> {
   /// guaranteed scheduler envelope.
   pub fn scheduler_admission_overhead() -> Weight {
     T::WeightInfo::scheduler_on_idle_base()
-      .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(2))
+      .saturating_add(T::WeightInfo::scheduler_paged_tombstone_drain(1).saturating_mul(2))
       .saturating_add(
         T::WeightInfo::scheduler_paged_consume_preserve_page()
           .max(T::WeightInfo::scheduler_paged_consume_delete_page()),
@@ -1563,19 +1659,16 @@ impl<T: Config> Pallet<T> {
     None
   }
 
-  fn close_within_budget(
-    aaa_id: AaaId,
+  fn close_admission_decision(
     instance: &AaaInstanceOf<T>,
     reason: CloseReason,
     meter: &WeightMeter,
   ) -> AdmissionDecision {
-    let close_weight_upper = Self::close_cycle_weight_upper_bound(instance);
-    if !meter.can_consume(close_weight_upper) {
+    let weight = Self::close_cycle_weight_upper_bound(instance);
+    if !meter.can_consume(weight) {
       return AdmissionDecision::Defer(DeferReason::InsufficientWeightBudget);
     }
-    Self::close_actor(aaa_id, instance, reason)
-      .expect("fresh scheduler snapshot satisfies terminal preconditions");
-    AdmissionDecision::Closed(close_weight_upper)
+    AdmissionDecision::Close { reason, weight }
   }
 
   fn pending_post_cycle_close_reason(instance: &AaaInstanceOf<T>) -> Option<CloseReason> {
@@ -1660,7 +1753,7 @@ impl<T: Config> Pallet<T> {
       return AdmissionDecision::Skip;
     }
     if Self::is_window_expired(instance) {
-      return Self::close_within_budget(aaa_id, instance, CloseReason::WindowExpired, meter);
+      return Self::close_admission_decision(instance, CloseReason::WindowExpired, meter);
     }
     if instance.lifecycle.is_paused() {
       return AdmissionDecision::Skip;
@@ -1669,16 +1762,16 @@ impl<T: Config> Pallet<T> {
       && instance.actor_class.aaa_type() == AaaType::User
       && instance.cycle_nonce == u64::MAX
     {
-      return Self::close_within_budget(aaa_id, instance, CloseReason::CycleNonceExhausted, meter);
+      return Self::close_admission_decision(instance, CloseReason::CycleNonceExhausted, meter);
     }
     if let Some(reason) = Self::pending_post_cycle_close_reason(instance) {
-      return Self::close_within_budget(aaa_id, instance, reason, meter);
+      return Self::close_admission_decision(instance, reason, meter);
     }
     if !Self::is_ready_for_execution(aaa_id, instance) {
       return AdmissionDecision::Skip;
     }
     if let Some(reason) = Self::user_resource_close_reason(instance, false) {
-      return Self::close_within_budget(aaa_id, instance, reason, meter);
+      return Self::close_admission_decision(instance, reason, meter);
     }
     let continuation = if instance.run_state == RunState::Suspended {
       Some(
@@ -1695,7 +1788,7 @@ impl<T: Config> Pallet<T> {
       && T::AssetOps::balance(&instance.sovereign_account, T::NativeAssetId::get())
         < Self::attempt_fee_upper_bound(instance, start_cursor)
     {
-      return Self::close_within_budget(aaa_id, instance, CloseReason::FeeBudgetExhausted, meter);
+      return Self::close_admission_decision(instance, CloseReason::FeeBudgetExhausted, meter);
     }
     let cycle_weight_upper = Self::cycle_admission_weight_upper(
       instance,

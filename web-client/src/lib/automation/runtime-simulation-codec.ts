@@ -37,6 +37,7 @@ export type AaaDecodedRuntimeSimulationOutcome = {
   finalizedThrough: number | null;
   cumulativeOutcomes: {
     executedSteps: number;
+    committedEffectfulTasks: number;
     skippedConditions: number;
     skippedResolution: number;
     skippedFundingUnavailable: number;
@@ -75,10 +76,7 @@ function hexToBytes(value: AaaPlanHex): Uint8Array {
   }
   const bytes = new Uint8Array((value.length - 2) / 2);
   for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(
-      value.slice(2 + index * 2, 4 + index * 2),
-      16,
-    );
+    bytes[index] = Number(`0x${value.slice(2 + index * 2, 4 + index * 2)}`);
   }
   return bytes;
 }
@@ -205,6 +203,10 @@ function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
     ),
     cumulativeOutcomes: {
       executedSteps: asIndex(totals.executed_steps, 'executed_steps'),
+      committedEffectfulTasks: asIndex(
+        totals.committed_effectful_tasks,
+        'committed_effectful_tasks',
+      ),
       skippedConditions: asIndex(
         totals.skipped_conditions,
         'skipped_conditions',

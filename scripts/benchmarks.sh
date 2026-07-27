@@ -18,6 +18,7 @@ PALLETS=(
     "pallet_treasury_owned_liquidity"
     "pallet_asset_registry"
     "pallet_governance"
+    "pallet_oracle"
     "pallet_staking"
     "pallet_xcm"
 )
@@ -222,6 +223,7 @@ verify_weight_file_contract() {
         "scheduler_wakeup_sparse_gap_recovery"
         "close_aaa_system_pure"
         "condition_set_all_max"
+        "condition_set_observation"
     )
 
     for benchmark in "${diagnostic_benchmarks[@]}"; do
@@ -294,6 +296,7 @@ run_pallet_benchmark() {
             "scheduler_wakeup_sparse_gap_recovery"
             "close_aaa_system_pure"
             "condition_set_all_max"
+            "condition_set_observation"
         )
         local benchmark
         for benchmark in "${diagnostic_benchmarks[@]}"; do

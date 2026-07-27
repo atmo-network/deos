@@ -13,11 +13,11 @@ sources:
   - ../../docs/README.md
   - ../../docs/manifesto.en.md
   - ../../docs/framework-instance.contract.en.md
-  - ../../docs/governance.specification.en.md
-  - ../../docs/governance.architecture.en.md
-  - ../../docs/aaa.architecture.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
+  - ../../template/pallets/governance/docs/architecture.en.md
+  - ../../template/pallets/aaa/docs/architecture.en.md
   - ../../docs/core.architecture.en.md
-  - ../../docs/tmc.architecture.en.md
+  - ../../template/pallets/tmc/docs/architecture.en.md
 status: active
 audience: newcomer
 tags:

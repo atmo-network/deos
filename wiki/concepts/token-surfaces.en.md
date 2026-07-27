@@ -10,8 +10,8 @@ available_locales:
   - ru
 sources:
   - ../../docs/tmctol.specification.en.md
-  - ../../docs/governance.specification.en.md
-  - ../../docs/staking.specification.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
+  - ../../template/pallets/staking/docs/specification.en.md
   - ../../template/primitives/src/ecosystem.rs
 status: active
 audience: newcomer

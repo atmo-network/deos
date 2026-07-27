@@ -10,8 +10,8 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/aaa.specification.en.md
-  - ../../docs/aaa.architecture.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/aaa/docs/architecture.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer

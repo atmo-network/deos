@@ -9,8 +9,8 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/governance.specification.en.md
-  - ../../docs/governance.architecture.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
+  - ../../template/pallets/governance/docs/architecture.en.md
   - ../../docs/manifesto.en.md
 status: active
 audience: newcomer

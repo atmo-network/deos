@@ -1,6 +1,6 @@
-# pallet-tmc
+# pallet-deos-tmc
 
-`pallet-tmc` is the DEOS unidirectional minting-curve pallet implementing the TMCTOL standard's minting primitive.
+`pallet-deos-tmc` (Rust crate `pallet_tmc`) is the DEOS unidirectional minting-curve pallet implementing the TMCTOL standard's minting primitive.
 
 ## SDK baseline
 
@@ -54,4 +54,4 @@ The current kernel does not yet include:
 - Router path selection
 - Broader treasury policy beyond the configured post-mint distribution split
 
-See `docs/tmc.architecture.en.md` for the current contract.
+See [`docs/architecture.en.md`](./docs/architecture.en.md) for the current contract.
