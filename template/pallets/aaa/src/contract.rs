@@ -9,7 +9,7 @@ pub enum AdapterRequirement {
   AssetOps,
   DexOps,
   StakingOps,
-  LiquidityDonationOps,
+  LiquidityOps,
 }
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
@@ -252,7 +252,7 @@ where
       push_unique(&mut assets_written, asset_b.clone());
       recipients.push(RecipientSurface::ActorSovereign);
       (
-        AdapterRequirement::DexOps,
+        AdapterRequirement::LiquidityOps,
         alloc::vec![EffectClass::LiquidityMutation],
         ActorAvailability::UserAndSystem,
         TaskWeightOwner::AddLiquidity,
@@ -266,7 +266,7 @@ where
       push_unique(&mut assets_written, lp_asset.clone());
       recipients.push(RecipientSurface::ActorSovereign);
       (
-        AdapterRequirement::DexOps,
+        AdapterRequirement::LiquidityOps,
         alloc::vec![EffectClass::LiquidityMutation],
         ActorAvailability::UserAndSystem,
         TaskWeightOwner::RemoveLiquidity,
@@ -324,7 +324,7 @@ where
       push_unique(&mut assets_written, asset_b.clone());
       recipients.push(RecipientSurface::AdapterDerived);
       (
-        AdapterRequirement::LiquidityDonationOps,
+        AdapterRequirement::LiquidityOps,
         alloc::vec![EffectClass::LiquidityMutation],
         ActorAvailability::UserAndSystem,
         TaskWeightOwner::DonateLiquidity,
@@ -382,12 +382,17 @@ where
 pub enum ConditionObservation {
   BalanceComparison,
   BlockNumberComparison,
+  ScalarObservationComparison,
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub enum ConditionReadSurface<AssetId> {
+pub enum ConditionReadSurface<AssetId, ObservationFeedId = ()> {
   SpendableAssetBalance(AssetId),
   CurrentBlockNumber,
+  TypedObservation {
+    feed: ObservationFeedId,
+    max_age_blocks: u32,
+  },
 }
 
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
@@ -398,9 +403,9 @@ pub enum ObservationWindow {
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub struct ConditionInstructionContract<AssetId> {
+pub struct ConditionInstructionContract<AssetId, ObservationFeedId = ()> {
   pub observation: ConditionObservation,
-  pub read_surface: ConditionReadSurface<AssetId>,
+  pub read_surface: ConditionReadSurface<AssetId, ObservationFeedId>,
   pub pure: bool,
   pub observation_window: ObservationWindow,
   pub bounded_read_count: u32,
@@ -453,9 +458,9 @@ pub fn describe_condition_set<C, MaxConditions: Get<u32>>(
   }
 }
 
-pub fn describe_condition<AssetId: Clone, Balance, BlockNumber>(
-  condition: &Condition<AssetId, Balance, BlockNumber>,
-) -> ConditionInstructionContract<AssetId> {
+pub fn describe_condition<AssetId: Clone, Balance, BlockNumber, ObservationFeedId: Clone>(
+  condition: &Condition<AssetId, Balance, BlockNumber, ObservationFeedId>,
+) -> ConditionInstructionContract<AssetId, ObservationFeedId> {
   let (observation, read_surface) = match condition {
     Condition::BalanceAbove { asset, .. }
     | Condition::BalanceBelow { asset, .. }
@@ -467,6 +472,32 @@ pub fn describe_condition<AssetId: Clone, Balance, BlockNumber>(
     Condition::BlockNumberAbove { .. } | Condition::BlockNumberBelow { .. } => (
       ConditionObservation::BlockNumberComparison,
       ConditionReadSurface::CurrentBlockNumber,
+    ),
+    Condition::ObservationAbove {
+      feed,
+      max_age_blocks,
+      ..
+    }
+    | Condition::ObservationBelow {
+      feed,
+      max_age_blocks,
+      ..
+    }
+    | Condition::ObservationEquals {
+      feed,
+      max_age_blocks,
+      ..
+    }
+    | Condition::ObservationNotEquals {
+      feed,
+      max_age_blocks,
+      ..
+    } => (
+      ConditionObservation::ScalarObservationComparison,
+      ConditionReadSurface::TypedObservation {
+        feed: feed.clone(),
+        max_age_blocks: *max_age_blocks,
+      },
     ),
   };
   ConditionInstructionContract {
@@ -658,7 +689,7 @@ mod tests {
           amount_b: fixed(),
           min_lp_out: 1,
         },
-        AdapterRequirement::DexOps,
+        AdapterRequirement::LiquidityOps,
         TaskWeightOwner::AddLiquidity,
       ),
       (
@@ -668,7 +699,7 @@ mod tests {
           min_amount_a: 1,
           min_amount_b: 1,
         },
-        AdapterRequirement::DexOps,
+        AdapterRequirement::LiquidityOps,
         TaskWeightOwner::RemoveLiquidity,
       ),
       (
@@ -702,7 +733,7 @@ mod tests {
           amount: fixed(),
           max_ratio_error: Perbill::zero(),
         },
-        AdapterRequirement::LiquidityDonationOps,
+        AdapterRequirement::LiquidityOps,
         TaskWeightOwner::DonateLiquidity,
       ),
       (
@@ -796,7 +827,7 @@ mod tests {
 
   #[test]
   fn every_condition_is_pure_and_bounded() {
-    let conditions = [
+    let conditions: [Condition<u32, u128, u32, u32>; 10] = [
       Condition::BalanceAbove {
         asset: 1u32,
         threshold: 1u128,
@@ -815,6 +846,26 @@ mod tests {
       },
       Condition::BlockNumberAbove { threshold: 1u32 },
       Condition::BlockNumberBelow { threshold: 1u32 },
+      Condition::ObservationAbove {
+        feed: 1,
+        threshold: 1,
+        max_age_blocks: 1,
+      },
+      Condition::ObservationBelow {
+        feed: 1,
+        threshold: 1,
+        max_age_blocks: 1,
+      },
+      Condition::ObservationEquals {
+        feed: 1,
+        threshold: 1,
+        max_age_blocks: 1,
+      },
+      Condition::ObservationNotEquals {
+        feed: 1,
+        threshold: 1,
+        max_age_blocks: 1,
+      },
     ];
     for condition in conditions {
       let contract = describe_condition(&condition);

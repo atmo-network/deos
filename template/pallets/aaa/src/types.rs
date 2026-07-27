@@ -7,6 +7,18 @@ pub type QueuePageId = u64;
 pub type WakeupPageId = u64;
 pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
+pub type ObservationRevision = u64;
+pub type ObservationDirtySlot = u32;
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct DirtyObservationState {
+  pub slot: ObservationDirtySlot,
+  pub latest_revision: ObservationRevision,
+  pub fanout_revision: ObservationRevision,
+  pub next_subscriber_page: u32,
+}
 
 #[derive(
   Clone,
@@ -672,6 +684,26 @@ pub enum CloseReason {
   FeeBudgetExhausted,
   AutoCloseNonceReached,
   RetryAttemptsExhausted,
+  ProductiveRunCompleted,
+}
+
+#[derive(
+  Clone,
+  Copy,
+  Debug,
+  Decode,
+  DecodeWithMemTracking,
+  Default,
+  Encode,
+  Eq,
+  PartialEq,
+  TypeInfo,
+  MaxEncodedLen,
+)]
+pub enum CompletionPolicy {
+  #[default]
+  Persistent,
+  CloseAfterProductiveRun,
 }
 
 #[derive(
@@ -924,16 +956,20 @@ fn is_non_empty_strictly_scale_ordered<Value: Encode, Bound: Get<u32>>(
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize))]
-pub enum TriggerSource<AccountId, AssetId, MaxWhitelistSize: Get<u32>> {
+pub enum TriggerSource<AccountId, AssetId, MaxWhitelistSize: Get<u32>, ObservationFeedId = AssetId>
+{
   Manual,
   OnAddressEvent {
     source_filter: SourceFilter<AccountId, MaxWhitelistSize>,
     asset_filter: AssetFilter<AssetId, MaxWhitelistSize>,
   },
+  OnObservationChange {
+    feed: ObservationFeedId,
+  },
 }
 
-impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
-  for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, ObservationFeedId: Clone> Clone
+  for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   fn clone(&self) -> Self {
     match self {
@@ -945,12 +981,17 @@ impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>> Clone
         source_filter: source_filter.clone(),
         asset_filter: asset_filter.clone(),
       },
+      Self::OnObservationChange { feed } => Self::OnObservationChange { feed: feed.clone() },
     }
   }
 }
 
-impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: Get<u32>>
-  core::fmt::Debug for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+impl<
+  AccountId: core::fmt::Debug,
+  AssetId: core::fmt::Debug,
+  MaxWhitelistSize: Get<u32>,
+  ObservationFeedId: core::fmt::Debug,
+> core::fmt::Debug for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
@@ -963,12 +1004,20 @@ impl<AccountId: core::fmt::Debug, AssetId: core::fmt::Debug, MaxWhitelistSize: G
         .field("source_filter", source_filter)
         .field("asset_filter", asset_filter)
         .finish(),
+      Self::OnObservationChange { feed } => f
+        .debug_struct("OnObservationChange")
+        .field("feed", feed)
+        .finish(),
     }
   }
 }
 
-impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> PartialEq
-  for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+impl<
+  AccountId: PartialEq,
+  AssetId: PartialEq,
+  MaxWhitelistSize: Get<u32>,
+  ObservationFeedId: PartialEq,
+> PartialEq for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
@@ -983,18 +1032,21 @@ impl<AccountId: PartialEq, AssetId: PartialEq, MaxWhitelistSize: Get<u32>> Parti
           asset_filter: right_asset,
         },
       ) => left_source == right_source && left_asset == right_asset,
+      (Self::OnObservationChange { feed: left }, Self::OnObservationChange { feed: right }) => {
+        left == right
+      }
       _ => false,
     }
   }
 }
 
-impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>> Eq
-  for TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, ObservationFeedId: Eq> Eq
+  for TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
 }
 
-impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>>
-  TriggerSource<AccountId, AssetId, MaxWhitelistSize>
+impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>, ObservationFeedId: Encode>
+  TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>
 {
   pub fn has_canonical_filters(&self) -> bool {
     match self {
@@ -1003,22 +1055,45 @@ impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>>
         source_filter,
         asset_filter,
       } => source_filter.has_canonical_members() && asset_filter.has_canonical_members(),
+      Self::OnObservationChange { .. } => true,
     }
   }
 }
 
-pub type TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources> =
-  BoundedVec<TriggerSource<AccountId, AssetId, MaxWhitelistSize>, MaxTriggerSources>;
+pub type TriggerSources<
+  AccountId,
+  AssetId,
+  MaxWhitelistSize,
+  MaxTriggerSources,
+  ObservationFeedId = AssetId,
+> = BoundedVec<
+  TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>,
+  MaxTriggerSources,
+>;
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
-pub enum CadenceMode<AccountId, AssetId, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> {
+pub enum CadenceMode<
+  AccountId,
+  AssetId,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId = AssetId,
+> {
   Always,
-  WhenSignalled(TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>),
+  WhenSignalled(
+    TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
+  ),
 }
 
-impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
-  Clone for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Clone,
+  AssetId: Clone,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Clone,
+> Clone
+  for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn clone(&self) -> Self {
     match self {
@@ -1033,7 +1108,9 @@ impl<
   AssetId: core::fmt::Debug,
   MaxWhitelistSize: Get<u32>,
   MaxTriggerSources: Get<u32>,
-> core::fmt::Debug for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+  ObservationFeedId: core::fmt::Debug,
+> core::fmt::Debug
+  for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
@@ -1048,7 +1125,9 @@ impl<
   AssetId: PartialEq,
   MaxWhitelistSize: Get<u32>,
   MaxTriggerSources: Get<u32>,
-> PartialEq for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+  ObservationFeedId: PartialEq,
+> PartialEq
+  for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
@@ -1059,26 +1138,43 @@ impl<
   }
 }
 
-impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> Eq
-  for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Eq,
+  AssetId: Eq,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Eq,
+> Eq for CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
-pub enum TriggerPolicy<AccountId, AssetId, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
-{
+pub enum TriggerPolicy<
+  AccountId,
+  AssetId,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId = AssetId,
+> {
   Immediate {
-    sources: TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>,
+    sources:
+      TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
   },
   Cadenced {
     every_blocks: u32,
-    mode: CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>,
+    mode: CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
   },
 }
 
-impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
-  Clone for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Clone,
+  AssetId: Clone,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Clone,
+> Clone
+  for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn clone(&self) -> Self {
     match self {
@@ -1098,7 +1194,9 @@ impl<
   AssetId: core::fmt::Debug,
   MaxWhitelistSize: Get<u32>,
   MaxTriggerSources: Get<u32>,
-> core::fmt::Debug for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+  ObservationFeedId: core::fmt::Debug,
+> core::fmt::Debug
+  for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     match self {
@@ -1120,7 +1218,9 @@ impl<
   AssetId: PartialEq,
   MaxWhitelistSize: Get<u32>,
   MaxTriggerSources: Get<u32>,
-> PartialEq for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+  ObservationFeedId: PartialEq,
+> PartialEq
+  for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn eq(&self, other: &Self) -> bool {
     match (self, other) {
@@ -1140,13 +1240,23 @@ impl<
   }
 }
 
-impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> Eq
-  for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Eq,
+  AssetId: Eq,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Eq,
+> Eq for TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
 }
 
-impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
-  TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Encode,
+  AssetId: Encode,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Encode,
+> TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   pub fn immediate_manual() -> Self {
     Self::Immediate {
@@ -1220,7 +1330,9 @@ impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>, MaxTriggerS
 
   pub fn sources(
     &self,
-  ) -> Option<&TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>> {
+  ) -> Option<
+    &TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
+  > {
     match self {
       Self::Immediate { sources }
       | Self::Cadenced {
@@ -1272,20 +1384,44 @@ impl<AccountId: Encode, AssetId: Encode, MaxWhitelistSize: Get<u32>, MaxTriggerS
         .any(|source| matches!(source, TriggerSource::OnAddressEvent { .. }))
     })
   }
+
+  pub fn observation_source_enabled(&self) -> bool {
+    self.sources().is_some_and(|sources| {
+      sources
+        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds source lookup.
+        .any(|source| matches!(source, TriggerSource::OnObservationChange { .. }))
+    })
+  }
 }
 
-pub type Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources> =
-  TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>;
+pub type Trigger<
+  AccountId,
+  AssetId,
+  MaxWhitelistSize,
+  MaxTriggerSources,
+  ObservationFeedId = AssetId,
+> = TriggerPolicy<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>;
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxWhitelistSize, MaxTriggerSources))]
-pub struct Schedule<AccountId, AssetId, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> {
-  pub trigger: Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>,
+pub struct Schedule<
+  AccountId,
+  AssetId,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId = AssetId,
+> {
+  pub trigger: Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>,
   pub cooldown_blocks: u32,
 }
 
-impl<AccountId: Clone, AssetId: Clone, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>>
-  Clone for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Clone,
+  AssetId: Clone,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Clone,
+> Clone for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn clone(&self) -> Self {
     Self {
@@ -1300,7 +1436,9 @@ impl<
   AssetId: core::fmt::Debug,
   MaxWhitelistSize: Get<u32>,
   MaxTriggerSources: Get<u32>,
-> core::fmt::Debug for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+  ObservationFeedId: core::fmt::Debug,
+> core::fmt::Debug
+  for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Schedule")
@@ -1315,28 +1453,71 @@ impl<
   AssetId: PartialEq,
   MaxWhitelistSize: Get<u32>,
   MaxTriggerSources: Get<u32>,
-> PartialEq for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+  ObservationFeedId: PartialEq,
+> PartialEq
+  for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
   fn eq(&self, other: &Self) -> bool {
     self.trigger == other.trigger && self.cooldown_blocks == other.cooldown_blocks
   }
 }
 
-impl<AccountId: Eq, AssetId: Eq, MaxWhitelistSize: Get<u32>, MaxTriggerSources: Get<u32>> Eq
-  for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources>
+impl<
+  AccountId: Eq,
+  AssetId: Eq,
+  MaxWhitelistSize: Get<u32>,
+  MaxTriggerSources: Get<u32>,
+  ObservationFeedId: Eq,
+> Eq for Schedule<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources, ObservationFeedId>
 {
 }
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum Condition<AssetId, Balance, BlockNumber = u32> {
-  BalanceAbove { asset: AssetId, threshold: Balance },
-  BalanceBelow { asset: AssetId, threshold: Balance },
-  BalanceEquals { asset: AssetId, threshold: Balance },
-  BalanceNotEquals { asset: AssetId, threshold: Balance },
-  BlockNumberAbove { threshold: BlockNumber },
-  BlockNumberBelow { threshold: BlockNumber },
+pub enum Condition<AssetId, Balance, BlockNumber = u32, ObservationFeedId = ()> {
+  BalanceAbove {
+    asset: AssetId,
+    threshold: Balance,
+  },
+  BalanceBelow {
+    asset: AssetId,
+    threshold: Balance,
+  },
+  BalanceEquals {
+    asset: AssetId,
+    threshold: Balance,
+  },
+  BalanceNotEquals {
+    asset: AssetId,
+    threshold: Balance,
+  },
+  BlockNumberAbove {
+    threshold: BlockNumber,
+  },
+  BlockNumberBelow {
+    threshold: BlockNumber,
+  },
+  ObservationAbove {
+    feed: ObservationFeedId,
+    threshold: u128,
+    max_age_blocks: u32,
+  },
+  ObservationBelow {
+    feed: ObservationFeedId,
+    threshold: u128,
+    max_age_blocks: u32,
+  },
+  ObservationEquals {
+    feed: ObservationFeedId,
+    threshold: u128,
+    max_age_blocks: u32,
+  },
+  ObservationNotEquals {
+    feed: ObservationFeedId,
+    threshold: u128,
+    max_age_blocks: u32,
+  },
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -1408,8 +1589,10 @@ pub struct Step<
   AccountId,
   MaxConditionsPerStep: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
+  ObservationFeedId = (),
 > {
-  pub conditions: ConditionSet<Condition<AssetId, Balance>, MaxConditionsPerStep>,
+  pub conditions:
+    ConditionSet<Condition<AssetId, Balance, u32, ObservationFeedId>, MaxConditionsPerStep>,
   pub task: Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>,
   pub on_error: StepErrorPolicy,
 }
@@ -1420,7 +1603,16 @@ impl<
   AccountId: Clone,
   MaxConditionsPerStep: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
-> Clone for Step<AssetId, Balance, AccountId, MaxConditionsPerStep, MaxSplitTransferLegs>
+  ObservationFeedId: Clone,
+> Clone
+  for Step<
+    AssetId,
+    Balance,
+    AccountId,
+    MaxConditionsPerStep,
+    MaxSplitTransferLegs,
+    ObservationFeedId,
+  >
 {
   fn clone(&self) -> Self {
     Self {
@@ -1437,8 +1629,16 @@ impl<
   AccountId: core::fmt::Debug,
   MaxConditionsPerStep: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
+  ObservationFeedId: core::fmt::Debug,
 > core::fmt::Debug
-  for Step<AssetId, Balance, AccountId, MaxConditionsPerStep, MaxSplitTransferLegs>
+  for Step<
+    AssetId,
+    Balance,
+    AccountId,
+    MaxConditionsPerStep,
+    MaxSplitTransferLegs,
+    ObservationFeedId,
+  >
 {
   fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
     f.debug_struct("Step")
@@ -1455,7 +1655,16 @@ impl<
   AccountId: PartialEq,
   MaxConditionsPerStep: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
-> PartialEq for Step<AssetId, Balance, AccountId, MaxConditionsPerStep, MaxSplitTransferLegs>
+  ObservationFeedId: PartialEq,
+> PartialEq
+  for Step<
+    AssetId,
+    Balance,
+    AccountId,
+    MaxConditionsPerStep,
+    MaxSplitTransferLegs,
+    ObservationFeedId,
+  >
 {
   fn eq(&self, other: &Self) -> bool {
     self.conditions == other.conditions
@@ -1470,7 +1679,16 @@ impl<
   AccountId: Eq,
   MaxConditionsPerStep: Get<u32>,
   MaxSplitTransferLegs: Get<u32>,
-> Eq for Step<AssetId, Balance, AccountId, MaxConditionsPerStep, MaxSplitTransferLegs>
+  ObservationFeedId: Eq,
+> Eq
+  for Step<
+    AssetId,
+    Balance,
+    AccountId,
+    MaxConditionsPerStep,
+    MaxSplitTransferLegs,
+    ObservationFeedId,
+  >
 {
 }
 
@@ -1553,6 +1771,7 @@ pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
     schedule: Schedule,
     schedule_window: Option<ScheduleWindow<BlockNumber>>,
     execution_plan: ExecutionPlan,
+    completion_policy: CompletionPolicy,
     funding_source_policy: FundingPolicy,
   },
 }
@@ -1610,6 +1829,7 @@ pub enum ResolutionSurface<AssetId> {
 )]
 pub struct OutcomeTotals {
   pub executed_steps: u32,
+  pub committed_effectful_tasks: u32,
   pub skipped_conditions: u32,
   pub skipped_resolution: u32,
   pub skipped_funding_unavailable: u32,
@@ -1670,6 +1890,7 @@ pub struct ActorProgramState<Schedule, BlockNumber, ExecutionPlan> {
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
+  pub completion_policy: CompletionPolicy,
 }
 
 #[derive(
@@ -1685,6 +1906,7 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
+  pub completion_policy: CompletionPolicy,
   pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,

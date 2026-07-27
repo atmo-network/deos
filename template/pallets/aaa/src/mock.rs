@@ -16,8 +16,7 @@ use alloc::vec;
 use core::cell::RefCell;
 
 use crate::{
-  AaaType, AssetOps, DexOps, ExecutionContext, FeeCollector, LiquidityDonationOps, StakingOps,
-  TaskFailure,
+  AaaType, AssetOps, DexOps, ExecutionContext, FeeCollector, LiquidityOps, StakingOps, TaskFailure,
 };
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
@@ -152,6 +151,8 @@ thread_local! {
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
   static ASSET_MINIMUM_BALANCE: RefCell<Balance> = RefCell::new(1);
+  static OBSERVATIONS: RefCell<alloc::collections::BTreeMap<u32, crate::ScalarObservationState>> =
+    RefCell::new(alloc::collections::BTreeMap::new());
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
@@ -172,6 +173,12 @@ thread_local! {
 
 pub fn set_asset_minimum_balance(amount: Balance) {
   ASSET_MINIMUM_BALANCE.with(|value| *value.borrow_mut() = amount);
+}
+
+pub fn set_observation(feed: u32, state: crate::ScalarObservationState) {
+  OBSERVATIONS.with(|values| {
+    values.borrow_mut().insert(feed, state);
+  });
 }
 
 pub fn set_pool_reserves(
@@ -207,6 +214,7 @@ pub fn reset_mock_adapters() {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
+  OBSERVATIONS.with(|values| values.borrow_mut().clear());
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
   TEMPORARY_DEX_FAILURE.with(|v| *v.borrow_mut() = false);
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
@@ -223,6 +231,19 @@ pub fn reset_mock_adapters() {
   {
     BENCHMARK_INGRESS.with(|event| *event.borrow_mut() = None);
     BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow_mut() = false);
+  }
+}
+
+pub struct MockObservationProvider;
+impl crate::ObservationProvider<u32> for MockObservationProvider {
+  fn observation(feed: u32, _: u32) -> crate::ScalarObservationState {
+    OBSERVATIONS.with(|values| {
+      values
+        .borrow()
+        .get(&feed)
+        .copied()
+        .unwrap_or(crate::ScalarObservationState::Unavailable)
+    })
   }
 }
 
@@ -367,21 +388,39 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
     ASSET_MINIMUM_BALANCE.with(|value| *value.borrow())
   }
 
-  fn can_deposit(who: &AccountId, asset: TestAsset, amount: Balance) -> bool {
+  fn preflight_transfer(
+    from: &AccountId,
+    to: &AccountId,
+    asset: TestAsset,
+    amount: Balance,
+  ) -> Result<(), TaskFailure> {
     if amount == 0 {
-      return true;
+      return Ok(());
     }
-    let current = match asset {
-      TestAsset::Native => {
-        use polkadot_sdk::frame_support::traits::Currency;
-        <Balances as Currency<AccountId>>::total_balance(who)
-      }
-      _ => ASSET_BALANCES.with(|b| b.borrow().get(&(*who, asset)).copied().unwrap_or(0)),
-    };
-    if current != 0 {
-      return true;
+    if asset == TestAsset::Native {
+      use polkadot_sdk::frame_support::traits::{
+        fungible::Inspect as NativeInspect, tokens::Provenance,
+      };
+      <Balances as NativeInspect<AccountId>>::can_withdraw(from, amount)
+        .into_result(false)
+        .map_err(TaskFailure::permanent)?;
+      return <Balances as NativeInspect<AccountId>>::can_deposit(to, amount, Provenance::Extant)
+        .into_result()
+        .map_err(|_| TaskFailure::temporary(crate::Error::<Test>::RecipientDepositUnavailable));
     }
-    amount >= Self::minimum_balance(asset)
+    let source = ASSET_BALANCES.with(|b| b.borrow().get(&(*from, asset)).copied().unwrap_or(0));
+    if source < amount {
+      return Err(TaskFailure::permanent(DispatchError::Token(
+        polkadot_sdk::sp_runtime::TokenError::FundsUnavailable,
+      )));
+    }
+    let recipient = ASSET_BALANCES.with(|b| b.borrow().get(&(*to, asset)).copied().unwrap_or(0));
+    if recipient == 0 && amount < Self::minimum_balance(asset) {
+      return Err(TaskFailure::temporary(
+        crate::Error::<Test>::RecipientDepositUnavailable,
+      ));
+    }
+    Ok(())
   }
 }
 
@@ -523,40 +562,6 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
     Ok(amount_in)
   }
-
-  fn add_liquidity(
-    _who: &AccountId,
-    _asset_a: TestAsset,
-    _asset_b: TestAsset,
-    amount_a: Balance,
-    amount_b: Balance,
-    min_lp_out: Balance,
-  ) -> Result<(Balance, Balance, Balance), TaskFailure> {
-    if TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow()) {
-      return Err(TaskFailure::temporary(DispatchError::Other(
-        "TemporaryAddLiquidityCapacity",
-      )));
-    }
-    let lp_minted = integer_sqrt(amount_a.saturating_mul(amount_b));
-    if lp_minted < min_lp_out {
-      return Err(DispatchError::Other("MinimumLpOutputNotMet").into());
-    }
-    Ok((amount_a, amount_b, lp_minted))
-  }
-
-  fn remove_liquidity(
-    _who: &AccountId,
-    _lp_asset: TestAsset,
-    lp_amount: Balance,
-    min_amount_a: Balance,
-    min_amount_b: Balance,
-  ) -> Result<(Balance, Balance), TaskFailure> {
-    let half = lp_amount / 2;
-    if half < min_amount_a || half < min_amount_b {
-      return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
-    }
-    Ok((half, half))
-  }
 }
 
 impl MockDexOps {
@@ -634,9 +639,43 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
   }
 }
 
-pub struct MockLiquidityDonationOps;
+pub struct MockLiquidityOps;
 
-impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonationOps {
+impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
+  fn add_liquidity(
+    _who: &AccountId,
+    _asset_a: TestAsset,
+    _asset_b: TestAsset,
+    amount_a: Balance,
+    amount_b: Balance,
+    min_lp_out: Balance,
+  ) -> Result<(Balance, Balance, Balance), TaskFailure> {
+    if TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow()) {
+      return Err(TaskFailure::temporary(DispatchError::Other(
+        "TemporaryAddLiquidityCapacity",
+      )));
+    }
+    let lp_minted = integer_sqrt(amount_a.saturating_mul(amount_b));
+    if lp_minted < min_lp_out {
+      return Err(DispatchError::Other("MinimumLpOutputNotMet").into());
+    }
+    Ok((amount_a, amount_b, lp_minted))
+  }
+
+  fn remove_liquidity(
+    _who: &AccountId,
+    _lp_asset: TestAsset,
+    lp_amount: Balance,
+    min_amount_a: Balance,
+    min_amount_b: Balance,
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    let half = lp_amount / 2;
+    if half < min_amount_a || half < min_amount_b {
+      return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
+    }
+    Ok((half, half))
+  }
+
   fn donate_liquidity(
     who: &AccountId,
     asset_a: TestAsset,
@@ -645,7 +684,7 @@ impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonati
     _max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure> {
     if FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow()) {
-      return Err(DispatchError::Other("MockLiquidityDonationOpsFailed").into());
+      return Err(DispatchError::Other("MockLiquidityOpsFailed").into());
     }
     if MockAssetOps::balance(who, asset_a) < amount || MockAssetOps::balance(who, asset_b) < amount
     {
@@ -680,7 +719,7 @@ impl LiquidityDonationOps<AccountId, TestAsset, Balance> for MockLiquidityDonati
 pub struct MockBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelper {
+impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmarkHelper {
   fn setup_add_liquidity(
     owner: &AccountId,
   ) -> Result<(TestAsset, TestAsset, Balance, Balance), DispatchError> {
@@ -759,6 +798,13 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance> for MockBenchmarkHelp
     max: u32,
   ) -> Result<alloc::vec::Vec<TestAsset>, DispatchError> {
     Ok(Self::funding_assets(max))
+  }
+
+  fn setup_observation_feeds(max: u32) -> Result<alloc::vec::Vec<u32>, DispatchError> {
+    for feed in 1..=max {
+      set_observation(feed, crate::ScalarObservationState::Fresh { value: 1 });
+    }
+    Ok((1..=max).collect())
   }
 
   fn enable_asset_ops_ingress() {
@@ -883,6 +929,13 @@ impl Get<u32> for TestMaxIdleStarvationBlocks {
   }
 }
 
+pub struct TestObservationFanoutWeightLimit;
+impl Get<polkadot_sdk::sp_weights::Weight> for TestObservationFanoutWeightLimit {
+  fn get() -> polkadot_sdk::sp_weights::Weight {
+    polkadot_sdk::sp_weights::Weight::MAX
+  }
+}
+
 pub struct TestGuaranteedOnIdleWeight;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestGuaranteedOnIdleWeight {
   fn get() -> polkadot_sdk::sp_weights::Weight {
@@ -949,10 +1002,12 @@ impl pallet_aaa::Config for Test {
   type Balance = Balance;
   type NativeAssetId = NativeAsset;
   type AssetOps = MockAssetOps;
+  type ObservationFeedId = u32;
+  type ObservationProvider = MockObservationProvider;
   type FundingAuthority = MockFundingAuthority;
   type DexOps = MockDexOps;
   type StakingOps = MockStakingOps;
-  type LiquidityDonationOps = MockLiquidityDonationOps;
+  type LiquidityOps = MockLiquidityOps;
   type MinWindowLength = frame::traits::ConstU64<100>;
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
@@ -971,6 +1026,8 @@ impl pallet_aaa::Config for Test {
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
+  type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
+  type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;

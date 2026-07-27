@@ -8,12 +8,14 @@ pub mod contract;
 pub mod types;
 
 mod execution;
+mod reactions;
 mod scheduler;
+mod subscriptions;
 
 pub mod adapters;
 pub use adapters::{
-  AssetOps, DexOps, ExecutionContext, FundingAuthority, LiquidityDonationOps, RetryClass,
-  StakingOps, TaskFailure,
+  AssetOps, DexOps, ExecutionContext, FundingAuthority, LiquidityOps, ObservationProvider,
+  RetryClass, ScalarObservationState, StakingOps, TaskFailure,
 };
 pub use types::{InputLimit, SYSTEM_OWNER_SLOT_SENTINEL, Task};
 
@@ -29,7 +31,7 @@ mod tests;
 mod benchmarking;
 
 #[cfg(feature = "runtime-benchmarks")]
-pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
+pub trait BenchmarkHelper<AccountId, AssetId, Balance, ObservationFeedId> {
   fn setup_add_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetId, AssetId, Balance, Balance), polkadot_sdk::sp_runtime::DispatchError>;
@@ -56,6 +58,9 @@ pub trait BenchmarkHelper<AccountId, AssetId, Balance> {
     owner: &AccountId,
     max: u32,
   ) -> Result<alloc::vec::Vec<AssetId>, polkadot_sdk::sp_runtime::DispatchError>;
+  fn setup_observation_feeds(
+    max: u32,
+  ) -> Result<alloc::vec::Vec<ObservationFeedId>, polkadot_sdk::sp_runtime::DispatchError>;
   fn enable_asset_ops_ingress() {}
   fn setup_address_event_ingress(
     recipient: &AccountId,
@@ -98,8 +103,8 @@ sp_api::decl_runtime_apis! {
 #[frame::pallet]
 pub mod pallet {
   use super::{
-    AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityDonationOps, TaskWeightInfo,
-    WeightInfo,
+    AssetOps, DexOps, FeeCollector, FundingAuthority, LiquidityOps, ObservationProvider,
+    TaskWeightInfo, WeightInfo,
   };
   use crate::adapters::StakingOps as _;
   use frame::prelude::*;
@@ -128,10 +133,12 @@ pub mod pallet {
     type NativeAssetId: Get<Self::AssetId>;
 
     type AssetOps: AssetOps<Self::AccountId, Self::AssetId, Self::Balance>;
+    type ObservationFeedId: Parameter + Member + Copy + MaxEncodedLen + Ord;
+    type ObservationProvider: ObservationProvider<Self::ObservationFeedId>;
     type FundingAuthority: FundingAuthority<Self::AccountId>;
     type DexOps: DexOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type StakingOps: crate::adapters::StakingOps<Self::AccountId, Self::AssetId, Self::Balance>;
-    type LiquidityDonationOps: LiquidityDonationOps<Self::AccountId, Self::AssetId, Self::Balance>;
+    type LiquidityOps: LiquidityOps<Self::AccountId, Self::AssetId, Self::Balance>;
 
     #[pallet::constant]
     type MinWindowLength: Get<BlockNumberFor<Self>>;
@@ -172,6 +179,10 @@ pub mod pallet {
     /// Independent ceiling for physical queue-entry inspection per scheduler pass.
     #[pallet::constant]
     type MaxQueueEntriesScannedPerBlock: Get<u32>;
+    #[pallet::constant]
+    type MaxObservationFanoutPagesPerBlock: Get<u32>;
+    #[pallet::constant]
+    type ObservationFanoutWeightLimit: Get<Weight>;
     #[pallet::constant]
     type MaxWakeupsPerBlock: Get<u32>;
     #[pallet::constant]
@@ -234,7 +245,7 @@ pub mod pallet {
       >;
 
     #[cfg(feature = "runtime-benchmarks")]
-    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::AssetId, Self::Balance>;
+    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::AssetId, Self::Balance, Self::ObservationFeedId>;
   }
 
   pub type BalanceOf<T> = <T as Config>::Balance;
@@ -245,10 +256,17 @@ pub mod pallet {
 
   pub type AssetFilterOf<T> = AssetFilter<<T as Config>::AssetId, <T as Config>::MaxWhitelistSize>;
 
+  pub type ActorObservationFeedsOf<T> =
+    BoundedVec<<T as Config>::ObservationFeedId, <T as Config>::MaxTriggerSources>;
+  pub type ObservationSubscriberPageOf<T> = BoundedVec<Option<AaaId>, <T as Config>::QueuePageSize>;
+  pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::QueuePageSize>;
+  pub type ObservationDirtyFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::QueuePageSize>;
+
   pub type TriggerSourceOf<T> = TriggerSource<
     <T as frame_system::Config>::AccountId,
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
+    <T as Config>::ObservationFeedId,
   >;
 
   pub type TriggerPolicyOf<T> = TriggerPolicy<
@@ -256,6 +274,7 @@ pub mod pallet {
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
     <T as Config>::MaxTriggerSources,
+    <T as Config>::ObservationFeedId,
   >;
 
   pub type TriggerOf<T> = Trigger<
@@ -263,6 +282,7 @@ pub mod pallet {
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
     <T as Config>::MaxTriggerSources,
+    <T as Config>::ObservationFeedId,
   >;
 
   pub type ScheduleOf<T> = Schedule<
@@ -270,10 +290,16 @@ pub mod pallet {
     <T as Config>::AssetId,
     <T as Config>::MaxWhitelistSize,
     <T as Config>::MaxTriggerSources,
+    <T as Config>::ObservationFeedId,
   >;
 
   pub type ConditionSetOf<T> = ConditionSet<
-    Condition<<T as Config>::AssetId, <T as Config>::Balance>,
+    Condition<
+      <T as Config>::AssetId,
+      <T as Config>::Balance,
+      u32,
+      <T as Config>::ObservationFeedId,
+    >,
     <T as Config>::MaxConditionsPerStep,
   >;
 
@@ -295,6 +321,7 @@ pub mod pallet {
     <T as frame_system::Config>::AccountId,
     <T as Config>::MaxConditionsPerStep,
     <T as Config>::MaxSplitTransferLegs,
+    <T as Config>::ObservationFeedId,
   >;
 
   pub type ExecutionPlanOf<T> = BoundedVec<StepOf<T>, <T as Config>::MaxExecutionPlanSteps>;
@@ -397,6 +424,7 @@ pub mod pallet {
         schedule: program.schedule,
         schedule_window: program.schedule_window,
         execution_plan: program.execution_plan,
+        completion_policy: program.completion_policy,
         cycle_nonce: hot.cycle_nonce,
         auto_close_at_cycle_nonce: hot.auto_close_at_cycle_nonce,
         consecutive_failures: hot.consecutive_failures,
@@ -459,20 +487,25 @@ pub mod pallet {
           schedule: instance.schedule,
           schedule_window: instance.schedule_window,
           execution_plan: instance.execution_plan,
+          completion_policy: instance.completion_policy,
         },
       )
     }
 
-    pub(crate) fn insert_active_actor(aaa_id: AaaId, instance: AaaInstanceOf<T>) {
+    pub(crate) fn insert_active_actor(aaa_id: AaaId, instance: AaaInstanceOf<T>) -> DispatchResult {
       let (hot, program) = Self::split_active_actor(instance);
+      Self::replace_observation_subscriptions(aaa_id, &program.schedule)?;
       ActorHot::<T>::insert(aaa_id, hot);
       ActorProgram::<T>::insert(aaa_id, program);
+      Ok(())
     }
 
-    pub(crate) fn remove_active_actor(aaa_id: AaaId) {
+    pub(crate) fn remove_active_actor(aaa_id: AaaId) -> DispatchResult {
+      Self::remove_observation_subscriptions(aaa_id)?;
       ActorHot::<T>::remove(aaa_id);
       ActorProgram::<T>::remove(aaa_id);
       ContinuationStateStore::<T>::remove(aaa_id);
+      Ok(())
     }
   }
 
@@ -573,6 +606,83 @@ pub mod pallet {
   #[pallet::getter(fn configured_active_actor_limit)]
   pub type ActiveActorLimit<T: Config> = StorageValue<_, u32, ValueQuery>;
 
+  /// Canonical observation feed ownership derived from each active actor's trigger policy.
+  #[pallet::storage]
+  #[pallet::getter(fn actor_observation_feeds)]
+  pub type ActorObservationFeeds<T: Config> =
+    StorageMap<_, Blake2_128Concat, AaaId, ActorObservationFeedsOf<T>, OptionQuery>;
+
+  /// Reusable dense slot owned only while an actor has observation subscriptions.
+  #[pallet::storage]
+  #[pallet::getter(fn observation_subscription_slot)]
+  pub type ObservationSubscriptionSlot<T> =
+    StorageMap<_, Blake2_128Concat, AaaId, u32, OptionQuery>;
+
+  #[pallet::storage]
+  pub type ObservationSubscriptionSlotOwner<T> =
+    StorageMap<_, Blake2_128Concat, u32, AaaId, OptionQuery>;
+
+  #[pallet::storage]
+  pub type NextObservationSubscriptionSlot<T> = StorageValue<_, u32, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ObservationFreeSlotLen<T> = StorageValue<_, u32, ValueQuery>;
+
+  #[pallet::storage]
+  pub type ObservationFreeSlotPages<T: Config> =
+    StorageMap<_, Blake2_128Concat, u32, ObservationFreeSlotPageOf<T>, OptionQuery>;
+
+  /// Fixed slot-addressed subscriber pages. Empty pages are deleted immediately.
+  #[pallet::storage]
+  #[pallet::getter(fn observation_subscriber_pages)]
+  pub type ObservationSubscriberPages<T: Config> = StorageDoubleMap<
+    _,
+    Blake2_128Concat,
+    T::ObservationFeedId,
+    Blake2_128Concat,
+    u32,
+    ObservationSubscriberPageOf<T>,
+    OptionQuery,
+  >;
+
+  #[pallet::storage]
+  #[pallet::getter(fn observation_subscriber_count)]
+  pub type ObservationSubscriberCount<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, u32, ValueQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn observation_subscription_count)]
+  pub type ObservationSubscriptionCount<T> = StorageValue<_, u32, ValueQuery>;
+
+  /// Latest changed revision and deferred-fanout cursor for one subscribed feed.
+  #[pallet::storage]
+  #[pallet::getter(fn dirty_observation_feeds)]
+  pub type DirtyObservationFeeds<T: Config> =
+    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, DirtyObservationState, OptionQuery>;
+
+  #[pallet::storage]
+  pub type DirtyObservationSlotFeed<T: Config> =
+    StorageMap<_, Blake2_128Concat, ObservationDirtySlot, T::ObservationFeedId, OptionQuery>;
+
+  #[pallet::storage]
+  pub type NextDirtyObservationSlot<T> = StorageValue<_, ObservationDirtySlot, ValueQuery>;
+
+  #[pallet::storage]
+  pub type DirtyObservationFreeSlotLen<T> = StorageValue<_, u32, ValueQuery>;
+
+  #[pallet::storage]
+  pub type DirtyObservationFreeSlotPages<T: Config> =
+    StorageMap<_, Blake2_128Concat, u32, ObservationDirtyFreeSlotPageOf<T>, OptionQuery>;
+
+  #[pallet::storage]
+  #[pallet::getter(fn dirty_observation_feed_count)]
+  pub type DirtyObservationFeedCount<T> = StorageValue<_, u32, ValueQuery>;
+
+  /// Circular reusable-slot cursor for independently metered deferred fanout.
+  #[pallet::storage]
+  #[pallet::getter(fn dirty_observation_scan_slot)]
+  pub type DirtyObservationScanSlot<T> = StorageValue<_, ObservationDirtySlot, ValueQuery>;
+
   #[pallet::storage]
   #[pallet::getter(fn global_circuit_breaker)]
   pub type GlobalCircuitBreaker<T> = StorageValue<_, bool, ValueQuery>;
@@ -594,6 +704,7 @@ pub mod pallet {
       Schedule,
       Option<ScheduleWindow>,
       ExecutionPlan,
+      CompletionPolicy,
     )>;
 
     fn dormant_system_aaas() -> alloc::vec::Vec<(AaaId, AccountId)> {
@@ -618,6 +729,7 @@ pub mod pallet {
       Schedule,
       Option<ScheduleWindowT>,
       ExecutionPlan,
+      CompletionPolicy,
     )> {
       alloc::vec::Vec::new()
     }
@@ -637,8 +749,15 @@ pub mod pallet {
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
       }
-      for (aaa_id, owner, mutability, schedule, schedule_window, execution_plan) in
-        T::GenesisSystemAaas::system_aaas()
+      for (
+        aaa_id,
+        owner,
+        mutability,
+        schedule,
+        schedule_window,
+        execution_plan,
+        completion_policy,
+      ) in T::GenesisSystemAaas::system_aaas()
       {
         assert!(
           !Pallet::<T>::active_actor_exists(aaa_id),
@@ -659,6 +778,8 @@ pub mod pallet {
           mutability == Mutability::Mutable || schedule_window.is_none(),
           "genesis System Immutable AAA must be perpetual"
         );
+        Pallet::<T>::validate_trigger_amount_compatibility(&schedule, &execution_plan)
+          .expect("genesis trigger sources must support PercentageOfTrigger semantics");
         Pallet::<T>::ensure_retry_later_allowed(mutability, &execution_plan)
           .expect("genesis System Immutable AAA cannot use RetryLater");
         Pallet::<T>::ensure_execution_plan_fits_idle_budget(AaaType::System, &execution_plan)
@@ -681,6 +802,7 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
+          completion_policy,
           cycle_nonce: 0,
           consecutive_failures: 0,
           pending_signal: false,
@@ -701,7 +823,8 @@ pub mod pallet {
         );
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        Pallet::<T>::insert_active_actor(aaa_id, instance);
+        Pallet::<T>::insert_active_actor(aaa_id, instance)
+          .unwrap_or_else(|error| panic!("genesis observation subscription failed: {error:?}"));
         ActorFunding::<T>::insert(
           aaa_id,
           ActorFundingState {
@@ -810,6 +933,15 @@ pub mod pallet {
           && T::MaxQueueEntriesScannedPerBlock::get() <= T::MaxQueueLength::get(),
         "queue scan ceiling must be independently bounded by physical capacity"
       );
+      assert!(
+        T::MaxObservationFanoutPagesPerBlock::get() > 0,
+        "observation fanout page ceiling must be non-zero"
+      );
+      let fanout_limit = T::ObservationFanoutWeightLimit::get();
+      assert!(
+        fanout_limit.ref_time() > 0 && fanout_limit.proof_size() > 0,
+        "observation fanout Weight limit must be non-zero in both dimensions"
+      );
     }
 
     #[cfg(feature = "try-runtime")]
@@ -849,9 +981,17 @@ pub mod pallet {
       } else {
         Weight::zero()
       };
-      let remaining_after_housekeeping = after_base.saturating_sub(saturated_cleanup_weight);
+      let remaining_after_cleanup = after_base.saturating_sub(saturated_cleanup_weight);
+      let fanout_weight = if DirtyObservationFeedCount::<T>::get() > 0 {
+        Self::fanout_dirty_observations(remaining_after_cleanup)
+      } else {
+        Weight::zero()
+      };
+      let remaining_after_housekeeping = remaining_after_cleanup.saturating_sub(fanout_weight);
       Self::update_idle_starvation_state(now, breaker_active, remaining_after_housekeeping);
-      let housekeeping_weight = base_weight.saturating_add(saturated_cleanup_weight);
+      let housekeeping_weight = base_weight
+        .saturating_add(saturated_cleanup_weight)
+        .saturating_add(fanout_weight);
       if breaker_active {
         return housekeeping_weight;
       }
@@ -900,6 +1040,7 @@ pub mod pallet {
       aaa_id: AaaId,
       cycle_nonce: u64,
       executed_steps: u32,
+      committed_effectful_tasks: u32,
       skipped_conditions: u32,
       skipped_resolution: u32,
       skipped_funding_unavailable: u32,
@@ -1113,6 +1254,13 @@ pub mod pallet {
     InvalidTradeBound,
     InvalidRetryAttemptLimit,
     RecipientDepositUnavailable,
+    InvalidObservationMaxAge,
+    ObservationSubscriptionCapacityExceeded,
+    ObservationSubscriptionInvariant,
+    InvalidObservationRevision,
+    DirtyObservationCapacityExceeded,
+    DirtyObservationInvariant,
+    InvalidTriggerAmountCompatibility,
   }
 
   #[pallet::call]
@@ -1334,6 +1482,7 @@ pub mod pallet {
       let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
+      Self::validate_trigger_amount_compatibility(&schedule, &snapshot.execution_plan)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -1347,7 +1496,9 @@ pub mod pallet {
         schedule_window,
         frame_system::Pallet::<T>::block_number(),
       );
+      Self::preflight_observation_subscription_replace(aaa_id, &schedule)?;
       Self::cancel_continuation_internal(aaa_id, CancellationReason::ScheduleChanged, None)?;
+      Self::replace_observation_subscriptions(aaa_id, &schedule)?;
       ActorProgram::<T>::mutate(aaa_id, |maybe| {
         let program = maybe
           .as_mut()
@@ -1396,6 +1547,7 @@ pub mod pallet {
       Self::validate_execution_plan_shape(&execution_plan)?;
       let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
+      Self::validate_trigger_amount_compatibility(&snapshot.schedule, &execution_plan)?;
       Self::ensure_retry_later_allowed(snapshot.mutability, &execution_plan)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -2035,6 +2187,7 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
+          completion_policy,
           funding_source_policy,
         } => Self::do_create_aaa(
           owner,
@@ -2043,6 +2196,7 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
+          completion_policy,
           funding_source_policy,
           preferred_slot,
           None,
@@ -2065,6 +2219,7 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
+          completion_policy,
           funding_source_policy,
         } => Self::do_create_aaa(
           owner,
@@ -2073,6 +2228,7 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
+          completion_policy,
           funding_source_policy,
           None,
           requested_aaa_id,
@@ -2087,6 +2243,7 @@ pub mod pallet {
       schedule: ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
       execution_plan: ExecutionPlanOf<T>,
+      completion_policy: CompletionPolicy,
       funding_source_policy: FundingSourcePolicyOf<T>,
       preferred_user_slot: Option<u8>,
       requested_aaa_id: Option<AaaId>,
@@ -2118,6 +2275,7 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
+      Self::validate_trigger_amount_compatibility(&schedule, &execution_plan)?;
       Self::ensure_retry_later_allowed(mutability, &execution_plan)?;
       let active_count = Self::active_instance_count();
       ensure!(
@@ -2180,6 +2338,7 @@ pub mod pallet {
           schedule,
           schedule_window,
           execution_plan,
+          completion_policy,
           cycle_nonce: 0,
           consecutive_failures: 0,
           pending_signal: false,
@@ -2196,7 +2355,9 @@ pub mod pallet {
         created_owner_slot = Some(owner_slot);
         created_sovereign_account = Some(sovereign_account.clone());
         SovereignIndex::<T>::insert(sovereign_account.clone(), aaa_id);
-        Self::insert_active_actor(aaa_id, instance);
+        if let Err(error) = Self::insert_active_actor(aaa_id, instance) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         ActorFunding::<T>::insert(
           aaa_id,
           ActorFundingState {
@@ -2257,6 +2418,7 @@ pub mod pallet {
         schedule,
         schedule_window,
         execution_plan,
+        completion_policy,
         funding_source_policy,
       } = program
       else {
@@ -2291,6 +2453,7 @@ pub mod pallet {
         Self::validate_schedule_window(window)?;
       }
       Self::validate_execution_plan_shape(&execution_plan)?;
+      Self::validate_trigger_amount_compatibility(&schedule, &execution_plan)?;
       Self::ensure_retry_later_allowed(identity.mutability, &execution_plan)?;
       Self::ensure_execution_plan_fits_idle_budget(aaa_type, &execution_plan)?;
       let funding_tracked_assets = Self::derive_funding_tracked_assets(&execution_plan)?;
@@ -2316,6 +2479,7 @@ pub mod pallet {
         schedule,
         schedule_window,
         execution_plan,
+        completion_policy,
         cycle_nonce: 0,
         consecutive_failures: 0,
         pending_signal: false,
@@ -2336,7 +2500,9 @@ pub mod pallet {
           ));
         }
         DormantAaaIdentities::<T>::remove(aaa_id);
-        Self::insert_active_actor(aaa_id, instance);
+        if let Err(error) = Self::insert_active_actor(aaa_id, instance) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         ActorFunding::<T>::insert(
           aaa_id,
           ActorFundingState {
@@ -2381,7 +2547,9 @@ pub mod pallet {
             Error::<T>::AaaNotFound.into(),
           ));
         }
-        Self::remove_active_actor(aaa_id);
+        if let Err(error) = Self::remove_active_actor(aaa_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         ActorFunding::<T>::remove(aaa_id);
         DormantAaaIdentities::<T>::insert(aaa_id, identity);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
@@ -2485,6 +2653,20 @@ pub mod pallet {
           ),
           Error::<T>::EmptyConditionSet
         );
+        if let ConditionSet::All(conditions) | ConditionSet::Any(conditions) = &step.conditions {
+          for condition in conditions {
+            let max_age_blocks = match condition {
+              Condition::ObservationAbove { max_age_blocks, .. }
+              | Condition::ObservationBelow { max_age_blocks, .. }
+              | Condition::ObservationEquals { max_age_blocks, .. }
+              | Condition::ObservationNotEquals { max_age_blocks, .. } => Some(max_age_blocks),
+              _ => None,
+            };
+            if let Some(max_age_blocks) = max_age_blocks {
+              ensure!(*max_age_blocks > 0, Error::<T>::InvalidObservationMaxAge);
+            }
+          }
+        }
         match &step.task {
           AaaTask::Transfer { .. }
           | AaaTask::SplitTransfer { .. }
@@ -2523,6 +2705,52 @@ pub mod pallet {
           | AaaTask::Unstake { .. }
           | AaaTask::StopCycle => {}
         }
+      }
+      Ok(())
+    }
+
+    fn validate_trigger_amount_compatibility(
+      schedule: &ScheduleOf<T>,
+      execution_plan: &ExecutionPlanOf<T>,
+    ) -> DispatchResult {
+      let surfaces = Self::trigger_surfaces(execution_plan, 0);
+      if surfaces.is_empty() {
+        return Ok(());
+      }
+      let mut ingress_assets = alloc::vec::Vec::new();
+      for surface in surfaces {
+        let asset = match surface {
+          ResolutionSurface::Asset(asset) => asset,
+          ResolutionSurface::StakingShares(position_asset) => {
+            T::StakingOps::share_asset(position_asset)
+              .ok_or(Error::<T>::InvalidTriggerAmountCompatibility)?
+          }
+        };
+        if !ingress_assets.contains(&asset) {
+          ingress_assets.push(asset);
+        }
+      }
+      let sources = schedule
+        .trigger
+        .sources()
+        .ok_or(Error::<T>::InvalidTriggerAmountCompatibility)?;
+      ensure!(
+        !sources.is_empty(),
+        Error::<T>::InvalidTriggerAmountCompatibility
+      );
+      for source in sources {
+        let TriggerSource::OnAddressEvent { asset_filter, .. } = source else {
+          return Err(Error::<T>::InvalidTriggerAmountCompatibility.into());
+        };
+        ensure!(
+          ingress_assets
+            .iter() // deos-bypass: bounded-iter — execution-plan trigger surfaces are bounded by MaxContinuationSnapshotEntries.
+            .all(|asset| match asset_filter {
+              AssetFilter::Any => true,
+              AssetFilter::Whitelist(assets) => assets.contains(asset),
+            }),
+          Error::<T>::InvalidTriggerAmountCompatibility
+        );
       }
       Ok(())
     }
@@ -2719,6 +2947,8 @@ pub mod pallet {
         );
       }
 
+      Self::preflight_remove_observation_subscriptions(aaa_id)?;
+
       let cancellation_reason = match reason {
         CloseReason::WindowExpired => CancellationReason::WindowExpired,
         CloseReason::OwnerInitiated => CancellationReason::Closed,
@@ -2727,13 +2957,14 @@ pub mod pallet {
         | CloseReason::CycleNonceExhausted
         | CloseReason::FeeBudgetExhausted
         | CloseReason::AutoCloseNonceReached
-        | CloseReason::RetryAttemptsExhausted => CancellationReason::Terminal,
+        | CloseReason::RetryAttemptsExhausted
+        | CloseReason::ProductiveRunCompleted => CancellationReason::Terminal,
       };
       Self::cancel_continuation_internal(aaa_id, cancellation_reason, None)?;
 
       // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as soon as
       // hot state disappears. Terminal cleanup therefore performs no shared-container scan.
-      Self::remove_active_actor(aaa_id);
+      Self::remove_active_actor(aaa_id)?;
       ActorFunding::<T>::remove(aaa_id);
       ActiveAaaCount::<T>::mutate(|count| *count -= 1);
       ActorIdentityCount::<T>::mutate(|count| *count -= 1);
@@ -3323,6 +3554,8 @@ pub mod pallet {
           ));
         }
       }
+      Self::do_try_state_observation_subscriptions()?;
+      Self::do_try_state_dirty_observations()?;
       Ok(())
     }
   }

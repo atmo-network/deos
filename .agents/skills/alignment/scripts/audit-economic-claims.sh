@@ -113,7 +113,7 @@ const flashLoanOverclaims = [
   { re: /immune\s+to\s+flash/i, label: 'immune to flash-loan overclaim' },
   { re: /eliminates\s+flash/i, label: 'eliminates flash-loan overclaim' },
 ];
-const publicContractFiles = ['AGENTS.md', 'template/pallets/axial-router/README.md'];
+const publicContractFiles = ['AGENTS.md', 'template/pallets/router/README.md'];
 const architectureDocsDir = path.join(projectRoot, 'docs');
 if (fs.existsSync(architectureDocsDir)) {
   for (const name of fs.readdirSync(architectureDocsDir)) {

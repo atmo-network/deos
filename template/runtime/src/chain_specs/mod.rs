@@ -12,7 +12,7 @@ use crate::{
 };
 use alloc::{vec, vec::Vec};
 use cumulus_primitives_core::ParaId;
-use frame_support::{build_struct_json_patch, traits::Get};
+use frame_support::build_struct_json_patch;
 use polkadot_sdk::{staging_xcm as xcm, *};
 use serde_json::Value;
 use sp_genesis_builder::PresetId;
@@ -100,13 +100,6 @@ fn local_web_client_asset_accounts(owner: &AccountId) -> Vec<(u32, AccountId, Ba
   )]
 }
 
-fn local_web_client_tracked_assets() -> Vec<AssetKind> {
-  vec![
-    AssetKind::Native,
-    AssetKind::Foreign(LOCAL_WEB_CLIENT_FOREIGN_ASSET_ID),
-  ]
-}
-
 fn local_web_client_curves() -> Vec<(AssetKind, AssetKind, Balance, Balance)> {
   vec![(
     AssetKind::Native,
@@ -149,19 +142,22 @@ impl ChainSpecBuilder {
 
   /// Build the genesis configuration as JSON patch
   pub fn build_genesis_patch(&self) -> Value {
-    let mut endowed_accounts = self.endowed_accounts.clone();
-    let aaa_fee_sink = <crate::Runtime as pallet_aaa::Config>::FeeSink::get();
-    if !endowed_accounts.contains(&aaa_fee_sink) {
-      endowed_accounts.push(aaa_fee_sink);
+    let endowed_accounts = self.endowed_accounts.clone();
+    let mut native_balances = endowed_accounts
+      .clone()
+      .into_iter()
+      .map(|account| (account, self.economic_params.initial_endowment))
+      .collect::<Vec<_>>();
+    for anchor in crate::configs::aaa_config::TmctolGenesisSystemAaas::native_flow_anchor_accounts()
+    {
+      if !endowed_accounts.contains(&anchor) {
+        native_balances.push((anchor, EXISTENTIAL_DEPOSIT));
+      }
     }
 
     let mut patch = build_struct_json_patch!(RuntimeGenesisConfig {
       balances: pallet_balances::GenesisConfig {
-        balances: endowed_accounts
-          .iter()
-          .cloned()
-          .map(|account| (account, self.economic_params.initial_endowment))
-          .collect::<Vec<_>>(),
+        balances: native_balances,
       },
       assets: pallet_assets::GenesisConfig {
         assets: local_web_client_assets(&self.bootstrap_asset_owner),
@@ -201,7 +197,6 @@ impl ChainSpecBuilder {
         safe_xcm_version: Some(self.economic_params.safe_xcm_version)
       },
       axial_router: pallet_axial_router::GenesisConfig {
-        tracked_assets: local_web_client_tracked_assets(),
         _marker: Default::default(),
       },
       token_minting_curve: pallet_tmc::GenesisConfig {
@@ -367,6 +362,24 @@ mod tests {
       genesis_json["collatorSelection"]["desiredCandidates"],
       serde_json::Value::from(0),
     );
+  }
+
+  #[test]
+  fn development_genesis_funds_every_native_flow_anchor_with_one_ed() {
+    let genesis = development_config().build_genesis_patch();
+    let balances = genesis["balances"]["balances"]
+      .as_array()
+      .expect("genesis balances must be an array");
+    for anchor in crate::configs::aaa_config::TmctolGenesisSystemAaas::native_flow_anchor_accounts()
+    {
+      let encoded = serde_json::to_value(anchor).expect("anchor account must encode");
+      let entry = balances
+        .clone()
+        .into_iter()
+        .find(|entry| entry[0] == encoded)
+        .expect("every native-flow anchor must be endowed");
+      assert_eq!(entry[1], serde_json::Value::from(EXISTENTIAL_DEPOSIT));
+    }
   }
 
   #[test]

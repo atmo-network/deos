@@ -1,0 +1,40 @@
+[package]
+name = "pallet-oracle-embedding-fixture"
+version = "0.7.7"
+description = "Independent runtime fixture for pallet-deos-oracle"
+authors.workspace = true
+license = "MIT-0"
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codec = { workspace = true }
+pallet-oracle = { workspace = true }
+polkadot-sdk = { workspace = true, features = [
+  "frame-support",
+  "frame-system",
+  "sp-core",
+  "sp-io",
+  "sp-runtime",
+] }
+scale-info = { workspace = true }
+
+[features]
+default = ["std"]
+std = [
+  "codec/std",
+  "pallet-oracle/std",
+  "polkadot-sdk/std",
+  "scale-info/std",
+]
+runtime-benchmarks = [
+  "pallet-oracle/runtime-benchmarks",
+  "polkadot-sdk/runtime-benchmarks",
+]
+try-runtime = [
+  "pallet-oracle/try-runtime",
+  "polkadot-sdk/try-runtime",
+]

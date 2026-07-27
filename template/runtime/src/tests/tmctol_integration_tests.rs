@@ -8,7 +8,8 @@
 
 use super::common::{
   ALICE, ASSET_A, ASSET_B, add_liquidity, burning_manager_account, create_pool, get_pool_lp_asset,
-  liquidity_actor_account, new_test_ext, seeded_test_ext,
+  liquidity_actor_account, new_test_ext, publish_axial_router_observation,
+  publish_bidirectional_axial_router_observation, seeded_test_ext,
 };
 use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_aaa::{
@@ -46,6 +47,7 @@ fn activate_dormant_system(
       },
       schedule_window: None,
       execution_plan,
+      completion_policy: pallet_aaa::CompletionPolicy::Persistent,
       funding_source_policy: FundingSourcePolicy::RuntimePolicy,
     },
   )
@@ -144,6 +146,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
         },
         schedule_window: None,
         execution_plan,
+        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: FundingSourcePolicy::RuntimePolicy,
       },
     ));
@@ -506,16 +509,11 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
       );
     }
     let price = 1_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_bidirectional_axial_router_observation(
       AssetKind::Local(super::common::ASSET_A),
       AssetKind::Native,
       price,
-    );
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(super::common::ASSET_A),
-      price,
-    );
+    ));
     let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
     let new_execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![
       pallet_aaa::Step {
@@ -596,16 +594,11 @@ fn dexops_can_swap_foreign_to_native() {
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let bm = AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
     let price = 1_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_bidirectional_axial_router_observation(
       AssetKind::Local(super::common::ASSET_A),
       AssetKind::Native,
       price,
-    );
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(super::common::ASSET_A),
-      price,
-    );
+    ));
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(
       &bm,
       10 * crate::EXISTENTIAL_DEPOSIT,
@@ -642,16 +635,11 @@ fn dexops_normal_swap_succeeds() {
     let amount = primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount * 10);
     let price = 1_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_bidirectional_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       price,
-    );
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      AssetKind::Local(super::common::ASSET_A),
-      AssetKind::Native,
-      price,
-    );
+    ));
     use pallet_aaa::DexOps;
     let result = <Runtime as pallet_aaa::Config>::DexOps::swap_exact_in(
       ExecutionContext::new(&bm, AaaType::System),
@@ -674,11 +662,11 @@ fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
   // so reserve / 5 stays below the guard and reserve / 3 exceeds it.
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       fair_price,
-    );
+    ));
     assert_ok!(crate::AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
@@ -691,11 +679,11 @@ fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
   });
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_axial_router_infrastructure());
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       fair_price,
-    );
+    ));
     assert_noop!(
       crate::AxialRouter::swap(
         RuntimeOrigin::signed(ALICE),
@@ -719,11 +707,11 @@ fn oracle_deviation_rejects_swap_via_dexops() {
     let amount = 10 * primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount);
     let deviated_price = 10_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       deviated_price,
-    );
+    ));
     let result = <Runtime as pallet_aaa::Config>::DexOps::swap_exact_in(
       ExecutionContext::new(&bm, AaaType::System),
       AssetKind::Native,
@@ -750,16 +738,11 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
       crate::Balance,
     >>::mint(&bm, AssetKind::Native, amount * 10));
     let price = 1_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_bidirectional_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       price,
-    );
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      AssetKind::Local(super::common::ASSET_A),
-      AssetKind::Native,
-      price,
-    );
+    ));
     let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_aaa::Step {
       conditions: Default::default(),
       task: Task::SwapIn {
@@ -1044,8 +1027,11 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       crate::Balance,
     >>::mint(&liquidity_actor, foreign, fund_amount));
     let price = 1_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(AssetKind::Native, foreign, price);
-    pallet_axial_router::EmaPrices::<Runtime>::insert(foreign, AssetKind::Native, price);
+    assert_ok!(publish_bidirectional_axial_router_observation(
+      AssetKind::Native,
+      foreign,
+      price,
+    ));
     System::reset_events();
     for block in 11..=30 {
       System::set_block_number(block);
@@ -1147,8 +1133,11 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       liquidity_actor_fund_amount
     ));
     let price = 1_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(AssetKind::Native, foreign, price);
-    pallet_axial_router::EmaPrices::<Runtime>::insert(foreign, AssetKind::Native, price);
+    assert_ok!(publish_bidirectional_axial_router_observation(
+      AssetKind::Native,
+      foreign,
+      price,
+    ));
     let burn_execution_plan =
       crate::configs::aaa_config::TmctolGenesisSystemAaas::build_burn_execution_plan(
         alloc::vec![foreign],
@@ -1790,12 +1779,12 @@ fn treasury_b_buyback_burns_bldr() {
       target_supply_before,
       target_supply_after
     );
-    // Verify: Treasury B holds zero target tokens
+    // Verify: PreserveSpend retains the target asset minimum after buyback burn.
     let treasury_target =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(target_id, &treasury_b_sov);
     assert_eq!(
-      treasury_target, 0,
-      "Treasury B must burn all acquired tokens"
+      treasury_target, 1,
+      "Treasury B must preserve the target asset minimum"
     );
   });
 }

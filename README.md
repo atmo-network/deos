@@ -80,10 +80,10 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 ### Core contracts
 
 - [TMCTOL Specification](./docs/tmctol.specification.en.md)
-- [AAA Specification](./docs/aaa.specification.en.md)
-- [AAA External Runtime Embedding Guide](./template/pallets/aaa/EMBEDDING.md)
+- [AAA Specification](./template/pallets/aaa/docs/specification.en.md)
+- [AAA External Runtime Embedding Guide](./template/pallets/aaa/docs/embedding.md)
 - [AAA Control-Plane Contract](./docs/aaa-control-plane.contract.en.md)
-- [Governance Specification](./docs/governance.specification.en.md)
+- [Governance Specification](./template/pallets/governance/docs/specification.en.md)
 - [Read-Model Contract](./docs/read-model.contract.en.md)
 - [Core Architecture](./docs/core.architecture.en.md)
 

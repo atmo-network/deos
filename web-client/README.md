@@ -17,7 +17,7 @@ It provides:
 - Axial Router swap quotes and signed swap submission;
 - staking views/actions for the current native `stNTVE` / `NTVE-stNTVE` launch-line model;
 - governance proposal viewing, voting, advisory submission, tactical treasury invoice submission, preimage review, and runtime-upgrade relay guidance;
-- automation and system-status views from the live adapter snapshot;
+- automation actor, typed current-observation inspection, and system-status views from finalized canonical state;
 - chart/session history and route diagnostics with explicit provenance limits;
 - centralized transaction, receipt, finalization, and live-network feedback through `LogWidget`;
 - generated wiki browsing from `../wiki` with metadata-backed navigation, aliases, graph links, page state, source provenance, and trusted markdown rendering.
@@ -43,6 +43,7 @@ Do not make archive/search/dashboard behavior look like canonical chain truth. I
 - `src/lib/staking/` — staking-facing contracts and UI types.
 - `src/lib/governance/` — governance store, labels, payload helpers, review helpers, and UI-facing projections.
 - `src/lib/automation/` — automation-facing contracts and UI types.
+- `src/lib/observation/` — typed feed inspection, exact scalar formatting, freshness classification, and inspection UI.
 - `src/lib/log/` — account log, live network feed, transaction progress, and receipts.
 - `src/lib/wallet/` — wallet session state, signer discovery, address validation, local dev signer routing.
 - `src/lib/system/` — chain snapshot, refresh ownership, endpoint/session wiring, adapter runtime context, browser persistence.

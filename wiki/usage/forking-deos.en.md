@@ -12,7 +12,7 @@ sources:
   - ../../AGENTS.md
   - ../../README.md
   - ../../docs/README.md
-  - ../../template/pallets/aaa/EMBEDDING.md
+  - ../../template/pallets/aaa/docs/embedding.md
   - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md
@@ -105,7 +105,7 @@ If a row is undecided, the fork is still a prototype. If a row is decided but no
 3. Set launch parameters and treat launch physics as immutable unless a stronger constitutional contract says otherwise.
 4. Review System AAA actor roles and remove assumptions that only fit the reference ecosystem.
 5. Treat builder invoices and bucket policies as opt-in mechanisms: decide what your instance enables, renames, funds, or disables.
-6. For AAA reuse, implement host-runtime adapters and keep business policy in adapters or genesis actor configuration, not in `pallet-aaa` core.
+6. For AAA reuse, implement host-runtime adapters and keep business policy in adapters or genesis actor configuration, not in `pallet_aaa` core.
 7. Classify every client datum as direct on-chain projection or materialized/indexed view.
 8. Update scripts, metadata export, endpoints, and operator documentation.
 9. Run the smallest meaningful validation first, then escalate when math/runtime/client boundaries cross.

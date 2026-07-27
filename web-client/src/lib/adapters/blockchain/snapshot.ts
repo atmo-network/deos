@@ -28,7 +28,6 @@ import {
   fallbackAssetSymbol,
   foreignAsset,
   isAssetWithId,
-  isForeignAssetKind,
   localAsset,
   nativeFreeBalance,
   runtimeAssetKey,
@@ -44,9 +43,7 @@ export class BlockchainSnapshotBuilder {
     const foreignAsset =
       canonicalForeignAsset ??
       (await this.resolvePrimaryForeignAsset(snapshot));
-    const trackedAssets = await this.trackedAssets(snapshot);
-    const trackedForeignAssetCount =
-      trackedAssets.filter(isForeignAssetKind).length;
+    const registeredForeignAssetCount = canonicalForeignAsset === null ? 0 : 1;
     const minForeignSwapAmount =
       await snapshot.typedApi.constants.AxialRouter.MinSwapForeign();
     const [
@@ -118,7 +115,7 @@ export class BlockchainSnapshotBuilder {
       supplyLp,
       hasPool,
       hasNativeCurve: curve !== null,
-      trackedForeignAssetCount,
+      registeredForeignAssetCount,
       minForeignSwapAmount,
       gravityWellRatio,
       buckets,
@@ -137,13 +134,11 @@ export class BlockchainSnapshotBuilder {
     const [
       canonicalForeignAsset,
       primaryRouteAsset,
-      trackedAssets,
       nativeAccount,
       nativeStakingPool,
     ] = await Promise.all([
       this.canonicalForeignAsset(snapshot),
       this.resolvePrimaryForeignAsset(snapshot),
-      this.trackedAssets(snapshot),
       snapshot.typedApi.query.System.Account.getValue(address, {
         at: snapshot.at,
       }),
@@ -165,7 +160,6 @@ export class BlockchainSnapshotBuilder {
     const candidateAssets = dedupeRuntimeAssets([
       NATIVE_ASSET,
       primaryRouteAsset,
-      ...trackedAssets,
       ...nativeStakingAssets,
     ]);
     return await Promise.all(
@@ -196,8 +190,7 @@ export class BlockchainSnapshotBuilder {
     if (canonicalForeignAsset) {
       return canonicalForeignAsset;
     }
-    const trackedAssets = await this.trackedAssets(snapshot);
-    return trackedAssets.find(isForeignAssetKind) ?? foreignAsset(TYPE_FOREIGN);
+    return foreignAsset(TYPE_FOREIGN);
   }
 
   async xykReserves(
@@ -238,16 +231,6 @@ export class BlockchainSnapshotBuilder {
       return nativeCurve.foreign_asset;
     }
     return null;
-  }
-
-  private async trackedAssets(
-    snapshot: DeosChainSnapshot,
-  ): Promise<RuntimeAssetKind[]> {
-    return (
-      (await snapshot.typedApi.query.AxialRouter.TrackedAssets.getValue({
-        at: snapshot.at,
-      })) ?? []
-    );
   }
 
   private async describeAsset(

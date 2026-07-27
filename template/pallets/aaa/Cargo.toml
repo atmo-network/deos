@@ -1,18 +1,21 @@
 [package]
-name = "pallet-aaa"
-version = "0.7.6"
+name = "pallet-deos-aaa"
+version = "0.7.7"
 description = "Deterministic Account Abstraction Actors and bounded runtime automation for FRAME"
 authors = ["DEOS Contributors"]
 license = "MIT-0"
 homepage = "https://github.com/atmo-network/deos"
 repository = "https://github.com/atmo-network/deos"
-documentation = "https://docs.rs/pallet-aaa"
+documentation = "https://docs.rs/pallet-deos-aaa"
 readme = "README.md"
 keywords = ["substrate", "frame", "automation", "actors"]
 categories = ["cryptography::cryptocurrencies"]
 edition.workspace = true
 publish = false
-include = ["Cargo.toml", "README.md", "EMBEDDING.md", "src/**/*.rs", "examples/**/*.rs"]
+include = ["Cargo.toml", "README.md", "docs/**/*.md", "src/**/*.rs", "examples/**/*.rs"]
+
+[lib]
+name = "pallet_aaa"
 
 [lints]
 workspace = true

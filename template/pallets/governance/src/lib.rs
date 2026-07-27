@@ -211,7 +211,6 @@ pub trait ProposalPayloadPreimageProvider<Hash> {
 )]
 pub enum ProposalParameterChangeSurface {
   RouterFee,
-  TrackedAsset,
 }
 
 #[derive(

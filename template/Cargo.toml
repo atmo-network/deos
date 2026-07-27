@@ -6,8 +6,8 @@ repository = "https://github.com/paritytech/polkadot-sdk-parachain-template.git"
 edition = "2024"
 
 [workspace]
-default-members = ["pallets/axial-router", "runtime"]
-members = ["pallets/aaa", "pallets/aaa/embedding-runtime", "pallets/asset-registry", "pallets/axial-router", "pallets/governance", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
+default-members = ["pallets/router", "runtime"]
+members = ["pallets/aaa", "pallets/aaa/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -53,12 +53,13 @@ zero-prefixed-literal = { level = "allow", priority = 2 }
 [workspace.dependencies]
 deos-runtime = { path = "./runtime", default-features = false }
 primitives = { path = "./primitives", default-features = false }
-pallet-aaa = { path = "./pallets/aaa", default-features = false }
+pallet-aaa = { package = "pallet-deos-aaa", path = "./pallets/aaa", default-features = false }
 pallet-asset-registry = { path = "./pallets/asset-registry", default-features = false }
-pallet-axial-router = { path = "./pallets/axial-router", default-features = false }
+pallet-axial-router = { package = "pallet-deus-router", path = "./pallets/router", default-features = false }
 pallet-governance = { package = "pallet-deos-governance", path = "./pallets/governance", default-features = false }
+pallet-oracle = { package = "pallet-deos-oracle", path = "./pallets/oracle", default-features = false }
 pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", default-features = false }
-pallet-tmc = { path = "./pallets/tmc", default-features = false }
+pallet-tmc = { package = "pallet-deos-tmc", path = "./pallets/tmc", default-features = false }
 
 # Polkadot SDK umbrella crate
 polkadot-sdk = { version = "2606.0.0", default-features = false }

@@ -13,15 +13,15 @@ use polkadot_sdk::frame_support::traits::{
   Currency, Get,
   fungible::Inspect as NativeInspect,
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
-  tokens::{Fortitude, Precision, Preservation},
+  tokens::{DepositConsequence, Fortitude, Precision, Preservation, Provenance},
 };
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
 use pallet_aaa::{
-  AaaType, AssetOps, DexOps, ExecutionContext, FeeCollector, FundingAuthority,
-  LiquidityDonationOps, TaskFailure,
+  AaaType, AssetOps, DexOps, ExecutionContext, FeeCollector, FundingAuthority, LiquidityOps,
+  TaskFailure,
 };
 
 parameter_types! {
@@ -64,7 +64,10 @@ parameter_types! {
   /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
   pub const AaaWakeupPageSize: u32 = 32;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
-    pub const AaaMaxWakeupsPerBlock: u32 = 512;
+  pub const AaaMaxObservationFanoutPagesPerBlock: u32 = 64;
+  pub const AaaMaxWakeupsPerBlock: u32 = 512;
+  pub AaaObservationFanoutWeightLimit: Weight =
+    Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
   pub AaaGuaranteedOnIdleWeight: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
 
@@ -171,7 +174,8 @@ impl TmctolAssetOps {
       return Ok(());
     }
     let staking_pool = crate::Staking::pool_account_for(native_asset_id);
-    let amount = <Balances as Currency<AccountId>>::free_balance(&staking_pool);
+    let amount = <Balances as Currency<AccountId>>::free_balance(&staking_pool)
+      .saturating_sub(ExistentialDeposit::get());
     if amount == 0 {
       return Ok(());
     }
@@ -318,20 +322,49 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     }
   }
 
-  fn can_deposit(who: &AccountId, asset: AssetKind, amount: Balance) -> bool {
+  fn preflight_transfer(
+    from: &AccountId,
+    to: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+  ) -> Result<(), TaskFailure> {
     if amount == 0 {
-      return true;
+      return Ok(());
     }
-    let current = match asset {
-      AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(who),
+    let deposit = match asset {
+      AssetKind::Native => {
+        <Balances as NativeInspect<AccountId>>::can_withdraw(from, amount)
+          .into_result(false)
+          .map_err(TaskFailure::permanent)?;
+        <Balances as NativeInspect<AccountId>>::can_deposit(to, amount, Provenance::Extant)
+      }
       AssetKind::Local(id) | AssetKind::Foreign(id) => {
-        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, who)
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::can_withdraw(
+          id, from, amount,
+        )
+        .into_result(false)
+        .map_err(TaskFailure::permanent)?;
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::can_deposit(
+          id,
+          to,
+          amount,
+          Provenance::Extant,
+        )
       }
     };
-    if current != 0 {
-      return true;
+    match deposit {
+      DepositConsequence::Success => Ok(()),
+      DepositConsequence::BelowMinimum
+      | DepositConsequence::CannotCreate
+      | DepositConsequence::Blocked => Err(TaskFailure::temporary(
+        pallet_aaa::Error::<Runtime>::RecipientDepositUnavailable,
+      )),
+      permanent => Err(TaskFailure::permanent(
+        permanent
+          .into_result()
+          .expect_err("non-success deposit consequence has an error"),
+      )),
     }
-    amount >= Self::minimum_balance(asset)
   }
 }
 
@@ -378,40 +411,12 @@ pub(crate) fn classify_router_failure(error: pallet_axial_router::Error<Runtime>
     | Error::DeadlinePassed
     | Error::FeeRoutingFailed
     | Error::InsufficientInputBalance
-    | Error::MaxTrackedAssetsExceeded
     | Error::RouterFeeTooHigh
     | Error::LpTokenPairCollision => TaskFailure::permanent(error),
   }
 }
 
-pub struct TmctolLiquidityDonationOps;
-impl LiquidityDonationOps<AccountId, AssetKind, Balance> for TmctolLiquidityDonationOps {
-  fn donate_liquidity(
-    who: &AccountId,
-    asset_a: AssetKind,
-    asset_b: AssetKind,
-    amount: Balance,
-    max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), TaskFailure> {
-    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
-    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
-      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable")))?;
-    if asset_a == AssetKind::Local(native_asset_id) && asset_b == AssetKind::Local(staked_asset_id)
-    {
-      let donation =
-        crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
-          who,
-          amount,
-          max_ratio_error,
-        )?;
-      TmctolAssetOps::bridge_native_staking_pool_yield().map_err(TaskFailure::permanent)?;
-      return Ok(donation);
-    }
-    Err(TaskFailure::permanent(DispatchError::Other(
-      "LiquidityDonationUnsupported",
-    )))
-  }
-}
+pub struct TmctolLiquidityOps;
 
 impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
   fn swap_exact_in(
@@ -499,7 +504,9 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     )
     .map_err(TaskFailure::permanent)
   }
+}
 
+impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
   fn add_liquidity(
     who: &AccountId,
     asset_a: AssetKind,
@@ -521,7 +528,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
         }
         super::assets_config::register_pool_lp_pair(asset_a, asset_b)
           .map_err(TaskFailure::permanent)?;
-        let lp_before = Self::lp_balance(who, asset_a, asset_b);
+        let lp_before = liquidity_lp_balance(who, asset_a, asset_b);
         AssetConversion::add_liquidity(
           RuntimeOrigin::signed(who.clone()),
           Box::new(asset_a),
@@ -533,7 +540,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
           who.clone(),
         )
         .map_err(TaskFailure::permanent)?;
-        let lp_after = Self::lp_balance(who, asset_a, asset_b);
+        let lp_after = liquidity_lp_balance(who, asset_a, asset_b);
         let lp_minted = lp_after.saturating_sub(lp_before);
         if lp_minted < min_lp_out {
           return Err(TaskFailure::temporary(DispatchError::Other(
@@ -600,6 +607,32 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       }
     })
   }
+
+  fn donate_liquidity(
+    who: &AccountId,
+    asset_a: AssetKind,
+    asset_b: AssetKind,
+    amount: Balance,
+    max_ratio_error: Perbill,
+  ) -> Result<(Balance, Balance), TaskFailure> {
+    let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
+    let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
+      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable")))?;
+    if asset_a == AssetKind::Local(native_asset_id) && asset_b == AssetKind::Local(staked_asset_id)
+    {
+      let donation =
+        crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
+          who,
+          amount,
+          max_ratio_error,
+        )?;
+      TmctolAssetOps::bridge_native_staking_pool_yield().map_err(TaskFailure::permanent)?;
+      return Ok(donation);
+    }
+    Err(TaskFailure::permanent(DispatchError::Other(
+      "LiquidityDonationUnsupported",
+    )))
+  }
 }
 
 impl TmctolDexOps {
@@ -618,14 +651,16 @@ impl TmctolDexOps {
         "InvalidSystemMarketQuote",
       )));
     }
-    let current_block = System::block_number();
-    let ema_reference = crate::AxialRouter::get_oracle_price(asset_in, asset_out)
-      .filter(|price| *price > 0)
-      .filter(|_| {
-        let last_update = pallet_axial_router::EmaLastUpdate::<Runtime>::get(asset_in, asset_out);
-        !last_update.is_zero()
-          && current_block.saturating_sub(last_update) <= AaaMaxSystemReferenceAgeBlocks::get()
-      });
+    let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    let ema_reference =
+      crate::Oracle::observation_state(feed, AaaMaxSystemReferenceAgeBlocks::get())
+        .ok()
+        .and_then(|state| match state {
+          pallet_oracle::ObservationState::Fresh(observation) if observation.value > 0 => {
+            Some(observation.value)
+          }
+          _ => None,
+        });
     let reserve_reference = AssetConversion::get_reserves(asset_in, asset_out)
       .ok()
       .and_then(|(reserve_in, reserve_out)| {
@@ -650,21 +685,18 @@ impl TmctolDexOps {
     }
     Ok(())
   }
+}
 
-  fn lp_balance(who: &AccountId, asset_a: AssetKind, asset_b: AssetKind) -> Balance {
-    let pool_id =
-      <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b).ok();
-    let Some(pool_id) = pool_id else {
-      return 0;
-    };
-    let Some(pool_info) = pallet_asset_conversion::Pools::<Runtime>::get(pool_id) else {
-      return 0;
-    };
-    <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(
-      pool_info.lp_token,
-      who,
-    )
-  }
+fn liquidity_lp_balance(who: &AccountId, asset_a: AssetKind, asset_b: AssetKind) -> Balance {
+  let pool_id =
+    <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_id(&asset_a, &asset_b).ok();
+  let Some(pool_id) = pool_id else {
+    return 0;
+  };
+  let Some(pool_info) = pallet_asset_conversion::Pools::<Runtime>::get(pool_id) else {
+    return 0;
+  };
+  <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(pool_info.lp_token, who)
 }
 
 /// System AAA genesis initializer for the current DEOS reference runtime.
@@ -676,6 +708,19 @@ impl TmctolDexOps {
 pub struct TmctolGenesisSystemAaas;
 
 impl TmctolGenesisSystemAaas {
+  /// Runtime-topology accounts that retain one free native ED so arbitrarily small native ingress
+  /// remains admissible under `pallet-balances` semantics.
+  pub fn native_flow_anchor_accounts() -> alloc::vec::Vec<AccountId> {
+    let mut accounts = (ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID
+      ..=ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID)
+      .map(crate::AAA::sovereign_account_id_system)
+      .collect::<alloc::vec::Vec<_>>();
+    accounts.push(crate::Staking::pool_account_for(
+      <Runtime as pallet_staking::Config>::NativeStakingAssetId::get(),
+    ));
+    accounts
+  }
+
   pub fn resolve_zap_slippage_tolerance(foreign: AssetKind) -> Perbill {
     let Some((native_reserve, _)) = AssetConversion::get_reserves(AssetKind::Native, foreign).ok()
     else {
@@ -708,6 +753,7 @@ impl
     pallet_aaa::ScheduleOf<Runtime>,
     Option<pallet_aaa::ScheduleWindow<crate::BlockNumber>>,
     pallet_aaa::ExecutionPlanOf<Runtime>,
+    pallet_aaa::CompletionPolicy,
   )> {
     use pallet_aaa::{Mutability, Schedule, Trigger};
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
@@ -750,6 +796,7 @@ impl
         burn_schedule,
         None,
         burn_execution_plan,
+        pallet_aaa::CompletionPolicy::Persistent,
       ),
       (
         ecosystem::aaa_ids::FEE_SINK_AAA_ID,
@@ -758,6 +805,7 @@ impl
         fee_sink_schedule,
         None,
         fee_sink_execution_plan,
+        pallet_aaa::CompletionPolicy::Persistent,
       ),
       // --- BLDR Splitter (aaa_id = 10) ---
       // Receives 66% of TMC-minted $BLDR, splits 50/50 to BLDR liquidity + treasury lanes.
@@ -777,6 +825,7 @@ impl
           AssetKind::Local(ecosystem::protocol_tokens::BLDR_ASSET_ID),
           dust,
         ),
+        pallet_aaa::CompletionPolicy::Persistent,
       ),
     ]
   }
@@ -811,7 +860,9 @@ impl
 
 impl TmctolGenesisSystemAaas {
   fn all_conditions(
-    conditions: alloc::vec::Vec<pallet_aaa::Condition<AssetKind, Balance>>,
+    conditions: alloc::vec::Vec<
+      pallet_aaa::Condition<AssetKind, Balance, u32, primitives::OracleFeedId>,
+    >,
   ) -> pallet_aaa::ConditionSetOf<Runtime> {
     pallet_aaa::ConditionSet::All(
       conditions
@@ -1172,6 +1223,7 @@ impl TmctolGenesisSystemAaas {
         },
         schedule_window: None,
         execution_plan,
+        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: pallet_aaa::FundingSourcePolicy::RuntimePolicy,
       },
     )
@@ -1345,6 +1397,30 @@ impl FundingAuthority<AccountId> for DeosFundingAuthority {
   }
 }
 
+pub struct TmctolObservationProvider;
+
+impl pallet_aaa::ObservationProvider<primitives::OracleFeedId> for TmctolObservationProvider {
+  fn observation(
+    feed: primitives::OracleFeedId,
+    max_age_blocks: u32,
+  ) -> pallet_aaa::ScalarObservationState {
+    match crate::Oracle::observation_state(feed, max_age_blocks) {
+      Ok(pallet_oracle::ObservationState::Fresh(observation)) => {
+        pallet_aaa::ScalarObservationState::Fresh {
+          value: observation.value,
+        }
+      }
+      Ok(pallet_oracle::ObservationState::Uninitialized) => {
+        pallet_aaa::ScalarObservationState::Uninitialized
+      }
+      Ok(pallet_oracle::ObservationState::Stale(_)) => pallet_aaa::ScalarObservationState::Stale,
+      Ok(pallet_oracle::ObservationState::Unavailable) | Err(_) => {
+        pallet_aaa::ScalarObservationState::Unavailable
+      }
+    }
+  }
+}
+
 impl pallet_aaa::Config for Runtime {
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
@@ -1352,10 +1428,12 @@ impl pallet_aaa::Config for Runtime {
   type NativeAssetId = AaaNativeAssetId;
   type Balance = Balance;
   type AssetOps = TmctolAssetOps;
+  type ObservationFeedId = primitives::OracleFeedId;
+  type ObservationProvider = TmctolObservationProvider;
   type FundingAuthority = DeosFundingAuthority;
   type DexOps = TmctolDexOps;
   type StakingOps = TmctolStakingOps;
-  type LiquidityDonationOps = TmctolLiquidityDonationOps;
+  type LiquidityOps = TmctolLiquidityOps;
   type AaaCreationFee = AaaCreationFee;
   type ConditionReadFee = AaaConditionReadFee;
   type FeeSink = AaaFeeRecipient;
@@ -1376,6 +1454,8 @@ impl pallet_aaa::Config for Runtime {
   type QueuePageSize = AaaQueuePageSize;
   type WakeupPageSize = AaaWakeupPageSize;
   type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
+  type MaxObservationFanoutPagesPerBlock = AaaMaxObservationFanoutPagesPerBlock;
+  type ObservationFanoutWeightLimit = AaaObservationFanoutWeightLimit;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxContinuationSnapshotEntries = AaaMaxContinuationSnapshotEntries;
@@ -1420,7 +1500,9 @@ impl RuntimeAaaBenchmarkHelper {
 }
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBenchmarkHelper {
+impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance, primitives::OracleFeedId>
+  for RuntimeAaaBenchmarkHelper
+{
   fn setup_add_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
@@ -1680,6 +1762,22 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance> for RuntimeAaaBe
       }
     }
     Ok(assets)
+  }
+
+  fn setup_observation_feeds(
+    max: u32,
+  ) -> Result<alloc::vec::Vec<primitives::OracleFeedId>, DispatchError> {
+    let producer = crate::AxialRouter::account_id();
+    let mut feeds = alloc::vec::Vec::with_capacity(max as usize);
+    for index in 1..=max {
+      let asset_in = AssetKind::Local(0x3000_0000u32.saturating_add(index));
+      let asset_out = AssetKind::Native;
+      crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out)?;
+      let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+      crate::Oracle::publish(RuntimeOrigin::signed(producer.clone()), feed, 1)?;
+      feeds.push(feed);
+    }
+    Ok(feeds)
   }
 
   fn setup_address_event_ingress(

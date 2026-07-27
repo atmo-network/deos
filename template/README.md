@@ -32,8 +32,9 @@ Custom DEOS runtime pallets in the current reference configuration:
 
 - [`aaa/`](./pallets/aaa/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
 - [`asset-registry/`](./pallets/asset-registry/) — XCM location to asset-id registry
-- [`axial-router/`](./pallets/axial-router/) — routing and fee/burn execution gateway
+- [`router/`](./pallets/router/) — Axial Router routing and fee/burn execution gateway
 - [`governance/`](./pallets/governance/) — bounded governance reward-memory and proposal lifecycle
+- [`oracle/`](./pallets/oracle/README.md) — reusable bounded typed scalar observation and revision truth
 - [`staking/`](./pallets/staking/) — share-vault staking, liquid `stXXX` receipts, locked native LP nomination, governance custody, and reward settlement
 - [`tmc/`](./pallets/tmc/) — token minting curve logic
 
@@ -41,7 +42,7 @@ See [`pallets/README.md`](./pallets/README.md) for the pallet index.
 
 ### [`pallets/aaa/embedding-runtime/`](./pallets/aaa/embedding-runtime/README.md)
 
-External-consumer Cargo fixture owned by the `pallet-aaa` package boundary. It proves the portable host contract in default, DEX, try-runtime, and no-std profiles while starting with zero System actors and using no DEOS helper or topology dependencies.
+External-consumer Cargo fixture owned by the `pallet-deos-aaa` package boundary. It proves the portable host contract in default, DEX, try-runtime, and no-std profiles while starting with zero System actors and using no DEOS helper or topology dependencies.
 
 ### `primitives/`
 
@@ -61,12 +62,14 @@ These are not part of the production runtime contract.
 The most relevant implementation docs live in `../docs/`:
 
 - [`core.architecture.en.md`](../docs/core.architecture.en.md)
-- [`aaa.architecture.en.md`](../docs/aaa.architecture.en.md)
-- [`tmc.architecture.en.md`](../docs/tmc.architecture.en.md)
-- [`axial-router.architecture.en.md`](../docs/axial-router.architecture.en.md)
-- [`asset-registry.architecture.en.md`](../docs/asset-registry.architecture.en.md)
-- [`staking.architecture.en.md`](../docs/staking.architecture.en.md)
-- [`governance.architecture.en.md`](../docs/governance.architecture.en.md)
+- [`aaa/docs/architecture.en.md`](./pallets/aaa/docs/architecture.en.md)
+- [`oracle/docs/specification.en.md`](./pallets/oracle/docs/specification.en.md)
+- [`oracle/docs/architecture.en.md`](./pallets/oracle/docs/architecture.en.md)
+- [`tmc/docs/architecture.en.md`](./pallets/tmc/docs/architecture.en.md)
+- [`router/docs/architecture.en.md`](./pallets/router/docs/architecture.en.md)
+- [`asset-registry/docs/architecture.en.md`](./pallets/asset-registry/docs/architecture.en.md)
+- [`staking/docs/architecture.en.md`](./pallets/staking/docs/architecture.en.md)
+- [`governance/docs/architecture.en.md`](./pallets/governance/docs/architecture.en.md)
 
 For contract/spec-level docs, start at [`../docs/README.md`](../docs/README.md).
 
@@ -95,7 +98,7 @@ cargo check -p deos-runtime --features runtime-benchmarks
 ### Targeted pallet checks
 
 ```bash
-cargo test -p pallet-aaa
+cargo test -p pallet-deos-aaa
 cargo test -p pallet-deos-governance
 cargo test -p pallet-deos-staking
 ```

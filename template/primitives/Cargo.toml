@@ -1,6 +1,6 @@
 [package]
 name = "primitives"
-version = "0.7.6"
+version = "0.7.7"
 description = "Shared primitive types for the DEOS reference runtime"
 authors.workspace = true
 homepage.workspace = true
@@ -21,6 +21,7 @@ sp-arithmetic = { workspace = true }
 
 [features]
 default = ["std"]
+runtime-benchmarks = []
 std = [
 	"codec/std",
 	"scale-info/std",

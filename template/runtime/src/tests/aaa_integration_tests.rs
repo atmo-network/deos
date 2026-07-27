@@ -1,16 +1,16 @@
 use super::common::{
-  ALICE, ASSET_A, BOB, CHARLIE, add_liquidity, create_pool, create_test_asset, mint_tokens,
-  seeded_test_ext,
+  ALICE, ASSET_A, BOB, CHARLIE, add_liquidity, axial_router_account, create_pool,
+  create_test_asset, mint_tokens, seeded_test_ext,
 };
 use crate::{
-  AAA, AccountId, Address, Assets, Balance, Balances, Executive, Runtime, RuntimeCall,
+  AAA, AccountId, Address, Assets, Balance, Balances, Executive, Oracle, Runtime, RuntimeCall,
   RuntimeEvent, RuntimeOrigin, Signature, Staking, System, TxExtension, UncheckedExtrinsic,
   configs::{
     AddressEventIngress, RuntimeAddressEventIngress,
     aaa_config::{
       AaaSystemExecutionReserve, AaaUserExecutionGuarantee, TmctolAssetOps, TmctolDexOps,
-      TmctolFeeCollector, TmctolGenesisSystemAaas, classify_remove_liquidity_failure,
-      classify_router_failure, validate_remove_liquidity_output,
+      TmctolFeeCollector, TmctolGenesisSystemAaas, TmctolLiquidityOps,
+      classify_remove_liquidity_failure, classify_router_failure, validate_remove_liquidity_output,
     },
     address_event_ingress::AddressEventIngressExtension,
     pool_index::PoolIndexExtension,
@@ -19,19 +19,21 @@ use crate::{
 use alloc::boxed::Box;
 use codec::Encode;
 use pallet_aaa::{
-  AaaId, AaaType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps, CloseReason, DeferReason,
-  DexOps, Error, Event, ExecutionContext, ExecutionPlanOf, FeeCollector, FundingBatch,
-  FundingSourcePolicy, IdleStarvationPhase, IdleStarvationState, InputLimit, Mutability,
-  ProgramInput, RetryClass, Schedule, ScheduleOf, ScheduleWindow, SimulationMode, SimulationStatus,
-  SimulationStepOutcome, SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps,
-  StepErrorPolicy, StepOf, StepSkippedReason, Task, TaskOf, Trigger, TriggerSource, WeightInfo,
+  AaaId, AaaType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps, CloseReason,
+  CompletionPolicy, DeferReason, DexOps, Error, Event, ExecutionContext, ExecutionPlanOf,
+  FeeCollector, FundingBatch, FundingSourcePolicy, IdleStarvationPhase, IdleStarvationState,
+  InputLimit, LiquidityOps, Mutability, ProgramInput, RetryClass, Schedule, ScheduleOf,
+  ScheduleWindow, SimulationMode, SimulationStatus, SimulationStepOutcome, SourceFilter,
+  SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
+  StepSkippedReason, Task, TaskOf, Trigger, TriggerSource, WeightInfo,
 };
 use pallet_axial_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
   dispatch::{DispatchClass, GetDispatchInfo},
   traits::{
-    Currency, Get, GetStorageVersion, Hooks, StorageVersion,
+    Currency, ExistenceRequirement, Get, GetStorageVersion, Hooks, ReservableCurrency,
+    StorageVersion,
     fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
     tokens::imbalance::{ImbalanceAccounting, UnsafeConstructorDestructor, UnsafeManualAccounting},
   },
@@ -53,6 +55,75 @@ type RuntimeAssetFilter = AssetFilterOf<Runtime>;
 type RuntimeTask = TaskOf<Runtime>;
 type RuntimeStep = StepOf<Runtime>;
 type ExecutionPlan = ExecutionPlanOf<Runtime>;
+
+#[test]
+fn runtime_oracle_change_hook_coalesces_into_aaa_dirty_feed_state() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let producer = axial_router_account();
+    let feed =
+      crate::configs::oracle_config::axial_router_pool_feed(AssetKind::Native, AssetKind::Local(7));
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::AxialRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    create_system(
+      ALICE,
+      observation_schedule(feed),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("one step fits"),
+    );
+
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    let first = AAA::dirty_observation_feeds(feed).expect("AAA hook marks the feed dirty");
+    assert_eq!(first.latest_revision, 1);
+    assert_eq!(first.fanout_revision, 0);
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      feed,
+      1_000_000_000_000,
+    ));
+    assert_eq!(AAA::dirty_observation_feeds(feed), Some(first));
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      2_000_000_000_000,
+    ));
+    let latest = AAA::dirty_observation_feeds(feed).expect("dirty feed remains coalesced");
+    assert_eq!(latest.slot, first.slot);
+    assert_eq!(latest.latest_revision, 2);
+    assert_eq!(AAA::dirty_observation_feed_count(), 1);
+  });
+}
+
+#[test]
+fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
+  super::common::new_test_ext().execute_with(|| {
+    let anchors = TmctolGenesisSystemAaas::native_flow_anchor_accounts();
+    let unique = anchors.iter().collect::<alloc::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), anchors.len());
+    for (index, account) in anchors.into_iter().enumerate() {
+      assert_eq!(
+        Balances::free_balance(&account),
+        crate::EXISTENTIAL_DEPOSIT,
+        "native-flow anchor {index} ({account:?}) must start with one ED"
+      );
+    }
+  });
+}
 
 #[test]
 fn aaa_0_7_storage_schema_is_a_fresh_genesis_baseline() {
@@ -116,6 +187,16 @@ fn manual_schedule() -> RuntimeSchedule {
   }
 }
 
+fn observation_schedule(feed: primitives::OracleFeedId) -> RuntimeSchedule {
+  Schedule {
+    trigger: Trigger::Immediate {
+      sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
+        .expect("one observation source fits"),
+    },
+    cooldown_blocks: 0,
+  }
+}
+
 fn on_address_event_schedule(
   source_filter: RuntimeSourceFilter,
   asset_filter: RuntimeAssetFilter,
@@ -144,6 +225,7 @@ fn user_active_program(
     schedule,
     schedule_window,
     execution_plan,
+    completion_policy: pallet_aaa::CompletionPolicy::Persistent,
     funding_source_policy: pallet_aaa::FundingSourcePolicy::OwnerOnly,
   }
 }
@@ -157,6 +239,7 @@ fn system_active_program(
     schedule,
     schedule_window,
     execution_plan,
+    completion_policy: pallet_aaa::CompletionPolicy::Persistent,
     funding_source_policy: pallet_aaa::FundingSourcePolicy::RuntimePolicy,
   }
 }
@@ -437,6 +520,7 @@ fn manual_trigger_executes_transfer_execution_plan() {
           aaa_id: id,
           cycle_nonce: 1,
           executed_steps: 1,
+          committed_effectful_tasks: 1,
           skipped_conditions: 0,
           skipped_resolution: 0,
           skipped_funding_unavailable: 0,
@@ -444,6 +528,62 @@ fn manual_trigger_executes_transfer_execution_plan() {
         } if *id == aaa_id
       )
     }));
+  });
+}
+
+#[test]
+fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let amount = 5_000_000_000_000u128;
+    let aaa_id = AAA::next_aaa_id();
+    let program = ProgramInput::Active {
+      schedule: manual_schedule(),
+      schedule_window: None,
+      execution_plan: transfer_execution_plan(BOB, AssetKind::Native, amount),
+      completion_policy: CompletionPolicy::CloseAfterProductiveRun,
+      funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+    };
+    assert_ok!(AAA::create_system_aaa(
+      RuntimeOrigin::root(),
+      ALICE,
+      Mutability::Mutable,
+      program.clone(),
+    ));
+    let actor = AAA::sovereign_account_id_system(aaa_id);
+    fund_native(aaa_id, 100_000_000_000_000);
+    let actor_before = native_balance(&actor);
+    let bob_before = native_balance(&BOB);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), aaa_id));
+    let simulation = AAA::simulate_current_program(
+      aaa_id,
+      AaaType::System,
+      Mutability::Mutable,
+      program,
+      SimulationMode::FreshCurrentPlan,
+    )
+    .expect("ready productive program simulates");
+    assert_eq!(
+      simulation.status,
+      SimulationStatus::Closed(CloseReason::ProductiveRunCompleted)
+    );
+    assert!(AAA::aaa_instances(aaa_id).is_some());
+    assert_eq!(native_balance(&BOB), bob_before);
+    assert_eq!(native_balance(&actor), actor_before);
+
+    run_idle(Weight::MAX);
+
+    assert!(AAA::aaa_instances(aaa_id).is_none());
+    assert_eq!(native_balance(&BOB), bob_before.saturating_add(amount));
+    assert_eq!(native_balance(&actor), actor_before.saturating_sub(amount));
+    assert!(has_aaa_event(|event| matches!(
+      event,
+      Event::AaaClosed {
+        aaa_id: id,
+        reason: CloseReason::ProductiveRunCompleted,
+      } if *id == aaa_id
+    )));
   });
 }
 
@@ -549,11 +689,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
       .expect("created pool must exist");
     let lp_before_add_bound = Assets::balance(pool.lp_token, &ALICE);
     assert_eq!(
-      <crate::configs::aaa_config::TmctolDexOps as DexOps<
-        AccountId,
-        AssetKind,
-        Balance,
-      >>::add_liquidity(
+      <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::add_liquidity(
         &ALICE,
         pair.0,
         pair.1,
@@ -569,11 +705,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
     let lp_amount = Assets::balance(pool.lp_token, &ALICE) / 2;
     pallet_axial_router::LpPairByTokenId::<Runtime>::remove(pool.lp_token);
     assert_noop!(
-      <crate::configs::aaa_config::TmctolDexOps as DexOps<
-        AccountId,
-        AssetKind,
-        Balance,
-      >>::remove_liquidity(
+      <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::remove_liquidity(
         &ALICE,
         AssetKind::Local(pool.lp_token),
         lp_amount,
@@ -585,11 +717,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
     assert_ok!(crate::AxialRouter::register_lp_pair(pool.lp_token, pair));
     let lp_before_bound_failure = Assets::balance(pool.lp_token, &ALICE);
     assert_eq!(
-      <crate::configs::aaa_config::TmctolDexOps as DexOps<
-        AccountId,
-        AssetKind,
-        Balance,
-      >>::remove_liquidity(
+      <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::remove_liquidity(
         &ALICE,
         AssetKind::Local(pool.lp_token),
         lp_amount,
@@ -604,7 +732,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
       Assets::balance(pool.lp_token, &ALICE),
       lp_before_bound_failure
     );
-    assert_ok!(<crate::configs::aaa_config::TmctolDexOps as DexOps<
+    assert_ok!(<TmctolLiquidityOps as LiquidityOps<
       AccountId,
       AssetKind,
       Balance,
@@ -894,6 +1022,23 @@ fn paged_queue_limits_are_independent_runtime_controls() {
       10_000
     );
     assert_eq!(
+      <Runtime as pallet_aaa::Config>::MaxObservationFanoutPagesPerBlock::get(),
+      64
+    );
+    let fanout_limit = <Runtime as pallet_aaa::Config>::ObservationFanoutWeightLimit::get();
+    assert!(fanout_limit.ref_time() > 0 && fanout_limit.proof_size() > 0);
+    assert!(fanout_limit.all_lte(
+      <Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight::get()
+    ));
+    assert!(
+      crate::AAA::observation_change_ingress_weight().all_lte(fanout_limit)
+    );
+    assert!(
+      <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::observation_fanout_page()
+        .all_lte(fanout_limit),
+      "one maximum-density fanout page must fit the dedicated two-dimensional runtime budget"
+    );
+    assert_eq!(
       <Runtime as pallet_aaa::Config>::MaxExecutionsPerBlock::get(),
       1_000,
       "the execution count is a safety ceiling; WeightMeter remains primary"
@@ -1039,6 +1184,7 @@ fn cycle_summary_reports_funding_unavailable_skip() {
           aaa_id: id,
           cycle_nonce: 1,
           executed_steps: 0,
+          committed_effectful_tasks: 0,
           skipped_conditions: 0,
           skipped_resolution: 0,
           skipped_funding_unavailable: 1,
@@ -1507,9 +1653,14 @@ fn remove_liquidity_passes_each_minimum_to_asset_conversion_before_mutation() {
     assert!(lp_before > 1);
 
     for (min_amount_a, min_amount_b) in [(u128::MAX, 1), (1, u128::MAX)] {
-      let failure =
-        TmctolDexOps::remove_liquidity(&ALICE, lp_asset, lp_before / 2, min_amount_a, min_amount_b)
-          .expect_err("downstream authored minimum must reject before mutation");
+      let failure = TmctolLiquidityOps::remove_liquidity(
+        &ALICE,
+        lp_asset,
+        lp_before / 2,
+        min_amount_a,
+        min_amount_b,
+      )
+      .expect_err("downstream authored minimum must reject before mutation");
       assert_eq!(failure.retry, RetryClass::Temporary);
       assert_eq!(Assets::balance(lp_id, &ALICE), lp_before);
       assert_eq!(Balances::free_balance(&ALICE), native_before);
@@ -1638,7 +1789,6 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
     RouterError::<Runtime>::DeadlinePassed,
     RouterError::<Runtime>::FeeRoutingFailed,
     RouterError::<Runtime>::InsufficientInputBalance,
-    RouterError::<Runtime>::MaxTrackedAssetsExceeded,
     RouterError::<Runtime>::RouterFeeTooHigh,
     RouterError::<Runtime>::LpTokenPairCollision,
   ] {
@@ -1672,16 +1822,7 @@ fn every_system_actor_uses_typed_service_and_preserves_task_local_swap_amounts()
       .amount_out
       .saturating_mul(PRECISION)
       .saturating_div(quote.amount_after_fee);
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(ASSET_A),
-      reference,
-    );
-    pallet_axial_router::EmaLastUpdate::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(ASSET_A),
-      System::block_number(),
-    );
+    publish_axial_router_observation(AssetKind::Native, AssetKind::Local(ASSET_A), reference);
     let before = native_balance(&actor);
     assert_ok!(crate::configs::aaa_config::TmctolDexOps::swap_exact_in(
       ExecutionContext::new(&actor, AaaType::System),
@@ -1704,15 +1845,10 @@ fn typed_system_swap_uses_stricter_reference_deviation_than_user_swap() {
     let actor = AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
     let amount = 10 * PRECISION;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    publish_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       PRECISION.saturating_mul(110).saturating_div(100),
-    );
-    pallet_axial_router::EmaLastUpdate::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(ASSET_A),
-      System::block_number(),
     );
     let actor_before = native_balance(&actor);
     assert_eq!(
@@ -1740,6 +1876,54 @@ fn typed_system_swap_uses_stricter_reference_deviation_than_user_swap() {
 }
 
 #[test]
+fn missing_or_uninitialized_pool_feed_does_not_block_a_valid_user_swap() {
+  use primitives::ecosystem::params::PRECISION;
+
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    assert_ok!(super::common::setup_axial_router_infrastructure());
+    let asset_in = AssetKind::Native;
+    let asset_out = AssetKind::Local(ASSET_A);
+    let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    assert_eq!(
+      Oracle::observation_state(feed, 1).expect("maximum age is valid"),
+      pallet_oracle::ObservationState::Uninitialized
+    );
+    assert_ok!(TmctolDexOps::swap_exact_in(
+      ExecutionContext::new(&ALICE, AaaType::User),
+      asset_in,
+      asset_out,
+      10 * PRECISION,
+      Perbill::one(),
+    ));
+
+    pallet_oracle::Feeds::<Runtime>::remove(feed);
+    assert_eq!(
+      Oracle::observation_state(feed, 1).expect("maximum age is valid"),
+      pallet_oracle::ObservationState::Unavailable
+    );
+    assert_ok!(TmctolDexOps::swap_exact_in(
+      ExecutionContext::new(&ALICE, AaaType::User),
+      asset_in,
+      asset_out,
+      10 * PRECISION,
+      Perbill::one(),
+    ));
+  });
+}
+
+fn publish_axial_router_observation(asset_in: AssetKind, asset_out: AssetKind, value: Balance) {
+  crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out)
+    .expect("test pair feed admission succeeds");
+  Oracle::publish(
+    RuntimeOrigin::signed(axial_router_account()),
+    crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out),
+    value,
+  )
+  .expect("Axial Router producer publishes the observation");
+}
+
+#[test]
 fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
   seeded_test_ext().execute_with(|| {
     use crate::configs::aaa_config::AaaMaxSystemReferenceAgeBlocks;
@@ -1748,9 +1932,9 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
     let asset_in = AssetKind::Native;
     let asset_out = AssetKind::Local(999_999);
     let max_age = AaaMaxSystemReferenceAgeBlocks::get();
+    System::set_block_number(1);
+    publish_axial_router_observation(asset_in, asset_out, PRECISION);
     System::set_block_number(max_age.saturating_add(1));
-    pallet_axial_router::EmaPrices::<Runtime>::insert(asset_in, asset_out, PRECISION);
-    pallet_axial_router::EmaLastUpdate::<Runtime>::insert(asset_in, asset_out, 1);
     assert_ok!(TmctolDexOps::ensure_system_reference_price(
       &ExecutionContext::new(&ALICE, AaaType::System),
       asset_in,
@@ -1772,17 +1956,16 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
         "SystemReferencePriceUnavailable"
       )))
     );
-    pallet_axial_router::EmaPrices::<Runtime>::insert(asset_in, asset_out, 0);
-    pallet_axial_router::EmaLastUpdate::<Runtime>::insert(
-      asset_in,
-      asset_out,
-      System::block_number(),
+
+    let uninitialized_out = AssetKind::Local(999_998);
+    assert_ok!(
+      crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, uninitialized_out,)
     );
     assert_eq!(
       TmctolDexOps::ensure_system_reference_price(
         &ExecutionContext::new(&ALICE, AaaType::System),
         asset_in,
-        asset_out,
+        uninitialized_out,
         PRECISION,
         PRECISION,
       ),
@@ -1793,12 +1976,12 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
 
     assert_ok!(super::common::setup_axial_router_infrastructure());
     let pooled_out = AssetKind::Local(ASSET_A);
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      asset_in,
-      pooled_out,
-      PRECISION.saturating_mul(10),
+    publish_axial_router_observation(asset_in, pooled_out, PRECISION.saturating_mul(10));
+    System::set_block_number(
+      System::block_number()
+        .saturating_add(max_age)
+        .saturating_add(1),
     );
-    pallet_axial_router::EmaLastUpdate::<Runtime>::insert(asset_in, pooled_out, 1);
     let (reserve_in, reserve_out) =
       crate::AssetConversion::get_reserves(asset_in, pooled_out).expect("pool reserves exist");
     let reserve_reference = reserve_out.saturating_mul(PRECISION) / reserve_in;
@@ -1844,18 +2027,14 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         },
         schedule_window: None,
         execution_plan: plan,
+        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: FundingSourcePolicy::RuntimePolicy,
       },
     ));
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    publish_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       PRECISION.saturating_mul(110).saturating_div(100),
-    );
-    pallet_axial_router::EmaLastUpdate::<Runtime>::insert(
-      AssetKind::Native,
-      AssetKind::Local(ASSET_A),
-      System::block_number(),
     );
     let before = native_balance(&actor);
 
@@ -2118,6 +2297,151 @@ fn split_transfer_uses_perbill_and_keeps_remainder_on_aaa() {
           && *retained == 1
       )
     }));
+  });
+}
+
+#[test]
+fn native_preflight_requires_a_free_ed_anchor_for_sub_ed_ingress() {
+  seeded_test_ext().execute_with(|| {
+    let provider_only = AccountId::new([70u8; 32]);
+    let reserved_anchor = AccountId::new([71u8; 32]);
+    let free_anchor = AccountId::new([72u8; 32]);
+    let existential_deposit = crate::EXISTENTIAL_DEPOSIT;
+    let amount = existential_deposit / 2;
+    let unavailable = || {
+      Err(pallet_aaa::TaskFailure::temporary(
+        Error::<Runtime>::RecipientDepositUnavailable,
+      ))
+    };
+
+    System::inc_providers(&provider_only);
+    assert_eq!(
+      TmctolAssetOps::preflight_transfer(&ALICE, &provider_only, AssetKind::Native, amount,),
+      unavailable()
+    );
+
+    System::inc_providers(&reserved_anchor);
+    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+      &ALICE,
+      &reserved_anchor,
+      existential_deposit,
+      ExistenceRequirement::AllowDeath,
+    ));
+    assert_ok!(<Balances as ReservableCurrency<AccountId>>::reserve(
+      &reserved_anchor,
+      existential_deposit,
+    ));
+    assert_eq!(Balances::free_balance(&reserved_anchor), 0);
+    assert_eq!(
+      TmctolAssetOps::preflight_transfer(&ALICE, &reserved_anchor, AssetKind::Native, amount,),
+      unavailable()
+    );
+
+    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+      &ALICE,
+      &free_anchor,
+      existential_deposit,
+      ExistenceRequirement::AllowDeath,
+    ));
+    assert_ok!(TmctolAssetOps::preflight_transfer(
+      &ALICE,
+      &free_anchor,
+      AssetKind::Native,
+      amount,
+    ));
+    assert_ok!(TmctolAssetOps::transfer(
+      &ALICE,
+      &free_anchor,
+      AssetKind::Native,
+      amount,
+    ));
+    assert_eq!(
+      Balances::free_balance(&free_anchor),
+      existential_deposit.saturating_add(amount)
+    );
+  });
+}
+
+#[test]
+fn anchored_split_transfer_rolls_back_when_a_later_recipient_is_unavailable() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let anchored = AccountId::new([73u8; 32]);
+    let provider_only = AccountId::new([74u8; 32]);
+    assert_ok!(<Balances as Currency<AccountId>>::transfer(
+      &ALICE,
+      &anchored,
+      crate::EXISTENTIAL_DEPOSIT,
+      ExistenceRequirement::AllowDeath,
+    ));
+    System::inc_providers(&provider_only);
+    let legs = BoundedVec::try_from(vec![
+      SplitLeg {
+        to: anchored.clone(),
+        share: Perbill::from_percent(50),
+      },
+      SplitLeg {
+        to: provider_only.clone(),
+        share: Perbill::from_percent(50),
+      },
+    ])
+    .expect("two split legs fit");
+    let plan = BoundedVec::try_from(vec![make_step(Task::SplitTransfer {
+      asset: AssetKind::Native,
+      amount: AmountResolution::Fixed(2),
+      legs,
+    })])
+    .expect("split plan fits");
+    let aaa_id = create_user(ALICE, manual_schedule(), None, plan);
+    fund_native(aaa_id, crate::EXISTENTIAL_DEPOSIT.saturating_mul(10));
+    let anchored_before = native_balance(&anchored);
+
+    assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
+    run_idle(Weight::MAX);
+
+    assert_eq!(native_balance(&anchored), anchored_before);
+    assert_eq!(native_balance(&provider_only), 0);
+  });
+}
+
+#[test]
+fn foreign_asset_preflight_enforces_exact_minimum_boundary() {
+  seeded_test_ext().execute_with(|| {
+    const ASSET_ID: u32 = 77_707;
+    let below = AccountId::new([71u8; 32]);
+    let equal = AccountId::new([72u8; 32]);
+    let above = AccountId::new([73u8; 32]);
+    assert_ok!(Assets::force_create(
+      RuntimeOrigin::root(),
+      ASSET_ID,
+      ALICE.clone().into(),
+      true,
+      100,
+    ));
+    assert_ok!(mint_tokens(ASSET_ID, &ALICE, &ALICE, 1_000));
+    let asset = AssetKind::Foreign(ASSET_ID);
+    assert_eq!(
+      TmctolAssetOps::preflight_transfer(&ALICE, &below, asset, 99),
+      Err(pallet_aaa::TaskFailure::temporary(
+        Error::<Runtime>::RecipientDepositUnavailable,
+      ))
+    );
+    assert_ok!(TmctolAssetOps::preflight_transfer(
+      &ALICE, &equal, asset, 100
+    ));
+    assert_ok!(TmctolAssetOps::transfer(&ALICE, &equal, asset, 100));
+    assert_ok!(TmctolAssetOps::preflight_transfer(
+      &ALICE, &above, asset, 101
+    ));
+    assert_ok!(TmctolAssetOps::transfer(&ALICE, &above, asset, 101));
+    assert_eq!(
+      <Assets as FungiblesInspect<AccountId>>::balance(ASSET_ID, &equal),
+      100
+    );
+    assert_eq!(
+      <Assets as FungiblesInspect<AccountId>>::balance(ASSET_ID, &above),
+      101
+    );
   });
 }
 
@@ -2683,6 +3007,43 @@ fn circular_actor_graph_cannot_reexecute_an_actor_in_the_same_block() {
         .cycle_nonce,
       1,
       "A-triggered recursive work for B must remain beyond block two's cutoff"
+    );
+  });
+}
+
+#[test]
+fn aaa_observation_provider_maps_oracle_state_without_concrete_pallet_dependency() {
+  seeded_test_ext().execute_with(|| {
+    let asset_in = AssetKind::Native;
+    let asset_out = AssetKind::Local(ASSET_A);
+    let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    assert_eq!(
+      <crate::configs::aaa_config::TmctolObservationProvider as pallet_aaa::ObservationProvider<
+        primitives::OracleFeedId,
+      >>::observation(feed, 10),
+      pallet_aaa::ScalarObservationState::Unavailable
+    );
+    assert_ok!(crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out,));
+    assert_eq!(
+      <crate::configs::aaa_config::TmctolObservationProvider as pallet_aaa::ObservationProvider<
+        primitives::OracleFeedId,
+      >>::observation(feed, 10),
+      pallet_aaa::ScalarObservationState::Uninitialized
+    );
+    System::set_block_number(1);
+    publish_axial_router_observation(asset_in, asset_out, 50);
+    assert_eq!(
+      <crate::configs::aaa_config::TmctolObservationProvider as pallet_aaa::ObservationProvider<
+        primitives::OracleFeedId,
+      >>::observation(feed, 10),
+      pallet_aaa::ScalarObservationState::Fresh { value: 50 }
+    );
+    System::set_block_number(12);
+    assert_eq!(
+      <crate::configs::aaa_config::TmctolObservationProvider as pallet_aaa::ObservationProvider<
+        primitives::OracleFeedId,
+      >>::observation(feed, 10),
+      pallet_aaa::ScalarObservationState::Stale
     );
   });
 }

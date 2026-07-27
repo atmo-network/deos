@@ -1,11 +1,11 @@
-# pallet-aaa
+# pallet-deos-aaa
 
-`pallet-aaa` is a reusable FRAME pallet for deterministic Account Abstraction Actors. DEOS provides its production-oriented reference composition.
+`pallet-deos-aaa` (Rust crate `pallet_aaa`) is a reusable FRAME pallet for deterministic Account Abstraction Actors. DEOS provides its production-oriented reference composition.
 
 ## SDK baseline
 
 This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
-The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-aaa` core logic.
+The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet_aaa` core logic.
 
 ## Scope
 
@@ -14,12 +14,12 @@ The current kernel/runtime slice provides:
 - User and system AAA creation with deterministic sovereign accounts
 - Bounded execution plans whose steps own one non-nested `ConditionSet::{Always, All, Any}` and one typed task (`Transfer`, `Swap`, `AddLiquidity`, `Stake`, `Unstake`, `DonateLiquidity`, or adapter-free `StopCycle`, etc.)
 - One scheduler over type-derived `SystemQueue`/`UserQueue` paged FIFO lanes with a shared monotonic `NextQueueTicket`, common block cutoff, one actor-local live ticket, and shared time-ordered wakeup storage
-- Timer, manual, and `OnAddressEvent` triggers, where matched asset ingress can function as a trigger-message
+- Timer, manual, `OnAddressEvent`, and typed `OnObservationChange` sources; observation subscriptions and latest revisions stay bounded in reusable paged state while independently metered deferred fanout coalesces into the existing readiness latch and scheduler
 - Bounded `on_idle` execution with sparse Healthy/Starving/Alerted state and one-time detection/recovery events
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Sparse progress-preserving Continuation for Mutable actors, with scalar suffix cursor, Temporary-only retry, deterministic cancellation, and no prefix replay
 - A bounded `simulate_current_program` rollback core and versioned `AaaSimulationApi` declaration that require exact stored-program identity, follow fresh/Continuation readiness, return ordered outcomes, and roll the entire attempt back
-- Runtime-configured adapters for assets, DEX, staking, liquidity donation, typed failure retryability, fee collection, direct ingress, and weights; swap adapters receive only the actor account and authoritative immutable `AaaType` through a minimal execution context
+- Runtime-configured adapters for assets, swaps, liquidity, staking, typed failure retryability, fee collection, direct ingress, and weights; swap adapters receive only the actor account and authoritative immutable `AaaType` through a minimal execution context
 - Exhaustive package-owned instruction contracts for every task, condition, amount resolution, and error policy, with weight ownership delegated to `TaskWeightInfo`
 - Genesis provisioning of System actors through runtime configuration
 
@@ -27,6 +27,10 @@ The current kernel/runtime slice provides:
 
 AAA is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
 Actors execute declarative plans against runtime adapters under explicit queue, scheduler, fee, weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
+
+Observation readiness carries no asset amount. Plans using `PercentageOfTrigger` therefore require applicable AddressEvent-only sources and fail admission under Manual, observation, periodic-only, or mixed source sets.
+
+Active programs choose `Persistent` or `CloseAfterProductiveRun`. Productive closure requires successful logical-run completion with at least one committed effectful task; false conditions, skips, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
 
 `StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary, funding, and auto-close handling, and cannot select a cursor or mutate actor lifecycle.
 
@@ -50,14 +54,14 @@ Readiness and execution must stay deterministic and bounded:
 The pallet must stay generic.
 Concrete chain policy belongs in runtime configuration, including:
 
-- `AssetOps`, `DexOps`, `StakingOps`, and `LiquidityDonationOps`
+- `AssetOps`, swap-only `DexOps`, `LiquidityOps`, and `StakingOps`
 - Fee conversion, fee collection, and task weight classes
 - Ingress hooks and genesis System AAA topology
 - Governance/system origins and operational bounds
 
 ## External runtime embedding checklist
 
-A runtime can reuse `pallet-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The package-owned host-runtime contract lives in [`EMBEDDING.md`](./EMBEDDING.md). Executable portability evidence lives in the separate [`embedding-runtime`](https://github.com/atmo-network/deos/tree/main/template/pallets/aaa/embedding-runtime) Cargo package under this pallet ownership boundary; that fixture is not a second product or a normative topology.
+A runtime can reuse `pallet-deos-aaa` without adopting the full DEOS/TMCTOL topology by providing the bounded configuration surface only. The package-owned host-runtime contract lives in [`docs/embedding.md`](./docs/embedding.md). Executable portability evidence lives in the separate [`embedding-runtime`](https://github.com/atmo-network/deos/tree/main/template/pallets/aaa/embedding-runtime) Cargo package under this pallet ownership boundary; that fixture is not a second product or a normative topology.
 
 Minimal checklist:
 
@@ -79,4 +83,4 @@ The current kernel does not yet include:
 - Unbounded task graphs or unmetered loops
 - Direct pallet-specific business logic embedded into AAA core
 
-See the repository's [AAA Architecture](https://github.com/atmo-network/deos/blob/main/docs/aaa.architecture.en.md) and [AAA Specification](https://github.com/atmo-network/deos/blob/main/docs/aaa.specification.en.md) for the current reference binding and normative semantics.
+See the package-owned [AAA Architecture](./docs/architecture.en.md) and [AAA Specification](./docs/specification.en.md) for the current reference binding and normative semantics.

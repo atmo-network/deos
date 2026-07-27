@@ -84,4 +84,4 @@ The current kernel does not yet include:
 - Permanent proposal-history archival inside the kernel pallet
 - Richer GovXP / identity policy beyond the current counters-first slice, including delegation, any later bounded multiplier policy, and broader SBT / reputation layers
 
-See [`docs/governance.specification.en.md`](../../../docs/governance.specification.en.md) for the intended governance contract, [`docs/governance.architecture.en.md`](../../../docs/governance.architecture.en.md) for the current implementation map, plus [`docs/staking.specification.en.md`](../../../docs/staking.specification.en.md) and `BACKLOG.md` for the broader two-pallet reward trajectory.
+See [`docs/specification.en.md`](./docs/specification.en.md) for the intended governance contract, [`docs/architecture.en.md`](./docs/architecture.en.md) for the current implementation map, plus [`../staking/docs/specification.en.md`](../staking/docs/specification.en.md) and [`BACKLOG.md`](../../../BACKLOG.md) for the broader two-pallet reward trajectory.

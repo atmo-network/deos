@@ -38,8 +38,15 @@ const runtime = {
 const account = '5C62Ck4UrFPiBtoCmeSrgF7x9yv9mn38446dhCpsi2mLHiFT';
 const native = { type: 'Native', value: undefined };
 const local = { type: 'Local', value: 7 };
-const fixed = (value = 10n) => ({ type: 'Fixed', value });
 const variant = (type) => ({ type, value: undefined });
+const observationFeed = {
+  asset_in: native,
+  asset_out: local,
+  method: variant('PreExecutionSpot'),
+  aggregation: { type: 'Ema', value: { half_life_blocks: 100 } },
+  scale: 12,
+};
+const fixed = (value = 10n) => ({ type: 'Fixed', value });
 
 const taskNames = [
   'Transfer',
@@ -62,6 +69,10 @@ const conditionNames = [
   'BalanceNotEquals',
   'BlockNumberAbove',
   'BlockNumberBelow',
+  'ObservationAbove',
+  'ObservationBelow',
+  'ObservationEquals',
+  'ObservationNotEquals',
 ];
 const amountNames = [
   'Fixed',
@@ -102,7 +113,7 @@ const adapterCapabilities = {
     AssetOps: 'supported',
     DexOps: 'supported',
     StakingOps: 'supported',
-    LiquidityDonationOps: 'supported',
+    LiquidityOps: 'supported',
   },
   temporaryFailures: Object.fromEntries(taskNames.map((name) => [name, 'no'])),
 };
@@ -191,9 +202,16 @@ function step({
 }
 
 function condition(name) {
-  return name.startsWith('Balance')
-    ? { type: name, value: { asset: native, threshold: 1n } }
-    : { type: name, value: { threshold: 1 } };
+  if (name.startsWith('Balance')) {
+    return { type: name, value: { asset: native, threshold: 1n } };
+  }
+  if (name.startsWith('Observation')) {
+    return {
+      type: name,
+      value: { feed: observationFeed, threshold: 1n, max_age_blocks: 12 },
+    };
+  }
+  return { type: name, value: { threshold: 1 } };
 }
 
 function activeProgram(steps) {
@@ -211,6 +229,7 @@ function activeProgram(steps) {
       },
       schedule_window: undefined,
       execution_plan: steps,
+      completion_policy: variant('Persistent'),
       funding_source_policy: variant('OwnerOnly'),
     },
   };
@@ -452,7 +471,7 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
     { kind: 'AdapterDerived' },
   ]);
   const wrongVersion = structuredClone(AAA_SEMANTIC_MANIFEST);
-  wrongVersion.formatVersion = 2;
+  wrongVersion.formatVersion = 3;
   assert.throws(
     () => parseAaaSemanticManifest(wrongVersion),
     /Unsupported AAA semantic manifest version/,
@@ -462,6 +481,12 @@ test('generated manifest preserves recipient kinds and rejects identity drift', 
   assert.throws(
     () => parseAaaSemanticManifest(unknownTask),
     /Task variants are unknown/,
+  );
+  const reorderedCondition = structuredClone(AAA_SEMANTIC_MANIFEST);
+  reorderedCondition.conditions[0].scaleIndex = 1;
+  assert.throws(
+    () => parseAaaSemanticManifest(reorderedCondition),
+    /Condition SCALE indices are unknown/,
   );
 });
 
@@ -711,6 +736,32 @@ test('every current Condition is pure, bounded, and attempt-observed', () => {
     assert.equal(projected.pure, true);
     assert.equal(projected.boundedReadCount, 1);
     assert.equal(projected.observationWindow, 'step-attempt-time');
+    if (name.startsWith('Observation')) {
+      assert.equal(projected.observation, 'scalar-observation');
+      assert.deepEqual(projected.readSurface, {
+        feed: {
+          aggregation: {
+            type: 'Ema',
+            value: {
+              half_life_blocks: {
+                $runtimeType: 'number',
+                $integer: '100',
+              },
+            },
+          },
+          asset_in: { type: 'Native', value: { $none: true } },
+          asset_out: {
+            type: 'Local',
+            value: { $runtimeType: 'number', $integer: '7' },
+          },
+          method: { type: 'PreExecutionSpot', value: { $none: true } },
+          scale: { $runtimeType: 'number', $integer: '12' },
+        },
+        maxAgeBlocks: 12,
+        freshness: 'fresh-only',
+        nonFreshResult: 'false',
+      });
+    }
   }
 });
 
@@ -805,6 +856,7 @@ test('Dormant and active programs both produce complete bounded analysis', () =>
       });
       const dormantResult = analyze(dormant);
       assert.equal(dormantResult.program, 'Dormant');
+      assert.equal(dormantResult.completionPolicy, null);
       assert.equal(dormantResult.trigger, null);
       assert.deepEqual(dormantResult.steps, []);
       assert.equal(dormantResult.suffixEnvelopes.length, 1);
@@ -822,6 +874,10 @@ test('trigger analysis separates readiness sources from admission and runtime pr
       asset_filter: variant('Any'),
     },
   };
+  const observationChange = {
+    type: 'OnObservationChange',
+    value: { feed: observationFeed },
+  };
   const programWithTrigger = (trigger) => {
     const program = activeProgram([step()]);
     program.value.schedule.trigger = trigger;
@@ -831,21 +887,62 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     artifactFor({
       program: programWithTrigger({
         type: 'Immediate',
-        value: { sources: [variant('Manual'), addressEvent] },
+        value: {
+          sources: [variant('Manual'), addressEvent, observationChange],
+        },
       }),
     }),
   );
+  assert.equal(immediate.completionPolicy, 'Persistent');
   assert.deepEqual(immediate.trigger, {
     admission: 'Immediate',
     everyBlocks: null,
-    sourceCount: 2,
-    sourceKinds: ['Manual', 'AddressEvent'],
+    sourceCount: 3,
+    sourceKinds: ['Manual', 'AddressEvent', 'ObservationChange'],
+    observationFeeds: [
+      {
+        aggregation: {
+          type: 'Ema',
+          value: {
+            half_life_blocks: { $runtimeType: 'number', $integer: '100' },
+          },
+        },
+        asset_in: { type: 'Native', value: { $none: true } },
+        asset_out: {
+          type: 'Local',
+          value: { $runtimeType: 'number', $integer: '7' },
+        },
+        method: { type: 'PreExecutionSpot', value: { $none: true } },
+        scale: { $runtimeType: 'number', $integer: '12' },
+      },
+    ],
   });
   assert(
     immediate.findings.some(
       (finding) =>
         finding.kind === 'ExternallySignalledAdmission' &&
         finding.gate === 'Immediate',
+    ),
+  );
+  const triggerAmountProgram = programWithTrigger({
+    type: 'Immediate',
+    value: { sources: [observationChange] },
+  });
+  triggerAmountProgram.value.execution_plan = [
+    step({
+      amount: { type: 'PercentageOfTrigger', value: 500_000_000 },
+    }),
+  ];
+  const triggerAmountAnalysis = analyze(
+    artifactFor({ program: triggerAmountProgram }),
+  );
+  assert(
+    triggerAmountAnalysis.findings.some(
+      (finding) =>
+        finding.kind === 'TriggerAmountCompatibilityViolation' &&
+        finding.reason === 'AddressEventOnlyRequired' &&
+        finding.steps[0] === 0 &&
+        finding.sourceKinds[0] === 'ObservationChange',
     ),
   );
 
@@ -865,6 +962,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     everyBlocks: 10,
     sourceCount: 0,
     sourceKinds: [],
+    observationFeeds: [],
   });
   assert(
     periodic.findings.some(
@@ -892,6 +990,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
     everyBlocks: 20,
     sourceCount: 1,
     sourceKinds: ['AddressEvent'],
+    observationFeeds: [],
   });
   assert(
     signalled.findings.some(

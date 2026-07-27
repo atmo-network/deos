@@ -154,9 +154,7 @@ export type GovernanceProposalExecutionFailureReason =
   | 'UnsupportedPayloadKind'
   | 'MissingWinningPrimaryOption'
   | 'DispatchFailed';
-export type GovernanceProposalParameterChangeSurface =
-  | 'RouterFee'
-  | 'TrackedAsset';
+export type GovernanceProposalParameterChangeSurface = 'RouterFee';
 export type GovernanceProposalTreasurySpendSettlementKind =
   | 'DirectTransfer'
   | 'InvoiceScalarTransfer';

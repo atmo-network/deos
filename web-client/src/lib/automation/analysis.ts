@@ -19,29 +19,27 @@ import {
 } from './plan-artifact.ts';
 import {
   type AaaAmountName,
+  type AaaConditionName,
   type AaaSemanticTask,
   type AaaTaskName,
   aaaAmountSemantics,
+  aaaConditionSemantics,
   aaaTaskSemantics,
 } from './semantic-manifest.ts';
 
-export type { AaaAmountName, AaaTaskName } from './semantic-manifest.ts';
+export type {
+  AaaAmountName,
+  AaaConditionName,
+  AaaTaskName,
+} from './semantic-manifest.ts';
 
-export const AAA_STATIC_ANALYZER_VERSION = '6' as const;
-
-export type AaaConditionName =
-  | 'BalanceAbove'
-  | 'BalanceBelow'
-  | 'BalanceEquals'
-  | 'BalanceNotEquals'
-  | 'BlockNumberAbove'
-  | 'BlockNumberBelow';
+export const AAA_STATIC_ANALYZER_VERSION = '9' as const;
 
 export type AaaRequiredAdapter =
   | 'AssetOps'
   | 'DexOps'
   | 'StakingOps'
-  | 'LiquidityDonationOps';
+  | 'LiquidityOps';
 
 export type AaaStaticObservationWindow =
   | 'artifact-time'
@@ -147,8 +145,16 @@ export type AaaStaticStepAnalysis = {
   conditions: Array<{
     type: AaaConditionName;
     value: AaaPlanProjection;
-    observation: 'balance' | 'block-number';
-    readSurface: AaaPlanProjection | 'current-block';
+    observation: 'balance' | 'block-number' | 'scalar-observation';
+    readSurface:
+      | AaaPlanProjection
+      | 'current-block'
+      | {
+          feed: AaaPlanProjection;
+          maxAgeBlocks: number;
+          freshness: 'fresh-only';
+          nonFreshResult: 'false';
+        };
     pure: true;
     observationWindow: 'step-attempt-time';
     boundedReadCount: 1;
@@ -225,16 +231,23 @@ export type AaaStaticTriggerAnalysis = {
   admission: 'Immediate' | 'CadencedAlways' | 'CadencedWhenSignalled';
   everyBlocks: number | null;
   sourceCount: number;
-  sourceKinds: Array<'Manual' | 'AddressEvent'>;
+  sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
+  observationFeeds: AaaPlanProjection[];
 };
 
 export type AaaStaticFinding =
   | {
       kind: 'ExternallySignalledAdmission';
       gate: 'Immediate' | 'Cadenced';
-      sourceKinds: Array<'Manual' | 'AddressEvent'>;
+      sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
     }
   | { kind: 'PeriodicAdmission'; everyBlocks: number }
+  | {
+      kind: 'TriggerAmountCompatibilityViolation';
+      steps: number[];
+      sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
+      reason: 'AddressEventOnlyRequired';
+    }
   | {
       kind: 'CommittedEffectBeforeRetryableStep';
       before: number;
@@ -322,6 +335,7 @@ export type ProgramStaticAnalysis = {
   program: 'Dormant' | 'Active';
   actorType: AaaPlanArtifact['aaaType'];
   mutability: AaaPlanArtifact['mutability'];
+  completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null;
   trigger: AaaStaticTriggerAnalysis | null;
   steps: AaaStaticStepAnalysis[];
   economicSurface: AaaStaticStepAnalysis['economicSurface'];
@@ -515,20 +529,6 @@ function validateModel(model: AaaStaticWeightModel) {
   }
 }
 
-function asConditionName(value: string): AaaConditionName {
-  switch (value) {
-    case 'BalanceAbove':
-    case 'BalanceBelow':
-    case 'BalanceEquals':
-    case 'BalanceNotEquals':
-    case 'BlockNumberAbove':
-    case 'BlockNumberBelow':
-      return value;
-    default:
-      throw new Error(`Unsupported Condition variant: ${value}`);
-  }
-}
-
 function errorPolicy(value: AaaPlanProjection) {
   const parsed = variant(value, 'StepErrorPolicy');
   switch (parsed.type) {
@@ -707,18 +707,57 @@ function taskSemantics(
 
 function conditionAnalysis(condition: AaaPlanProjection) {
   const parsed = variant(condition, 'Condition');
-  const type = asConditionName(parsed.type);
-  const balance = type.startsWith('Balance');
+  const semantics = aaaConditionSemantics(parsed.type);
+  const label = `Condition.${semantics.condition}`;
+  const readSurface = (() => {
+    switch (semantics.readSurface.kind) {
+      case 'SpendableAssetBalance':
+        return semanticValue(parsed.value, semantics.readSurface.path, label);
+      case 'CurrentBlockNumber':
+        return 'current-block' as const;
+      case 'TypedObservation': {
+        const maxAgeBlocks = safeInteger(
+          semanticValue(
+            parsed.value,
+            semantics.readSurface.maxAgeBlocksPath,
+            label,
+          ),
+          `${label}.max_age_blocks`,
+        );
+        if (maxAgeBlocks === 0) {
+          throw new Error(`${label}.max_age_blocks must be nonzero`);
+        }
+        return {
+          feed: semanticValue(
+            parsed.value,
+            semantics.readSurface.feedPath,
+            label,
+          ),
+          maxAgeBlocks,
+          freshness: 'fresh-only' as const,
+          nonFreshResult: 'false' as const,
+        };
+      }
+    }
+  })();
+  const observation = (() => {
+    switch (semantics.observation) {
+      case 'BalanceComparison':
+        return 'balance' as const;
+      case 'BlockNumberComparison':
+        return 'block-number' as const;
+      case 'ScalarObservationComparison':
+        return 'scalar-observation' as const;
+    }
+  })();
   return {
-    type,
+    type: semantics.condition,
     value: parsed.value,
-    observation: balance ? ('balance' as const) : ('block-number' as const),
-    readSurface: balance
-      ? member(parsed.value, 'asset', `Condition.${type}`)
-      : ('current-block' as const),
-    pure: true as const,
+    observation,
+    readSurface,
+    pure: semantics.pure,
     observationWindow: 'step-attempt-time' as const,
-    boundedReadCount: 1 as const,
+    boundedReadCount: semantics.boundedReadCount,
   };
 }
 
@@ -947,8 +986,9 @@ function forwardDependencies(steps: AaaStaticStepAnalysis[]) {
       for (const written of steps[from].economicSurface.assetsWritten) {
         const conditionMatch = steps[to].conditions.some(
           (condition) =>
-            condition.readSurface !== 'current-block' &&
-            fingerprint(condition.readSurface) === fingerprint(written),
+            condition.observation === 'balance' &&
+            fingerprint(condition.readSurface as AaaPlanProjection) ===
+              fingerprint(written),
         );
         const taskMatch = steps[to].economicSurface.assetsRead.some(
           (read) => fingerprint(read) === fingerprint(written),
@@ -1080,26 +1120,40 @@ function parseTrigger(value: AaaPlanProjection): AaaStaticTriggerAnalysis {
     member(schedule, 'trigger', 'Schedule'),
     'Schedule.trigger',
   );
-  const parseSources = (
-    projected: AaaPlanProjection,
-    label: string,
-  ): Array<'Manual' | 'AddressEvent'> =>
-    array(projected, label).map((source, index) => {
-      const type = variant(source, `${label}[${index}]`).type;
-      if (type === 'Manual') return 'Manual';
-      if (type === 'OnAddressEvent') return 'AddressEvent';
-      throw new Error(`Unsupported TriggerSource variant: ${type}`);
+  const parseSources = (projected: AaaPlanProjection, label: string) => {
+    const sourceKinds: AaaStaticTriggerAnalysis['sourceKinds'] = [];
+    const observationFeeds: AaaPlanProjection[] = [];
+    array(projected, label).forEach((source, index) => {
+      const parsed = variant(source, `${label}[${index}]`);
+      if (parsed.type === 'Manual') {
+        sourceKinds.push('Manual');
+        return;
+      }
+      if (parsed.type === 'OnAddressEvent') {
+        sourceKinds.push('AddressEvent');
+        return;
+      }
+      if (parsed.type === 'OnObservationChange') {
+        sourceKinds.push('ObservationChange');
+        observationFeeds.push(
+          member(parsed.value, 'feed', `TriggerSource.OnObservationChange`),
+        );
+        return;
+      }
+      throw new Error(`Unsupported TriggerSource variant: ${parsed.type}`);
     });
+    return { sourceKinds, observationFeeds };
+  };
   if (trigger.type === 'Immediate') {
-    const sourceKinds = parseSources(
+    const sources = parseSources(
       member(trigger.value, 'sources', 'TriggerPolicy.Immediate'),
       'TriggerPolicy.Immediate.sources',
     );
     return {
       admission: 'Immediate',
       everyBlocks: null,
-      sourceCount: sourceKinds.length,
-      sourceKinds,
+      sourceCount: sources.sourceKinds.length,
+      ...sources,
     };
   }
   if (trigger.type !== 'Cadenced') {
@@ -1127,20 +1181,18 @@ function parseTrigger(value: AaaPlanProjection): AaaStaticTriggerAnalysis {
       everyBlocks: everyBlocksNumber,
       sourceCount: 0,
       sourceKinds: [],
+      observationFeeds: [],
     };
   }
   if (mode.type !== 'WhenSignalled') {
     throw new Error(`Unsupported CadenceMode variant: ${mode.type}`);
   }
-  const sourceKinds = parseSources(
-    mode.value,
-    'CadenceMode.WhenSignalled.sources',
-  );
+  const sources = parseSources(mode.value, 'CadenceMode.WhenSignalled.sources');
   return {
     admission: 'CadencedWhenSignalled',
     everyBlocks: everyBlocksNumber,
-    sourceCount: sourceKinds.length,
-    sourceKinds,
+    sourceCount: sources.sourceKinds.length,
+    ...sources,
   };
 }
 
@@ -1155,6 +1207,27 @@ function findings(
   minimumBalanceEvidence?: AaaMinimumBalanceEvidence,
 ): AaaStaticFinding[] {
   const results: AaaStaticFinding[] = [];
+  const triggerAmountSteps = steps
+    .filter((step) =>
+      step.amounts.some(
+        (amount) => amount.resolution === 'PercentageOfTrigger',
+      ),
+    )
+    .map((step) => step.index);
+  if (
+    triggerAmountSteps.length > 0 &&
+    (trigger == null ||
+      trigger.admission === 'CadencedAlways' ||
+      trigger.sourceKinds.length === 0 ||
+      trigger.sourceKinds.some((kind) => kind !== 'AddressEvent'))
+  ) {
+    results.push({
+      kind: 'TriggerAmountCompatibilityViolation',
+      steps: triggerAmountSteps,
+      sourceKinds: trigger?.sourceKinds ?? [],
+      reason: 'AddressEventOnlyRequired',
+    });
+  }
   if (trigger?.admission === 'CadencedAlways') {
     results.push({
       kind: 'PeriodicAdmission',
@@ -1389,10 +1462,22 @@ export function analyzeAaaProgram(input: {
   }
   const program = variant(inspection.projection, 'ProgramInput');
   let trigger: AaaStaticTriggerAnalysis | null = null;
+  let completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null = null;
   let steps: AaaStaticStepAnalysis[] = [];
   let forecastInputs: AaaStepCostInput[] = [];
   if (program.type === 'Active') {
     trigger = parseTrigger(program.value);
+    const projectedPolicy = variant(
+      member(program.value, 'completion_policy', 'ProgramInput.Active'),
+      'ProgramInput.Active.completion_policy',
+    );
+    if (
+      projectedPolicy.type !== 'Persistent' &&
+      projectedPolicy.type !== 'CloseAfterProductiveRun'
+    ) {
+      throw new Error(`Unsupported completion policy: ${projectedPolicy.type}`);
+    }
+    completionPolicy = projectedPolicy.type;
     ({ steps, forecastInputs } = parseSteps(
       input.artifact,
       member(program.value, 'execution_plan', 'ProgramInput.Active'),
@@ -1429,6 +1514,7 @@ export function analyzeAaaProgram(input: {
     program: program.type,
     actorType: input.artifact.aaaType,
     mutability: input.artifact.mutability,
+    completionPolicy,
     trigger,
     steps,
     economicSurface: aggregateEconomicSurface(steps),

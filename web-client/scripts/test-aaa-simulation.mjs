@@ -88,6 +88,43 @@ test('local projection commits successful tasks and rolls back one failed task',
   );
 });
 
+test('productive completion closes only after one committed effectful task', () => {
+  const falseCycle = simulateAaaLocally({
+    ...provenance,
+    completionPolicy: 'CloseAfterProductiveRun',
+    initialState: { balance: 100n },
+    steps: [
+      localStep(0, 'AbortCycle', {
+        conditionSet: { type: 'All', conditions: ['latest-observation'] },
+      }),
+    ],
+    evaluateCondition() {
+      return { kind: 'Value', value: false };
+    },
+    runTask() {
+      throw new Error('false condition must not execute');
+    },
+  });
+  assert.equal(falseCycle.status, 'Completed');
+  assert.equal(falseCycle.closeReason, null);
+  assert.equal(falseCycle.cumulative.committedEffectfulTasks, 0);
+
+  const productive = simulateAaaLocally({
+    ...provenance,
+    completionPolicy: 'CloseAfterProductiveRun',
+    initialState: { balance: 100n },
+    steps: [localStep(0)],
+    runTask(_step, state) {
+      state.balance -= 10n;
+      return { kind: 'Executed' };
+    },
+  });
+  assert.equal(productive.status, 'Closed');
+  assert.equal(productive.closeReason, 'ProductiveRunCompleted');
+  assert.equal(productive.state.balance, 90n);
+  assert.equal(productive.cumulative.committedEffectfulTasks, 1);
+});
+
 test('temporary RetryLater preserves the prefix and resumes from one scalar cursor', () => {
   const suspended = simulateAaaLocally({
     ...provenance,

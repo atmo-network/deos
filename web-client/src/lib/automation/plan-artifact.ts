@@ -127,10 +127,7 @@ function hexToBytes(value: string) {
     throw new Error('Expected canonical lowercase hex bytes');
   const bytes = new Uint8Array((value.length - 2) / 2);
   for (let index = 0; index < bytes.length; index += 1) {
-    bytes[index] = Number.parseInt(
-      value.slice(2 + index * 2, 4 + index * 2),
-      16,
-    );
+    bytes[index] = Number(`0x${value.slice(2 + index * 2, 4 + index * 2)}`);
   }
   return bytes;
 }

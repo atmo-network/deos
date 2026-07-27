@@ -5,10 +5,10 @@ use crate::{
   AAA, Assets, Balances, Runtime, RuntimeOrigin, Staking,
   configs::{
     AssetKind, RuntimeFeeCollector,
-    aaa_config::{TmctolAssetOps, TmctolGenesisSystemAaas},
+    aaa_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemAaas},
   },
 };
-use pallet_aaa::AssetOps;
+use pallet_aaa::{AssetOps, FeeCollector};
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{
@@ -38,6 +38,41 @@ fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
     RuntimeFeeCollector::on_unbalanced(credit);
     assert_eq!(Balances::free_balance(&fee_sink), sink_before + amount);
     assert_eq!(Balances::free_balance(&ALICE), INITIAL_BALANCE - amount);
+  });
+}
+
+#[test]
+fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures() {
+  new_test_ext().execute_with(|| {
+    let fee_sink = aaa_fee_sink_account();
+    let staking_pool = Staking::pool_account_for(0);
+    let lp_farmer = AAA::sovereign_account_id_system(
+      primitives::ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+    );
+    let anchor = crate::EXISTENTIAL_DEPOSIT;
+    assert_eq!(Balances::free_balance(&fee_sink), anchor);
+    assert_eq!(Balances::free_balance(&staking_pool), anchor);
+    assert_eq!(Balances::free_balance(&lp_farmer), anchor);
+
+    for block in [2, 12, 22] {
+      assert_ok!(TmctolFeeCollector::collect_fee(
+        &ALICE,
+        &fee_sink,
+        AssetKind::Native,
+        2,
+      ));
+      crate::System::set_block_number(block);
+      let _ = AAA::on_initialize(block);
+      let _ = AAA::on_idle(block, Weight::MAX);
+    }
+
+    assert_eq!(Balances::free_balance(&fee_sink), anchor);
+    assert_eq!(Balances::free_balance(&staking_pool), anchor + 3);
+    assert_eq!(Balances::free_balance(&lp_farmer), anchor + 3);
+    let actor = AAA::aaa_instances(primitives::ecosystem::aaa_ids::FEE_SINK_AAA_ID)
+      .expect("Fee Sink actor remains active");
+    assert_eq!(actor.cycle_nonce, 3);
+    assert_eq!(actor.consecutive_failures, 0);
   });
 }
 
@@ -126,9 +161,15 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
       );
     assert_eq!(lp_supply_after, lp_supply_before);
     assert!(Assets::balance(native_asset_id, &staking_pool) > pool_native_asset_before);
-    assert_eq!(Balances::free_balance(&staking_pool), 0);
+    assert_eq!(
+      Balances::free_balance(&staking_pool),
+      crate::EXISTENTIAL_DEPOSIT
+    );
     assert!(Assets::balance(native_asset_id, &lp_farmer) <= 1);
-    assert_eq!(Balances::free_balance(&lp_farmer), 0);
+    assert_eq!(
+      Balances::free_balance(&lp_farmer),
+      crate::EXISTENTIAL_DEPOSIT
+    );
     assert!(Assets::balance(native_asset_id, &pool_account) > lp_pool_native_before);
     assert!(Assets::balance(staked_asset_id, &pool_account) > lp_pool_staked_before);
     assert_eq!(

@@ -10,7 +10,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/manifesto.en.md
-  - ../../docs/governance.specification.en.md
+  - ../../template/pallets/governance/docs/specification.en.md
   - ../../docs/tmctol.specification.en.md
 status: active
 audience: newcomer

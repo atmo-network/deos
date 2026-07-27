@@ -26,6 +26,7 @@ pub mod pallet_aaa;
 pub mod pallet_asset_registry;
 pub mod pallet_axial_router;
 pub mod pallet_governance;
+pub mod pallet_oracle;
 pub mod pallet_staking;
 pub mod pallet_xcm;
 

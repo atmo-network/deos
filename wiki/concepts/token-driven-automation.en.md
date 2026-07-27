@@ -10,7 +10,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
-  - ../../docs/aaa.specification.en.md
+  - ../../template/pallets/aaa/docs/specification.en.md
   - ../../README.md
 status: active
 audience: newcomer
@@ -35,7 +35,7 @@ confidence: 0.9
 
 DEOS models protocol behavior as a token-driven economic automaton. Instead of centering everything on admin calls, it tries to express recurring economic actions as bounded state transitions triggered by balances, timers, and typed execution plans.
 
-The main execution system for that model is `pallet-aaa`, which hosts both system actors and user actors.
+The main execution system for that model is `pallet-deos-aaa`, which hosts both system actors and user actors.
 
 ## The Core Coordination Rule
 

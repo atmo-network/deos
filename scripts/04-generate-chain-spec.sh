@@ -192,9 +192,6 @@ if foreign_metadata_entry not in metadata_entries:
 foreign_account_entry = [foreign_id, bootstrap_asset_owner, foreign_balance]
 if foreign_account_entry not in account_entries:
     account_entries.append(foreign_account_entry)
-patch['axialRouter'] = {
-    'trackedAssets': ['Native', {'Foreign': foreign_id}],
-}
 patch['tokenMintingCurve'] = {
     'curves': [['Native', {'Foreign': foreign_id}, initial_price, slope]],
 }

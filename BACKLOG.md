@@ -2,11 +2,10 @@
 
 > Open framework work only; durable protocol lives in `AGENTS.md`, and completed delivery history lives in `CHANGELOG.md`.
 >
-> Release boundary: `DEOS 0.7.6 — AAA Intent, Failure, and Service Semantics` is the current framework line. Completed semantics and evidence live in `CHANGELOG.md` and the owning AAA specification, package, architecture, and control-plane documents.
+> Release boundary: `DEOS 0.7.7 — Typed Observation and Reactive AAA` is the current framework line. Completed semantics and release evidence live in `CHANGELOG.md` and the owning Oracle, Router, AAA, control-plane, and architecture documents.
 
-## Post-0.7.6 AAA Possibilities
+## Post-0.7.7 AAA Possibilities
 
-- [~] `AAA 0.7.7 / Price-Observation Ownership`: Reconsider a thin price-only pallet after a concrete second producer or consumer justifies extraction. First define bounded pair admission and typed unavailable/uninitialized/fresh/stale/degraded reads with local-pool provenance; preserve directional EMA math, pre-execution ordering, Router and System-AAA outcomes, rollback, weights, and metadata. Do not expand into generalized feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, history storage, or AAA oracle predicates without separate demand.
 - [~] `Batch Settlement`: Consider intent or frequent-batch settlement with one clearing rule only as a DEX-level later design after the `0.7.6` service and loss envelopes close; scheduler priority alone does not remove order-based extraction.
 - [~] `Probabilistic Trigger Extension`: Consider probability only as a future append-only progressive trigger extension after a concrete deterministic and financially secure entropy capability exists, has an owned runtime ingress/security model, and carries production ProofSize/weight evidence; `0.7.2` contract contraction does not permanently reject the capability.
 - [~] `Immutable Continuation`: Consider `RetryLater` for Immutable actors only after a concrete constitutional need defines non-intervention, cancellation, permanent adapter failure, terminal handling, and upgrade semantics beyond the validated Mutable-only baseline.

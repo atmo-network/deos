@@ -17,7 +17,7 @@ use polkadot_sdk::frame_support::traits::{
 
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 use polkadot_sdk::sp_core::U256;
-use polkadot_sdk::sp_runtime::{DispatchError, Perbill, Saturating, TokenError};
+use polkadot_sdk::sp_runtime::{DispatchError, Perbill, TokenError, traits::AccountIdConversion};
 use polkadot_sdk::*;
 
 use crate::{AssetConversion, RuntimeOrigin};
@@ -615,45 +615,30 @@ where
   }
 }
 
-impl<T: pallet_axial_router::pallet::Config> pallet_axial_router::PriceOracle<Balance>
-  for PriceOracleImpl<T>
-{
+impl pallet_axial_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
   fn update_ema_price(
     asset_in: AssetKind,
     asset_out: AssetKind,
     price: Balance,
   ) -> Result<(), sp_runtime::DispatchError> {
-    let ema_half_life = T::EmaHalfLife::get();
-    let current_block = polkadot_sdk::frame_system::Pallet::<T>::block_number();
-    let last_update = pallet_axial_router::EmaLastUpdate::<T>::get(asset_in, asset_out);
-    let previous_ema_price = pallet_axial_router::EmaPrices::<T>::get(asset_in, asset_out);
-    let new_ema_price = if previous_ema_price.is_zero() {
-      price
-    } else {
-      // Time-weighted alpha: elapsed blocks increase EMA responsiveness
-      let elapsed: u32 = current_block
-        .saturating_sub(last_update)
-        .try_into()
-        .unwrap_or(u32::MAX);
-      let effective_elapsed = elapsed.max(1);
-      let alpha = polkadot_sdk::sp_runtime::Perbill::from_rational(
-        effective_elapsed,
-        ema_half_life.saturating_add(effective_elapsed),
-      );
-      let ema_part1 = alpha.mul_floor(price);
-      let ema_part2 = (polkadot_sdk::sp_runtime::Perbill::from_percent(100) - alpha)
-        .mul_floor(previous_ema_price);
-      ema_part1 + ema_part2
-    };
-    pallet_axial_router::EmaPrices::<T>::insert(asset_in, asset_out, new_ema_price);
-    pallet_axial_router::EmaLastUpdate::<T>::insert(asset_in, asset_out, current_block);
-    Ok(())
+    let feed = super::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    if !pallet_oracle::Feeds::<Runtime>::contains_key(feed) {
+      return Ok(());
+    }
+    let producer: AccountId = AxialRouterPalletId::get().into_account_truncating();
+    crate::Oracle::publish_from(producer, feed, price)
   }
 
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<Balance> {
-    Some(pallet_axial_router::EmaPrices::<T>::get(
-      asset_in, asset_out,
-    ))
+    let feed = super::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    crate::Oracle::observation_state(feed, u32::MAX)
+      .ok()
+      .and_then(|state| match state {
+        pallet_oracle::ObservationState::Fresh(observation) if observation.value > 0 => {
+          Some(observation.value)
+        }
+        _ => None,
+      })
   }
 
   fn validate_price_deviation(
@@ -661,20 +646,13 @@ impl<T: pallet_axial_router::pallet::Config> pallet_axial_router::PriceOracle<Ba
     asset_out: AssetKind,
     current_price: Balance,
   ) -> Result<(), sp_runtime::DispatchError> {
-    let max_price_deviation = T::MaxPriceDeviation::get();
     if let Some(ema_price) = Self::get_ema_price(asset_in, asset_out) {
-      if ema_price.is_zero() {
-        return Ok(()); // No EMA data yet, skip validation
-      }
-      // Calculate price deviation
       let deviation = if current_price > ema_price {
         polkadot_sdk::sp_runtime::Perbill::from_rational(current_price - ema_price, ema_price)
       } else {
         polkadot_sdk::sp_runtime::Perbill::from_rational(ema_price - current_price, ema_price)
       };
-      if deviation > max_price_deviation {
-        // This is a bounded runtime safety check. Durable price-deviation analytics,
-        // dashboards, and alert history belong in external indexers/operator tooling.
+      if deviation > AxialRouterMaxPriceDeviation::get() {
         return Err(DispatchError::Other("Price deviation exceeded"));
       }
     }
@@ -749,7 +727,6 @@ impl pallet_axial_router::pallet::Config for Runtime {
   type FeeAdapter = FeeManagerImpl<Runtime>;
   type MaxPriceDeviation = AxialRouterMaxPriceDeviation;
   type MaxRouterFee = AxialRouterMaxFee;
-  type MaxTrackedAssets = ConstU32<64>;
   type MinSwapForeign = MinSwapForeign;
   type NativeAsset = NativeAsset;
   type PalletId = AxialRouterPalletId;

@@ -74,4 +74,4 @@ The current kernel does not yet include:
 - A stronger per-slot weighted author lottery inside a fixed authority set
 - Advanced staking UX beyond the native security path
 
-See [`docs/staking.specification.en.md`](../../../docs/staking.specification.en.md) for the contract and [`docs/staking.architecture.en.md`](../../../docs/staking.architecture.en.md) for the current implementation map.
+See [`docs/specification.en.md`](./docs/specification.en.md) for the contract and [`docs/architecture.en.md`](./docs/architecture.en.md) for the current implementation map.

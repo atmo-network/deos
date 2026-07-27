@@ -102,5 +102,5 @@ For runtime behavior and pallet wiring, see implementation docs in `docs/` and t
 
 - Main protocol spec: [`../docs/tmctol.specification.en.md`](../docs/tmctol.specification.en.md)
 - Core runtime architecture: [`../docs/core.architecture.en.md`](../docs/core.architecture.en.md)
-- TMC implementation architecture: [`../docs/tmc.architecture.en.md`](../docs/tmc.architecture.en.md)
+- TMC implementation architecture: [`../template/pallets/tmc/docs/architecture.en.md`](../template/pallets/tmc/docs/architecture.en.md)
 - Test explanations: [`./tests.md`](./tests.md)

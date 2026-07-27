@@ -41,19 +41,22 @@ The flagship economic standard combining minting curves with automatic liquidity
 
 #### Runtime / Product Contracts
 
-- [AAA Specification](./aaa.specification.en.md)
+- [Typed Observation Oracle Specification](../template/pallets/oracle/docs/specification.en.md)
+  Bounded reusable scalar-feed contract covering typed identity and provenance, immutable aggregation semantics, current-state freshness, revision rules, producer authority, lifecycle, and transactional O(1) change notification.
+
+- [AAA Specification](../template/pallets/aaa/docs/specification.en.md)
   Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, execution-plan/task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
 
-- [AAA External Runtime Embedding Guide](../template/pallets/aaa/EMBEDDING.md)
-  Package-owned host-runtime checklist for reusing `pallet-aaa` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries. The former [`docs/aaa.embedding.en.md`](./aaa.embedding.en.md) path remains as a compatibility redirect.
+- [AAA External Runtime Embedding Guide](../template/pallets/aaa/docs/embedding.md)
+  Package-owned host-runtime checklist for reusing `pallet-deos-aaa` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.
 
 - [AAA Control-Plane Contract](./aaa-control-plane.contract.en.md)
   Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded AAA programs.
 
-- [Staking Specification](./staking.specification.en.md)
+- [Staking Specification](../template/pallets/staking/docs/specification.en.md)
   Multi-asset share-vault staking contract: sovereign backing channels, share-based ownership, receipt direction, native-special-case rules, and the dual-inflow reward contract.
 
-- [DEOS Governance Specification](./governance.specification.en.md)
+- [DEOS Governance Specification](../template/pallets/governance/docs/specification.en.md)
   DEOS's bounded dual-track alternative to OpenGov for the current TMCTOL standard: domains, cadence, primary/protection hierarchy, typed payload kinds, invoice voting, bounded observability, and runtime-upgrade authority.
 
 - [Read-Model Contract](./read-model.contract.en.md)
@@ -66,29 +69,32 @@ The flagship economic standard combining minting curves with automatic liquidity
 
 Implementation-specific documents describing how the current runtime realizes the contracts above.
 
-- [AAA Architecture](./aaa.architecture.en.md)
-  Code-anchored implementation map of `pallet-aaa`: scheduler queues, admission/fee gates, lifecycle transitions, adapter boundaries, balance-ingress event wiring, the current TMCTOL reference topology for System AAA, runtime bindings, telemetry surface, and release-mode scheduler performance baseline.
+- [AAA Architecture](../template/pallets/aaa/docs/architecture.en.md)
+  Code-anchored implementation map of `pallet-deos-aaa`: scheduler queues, admission/fee gates, lifecycle transitions, adapter boundaries, balance-ingress event wiring, the current TMCTOL reference topology for System AAA, runtime bindings, telemetry surface, and release-mode scheduler performance baseline.
+
+- [Typed Observation Oracle Architecture](../template/pallets/oracle/docs/architecture.en.md)
+  Implementation map for the standalone bounded oracle package, typed runtime bindings, independent fixture, current storage topology, transactional publication, and production weight evidence.
 
 - [Core Architecture](./core.architecture.en.md)
   _! SYSTEM BACKBONE !_
   The token-driven design foundation. Covers system accounts structure, "Omnivorous" balance monitoring, Bitmask Asset Taxonomy, separation of Abstract Actors from Concrete Pallets, and the operational token lifecycle checkpoint runbook.
 
-- [Axial Router Architecture](./axial-router.architecture.en.md)
+- [Axial Router Architecture](../template/pallets/router/docs/architecture.en.md)
   The economic coordination actor. Details mechanism-over-policy design, EMA oracle, fee burning flows, and integration with Asset Conversion.
 
-- [Token Minting Curve Architecture](./tmc.architecture.en.md)
+- [Token Minting Curve Architecture](../template/pallets/tmc/docs/architecture.en.md)
   The unidirectional minting engine. Covers the current runtime realization of the linear bonding curve, integral-based minting, read surfaces, and conservation invariants.
 
-- [Asset Registry Architecture](./asset-registry.architecture.en.md)
+- [Asset Registry Architecture](../template/pallets/asset-registry/docs/architecture.en.md)
   The foreign asset gateway. Documents the Hybrid Registry pattern: deterministic hashing at registration, persistent bidirectional `Location <-> AssetId` mapping, and XCM location-key migration.
 
 - [Randomness Strategy](./randomness.strategy.en.md)
   Secondary operational note for the current launch line. Documents the retirement of the local `pallet-vrf` line, the trusted team-operated collator posture plus previous-block-hash fallback used for the first mainnet, and the gate for any future relay-beacon replacement: only a new parachain-consumable per-block protocol beacon qualifies.
 
-- [Staking Architecture](./staking.architecture.en.md)
+- [Staking Architecture](../template/pallets/staking/docs/architecture.en.md)
   Code-anchored implementation map of `pallet-staking`: deterministic pool/reward account derivation, receipt lifecycle, legacy `Positions -> stXXX` bridge, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination, explicit NativeVotePower custody, native nomination reward settlement, runtime bindings, and the current operational watchpoints.
 
-- [Governance Architecture](./governance.architecture.en.md)
+- [Governance Architecture](../template/pallets/governance/docs/architecture.en.md)
   Code-anchored implementation map of `pallet-governance`: bounded winning-vote memory, resolution-once dedup, active proposal lifecycle, weighted vote policy wiring, auto-finalization buckets, recent finalized-outcome retention, and the current policy/watchpoint surface.
 
 ### 5. Roadmap

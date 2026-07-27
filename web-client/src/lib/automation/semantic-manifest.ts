@@ -20,6 +20,18 @@ export type AaaTaskName =
   | 'Unstake'
   | 'StopCycle';
 
+export type AaaConditionName =
+  | 'BalanceAbove'
+  | 'BalanceBelow'
+  | 'BalanceEquals'
+  | 'BalanceNotEquals'
+  | 'BlockNumberAbove'
+  | 'BlockNumberBelow'
+  | 'ObservationAbove'
+  | 'ObservationBelow'
+  | 'ObservationEquals'
+  | 'ObservationNotEquals';
+
 export type AaaAmountName =
   | 'Fixed'
   | 'PercentageOfCurrent'
@@ -42,6 +54,19 @@ const TASK_NAMES = [
   'StopCycle',
 ] as const satisfies readonly AaaTaskName[];
 
+const CONDITION_NAMES = [
+  'BalanceAbove',
+  'BalanceBelow',
+  'BalanceEquals',
+  'BalanceNotEquals',
+  'BlockNumberAbove',
+  'BlockNumberBelow',
+  'ObservationAbove',
+  'ObservationBelow',
+  'ObservationEquals',
+  'ObservationNotEquals',
+] as const satisfies readonly AaaConditionName[];
+
 const AMOUNT_NAMES = [
   'Fixed',
   'PercentageOfCurrent',
@@ -62,7 +87,7 @@ export type AaaSemanticTask = {
     | 'AssetOps'
     | 'DexOps'
     | 'StakingOps'
-    | 'LiquidityDonationOps';
+    | 'LiquidityOps';
   assetsRead: string[];
   assetsWritten: string[];
   readsAdapterDerivedAssets: boolean;
@@ -86,6 +111,22 @@ export type AaaSemanticTask = {
   amountSurfaces: Array<{ role: string; path: string }>;
 };
 
+export type AaaSemanticCondition = {
+  condition: AaaConditionName;
+  scaleIndex: number;
+  observation:
+    | 'BalanceComparison'
+    | 'BlockNumberComparison'
+    | 'ScalarObservationComparison';
+  readSurface:
+    | { kind: 'SpendableAssetBalance'; path: string }
+    | { kind: 'CurrentBlockNumber' }
+    | { kind: 'TypedObservation'; feedPath: string; maxAgeBlocksPath: string };
+  pure: true;
+  observationWindow: 'StepAttemptTime';
+  boundedReadCount: 1;
+};
+
 export type AaaSemanticAmountResolution = {
   resolution: AaaAmountName;
   dataDependencies: Array<
@@ -106,8 +147,9 @@ export type AaaSemanticAmountResolution = {
 
 export type AaaSemanticManifest = {
   format: 'deos.aaa.semantic-manifest';
-  formatVersion: 1;
+  formatVersion: 2;
   tasks: AaaSemanticTask[];
+  conditions: AaaSemanticCondition[];
   amountResolutions: AaaSemanticAmountResolution[];
 };
 
@@ -123,6 +165,7 @@ function names(value: unknown, label: string) {
   return value.map((entry, index) => {
     const projected = record(entry, `${label}[${index}]`);
     if (typeof projected.task === 'string') return projected.task;
+    if (typeof projected.condition === 'string') return projected.condition;
     if (typeof projected.resolution === 'string') return projected.resolution;
     throw new Error(`${label}[${index}] has no semantic identity`);
   });
@@ -148,10 +191,23 @@ export function parseAaaSemanticManifest(value: unknown): AaaSemanticManifest {
   if (projected.format !== 'deos.aaa.semantic-manifest') {
     throw new Error('Unsupported AAA semantic manifest format');
   }
-  if (projected.formatVersion !== 1) {
+  if (projected.formatVersion !== 2) {
     throw new Error('Unsupported AAA semantic manifest version');
   }
   requireExactNames(names(projected.tasks, 'tasks'), TASK_NAMES, 'Task');
+  requireExactNames(
+    names(projected.conditions, 'conditions'),
+    CONDITION_NAMES,
+    'Condition',
+  );
+  const conditions = projected.conditions as Array<Record<string, unknown>>;
+  conditions.forEach((condition, index) => {
+    if (condition.scaleIndex !== index) {
+      throw new Error(
+        'Condition SCALE indices are unknown, missing, or reordered',
+      );
+    }
+  });
   requireExactNames(
     names(projected.amountResolutions, 'amountResolutions'),
     AMOUNT_NAMES,
@@ -165,6 +221,12 @@ export const AAA_SEMANTIC_MANIFEST = parseAaaSemanticManifest(manifestJson);
 const TASKS = new Map(
   AAA_SEMANTIC_MANIFEST.tasks.map((task) => [task.task, task]),
 );
+const CONDITIONS = new Map(
+  AAA_SEMANTIC_MANIFEST.conditions.map((condition) => [
+    condition.condition,
+    condition,
+  ]),
+);
 const AMOUNTS = new Map(
   AAA_SEMANTIC_MANIFEST.amountResolutions.map((amount) => [
     amount.resolution,
@@ -175,6 +237,14 @@ const AMOUNTS = new Map(
 export function aaaTaskSemantics(task: string): AaaSemanticTask {
   const semantics = TASKS.get(task as AaaTaskName);
   if (semantics == null) throw new Error(`Unsupported Task variant: ${task}`);
+  return semantics;
+}
+
+export function aaaConditionSemantics(condition: string): AaaSemanticCondition {
+  const semantics = CONDITIONS.get(condition as AaaConditionName);
+  if (semantics == null) {
+    throw new Error(`Unsupported Condition variant: ${condition}`);
+  }
   return semantics;
 }
 

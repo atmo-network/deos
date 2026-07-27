@@ -33,6 +33,14 @@ export type AaaAuthoringAmount =
     }
   | { type: 'AllBalance' };
 
+export type AaaAuthoringObservationFeed = {
+  assetIn: AaaAuthoringAsset;
+  assetOut: AaaAuthoringAsset;
+  method: 'PreExecutionSpot';
+  aggregation: { type: 'LastValue' } | { type: 'Ema'; halfLifeBlocks: number };
+  scale: number;
+};
+
 export type AaaAuthoringCondition =
   | {
       type:
@@ -46,6 +54,16 @@ export type AaaAuthoringCondition =
   | {
       type: 'BlockNumberAbove' | 'BlockNumberBelow';
       threshold: number;
+    }
+  | {
+      type:
+        | 'ObservationAbove'
+        | 'ObservationBelow'
+        | 'ObservationEquals'
+        | 'ObservationNotEquals';
+      feed: AaaAuthoringObservationFeed;
+      threshold: string;
+      maxAgeBlocks: number;
     };
 
 export type AaaAuthoringInputLimit =
@@ -136,6 +154,10 @@ export const AAA_AUTHORING_CONDITION_TYPES = [
   'BalanceNotEquals',
   'BlockNumberAbove',
   'BlockNumberBelow',
+  'ObservationAbove',
+  'ObservationBelow',
+  'ObservationEquals',
+  'ObservationNotEquals',
 ] as const satisfies readonly AaaAuthoringCondition['type'][];
 
 export type AaaAuthoringConditionSet =
@@ -166,7 +188,8 @@ export type AaaAuthoringTriggerSource =
       assetFilter:
         | { type: 'Any' }
         | { type: 'Whitelist'; assets: AaaAuthoringAsset[] };
-    };
+    }
+  | { type: 'OnObservationChange'; feed: AaaAuthoringObservationFeed };
 
 export type AaaAuthoringTrigger =
   | { type: 'Immediate'; sources: AaaAuthoringTriggerSource[] }
@@ -178,9 +201,14 @@ export type AaaAuthoringTrigger =
         | { type: 'WhenSignalled'; sources: AaaAuthoringTriggerSource[] };
     };
 
+export type AaaAuthoringCompletionPolicy =
+  | 'Persistent'
+  | 'CloseAfterProductiveRun';
+
 export type AaaAuthoringProgram = {
   aaaType: AaaPlanType;
   mutability: AutomationMutability;
+  completionPolicy: AaaAuthoringCompletionPolicy;
   trigger: AaaAuthoringTrigger;
   cooldownBlocks: number;
   scheduleWindow: { start: number; end: number } | null;
@@ -299,6 +327,22 @@ export function createAaaAuthoringCondition(
     case 'BlockNumberAbove':
     case 'BlockNumberBelow':
       return { type, threshold: 0 };
+    case 'ObservationAbove':
+    case 'ObservationBelow':
+    case 'ObservationEquals':
+    case 'ObservationNotEquals':
+      return {
+        type,
+        feed: {
+          assetIn: { type: 'Native' },
+          assetOut: { type: 'Local', id: 0 },
+          method: 'PreExecutionSpot',
+          aggregation: { type: 'LastValue' },
+          scale: 12,
+        },
+        threshold: '0',
+        maxAgeBlocks: 1,
+      };
   }
 }
 
@@ -318,6 +362,7 @@ export function createAaaAuthoringProgram(): AaaAuthoringProgram {
   return {
     aaaType: 'User',
     mutability: 'Mutable',
+    completionPolicy: 'Persistent',
     trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
     cooldownBlocks: 0,
     scheduleWindow: null,
@@ -435,6 +480,31 @@ function validatePositiveBalanceBound(
   }
 }
 
+function validateObservationFeed(
+  feed: AaaAuthoringObservationFeed,
+  path: string,
+  issues: AaaAuthoringIssue[],
+) {
+  validateAsset(feed.assetIn, `${path}.assetIn`, issues);
+  validateAsset(feed.assetOut, `${path}.assetOut`, issues);
+  if (
+    feed.aggregation.type === 'Ema' &&
+    (!isU32(feed.aggregation.halfLifeBlocks) ||
+      feed.aggregation.halfLifeBlocks === 0)
+  ) {
+    issues.push({
+      path: `${path}.aggregation.halfLifeBlocks`,
+      message: 'EMA half-life must be a nonzero u32',
+    });
+  }
+  if (!Number.isInteger(feed.scale) || feed.scale < 0 || feed.scale > 255) {
+    issues.push({
+      path: `${path}.scale`,
+      message: 'Observation scale must be a u8',
+    });
+  }
+}
+
 function validateCondition(
   condition: AaaAuthoringCondition,
   path: string,
@@ -459,6 +529,24 @@ function validateCondition(
         issues.push({
           path: `${path}.threshold`,
           message: 'Block threshold must be a u32',
+        });
+      }
+      return;
+    case 'ObservationAbove':
+    case 'ObservationBelow':
+    case 'ObservationEquals':
+    case 'ObservationNotEquals':
+      validateObservationFeed(condition.feed, `${path}.feed`, issues);
+      if (!UNSIGNED_INTEGER.test(condition.threshold)) {
+        issues.push({
+          path: `${path}.threshold`,
+          message: 'Observation threshold must be a canonical unsigned integer',
+        });
+      }
+      if (!isU32(condition.maxAgeBlocks) || condition.maxAgeBlocks === 0) {
+        issues.push({
+          path: `${path}.maxAgeBlocks`,
+          message: 'Observation maximum age must be a nonzero u32',
         });
       }
   }
@@ -601,6 +689,108 @@ function validateTask(
   }
 }
 
+type TriggerAmountSurface = {
+  asset: AaaAuthoringAsset;
+  runtimeDerived: boolean;
+  path: string;
+};
+
+function collectTriggerAmountSurfaces(
+  task: AaaAuthoringTask,
+  path: string,
+): TriggerAmountSurface[] {
+  const surfaces: TriggerAmountSurface[] = [];
+  const push = (
+    amount: AaaAuthoringAmount,
+    asset: AaaAuthoringAsset,
+    amountPath: string,
+    runtimeDerived = false,
+  ) => {
+    if (amount.type === 'PercentageOfTrigger') {
+      surfaces.push({ asset, runtimeDerived, path: amountPath });
+    }
+  };
+  switch (task.type) {
+    case 'Transfer':
+    case 'SplitTransfer':
+    case 'Burn':
+    case 'Mint':
+    case 'Stake':
+      push(task.amount, task.asset, `${path}.amount`);
+      break;
+    case 'SwapIn':
+      push(task.amountIn, task.assetIn, `${path}.amountIn`);
+      break;
+    case 'SwapOut':
+      push(task.amountOut, task.assetOut, `${path}.amountOut`);
+      break;
+    case 'AddLiquidity':
+      push(task.amountA, task.assetA, `${path}.amountA`);
+      push(task.amountB, task.assetB, `${path}.amountB`);
+      break;
+    case 'RemoveLiquidity':
+      push(task.amount, task.lpAsset, `${path}.amount`);
+      break;
+    case 'DonateLiquidity':
+      push(task.amount, task.assetA, `${path}.amount`);
+      break;
+    case 'Unstake':
+      push(task.shares, task.asset, `${path}.shares`, true);
+      break;
+    case 'StopCycle':
+      break;
+  }
+  return surfaces;
+}
+
+function validateTriggerAmountCompatibility(
+  program: AaaAuthoringProgram,
+  issues: AaaAuthoringIssue[],
+) {
+  const surfaces = program.steps.flatMap((step, index) =>
+    collectTriggerAmountSurfaces(step.task, `steps[${index}].task`),
+  );
+  if (surfaces.length === 0) return;
+  const sources =
+    program.trigger.type === 'Immediate'
+      ? program.trigger.sources
+      : program.trigger.mode.type === 'WhenSignalled'
+        ? program.trigger.mode.sources
+        : [];
+  if (
+    sources.length === 0 ||
+    sources.some((source) => source.type !== 'OnAddressEvent')
+  ) {
+    issues.push({
+      path: 'trigger',
+      message:
+        'PercentageOfTrigger requires only address-event readiness sources; Manual, observation, and cadence-only admission provide no trigger amount',
+    });
+    return;
+  }
+  for (const source of sources) {
+    if (source.type !== 'OnAddressEvent') continue;
+    for (const surface of surfaces) {
+      const covered =
+        source.assetFilter.type === 'Any' ||
+        (!surface.runtimeDerived &&
+          source.assetFilter.assets.some(
+            (asset) =>
+              bytesKey(assetCanonicalBytes(asset)) ===
+              bytesKey(assetCanonicalBytes(surface.asset)),
+          ));
+      if (!covered) {
+        issues.push({
+          path: surface.path,
+          message: surface.runtimeDerived
+            ? 'PercentageOfTrigger for Unstake requires an Any-asset address source because the receipt asset is runtime-derived'
+            : 'PercentageOfTrigger asset must be admitted by every address-event source',
+        });
+      }
+    }
+  }
+}
+
 function validateUniqueAddresses(
   accounts: string[],
   path: string,
@@ -680,6 +870,8 @@ function validateTriggerSources(
           assets.add(key);
         });
       }
+    } else if (source.type === 'OnObservationChange') {
+      validateObservationFeed(source.feed, `${sourcePath}.feed`, issues);
     }
     try {
       const key = bytesKey(triggerSourceCanonicalBytes(source));
@@ -735,6 +927,16 @@ export function validateAaaAuthoringProgram(
   const issues: AaaAuthoringIssue[] = [];
   const maxSteps =
     program.aaaType === 'User' ? limits.maxUserSteps : limits.maxSystemSteps;
+  if (
+    program.completionPolicy !== 'Persistent' &&
+    program.completionPolicy !== 'CloseAfterProductiveRun'
+  ) {
+    issues.push({
+      path: 'completionPolicy',
+      message:
+        'Completion policy must be Persistent or CloseAfterProductiveRun',
+    });
+  }
   if (program.steps.length === 0 || program.steps.length > maxSteps) {
     issues.push({
       path: 'steps',
@@ -822,6 +1024,7 @@ export function validateAaaAuthoringProgram(
     }
     validateTask(step.task, `${path}.task`, issues, limits, program.aaaType);
   });
+  validateTriggerAmountCompatibility(program, issues);
   return issues.length === 0
     ? { valid: true, issues: [] }
     : { valid: false, issues };
@@ -912,6 +1115,21 @@ function lowerAmount(amount: AaaAuthoringAmount) {
   }
 }
 
+function lowerObservationFeed(feed: AaaAuthoringObservationFeed) {
+  return {
+    asset_in: lowerAsset(feed.assetIn),
+    asset_out: lowerAsset(feed.assetOut),
+    method: runtimeVariant(feed.method),
+    aggregation:
+      feed.aggregation.type === 'LastValue'
+        ? runtimeVariant('LastValue')
+        : runtimeVariant('Ema', {
+            half_life_blocks: feed.aggregation.halfLifeBlocks,
+          }),
+    scale: feed.scale,
+  };
+}
+
 function lowerCondition(condition: AaaAuthoringCondition) {
   switch (condition.type) {
     case 'BalanceAbove':
@@ -925,6 +1143,15 @@ function lowerCondition(condition: AaaAuthoringCondition) {
     case 'BlockNumberAbove':
     case 'BlockNumberBelow':
       return runtimeVariant(condition.type, { threshold: condition.threshold });
+    case 'ObservationAbove':
+    case 'ObservationBelow':
+    case 'ObservationEquals':
+    case 'ObservationNotEquals':
+      return runtimeVariant(condition.type, {
+        feed: lowerObservationFeed(condition.feed),
+        threshold: BigInt(condition.threshold),
+        max_age_blocks: condition.maxAgeBlocks,
+      });
   }
 }
 
@@ -1044,6 +1271,18 @@ function assetCanonicalBytes(asset: AaaAuthoringAsset) {
   }
 }
 
+function observationFeedCanonicalBytes(feed: AaaAuthoringObservationFeed) {
+  return [
+    ...assetCanonicalBytes(feed.assetIn),
+    ...assetCanonicalBytes(feed.assetOut),
+    0,
+    ...(feed.aggregation.type === 'LastValue'
+      ? [0]
+      : [1, ...u32Le(feed.aggregation.halfLifeBlocks)]),
+    feed.scale,
+  ];
+}
+
 function sourceFilterCanonicalBytes(
   filter: Extract<
     AaaAuthoringTriggerSource,
@@ -1103,6 +1342,8 @@ function triggerSourceCanonicalBytes(source: AaaAuthoringTriggerSource) {
         ...sourceFilterCanonicalBytes(source.sourceFilter),
         ...assetFilterCanonicalBytes(source.assetFilter),
       ];
+    case 'OnObservationChange':
+      return [2, ...observationFeedCanonicalBytes(source.feed)];
   }
 }
 
@@ -1142,6 +1383,10 @@ function lowerTriggerSource(source: AaaAuthoringTriggerSource) {
         asset_filter: assetFilter,
       });
     }
+    case 'OnObservationChange':
+      return runtimeVariant('OnObservationChange', {
+        feed: lowerObservationFeed(source.feed),
+      });
   }
 }
 
@@ -1234,6 +1479,7 @@ export function lowerAaaAuthoringProgram(
             })
           : runtimeVariant(step.errorPolicy.type),
     })),
+    completion_policy: runtimeVariant(program.completionPolicy),
     funding_source_policy: lowerFundingPolicy(program.fundingPolicy),
   });
 }

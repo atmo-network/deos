@@ -59,7 +59,7 @@ export type SystemSnapshot = {
   supplyLp: bigint;
   hasPool: boolean;
   hasNativeCurve: boolean;
-  trackedForeignAssetCount: number;
+  registeredForeignAssetCount: number;
   minForeignSwapAmount: bigint;
   gravityWellRatio: number;
   buckets: Map<string, BucketBalance>;

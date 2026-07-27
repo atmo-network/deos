@@ -172,7 +172,6 @@ async function main() {
   };
   try {
     const fin = await client.getFinalizedBlock();
-    const tracked = await api.query.AxialRouter.TrackedAssets.getValue({ at: fin.hash }) ?? [];
     const curve = await api.query.TokenMintingCurve.TokenCurves.getValue(assetNative(), { at: fin.hash });
     const assetDetails = await api.view.Assets.asset_details(FOREIGN_ID, { at: fin.hash });
     const nativeStakingAssetDetails = await api.view.Assets.asset_details(NATIVE_STAKING_ASSET_ID, { at: fin.hash });
@@ -273,14 +272,12 @@ async function main() {
     }
 
     const after = await client.getFinalizedBlock();
-    const finalTracked = await api.query.AxialRouter.TrackedAssets.getValue({ at: after.hash }) ?? [];
     const finalCurve = await api.query.TokenMintingCurve.TokenCurves.getValue(assetNative(), { at: after.hash });
     const finalReserves = await api.view.AssetConversion.get_reserves(assetForeign(), assetNative(), { at: after.hash });
     const finalNativeStakingPool = await api.view.Staking.native_staking_liquidity_pool({ at: after.hash });
     console.log('\n== final state ==');
     console.log(encode({
       block: after.number,
-      tracked: finalTracked,
       hasCurve: finalCurve !== null && finalCurve !== undefined,
       reserves: finalReserves,
       nativeStakingPool: finalNativeStakingPool,

@@ -8,7 +8,8 @@
 
 use super::common::{
   ALICE, ASSET_A, BOB, CHARLIE, DAVE, EVE, INITIAL_BALANCE, SWAP_AMOUNT,
-  setup_axial_router_infrastructure, setup_basic_test_environment,
+  publish_axial_router_observation, setup_axial_router_infrastructure,
+  setup_basic_test_environment,
 };
 use crate::configs::axial_router_config::{BurningManagerAccount, FeeManagerImpl};
 use crate::{AccountId, Assets, AxialRouter, Balances, Runtime, RuntimeOrigin, System};
@@ -603,11 +604,11 @@ fn test_oracle_manipulation_resistance_rejects_deviated_quote() {
     System::set_block_number(1);
     // Inject strongly deviated EMA quote to emulate manipulation/stale oracle state
     let manipulated_price = 10_000_000_000_000u128;
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    assert_ok!(publish_axial_router_observation(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       manipulated_price,
-    );
+    ));
     assert_noop!(
       AxialRouter::swap(
         RuntimeOrigin::signed(ALICE),
@@ -621,15 +622,17 @@ fn test_oracle_manipulation_resistance_rejects_deviated_quote() {
       pallet_axial_router::Error::<Runtime>::PriceDeviationExceeded
     );
     // Restore fair EMA and verify swap path becomes available again
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
+    let feed = crate::configs::oracle_config::axial_router_pool_feed(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
-      primitives::ecosystem::params::PRECISION,
     );
-    pallet_axial_router::EmaPrices::<Runtime>::insert(
-      AssetKind::Local(ASSET_A),
-      AssetKind::Native,
-      primitives::ecosystem::params::PRECISION,
+    pallet_oracle::Observations::<Runtime>::insert(
+      feed,
+      pallet_oracle::Observation {
+        value: primitives::ecosystem::params::PRECISION,
+        updated_at: System::block_number(),
+        revision: 2,
+      },
     );
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(ALICE),

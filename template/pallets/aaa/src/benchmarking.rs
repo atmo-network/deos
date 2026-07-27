@@ -33,6 +33,7 @@ mod benches {
       schedule,
       schedule_window: None,
       execution_plan,
+      completion_policy: CompletionPolicy::Persistent,
       funding_source_policy: FundingSourcePolicy::OwnerOnly,
     }
   }
@@ -45,6 +46,7 @@ mod benches {
       schedule,
       schedule_window: None,
       execution_plan,
+      completion_policy: CompletionPolicy::Persistent,
       funding_source_policy: FundingSourcePolicy::RuntimePolicy,
     }
   }
@@ -672,6 +674,32 @@ mod benches {
   }
 
   #[benchmark]
+  fn condition_set_observation(c: Linear<1, 4>) {
+    let actor: T::AccountId = account("condition-observation", 0, 0);
+    let bounded = c.min(T::MaxConditionsPerStep::get());
+    let feeds = T::BenchmarkHelper::setup_observation_feeds(bounded)
+      .expect("observation benchmark feeds must be available");
+    assert!(feeds.len() >= bounded as usize);
+    let conditions = BoundedVec::try_from(
+      feeds
+        .into_iter()
+        .take(bounded as usize)
+        .map(|feed| Condition::ObservationAbove {
+          feed,
+          threshold: 0,
+          max_age_blocks: 100,
+        })
+        .collect::<alloc::vec::Vec<_>>(),
+    )
+    .expect("maximum observation condition group fits");
+    let condition_set = ConditionSet::All(conditions);
+    #[block]
+    {
+      let _ = Pallet::<T>::evaluate_condition_set(&condition_set, &actor, T::Balance::zero());
+    }
+  }
+
+  #[benchmark]
   fn condition_set_evaluation(c: Linear<1, 4>) {
     let actor: T::AccountId = account("condition-any", 0, 0);
     let bounded = c.min(T::MaxConditionsPerStep::get());
@@ -763,7 +791,7 @@ mod benches {
       .expect("benchmark helper must prepare add-liquidity state");
     #[block]
     {
-      T::DexOps::add_liquidity(&caller, asset_a, asset_b, amount_a, amount_b, One::one())
+      T::LiquidityOps::add_liquidity(&caller, asset_a, asset_b, amount_a, amount_b, One::one())
         .expect("add-liquidity benchmark operation must succeed");
     }
   }
@@ -775,7 +803,7 @@ mod benches {
       .expect("benchmark helper must prepare liquidity-donation state");
     #[block]
     {
-      T::LiquidityDonationOps::donate_liquidity(&caller, asset_a, asset_b, amount, Perbill::zero())
+      T::LiquidityOps::donate_liquidity(&caller, asset_a, asset_b, amount, Perbill::zero())
         .expect("liquidity-donation benchmark operation must succeed");
     }
   }
@@ -787,7 +815,7 @@ mod benches {
       .expect("benchmark helper must prepare indexed remove-liquidity state");
     #[block]
     {
-      T::DexOps::remove_liquidity(&caller, lp_asset, lp_amount, One::one(), One::one())
+      T::LiquidityOps::remove_liquidity(&caller, lp_asset, lp_amount, One::one(), One::one())
         .expect("remove-liquidity benchmark operation must succeed");
     }
   }
@@ -902,6 +930,27 @@ mod benches {
       on_error: StepErrorPolicy::AbortCycle,
     };
     BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
+  }
+
+  fn bench_create_system_observation<T: Config>(
+    owner: T::AccountId,
+    feed: T::ObservationFeedId,
+  ) -> AaaId {
+    let schedule = Schedule {
+      trigger: Trigger::Immediate {
+        sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
+          .expect("one observation source must fit"),
+      },
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_program::<T>(schedule, make_inert_execution_plan::<T>()),
+    )
+    .expect("observation benchmark actor creation must succeed");
+    NextAaaId::<T>::get().saturating_sub(1)
   }
 
   fn bench_create_system_manual<T: Config>(seed: u32) -> AaaId {
@@ -1159,6 +1208,7 @@ mod benches {
       core::hint::black_box(SystemQueueTail::<T>::get());
       core::hint::black_box(UserQueueHead::<T>::get());
       core::hint::black_box(UserQueueTail::<T>::get());
+      core::hint::black_box(DirtyObservationFeedCount::<T>::get());
       Pallet::<T>::update_idle_starvation_state(now, breaker_active, Weight::zero());
     }
   }
@@ -1987,6 +2037,58 @@ mod benches {
           .saturating_add(Weight::from_parts(step.conditions.len() as u64, 0));
       }
       core::hint::black_box(total);
+    }
+  }
+
+  #[benchmark]
+  fn observation_change_ingress() {
+    let owner: T::AccountId = account("observation-ingress", 0, 0);
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("observation benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one observation benchmark feed is required");
+    let _ = bench_create_system_observation::<T>(owner, feed);
+    #[block]
+    {
+      Pallet::<T>::note_observation_changed(feed, 1)
+        .expect("observation change ingress must succeed");
+    }
+    let state = DirtyObservationFeeds::<T>::get(feed).expect("feed must be dirty");
+    assert_eq!(state.latest_revision, 1);
+    assert_eq!(DirtyObservationFeedCount::<T>::get(), 1);
+  }
+
+  #[benchmark]
+  fn observation_fanout_base() {
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::dirty_observation_fanout_base_probe());
+    }
+  }
+
+  #[benchmark]
+  fn observation_fanout_page() {
+    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
+      .expect("observation benchmark feed must be available")
+      .into_iter()
+      .next()
+      .expect("one observation benchmark feed is required");
+    let mut actors = alloc::vec::Vec::new();
+    for index in 0..T::QueuePageSize::get() {
+      let owner: T::AccountId = account("observation-fanout", index, 0);
+      actors.push(bench_create_system_observation::<T>(owner, feed));
+    }
+    Pallet::<T>::note_observation_changed(feed, 1)
+      .expect("observation change ingress must succeed");
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()
+        .expect("dense observation fanout page must succeed");
+    }
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    for aaa_id in actors {
+      assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
     }
   }
 
