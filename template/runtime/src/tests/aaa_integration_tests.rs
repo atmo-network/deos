@@ -111,6 +111,71 @@ fn runtime_oracle_change_hook_coalesces_into_aaa_dirty_feed_state() {
 }
 
 #[test]
+fn oracle_publication_rolls_back_when_aaa_change_hook_rejects() {
+  seeded_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let producer = axial_router_account();
+    let feed =
+      crate::configs::oracle_config::axial_router_pool_feed(AssetKind::Native, AssetKind::Local(8));
+    assert_ok!(Oracle::register_feed(
+      RuntimeOrigin::root(),
+      feed,
+      producer.clone(),
+      feed.meaning(),
+      primitives::OracleProvenance::AxialRouterPreExecutionReserves,
+      feed.scale,
+      pallet_oracle::Aggregation::Ema {
+        half_life_blocks: 100,
+      },
+      pallet_oracle::ZeroPolicy::Reject,
+      false,
+    ));
+    create_system(
+      ALICE,
+      observation_schedule(feed),
+      None,
+      BoundedVec::try_from(vec![make_step(inert_task())]).expect("one step fits"),
+    );
+    pallet_aaa::DirtyObservationListState::<Runtime>::mutate(|list| {
+      list.count = <Runtime as pallet_aaa::Config>::MaxActiveActors::get()
+        .saturating_mul(<Runtime as pallet_aaa::Config>::MaxTriggerSources::get());
+    });
+    let aaa_before = AAA::dirty_observation_list();
+    let events_before = System::events();
+
+    assert_noop!(
+      Oracle::publish(
+        RuntimeOrigin::signed(producer.clone()),
+        feed,
+        1_000_000_000_000
+      ),
+      Error::<Runtime>::DirtyObservationCapacityExceeded
+    );
+    assert!(Oracle::observations(feed).is_none());
+    assert!(AAA::dirty_observation_feeds(feed).is_none());
+    assert_eq!(AAA::dirty_observation_list(), aaa_before);
+    assert_eq!(System::events(), events_before);
+
+    pallet_aaa::DirtyObservationListState::<Runtime>::kill();
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      feed,
+      1_000_000_000_000,
+    ));
+    assert_eq!(
+      Oracle::observations(feed).expect("retry commits").revision,
+      1
+    );
+    assert_eq!(
+      AAA::dirty_observation_feeds(feed)
+        .expect("retry reaches AAA")
+        .latest_revision,
+      1
+    );
+  });
+}
+
+#[test]
 fn native_flow_anchor_topology_is_unique_and_funded_with_one_ed() {
   super::common::new_test_ext().execute_with(|| {
     let anchors = TmctolGenesisSystemAaas::native_flow_anchor_accounts();
@@ -1069,7 +1134,7 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.proof_size() / unit.proof_size());
 
   assert_eq!(base, Weight::from_parts(31_565_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(10_082_557_000, 172_190));
+  assert_eq!(unit, Weight::from_parts(10_087_516_000, 172_190));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
     units_per_block, 5,

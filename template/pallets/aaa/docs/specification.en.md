@@ -1,11 +1,11 @@
 # AAA Specification
 
 - **Component**: `pallet-deos-aaa` (Rust crate `pallet_aaa`; Account Abstraction Actors)
-- **Specification line**: `0.7.8`
+- **Specification line**: `0.7.9`
 - **Date**: July 2026
 - **Status**: Normative
-- **Release focus**: Reactive Delivery and Feedback Analysis
-- **Source basis**: This accepted specification and the verified `0.7.8` Reactive Delivery and Feedback Analysis implementation, generated evidence, and release-validation baseline.
+- **Release focus**: Reactive Truth Closure
+- **Source basis**: This accepted specification and the verified `0.7.9` Reactive Truth Closure implementation, generated evidence, and release-validation baseline.
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 

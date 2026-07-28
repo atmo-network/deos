@@ -13,11 +13,13 @@ import {
   projectObservationDeliveryInspection,
   projectObservationInspection,
 } from '$lib/observation/inspection';
+import { expectedObservationFanoutBudget } from '$lib/observation/runtime-evidence';
 import type {
   ObservationAggregation,
   ObservationAssetIdentity,
   ObservationDeliveryInspection,
   ObservationFanoutBudget,
+  ObservationFanoutEvidence,
   ObservationFeedIdentity,
   ObservationInspection,
 } from '$lib/observation/types';
@@ -25,14 +27,8 @@ import type {
 import type { DeosChainSnapshot } from './deos';
 import type { RuntimeAssetKind } from './runtime-assets';
 
-export const DEOS_OBSERVATION_FANOUT_BUDGET: ObservationFanoutBudget = {
-  runtimeIdentity: 'deos-runtime@spec-1',
-  weightIdentity:
-    'sha256:6688fe062147259f42666b477b5d1bfb43a339eb8ba2f14cd842352b4f631728',
-  maxPagesPerBlock: 5,
-  maxActiveDirtyFeeds: 40_000,
-  maxSubscriberPagesPerFeed: 157,
-};
+export const DEOS_OBSERVATION_FANOUT_BUDGET: ObservationFanoutBudget =
+  expectedObservationFanoutBudget();
 
 function assetIdentity(asset: RuntimeAssetKind): ObservationAssetIdentity {
   return asset.type === 'Native'
@@ -122,31 +118,54 @@ export class BlockchainObservationReader {
     );
   }
 
-  private async dirtyFeedPosition(
+  private async dirtyFeedPositions(
     snapshot: DeosChainSnapshot,
-    dirty: {
-      previous_dirty_feed?: ReturnType<typeof runtimeFeed>;
+    selected: ReturnType<typeof runtimeFeed>,
+    activeList: {
+      head?: ReturnType<typeof runtimeFeed>;
+      cursor?: ReturnType<typeof runtimeFeed>;
+      count: number;
     },
-    activeCount: number,
   ) {
-    let position = 0;
-    let previous = dirty.previous_dirty_feed;
-    while (previous != null) {
-      position += 1;
-      if (position >= activeCount) {
-        throw new Error('AAA dirty-feed links exceed the active-list bound');
+    if (activeList.count === 0) {
+      return { selectedPosition: null, cursorPosition: null };
+    }
+    if (activeList.head == null || activeList.cursor == null) {
+      throw new Error('AAA active dirty-feed list is missing head or cursor');
+    }
+    const selectedIdentity = formatObservationFeed(feedIdentity(selected));
+    const cursorIdentity = formatObservationFeed(
+      feedIdentity(activeList.cursor),
+    );
+    let selectedPosition: number | null = null;
+    let cursorPosition: number | null = null;
+    let current: ReturnType<typeof runtimeFeed> | undefined = activeList.head;
+    for (let position = 0; position < activeList.count; position += 1) {
+      if (current == null) {
+        throw new Error('AAA active dirty-feed list ended before its count');
       }
+      const identity = formatObservationFeed(feedIdentity(current));
+      if (identity === selectedIdentity) selectedPosition = position;
+      if (identity === cursorIdentity) cursorPosition = position;
       const state =
         await snapshot.typedApi.query.AAA.DirtyObservationFeeds.getValue(
-          previous,
+          current,
           { at: snapshot.at },
         );
       if (state == null) {
-        throw new Error('AAA dirty-feed predecessor is missing');
+        throw new Error('AAA active dirty-feed member is missing');
       }
-      previous = state.previous_dirty_feed;
+      current = state.next_dirty_feed;
     }
-    return position;
+    if (current != null) {
+      throw new Error('AAA active dirty-feed links exceed the list count');
+    }
+    if (selectedPosition === null || cursorPosition === null) {
+      throw new Error(
+        'AAA selected feed or fair cursor is outside the active list',
+      );
+    }
+    return { selectedPosition, cursorPosition };
   }
 
   private async remainingSubscriberPages(
@@ -219,6 +238,7 @@ export class BlockchainObservationReader {
     key: ReturnType<typeof runtimeFeed>,
     oracleRevision: bigint | null,
     aaaId: number | undefined,
+    evidence: ObservationFanoutEvidence,
   ): Promise<ObservationDeliveryInspection> {
     const [dirty, activeList, subscriberPages, selectedActor] =
       await Promise.all([
@@ -237,16 +257,14 @@ export class BlockchainObservationReader {
         this.selectedActorInspection(snapshot, aaaId),
       ]);
     const occupiedPageCount = subscriberPages?.count ?? 0;
-    const selectedPosition =
+    const positions =
       dirty == null
-        ? null
-        : await this.dirtyFeedPosition(snapshot, dirty, activeList.count);
-    const pendingRestart =
-      dirty != null && dirty.fanout_revision < dirty.latest_revision;
-    const remainingPageCount =
+        ? { selectedPosition: null, cursorPosition: null }
+        : await this.dirtyFeedPositions(snapshot, key, activeList);
+    const remainingCurrentRevisionPages =
       dirty == null
         ? 0
-        : pendingRestart
+        : dirty.fanout_revision === 0n
           ? occupiedPageCount
           : await this.remainingSubscriberPages(
               snapshot,
@@ -270,18 +288,21 @@ export class BlockchainObservationReader {
         tail: optionalFeedIdentity(activeList.tail),
         cursor: optionalFeedIdentity(activeList.cursor),
         count: activeList.count,
-        selectedPosition,
+        selectedPosition: positions.selectedPosition,
+        cursorPosition: positions.cursorPosition,
       },
       occupiedPageCount,
-      remainingPageCount,
+      remainingCurrentRevisionPages,
       finalizedBlock: snapshot.finalizedBlockNumber,
       budget: DEOS_OBSERVATION_FANOUT_BUDGET,
+      evidence,
       selectedActor,
     });
   }
 
   async inspection(
     snapshot: DeosChainSnapshot,
+    evidence: ObservationFanoutEvidence,
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
     aaaId?: number,
@@ -298,6 +319,7 @@ export class BlockchainObservationReader {
       key,
       observation?.revision ?? null,
       aaaId,
+      evidence,
     );
     const projection: ObservationInspection = projectObservationInspection({
       feed,

@@ -176,7 +176,7 @@ Creation, activation, reopening, and plan replacement reject any actor whose sch
 
 The runtime binds `MaxObservationFanoutPagesPerBlock = 64` and `ObservationFanoutWeightLimit = 400,000,000,000 / 1,000,000`. Production ProofSize admits five worst-case units after base admission.
 
-| Production topology after publication | Charged units | Blocks at five units |
+| Production topology after publication | Fanout service units | Blocks at five units |
 | --- | ---: | ---: |
 | One feed with 10,000 subscribers | 157 | 32 |
 | One sparse subscriber at a historical high page id | 1 | 1 |
@@ -184,9 +184,9 @@ The runtime binds `MaxObservationFanoutPagesPerBlock = 64` and `ObservationFanou
 | One revision restart after quiescence | At most 314 | 63 |
 | Persistently saturated queue | Unbounded | Unbounded |
 
-The finite rows require quiescent revisions, available configured budget, and eventual queue capacity. They end at fanout completion, not condition evaluation or actor attempt.
+A fanout service unit is one occupied-page attempt or one cursorless restart/cleanup transition; final-page completion may clear or restart within its page unit. The finite rows require stable active topology, no newer selected-feed revision, available configured RefTime/ProofSize budget, eventual queue capacity, and same-finalized-block runtime/code/metadata/constants matching generated client evidence. Mismatch withholds the rows while retaining factual chain topology. Estimates end at fanout completion, not queue admission, condition evaluation, or actor attempt.
 
-Production fanout base is `31,565,000 / 1,543`; the completing dense unit is `10,082,557,000 / 172,190`. A saturated dense diagnostic is lower in RefTime and equal in ProofSize, so one conservative unit class remains sufficient.
+Production fanout base is `31,565,000 / 1,543`; the completing dense unit is `10,087,516,000 / 172,190`. A saturated dense diagnostic is lower in RefTime and equal in ProofSize, so one conservative unit class remains sufficient.
 
 ## Generated Evidence and Artifacts
 
@@ -194,11 +194,13 @@ Accepted production identities:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| AAA runtime weights | `6688fe062147259f42666b477b5d1bfb43a339eb8ba2f14cd842352b4f631728` |
-| DEOS Oracle runtime weights | `97d87f3d2bfd1fe43e2df3c86af07b13283a72a40de5862d676592eb863d658a` |
-| Compact runtime Wasm | `d18815e9ca4e02918626274af822e09e7d8d5465c87a95d605f6725dd6dc01e6` |
-| V16 metadata | `b6b7c3c2b2f55f64d8b15e5dfcc4f08cad6b645526d30e44b3a1f249f6ec688e` |
+| AAA runtime weights | `056ff7e1ab872e9f99acb549ca555daa234187f2af01efbe3d6988c6b42fdb8b` |
+| DEOS Oracle runtime weights | `d4a2d544af9c058d0b3eb9bcaa436a82af20888fbda1dfcf2a645dd4c775bc10` |
+| Compact runtime Wasm | `73e84e74c4ecd3ccf865237c27c13bf634684ac966579aced957a34faed7ec2f` |
+| SCALE-encoded V16 metadata | `47d8c47d624c35162a7ed396aff5946b7cb4098835cd8bcf38ec14a3cbc61b93` |
 | AAA semantic manifest | `f7b952b6785d4c7e668a16b36fc92ce593d121424c2de319726756034e6bb190` |
+
+The metadata identity hashes the exact bytes at `web-client/.papi/metadata/deos.scale`. The superseded `b6b7c3c2…` value names no retained artifact or documented alternate representation and therefore constituted stale evidence rather than a second metadata identity.
 
 `template/runtime/src/weights/pallet_aaa.rs` owns complete generated methods and storage annotations. Architecture records only load-bearing admission values and accepted identities; benchmark-host timing never becomes a chain-throughput claim.
 
@@ -215,6 +217,18 @@ Unbounded history, archive search, forecasting records, governance preparation h
 Package tests own executable actor, scheduler, trigger, lifecycle, storage, and try-state behavior. Runtime tests own adapters, fees, ingress, genesis topology, Oracle/Router rollback, staking, XCM, generated-weight binding, block-budget partition, and full System/User composition.
 
 The full `scripts/aaa-release-gate.sh` route covers package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and the occupancy profile. The canonical script owns command syntax and profile selection.
+
+`template/runtime/src/tests/fixtures/aaa-reactive-operations.v1.json` is the machine-readable reactive-operations corpus. Every scenario names initial state, ordered actions, checkpoints, terminal state, global invariants, production weight class, rollback boundary, runtime evidence identity, and an executable Rust test anchor. Seeded scenarios also name their seed.
+
+`scripts/reactive-operations-corpus.sh` validates all or one family and emits selected seed/initial-state failure artifacts. `--execute` runs every selected Rust anchor in dev or release profile; those tests remain the behavioral evidence owner. The delivery-pressure family covers seeded revision races, newer-revision restart, queue-admission retry, three simultaneously dense feeds under one-unit round robin, cursor repair, dirty-age preservation/reset, and maximum subscriber density.
+
+The runtime cross-pallet hook-rejection anchor fills AAA dirty capacity, attempts direct Oracle publication, and proves Oracle observation/revision, AAA feed/list state, and runtime events equal the captured pre-state. After capacity recovery, one producer retry commits Oracle revision `1` and AAA latest revision `1`; no replay state or Router publication path participates.
+
+Task rollback and lifecycle rollback remain distinct corpus boundaries. A DEX adapter that fails after input transfer restores actor/pool task writes while `ContinueNextStep` permits the following transfer and cycle summary to commit. Corrupt dirty-list linkage makes deactivation fail closed and restores actor, subscription, dirty-feed, list, and event pre-state; explicit linkage repair permits a fresh deactivation attempt to finish cleanup.
+
+Operational-recovery fixtures bind exact runtime version identity, breaker deferral/recovery, Continuation wakeup, and bounded repair. Version drift yields `EvidenceMismatch` without changing factual reactive state. Breaker activation produces no partial cycle/close evidence; recovery admits the deferred close. A suspended retry wakes at cooldown without another signal, while one-actor permissionless repair remains available under the breaker and performs no hidden task work.
+
+Full-corpus validation requires scenario coverage for revision linkage, dirty-feed uniqueness, subscriber-page reachability, queue/wakeup exclusivity, atomic pre-state restoration, and bounded weight ownership. Quick AAA acceptance validates this contract; full acceptance executes all 20 anchored Rust tests in the selected Cargo profile.
 
 Operational observation uses typed lane heads/tails, bounded occupancy, active limit, wakeup cursor/buckets, actor-local queue and wakeup pointers, `CycleDeferred`, starvation detection/recovery events, and sweep events. These surfaces expose pressure without promising an exact future execution block.
 

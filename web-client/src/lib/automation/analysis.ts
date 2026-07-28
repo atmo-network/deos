@@ -336,6 +336,7 @@ export type ProgramStaticAnalysis = {
   actorType: AaaPlanArtifact['aaaType'];
   mutability: AaaPlanArtifact['mutability'];
   completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null;
+  cooldownBlocks: number | null;
   trigger: AaaStaticTriggerAnalysis | null;
   steps: AaaStaticStepAnalysis[];
   economicSurface: AaaStaticStepAnalysis['economicSurface'];
@@ -1463,10 +1464,16 @@ export function analyzeAaaProgram(input: {
   const program = variant(inspection.projection, 'ProgramInput');
   let trigger: AaaStaticTriggerAnalysis | null = null;
   let completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null = null;
+  let cooldownBlocks: number | null = null;
   let steps: AaaStaticStepAnalysis[] = [];
   let forecastInputs: AaaStepCostInput[] = [];
   if (program.type === 'Active') {
     trigger = parseTrigger(program.value);
+    const schedule = member(program.value, 'schedule', 'ProgramInput.Active');
+    cooldownBlocks = safeInteger(
+      member(schedule, 'cooldown_blocks', 'ProgramInput.Active.schedule'),
+      'ProgramInput.Active.schedule.cooldown_blocks',
+    );
     const projectedPolicy = variant(
       member(program.value, 'completion_policy', 'ProgramInput.Active'),
       'ProgramInput.Active.completion_policy',
@@ -1515,6 +1522,7 @@ export function analyzeAaaProgram(input: {
     actorType: input.artifact.aaaType,
     mutability: input.artifact.mutability,
     completionPolicy,
+    cooldownBlocks,
     trigger,
     steps,
     economicSurface: aggregateEconomicSurface(steps),

@@ -857,11 +857,14 @@ test('Dormant and active programs both produce complete bounded analysis', () =>
       const dormantResult = analyze(dormant);
       assert.equal(dormantResult.program, 'Dormant');
       assert.equal(dormantResult.completionPolicy, null);
+      assert.equal(dormantResult.cooldownBlocks, null);
       assert.equal(dormantResult.trigger, null);
       assert.deepEqual(dormantResult.steps, []);
       assert.equal(dormantResult.suffixEnvelopes.length, 1);
       const active = artifactFor({ steps: [step()], aaaType, mutability });
-      assert.equal(analyze(active).program, 'Active');
+      const activeResult = analyze(active);
+      assert.equal(activeResult.program, 'Active');
+      assert.equal(activeResult.cooldownBlocks, 5);
     }
   }
 });
