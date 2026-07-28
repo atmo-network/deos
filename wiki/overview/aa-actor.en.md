@@ -11,6 +11,7 @@ available_locales:
 sources:
   - ../../template/pallets/aaa/docs/specification.en.md
   - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../docs/aaa.integration.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -22,7 +23,7 @@ related:
   - AAA System
   - Token-Driven Automation
   - Routing and Minting Loop
-  - Governance Overview
+  - Governance
   - Core Terms
 last_compiled: 2026-07-24
 confidence: 0.9
@@ -91,5 +92,5 @@ They also make actor graphs possible: one actor's balance outflow can become ano
 - [AAA System](aaa-system.en.md)
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
-- [Governance Overview](governance-overview.en.md)
+- [Governance](governance.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

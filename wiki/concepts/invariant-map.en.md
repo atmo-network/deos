@@ -15,7 +15,7 @@ sources:
   - ../../template/pallets/router/docs/architecture.en.md
   - ../../template/pallets/aaa/docs/specification.en.md
   - ../../template/pallets/governance/docs/specification.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
 status: active
 audience: developer
 tags:
@@ -29,7 +29,6 @@ related:
   - Economic Claim Levels
   - Three-Layer Validation
   - TMCTOL Standard
-  - What DEOS Is Not
   - Governance Domains
 last_compiled: 2026-07-21
 confidence: 0.85
@@ -79,5 +78,4 @@ A threat is not “solved” just because a page mentions it. It is controlled o
 - [Economic Claim Levels](economic-claim-levels.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
-- [What DEOS Is Not](what-deos-is-not.en.md)
 - [Governance Domains](governance-domains.en.md)

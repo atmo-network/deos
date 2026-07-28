@@ -297,6 +297,7 @@ run_pallet_benchmark() {
             "close_aaa_system_pure"
             "condition_set_all_max"
             "condition_set_observation"
+            "observation_fanout_blocked_page"
         )
         local benchmark
         for benchmark in "${diagnostic_benchmarks[@]}"; do

@@ -44,6 +44,64 @@ export type ObservationInspection = {
   authoredMaxAgeBlocks: number;
   latestStateCoalescing: true;
   fairPriceProof: false;
+  delivery: ObservationDeliveryInspection | null;
+};
+
+export type ObservationFanoutBudget = {
+  runtimeIdentity: string;
+  weightIdentity: string;
+  maxPagesPerBlock: number;
+  maxActiveDirtyFeeds: number;
+  maxSubscriberPagesPerFeed: number;
+};
+
+export type ObservationDeliveryStatus =
+  | 'Clean'
+  | 'PendingFanout'
+  | 'FanoutInProgress'
+  | 'AwaitingCleanup';
+
+export type ObservationActorAdmissionStatus =
+  | 'ActorMissing'
+  | 'NoPendingSignal'
+  | 'PendingQueueAdmission'
+  | 'Queued'
+  | 'WakeupScheduled';
+
+export type ObservationActorDeliveryInspection = {
+  aaaId: bigint;
+  exists: boolean;
+  pendingSignal: boolean | null;
+  queueLane: 'System' | 'User' | null;
+  queueTicket: bigint | null;
+  wakeup: {
+    block: number;
+    pageId: bigint;
+    slot: number;
+  } | null;
+  queueAdmissionStatus: ObservationActorAdmissionStatus;
+};
+
+export type ObservationDeliveryInspection = {
+  status: ObservationDeliveryStatus;
+  latestRevision: bigint | null;
+  fanoutRevision: bigint | null;
+  dirtySince: number | null;
+  dirtyAgeBlocks: number | null;
+  activeList: {
+    head: ObservationFeedIdentity | null;
+    tail: ObservationFeedIdentity | null;
+    cursor: ObservationFeedIdentity | null;
+    count: number;
+    selectedPosition: number | null;
+  };
+  nextSubscriberPage: number | null;
+  occupiedPageCount: number;
+  estimatedRemainingFanoutPages: number;
+  estimatedRemainingBlocks: number;
+  budget: ObservationFanoutBudget;
+  estimateAssumptions: readonly string[];
+  selectedActor: ObservationActorDeliveryInspection | null;
 };
 
 export type ObservationInspectionProvider = {
@@ -51,5 +109,6 @@ export type ObservationInspectionProvider = {
   getObservationInspection?(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
+    aaaId?: number,
   ): Promise<ReadModelValue<ObservationInspection>>;
 };

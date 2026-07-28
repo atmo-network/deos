@@ -29,7 +29,7 @@ pub const CHARLIE: AccountId = AccountId::new([3u8; 32]);
 pub const DAVE: AccountId = AccountId::new([4u8; 32]);
 pub const EVE: AccountId = AccountId::new([5u8; 32]);
 
-// Axial Router account from pallet configuration
+// DEOS Router account from pallet configuration
 pub fn axial_router_account() -> AccountId {
   crate::AxialRouter::account_id()
 }
@@ -484,7 +484,7 @@ pub fn get_pool_lp_asset(asset1: AssetKind, asset2: AssetKind) -> AssetKind {
   AssetKind::Local(pool_info.lp_token)
 }
 
-/// Sets up the asset conversion infrastructure used by Axial Router tests.
+/// Sets up the asset conversion infrastructure used by DEOS Router tests.
 pub fn setup_axial_router_infrastructure() -> Result<(), &'static str> {
   use crate::configs::AssetKind;
   // Create single pool for native ↔ asset pair used by tests

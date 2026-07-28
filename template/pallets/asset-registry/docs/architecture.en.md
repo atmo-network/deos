@@ -56,7 +56,7 @@ graph TD
         Storage -->|5. Emit Event| Event[ForeignAssetRegistered]
     end
 
-    Runtime -->|Available to| Router[Axial Router]
+    Runtime -->|Available to| Router[DEOS Router]
     Runtime -->|Available to| BurnActor[Burn Actor]
     Runtime -->|Available to| LiquidityActor[Liquidity Actor]
 ```
@@ -269,7 +269,7 @@ When an XCM message transfers foreign assets:
 
 `Implicit whitelist`: Only governance-registered assets can enter the runtime.
 
-### Connection to Axial Router (Foreign Swaps)
+### Connection to DEOS Router (Foreign Swaps)
 
 Router accepts foreign assets in swap paths if:
 

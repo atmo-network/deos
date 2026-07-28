@@ -50,8 +50,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 		// Proof Size summary in bytes:
 		//  Measured:  `19581`
 		//  Estimated: `20532`
-		// Minimum execution time: 131_582_000 picoseconds.
-		Weight::from_parts(138_358_000, 0)
+		// Minimum execution time: 132_281_000 picoseconds.
+		Weight::from_parts(142_060_000, 0)
 			.saturating_add(Weight::from_parts(0, 20532))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(4))
@@ -70,9 +70,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 		// Proof Size summary in bytes:
 		//  Measured:  `44420`
 		//  Estimated: `34255`
-		// Minimum execution time: 193_114_000 picoseconds.
-		Weight::from_parts(206_174_000, 0)
-			// Conservative bridge: measured ProofSize (44,420) exceeded generated estimate (34,255).
+		// Minimum execution time: 193_254_000 picoseconds.
+		Weight::from_parts(211_203_000, 0)
 			.saturating_add(Weight::from_parts(0, 44420))
 			.saturating_add(T::DbWeight::get().reads(5))
 			.saturating_add(T::DbWeight::get().writes(5))
@@ -83,8 +82,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 		// Proof Size summary in bytes:
 		//  Measured:  `310`
 		//  Estimated: `3551`
-		// Minimum execution time: 16_762_000 picoseconds.
-		Weight::from_parts(18_648_000, 0)
+		// Minimum execution time: 16_413_000 picoseconds.
+		Weight::from_parts(18_788_000, 0)
 			.saturating_add(Weight::from_parts(0, 3551))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -95,7 +94,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 		// Proof Size summary in bytes:
 		//  Measured:  `310`
 		//  Estimated: `3551`
-		// Minimum execution time: 16_902_000 picoseconds.
+		// Minimum execution time: 16_623_000 picoseconds.
 		Weight::from_parts(18_788_000, 0)
 			.saturating_add(Weight::from_parts(0, 3551))
 			.saturating_add(T::DbWeight::get().reads(1))
@@ -107,8 +106,8 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 		// Proof Size summary in bytes:
 		//  Measured:  `310`
 		//  Estimated: `3551`
-		// Minimum execution time: 16_762_000 picoseconds.
-		Weight::from_parts(18_648_000, 0)
+		// Minimum execution time: 16_623_000 picoseconds.
+		Weight::from_parts(18_718_000, 0)
 			.saturating_add(Weight::from_parts(0, 3551))
 			.saturating_add(T::DbWeight::get().reads(1))
 			.saturating_add(T::DbWeight::get().writes(1))
@@ -120,14 +119,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 	/// Storage: `AAA::ObservationSubscriberCount` (r:1 w:0)
 	/// Proof: `AAA::ObservationSubscriberCount` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::DirtyObservationFeeds` (r:1 w:0)
-	/// Proof: `AAA::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(57), added: 2532, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(94), added: 2569, mode: `MaxEncodedLen`)
 	fn publish_last_value() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `598`
-		//  Estimated: `3551`
-		// Minimum execution time: 33_804_000 picoseconds.
-		Weight::from_parts(35_759_000, 0)
-			.saturating_add(Weight::from_parts(0, 3551))
+		//  Estimated: `3559`
+		// Minimum execution time: 33_384_000 picoseconds.
+		Weight::from_parts(35_829_000, 0)
+			.saturating_add(Weight::from_parts(0, 3559))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -138,14 +137,14 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 	/// Storage: `AAA::ObservationSubscriberCount` (r:1 w:0)
 	/// Proof: `AAA::ObservationSubscriberCount` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
 	/// Storage: `AAA::DirtyObservationFeeds` (r:1 w:0)
-	/// Proof: `AAA::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(57), added: 2532, mode: `MaxEncodedLen`)
+	/// Proof: `AAA::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(94), added: 2569, mode: `MaxEncodedLen`)
 	fn publish_ema_changed() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `677`
-		//  Estimated: `3551`
-		// Minimum execution time: 35_550_000 picoseconds.
+		//  Estimated: `3559`
+		// Minimum execution time: 35_200_000 picoseconds.
 		Weight::from_parts(37_575_000, 0)
-			.saturating_add(Weight::from_parts(0, 3551))
+			.saturating_add(Weight::from_parts(0, 3559))
 			.saturating_add(T::DbWeight::get().reads(4))
 			.saturating_add(T::DbWeight::get().writes(1))
 	}
@@ -157,7 +156,7 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 		// Proof Size summary in bytes:
 		//  Measured:  `389`
 		//  Estimated: `3551`
-		// Minimum execution time: 20_603_000 picoseconds.
+		// Minimum execution time: 24_724_000 picoseconds.
 		Weight::from_parts(26_750_000, 0)
 			.saturating_add(Weight::from_parts(0, 3551))
 			.saturating_add(T::DbWeight::get().reads(2))

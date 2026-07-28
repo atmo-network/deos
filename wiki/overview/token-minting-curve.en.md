@@ -19,7 +19,7 @@ tags:
   - minting
   - tokenomics
 related:
-  - Axial Router
+  - DEOS Router
   - Routing and Minting Loop
   - TMCTOL Standard
   - TMCTOL Formulas
@@ -59,7 +59,7 @@ That rule matters because changing those parameters later would mean rewriting l
 TMC is only one part of the system. In the current reference line:
 
 - TMC handles deterministic issuance
-- The Axial Router decides when the mint path is the better route
+- DEOS Router decides when the mint path is the better route
 - Mint-side protocol allocation feeds later liquidity-provisioning flows
 - Treasury-owned liquidity and burn flows interact with the resulting supply dynamics
 
@@ -73,7 +73,7 @@ Historical mint analytics and long-range dashboards belong to indexed or materia
 
 ## Related
 
-- [Axial Router](axial-router.en.md)
+- [DEOS Router](router.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [TMCTOL Formulas](../math/tmctol-formulas.en.md)

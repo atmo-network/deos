@@ -12,7 +12,8 @@ Use this skill when an AAA change needs validation scope selection, scheduler st
 
 ## Workflow Boundary
 
-- Inspect the AAA specification, architecture, backlog slice, changed code, generated weights, and runtime configuration before selecting a gate.
+- Inspect the AAA specification, package architecture, `docs/aaa.integration.en.md`, backlog slice, changed code, generated weights, and runtime configuration before selecting a gate.
+- For reactive observation work, also inspect `docs/oracle.integration.en.md`; Oracle owns publication truth and AAA owns subscriptions, fanout, admission, and execution.
 - Route benchmark design, evidence classification, production-weight integration, and claim limits through [`benchmarking`](../benchmarking/SKILL.md); this skill owns the AAA-specific stress profile and release consequence.
 - Use `--quick` for bounded implementation slices that still need AAA-specific Clippy and pallet tests.
 - Use the full gate for scheduler stress acceptance, release preparation, or changes to queue/wakeup capacity, fairness, liveness, or guaranteed `on_idle` admission.

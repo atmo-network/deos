@@ -83,4 +83,4 @@ The current kernel does not yet include:
 - Unbounded task graphs or unmetered loops
 - Direct pallet-specific business logic embedded into AAA core
 
-See the package-owned [AAA Architecture](./docs/architecture.en.md) and [AAA Specification](./docs/specification.en.md) for the current reference binding and normative semantics.
+See the package-owned [AAA Architecture](./docs/architecture.en.md), [AAA Specification](./docs/specification.en.md), and [embedding guide](./docs/embedding.md) for reusable implementation, semantics, and host obligations. Concrete reference composition belongs to [`docs/aaa.integration.en.md`](../../../docs/aaa.integration.en.md).

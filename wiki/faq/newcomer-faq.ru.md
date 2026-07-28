@@ -17,7 +17,7 @@ sources:
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/staking/docs/specification.en.md
   - ../../docs/read-model.contract.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
 status: active
 audience: newcomer
@@ -31,7 +31,6 @@ related:
   - Маршруты чтения
   - Система AAA
   - Physics-first против politics-first
-  - UI Kit и Domain DAG
   - Generated Wiki
   - Базовые термины
 last_compiled: 2026-07-20
@@ -58,13 +57,13 @@ confidence: 0.85
 
 **Почему TMCTOL избегает redemption?** Потому что текущий стандарт трактует minting как однонаправленную физику протокола, а не как выход из резервов. Смотрите [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md) и [Token Minting Curve](../overview/token-minting-curve.ru.md).
 
-**Исчезает ли governance?** Нет. Governance остается, но его роль сужена: он задает направление, тактические домены и ограниченные пути обновлений, а не вручную управляет survival physics. Смотрите [Обзор Governance](../overview/governance-overview.ru.md) и [Домены Governance](../concepts/governance-domains.ru.md).
+**Исчезает ли governance?** Нет. Governance остается, но его роль сужена: он задает направление, тактические домены и ограниченные пути обновлений, а не вручную управляет survival physics. Смотрите [Governance](../overview/governance.ru.md) и [Домены Governance](../concepts/governance-domains.ru.md).
 
 **Что значит deterministic?** Реакции под управлением протокола явны и повторяемы для одного и того же состояния chain. Это не значит, что рынки становятся предсказуемыми.
 
 **Что такое AAA и AA-Актор?** `AAA` — вся система Account Abstraction Actors: scheduler, правила жизненного цикла, execution plans, actor accounts и task execution. `AA-Актор` — один конкретный runtime-экземпляр внутри этой системы. Смотрите [Систему AAA](../overview/aaa-system.ru.md) и [AA-Актор](../overview/aa-actor.ru.md).
 
-**Как устроен staking?** Staking — это домен multi-asset share-vault. [Пулы стейкинга](../concepts/staking-pools.ru.md) объясняют native `stNTVE`, LP nomination и snapshots наград.
+**Как устроен staking?** Staking — это домен multi-asset share-vault. [Стейкинг](../overview/staking.ru.md) объясняют native `stNTVE`, LP nomination и snapshots наград.
 
 ## Данные, клиент и границы wiki
 
@@ -73,8 +72,6 @@ confidence: 0.85
 **Web client — источник истины?** Нет. Web client — эталонная продуктовая поверхность, которая должна честно маркировать происхождение данных. Смотрите [Эталонный клиент](../overview/reference-client.ru.md).
 
 **Где живут версии релизов и status notes?** История релизов живет в changelog, открытая работа — в backlog, а текущее состояние для новичков — в [Статусе разработки](../development/status.ru.md). Architecture и wiki pages должны объяснять implementation truth и границы.
-
-**Что такое UI Kit и Domain DAG?** Это клиентские дисциплины против дублирования и размытых границ владения. Смотрите [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md).
 
 **Почему web client может рендерить wiki markdown напрямую?** Wiki markdown — доверенный repo-local content под проверкой репозитория, а не произвольный пользовательский ввод. Смотрите [Generated Wiki](../concepts/generated-wiki.ru.md).
 
@@ -86,6 +83,5 @@ confidence: 0.85
 - [Маршруты чтения](../getting-started/reading-paths.ru.md)
 - [Система AAA](../overview/aaa-system.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

@@ -19,7 +19,7 @@ tags:
   - launch-line
 related:
   - Physics-First vs Politics-First
-  - Governance Overview
+  - Governance
   - AA-Actor
   - Newcomer FAQ
 last_compiled: 2026-07-20
@@ -67,6 +67,6 @@ Randomness simplification narrows the launch contract:
 ## Related
 
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-- [Governance Overview](governance-overview.en.md)
+- [Governance](governance.en.md)
 - [AA-Actor](aa-actor.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)

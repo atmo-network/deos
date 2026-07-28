@@ -11,7 +11,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/README.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
   - ../../.agents/skills/wiki-sync/SKILL.md
   - ../_meta/navigation.json
@@ -28,7 +28,6 @@ tags:
 related:
   - Карта доменов
   - Эталонный клиент
-  - UI Kit и Domain DAG
   - Первые шаги
   - Координация агентов
   - Базовые термины
@@ -102,7 +101,6 @@ Wiki использует консервативные шаги `0.05`:
 
 - [Карта доменов](domain-map.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)
-- [UI Kit и Domain DAG](ui-kit-and-domain-dag.ru.md)
 - [Первые шаги](../getting-started/first-steps.ru.md)
 - [Координация агентов](../usage/agent-coordination.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

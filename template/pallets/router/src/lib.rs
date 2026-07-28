@@ -1,4 +1,4 @@
-//! Axial Router Pallet
+//! DEOS Router pallet
 //!
 //! Minimalist multi-token routing system optimized for TMC ecosystems.
 

@@ -470,7 +470,7 @@ Validation of adaptive system behaviors, intelligent routing decisions, and econ
 ### 12.4 Two-Phase Reward Routing - Unified Fee Collection
 
 - Nature: Tests collection of non-router protocol fees into Fee Sink.
-- Necessity: Keeps collection separate from phase-specific allocation and the Axial Router burn path.
+- Necessity: Keeps collection separate from phase-specific allocation and the DEOS Router burn path.
 - Validates: Fee Sink receives 100% of the collected amount.
 - Failure Criteria: Any amount bypasses Fee Sink or total value is not conserved.
 

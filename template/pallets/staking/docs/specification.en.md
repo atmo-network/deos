@@ -1,6 +1,6 @@
-# Staking Specification: Yield-Bearing Native Liquidity and Governance Power
+# DEOS Staking Specification: Yield-Bearing Native Liquidity and Governance Power
 
-> Contract maps: [`architecture.en.md`](./architecture.en.md), [Governance architecture](../../governance/docs/architecture.en.md), [Axial Router architecture](../../router/docs/architecture.en.md)
+> Contract maps: [`architecture.en.md`](./architecture.en.md), [Governance architecture](../../governance/docs/architecture.en.md), [DEOS Router architecture](../../router/docs/architecture.en.md)
 >
 > This document defines the target staking contract: the conceptual model, economic invariants, public capability surface, and governance-power semantics. Implementation status, migration state, runtime wiring, and operator rollout details belong in the paired architecture documents.
 
@@ -39,7 +39,7 @@ The launch staking surface is native-first:
 NTVE -> stNTVE -> NTVE/stNTVE LP -> locked LP nomination -> governance-conditioned reward
 ```
 
-The contract intentionally focuses on `NTVE/stNTVE` because this pair reinforces the axial-router and `$NTVE` value loop:
+The contract intentionally focuses on `NTVE/stNTVE` because this pair reinforces the DEOS Router and `$NTVE` value loop:
 
 ```text
 native staking -> liquid receipt liquidity -> router volume -> route fees -> NTVE burn/value support
@@ -63,7 +63,7 @@ The launch line is phase-aware:
 
 Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter. LP nomination and claimable nomination rewards MUST remain inactive while the runtime is in the trusted-collator Phase 1 line.
 
-Upstream collection sends 100% of transaction, AAA, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; Axial Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the current release line divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
+Upstream collection sends 100% of transaction, AAA, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; DEOS Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the current release line divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
 
 ### 3.1 Staking yield
 

@@ -46,7 +46,7 @@ User intent
   -> Reference Client
   -> Read-model classification
   -> Runtime surface
-  -> Axial Router / TMC / Staking / Governance
+  -> DEOS Router / TMC / DEOS Staking / DEOS Governance
   -> Events, balances, and bounded projections
   -> Reference Client feedback
 ```
@@ -57,7 +57,7 @@ The client is not the source of truth. It reads bounded chain truth directly whe
 
 ```text
 Swap request
-  -> Axial Router
+  -> DEOS Router
       -> compare XYK market path
       -> compare TMC protocol path
       -> choose best bounded route

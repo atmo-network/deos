@@ -103,7 +103,8 @@ fn runtime_oracle_change_hook_coalesces_into_aaa_dirty_feed_state() {
       2_000_000_000_000,
     ));
     let latest = AAA::dirty_observation_feeds(feed).expect("dirty feed remains coalesced");
-    assert_eq!(latest.slot, first.slot);
+    assert_eq!(latest.previous_dirty_feed, first.previous_dirty_feed);
+    assert_eq!(latest.next_dirty_feed, first.next_dirty_feed);
     assert_eq!(latest.latest_revision, 2);
     assert_eq!(AAA::dirty_observation_feed_count(), 1);
   });
@@ -1054,6 +1055,45 @@ fn paged_queue_limits_are_independent_runtime_controls() {
 }
 
 #[test]
+fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
+  let base =
+    <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::observation_fanout_base();
+  let unit =
+    <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::observation_fanout_page();
+  let limit = <Runtime as pallet_aaa::Config>::ObservationFanoutWeightLimit::get();
+  let configured_units =
+    u64::from(<Runtime as pallet_aaa::Config>::MaxObservationFanoutPagesPerBlock::get());
+  let available = limit.saturating_sub(base);
+  let units_per_block = configured_units
+    .min(available.ref_time() / unit.ref_time())
+    .min(available.proof_size() / unit.proof_size());
+
+  assert_eq!(base, Weight::from_parts(31_565_000, 1_543));
+  assert_eq!(unit, Weight::from_parts(10_082_557_000, 172_190));
+  assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
+  assert_eq!(
+    units_per_block, 5,
+    "conservative ProofSize is the active fanout limit"
+  );
+
+  let max_actors = u64::from(<Runtime as pallet_aaa::Config>::MaxActiveActors::get());
+  let page_size = u64::from(<Runtime as pallet_aaa::Config>::QueuePageSize::get());
+  let max_sources = u64::from(<Runtime as pallet_aaa::Config>::MaxTriggerSources::get());
+  let subscription_pages = max_actors.div_ceil(page_size);
+  let dense_single_feed_units = subscription_pages;
+  let sparse_high_slot_units = 1u64;
+  let compact_four_feed_units = subscription_pages.saturating_mul(max_sources);
+  let quiescent_revision_race_units = subscription_pages.saturating_mul(2);
+
+  assert_eq!((max_actors, page_size, max_sources), (10_000, 64, 4));
+  assert_eq!(subscription_pages, 157);
+  assert_eq!(dense_single_feed_units.div_ceil(units_per_block), 32);
+  assert_eq!(sparse_high_slot_units.div_ceil(units_per_block), 1);
+  assert_eq!(compact_four_feed_units.div_ceil(units_per_block), 126);
+  assert_eq!(quiescent_revision_race_units.div_ceil(units_per_block), 63);
+}
+
+#[test]
 fn guaranteed_idle_budget_executes_more_than_the_legacy_48_actor_ceiling() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -1920,7 +1960,7 @@ fn publish_axial_router_observation(asset_in: AssetKind, asset_out: AssetKind, v
     crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out),
     value,
   )
-  .expect("Axial Router producer publishes the observation");
+  .expect("DEOS Router producer publishes the observation");
 }
 
 #[test]

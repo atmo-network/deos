@@ -14,7 +14,7 @@ DEOS is a Polkadot SDK framework for building protocol economies. It moves recur
 
 - **TMC — deterministic issuance.** A unidirectional curve defines how assets enter circulation without promising protocol redemption.
 - **TOL — owned liquidity.** Mint output can accumulate into protected and governed liquidity lanes under an explicit bucket policy.
-- **Axial Router — max-output execution.** A bounded set of XYK, TMC, and Native-anchored routes compete by expected recipient output.
+- **DEOS Router — max-output execution.** A bounded set of XYK, TMC, and Native-anchored routes compete by expected recipient output.
 - **AAA — autonomous operations.** Typed execution plans drive the Burn Actor, Liquidity Actor, splitters, buckets, and treasuries within storage and block-weight bounds.
 - **Governance — constrained change.** Domain-scoped primary/protection tracks execute typed payloads instead of exposing unrestricted administration.
 

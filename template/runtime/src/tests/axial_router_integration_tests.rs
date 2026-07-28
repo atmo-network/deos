@@ -1,6 +1,6 @@
-//! Integration tests for Axial Router functionality.
+//! Integration tests for DEOS Router functionality.
 //!
-//! These tests cover the complete lifecycle of Axial Router operations including:
+//! These tests cover the complete lifecycle of DEOS Router operations including:
 //! - Asset management and routing infrastructure
 //! - Swap functionality with fee processing
 //! - Multi-hop routing and path validation

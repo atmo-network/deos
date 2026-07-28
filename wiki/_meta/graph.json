@@ -51,15 +51,27 @@
       }
     },
     {
-      "id": "axial-router",
+      "id": "router",
       "title": {
-        "en": "Axial Router",
-        "ru": "Axial Router"
+        "en": "DEOS Router",
+        "ru": "DEOS Router"
       },
       "page_type": "overview",
       "path": {
-        "en": "overview/axial-router.en.md",
-        "ru": "overview/axial-router.ru.md"
+        "en": "overview/router.en.md",
+        "ru": "overview/router.ru.md"
+      }
+    },
+    {
+      "id": "typed-observations",
+      "title": {
+        "en": "Typed Observations",
+        "ru": "Типизированные наблюдения"
+      },
+      "page_type": "overview",
+      "path": {
+        "en": "overview/typed-observations.en.md",
+        "ru": "overview/typed-observations.ru.md"
       }
     },
     {
@@ -75,15 +87,15 @@
       }
     },
     {
-      "id": "governance-overview",
+      "id": "governance",
       "title": {
-        "en": "Governance Overview",
-        "ru": "Обзор Governance"
+        "en": "Governance",
+        "ru": "Governance"
       },
       "page_type": "overview",
       "path": {
-        "en": "overview/governance-overview.en.md",
-        "ru": "overview/governance-overview.ru.md"
+        "en": "overview/governance.en.md",
+        "ru": "overview/governance.ru.md"
       }
     },
     {
@@ -207,15 +219,15 @@
       }
     },
     {
-      "id": "staking-pools",
+      "id": "staking",
       "title": {
-        "en": "Staking Pools",
-        "ru": "Пулы стейкинга"
+        "en": "Staking",
+        "ru": "Стейкинг"
       },
-      "page_type": "concept",
+      "page_type": "overview",
       "path": {
-        "en": "concepts/staking-pools.en.md",
-        "ru": "concepts/staking-pools.ru.md"
+        "en": "overview/staking.en.md",
+        "ru": "overview/staking.ru.md"
       }
     },
     {
@@ -240,18 +252,6 @@
       "path": {
         "en": "concepts/governance-domains.en.md",
         "ru": "concepts/governance-domains.ru.md"
-      }
-    },
-    {
-      "id": "ui-kit-and-domain-dag",
-      "title": {
-        "en": "UI Kit and Domain DAG",
-        "ru": "UI Kit и Domain DAG"
-      },
-      "page_type": "concept",
-      "path": {
-        "en": "concepts/ui-kit-and-domain-dag.en.md",
-        "ru": "concepts/ui-kit-and-domain-dag.ru.md"
       }
     },
     {
@@ -447,18 +447,6 @@
       }
     },
     {
-      "id": "what-deos-is-not",
-      "title": {
-        "en": "What DEOS Is Not",
-        "ru": "Чем DEOS не является"
-      },
-      "page_type": "concept",
-      "path": {
-        "en": "concepts/what-deos-is-not.en.md",
-        "ru": "concepts/what-deos-is-not.ru.md"
-      }
-    },
-    {
       "id": "economic-claim-levels",
       "title": {
         "en": "Economic Claim Levels",
@@ -597,7 +585,7 @@
     },
     {
       "from": "index",
-      "to": "governance-overview",
+      "to": "governance",
       "type": "entrypoint"
     },
     {
@@ -617,7 +605,7 @@
     },
     {
       "from": "core-terms",
-      "to": "governance-overview",
+      "to": "governance",
       "type": "defines"
     },
     {
@@ -657,7 +645,7 @@
     },
     {
       "from": "index",
-      "to": "axial-router",
+      "to": "router",
       "type": "entrypoint"
     },
     {
@@ -687,7 +675,7 @@
     },
     {
       "from": "index",
-      "to": "staking-pools",
+      "to": "staking",
       "type": "entrypoint"
     },
     {
@@ -722,7 +710,7 @@
     },
     {
       "from": "deos-framework",
-      "to": "axial-router",
+      "to": "router",
       "type": "explains-routing"
     },
     {
@@ -732,7 +720,7 @@
     },
     {
       "from": "deos-framework",
-      "to": "governance-overview",
+      "to": "governance",
       "type": "explains-governance"
     },
     {
@@ -816,23 +804,23 @@
       "type": "supports-runtime-flow"
     },
     {
-      "from": "axial-router",
+      "from": "router",
       "to": "token-minting-curve",
       "type": "paired-with"
     },
     {
-      "from": "axial-router",
+      "from": "router",
       "to": "routing-and-minting-loop",
       "type": "deepens-topic"
     },
     {
-      "from": "axial-router",
+      "from": "router",
       "to": "asset-identity",
       "type": "depends-on-assets"
     },
     {
       "from": "token-minting-curve",
-      "to": "axial-router",
+      "to": "router",
       "type": "paired-with"
     },
     {
@@ -846,18 +834,18 @@
       "type": "implemented-in-standard"
     },
     {
-      "from": "governance-overview",
+      "from": "governance",
       "to": "governance-domains",
       "type": "deepens-topic"
     },
     {
-      "from": "governance-overview",
+      "from": "governance",
       "to": "physics-vs-politics",
       "type": "explains-manifesto-link"
     },
     {
-      "from": "governance-overview",
-      "to": "staking-pools",
+      "from": "governance",
+      "to": "staking",
       "type": "connected-rewards"
     },
     {
@@ -867,7 +855,7 @@
     },
     {
       "from": "asset-identity",
-      "to": "staking-pools",
+      "to": "staking",
       "type": "enables-foreign-assets"
     },
     {
@@ -877,7 +865,7 @@
     },
     {
       "from": "randomness-strategy",
-      "to": "governance-overview",
+      "to": "governance",
       "type": "constrains-launch-policy"
     },
     {
@@ -902,7 +890,7 @@
     },
     {
       "from": "tmctol-standard",
-      "to": "staking-pools",
+      "to": "staking",
       "type": "related-subsystem"
     },
     {
@@ -922,7 +910,7 @@
     },
     {
       "from": "routing-and-minting-loop",
-      "to": "axial-router",
+      "to": "router",
       "type": "subsystem-view"
     },
     {
@@ -936,7 +924,7 @@
       "type": "uses-runtime-automation"
     },
     {
-      "from": "staking-pools",
+      "from": "staking",
       "to": "governance-domains",
       "type": "connected-rewards"
     },
@@ -944,16 +932,6 @@
       "from": "reference-client",
       "to": "read-model-split",
       "type": "implements-read-model-honesty"
-    },
-    {
-      "from": "reference-client",
-      "to": "ui-kit-and-domain-dag",
-      "type": "uses-frontend-ownership-discipline"
-    },
-    {
-      "from": "ui-kit-and-domain-dag",
-      "to": "reference-client",
-      "type": "frontend-architecture-detail"
     },
     {
       "from": "generated-wiki",
@@ -992,7 +970,7 @@
     },
     {
       "from": "domain-map",
-      "to": "governance-overview",
+      "to": "governance",
       "type": "maps-governance-domain"
     },
     {
@@ -1057,7 +1035,7 @@
     },
     {
       "from": "governance-domains",
-      "to": "governance-overview",
+      "to": "governance",
       "type": "overview-parent"
     },
     {
@@ -1092,7 +1070,7 @@
     },
     {
       "from": "end-to-end-flows",
-      "to": "staking-pools",
+      "to": "staking",
       "type": "walks-through"
     },
     {
@@ -1162,7 +1140,7 @@
     },
     {
       "from": "token-surfaces",
-      "to": "staking-pools",
+      "to": "staking",
       "type": "maps"
     },
     {
@@ -1421,21 +1399,6 @@
       "type": "uses"
     },
     {
-      "from": "what-deos-is-not",
-      "to": "deos-framework",
-      "type": "clarifies"
-    },
-    {
-      "from": "what-deos-is-not",
-      "to": "invariant-map",
-      "type": "relates"
-    },
-    {
-      "from": "what-deos-is-not",
-      "to": "parachain-context",
-      "type": "relates"
-    },
-    {
       "from": "economic-claim-levels",
       "to": "economic-thresholds",
       "type": "clarifies"
@@ -1453,11 +1416,6 @@
     {
       "from": "reading-paths",
       "to": "invariant-map",
-      "type": "recommends"
-    },
-    {
-      "from": "reading-paths",
-      "to": "what-deos-is-not",
       "type": "recommends"
     },
     {
@@ -1537,11 +1495,6 @@
     },
     {
       "from": "deos-in-60-seconds",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
-    },
-    {
-      "from": "deos-in-60-seconds",
       "to": "tmctol-standard",
       "type": "introduces"
     },
@@ -1617,11 +1570,6 @@
     },
     {
       "from": "partner-pitch",
-      "to": "what-deos-is-not",
-      "type": "clarifies"
-    },
-    {
-      "from": "partner-pitch",
       "to": "tmctol-standard",
       "type": "explains"
     },
@@ -1669,6 +1617,26 @@
       "from": "index",
       "to": "executive-summary",
       "type": "starts"
+    },
+    {
+      "from": "index",
+      "to": "typed-observations",
+      "type": "entrypoint"
+    },
+    {
+      "from": "router",
+      "to": "typed-observations",
+      "type": "publishes-observations"
+    },
+    {
+      "from": "typed-observations",
+      "to": "aaa-system",
+      "type": "triggers-reconsideration"
+    },
+    {
+      "from": "typed-observations",
+      "to": "read-model-split",
+      "type": "defines-current-truth"
     }
   ]
 }

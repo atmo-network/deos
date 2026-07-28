@@ -9,7 +9,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
   - ../../web-client/src/lib/ui/README.md
   - ../../docs/read-model.contract.en.md
@@ -54,7 +54,7 @@ Widgets should adapt to pane width and height instead of assuming one desktop-on
 
 ## Ownership and Feedback
 
-The client uses [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md) to keep repeated controls and structural boundaries in owner layers. Widgets should express product intent, not rebuild primitive controls or reach through adapter internals.
+The client keeps repeated controls and structural boundaries in explicit UI and domain owner layers. Widgets should express product intent, not rebuild primitive controls or reach through adapter internals.
 
 Execution feedback is centralized: `LogWidget` is the main transaction/progress surface, while action widgets stay focused on initiating actions. This follows the same anti-duplication rule as UI primitives and provenance badges.
 
@@ -71,6 +71,5 @@ The web client renders generated wiki content as trusted repo-local markdown and
 - [First Steps](../getting-started/first-steps.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
-- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

@@ -1,55 +1,58 @@
 ---
 name: oracle-delivery
-description: Drives typed observation delivery from standalone bounded pallet through Router extraction, AAA reaction ingress, generated evidence, and release handoff.
-type: FSS Skill
-title: Typed Observation Delivery
-status: draft
+description: Stable entry point for DEOS typed-observation work across the standalone Oracle pallet, producers, reactive AAA, client inspection, bounded evidence, and support.
 fss: true
 ---
 
-# Typed Observation Delivery
+# Oracle
 
 Canonical open work: ../../../BACKLOG.md
 
-## Mission and Scope
+Use this skill as the feature entry point whenever work creates, changes, consumes, inspects, validates, or documents DEOS typed observations. It preserves ownership boundaries and routes activated work from the canonical backlog without cloning release tasks.
 
-Deliver the DEOS typed-observation vertical without merging truth ownership across the oracle, producers, AAA, Router, or indexed history. This skill owns delivery sequencing and evidence interpretation, not runtime semantics, task state, or shared validation implementations.
+## Feature Boundary
+
+Oracle owns bounded current scalar/revision truth. Producers own samples, Router owns routing and pre-execution pool sampling, AAA owns subscriptions and reactions, and materialized providers own history. This skill coordinates that feature boundary; it does not own runtime semantics, producer policy, subscriber execution, external price networks, or shared command implementations.
 
 ## Truth Owners
 
-- `BACKLOG.md` owns remaining 0.7.7 observation work and dependency order.
-- `template/pallets/oracle/docs/specification.en.md` owns standalone oracle semantics.
-- `template/pallets/aaa/docs/specification.en.md` owns reactive AAA semantics.
-- `template/pallets/router/docs/architecture.en.md` owns current Router behavior.
-- Code and tests own executable behavior; architecture documents map only shipped integration.
-- `CHANGELOG.md` receives outcomes only after the complete 0.7.7 release gate.
+- `template/pallets/oracle/docs/specification.en.md` owns intended Oracle semantics and invariants.
+- `template/pallets/oracle/docs/architecture.en.md` owns the reusable package implementation map; `docs/oracle.integration.en.md` owns concrete DEOS runtime, Router, AAA, client, weight, and rollback composition.
+- `template/pallets/oracle/` owns executable behavior, tests, benchmarks, weights, and the independent embedding runtime.
+- `template/pallets/router/docs/architecture.en.md` owns Router observation production and pre-execution ordering.
+- `template/pallets/aaa/docs/specification.en.md` and `template/pallets/aaa/docs/architecture.en.md` own reactive subscription, fanout, scheduling, and execution semantics.
+- `docs/aaa-control-plane.contract.en.md` and `docs/read-model.contract.en.md` own off-chain inspection and canonical/materialized provenance.
+- `web-client/src/lib/observation/` and its blockchain adapter own browser realization.
+- `BACKLOG.md` owns activated future work; `CHANGELOG.md` owns completed outcomes.
 
-## Operating Protocol
+## Routing Protocol
 
-- Start with the earliest open 0.7.7 dependency and refuse shadow state introduced for later compatibility.
-- Keep `pallet-oracle` independently reusable: generic typed identities, bounded admission, O(1) current truth, no AAA/Router/DEOS topology dependency, no history, network, or off-chain correctness.
-- Require immutable feed meaning, producer, provenance, scale, aggregation, zero policy, and EMA parameters; semantic change creates a new feed.
-- Preserve Router arithmetic with exact regression vectors before deleting Router-owned EMA storage.
-- Keep oracle change notification O(1) and subscriber-independent; AAA alone owns bounded subscriptions, dirty coalescing, fanout, and execution.
-- Update canonical work immediately when evidence closes, narrows, splits, or gates a slice.
+1. Classify the task as Oracle package semantics, producer integration, reactive AAA, control-plane/client inspection, materialized history, or documentation/support.
+2. Read the owning specification and architecture map, then inspect the affected code, tests, runtime configuration, and current diff before changing behavior.
+3. Preserve one truth owner per layer: do not recreate Oracle values in Router or AAA, execute subscribers in producer context, infer reverse-direction feeds, or place archive history in consensus storage.
+4. Reconcile the specification before non-trivial semantic changes. Update architecture only from shipped implementation truth.
+5. Run the narrowest owning validation first and escalate when the change crosses package, runtime, AAA, client, metadata, weight, or release boundaries.
+6. Reconcile open work and delivery history only to evidence actually produced, then run the repository completion gate.
 
-## Knowledge Routing
+## Decisive Checks
 
-- Load the oracle specification for package types, state, transitions, read semantics, and hook atomicity.
-- Load Router architecture and its implementation only for extraction/parity work.
-- Load AAA specification, architecture, embedding guide, and `aaa-delivery` public contract only when the slice crosses into reactive AAA.
-- Load read-model and control-plane contracts only when exposing observation data beyond runtime consumers.
-- Use the benchmarking capability for generated RefTime/ProofSize evidence; do not duplicate benchmark commands here.
+- Every feed has immutable typed meaning, producer, provenance, scale, aggregation, freshness, lifecycle, and explicit bounds; semantic changes create a new feed identity.
+- Current reads and publication remain bounded. Notification work stays subscriber-independent and does not synchronously iterate subscribers.
+- Equal output may refresh `updated_at` without advancing the change-only revision or notifying reactions.
+- Directional pool observations require explicit admission in each direction and preserve Router pre-execution sampling plus whole-swap rollback.
+- AAA alone owns bounded subscriptions, dirty coalescing, deferred fanout, the existing readiness latch, queue, wakeup, and scheduler path.
+- Browser inspection reads selected bounded finalized-state keys and labels provenance, freshness, staleness, and unavailability honestly; history requires a named materialized provider.
+- Local-pool observations never become claims of external fair price, manipulation resistance, MEV protection, or transaction-order guarantees.
 
-## Evidence and Gates
+## Evidence Routes
 
-- Package foundation requires default, no-std, runtime-benchmark, independent embedding, unit, metadata/storage-contract, try-state, and generated-weight evidence.
-- Every state collection and producer index needs an explicit bound and maximum-density test.
-- Revision tests must distinguish accepted sample, changed published value, equal published value, refresh-only update, overflow, and transactional hook failure.
-- Extraction cannot delete Router storage before exact EMA vectors and failed-swap rollback prove parity.
-- Reactive delivery cannot iterate subscribers in producer context or add another scheduler.
-- Release handoff requires the repository validation matrix, artifact equality, context synchronization, and no unresolved correctness blocker.
+- Oracle package changes require focused unit/try-state tests and the applicable default, no-std, runtime-benchmark, try-runtime, and independent-embedding profiles.
+- Storage, admission, lifecycle, or publication changes require maximum-density and transactional-failure evidence plus regenerated two-dimensional weights when measured work changes.
+- Router producer changes require exact aggregation/parity vectors, directional registration coverage, and failed-swap rollback evidence.
+- Reactive AAA changes require focused ingress/subscription/fanout tests and the shared AAA quick or full release route according to scheduler, liveness, capacity, or production-weight impact.
+- Client/control-plane changes require observation and reactive-authoring tests, Svelte checks, and production build when browser realization changes.
+- Metadata, runtime Wasm, generated artifacts, or release claims require their owning full validation and freshness gates; no narrower result may be promoted into release evidence.
 
-## Evolution and Retirement
+## Evolution
 
-Refine this skill only when observation delivery exposes a recurring route, gate, or failure mode not owned by canonical docs or shared capabilities. Remove mutable implementation detail after promotion. Mature or retire the delivery emphasis once 0.7.7 ships and the remaining support loop no longer requires cross-slice reconstruction.
+Keep this mature feature skill version-neutral and compact. When verified Oracle work becomes actionable, continue in this same skill and point agents to the exact canonical backlog slice. Add guidance only for recurring feature-specific routing or evidence failures that canonical docs and shared validators do not already own; remove guidance after a stronger owner absorbs it. Split only if a genuinely independent observation feature develops its own truth owners and decisive gates.

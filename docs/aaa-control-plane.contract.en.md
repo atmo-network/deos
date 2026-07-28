@@ -31,6 +31,14 @@ A canonical executable plan is a chain-bound artifact with these required fields
 
 A canonical artifact is executable only when live genesis hash, runtime versions, and metadata hash match the envelope. A mismatch requires explicit re-decode, revalidation, re-encoding, and a new `planId`; tooling must not silently rebind stale bytes.
 
+## Configuration IR and Tokenomic Genome
+
+`deos.aaa.configuration-ir` version `1` is the format-neutral typed authoring structure. It preserves actor type, mutability, completion policy, trigger/admission policy, exact observation feeds, cooldown and schedule window, funding policy, ordered linear steps, exact `ConditionSet`, task parameters, amount resolutions, and failure policy. Presentation-only step keys never enter the IR.
+
+JSON, TOML, and structured Markdown adapters preserve the same normalized IR. The TOML and Markdown forms store each top-level typed field as exact JSON data, so adapter grammar cannot reinterpret runtime concepts. Comments, surrounding Markdown prose, object-key order, whitespace, and file extension do not affect normalization, canonical lowering, SCALE bytes, or `planId`.
+
+Normalization rejects unknown format versions, missing required fields, and unknown top-level fields. Diagnostics reuse canonical authoring validation; structural diff reports deterministic JSON-pointer paths. Acceptance requires `parse -> IR -> canonical authoring lower -> metadata decode/re-encode` equality. The IR is an off-chain convenience surface, not another runtime language, recipe engine, or consensus rule.
+
 ## Human Projection
 
 A human projection must decode `programScale` through the exact metadata identified by `metadataHash`. It must show every `ProgramInput`, trigger, schedule window, funding policy, step, exact `ConditionSet` mode, atomic condition, task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact nonzero `RetryLater.maxAttempts` payload without lossy defaults. `Always`, `All`, and `Any` remain distinct typed objects rather than an ambiguous raw array.
@@ -46,6 +54,10 @@ Trigger projection preserves source and admission as independent typed dimension
 The control plane reads bounded `Oracle.FeedIds` and only the selected exact feed/configuration and current-observation keys at one finalized hash. It displays the complete directional identity, decimal scale and exact formatting, producer, provenance, aggregation, lifecycle, update block, change-only revision, authored maximum age, current age, and Fresh/Stale/Unavailable/Uninitialized status as direct canonical-chain storage truth.
 
 Latest-state fanout remains reconsideration-only. Equal-value publication may refresh `updated_at` without incrementing revision; dirty revisions may coalesce before subscriber execution, and the inspector promises neither intermediate-revision delivery nor per-revision execution. Historical samples, timelines, and alerts require an explicitly materialized provider.
+
+The reactive delivery projection MUST fail closed unless DEOS Oracle revision, AAA dirty state, active-list topology, subscriber-page topology, and finalized block come from one snapshot. It reports Clean, PendingFanout, FanoutInProgress, or AwaitingCleanup; exact `dirty_since` age; latest/fanout revisions; active-list head/tail/count/cursor and zero-based selected position; next subscriber page; occupied and remaining page counts; and a ceiling estimate under identified runtime, weight, cardinality, and pages-per-block evidence. A timing estimate assumes quiescent revisions and available fanout budget and never predicts actor queue admission, execution, or one exact future block.
+
+Optional selected-actor inspection reads only exact `ActorHot(aaa_id)` at that finalized hash. It reports actor existence, pending signal, type-derived System/User lane, queue ticket or wakeup block/page/slot, and one factual status: ActorMissing, NoPendingSignal, PendingQueueAdmission, Queued, or WakeupScheduled. Queue and wakeup pointers are mutually exclusive. PendingQueueAdmission means a signal lacks both paths at the snapshot; it does not predict when capacity returns.
 
 `AxialRouterPreExecutionReserves` identifies local pool reserves observed before Router execution. The inspection surface MUST state that this is not an external fair-price, manipulation-resistance, MEV-protection, or ordering proof. Authored slippage, System reference-deviation guards, and execution-time conditions remain separate contracts.
 
@@ -101,6 +113,20 @@ For every cursor from zero through plan length, the analyzer emits one suffix en
 
 Findings remain factual and unscored: trigger admission shape, committed effects before a retryable step, retry-live observations, current-balance mixing after an earlier write, unsupported/unknown adapters, unknown Temporary-failure classification, potential actor-signal edges, budget-relative ProofSize dominance, and the conditional administrative actions that invalidate an active Continuation. Capability claims remain unknown unless an identified profile proves them.
 
+## Closed-Loop Feedback Projection
+
+`AaaFeedbackModel` consumes identified `ProgramStaticAnalysis` results rather than decoding plans or recreating task semantics. It builds a deterministic bounded graph over actors, typed observation feeds, shared assets, exact actor-account signal recipients, and declared future parameter actuators. Observation-to-actor edges come only from exact trigger or condition feed identity; actor effects come from existing analyzed steps plus explicit typed effect matchers.
+
+Each observation is classified as `Endogenous`, `Exogenous`, or `Unknown`. Exogenous observations cannot declare actor-effect matchers, duplicate feed projections fail closed, and actuator controllers and targets must resolve exactly. Shared-asset edges show structural read/write coupling; they do not claim that one balance movement caused a later action. Parameter actuators remain explicit declared nodes rather than inferred runtime capabilities.
+
+Strongly connected components produce canonical self-feedback or cross-actor paths under fixed node and edge ceilings. Every result says `StructuralPossibility`; stability, probability, and causal strength remain `Unknown`. A detected path is a review surface, not proof of instability, oscillation, exploitability, or economic harm. An absent path proves only absence from the supplied finite model and effect declarations.
+
+Reactive findings remain factual and unscored. Structural evidence may report endogenous feedback, self/cross-actor cycles, and shared-observation actuator contention. Timing and policy findings require one explicit evidence snapshot identifying runtime, weights, cadence, estimated delivery, actor cooldown, hysteresis/persistence, declared gain, and reactive-ingress priority; absent or unknown evidence produces no claim.
+
+The evidence-bound set covers freshness below the estimated delivery envelope, threshold chatter possibility, missing hysteresis or persistence, declared high gain, cooldown/feed-rate mismatch, and a System actor explicitly declared on ordinary reactive ingress. Every such row carries the snapshot identity. The model never infers gain, exact delivery time, scheduler service, instability, exploitability, or harm.
+
+The falsification corpus covers price → swap → price, fee funding → downstream market action → price, actor funding → downstream actor activation, explicit parameter-policy effects, and unmatched exogenous observations. The projection is off-chain control-plane evidence and creates no consensus rule, scheduler priority, or execution authority.
+
 ## Matching-Runtime Simulation Provider
 
 The first runtime provider simulates one attempt of an existing active actor whose stored `ProgramInput::Active`, `AaaType`, and `Mutability` exactly match the validated artifact. It supports an idle actor's next fresh cycle and a suspended actor's next Continuation attempt. It does not simulate creation, dormant activation, a proposed replacement program, scheduler throughput, queue position, or future block timing.
@@ -149,7 +175,7 @@ The corpus tests language coverage rather than market viability. `Expressible` m
 | 8 | Stake then maturity-gated unstake | Stake plan plus a later timer/block-gated Unstake plan | Partial | Basic stake and unstake tasks exist, but reward, maturity, health, or exchange-rate predicates have no atomic condition. Separate actors add custody, scheduling, latency, and operational cost. |
 | 9 | Oracle-price take-profit or stop-loss | Fresh typed price observation → swap or successful stop | Expressible | Observation conditions compare one explicitly authored feed identity and raw scalar threshold. Unavailable, uninitialized, or stale truth skips the task; local-pool provenance does not imply external fair price. |
 | 10 | Dynamic target-ratio portfolio rebalance | Observe portfolio ratio → choose assets and calculated amounts → trade toward target | Unavailable | The language has no ratio predicate, arithmetic expression, dynamic asset selection, or iterative convergence. A bounded runtime adapter could own one typed future mechanism only after concrete demand and weights. |
-| 11 | Descending buy buckets | Independent one-shot actors: price change → `All(ObservationBelow(level), BalanceAbove(spend))` → `SwapIn` → bounded retry | Expressible | Axial Router produces local pre-execution samples, Oracle owns current truth, and AAA owns reaction. Non-fresh truth skips; retry exhaustion closes only that bucket. |
+| 11 | Descending buy buckets | Independent one-shot actors: price change → `All(ObservationBelow(level), BalanceAbove(spend))` → `SwapIn` → bounded retry | Expressible | DEOS Router produces local pre-execution samples, DEOS Oracle owns current truth, and AAA owns reaction. Non-fresh truth skips; retry exhaustion closes only that bucket. |
 | 12 | Ascending sell buckets | Independent one-shot actors: reverse-price change → `All(ObservationAbove(level), BalanceAbove(sell))` → `SwapIn` → bounded retry | Expressible | Every bucket authors its feed, threshold, amount, slippage, and retry limit. Local-pool provenance proves neither fair price nor ordering protection. |
 | 13 | Treasury reserve-ratio reaction | Manual `SplitTransfer` execution core; treasury-ratio predicate absent | Partial | Current Oracle meaning covers directional local-pool price, not treasury balance ratio. No producer or truth owner exists; automatic execution must remain disabled rather than mislabeling a price feed. |
 | 14 | Liquidity-depth reaction | Manual `AddLiquidity` execution core; absolute-depth predicate absent | Partial | Current price feeds expose a ratio, not absolute reserve depth. A future typed producer and meaning must own depth before the core can become reactive. |

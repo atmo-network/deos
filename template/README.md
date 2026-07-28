@@ -32,7 +32,7 @@ Custom DEOS runtime pallets in the current reference configuration:
 
 - [`aaa/`](./pallets/aaa/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
 - [`asset-registry/`](./pallets/asset-registry/) — XCM location to asset-id registry
-- [`router/`](./pallets/router/) — Axial Router routing and fee/burn execution gateway
+- [`router/`](./pallets/router/) — DEOS Router routing and fee/burn execution gateway
 - [`governance/`](./pallets/governance/) — bounded governance reward-memory and proposal lifecycle
 - [`oracle/`](./pallets/oracle/README.md) — reusable bounded typed scalar observation and revision truth
 - [`staking/`](./pallets/staking/) — share-vault staking, liquid `stXXX` receipts, locked native LP nomination, governance custody, and reward settlement

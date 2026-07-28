@@ -23,6 +23,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
   type Props = {
     refreshKey: number;
     compact?: boolean;
+    actorOptions?: readonly { aaaId: number; label: string }[];
     loadFeeds:
       | (() => Promise<ReadModelValue<ObservationFeedIdentity[]>>)
       | null;
@@ -30,6 +31,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
       | ((
           feed: ObservationFeedIdentity,
           maxAgeBlocks: number,
+          aaaId?: number,
         ) => Promise<ReadModelValue<ObservationInspection>>)
       | null;
   };
@@ -37,12 +39,14 @@ Zone: Observation domain UI; receives provider capabilities from its composition
   let {
     refreshKey,
     compact = false,
+    actorOptions = [],
     loadFeeds,
     loadInspection,
   }: Props = $props();
   let feeds = $state<ReadModelValue<ObservationFeedIdentity[]> | null>(null);
   let inspection = $state<ReadModelValue<ObservationInspection> | null>(null);
   let selectedFeedIndex = $state(0);
+  let selectedActorId = $state('');
   let maxAgeBlocks = $state(100);
   let loadingFeeds = $state(false);
   let loadingInspection = $state(false);
@@ -60,6 +64,10 @@ Zone: Observation domain UI; receives provider capabilities from its composition
     selectedFeedIndex = Number(
       (event.currentTarget as HTMLSelectElement).value,
     );
+  }
+
+  function selectActor(event: Event) {
+    selectedActorId = (event.currentTarget as HTMLSelectElement).value;
   }
 
   $effect(() => {
@@ -99,6 +107,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
   $effect(() => {
     const feed = selectedFeed;
     const age = maxAgeBlocks;
+    const actorId = selectedActorId === '' ? undefined : Number(selectedActorId);
     refreshKey;
     if (!feed || !loadInspection || age <= 0 || age > 0xffff_ffff) {
       inspection = null;
@@ -107,7 +116,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
     let cancelled = false;
     loadingInspection = true;
     error = null;
-    void loadInspection(feed, age)
+    void loadInspection(feed, age, actorId)
       .then((nextInspection) => {
         if (cancelled) return;
         inspection = nextInspection;
@@ -129,7 +138,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
 
 <div class="grid gap-3 p-3 text-xs">
   <Notice variant="warn">
-    Local-pool observations come from Axial Router pre-execution reserves. They
+    Local-pool observations come from DEOS Router pre-execution reserves. They
     are bounded execution references, not fair-price, manipulation-resistance,
     MEV-protection, or ordering proofs.
   </Notice>
@@ -138,7 +147,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
     <Notice variant="warn">{error}</Notice>
   {/if}
 
-  <div class={compact ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
+  <div class={compact ? 'grid gap-2' : 'grid grid-cols-3 gap-2'}>
     <SelectField
       label="Canonical feed"
       value={String(selectedFeedIndex)}
@@ -153,6 +162,17 @@ Zone: Observation domain UI; receives provider capabilities from its composition
       {:else}
         <option value="0">No registered feeds</option>
       {/if}
+    </SelectField>
+    <SelectField
+      label="Selected actor delivery"
+      value={selectedActorId}
+      onchange={selectActor}
+      selectClass="h-9 py-1.5 text-xs"
+    >
+      <option value="">No actor selected</option>
+      {#each actorOptions as actor (actor.aaaId)}
+        <option value={actor.aaaId}>{actor.label} · AAA {actor.aaaId}</option>
+      {/each}
     </SelectField>
     <NumberInput
       label="Authored maximum age (blocks)"
@@ -238,6 +258,128 @@ Zone: Observation domain UI; receives provider capabilities from its composition
           value="Materialized provider (not loaded here)"
         />
       </div>
+
+      {#if value.delivery}
+        {@const delivery = value.delivery}
+        <div class="grid gap-2 border-t border-(--mono-border) pt-2">
+          <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
+            Reactive delivery
+          </div>
+          <div
+            class={compact
+              ? 'grid gap-1'
+              : 'grid grid-cols-2 gap-x-4 gap-y-1'}
+          >
+            <DetailRow label="Delivery status" value={delivery.status} />
+            <DetailRow
+              label="Latest / fanout revision"
+              value={`${delivery.latestRevision?.toString() ?? 'None'} / ${delivery.fanoutRevision?.toString() ?? 'None'}`}
+              valueClass="tabnum"
+            />
+            <DetailRow
+              label="Exact dirty age"
+              value={delivery.dirtyAgeBlocks == null
+                ? 'Clean'
+                : `${delivery.dirtyAgeBlocks} blocks`}
+              valueClass="tabnum"
+            />
+            <DetailRow
+              label="Active-list position"
+              value={delivery.activeList.selectedPosition == null
+                ? 'Not active'
+                : `${delivery.activeList.selectedPosition} of ${delivery.activeList.count} (zero-based)`}
+              valueClass="tabnum"
+            />
+            <DetailRow
+              label="Fair cursor"
+              value={delivery.activeList.cursor == null
+                ? 'None'
+                : formatObservationFeed(delivery.activeList.cursor)}
+            />
+            <DetailRow
+              label="Head / tail"
+              value={`${delivery.activeList.head == null ? 'None' : formatObservationFeed(delivery.activeList.head)} / ${delivery.activeList.tail == null ? 'None' : formatObservationFeed(delivery.activeList.tail)}`}
+            />
+            <DetailRow
+              label="Next subscriber page"
+              value={delivery.nextSubscriberPage?.toString() ?? 'None'}
+              valueClass="tabnum"
+            />
+            <DetailRow
+              label="Occupied / remaining pages"
+              value={`${delivery.occupiedPageCount} / ${delivery.estimatedRemainingFanoutPages}`}
+              valueClass="tabnum"
+            />
+            <DetailRow
+              label="Estimated fanout blocks"
+              value={`${delivery.estimatedRemainingBlocks} under ${delivery.budget.maxPagesPerBlock} pages/block`}
+              valueClass="tabnum"
+            />
+            <DetailRow
+              label="Budget evidence"
+              value={`${delivery.budget.runtimeIdentity} · ${delivery.budget.weightIdentity}`}
+              valueClass="font-mono break-all"
+            />
+          </div>
+          {#if delivery.selectedActor}
+            {@const actor = delivery.selectedActor}
+            <div class="grid gap-1 rounded-lg bg-(--mono-surface) p-2">
+              <div
+                class="text-[10px] uppercase tracking-wider text-(--mono-muted)"
+              >
+                Selected actor admission
+              </div>
+              <div
+                class={compact
+                  ? 'grid gap-1'
+                  : 'grid grid-cols-2 gap-x-4 gap-y-1'}
+              >
+                <DetailRow
+                  label="AAA id / lane"
+                  value={`${actor.aaaId.toString()} / ${actor.queueLane ?? 'Unavailable'}`}
+                  valueClass="tabnum"
+                />
+                <DetailRow
+                  label="Queue-admission status"
+                  value={actor.queueAdmissionStatus}
+                />
+                <DetailRow
+                  label="Pending signal"
+                  value={actor.pendingSignal == null
+                    ? 'Unavailable'
+                    : actor.pendingSignal
+                      ? 'Yes'
+                      : 'No'}
+                />
+                <DetailRow
+                  label="Queue ticket"
+                  value={actor.queueTicket?.toString() ?? 'None'}
+                  valueClass="tabnum"
+                />
+                <DetailRow
+                  label="Wakeup block"
+                  value={actor.wakeup == null
+                    ? 'None'
+                    : actor.wakeup.block.toString()}
+                  valueClass="tabnum"
+                />
+                <DetailRow
+                  label="Wakeup page / slot"
+                  value={actor.wakeup == null
+                    ? 'None'
+                    : `${actor.wakeup.pageId.toString()} / ${actor.wakeup.slot}`}
+                  valueClass="tabnum"
+                />
+              </div>
+            </div>
+          {/if}
+          {#if delivery.estimateAssumptions.length > 0}
+            <Notice variant="muted">
+              Estimate assumptions: {delivery.estimateAssumptions.join(' ')}
+            </Notice>
+          {/if}
+        </div>
+      {/if}
 
       <Notice variant="muted">
         Observation-change signals coalesce to latest-state reconsideration.

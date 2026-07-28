@@ -11,6 +11,8 @@ available_locales:
 sources:
   - ../../template/pallets/aaa/docs/specification.en.md
   - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../docs/aaa.integration.en.md
+  - ../../docs/oracle.integration.en.md
   - ../../docs/aaa-control-plane.contract.en.md
   - ../../template/pallets/aaa/docs/embedding.md
   - ../../docs/core.architecture.en.md
@@ -23,9 +25,10 @@ tags:
   - automation
 related:
   - AA-Actor
+  - Typed Observations
   - Token-Driven Automation
   - Routing and Minting Loop
-  - Governance Overview
+  - Governance
   - Core Terms
 last_compiled: 2026-07-27
 confidence: 0.95
@@ -125,7 +128,7 @@ On the current reference line, AAA is the execution substrate for runtime-side p
 
 The shipped runtime reserves fifteen deterministic System addresses but enrolls only three active programs at genesis: Burn Actor, Fee Sink, and BLDR Splitter. These programs react to verified inbound value rather than periodic polling. Ten Mutable System identities start dormant with no plan, funding, fee, queue, wakeup, or cycle state. Activation accepts one typed active-program input with an explicit schedule, run plan, and funding policy, and validates it before enrollment. The two permanent Bucket A anchors remain custody-only deterministic accounts outside generic actor storage. Native staking LP provisioning can activate only after the receipt asset, staking pool, dormant identity, and non-empty `NTVE/stNTVE` AMM are ready.
 
-AAA does not replace TMC, Axial Router, staking, or governance. Those subsystems own math and domain rules. AAA gives them a deterministic way to be orchestrated together.
+AAA does not replace TMC, DEOS Router, DEOS Staking, or DEOS Governance. Those subsystems own math and domain rules. AAA gives them a deterministic way to be orchestrated together.
 
 ## Why It Exists
 
@@ -138,7 +141,8 @@ Within the existing task and adapter language, many workflow/topology changes ca
 ## Related
 
 - [AA-Actor](aa-actor.en.md)
+- [Typed Observations](typed-observations.en.md)
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
-- [Governance Overview](governance-overview.en.md)
+- [Governance](governance.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

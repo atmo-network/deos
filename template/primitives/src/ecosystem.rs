@@ -16,7 +16,7 @@ pub type Balance = u128;
 ///
 /// IDs are sequential from `0` for all core system actors in the current launch line.
 pub mod aaa_ids {
-  /// Burn Actor System AAA — collects Axial Router fees and burns native tokens
+  /// Burn Actor System AAA — collects DEOS Router fees and burns native tokens
   /// Created first at genesis (`aaa_id = 0`)
   ///
   /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
@@ -28,7 +28,7 @@ pub mod aaa_ids {
   /// Created at genesis (`aaa_id = 1`)
   ///
   /// Canonical role: unified collection address for 100% of transaction, AAA User-action,
-  /// governance-opening, and XCM-execution fees, with no immediate author share. Axial Router
+  /// governance-opening, and XCM-execution fees, with no immediate author share. DEOS Router
   /// trading fees remain a separate deflationary flow to the Burn Actor. During the trusted,
   /// permissioned-collator phase, available native balance splits 50/50 between staking ingress
   /// and liquidity provisioning. Equal security/staking/liquidity thirds require permissionless
@@ -174,7 +174,7 @@ pub mod pallet_ids {
   ///   SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
   pub const AAA_PALLET_ID: &[u8; 8] = b"aaactor0";
 
-  /// Axial Router pallet ID (multi-token routing engine)
+  /// DEOS Router pallet ID (multi-token routing engine)
   ///
   /// Pallet account (SS58 prefix 42):
   ///   hex:  `0x6d6f646c617869616c7274300000000000000000000000000000000000000000`
@@ -254,13 +254,13 @@ pub mod params {
   /// TMC liquidity-actor allocation ratio (66.6% of minted tokens).
   pub const TMC_ZAP_ALLOCATION: Perbill = Perbill::from_parts(666_666_667);
 
-  /// Axial Router fee (0.5%).
+  /// DEOS Router fee (0.5%).
   ///
-  /// Protocol captures 0.5% on all swaps routed through the Axial Router.
+  /// Protocol captures 0.5% on all swaps routed through DEOS Router.
   /// XYK pool fee is 0.0% — all fee revenue flows through the Router to the Burning Manager.
   pub const AXIAL_ROUTER_FEE: Perbill = Perbill::from_parts(5_000_000); // 50 bps
 
-  /// Maximum governance-settable Axial Router fee (1%).
+  /// Maximum governance-settable DEOS Router fee (1%).
   ///
   /// Bounds fee mutation so router policy cannot silently invalidate TMCTOL liveness
   /// or conservation assumptions while preserving a narrow launch-line adjustment band.

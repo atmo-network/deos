@@ -30,7 +30,7 @@ pub trait PriceOracle<Balance> {
   ) -> Result<(), DispatchError>;
 }
 
-/// TMC interface for Axial Router integration
+/// TMC interface for DEOS Router integration
 pub trait TmcInterface<AccountId, Balance> {
   /// Check if TMC curve exists for asset
   fn has_curve(asset: AssetKind) -> bool;

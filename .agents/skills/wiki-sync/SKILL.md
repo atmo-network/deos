@@ -713,6 +713,15 @@ Examples:
 
 If ambiguity exists, the agent SHOULD anchor naming to the dominant concept expressed in `/docs`.
 
+Before creating or renaming an owner page, the agent MUST answer four questions:
+
+1. Does the page own a domain, concept, mechanism, concrete subsystem, or product surface?
+2. What object will a reader reasonably expect to find under this title?
+3. Would the title remain true if the current pallet, package, or implementation changed?
+4. Do subsystem and mechanism each have enough independent content to justify separate pages, or should one page distinguish them internally?
+
+The `overview/` directory expresses an entrypoint role, not a naming schema. The agent MUST NOT mechanically prefix overview titles with a framework or product name. It SHOULD use a branded subsystem title only when the page actually owns that concrete subsystem; broader domain and concept pages retain semantic names such as `Asset Identity`, `Governance`, `Staking`, or `Typed Observations`.
+
 ## Quality Thresholds
 
 The agent SHOULD treat a wiki page as weak if it has one or more of these properties:

@@ -18,7 +18,7 @@ Exclude consensus mechanics, unbounded on-chain history, hidden correctness depe
 
 - `docs/read-model.contract.en.md` owns canonical-chain versus materialized classification.
 - Owning subsystem specifications and architecture documents own event/storage meaning.
-- `docs/web-client.architecture.en.md` owns browser provenance and provider realization.
+- `web-client/docs/architecture.en.md` owns browser provenance and provider realization.
 - The selected indexer package owns ingestion, schema, checkpoints, replay, and API behavior once implementation exists.
 - Client domain slices own provider adapters and presentation contracts.
 - `BACKLOG.md` owns remaining work; `CHANGELOG.md` owns completed outcomes.

@@ -13,7 +13,7 @@ sources:
   - ../../docs/README.md
   - ../../docs/core.architecture.en.md
   - ../../docs/tmctol.specification.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
 status: active
 audience: newcomer
 tags:
@@ -24,7 +24,7 @@ related:
   - DEOS Framework Overview
   - TMCTOL Standard
   - AAA System
-  - Governance Overview
+  - Governance
   - $BLDR Builder Economy
   - Reference Client
 last_compiled: 2026-07-20
@@ -63,13 +63,13 @@ Read [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor
 
 The routing domain connects user intent, mint paths, AMM liquidity, fees, and registered assets. It is where the framework decides whether a trade should go through market liquidity or protocol liquidity, and how foreign assets become local runtime citizens.
 
-Read [Axial Router](../overview/axial-router.en.md), [Asset Identity](../overview/asset-identity.en.md), and [Read-Model Split](read-model-split.en.md).
+Read [DEOS Router](../overview/router.en.md), [Asset Identity](../overview/asset-identity.en.md), and [Read-Model Split](read-model-split.en.md).
 
 ### Governance and protection
 
 The governance domain explains who may change what. DEOS governance is domain-scoped: each governed area has a primary power surface, a protection surface, typed payloads, bounded execution authority, and explicit limits.
 
-Read [Governance Overview](../overview/governance-overview.en.md), [Governance Domains](governance-domains.en.md), and [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md).
+Read [Governance](../overview/governance.en.md), [Governance Domains](governance-domains.en.md), and [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md).
 
 ### Builder economy and useful work
 
@@ -81,13 +81,13 @@ Read [$BLDR Builder Economy](builder-economy.en.md), then use [Token Surfaces](t
 
 The staking domain explains share-vault receipts, native liquid staking, LP nomination, reward memory, and protocol donation into liquidity. It bridges economic security, user positions, and governance-conditioned rewards.
 
-Read [Staking Pools](staking-pools.en.md) and [Three-Layer Validation](../development/three-layer-validation.en.md).
+Read [Staking](../overview/staking.en.md) and [Three-Layer Validation](../development/three-layer-validation.en.md).
 
 ### Client and read model
 
 The client domain explains how the browser product shows the system without pretending to be the source of truth. It distinguishes direct on-chain state, session-derived projections, and future materialized/indexed providers.
 
-Read [Reference Client](../overview/reference-client.en.md), [UI Kit and Domain DAG](ui-kit-and-domain-dag.en.md), and [Read-Model Split](read-model-split.en.md).
+Read [Reference Client](../overview/reference-client.en.md) and [Read-Model Split](read-model-split.en.md).
 
 ### Tooling and validation
 
@@ -123,6 +123,6 @@ A useful traversal is:
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [AAA System](../overview/aaa-system.en.md)
-- [Governance Overview](../overview/governance-overview.en.md)
+- [Governance](../overview/governance.en.md)
 - [$BLDR Builder Economy](builder-economy.en.md)
 - [Reference Client](../overview/reference-client.en.md)

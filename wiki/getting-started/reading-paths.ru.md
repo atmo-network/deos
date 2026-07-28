@@ -68,12 +68,11 @@ confidence: 0.85
 3. [Executive Summary](executive-summary.ru.md)
 4. [Physics vs Politics](../comparisons/physics-vs-politics.ru.md)
 5. [Экономика $BLDR](../concepts/builder-economy.ru.md)
-6. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
-7. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
-8. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
-9. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
-10. [Форк DEOS](../usage/forking-deos.ru.md)
-11. [Эталонный клиент](../overview/reference-client.ru.md)
+6. [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
+7. [Уровни экономических утверждений](../concepts/economic-claim-levels.ru.md)
+8. [Карта инвариантов и угроз](../concepts/invariant-map.ru.md)
+9. [Форк DEOS](../usage/forking-deos.ru.md)
+10. [Эталонный клиент](../overview/reference-client.ru.md)
 
 Этот маршрут для партнеров, ecosystem readers и technical evaluators, которым сначала нужны мем, границы, карта рисков и обязанности форка, а уже потом topology реализации.
 
@@ -88,7 +87,7 @@ confidence: 0.85
 7. [Сценарии TOL buckets](../concepts/tol-bucket-scenarios.ru.md)
 8. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
 9. [Token Minting Curve](../overview/token-minting-curve.ru.md)
-10. [Axial Router](../overview/axial-router.ru.md)
+10. [DEOS Router](../overview/router.ru.md)
 11. [Трехуровневая валидация](../development/three-layer-validation.ru.md)
 
 Экономическая работа должна сохранять различие между формулами, поведением runtime и интеграционными эффектами. Маршрут wiki должен показать, какой домен вы меняете, до запуска более глубокого набора проверок.
@@ -107,11 +106,11 @@ confidence: 0.85
 
 ## Если вы меняете governance
 
-1. [Обзор Governance](../overview/governance-overview.ru.md)
+1. [Governance](../overview/governance.ru.md)
 2. [Домены Governance](../concepts/governance-domains.ru.md)
 3. [Экономика $BLDR](../concepts/builder-economy.ru.md)
 4. [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-5. [Пулы стейкинга](../concepts/staking-pools.ru.md)
+5. [Стейкинг](../overview/staking.ru.md)
 6. [Разделение read-model](../concepts/read-model-split.ru.md)
 7. [Базовые термины](../glossary/core-terms.ru.md)
 
@@ -120,11 +119,10 @@ confidence: 0.85
 ## Если вы меняете веб-клиент
 
 1. [Эталонный клиент](../overview/reference-client.ru.md)
-2. [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
-3. [Разделение read-model](../concepts/read-model-split.ru.md)
-4. [Generated Wiki](../concepts/generated-wiki.ru.md)
-5. [Слой скриптов](../usage/scripts-layer.ru.md)
-6. [Статус разработки](../development/status.ru.md)
+2. [Разделение read-model](../concepts/read-model-split.ru.md)
+3. [Generated Wiki](../concepts/generated-wiki.ru.md)
+4. [Слой скриптов](../usage/scripts-layer.ru.md)
+5. [Статус разработки](../development/status.ru.md)
 
 Работа с клиентом должна сохранять повторное использование UI Kit, правила владения Domain DAG, честное происхождение данных в read-model и доверенную границу рендеринга wiki.
 
@@ -148,7 +146,6 @@ confidence: 0.85
 6. [Технологический стек](../implementation/tech-stack.ru.md)
 7. [Parachain context](../concepts/parachain-context.ru.md)
 8. [Форк DEOS](../usage/forking-deos.ru.md)
-9. [Чем DEOS не является](../concepts/what-deos-is-not.ru.md)
 
 Работа с инструментами и fork work должна оставаться ограниченной, явной и честной по требованиям запуска, сохраненным framework contracts и поведению.
 

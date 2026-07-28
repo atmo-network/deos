@@ -10,7 +10,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/README.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
   - ../../.agents/skills/wiki-sync/SKILL.md
   - ../_meta/navigation.json
@@ -28,7 +28,6 @@ tags:
 related:
   - Domain Map
   - Reference Client
-  - UI Kit and Domain DAG
   - First Steps
   - Agent Coordination
   - Core Terms
@@ -102,7 +101,6 @@ When evolving the wiki, update the owner page first, replace duplicated explanat
 
 - [Domain Map](domain-map.en.md)
 - [Reference Client](../overview/reference-client.en.md)
-- [UI Kit and Domain DAG](ui-kit-and-domain-dag.en.md)
 - [First Steps](../getting-started/first-steps.en.md)
 - [Agent Coordination](../usage/agent-coordination.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

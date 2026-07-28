@@ -38,7 +38,7 @@ test('canonical dormant artifact is deterministic and round-trips exact SCALE', 
   const artifact = dormantArtifact();
   assert.equal(
     artifact.planId,
-    '0x33ce9d385896cf500aa13d4ff51b96efa5361e16d5c3130dbd06c571e08f3750',
+    '0x8d127113b22fa7744646d1eb32862cac52045332db0531a41e03f5c9976de3cb',
   );
   const inspection = inspectAaaPlanArtifact(artifact, metadataBytes, runtime);
   assert.equal(inspection.valid, true);

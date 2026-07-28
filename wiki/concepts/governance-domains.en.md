@@ -19,11 +19,11 @@ tags:
   - governance
   - domains
 related:
-  - Governance Overview
+  - Governance
   - DEOS Framework Overview
   - TMCTOL Standard
   - $BLDR Builder Economy
-  - Staking Pools
+  - Staking
   - Read-Model Split
   - Physics-First vs Politics-First
   - Core Terms
@@ -37,7 +37,7 @@ confidence: 0.9
 
 A governance domain is one typed governance cell inside DEOS Governance. It tells the runtime and the user what is governed, whose voting power counts, which protection surface can intervene, which proposal families are valid, and how far successful execution may reach.
 
-[Governance Overview](../overview/governance-overview.en.md) explains the whole subsystem. This page explains the unit that keeps that subsystem from collapsing into one flat voting market.
+[Governance](../overview/governance.en.md) explains the whole subsystem. This page explains the unit that keeps that subsystem from collapsing into one flat voting market.
 
 ## Domain Contract
 
@@ -100,11 +100,11 @@ Read a governance domain through five questions:
 
 ## Related
 
-- [Governance Overview](../overview/governance-overview.en.md)
+- [Governance](../overview/governance.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [$BLDR Builder Economy](builder-economy.en.md)
-- [Staking Pools](staking-pools.en.md)
+- [Staking](../overview/staking.en.md)
 - [Read-Model Split](read-model-split.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

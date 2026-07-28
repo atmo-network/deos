@@ -4096,23 +4096,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "deos-primitives"
+version = "0.7.8"
+dependencies = [
+ "parity-scale-codec",
+ "scale-info",
+ "serde",
+ "sp-api",
+ "sp-arithmetic",
+]
+
+[[package]]
 name = "deos-runtime"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "cumulus-pallet-parachain-system",
+ "deos-primitives",
  "docify",
  "hex-literal",
  "log",
- "pallet-asset-registry",
  "pallet-deos-aaa",
+ "pallet-deos-asset-registry",
  "pallet-deos-governance",
  "pallet-deos-oracle",
+ "pallet-deos-router",
  "pallet-deos-staking",
  "pallet-deos-tmc",
- "pallet-deus-router",
  "parity-scale-codec",
  "polkadot-sdk",
- "primitives",
  "scale-info",
  "serde_json",
  "smallvec",
@@ -8628,7 +8639,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-aaa-embedding-fixture"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "pallet-deos-aaa",
  "parity-scale-codec",
@@ -8755,18 +8766,6 @@ dependencies = [
  "scale-info",
  "sp-core",
  "sp-runtime",
-]
-
-[[package]]
-name = "pallet-asset-registry"
-version = "0.7.7"
-dependencies = [
- "parity-scale-codec",
- "polkadot-sdk",
- "polkadot-sdk-frame",
- "primitives",
- "proptest",
- "scale-info",
 ]
 
 [[package]]
@@ -9413,7 +9412,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-aaa"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9426,8 +9425,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-deos-asset-registry"
+version = "0.7.8"
+dependencies = [
+ "deos-primitives",
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "polkadot-sdk-frame",
+ "proptest",
+ "scale-info",
+]
+
+[[package]]
 name = "pallet-deos-governance"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9437,7 +9448,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-oracle"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9446,8 +9457,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-deos-router"
+version = "0.7.8"
+dependencies = [
+ "deos-primitives",
+ "pallet-deos-tmc",
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "polkadot-sdk-frame",
+ "proptest",
+ "scale-info",
+]
+
+[[package]]
 name = "pallet-deos-staking"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9457,12 +9481,12 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-tmc"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
+ "deos-primitives",
  "parity-scale-codec",
  "polkadot-sdk",
  "polkadot-sdk-frame",
- "primitives",
  "proptest",
  "scale-info",
 ]
@@ -9486,19 +9510,6 @@ dependencies = [
  "staging-xcm",
  "staging-xcm-builder",
  "staging-xcm-executor",
-]
-
-[[package]]
-name = "pallet-deus-router"
-version = "0.7.7"
-dependencies = [
- "pallet-deos-tmc",
- "parity-scale-codec",
- "polkadot-sdk",
- "polkadot-sdk-frame",
- "primitives",
- "proptest",
- "scale-info",
 ]
 
 [[package]]
@@ -10067,7 +10078,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-oracle-embedding-fixture"
-version = "0.7.7"
+version = "0.7.8"
 dependencies = [
  "pallet-deos-oracle",
  "parity-scale-codec",
@@ -13263,17 +13274,6 @@ dependencies = [
  "impl-serde",
  "scale-info",
  "uint 0.10.0",
-]
-
-[[package]]
-name = "primitives"
-version = "0.7.7"
-dependencies = [
- "parity-scale-codec",
- "scale-info",
- "serde",
- "sp-api",
- "sp-arithmetic",
 ]
 
 [[package]]

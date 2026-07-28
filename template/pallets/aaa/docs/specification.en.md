@@ -1,11 +1,11 @@
 # AAA Specification
 
 - **Component**: `pallet-deos-aaa` (Rust crate `pallet_aaa`; Account Abstraction Actors)
-- **Specification line**: `0.7.7`
+- **Specification line**: `0.7.8`
 - **Date**: July 2026
 - **Status**: Normative
-- **Release focus**: AAA Intent, Failure, and Service Semantics
-- **Source basis**: This accepted specification and the verified `0.7.3` implementation baseline.
+- **Release focus**: Reactive Delivery and Feedback Analysis
+- **Source basis**: This accepted specification and the verified `0.7.8` Reactive Delivery and Feedback Analysis implementation, generated evidence, and release-validation baseline.
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
 
@@ -13,7 +13,7 @@
 
 ## 0. Specification Maintenance Meta-Layer
 
-This specification MUST stay at or below **1280 lines** (formatting-preserving count), add new normative content only with equal-or-greater removal of obsolete content, state rules as positive executable behavior unless a negative safety-critical constraint is required, keep normative facts single-sourced with references instead of duplication, preserve mandatory blank-line separation above and below numbered headings, and ensure every line carries normative meaning, traceability, or required implementation context.
+This specification MUST stay at or below **1500 lines** (formatting-preserving count), add new normative content only with equal-or-greater removal of obsolete content, state rules as positive executable behavior unless a negative safety-critical constraint is required, keep normative facts single-sourced with references instead of duplication, preserve mandatory blank-line separation above and below numbered headings, and ensure every line carries normative meaning, traceability, or required implementation context.
 
 ---
 
@@ -819,8 +819,8 @@ Physical topology:
 
 1. An actor with at least one observation source owns one reusable dense slot below `MaxActiveActors`; actors without observation sources own no slot.
 2. Free slots use a `QueuePageSize`-bounded paged LIFO. Slot allocation and release touch one free page and exact forward/reverse ownership only; sequential actor churn cannot grow slot identity beyond `MaxActiveActors`.
-3. Subscriber pages use `(feed, slot / QueuePageSize)` as the physical key and `slot % QueuePageSize` as the exact optional entry. A mutation reads or writes one feed page and never scans actors, feeds, or unrelated pages.
-4. Empty subscriber pages and zero feed counts MUST be deleted immediately. Global live subscriptions MUST remain at most `MaxActiveActors * MaxTriggerSources`.
+3. Subscriber pages use `(feed, slot / QueuePageSize)` as the physical key and `slot % QueuePageSize` as the exact optional entry. Each feed owns an exact doubly linked list of occupied pages; page insertion/removal updates at most the page, one predecessor, one successor, and feed-local bounds without scanning actors or page ids.
+4. Empty subscriber pages and zero feed counts MUST be deleted immediately. Fanout MUST traverse only the feed's occupied-page list rather than the global subscription-slot high-water span. Global live subscriptions remain at most `MaxActiveActors * MaxTriggerSources`, while occupied pages remain at most live subscriptions.
 5. Creation and activation install the derived set atomically. Schedule replacement applies an exact old/new difference. Execution-plan replacement changes no subscriptions. Deactivation and every active close path remove the actor's exact feed entries and release its slot; dormant close owns no subscriptions.
 6. Try-state MUST reconcile actor feed ownership, slot forward/reverse maps, free-slot pages, every subscriber page cell, per-feed counts, and the global count.
 
@@ -828,13 +828,13 @@ The index does not itself mark readiness or execute actors. Changed-revision dir
 
 ### 7.4 Dirty Observation Ingress
 
-The runtime Oracle hook MUST call `note_observation_changed(feed, revision)` only for a changed published scalar. Revision `0` and revision regression fail closed. A feed without subscribers performs no dirty allocation; a subscribed clean feed allocates one reusable dirty slot, while equal or newer calls retain one slot and update only the latest revision.
+The runtime Oracle hook MUST call `note_observation_changed(feed, revision)` only for a changed published scalar. Revision `0` and revision regression fail closed. A feed without subscribers performs no dirty allocation; a subscribed clean feed appends one node to the exact active-dirty list, while equal or newer calls retain one node and update only the latest revision.
 
-Each dirty state stores `slot`, `latest_revision`, `fanout_revision`, and `next_subscriber_page`. Ingress initializes the latter two fields to zero and MUST NOT read subscriber pages, mutate actor readiness, enqueue actors, evaluate conditions, or execute plans. Deferred fanout exclusively owns those cursor fields.
+Each dirty state stores `latest_revision`, `fanout_revision`, the block when the current uninterrupted dirty interval began as `dirty_since`, an optional exact `next_subscriber_page`, and reciprocal previous/next active-dirty links. Ingress initializes fanout revision zero and dirty age at first clean-to-dirty insertion with no page cursor. Coalesced equal or newer revisions MUST preserve `dirty_since`; unlinking and a later clean-to-dirty insertion starts a new interval. Dirty age is `finalized_block.saturating_sub(dirty_since)`, not an inference from Oracle observation time. Ingress MUST NOT read subscriber pages, mutate actor readiness, enqueue actors, evaluate conditions, or execute plans. The first fanout unit snapshots the latest revision and feed-local occupied-page head; deferred fanout exclusively owns subsequent page-cursor progress.
 
-Dirty slots use a `QueuePageSize`-bounded paged free-slot LIFO. Their maximum identity is `MaxActiveActors * MaxTriggerSources`, and live dirty count cannot exceed live subscription count. Removing a feed's last subscriber deletes its dirty state and exact reverse slot, then returns that slot; lifecycle preflight covers every bounded release before subscription mutation.
+The active-dirty list stores exact head, tail, fair cursor, and live count. Its cardinality is bounded by `MaxActiveActors * MaxTriggerSources` and cannot exceed live subscription count. First insertion initializes all three pointers; later insertions append in O(1). Removing a feed's last subscriber unlinks at most two neighbors and repairs the fair cursor before subscription mutation commits.
 
-The hook reports one conservative worst-branch Weight with no subscriber-count component. Its mutation runs transactionally, so any invariant, capacity, or revision failure leaves dirty state unchanged and propagates into Oracle publication rollback. Try-state reconciles latest/cursor validity, subscribers, slot directions, free pages, and live count.
+The hook reports one conservative worst-branch Weight with no subscriber-count component. Its mutation runs transactionally, so any invariant, capacity, or revision failure leaves dirty state unchanged and propagates into Oracle publication rollback. Try-state reconciles latest/page-cursor validity, subscribers, reciprocal dirty links, list bounds, fair-cursor ownership, and live count.
 
 Dirty state remains reconsideration-only. It promises neither one execution per revision nor intermediate-revision delivery.
 
@@ -842,17 +842,30 @@ Dirty state remains reconsideration-only. It promises neither one execution per 
 
 Fanout MUST run as an independently metered `on_idle` worker before actor execution. It owns an explicit maximum page count and a configured RefTime/ProofSize limit within gross idle headroom. Each unit MUST admit the complete worst-case page Weight in both dimensions before any dirty cursor, actor latch, queue, wakeup, or free-slot mutation; one unit short performs none of those mutations.
 
-One unit MAY inspect one reusable dirty slot and at most one `QueuePageSize` subscriber page. A free slot advances the circular `DirtyObservationScanSlot` as bounded tombstone work. A live page sets the existing `ActorHot.pending_signal` for every live page entry. Existing queue/wakeup membership remains authoritative; an actor without either requests canonical paged-queue admission. If physical queue capacity blocks any request, the worker retains that page cursor and retries after canonical cleanup. It MUST NOT evaluate conditions, execute tasks, create another actor latch, or create another scheduler.
+One unit selects the exact fair-cursor feed and MAY inspect at most one occupied `QueuePageSize` subscriber page. The cursor rotates to the next active dirty feed, wrapping to the head, without probing empty identities. A live page sets the existing `ActorHot.pending_signal` for every live page entry. Existing queue/wakeup membership remains authoritative; an actor without either requests canonical paged-queue admission. If physical queue capacity blocks any request, the worker retains that page cursor and retries after canonical cleanup. It MUST NOT evaluate conditions, execute tasks, create another actor latch, or create another scheduler.
 
-For each feed, the first admitted page snapshots `fanout_revision = latest_revision`. `next_subscriber_page` advances after each committed page. At the final page:
+For each feed, the first admitted page snapshots `fanout_revision = latest_revision`. `next_subscriber_page` follows the exact occupied-page link after each committed page. Removing the cursor page advances it to that page's successor; an absent cursor completes the current pass without scanning empty page ids. At the final page:
 
-1. If `latest_revision == fanout_revision`, the worker deletes exact dirty state, releases its reusable slot, and decrements live dirty count.
-2. If a newer revision arrived, the worker retains one dirty state, sets `fanout_revision = latest_revision`, and restarts at page zero.
-3. Equal revisions create no restart, duplicate slot, or duplicate readiness membership.
+1. If `latest_revision == fanout_revision`, the worker unlinks and deletes exact dirty state while repairing head, tail, cursor, and live count.
+2. If a newer revision arrived, the worker retains one dirty state, sets `fanout_revision = latest_revision`, and restarts at the current occupied-page head.
+3. Equal revisions create no restart, duplicate list node, or duplicate readiness membership.
 
 A subscriber MAY execute from an earlier signal while another page or newer revision remains. Restart semantics MUST ensure that no newer revision is permanently lost, while preserving only latest-state reconsideration rather than one execution per revision. Existing pending-latch coalescing, queue/wakeup uniqueness, at-most-once-per-block execution, and circular-graph cutoff remain authoritative.
 
 Fanout MAY set pending readiness while the global breaker or actor pause prevents execution; those controls MUST preserve the latch and existing future-admission path. RefTime exhaustion, ProofSize exhaustion, and the page-count ceiling defer remaining dirty work without clearing progress.
+
+Reactive delivery stages have distinct completion meanings:
+
+1. Successful Oracle publication means the changed scalar, revision, event, and AAA dirty ingress committed atomically. Hook failure rolls the whole publication back; it MUST NOT expose a revision without its dirty obligation.
+2. Dirty ingress means one latest revision awaits reconsideration fanout. It guarantees neither subscriber delivery nor one obligation per coalesced revision.
+3. A visited live subscriber receives `pending_signal` before or with an idempotent canonical queue/wakeup admission attempt. A page advances only after every live entry has an admission path; queue saturation MAY retain partial latches and memberships while the same page retries.
+4. Fanout completion means every addressable subscriber page for the snapshotted revision completed and no newer revision remained at that boundary. It does not mean that conditions were evaluated, an actor attempt began, or a task executed.
+5. Fanout runs before actor execution in the same `on_idle` call, so a newly admitted eligible actor MAY be attempted in that block. Queue age, head-of-line admission, Weight, count, cadence/cooldown/window eligibility, pause, breaker, fees, and plan readiness MAY defer it.
+6. Freshness is evaluated from canonical observation state at the later condition attempt, not at publication, ingress, fanout, or queue admission. A delivered signal MAY therefore produce `ConditionsNotMet` after the authored age window expires.
+7. At-most-once execution applies per actor per block through the scheduler and does not imply one attempt per feed, signal, publication, or revision.
+8. System/User service reservations begin only in scheduler actor-execution phases. They do not reserve Oracle publication, dirty ingress, fanout, wakeup work, queue mutation, discovery, cleanup, or admission bookkeeping.
+9. A finite fanout block envelope MAY be stated only against identified RefTime/ProofSize weights and runtime bounds, a quiescent latest revision, available configured fanout budget, and eventual queue capacity. Revision churn, persistent saturation, pause, or breaker state has no finite execution deadline.
+10. Every estimate MUST separate publication, fanout, queue/wakeup admission, and actor attempt; it MUST NOT promise an exact future execution block or convert benchmark-host time into chain throughput.
 
 ### 7.6 Manual Source
 

@@ -23,7 +23,7 @@ tags:
   - governance
 related:
   - Стандарт TMCTOL
-  - Пулы стейкинга
+  - Стейкинг
   - Домены Governance
   - Экономика $BLDR
   - Token Minting Curve
@@ -75,7 +75,7 @@ LP tokens представляют позиции в AMM pools. Некоторы
 - **Emission math**: [Token Minting Curve](../overview/token-minting-curve.ru.md) и [Формулы TMCTOL](../math/tmctol-formulas.ru.md).
 - **Governance power**: [Домены Governance](governance-domains.ru.md).
 - **Координация созидателей**: [Экономика $BLDR](builder-economy.ru.md).
-- **Receipt value**: [Пулы стейкинга](staking-pools.ru.md) и учет liquidity positions.
+- **Receipt value**: [Стейкинг](../overview/staking.ru.md) и учет liquidity positions.
 
 Не выводите полную monetary policy каждого токена только из governance-role. Например, `$BLDR` может быть важен для tactical governance, но wiki не должна притворяться, что downstream demand, launch allocation или ecosystem product-market fit уже решены внутри framework.
 
@@ -88,7 +88,7 @@ Token balances и ограниченные receipt/projection data могут б
 ## Связанные страницы
 
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Пулы стейкинга](staking-pools.ru.md)
+- [Стейкинг](../overview/staking.ru.md)
 - [Домены Governance](governance-domains.ru.md)
 - [Экономика $BLDR](builder-economy.ru.md)
 - [Token Minting Curve](../overview/token-minting-curve.ru.md)

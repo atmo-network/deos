@@ -1,10 +1,10 @@
 ---
 page_type: overview
-title: Обзор Governance
+title: Governance
 summary: Широкая карта DEOS Governance как ограниченного конституционного слоя, который разделяет протокольную физику, стратегическую защиту, тактическую координацию и живую истину read-model.
 locale: ru
-canonical_page_id: governance-overview
-translation_of: governance-overview.en.md
+canonical_page_id: governance
+translation_of: governance.en.md
 translation_status: localized
 available_locales:
   - en
@@ -22,13 +22,13 @@ tags:
 related:
   - Домены Governance
   - Physics-first против politics-first
-  - Пулы стейкинга
+  - Стейкинг
   - Базовые термины
-last_compiled: 2026-07-20
+last_compiled: 2026-07-28
 confidence: 0.9
 ---
 
-# Обзор Governance
+# Governance
 
 ## Кратко
 
@@ -75,15 +75,15 @@ Governance может передавать в стейкинг ограниче�
 
 Лучший порядок чтения:
 
-1. `Обзор Governance` — зачем нужна вся подсистема;
+1. `Governance` — зачем нужна эта область;
 2. [Домены Governance](../concepts/governance-domains.ru.md) — как типизируется одна governance-ячейка;
 3. [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md) — почему протокольная физика остается защищенной;
-4. [Пулы стейкинга](../concepts/staking-pools.ru.md) — где governance-conditioned reward signals встречаются со стейкингом;
+4. [Стейкинг](staking.ru.md) — где governance-conditioned reward signals встречаются со стейкингом;
 5. [Базовые термины](../glossary/core-terms.ru.md) — повторяющийся словарь.
 
 ## Связанные страницы
 
 - [Домены Governance](../concepts/governance-domains.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-- [Пулы стейкинга](../concepts/staking-pools.ru.md)
+- [Стейкинг](staking.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

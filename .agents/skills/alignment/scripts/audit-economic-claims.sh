@@ -121,8 +121,8 @@ if (fs.existsSync(architectureDocsDir)) {
   }
 }
 const wikiRouterFiles = [
-  'wiki/overview/axial-router.en.md',
-  'wiki/overview/axial-router.ru.md',
+  'wiki/overview/deos-router.en.md',
+  'wiki/overview/deos-router.ru.md',
   'wiki/_meta/navigation.json',
 ];
 publicContractFiles.push(...wikiRouterFiles);

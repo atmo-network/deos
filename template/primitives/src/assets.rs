@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 use std::vec::Vec;
 
 /// This enum serves as the single source of truth for asset types across all pallets,
-/// enabling type-safe interactions between Axial Router, TMC, Burning Manager, and other actors.
+/// enabling type-safe interactions between DEOS Router, TMC, Burn Actor, and other actors.
 ///
 /// - `Native`: The system's native token (managed by pallet-balances).
 /// - `Local(u32)`: Local synthetic assets (managed by pallet-assets).

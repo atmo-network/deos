@@ -28,7 +28,7 @@ related:
   - Система AAA
   - AA-Актор
   - Стандарт TMCTOL
-  - Пулы стейкинга
+  - Стейкинг
   - Разделение read-model
 last_compiled: 2026-07-24
 confidence: 0.85
@@ -42,16 +42,16 @@ confidence: 0.85
 
 Примеры упрощены, но каждый шаг называет ответственный домен и страницу-владельца для деталей.
 
-## Swap через Axial Router
+## Swap через DEOS Router
 
 1. Пользователь запрашивает preview swap в эталонном клиенте.
 2. Клиент читает ограниченные route/asset данные и помечает результат как живую on-chain истину, а не archive analytics.
-3. Axial Router сравнивает пути через market liquidity и protocol liquidity.
+3. DEOS Router сравнивает пути через market liquidity и protocol liquidity.
 4. Если выгоднее TMC path, маршрут идет через curve minting. Если выгоднее XYK path, он идет через market liquidity.
 5. Комиссии маршрутизатора поступают в настроенный контур Burn Actor; сжигание происходит только после того, как обеспеченный средствами и допущенный к расписанию актор завершит исполнение.
 6. Клиент показывает execution progress через общий feedback, а не через отдельный transaction log в каждом widget.
 
-Страницы-владельцы: [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md), [Axial Router](../overview/axial-router.ru.md), [Разделение read-model](read-model-split.ru.md), [Эталонный клиент](../overview/reference-client.ru.md).
+Страницы-владельцы: [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md), [DEOS Router](../overview/router.ru.md), [Разделение read-model](read-model-split.ru.md), [Эталонный клиент](../overview/reference-client.ru.md).
 
 ## Цепочка пробуждения акторов
 
@@ -97,7 +97,7 @@ confidence: 0.85
 4. Native nomination reward paths отделены от generic same-asset staking rewards.
 5. Governance-conditioned participation может влиять на reward coefficients, но governance и staking остаются разными подсистемами.
 
-Страница-владелец: [Пулы стейкинга](staking-pools.ru.md).
+Страница-владелец: [Стейкинг](../overview/staking.ru.md).
 
 ## Правило проверки
 
@@ -118,5 +118,5 @@ confidence: 0.85
 - [Система AAA](../overview/aaa-system.ru.md)
 - [AA-Актор](../overview/aa-actor.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Пулы стейкинга](staking-pools.ru.md)
+- [Стейкинг](../overview/staking.ru.md)
 - [Разделение read-model](read-model-split.ru.md)

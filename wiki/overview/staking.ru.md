@@ -1,10 +1,10 @@
 ---
-page_type: concept
-title: Пулы стейкинга
+page_type: overview
+title: Стейкинг
 summary: Стейкинг DEOS использует пулы долей с переносимыми квитанциями `stXXX`. На этапе Phase 1 действует ликвидный учет `$NTVE -> stNTVE`, но пользовательские LP-номинации и доступные к получению награды остаются отключенными до явного обновления runtime для Phase 2.
 locale: ru
-canonical_page_id: staking-pools
-translation_of: staking-pools.en.md
+canonical_page_id: staking
+translation_of: staking.en.md
 translation_status: localized
 available_locales:
   - en
@@ -16,7 +16,7 @@ sources:
 status: active
 audience: newcomer
 tags:
-  - concept
+  - overview
   - staking
   - receipts
 related:
@@ -24,11 +24,11 @@ related:
   - Контур маршрутизации и минтинга
   - Базовые термины
   - FAQ для новичков
-last_compiled: 2026-07-20
+last_compiled: 2026-07-28
 confidence: 0.85
 ---
 
-# Пулы стейкинга
+# Стейкинг
 
 ## Кратко
 
@@ -110,7 +110,7 @@ Staking и governance остаются отдельными подсистема
 
 ## Связанные страницы
 
-- [Домены Governance](governance-domains.ru.md)
-- [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md)
+- [Домены Governance](../concepts/governance-domains.ru.md)
+- [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)

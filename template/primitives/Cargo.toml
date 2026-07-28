@@ -1,6 +1,6 @@
 [package]
-name = "primitives"
-version = "0.7.7"
+name = "deos-primitives"
+version = "0.7.8"
 description = "Shared primitive types for the DEOS reference runtime"
 authors.workspace = true
 homepage.workspace = true
@@ -8,6 +8,9 @@ repository.workspace = true
 edition.workspace = true
 license = "MIT-0"
 publish = false
+
+[lib]
+name = "primitives"
 
 [lints]
 workspace = true

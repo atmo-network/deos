@@ -41,8 +41,11 @@ The flagship economic standard combining minting curves with automatic liquidity
 
 #### Runtime / Product Contracts
 
-- [Typed Observation Oracle Specification](../template/pallets/oracle/docs/specification.en.md)
+- [DEOS Oracle Specification](../template/pallets/oracle/docs/specification.en.md)
   Bounded reusable scalar-feed contract covering typed identity and provenance, immutable aggregation semantics, current-state freshness, revision rules, producer authority, lifecycle, and transactional O(1) change notification.
+
+- [DEOS Oracle Embedding Guide](../template/pallets/oracle/docs/embedding.md)
+  Package-owned host-runtime obligations for generic types, authority, bounded hooks, consumers, production weights, and independent integration evidence.
 
 - [AAA Specification](../template/pallets/aaa/docs/specification.en.md)
   Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, execution-plan/task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
@@ -53,7 +56,7 @@ The flagship economic standard combining minting curves with automatic liquidity
 - [AAA Control-Plane Contract](./aaa-control-plane.contract.en.md)
   Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded AAA programs.
 
-- [Staking Specification](../template/pallets/staking/docs/specification.en.md)
+- [DEOS Staking Specification](../template/pallets/staking/docs/specification.en.md)
   Multi-asset share-vault staking contract: sovereign backing channels, share-based ownership, receipt direction, native-special-case rules, and the dual-inflow reward contract.
 
 - [DEOS Governance Specification](../template/pallets/governance/docs/specification.en.md)
@@ -69,17 +72,23 @@ The flagship economic standard combining minting curves with automatic liquidity
 
 Implementation-specific documents describing how the current runtime realizes the contracts above.
 
-- [AAA Architecture](../template/pallets/aaa/docs/architecture.en.md)
-  Code-anchored implementation map of `pallet-deos-aaa`: scheduler queues, admission/fee gates, lifecycle transitions, adapter boundaries, balance-ingress event wiring, the current TMCTOL reference topology for System AAA, runtime bindings, telemetry surface, and release-mode scheduler performance baseline.
+- [AAA Package Architecture](../template/pallets/aaa/docs/architecture.en.md)
+  Reusable crate implementation map covering actor state, execution, scheduler queues, wakeups, triggers, lifecycle, storage, extrinsics, adapter contracts, and package validation.
 
-- [Typed Observation Oracle Architecture](../template/pallets/oracle/docs/architecture.en.md)
-  Implementation map for the standalone bounded oracle package, typed runtime bindings, independent fixture, current storage topology, transactional publication, and production weight evidence.
+- [AAA Integration in DEOS](./aaa.integration.en.md)
+  Concrete reference composition covering deterministic System accounts, TMCTOL actor topology, runtime adapters, ingress, fees, block bounds, reactive delivery, generated artifacts, control-plane realization, validation, and operations.
+
+- [DEOS Oracle Package Architecture](../template/pallets/oracle/docs/architecture.en.md)
+  Reusable crate implementation map covering host interfaces, bounded storage, lifecycle, transactional publication, current-state reads, benchmark design, and the independent fixture.
+
+- [DEOS Oracle Integration](./oracle.integration.en.md)
+  Concrete reference composition covering directional pool feeds, runtime authority and bounds, DEOS Router production/consumption, reactive AAA ingress, browser inspection, generated weight ownership, and cross-system rollback evidence.
 
 - [Core Architecture](./core.architecture.en.md)
   _! SYSTEM BACKBONE !_
   The token-driven design foundation. Covers system accounts structure, "Omnivorous" balance monitoring, Bitmask Asset Taxonomy, separation of Abstract Actors from Concrete Pallets, and the operational token lifecycle checkpoint runbook.
 
-- [Axial Router Architecture](../template/pallets/router/docs/architecture.en.md)
+- [DEOS Router Architecture](../template/pallets/router/docs/architecture.en.md)
   The economic coordination actor. Details mechanism-over-policy design, EMA oracle, fee burning flows, and integration with Asset Conversion.
 
 - [Token Minting Curve Architecture](../template/pallets/tmc/docs/architecture.en.md)
@@ -91,7 +100,7 @@ Implementation-specific documents describing how the current runtime realizes th
 - [Randomness Strategy](./randomness.strategy.en.md)
   Secondary operational note for the current launch line. Documents the retirement of the local `pallet-vrf` line, the trusted team-operated collator posture plus previous-block-hash fallback used for the first mainnet, and the gate for any future relay-beacon replacement: only a new parachain-consumable per-block protocol beacon qualifies.
 
-- [Staking Architecture](../template/pallets/staking/docs/architecture.en.md)
+- [DEOS Staking Architecture](../template/pallets/staking/docs/architecture.en.md)
   Code-anchored implementation map of `pallet-staking`: deterministic pool/reward account derivation, receipt lifecycle, legacy `Positions -> stXXX` bridge, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination, explicit NativeVotePower custody, native nomination reward settlement, runtime bindings, and the current operational watchpoints.
 
 - [Governance Architecture](../template/pallets/governance/docs/architecture.en.md)
@@ -122,5 +131,5 @@ Implementation-specific documents describing how the current runtime realizes th
 - [Project Skill Graph](../.agents/skills/README.md)
   Agent-facing Domain DAG for validation routing, delivery judgment, capability ownership, and shared-script boundaries.
 
-- [Web Client Architecture](./web-client.architecture.en.md)
+- [Web Client Architecture](../web-client/docs/architecture.en.md)
   Client implementation contract: product role, read-model honesty, widget-vs-layout vocabulary, UI Kit, Domain DAG, adapter boundaries, generated-wiki rendering, and validation.

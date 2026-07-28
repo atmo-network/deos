@@ -12,6 +12,8 @@ available_locales:
 sources:
   - ../../docs/core.architecture.en.md
   - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../docs/aaa.integration.en.md
+  - ../../docs/oracle.integration.en.md
   - ../../README.md
 status: active
 audience: newcomer
@@ -26,7 +28,7 @@ related:
   - Стандарт TMCTOL
   - Разделение read-model
   - Базовые термины
-last_compiled: 2026-07-25
+last_compiled: 2026-07-27
 confidence: 0.9
 ---
 

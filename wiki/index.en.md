@@ -22,7 +22,7 @@ related:
   - DEOS Framework Overview
   - First Steps
   - AAA System
-  - Governance Overview
+  - Governance
   - $BLDR Builder Economy
   - Core Terms
   - Newcomer FAQ
@@ -64,9 +64,10 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [$BLDR Builder Economy](concepts/builder-economy.en.md) — useful-work invoices, tactical funding, and the founder-as-first-worker pattern
 - [Token Surfaces](concepts/token-surfaces.en.md) — Native, VETO, BLDR, receipts, and LP roles
 - [AAA System](overview/aaa-system.en.md) — autonomous protocol actors
-- [Axial Router](overview/axial-router.en.md) — routing, fees, and protocol liquidity decisions
-- [Governance Overview](overview/governance-overview.en.md) — domain-scoped authority and protection
-- [Staking Pools](concepts/staking-pools.en.md) — staking receipts, LP nomination, and rewards
+- [DEOS Router](overview/router.en.md) — routing, fees, and protocol liquidity decisions
+- [Typed Observations](overview/typed-observations.en.md) — current scalar truth and reactive delivery
+- [Governance](overview/governance.en.md) — domain-scoped authority and protection
+- [Staking](overview/staking.en.md) — receipts, LP nomination, and rewards
 - [Reference Client](overview/reference-client.en.md) — on-chain-first browser product and wiki reader
 
 ## Economic and runtime concepts
@@ -78,7 +79,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Economic Thresholds](concepts/economic-thresholds.en.md)
 - [Economic Claim Levels](concepts/economic-claim-levels.en.md)
 - [Invariant and Threat Map](concepts/invariant-map.en.md)
-- [What DEOS Is Not](concepts/what-deos-is-not.en.md)
 - [Asset Identity](overview/asset-identity.en.md)
 - [Runtime Patterns](overview/runtime-patterns.en.md)
 - [Parachain Context](concepts/parachain-context.en.md)
@@ -89,7 +89,6 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Governance Domains](concepts/governance-domains.en.md)
 - [Physics-First vs Politics-First](comparisons/physics-vs-politics.en.md)
 - [Read-Model Split](concepts/read-model-split.en.md)
-- [UI Kit and Domain DAG](concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](concepts/generated-wiki.en.md)
 
 ## Workflows and status
@@ -118,7 +117,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [DEOS Framework Overview](overview/deos-framework.en.md)
 - [First Steps](getting-started/first-steps.en.md)
 - [AAA System](overview/aaa-system.en.md)
-- [Governance Overview](overview/governance-overview.en.md)
+- [Governance](overview/governance.en.md)
 - [$BLDR Builder Economy](concepts/builder-economy.en.md)
 - [Core Terms](glossary/core-terms.en.md)
 - [Newcomer FAQ](faq/newcomer-faq.en.md)

@@ -66,6 +66,8 @@
         "en": [
           "../template/pallets/aaa/docs/specification.en.md",
           "../template/pallets/aaa/docs/architecture.en.md",
+          "../docs/aaa.integration.en.md",
+          "../docs/oracle.integration.en.md",
           "../docs/aaa-control-plane.contract.en.md",
           "../template/pallets/aaa/docs/embedding.md",
           "../docs/core.architecture.en.md"
@@ -73,6 +75,8 @@
         "ru": [
           "../template/pallets/aaa/docs/specification.en.md",
           "../template/pallets/aaa/docs/architecture.en.md",
+          "../docs/aaa.integration.en.md",
+          "../docs/oracle.integration.en.md",
           "../docs/aaa-control-plane.contract.en.md",
           "../template/pallets/aaa/docs/embedding.md",
           "../docs/core.architecture.en.md"
@@ -96,24 +100,26 @@
         "en": [
           "../template/pallets/aaa/docs/specification.en.md",
           "../template/pallets/aaa/docs/architecture.en.md",
+          "../docs/aaa.integration.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
           "../template/pallets/aaa/docs/specification.en.md",
           "../template/pallets/aaa/docs/architecture.en.md",
+          "../docs/aaa.integration.en.md",
           "../docs/core.architecture.en.md"
         ]
       }
     },
-    "axial-router": {
+    "router": {
       "path": {
-        "en": "overview/axial-router.en.md",
-        "ru": "overview/axial-router.ru.md"
+        "en": "overview/router.en.md",
+        "ru": "overview/router.ru.md"
       },
       "page_type": "overview",
       "title": {
-        "en": "Axial Router",
-        "ru": "Axial Router"
+        "en": "DEOS Router",
+        "ru": "DEOS Router"
       },
       "status": "active",
       "audience": "newcomer",
@@ -121,11 +127,39 @@
       "sources": {
         "en": [
           "../template/pallets/router/docs/architecture.en.md",
+          "../docs/oracle.integration.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
           "../template/pallets/router/docs/architecture.en.md",
+          "../docs/oracle.integration.en.md",
           "../docs/core.architecture.en.md"
+        ]
+      }
+    },
+    "typed-observations": {
+      "path": {
+        "en": "overview/typed-observations.en.md",
+        "ru": "overview/typed-observations.ru.md"
+      },
+      "page_type": "overview",
+      "title": {
+        "en": "Typed Observations",
+        "ru": "Типизированные наблюдения"
+      },
+      "status": "active",
+      "audience": "newcomer",
+      "confidence": 0.95,
+      "sources": {
+        "en": [
+          "../template/pallets/oracle/docs/specification.en.md",
+          "../template/pallets/oracle/docs/architecture.en.md",
+          "../docs/oracle.integration.en.md"
+        ],
+        "ru": [
+          "../template/pallets/oracle/docs/specification.en.md",
+          "../template/pallets/oracle/docs/architecture.en.md",
+          "../docs/oracle.integration.en.md"
         ]
       }
     },
@@ -153,15 +187,15 @@
         ]
       }
     },
-    "governance-overview": {
+    "governance": {
       "path": {
-        "en": "overview/governance-overview.en.md",
-        "ru": "overview/governance-overview.ru.md"
+        "en": "overview/governance.en.md",
+        "ru": "overview/governance.ru.md"
       },
       "page_type": "overview",
       "title": {
-        "en": "Governance Overview",
-        "ru": "Обзор Governance"
+        "en": "Governance",
+        "ru": "Governance"
       },
       "status": "active",
       "audience": "newcomer",
@@ -258,13 +292,13 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md",
           "../web-client/src/lib/ui/README.md",
           "../docs/read-model.contract.en.md"
         ],
         "ru": [
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md",
           "../web-client/src/lib/ui/README.md",
           "../docs/read-model.contract.en.md"
@@ -398,11 +432,15 @@
         "en": [
           "../docs/core.architecture.en.md",
           "../template/pallets/aaa/docs/specification.en.md",
+          "../docs/aaa.integration.en.md",
+          "../docs/oracle.integration.en.md",
           "../README.md"
         ],
         "ru": [
           "../docs/core.architecture.en.md",
           "../template/pallets/aaa/docs/specification.en.md",
+          "../docs/aaa.integration.en.md",
+          "../docs/oracle.integration.en.md",
           "../README.md"
         ]
       }
@@ -433,15 +471,15 @@
         ]
       }
     },
-    "staking-pools": {
+    "staking": {
       "path": {
-        "en": "concepts/staking-pools.en.md",
-        "ru": "concepts/staking-pools.ru.md"
+        "en": "overview/staking.en.md",
+        "ru": "overview/staking.ru.md"
       },
-      "page_type": "concept",
+      "page_type": "overview",
       "title": {
-        "en": "Staking Pools",
-        "ru": "Пулы стейкинга"
+        "en": "Staking",
+        "ru": "Стейкинг"
       },
       "status": "active",
       "audience": "newcomer",
@@ -509,32 +547,6 @@
         ]
       }
     },
-    "ui-kit-and-domain-dag": {
-      "path": {
-        "en": "concepts/ui-kit-and-domain-dag.en.md",
-        "ru": "concepts/ui-kit-and-domain-dag.ru.md"
-      },
-      "page_type": "concept",
-      "title": {
-        "en": "UI Kit and Domain DAG",
-        "ru": "UI Kit и Domain DAG"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "confidence": 0.95,
-      "sources": {
-        "en": [
-          "../docs/web-client.architecture.en.md",
-          "../web-client/README.md",
-          "../web-client/src/lib/ui/README.md"
-        ],
-        "ru": [
-          "../docs/web-client.architecture.en.md",
-          "../web-client/README.md",
-          "../web-client/src/lib/ui/README.md"
-        ]
-      }
-    },
     "generated-wiki": {
       "path": {
         "en": "concepts/generated-wiki.en.md",
@@ -551,7 +563,7 @@
       "sources": {
         "en": [
           "../docs/README.md",
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md",
           "../.agents/skills/wiki-sync/SKILL.md",
           "wiki/_meta/navigation.json",
@@ -562,7 +574,7 @@
         ],
         "ru": [
           "../docs/README.md",
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md",
           "../.agents/skills/wiki-sync/SKILL.md",
           "wiki/_meta/navigation.json",
@@ -592,14 +604,14 @@
           "../docs/README.md",
           "../docs/core.architecture.en.md",
           "../docs/tmctol.specification.en.md",
-          "../docs/web-client.architecture.en.md"
+          "../web-client/docs/architecture.en.md"
         ],
         "ru": [
           "../AGENTS.md",
           "../docs/README.md",
           "../docs/core.architecture.en.md",
           "../docs/tmctol.specification.en.md",
-          "../docs/web-client.architecture.en.md"
+          "../web-client/docs/architecture.en.md"
         ]
       }
     },
@@ -651,7 +663,7 @@
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/staking/docs/specification.en.md",
           "../docs/read-model.contract.en.md",
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md"
         ],
         "ru": [
@@ -662,7 +674,7 @@
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/staking/docs/specification.en.md",
           "../docs/read-model.contract.en.md",
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md"
         ]
       }
@@ -685,13 +697,13 @@
           "../BACKLOG.md",
           "../CHANGELOG.md",
           "../web-client/README.md",
-          "../docs/web-client.architecture.en.md"
+          "../web-client/docs/architecture.en.md"
         ],
         "ru": [
           "../BACKLOG.md",
           "../CHANGELOG.md",
           "../web-client/README.md",
-          "../docs/web-client.architecture.en.md"
+          "../web-client/docs/architecture.en.md"
         ]
       }
     },
@@ -720,7 +732,7 @@
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md"
         ],
         "ru": [
@@ -734,7 +746,7 @@
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
-          "../docs/web-client.architecture.en.md",
+          "../web-client/docs/architecture.en.md",
           "../web-client/README.md"
         ]
       }
@@ -1026,7 +1038,7 @@
           "../template/pallets/router/docs/architecture.en.md",
           "../template/pallets/aaa/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
-          "../docs/web-client.architecture.en.md"
+          "../web-client/docs/architecture.en.md"
         ],
         "ru": [
           "../AGENTS.md",
@@ -1035,33 +1047,7 @@
           "../template/pallets/router/docs/architecture.en.md",
           "../template/pallets/aaa/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
-          "../docs/web-client.architecture.en.md"
-        ]
-      }
-    },
-    "what-deos-is-not": {
-      "path": {
-        "en": "concepts/what-deos-is-not.en.md",
-        "ru": "concepts/what-deos-is-not.ru.md"
-      },
-      "page_type": "concept",
-      "title": {
-        "en": "What DEOS Is Not",
-        "ru": "Чем DEOS не является"
-      },
-      "status": "active",
-      "audience": "newcomer",
-      "confidence": 0.9,
-      "sources": {
-        "en": [
-          "../AGENTS.md",
-          "../docs/core.architecture.en.md",
-          "../docs/tmctol.specification.en.md"
-        ],
-        "ru": [
-          "../AGENTS.md",
-          "../docs/core.architecture.en.md",
-          "../docs/tmctol.specification.en.md"
+          "../web-client/docs/architecture.en.md"
         ]
       }
     },

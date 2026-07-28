@@ -1,4 +1,4 @@
-//! Axial Router pallet configuration for the parachain runtime.
+//! DEOS Router pallet configuration for the parachain runtime.
 //!
 //! Configures the minimalist multi-token routing system optimized for TMC ecosystems
 //! with Native-anchored routing and advanced fee processing.
@@ -64,7 +64,7 @@ impl polkadot_sdk::frame_support::traits::Get<AccountId> for LiquidityActorAccou
   }
 }
 
-/// TMC pallet adapter for Axial Router integration
+/// TMC pallet adapter for DEOS Router integration
 pub struct TmcPalletAdapter<T: pallet_axial_router::pallet::Config>(core::marker::PhantomData<T>);
 
 /// Price-observation implementation for local deviation checks

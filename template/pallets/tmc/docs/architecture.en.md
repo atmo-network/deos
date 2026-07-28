@@ -23,7 +23,7 @@ The Token Minting Curve (TMC) is a `Unidirectional Minting Engine` that issues n
 
 ```mermaid
 graph TD
-    User[User / XCM] -->|Native Payment| Router[Axial Router]
+    User[User / XCM] -->|Native Payment| Router[DEOS Router]
     Router -->|mint_with_distribution| TMC[Token Minting Curve]
 
     subgraph "TMC: Minting Process"
@@ -244,7 +244,7 @@ If a future launch line wants chain-native mint preview UX, it SHOULD add an exp
 
 ## Ecosystem Integration
 
-### Connection to Axial Router (Primary Minting Gateway)
+### Connection to DEOS Router (Primary Minting Gateway)
 
 The Router orchestrates minting by:
 
@@ -254,7 +254,7 @@ The Router orchestrates minting by:
 4. Preserving normal router fee semantics on swap routes, while TMC independently resolves collateral and minted-liquidity destinations
 5. The `recipient` receiving its share directly; the remaining minted allocation lands in the resolved protocol-liquidity account while collateral may route to a different bounded actor account
 
-Fee architecture note: transaction fee capture and burn semantics are enforced by Axial Router + Burn Actor, not by TMC treasury logic.
+Fee architecture note: transaction fee capture and burn semantics are enforced by DEOS Router + Burn Actor, not by TMC treasury logic.
 
 ### Connection to Liquidity-Provisioning Actors
 

@@ -258,9 +258,8 @@ pub mod pallet {
 
   pub type ActorObservationFeedsOf<T> =
     BoundedVec<<T as Config>::ObservationFeedId, <T as Config>::MaxTriggerSources>;
-  pub type ObservationSubscriberPageOf<T> = BoundedVec<Option<AaaId>, <T as Config>::QueuePageSize>;
+  pub type ObservationSubscriberPageOf<T> = ObservationSubscriberPage<<T as Config>::QueuePageSize>;
   pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::QueuePageSize>;
-  pub type ObservationDirtyFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::QueuePageSize>;
 
   pub type TriggerSourceOf<T> = TriggerSource<
     <T as frame_system::Config>::AccountId,
@@ -632,7 +631,7 @@ pub mod pallet {
   pub type ObservationFreeSlotPages<T: Config> =
     StorageMap<_, Blake2_128Concat, u32, ObservationFreeSlotPageOf<T>, OptionQuery>;
 
-  /// Fixed slot-addressed subscriber pages. Empty pages are deleted immediately.
+  /// Fixed slot-addressed subscriber pages linked through occupied pages only.
   #[pallet::storage]
   #[pallet::getter(fn observation_subscriber_pages)]
   pub type ObservationSubscriberPages<T: Config> = StorageDoubleMap<
@@ -642,6 +641,17 @@ pub mod pallet {
     Blake2_128Concat,
     u32,
     ObservationSubscriberPageOf<T>,
+    OptionQuery,
+  >;
+
+  /// Exact occupied-page list for one feed; absent when the feed has no subscribers.
+  #[pallet::storage]
+  #[pallet::getter(fn observation_subscriber_page_list)]
+  pub type ObservationSubscriberPageLists<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::ObservationFeedId,
+    ObservationSubscriberPageList,
     OptionQuery,
   >;
 
@@ -657,31 +667,19 @@ pub mod pallet {
   /// Latest changed revision and deferred-fanout cursor for one subscribed feed.
   #[pallet::storage]
   #[pallet::getter(fn dirty_observation_feeds)]
-  pub type DirtyObservationFeeds<T: Config> =
-    StorageMap<_, Blake2_128Concat, T::ObservationFeedId, DirtyObservationState, OptionQuery>;
+  pub type DirtyObservationFeeds<T: Config> = StorageMap<
+    _,
+    Blake2_128Concat,
+    T::ObservationFeedId,
+    DirtyObservationState<T::ObservationFeedId, BlockNumberFor<T>>,
+    OptionQuery,
+  >;
 
+  /// Exact bounded active-dirty ownership and fair fanout cursor.
   #[pallet::storage]
-  pub type DirtyObservationSlotFeed<T: Config> =
-    StorageMap<_, Blake2_128Concat, ObservationDirtySlot, T::ObservationFeedId, OptionQuery>;
-
-  #[pallet::storage]
-  pub type NextDirtyObservationSlot<T> = StorageValue<_, ObservationDirtySlot, ValueQuery>;
-
-  #[pallet::storage]
-  pub type DirtyObservationFreeSlotLen<T> = StorageValue<_, u32, ValueQuery>;
-
-  #[pallet::storage]
-  pub type DirtyObservationFreeSlotPages<T: Config> =
-    StorageMap<_, Blake2_128Concat, u32, ObservationDirtyFreeSlotPageOf<T>, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn dirty_observation_feed_count)]
-  pub type DirtyObservationFeedCount<T> = StorageValue<_, u32, ValueQuery>;
-
-  /// Circular reusable-slot cursor for independently metered deferred fanout.
-  #[pallet::storage]
-  #[pallet::getter(fn dirty_observation_scan_slot)]
-  pub type DirtyObservationScanSlot<T> = StorageValue<_, ObservationDirtySlot, ValueQuery>;
+  #[pallet::getter(fn dirty_observation_list)]
+  pub type DirtyObservationListState<T: Config> =
+    StorageValue<_, DirtyObservationList<T::ObservationFeedId>, ValueQuery>;
 
   #[pallet::storage]
   #[pallet::getter(fn global_circuit_breaker)]
@@ -982,7 +980,7 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_cleanup = after_base.saturating_sub(saturated_cleanup_weight);
-      let fanout_weight = if DirtyObservationFeedCount::<T>::get() > 0 {
+      let fanout_weight = if DirtyObservationListState::<T>::get().count > 0 {
         Self::fanout_dirty_observations(remaining_after_cleanup)
       } else {
         Weight::zero()

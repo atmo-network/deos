@@ -6,7 +6,7 @@
     {
       "id": "router-max-output-selection",
       "doc": "template/pallets/router/docs/architecture.en.md",
-      "claim": "Axial Router selects among candidate routes by maximum recipient expected_output only; price_impact and total_fees are informational quote fields, not selection inputs.",
+      "claim": "DEOS Router selects among candidate routes by maximum recipient expected_output only; price_impact and total_fees are informational quote fields, not selection inputs.",
       "status": "shipped mitigation",
       "proof_kind": "characterization",
       "tautology_risk": "low",
@@ -72,7 +72,7 @@
     {
       "id": "router-direct-price-deviation-guard",
       "doc": "template/pallets/router/docs/architecture.en.md",
-      "claim": "Direct Axial Router routes are bounded by slippage plus EMA price-deviation checks.",
+      "claim": "Direct DEOS Router routes are bounded by slippage plus EMA price-deviation checks.",
       "status": "shipped mitigation",
       "proof_kind": "falsification",
       "tautology_risk": "low",

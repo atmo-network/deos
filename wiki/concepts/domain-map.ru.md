@@ -14,7 +14,7 @@ sources:
   - ../../docs/README.md
   - ../../docs/core.architecture.en.md
   - ../../docs/tmctol.specification.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
 status: active
 audience: newcomer
 tags:
@@ -25,7 +25,7 @@ related:
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
   - Система AAA
-  - Обзор Governance
+  - Governance
   - Экономика $BLDR
   - Эталонный клиент
 last_compiled: 2026-07-20
@@ -64,13 +64,13 @@ DEOS проще понимать как набор связанных домен
 
 Домен маршрутизации связывает намерение пользователя, пути minting, AMM-ликвидность, комиссии и зарегистрированные активы. Здесь фреймворк решает, использовать рыночную или протокольную ликвидность, и как foreign assets становятся локальными runtime-сущностями.
 
-Читайте [Axial Router](../overview/axial-router.ru.md), [Идентичность активов](../overview/asset-identity.ru.md) и [Разделение read-model](read-model-split.ru.md).
+Читайте [DEOS Router](../overview/router.ru.md), [Идентичность активов](../overview/asset-identity.ru.md) и [Разделение read-model](read-model-split.ru.md).
 
 ### Governance и защита
 
 Домен governance объясняет, кто и что может менять. DEOS governance привязан к доменам: у каждой управляемой области есть primary power surface, protection surface, типизированные payload, ограниченные полномочия исполнения и явные ограничения.
 
-Читайте [Обзор Governance](../overview/governance-overview.ru.md), [Домены Governance](governance-domains.ru.md) и [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md).
+Читайте [Governance](../overview/governance.ru.md), [Домены Governance](governance-domains.ru.md) и [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md).
 
 ### Экономика созидателей и полезная работа
 
@@ -82,13 +82,13 @@ DEOS проще понимать как набор связанных домен
 
 Домен staking объясняет share-vault receipts, native liquid staking, LP nomination, reward memory и protocol donation into liquidity. Он связывает экономическую безопасность, пользовательские позиции и governance-conditioned rewards.
 
-Читайте [Пулы стейкинга](staking-pools.ru.md) и [Трехуровневую валидацию](../development/three-layer-validation.ru.md).
+Читайте [Стейкинг](../overview/staking.ru.md) и [Трехуровневую валидацию](../development/three-layer-validation.ru.md).
 
 ### Клиент и read model
 
 Клиентский домен объясняет, как браузерный продукт показывает систему, не притворяясь источником истины. Он отделяет прямое on-chain состояние, session-derived projections и будущих materialized/indexed providers.
 
-Читайте [Эталонный клиент](../overview/reference-client.ru.md), [UI Kit и Domain DAG](ui-kit-and-domain-dag.ru.md) и [Разделение read-model](read-model-split.ru.md).
+Читайте [Эталонный клиент](../overview/reference-client.ru.md) и [Разделение read-model](read-model-split.ru.md).
 
 ### Инструменты и валидация
 
@@ -124,6 +124,6 @@ DEOS проще понимать как набор связанных домен
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Система AAA](../overview/aaa-system.ru.md)
-- [Обзор Governance](../overview/governance-overview.ru.md)
+- [Governance](../overview/governance.ru.md)
 - [Экономика $BLDR](builder-economy.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)

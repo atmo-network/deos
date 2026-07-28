@@ -19,7 +19,7 @@ sources:
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
   - ../../docs/read-model.contract.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
 status: active
 audience: newcomer
@@ -30,11 +30,10 @@ related:
   - DEOS Framework Overview
   - TMCTOL Standard
   - Token-Driven Automation
-  - Governance Overview
+  - Governance
   - Governance Domains
   - $BLDR Builder Economy
   - Read-Model Split
-  - UI Kit and Domain DAG
   - Generated Wiki
   - Reading Paths
   - Development Status
@@ -75,7 +74,7 @@ This glossary is a lookup surface, not a second explanation layer. Each term sta
 
 One concrete bounded runtime instance inside the broader AAA system.
 
-### Axial Router
+### DEOS Router
 
 The bounded route-selection mechanism for protocol trades and fee flow.
 
@@ -176,11 +175,10 @@ The wiki current-state map for baseline domains, active focus, open boundaries, 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
-- [Governance Overview](../overview/governance-overview.en.md)
+- [Governance](../overview/governance.en.md)
 - [Governance Domains](../concepts/governance-domains.en.md)
 - [$BLDR Builder Economy](../concepts/builder-economy.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)
-- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Reading Paths](../getting-started/reading-paths.en.md)
 - [Development Status](../development/status.en.md)

@@ -1,9 +1,9 @@
 ---
-page_type: concept
-title: Staking Pools
+page_type: overview
+title: Staking
 summary: DEOS staking uses multi-asset share vaults with transferable `stXXX` receipts. The Phase 1 launch line enables liquid `$NTVE -> stNTVE` accounting but keeps user LP nomination and claimable nomination rewards inactive; those belong to an explicit Phase 2 runtime-upgrade boundary.
 locale: en
-canonical_page_id: staking-pools
+canonical_page_id: staking
 translation_status: source
 available_locales:
   - en
@@ -15,7 +15,7 @@ sources:
 status: active
 audience: newcomer
 tags:
-  - concept
+  - overview
   - staking
   - receipts
 related:
@@ -23,11 +23,11 @@ related:
   - Routing and Minting Loop
   - Core Terms
   - Newcomer FAQ
-last_compiled: 2026-07-20
+last_compiled: 2026-07-28
 confidence: 0.85
 ---
 
-# Staking Pools
+# Staking
 
 ## Summary
 
@@ -109,7 +109,7 @@ For non-native assets, same-asset reward settlement can still auto-compound into
 
 ## Related
 
-- [Governance Domains](governance-domains.en.md)
-- [Routing and Minting Loop](routing-and-minting-loop.en.md)
+- [Governance Domains](../concepts/governance-domains.en.md)
+- [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)

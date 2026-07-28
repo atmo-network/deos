@@ -1,6 +1,6 @@
-# pallet-staking
+# pallet-deos-staking
 
-`pallet-staking` is the DEOS multi-asset share-vault staking pallet in the current reference runtime.
+`pallet-deos-staking` is the DEOS multi-asset share-vault staking pallet in the current reference runtime.
 
 ## SDK baseline
 

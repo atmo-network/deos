@@ -819,7 +819,7 @@ The current contract is narrower and cleaner:
 
 This keeps the current line honest: governance owns authorization of upgrade intent, while the later `apply_authorized_upgrade` call is only a transport step for already-authorized bytes.
 
-## Integration Boundary with Staking
+## Integration Boundary with DEOS Staking
 
 The key exported staking surface is:
 

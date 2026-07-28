@@ -3,14 +3,14 @@ use crate::{
   AssetFilter, AssetFilterOf, CadenceMode, CancellationReason, CloseReason, CompletionPolicy,
   Condition, ConditionSet, ContinuationStateStore, DeferReason, Error, Event, FundingSourcePolicy,
   GlobalCircuitBreaker, IdleStarvationPhase, IdleStarvationState, InputLimit, Mutability,
-  NextAaaId, OutcomeTotals, OwnerSlotMask, PauseReason, ProgramInput, QueueEntry, QueueGroup,
-  ResolutionSurface, RetryClass, RunState, SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf,
-  ScheduleWindow, SimulationError, SimulationMode, SimulationStatus, SimulationStepOutcome,
-  SimulationStepRecord, SourceFilter, SourceFilterOf, SovereignIndex, SplitLeg,
-  SplitTransferLegsOf, StepErrorPolicy, StepOf, StepSkippedReason, SuspensionReason,
-  SystemQueueHead, Task, TaskFailure, TaskOf, Trigger, TriggerPolicy, TriggerSource, UserQueueHead,
-  WakeupBucketState, WakeupEntry, WakeupPage, WakeupPointer, adapters::AssetOps, mock::*,
-  types::FundingBatch,
+  NextAaaId, ObservationSubscriberPageList, OutcomeTotals, OwnerSlotMask, PauseReason,
+  ProgramInput, QueueEntry, QueueGroup, ResolutionSurface, RetryClass, RunState,
+  SYSTEM_OWNER_SLOT_SENTINEL, Schedule, ScheduleOf, ScheduleWindow, SimulationError,
+  SimulationMode, SimulationStatus, SimulationStepOutcome, SimulationStepRecord, SourceFilter,
+  SourceFilterOf, SovereignIndex, SplitLeg, SplitTransferLegsOf, StepErrorPolicy, StepOf,
+  StepSkippedReason, SuspensionReason, SystemQueueHead, Task, TaskFailure, TaskOf, Trigger,
+  TriggerPolicy, TriggerSource, UserQueueHead, WakeupBucketState, WakeupEntry, WakeupPage,
+  WakeupPointer, adapters::AssetOps, mock::*, types::FundingBatch,
 };
 use alloc::collections::BTreeSet;
 
@@ -396,6 +396,67 @@ fn observation_subscriptions_follow_schedule_lifecycle_exactly() {
 }
 
 #[test]
+fn observation_occupied_page_list_follows_live_pages_after_fragmentation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let page_size = <Test as crate::Config>::QueuePageSize::get();
+    let mut actors = Vec::new();
+    for _ in 0..=page_size {
+      actors.push(create_system_with(
+        ALICE,
+        observation_schedule(vec![17]),
+        None,
+        inert_execution_plan(),
+      ));
+    }
+
+    assert_eq!(
+      AAA::observation_subscriber_page_list(17),
+      Some(ObservationSubscriberPageList {
+        head: 0,
+        tail: 1,
+        count: 2,
+      })
+    );
+    let first = AAA::observation_subscriber_pages(17, 0).expect("first occupied page");
+    let second = AAA::observation_subscriber_pages(17, 1).expect("second occupied page");
+    assert_eq!((first.previous, first.next), (None, Some(1)));
+    assert_eq!((second.previous, second.next), (Some(0), None));
+
+    let remaining_actor = *actors.last().expect("one actor remains");
+    for aaa_id in actors.iter().copied().take(page_size as usize) {
+      assert_ok!(AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    }
+
+    assert!(AAA::observation_subscriber_pages(17, 0).is_none());
+    assert_eq!(
+      AAA::observation_subscriber_page_list(17),
+      Some(ObservationSubscriberPageList {
+        head: 1,
+        tail: 1,
+        count: 1,
+      })
+    );
+    let remaining = AAA::observation_subscriber_pages(17, 1).expect("remaining occupied page");
+    assert_eq!((remaining.previous, remaining.next), (None, None));
+
+    assert_ok!(AAA::note_observation_changed(17, 1));
+    let base =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_base();
+    let unit =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_page();
+    assert_eq!(
+      AAA::fanout_dirty_observations(base.saturating_add(unit)),
+      base.saturating_add(unit)
+    );
+    assert!(AAA::dirty_observation_feeds(17).is_none());
+    assert!(AAA::pending_signal(remaining_actor));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
 fn duplicate_observation_subscriptions_fail_before_actor_mutation() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -434,7 +495,7 @@ fn observation_change_ingress_coalesces_latest_revision_without_subscriber_work(
     assert_ok!(AAA::note_observation_changed(1, 1));
     assert!(AAA::dirty_observation_feeds(1).is_none());
     assert_eq!(AAA::dirty_observation_feed_count(), 0);
-    assert_eq!(crate::NextDirtyObservationSlot::<Test>::get(), 0);
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
 
     let aaa_id = create_system_with(
       ALICE,
@@ -445,32 +506,43 @@ fn observation_change_ingress_coalesces_latest_revision_without_subscriber_work(
     assert_ok!(AAA::note_observation_changed(1, 1));
     assert!(!AAA::pending_signal(aaa_id));
     let initial = AAA::dirty_observation_feeds(1).expect("dirty feed");
-    assert_eq!(initial.slot, 0);
     assert_eq!(initial.latest_revision, 1);
     assert_eq!(initial.fanout_revision, 0);
-    assert_eq!(initial.next_subscriber_page, 0);
+    assert_eq!(initial.dirty_since, 1);
+    assert_eq!(initial.next_subscriber_page, None);
+    frame_system::Pallet::<Test>::set_block_number(5);
     assert_ok!(AAA::note_observation_changed(1, 1));
     assert_eq!(AAA::dirty_observation_feeds(1), Some(initial));
+    frame_system::Pallet::<Test>::set_block_number(8);
     assert_ok!(AAA::note_observation_changed(1, 3));
-    assert_eq!(
-      AAA::dirty_observation_feeds(1)
-        .expect("coalesced dirty feed")
-        .latest_revision,
-      3
-    );
+    let coalesced = AAA::dirty_observation_feeds(1).expect("coalesced dirty feed");
+    assert_eq!(coalesced.latest_revision, 3);
+    assert_eq!(coalesced.dirty_since, 1);
     assert_noop!(
       AAA::note_observation_changed(1, 2),
       Error::<Test>::InvalidObservationRevision
     );
     assert_eq!(AAA::dirty_observation_feed_count(), 1);
-    assert_eq!(crate::NextDirtyObservationSlot::<Test>::get(), 1);
+    assert_eq!(AAA::dirty_observation_list().head, Some(1));
+    assert_eq!(AAA::dirty_observation_list().tail, Some(1));
+    assert_eq!(AAA::dirty_observation_list().cursor, Some(1));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
+
+    assert_ok!(crate::Pallet::<Test>::clear_dirty_observation_feed(1));
+    frame_system::Pallet::<Test>::set_block_number(13);
+    assert_ok!(AAA::note_observation_changed(1, 4));
+    assert_eq!(
+      AAA::dirty_observation_feeds(1)
+        .expect("new dirty interval")
+        .dirty_since,
+      13
+    );
   });
 }
 
 #[test]
-fn last_subscription_cleanup_releases_and_reuses_dirty_feed_slot() {
+fn last_subscription_cleanup_unlinks_exact_dirty_feed() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     let first = create_system_with(
@@ -493,7 +565,7 @@ fn last_subscription_cleanup_releases_and_reuses_dirty_feed_slot() {
     assert_eq!(AAA::observation_subscriber_count(7), 0);
     assert!(AAA::dirty_observation_feeds(7).is_none());
     assert_eq!(AAA::dirty_observation_feed_count(), 0);
-    assert_eq!(crate::DirtyObservationFreeSlotLen::<Test>::get(), 1);
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
 
     create_system_with(
       ALICE,
@@ -502,16 +574,73 @@ fn last_subscription_cleanup_releases_and_reuses_dirty_feed_slot() {
       inert_execution_plan(),
     );
     assert_ok!(AAA::note_observation_changed(8, 4));
-    assert_eq!(AAA::dirty_observation_feeds(8).expect("dirty feed").slot, 0);
-    assert_eq!(crate::NextDirtyObservationSlot::<Test>::get(), 1);
-    assert_eq!(crate::DirtyObservationFreeSlotLen::<Test>::get(), 0);
+    assert_eq!(AAA::dirty_observation_list().head, Some(8));
+    assert_eq!(AAA::dirty_observation_list().tail, Some(8));
+    assert_eq!(AAA::dirty_observation_list().cursor, Some(8));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
 }
 
 #[test]
-fn dirty_feed_capacity_failure_rolls_back_slot_allocation() {
+fn active_dirty_list_rotates_fairly_and_repairs_cursor_on_removal() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let actors = [1u32, 2, 3].map(|feed| {
+      create_system_with(
+        ALICE,
+        observation_schedule(vec![feed]),
+        None,
+        inert_execution_plan(),
+      )
+    });
+    for feed in [1u32, 2, 3] {
+      assert_ok!(AAA::note_observation_changed(feed, 1));
+    }
+    let list = AAA::dirty_observation_list();
+    assert_eq!(
+      (list.head, list.tail, list.cursor, list.count),
+      (Some(1), Some(3), Some(1), 3)
+    );
+    assert_eq!(
+      AAA::dirty_observation_feeds(2)
+        .expect("middle dirty feed")
+        .previous_dirty_feed,
+      Some(1)
+    );
+
+    assert!(crate::Pallet::<Test>::do_fanout_dirty_observation_page().expect("first page"));
+    assert!(AAA::dirty_observation_feeds(1).is_none());
+    assert_eq!(AAA::dirty_observation_list().cursor, Some(2));
+    assert!(AAA::pending_signal(actors[0]));
+
+    assert_ok!(AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), actors[1]));
+    let repaired = AAA::dirty_observation_list();
+    assert_eq!(
+      (
+        repaired.head,
+        repaired.tail,
+        repaired.cursor,
+        repaired.count
+      ),
+      (Some(3), Some(3), Some(3), 1)
+    );
+    let last = AAA::dirty_observation_feeds(3).expect("last dirty feed");
+    assert_eq!(
+      (last.previous_dirty_feed, last.next_dirty_feed),
+      (None, None)
+    );
+
+    assert!(!crate::Pallet::<Test>::do_fanout_dirty_observation_page().expect("last page"));
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
+    assert!(AAA::pending_signal(actors[2]));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn dirty_feed_capacity_failure_rolls_back_list_insertion() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     create_system_with(
@@ -523,14 +652,16 @@ fn dirty_feed_capacity_failure_rolls_back_slot_allocation() {
     let active_actor_maximum: u32 = <Test as crate::Config>::MaxActiveActors::get();
     let trigger_source_maximum: u32 = <Test as crate::Config>::MaxTriggerSources::get();
     let maximum = active_actor_maximum * trigger_source_maximum;
-    crate::DirtyObservationFeedCount::<Test>::put(maximum);
+    crate::DirtyObservationListState::<Test>::put(crate::types::DirtyObservationList {
+      count: maximum,
+      ..Default::default()
+    });
     assert_noop!(
       AAA::note_observation_changed(9, 1),
       Error::<Test>::DirtyObservationCapacityExceeded
     );
     assert!(AAA::dirty_observation_feeds(9).is_none());
-    assert!(!crate::DirtyObservationSlotFeed::<Test>::contains_key(0));
-    assert_eq!(crate::NextDirtyObservationSlot::<Test>::get(), 0);
+    assert_eq!(AAA::dirty_observation_feed_count(), maximum);
   });
 }
 
@@ -556,13 +687,13 @@ fn fanout_requires_complete_ref_time_and_proof_size_before_mutation() {
     assert_eq!(AAA::fanout_dirty_observations(ref_time_short), base);
     assert_eq!(AAA::dirty_observation_feeds(10), Some(before));
     assert!(!AAA::pending_signal(aaa_id));
-    assert_eq!(AAA::dirty_observation_scan_slot(), 0);
+    assert_eq!(AAA::dirty_observation_list().cursor, Some(10));
 
     let proof_short = Weight::from_parts(u64::MAX, required.proof_size().saturating_sub(1));
     assert_eq!(AAA::fanout_dirty_observations(proof_short), base);
     assert_eq!(AAA::dirty_observation_feeds(10), Some(before));
     assert!(!AAA::pending_signal(aaa_id));
-    assert_eq!(AAA::dirty_observation_scan_slot(), 0);
+    assert_eq!(AAA::dirty_observation_list().cursor, Some(10));
   });
 }
 
@@ -596,7 +727,7 @@ fn one_fanout_page_sets_existing_latches_and_scheduler_membership() {
     }
     assert!(AAA::dirty_observation_feeds(11).is_none());
     assert_eq!(AAA::dirty_observation_feed_count(), 0);
-    assert_eq!(crate::DirtyObservationFreeSlotLen::<Test>::get(), 1);
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });
@@ -640,7 +771,7 @@ fn saturated_queue_retains_the_fanout_page_until_admission_recovers() {
 
     AAA::fanout_dirty_observations(budget);
     let retained = AAA::dirty_observation_feeds(16).expect("fanout page remains dirty");
-    assert_eq!(retained.next_subscriber_page, 0);
+    assert_eq!(retained.next_subscriber_page, Some(0));
     assert!(AAA::pending_signal(aaa_id));
     assert!(
       AAA::actor_hot(aaa_id)
@@ -709,7 +840,7 @@ fn newer_revision_during_fanout_restarts_from_the_first_subscriber_page() {
     AAA::fanout_dirty_observations(base.saturating_add(unit));
     let in_progress = AAA::dirty_observation_feeds(12).expect("fanout remains in progress");
     assert_eq!(in_progress.fanout_revision, 1);
-    assert_eq!(in_progress.next_subscriber_page, 1);
+    assert_eq!(in_progress.next_subscriber_page, Some(1));
     let first = actors[0];
     let first_ticket = AAA::actor_hot(first).expect("first actor").queue_ticket;
     crate::ActorHot::<Test>::mutate(first, |maybe| {
@@ -721,7 +852,7 @@ fn newer_revision_during_fanout_restarts_from_the_first_subscriber_page() {
     let restarted = AAA::dirty_observation_feeds(12).expect("new revision restarts fanout");
     assert_eq!(restarted.latest_revision, 2);
     assert_eq!(restarted.fanout_revision, 2);
-    assert_eq!(restarted.next_subscriber_page, 0);
+    assert_eq!(restarted.next_subscriber_page, Some(0));
     assert!(!AAA::pending_signal(first));
 
     AAA::fanout_dirty_observations(base.saturating_add(unit));
@@ -771,7 +902,12 @@ fn latest_revision_fanout_model_converges_across_seeded_races() {
       } else {
         before.fanout_revision
       };
-      let start = before.next_subscriber_page.saturating_mul(page_size) as usize;
+      let page_id = before.next_subscriber_page.unwrap_or_else(|| {
+        AAA::observation_subscriber_page_list(15)
+          .expect("occupied pages")
+          .head
+      });
+      let start = page_id.saturating_mul(page_size) as usize;
       let end = start
         .saturating_add(page_size as usize)
         .min(delivered.len());
@@ -885,7 +1021,7 @@ fn maximum_observation_subscription_density_is_paged_and_bounded() {
 
 #[cfg(feature = "try-runtime")]
 #[test]
-fn try_state_rejects_dirty_observation_reverse_index_drift() {
+fn try_state_rejects_dirty_observation_list_drift() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
     create_system_with(
@@ -896,7 +1032,7 @@ fn try_state_rejects_dirty_observation_reverse_index_drift() {
     );
     assert_ok!(AAA::note_observation_changed(6, 1));
     assert_ok!(crate::Pallet::<Test>::do_try_state());
-    crate::DirtyObservationSlotFeed::<Test>::remove(0);
+    crate::DirtyObservationListState::<Test>::mutate(|list| list.tail = None);
     assert!(crate::Pallet::<Test>::do_try_state().is_err());
   });
 }
@@ -1794,15 +1930,11 @@ fn aaa_storage_schema_is_explicit() {
       "ObservationFreeSlotLen",
       "ObservationFreeSlotPages",
       "ObservationSubscriberPages",
+      "ObservationSubscriberPageLists",
       "ObservationSubscriberCount",
       "ObservationSubscriptionCount",
       "DirtyObservationFeeds",
-      "DirtyObservationSlotFeed",
-      "NextDirtyObservationSlot",
-      "DirtyObservationFreeSlotLen",
-      "DirtyObservationFreeSlotPages",
-      "DirtyObservationFeedCount",
-      "DirtyObservationScanSlot",
+      "DirtyObservationListState",
       "GlobalCircuitBreaker",
       "IdleStarvationState",
     ]
@@ -1862,15 +1994,11 @@ fn aaa_storage_schema_is_explicit() {
       ("ObservationFreeSlotLen", false, false),
       ("ObservationFreeSlotPages", true, true),
       ("ObservationSubscriberPages", true, true),
+      ("ObservationSubscriberPageLists", true, true),
       ("ObservationSubscriberCount", false, true),
       ("ObservationSubscriptionCount", false, false),
       ("DirtyObservationFeeds", true, true),
-      ("DirtyObservationSlotFeed", true, true),
-      ("NextDirtyObservationSlot", false, false),
-      ("DirtyObservationFreeSlotLen", false, false),
-      ("DirtyObservationFreeSlotPages", true, true),
-      ("DirtyObservationFeedCount", false, false),
-      ("DirtyObservationScanSlot", false, false),
+      ("DirtyObservationListState", false, false),
       ("GlobalCircuitBreaker", false, false),
       ("IdleStarvationState", false, false),
     ]
@@ -1907,17 +2035,19 @@ fn aaa_storage_schema_is_explicit() {
   assert_plain_storage_type::<u32>(&entries[27]);
   assert_map_storage_types::<u32, crate::ObservationFreeSlotPageOf<Test>>(&entries[28]);
   assert_map_storage_types::<(u32, u32), crate::ObservationSubscriberPageOf<Test>>(&entries[29]);
-  assert_map_storage_types::<u32, u32>(&entries[30]);
-  assert_plain_storage_type::<u32>(&entries[31]);
-  assert_map_storage_types::<u32, crate::types::DirtyObservationState>(&entries[32]);
-  assert_map_storage_types::<u32, u32>(&entries[33]);
-  assert_plain_storage_type::<u32>(&entries[34]);
-  assert_plain_storage_type::<u32>(&entries[35]);
-  assert_map_storage_types::<u32, crate::ObservationDirtyFreeSlotPageOf<Test>>(&entries[36]);
-  assert_plain_storage_type::<u32>(&entries[37]);
-  assert_plain_storage_type::<u32>(&entries[38]);
-  assert_plain_storage_type::<bool>(&entries[39]);
-  assert_plain_storage_type::<IdleStarvationPhase<MockBlockNumber>>(&entries[40]);
+  assert_map_storage_types::<u32, ObservationSubscriberPageList>(&entries[30]);
+  assert_map_storage_types::<u32, u32>(&entries[31]);
+  assert_plain_storage_type::<u32>(&entries[32]);
+  assert_map_storage_types::<
+    u32,
+    crate::types::DirtyObservationState<
+      u32,
+      polkadot_sdk::frame_system::pallet_prelude::BlockNumberFor<Test>,
+    >,
+  >(&entries[33]);
+  assert_plain_storage_type::<crate::types::DirtyObservationList<u32>>(&entries[34]);
+  assert_plain_storage_type::<bool>(&entries[35]);
+  assert_plain_storage_type::<IdleStarvationPhase<MockBlockNumber>>(&entries[36]);
 }
 
 #[test]

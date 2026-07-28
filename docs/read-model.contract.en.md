@@ -91,7 +91,7 @@ Each subsystem below uses the same two buckets:
 - Zap execution history beyond bounded live state
 - Burn-liveness analytics before a bounded protocol contract classifies them
 
-### Asset Conversion and Axial Router
+### Asset Conversion and DEOS Router
 
 #### On-Chain Canonical Projection
 
@@ -125,7 +125,7 @@ Each subsystem below uses the same two buckets:
 - Ecosystem catalog browsing/search beyond the bounded reverse projection
 - Operational asset onboarding dashboards
 
-### Typed Observation Oracle
+### DEOS Oracle
 
 #### On-Chain Canonical Projection
 
@@ -139,9 +139,11 @@ Each subsystem below uses the same two buckets:
 - Per-feed sample and revision history
 - Intermediate revisions coalesced before subscriber execution
 - Price charts, manipulation analysis, route-quality comparison, and historical producer availability
-- Any archive, search, alert, or time-series surface beyond current bounded Oracle state
+- Any archive, search, alert, or time-series surface beyond current bounded DEOS Oracle state
 
-Local-pool feed provenance describes Axial Router pre-execution reserves only. Canonical status and scalar truth do not constitute an external fair-price, manipulation-resistance, MEV-protection, or ordering proof.
+Local-pool feed provenance describes DEOS Router pre-execution reserves only. Canonical status and scalar truth do not constitute an external fair-price, manipulation-resistance, MEV-protection, or ordering proof.
+
+A rejected publication is transaction feedback, not canonical feed or delivery state: atomic rollback leaves no observation revision, Oracle event, or AAA dirty marker to inspect. Clients may surface the exact direct-call error or the DEOS Router `InvalidOracleData` mapping from submission feedback, then reread finalized state after operator repair and retry.
 
 ### AAA / Automation Kernel
 
@@ -153,6 +155,8 @@ Local-pool feed provenance describes Axial Router pre-execution reserves only. C
 - Account ownership/control slots
 - Live balances and execution-side effects
 - Finalized point-in-time asset minimum and recipient-balance evidence when fetched directly at one bound block hash; downstream static findings must retain that evidence identity and block hash
+- Selected-feed reactive delivery from one finalized hash: exact `DirtyObservationFeeds`, global dirty-list head/tail/count/cursor, selected position through bounded predecessor links, occupied subscriber-page topology, and identified-budget page/block estimates
+- Optional selected-actor delivery from exact `ActorHot(aaa_id)`: existence, pending signal, type-derived lane, queue ticket or wakeup pointer, and factual admission status without execution timing
 - Current sparse `IdleStarvationState` and bounded detection/recovery events when scheduler observability changes phase
 - Current sparse Continuation for a suspended actor, including cursor, logical-run attempt, unsuccessful-attempt count at that cursor, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
 
@@ -165,7 +169,7 @@ Local-pool feed provenance describes Axial Router pre-execution reserves only. C
 - Historical starvation intervals, duration trends, and alert/recovery timelines reconstructed from runtime events
 - Metadata-bound plan artifacts when available, structural diffs, forecasts, simulations, and configuration-version history under the provenance rules in `aaa-control-plane.contract.en.md`
 
-### Staking
+### DEOS Staking
 
 #### On-Chain Canonical Projection
 

@@ -132,7 +132,6 @@ check_legacy_aaa_liquidity_adapter() {
 
 check_aaa_embedding_links() {
     local guide="$TEMPLATE_DIR/pallets/aaa/docs/embedding.md"
-    local redirect="$PROJECT_ROOT/docs/aaa.embedding.en.md"
     if [[ ! -f "$guide" ]]; then
         record_finding "package-owned AAA embedding guide is missing"
         return 0
@@ -146,9 +145,6 @@ check_aaa_embedding_links() {
     fi
     if ! rg -q 'docs/embedding\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
         missing+=("template/pallets/aaa/README.md")
-    fi
-    if [[ ! -f "$redirect" ]] || ! rg -q 'template/pallets/aaa/docs/embedding\.md' "$redirect"; then
-        missing+=("docs/aaa.embedding.en.md")
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
         record_finding "AAA embedding guide is not linked from required entrypoints"
