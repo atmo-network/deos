@@ -21,11 +21,11 @@ tags:
 related:
   - Обзор фреймворка DEOS
   - Token Minting Curve
-  - Axial Router
+  - DEOS Router
   - Токен-управляемая автоматизация
   - Контур маршрутизации и минтинга
   - Домены Governance
-  - Пулы стейкинга
+  - Стейкинг
   - Базовые термины
 last_compiled: 2026-07-20
 confidence: 0.85
@@ -98,9 +98,9 @@ DEOS дает этот более широкий операционный сло
 
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Token Minting Curve](../overview/token-minting-curve.ru.md)
-- [Axial Router](../overview/axial-router.ru.md)
+- [DEOS Router](../overview/router.ru.md)
 - [Токен-управляемая автоматизация](token-driven-automation.ru.md)
 - [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md)
 - [Домены Governance](governance-domains.ru.md)
-- [Пулы стейкинга](staking-pools.ru.md)
+- [Стейкинг](../overview/staking.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

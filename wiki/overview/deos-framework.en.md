@@ -23,9 +23,9 @@ related:
   - First Steps
   - AAA System
   - AA-Actor
-  - Axial Router
+  - DEOS Router
   - Token Minting Curve
-  - Governance Overview
+  - Governance
   - Asset Identity
   - Randomness Strategy
   - Runtime Patterns
@@ -83,7 +83,7 @@ DEOS uses token-driven coordination instead of request-response administration. 
 In the current line, that model appears through:
 
 - TMC for deterministic mint-side issuance
-- The Axial Router for route selection and fee burning
+- DEOS Router for route selection and fee burning
 - AAA for deterministic execution infrastructure
 - Staking and governance for bounded social control surfaces
 - An explicit read-model split between canonical on-chain projections and materialized views
@@ -94,9 +94,9 @@ In the current line, that model appears through:
 - [Forking DEOS](../usage/forking-deos.en.md)
 - [AAA System](aaa-system.en.md)
 - [AA-Actor](aa-actor.en.md)
-- [Axial Router](axial-router.en.md)
+- [DEOS Router](router.en.md)
 - [Token Minting Curve](token-minting-curve.en.md)
-- [Governance Overview](governance-overview.en.md)
+- [Governance](governance.en.md)
 - [Asset Identity](asset-identity.en.md)
 - [Randomness Strategy](randomness-strategy.en.md)
 - [Runtime Patterns](runtime-patterns.en.md)

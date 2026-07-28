@@ -1,4 +1,4 @@
-# Staking: Share-Vault, Native LP Nomination, and Epoch Reward Architecture
+# DEOS Staking: Share-Vault, Native LP Nomination, and Epoch Reward Architecture
 
 > **On-Chain Namespace**
 >

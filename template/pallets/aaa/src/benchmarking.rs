@@ -1208,7 +1208,7 @@ mod benches {
       core::hint::black_box(SystemQueueTail::<T>::get());
       core::hint::black_box(UserQueueHead::<T>::get());
       core::hint::black_box(UserQueueTail::<T>::get());
-      core::hint::black_box(DirtyObservationFeedCount::<T>::get());
+      core::hint::black_box(DirtyObservationListState::<T>::get());
       Pallet::<T>::update_idle_starvation_state(now, breaker_active, Weight::zero());
     }
   }
@@ -2043,12 +2043,15 @@ mod benches {
   #[benchmark]
   fn observation_change_ingress() {
     let owner: T::AccountId = account("observation-ingress", 0, 0);
-    let feed = T::BenchmarkHelper::setup_observation_feeds(1)
-      .expect("observation benchmark feed must be available")
-      .into_iter()
-      .next()
-      .expect("one observation benchmark feed is required");
+    let mut feeds = T::BenchmarkHelper::setup_observation_feeds(2)
+      .expect("observation benchmark feeds must be available")
+      .into_iter();
+    let seeded_feed = feeds.next().expect("seed observation feed is required");
+    let feed = feeds.next().expect("measured observation feed is required");
+    let _ = bench_create_system_observation::<T>(owner.clone(), seeded_feed);
     let _ = bench_create_system_observation::<T>(owner, feed);
+    Pallet::<T>::note_observation_changed(seeded_feed, 1)
+      .expect("seed observation change ingress must succeed");
     #[block]
     {
       Pallet::<T>::note_observation_changed(feed, 1)
@@ -2056,7 +2059,8 @@ mod benches {
     }
     let state = DirtyObservationFeeds::<T>::get(feed).expect("feed must be dirty");
     assert_eq!(state.latest_revision, 1);
-    assert_eq!(DirtyObservationFeedCount::<T>::get(), 1);
+    assert_eq!(state.previous_dirty_feed, Some(seeded_feed));
+    assert_eq!(DirtyObservationListState::<T>::get().count, 2);
   }
 
   #[benchmark]
@@ -2069,6 +2073,42 @@ mod benches {
 
   #[benchmark]
   fn observation_fanout_page() {
+    let mut feeds = T::BenchmarkHelper::setup_observation_feeds(3)
+      .expect("observation benchmark feeds must be available")
+      .into_iter();
+    let previous_feed = feeds.next().expect("previous observation feed is required");
+    let feed = feeds.next().expect("measured observation feed is required");
+    let next_feed = feeds.next().expect("next observation feed is required");
+    let mut actors = alloc::vec::Vec::new();
+    for index in 0..T::QueuePageSize::get() {
+      let owner: T::AccountId = account("observation-fanout", index, 0);
+      actors.push(bench_create_system_observation::<T>(owner, feed));
+    }
+    let previous_owner: T::AccountId = account("observation-fanout-previous", 0, 0);
+    let next_owner: T::AccountId = account("observation-fanout-next", 0, 0);
+    let _ = bench_create_system_observation::<T>(previous_owner, previous_feed);
+    let _ = bench_create_system_observation::<T>(next_owner, next_feed);
+    Pallet::<T>::note_observation_changed(previous_feed, 1)
+      .expect("previous observation change ingress must succeed");
+    Pallet::<T>::note_observation_changed(feed, 1)
+      .expect("measured observation change ingress must succeed");
+    Pallet::<T>::note_observation_changed(next_feed, 1)
+      .expect("next observation change ingress must succeed");
+    DirtyObservationListState::<T>::mutate(|list| list.cursor = Some(feed));
+    #[block]
+    {
+      Pallet::<T>::do_fanout_dirty_observation_page()
+        .expect("dense observation fanout page must succeed");
+    }
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    assert_eq!(DirtyObservationListState::<T>::get().count, 2);
+    for aaa_id in actors {
+      assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
+    }
+  }
+
+  #[benchmark]
+  fn observation_fanout_blocked_page() {
     let feed = T::BenchmarkHelper::setup_observation_feeds(1)
       .expect("observation benchmark feed must be available")
       .into_iter()
@@ -2076,19 +2116,41 @@ mod benches {
       .expect("one observation benchmark feed is required");
     let mut actors = alloc::vec::Vec::new();
     for index in 0..T::QueuePageSize::get() {
-      let owner: T::AccountId = account("observation-fanout", index, 0);
+      let owner: T::AccountId = account("observation-fanout-blocked", index, 0);
       actors.push(bench_create_system_observation::<T>(owner, feed));
     }
+    let page_size = T::QueuePageSize::get();
+    let capacity = T::MaxQueueLength::get();
+    for page_id in 0..capacity.div_ceil(page_size) {
+      let first = page_id.saturating_mul(page_size);
+      let len = page_size.min(capacity.saturating_sub(first));
+      let entries = (0..len)
+        .map(|offset| QueueEntry {
+          ticket: u64::from(first.saturating_add(offset)),
+          aaa_id: u64::MAX.saturating_sub(u64::from(first.saturating_add(offset))),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      SystemQueuePages::<T>::insert(
+        u64::from(page_id),
+        BoundedVec::try_from(entries).expect("saturated queue page fits"),
+      );
+    }
+    SystemQueueHead::<T>::put(0);
+    SystemQueueTail::<T>::put(u64::from(capacity));
+    NextQueueTicket::<T>::put(u64::from(capacity));
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
     #[block]
     {
       Pallet::<T>::do_fanout_dirty_observation_page()
-        .expect("dense observation fanout page must succeed");
+        .expect("blocked observation fanout page must remain retryable");
     }
-    assert!(DirtyObservationFeeds::<T>::get(feed).is_none());
+    assert!(DirtyObservationFeeds::<T>::get(feed).is_some());
     for aaa_id in actors {
-      assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.pending_signal));
+      assert!(
+        ActorHot::<T>::get(aaa_id)
+          .is_some_and(|hot| { hot.pending_signal && hot.queue_ticket.is_none() })
+      );
     }
   }
 

@@ -413,12 +413,14 @@ export class BlockchainAdapter implements Adapter {
   async getObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
+    aaaId?: number,
   ) {
     const snapshot = await (await this.ensurePapi()).snapshot();
     return await this.observationReader.inspection(
       snapshot,
       feed,
       maxAgeBlocks,
+      aaaId,
     );
   }
 

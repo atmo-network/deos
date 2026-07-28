@@ -1,55 +1,14 @@
-# AAA (Account Abstraction Actors): Runtime Architecture
+# AAA Package Architecture
 
-> **On-Chain Namespace**
->
-> - Package: `pallet-deos-aaa`; Rust crate: `pallet_aaa`
-> - PalletId: `aaactor0`
-> - Pallet account (`PalletId(*b"aaactor0").into_account_truncating()`, SS58 prefix 42):
->   - hex: `0x6d6f646c61616163746f72300000000000000000000000000000000000000000`
->   - SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
-> - Sovereign derivation:
->   - User AAA: `blake2_256(PalletId, owner, owner_slot)`
->   - System AAA: `blake2_256(PalletId, "system", aaa_id)`; `ActorClass::System` stores no owner slot, while the legacy creation-event field remains at compatibility sentinel `0` and never consumes `OwnerSlotMask`
+> Package: `pallet-deos-aaa`; Rust crate: `pallet_aaa`
+
+This document maps the independently reusable crate implementation. A host supplies `PalletId`, account derivation context, origins, adapters, bounds, fees, genesis actors, and production weights. Concrete DEOS namespace, System accounts, TMCTOL plans, runtime adapters, and operational evidence belong in [`docs/aaa.integration.en.md`](../../../../docs/aaa.integration.en.md).
 
 ## Executive Summary
 
-`pallet-deos-aaa` is the execution platform for deterministic protocol behavior in DEOS. It provides a deterministic scheduler, bounded execution model, and adapter-driven task runtime for both user-owned and system-owned actors.
+`pallet-deos-aaa` provides a deterministic scheduler, bounded execution model, typed trigger system, lifecycle state machine, and adapter-driven task runtime for User and System actors.
 
-The current DEOS reference runtime reserves fifteen deterministic System addresses for the TMCTOL topology but enrolls only actual programs in the scheduler:
-
-- Active actors: Burn Actor `0`, Fee Sink `1`, and BLDR Splitter `10`; all three use omnivorous `OnAddressEvent` intake rather than periodic polling.
-- Dormant identities: Liquidity Actor `2`, TOL Buckets B/C/D `4..=6`, Treasuries B/C/D `7..=9`, BLDR Liquidity Actor `11`, BLDR Treasury `13`, and native staking LP provisioning actor `14`.
-- Custody-only accounts outside generic actor storage: TOL Bucket A `3` and BLDR Bucket A `12`.
-
-Dormant identities retain their deterministic sovereign address, owner, Mutable System class, and one free native ED anchor but have no `ActorHot`, `ActorProgram`, readiness, queue, wakeup, funding, fee, or cycle state. Custody-only accounts receive the same runtime-topology anchor without a generic AAA identity or control surface. A FRAME provider or reserved balance does not make a zero-free account eligible for sub-ED native ingress under `pallet-balances` v50.
-
-The pallet itself is generic and runtime-agnostic. Chain-specific behavior is injected through `AssetOps`, `DexOps`, `LiquidityOps`, weight/fee conversion, bounds, and genesis actor specs. External host-runtime obligations are summarized in the [package-owned AAA Runtime Embedding Guide](./embedding.md).
-
-### Canonical Address Catalog (Current Runtime, Full System Map)
-
-All addresses below are deterministic for `AaaPalletId = *b"aaactor0"` (`AccountId32`, SS58 prefix 42).
-This catalog is the full current runtime deterministic System address map, including active actors, dormant identities, and custody-only accounts.
-
-| aaa_id | Role / account | Hex | SS58 |
-| ---: | --- | --- | --- |
-| — | AAA pallet account | `0x6d6f646c61616163746f72300000000000000000000000000000000000000000` | `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1` |
-| 0 | Burn Actor | `0xeba61f8494ba498cb84ce3b771bc3c193dbd82f9a999153a55c383349f6e512e` | `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv` |
-| 1 | Fee Sink | `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084` | `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh` |
-| 2 | Liquidity Actor | `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab` | `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C` |
-| 3 | TOL Bucket A (Anchor) | `0x6f9a5aa8cd9ba27b2e69f1bac1c521d2ffde543275ebd787da11dbd131c50d25` | `5Eb32Qkj9FpPMUXZMNreJzRESQRbYQWwiKXK4zf9VXifTEqX` |
-| 4 | TOL Bucket B (Building) | `0x03699bb4549d77d91390fc161867ccd3ef97d4f305f01757708905c84cb7d882` | `5C9BNb4AoxDngwC6nzu8SEtAEbtGHiKeBjzJwgUewA9qDNL3` |
-| 5 | TOL Bucket C (Capital) | `0x313e7fb07ed6681741b54c3d421f8c261027048e2a9b0668e1058654d369de29` | `5DBGmawvmUvHAg9e2A4bcwZm3NiGX5KE5sPCKepN36SMJvfX` |
-| 6 | TOL Bucket D (Dormant) | `0xd23baab9890a6990ff23e7ad7ab9d1ad34712d7add2344917d110e3cec5b9242` | `5GpMdwY6iMiA8LRUczsZH6p9WoxN4rX15U7FJWbeqTqTrPLX` |
-| 7 | Treasury B (Building) | `0xa027809984f38031e61246efe8ad1f28ddacd9870f6bed081560089c15f9b966` | `5FghFeZDxtGWmvASpM4etxnYtreW9yamSx1Pwh1aGYkny2uv` |
-| 8 | Treasury C (Capital) | `0xcae77c85e5665e0cbe994898429478d3facf4c29a9b7539902f95ad7b3b4bf9b` | `5GekJ6zNwu6ABqhpcagnxbPmP6UtJ1gUKdvJywZKugWkCLhe` |
-| 9 | Treasury D (Dormant) | `0xc81b0eb40aea260eb09b950cfbe2c43f9be1dc73bf62cf081c376cff4bdae0ca` | `5Gb5UKWyYyyttHG3GCsyEhN2Qtb92auewWLZzPaQCvp1RHaj` |
-| 10 | BLDR Splitter | `0x8a420d09aa8842c9075deefab7791be5e9f9471bc68baa8c926128cfc29b6962` | `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N` |
-| 11 | BLDR Liquidity Actor | `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221` | `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17` |
-| 12 | BLDR Bucket A (Anchor) | `0xb31a379c50afe1ba1ad65f1afafaf51df1c40ed2b6c08e9faf1a1ac2caf026de` | `5G7YDX7r2L8q5Wn73dNyhp8cnbpP3sTGUcRW6Eos5Urrxax8` |
-| 13 | BLDR Treasury | `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45` | `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG` |
-| 14 | Native staking LP provisioning actor | `0xbb27f4956462189d16c7f9e207222ce9691308c6a55bb0141f139ebe071394d2` | `5GJ6gSae5dZhxJm6EuD82gaxiLkvokMeLFMNmtuSz8htoidu` |
-
----
+The crate assigns no economic roles, assets, recipients, routes, actor IDs, or chain policy. Host behavior enters through typed adapters, origins, account derivation, weight/fee conversion, explicit bounds, and genesis actor specifications. External obligations live in the [package-owned embedding guide](./embedding.md).
 
 ## Architecture Overview
 
@@ -61,74 +20,9 @@ This catalog is the full current runtime deterministic System address map, inclu
 4. `Adapter isolation`: pallet never embeds DEX pricing logic or asset implementation specifics
 5. `Hot-state decomposition`: `ActorHot` carries only measured scheduler/admission facts needed to avoid cold program or detailed funding decode; the retired synchronized readiness mirror must not return
 
-### Runtime Role in DEOS
+### Host Composition Boundary
 
-AAA is the automation substrate inside DEOS. It executes domain logic via declarative execution plans while specialized pallets keep their domain mechanics. In the current reference line, those plans realize the TMCTOL standard:
-
-- `pallet-deus-router` (`pallet_axial_router`): routing and price-aware swaps
-- `pallet-deos-tmc` (`pallet_tmc`): minting curve mechanics
-- `pallet-asset-conversion`: AMM liquidity mechanics
-- `pallet-assets` / `pallet-balances`: token ledgers
-
-AAA orchestrates actions against these pallets through adapter traits.
-
----
-
-## Current TMCTOL System AAA Topology on DEOS
-
-### Genesis actor matrix
-
-`TmctolGenesisSystemAaas` currently classifies fifteen deterministic addresses:
-
-| Lane | Role | aaa_id | Genesis lifecycle |
-| --- | --- | ---: | --- |
-| Core | Burn Actor | 0 | Active: `build_burn_execution_plan([], dust)` |
-| Core | Fee Sink | 1 | Active: Phase 1 50/50 staking + LP donation |
-| Core | Liquidity Actor | 2 | Dormant |
-| TOL | Bucket A (Anchor) | 3 | Custody-only account |
-| TOL | Bucket B (Building) | 4 | Dormant |
-| TOL | Bucket C (Capital) | 5 | Dormant |
-| TOL | Bucket D | 6 | Dormant |
-| Treasury | Treasury B | 7 | Dormant |
-| Treasury | Treasury C | 8 | Dormant |
-| Treasury | Treasury D | 9 | Dormant |
-| BLDR | BLDR Splitter | 10 | Active: `build_bldr_splitter_execution_plan` |
-| BLDR | BLDR Liquidity Actor | 11 | Dormant |
-| BLDR | BLDR Bucket A | 12 | Custody-only account |
-| BLDR | BLDR Treasury | 13 | Dormant |
-| Staking | Native staking LP provisioning actor | 14 | Dormant |
-
-Active genesis actors use `SYSTEM_AAA_COOLDOWN_BLOCKS`, `AaaType::System`, `Mutability::Mutable`, and no schedule window. Dormant entries occupy `DormantAaaIdentities` and `SovereignIndex` but do not count toward `ActiveAaaCount`; custody-only accounts occupy neither store. `ActorIdentityCount` covers the thirteen active plus dormant identities. `NextAaaId` remains `15`, preserving the reserved address range.
-
-### Canonical execution-plan families
-
-The runtime keeps System AAA topology declarative. Governance evolves concrete execution plans through builder functions in `runtime/src/configs/aaa_config.rs`:
-
-- `build_burn_execution_plan` / Burn Actor: foreign balances → Native swap → burn; extend after foreign asset registration
-- `build_zap_execution_plan` / Liquidity Actor: add LP, foreign→native swap, split LP to buckets; activate after pool creation
-- `build_bucket_lp_transfer_execution_plan` / Buckets B/C/D: transfer a bounded LP fraction into the paired Treasury as one admitted cycle
-- `build_treasury_lp_unwind_execution_plan` / Treasuries B/C/D: remove all preservable balance of one configured system LP asset as a separate admitted cycle, leaving both underlying assets in Treasury custody; the task does not restrict who supplied that LP
-- `build_bldr_splitter_execution_plan` / BLDR Splitter: split the minted BLDR share 50/50 to liquidity/treasury lanes; TMC routes NTVE collateral directly to the BLDR Liquidity Actor; active at genesis
-- `build_bldr_zm_execution_plan` / BLDR Liquidity Actor: add NTVE/BLDR liquidity and transfer LP to BLDR Bucket A; activate after pool creation
-- `build_treasury_b_buyback_execution_plan` / Treasury B: swap NTVE percentage into target and burn acquired balance; optional policy lane
-- `build_native_staking_lp_farming_execution_plan` / Native staking LP provisioning actor: donate balanced `NTVE/stNTVE` without minting LP; activate after native pool + AMM creation
-
-This split keeps AAA generic: the pallet owns bounded scheduling/execution, while the current DEOS reference runtime wires the TMCTOL standard's economic composition into concrete System actors. Reusable execution-plan examples should be read as task-language patterns; the actor catalog above is TMCTOL-specific topology, not a required shape for downstream `pallet-deos-aaa` adopters.
-
-### Governance activation flows
-
-Current runtime operations reduce to four repeatable flows:
-
-1. `Foreign asset + TOL lane`
-   Register foreign asset -> create Native/foreign pool -> update Burn Actor -> update Liquidity Actor -> optionally activate a Bucket LP-transfer plan and the corresponding Treasury LP-removal plan. Pairing expresses reference topology and custody intent, not sender authorization: Treasury unwinds its configured LP balance regardless of depositor. The two cycles replace the rejected three-step same-actor unwind without bypassing `GuaranteedOnIdleWeight`.
-2. `BLDR lane`
-   Keep BLDR Splitter live at genesis -> create NTVE-BLDR pool -> activate BLDR Liquidity Actor -> optionally activate Treasury B buyback/burn policy.
-3. `Native staking LP provisioning lane`
-   Register native staking -> initialize `stNTVE` -> create and seed the `NTVE/stNTVE` AMM -> call `activate_native_staking_lp_farming`, which refuses activation until the receipt asset, staking pool, actor, and non-empty AMM are all live.
-4. `Emergency controls`
-   Pause single actors with `pause_aaa` when policy needs surgical intervention; use `set_global_circuit_breaker(true)` when cycle execution as a whole must stop while bookkeeping stays alive.
-
----
+AAA executes declarative plans against host-provided adapters. Ledger, market, liquidity, staking, fee, ingress, governance, and genesis policy remain outside the crate. The package never identifies a concrete pallet, asset, actor role, route, or recipient as canonical.
 
 ## Execution Model
 
@@ -150,7 +44,7 @@ Current owner-slot representation is intentionally compact and runtime-shaped:
 
 ### Current Actor-State Shape
 
-The shipped runtime stores each active actor across three canonical values:
+The package stores each active actor across three canonical values:
 
 - `ActorHot`: identity/ownership, typed lifecycle, cycle nonce, canonical `first_eligible_at`, last admitted cycle block, failure counter, canonical `pending_signal`, live queue/wakeup membership, optional last User queue-mutation block, auto-close target, cached cycle weight/fee bounds, and measured tracked/pending funding counts
 - `ActorProgram`: trigger/cooldown schedule, optional execution window, run plan, and `Persistent | CloseAfterProductiveRun` completion policy
@@ -158,13 +52,9 @@ The shipped runtime stores each active actor across three canonical values:
 
 `aaa_id` exists only as each storage-map key, and dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives first eligibility from current block, window start, cadence, and actor-stable jitter. The typed lifecycle forbids contradictory pause state.
 
-Runtime consumers compose the split state explicitly:
+Package consumers compose the split state explicitly. Scheduler, execution, lifecycle, liveness, wakeup, ingress, try-state, benchmarks, and tests combine `ActorHot + ActorProgram` through private helpers or the public `aaa_instances` Rust query helper. No synchronized compatibility storage mirrors those values.
 
-- Scheduler admission, execution, lifecycle, liveness, wakeup, ingress, try-state, benchmarks, and tests combine `ActorHot + ActorProgram` through pallet-private helpers or the public `aaa_instances` Rust query helper.
-- Browser and operator clients read both stores at one finalized snapshot and require both for an active actor projection.
-- The temporary Rust `AaaInstances` compatibility facade is deleted; no Rust type or metadata storage prefix carries that legacy name.
-
-This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current runtime-shaped storage realization.
+This is intentionally more concrete than the paired specification: the spec defines the required logical field groups, while this document records the current package storage realization.
 
 ### Execution-Plan Structure
 
@@ -176,15 +66,11 @@ Each actor stores a bounded `ExecutionPlan` of ordered `Step`s:
 
 `ConditionSet` is one non-nested `Always`, `All`, or `Any` aggregate per step. `Always` owns zero atoms; validated `All` and `Any` own one through `MaxConditionsPerStep`. The executor evaluates every atom without short-circuiting, aggregates once, and either prepares the one task or skips one cursor. Empty groups fail as `EmptyConditionSet`; `Any` never duplicates task execution or introduces successor data.
 
-Evaluation fee and cycle/suffix Weight accounting use `ConditionSet::len()`, so mode, order, and truth position cannot change the configured atomic-count bound. Existing runtime plans map empty vectors to `Always` and non-empty conjunctions to `All`; no storage or scheduler surface was added.
+Evaluation fee and cycle/suffix Weight accounting use `ConditionSet::len()`, so mode, order, and truth position cannot change the configured atomic-count bound. Package helpers map empty vectors to `Always` and non-empty conjunctions to `All`; no parallel storage or scheduler surface exists.
 
-`ObservationProvider<FeedId>` is the generic current-scalar boundary. The DEOS adapter maps standalone Oracle Unavailable, Uninitialized, Fresh, and Stale states without giving generic AAA a concrete Oracle dependency. Observation comparisons use exact `u128` Above/Below/Equals/NotEquals atoms; only Fresh exposes a value, while all other states produce ordinary `ConditionsNotMet`. Plan validation rejects zero `max_age_blocks`.
+`ObservationProvider<FeedId>` is the generic current-scalar boundary. A host maps Unavailable, Uninitialized, Fresh, and Stale states without giving AAA a concrete Oracle dependency. Observation comparisons use exact `u128` Above/Below/Equals/NotEquals atoms; only Fresh exposes a value, while all other states produce ordinary `ConditionsNotMet`. Plan validation rejects zero `max_age_blocks`.
 
-Production-Wasm `50 × 20` observation benchmarks cover one through four Fresh typed feeds. The measured regression is `5,709,220 + 9,778,566c` RefTime, `990 + 2,561c` ProofSize, and `2c` reads; the four-atom estimate reaches `44,823,484 / 11,234` with eight reads.
-
-`condition_set_evaluation(c)` conservatively envelops both balance and observation evidence: zero for `Always`, then `8,660,000 + 9,778,566c` RefTime, `3,675 + 2,561c` ProofSize, and `1 + 2c` reads for `c = 1..4`. Full non-short-circuit evaluation therefore remains charged independently of atom truth or aggregate mode.
-
-Production-Wasm `50 × 20` scheduler evidence covers the expanded `QueueEntry`, both physical lanes, and shared-head comparison. System-only cheap execution is `81,856,000 + 52,467,024n` RefTime and `4,253 + 2,717n` ProofSize; alternating System/User execution is `267,777,000 + 99,462,004n` RefTime and `8,560 + 2,718n` ProofSize. Neither model establishes ordinary-block throughput.
+`condition_set_evaluation(c)` charges full non-short-circuit evaluation independently of atom truth or aggregate mode. Package benchmarks cover `Always` plus one through `MaxConditionsPerStep` bounded atoms; production coefficients belong to the host-generated `WeightInfo`.
 
 Task set in implementation:
 
@@ -203,7 +89,7 @@ Task set in implementation:
 
 `SwapOut` groups authored output before explicit `InputLimit::{LiveQuote, Absolute(Balance)}` protection. `Absolute(0)` fails before storage; `Absolute(nonzero)` composes its ceiling with live preservable input capacity, while `LiveQuote` intentionally uses that capacity without an authored long-horizon ceiling. `DexOps::swap_exact_out` always receives the resulting finite bound.
 
-Liquidity tasks also carry fixed non-zero outputs. `AddLiquidity.min_lp_out` reaches `LiquidityOps::add_liquidity`; the DEOS adapter compares measured LP balance delta and returns failure below the bound.
+Liquidity tasks also carry fixed non-zero outputs. `AddLiquidity.min_lp_out` reaches `LiquidityOps::add_liquidity`; the host adapter must reject a measured LP output below that bound.
 
 `RemoveLiquidity.min_amount_a` and `min_amount_b` pass directly into Asset Conversion. Its two exact withdrawal-minimum errors classify as Temporary; malformed pair identity, missing indexed topology, and unknown downstream failures remain Permanent. The outer adapter transaction retains post-call balance-delta checks as defense in depth, so no success event or partial liquidity mutation survives either enforcement layer.
 
@@ -242,40 +128,25 @@ Resolution and charging follow these rules:
 - A multi-amount task resolves every field before dispatch and selects `FundingUnavailable > Skipped > Executable` independently of field order.
 - An Unstake last-funding plan fails validation when the runtime adapter cannot expose a transferable share asset.
 
-Pallet boundary tests cover fixed, current/trigger/last-funding percentages, split totals, and `AllBalance` across native, sufficient-asset, and staking-share surfaces. The DEOS adapter binds native/local/foreign position keys to live staking share state and receipt assets.
+Pallet boundary tests cover fixed, current/trigger/last-funding percentages, split totals, and `AllBalance` across native, sufficient-asset, and staking-share surfaces. The embedding fixture binds unrelated host position keys to share assets without DEOS types.
 
 Task execution is wrapped in a task-scoped storage transaction. If an adapter fails after an intermediate mutation, the task-local storage effects and success event are rolled back before `StepErrorPolicy` handling decides whether the cycle aborts or continues to the next step. Successful earlier steps in the same execution plan remain committed.
 
-`template/pallets/aaa/src/contract.rs` is the package-owned semantic classification surface. Exhaustive matches derive task adapter/assets/recipients/effects/availability/weight ownership/bounded algorithms, typed task amount roles with dependency and retry behavior, condition observations and purity, and error-policy controls.
+`src/contract.rs` is the package-owned semantic classification surface. Exhaustive matches derive task adapter/assets/recipients/effects/availability/weight ownership/bounded algorithms, typed task amount roles with dependency and retry behavior, condition observations and purity, and error-policy controls.
 
-`TaskWeightOwner::weight` delegates to the runtime's existing `TaskWeightInfo`; the module adds no codec, storage, runtime API, or parallel weight calculator. Package tests instantiate every current primitive, while a new enum variant makes its owning match non-exhaustive. The package example `semantic_manifest` verifies ordered task and amount coverage against SCALE metadata, projects the contract into `web-client/src/lib/automation/aaa-semantic-manifest.json`, and provides the release gate's freshness check.
+`TaskWeightOwner::weight` delegates to the runtime's existing `TaskWeightInfo`; the module adds no codec, storage, runtime API, or parallel weight calculator. Package tests instantiate every current primitive, while a new enum variant makes its owning match non-exhaustive. The package example `semantic_manifest` verifies ordered task and amount coverage against SCALE metadata and emits one deterministic format-neutral contract projection.
 
 The control-flow firewall combines closed types with adversarial evidence. `Step` metadata must expose exactly `conditions`, `task`, and `on_error`; exhaustive variant contracts admit no successor, nested program, callback, generic `RuntimeCall`, or opaque dispatch field. `ConditionSet` classification fixes full atomic observation, whole-group error, one admitted task, false advance, and no nesting. Atomic condition and amount classifiers expose only read dependencies and never a control target.
 
 `resolve_step_control` remains the only runtime transition owner, with the exhaustive policy/mutability/failure matrix and same-cursor Continuation regressions pinning retry identity. Task-local transactions forbid callback-visible partial mutation. Bounded vectors, adapter capability contracts, generated worst-case weights, maximum-plan tests, and circular scheduler stress bound adapter and cross-actor work without interpreting local plans recursively.
 
-### DEX Adapter Realization
+### Market Adapter Boundary
 
-`TmctolDexOps` realizes swaps through the caller-aware Axial Router quote surface:
+`DexOps` owns swap-only host execution; `LiquidityOps` owns add, remove, and donation operations. AAA supplies `ExecutionContext { actor, aaa_type }`, resolved amounts, and authored spend/output bounds without knowing route topology, market identity, or price-source policy.
 
-- Exact input receives `ExecutionContext { actor, aaa_type }`, derives `min_out` from the actor's `quote_exact_input`, includes the actor's router-fee status and the same maximum-output mechanism selection used by execution, and binds zero tolerance to that quote.
-- Exact output receives the same minimal typed context, calls the actor's `quote_exact_out` once, computes `quoted_max_in = required_in + ceil(tolerance × required_in)`, requires that envelope to fit the task and live-capacity bound, then calls `execute_exact_out_for` with the explicit total-input cap.
-- AAA constructs the context from stored immutable actor state at execution. The adapter uses `aaa_type` only where swap protection depends on User/System authority and does not infer it from the sovereign-account catalog.
-- Axial Router evaluates at most the direct XYK candidate and one reverse-quoted Native-anchored XYK path, selects minimum required input, includes the caller-aware router fee, and dispatches native exact-output execution. Direct TMC mint remains exact-input only because it has no exact-recipient-output execution contract.
+Adapters return typed task failures. Only explicitly classified Temporary failures may enter Mutable `RetryLater`; every unknown downstream dispatch error remains Permanent. Task-local transactions roll back adapter mutations before step policy runs.
 
-Runtime regressions cover fee-inclusive zero-tolerance exact input, tolerance rejection without mutation, minimal exact-output input, and exact funding for required input, later-step fees, and the preserved minimum.
-
-`classify_router_failure` exhaustively matches the typed Axial Router error enum: route/liquidity unavailability, slippage, oracle deviation/data unavailability, and missing multi-hop capacity are Temporary; malformed, forbidden, funding, fee, and configuration cases are Permanent. Liquidity and donation adapters emit owner-typed Temporary failures at explicit LP/output/ratio checks inside local transactions. Every unclassified downstream `DispatchError` remains Permanent.
-
-The runtime owns `AaaMaxSystemPriceDeviation = 5%` as a swap execution guard, not a generic market-policy object. No scheduler or market AAA-id whitelist and no asset-agnostic raw-balance System trade cap remain. Generic AAA dispatches task-local resolved market amounts unchanged except for exact output's authored maximum composed with live preservable input capacity.
-
-Before a swap whose authoritative execution context carries `AaaType::System`, `TmctolDexOps` reads the exact directional `pallet-oracle` feed with `MAX_SYSTEM_REFERENCE_AGE_BLOCKS = 100`. A Fresh nonzero observation at the exact age boundary remains eligible. Unavailable, Uninitialized, Stale, or invalid truth falls back to the direct pool reserve ratio; unavailable fallback and deviation above 5% are Temporary failures before mutation.
-
-User swaps retain Axial Router's ordinary 20% direct-pair guard and do not fail because the standalone feed is absent or uninitialized. Native-anchored System routes without a pair reference fail closed rather than bypassing the guard.
-
-The guard is local execution protection, not an external oracle, fair-price proof, or ordering defense. EMA and reserve state may already reflect manipulated pool activity; Router slippage and authored task bounds remain independent.
-
----
+Host-specific quotes, route selection, fees, oracle guards, slippage policy, and failure mapping belong in the integration architecture and embedding evidence.
 
 ## Scheduler Architecture
 
@@ -315,7 +186,7 @@ Deferral/terminal paths:
 
 `ActorProgram.completion_policy` defaults to `Persistent`. `CloseAfterProductiveRun` checks cumulative `committed_effectful_tasks` only after successful logical-run completion, including a resumed Continuation. False/latest-state-rejected conditions, skips, rolled-back failures, bare `StopCycle`, suspension, abort, cancellation, and retry exhaustion cannot select `ProductiveRunCompleted`. The pure close path remains valid for Immutable System actors and preserves their sovereign balances.
 
-Code anchor: `src/execution.rs::execute_single_cycle_traced` increments the cumulative count after task commit and applies productive close after `CycleSummary`. Pallet tests prefixed `close_after_productive_run_` falsify false-state, latest-state race, bare stop, retry, exhaustion, balance, and Immutable closure claims. `runtime/src/tests/aaa_integration_tests.rs::productive_run_completion_closes_runtime_actor_after_committed_transfer` pins runtime simulation rollback and real closure.
+Code anchor: `src/execution.rs::execute_single_cycle_traced` increments the cumulative count after task commit and applies productive close after `CycleSummary`. Pallet tests prefixed `close_after_productive_run_` falsify false-state, latest-state race, bare stop, retry, exhaustion, balance, and Immutable closure claims.
 
 Lifecycle lease-by-cycles is supported via `auto_close_at_cycle_nonce`: after a successful cycle reaches the configured target, actor closes with `AutoCloseNonceReached`. `set_auto_close_at_cycle_nonce` may set, shorten, extend, or clear the target, but every non-empty target must remain strictly ahead of current `cycle_nonce` and within `MaxAutoCloseNonceHorizon`; incrementing starts from the existing target or current nonce when unset, rejects zero/overflow, and revalidates the resulting current-relative horizon.
 
@@ -327,10 +198,8 @@ The generic pallet collects opening and per-step User fees through one runtime-s
 - Every attempted User step invokes `FeeCollector` at most once: condition/resolution/funding non-execution charges evaluation-only, while an executable step charges evaluation plus generated execution fee together.
 - Collection failure emits deterministic `StepFailed` without task dispatch or partial debit. Adapter failure after successful collection rolls back task-local effects but retains the one combined charge.
 - `ContinueNextStep` and `AbortCycle` do not alter the selected charge or trigger another collection.
-- `TmctolFeeCollector` atomically transfers each full charge into the Fee Sink System AAA; authorship and downstream allocation do not participate in collection.
-- The chain specification endows all fifteen reference System/custody sovereigns plus native staking ingress with one free native ED. Preserve-spend resolution leaves each anchor intact. Fee Sink can therefore split repeated sub-ED flows without false failures, while staking conversion consumes only the amount above the destination anchor.
 
-Pallet regressions cover each outcome, collection failure, one-call cardinality, and task rollback. Runtime integration proves that payer debit and Fee Sink credit equal the full collected amount. User fee admission derives each step and complete-plan reserve from the current runtime-bound generated weight plus `StepBaseFee`; tests reject execution immediately below that exact reserve rather than pinning a stale copied fee number.
+Pallet regressions cover each outcome, collection failure, one-call cardinality, and task rollback. User fee admission derives each step and complete-plan reserve from host-bound generated weights plus configured step fees; package tests reject execution immediately below that exact reserve.
 
 ### Progress-Preserving Continuation
 
@@ -342,13 +211,13 @@ Inclusive local exhaustion closes with `RetryAttemptsExhausted`. If both cutoffs
 
 `scheduler::retry_backoff_blocks` maps persisted attempt `0, 1, 2, ...` to `1, 2, 4, 8, 8...` blocks. Eligibility uses the larger of this delay and schedule cooldown, then respects window start. A one-block delay uses the existing next-block FIFO ticket; longer delays use the existing paged wakeup pointer. Repeated System reference-deviation failures therefore retain one cursor, perform no fill, and move from queue to wakeup without creating retry-specific scheduler state.
 
-`resolve_step_control` is the private exhaustive transition owner for completed, funding-unavailable, Permanent-failure, and Temporary-failure results across both mutability modes and all three error policies. Production execution calls it for adapter and funding decisions, and `simulate_current_program` inherits the same decision because it invokes `execute_single_cycle_traced`; a pure matrix regression pins all combinations. Adapter-local TypeScript simulation remains a separately labeled projection and must prove parity rather than act as runtime truth.
+`resolve_step_control` is the private exhaustive transition owner for completed, funding-unavailable, Permanent-failure, and Temporary-failure results across both mutability modes and all three error policies. Production execution calls it for adapter and funding decisions, and `simulate_current_program` inherits the same decision because it invokes `execute_single_cycle_traced`; a pure matrix regression pins all combinations.
 
 Task-scoped rollback leaves earlier successful steps committed. The named `SwapIn → AddLiquidity → Transfer` and Burn-prefix regressions prove same-cursor retry, prefix non-replay, cumulative outcomes, and no cancellation compensation. The fixed-seed model `0xDE05_0730` independently checks sparse state, cursor progress, queue/wakeup uniqueness, funding conservation, promotion, and cancellation after each transition.
 
 `simulate_current_program` is the package-owned rollback core behind versioned `AaaSimulationApi` runtime metadata. It requires exact stored Active program, actor type, mutability, mode/run-state, readiness, liveness, and User fee budget.
 
-The API executes the production path with an optional bounded trace and exposes fresh or Continuation outcomes including `unsuccessful_attempts_at_cursor`. Terminal closure returns `SimulationStatus::Closed(CloseReason)`. The whole attempt runs inside `TransactionOutcome::Rollback`; pallet and DEOS-runtime tests prove actor state, balances, events, fees, concrete adapter effects, and stored Continuation remain unchanged.
+The API executes the production path with an optional bounded trace and exposes fresh or Continuation outcomes including `unsuccessful_attempts_at_cursor`. Terminal closure returns `SimulationStatus::Closed(CloseReason)`. The whole attempt runs inside `TransactionOutcome::Rollback`; package tests prove actor state, balances, events, fees, adapter effects, and stored Continuation remain unchanged.
 
 Execution-plan, funding-policy, schedule, window, deactivation, terminal, and close transitions share `cancel_continuation_internal`. Pause and breaker preserve the run. Explicit call `23` is Mutable-only and emits `CycleCancelled` before one cumulative terminal `CycleSummary`; cancellation moves no balance, promotes no funding, and rolls back no prefix.
 
@@ -370,11 +239,7 @@ It uses two scheduler layers: a monotonic paged FIFO for work that can execute n
 
 `ActorHot.queue_ticket` is the sole live-membership marker. Immutable stored `AaaType` derives the only lane where that ticket can remain live. Replacement, close, pause, and cancellation use actor-local invalidation; stale page entries drain lazily. Scheduler admission reserves the generated hot probe before reading `ActorHot`; paused or negative readiness consumes no `ActorProgram` or `ContinuationState` proof. Only a hot-positive actor reserves the separate program/admission probe.
 
-The reference runtime binds `AaaSystemExecutionReserve = 20%` and `AaaUserExecutionGuarantee = 20%`; no scheduler AAA-id whitelist remains. The same shares reserve bounded scan offers before shared use, preventing asymmetric tombstones from consuming the opposite lane's guarantee. System actors may exceed their execution reserve only through globally age-ordered shared service after the User offer. User actors may consume unused System reserve.
-
-These percentages cover admitted actor-execution Weight/count, not discovery, wakeup, cleanup, probing, admission, or bookkeeping. The policy exists only inside `on_idle`; it does not reorder ordinary extrinsics or prevent frontrunning, backrunning, sandwiching, or other order-based extraction.
-
-Production-Wasm `50 × 20` measures the hot probe at `10,965,000 / 3,665` with one read and the program-positive probe at `18,368,000 / 9,968` with two reads. The latter benchmark asserts absent Continuation state, preserving the ordinary readiness storage envelope.
+Host-configured nonzero System and User execution shares reserve independent bounded scan and execution offers before shared service. Those shares cover admitted actor execution only, not discovery, wakeup, cleanup, probing, admission, or bookkeeping. No AAA-id whitelist participates in lane authority or fairness.
 
 Wakeup draining, paged queue operations, actor probes, normal cycles, and pure terminal cleanup use two-dimensional `WeightMeter` fit checks. Direct ingress is charged at its originating producer. Close admission uses the generated worst-case User cleanup bound and performs no shared-container scan.
 
@@ -384,7 +249,7 @@ Scheduler accounting stays local unless it controls consensus progress. `scanned
 
 The temporal wakeup layer owns future eligibility and admits it only through the active run queue. Every active actor may own at most one exact pointer; replacement and closure invalidate that slot without scanning actors or blocks. `MaxActiveActors` bounds global live wakeups, while `WakeupPageSize` controls I/O granularity rather than same-block capacity. This makes spillover buckets, placement-drop events, and actor-key retry scans unnecessary.
 
-The production path uses the paged wakeup substrate and sparse cursor:
+The package uses the paged wakeup substrate and sparse cursor:
 
 - `WakeupPages<(block, page_id)>` and per-block `WakeupBuckets` own the paged topology.
 - `WakeupCursorPages` plus `WakeupCursorLen` provide the production paged binary min-heap over distinct wakeup blocks; each bucket owns its exact reverse `cursor_index`.
@@ -396,46 +261,7 @@ The production path uses the paged wakeup substrate and sparse cursor:
 - The production drain primitive bounds work by slots scanned, preserves a partial head cursor, crosses linked page boundaries, deletes exhausted pages, clears only matching live pointers, discards stale slots, and removes an exhausted bucket from the cursor in the same transaction.
 - Try-state reconciles links, counts, slots, unique pointers, and active-actor capacity.
 
-Production-Wasm `50 x 20` focused operation evidence compares candidate page sizes (`RefTime / estimated ProofSize`):
-
-| Page entries | Append existing | Append new | Exact replacement | Unlink middle |
-| --- | --- | --- | --- | --- |
-| 32 | `37,645,000 / 4,827` | `39,112,000 / 4,870` | `40,508,000 / 6,646` | `50,147,000 / 10,131` |
-| 64 | `39,042,000 / 5,286` | `41,486,000 / 5,258` | `40,858,000 / 6,646` | `59,017,000 / 10,623` |
-| 128 | `49,169,000 / 6,033` | `52,033,000 / 5,839` | `39,321,000 / 6,646` | `58,598,000 / 11,258` |
-
-The runtime selects `WakeupPageSize = 32`. It minimizes every page-size-sensitive operation and halves page-value rewrite granularity relative to 64. Integrated models charge four reads and three/four writes for append, seven reads/writes for cursor-coupled replacement, and five reads/writes for middle-page unlinking.
-
-Production-Wasm `50 x 20` drain evidence at the selected page size records fixed operation samples (`RefTime / estimated ProofSize`):
-
-| Drain case | Slots | RefTime / ProofSize | Reads / writes |
-| --- | ---: | ---: | ---: |
-| Partial head | 16 | `144,295,000 / 44,482` | `18 / 18` |
-| Full page | 32 | `269,661,000 / 86,355` | `36 / 36` |
-| Dense boundary | 33 | `284,887,000 / 89,065` | `38 / 38` |
-| Stale page | 32 | `176,073,000 / 85,843` | `36 / 4` |
-
-These fixed drain samples validate partial preservation, complete deletion, one-page boundary crossing, stale-pointer filtering, and transactional cursor removal for exhausted buckets; they do not imply block throughput.
-
-Production-Wasm `50 x 20` cursor evidence exercises the maximum configured 10,000-block heap depth with only the pages and reverse-index buckets required by the traversed path:
-
-| Cursor case | RefTime / ProofSize | Reads / writes |
-| --- | ---: | ---: |
-| Insert and full sift-up | `355,009,000 / 41,807` | `25 / 25` |
-| Pop minimum and full repair | `481,354,000 / 56,199` | `34 / 26` |
-| Exact removal and full repair | `434,350,000 / 55,767` | `33 / 25` |
-
-Integrated worker evidence uses the same production-Wasm route:
-
-| Worker case | RefTime / ProofSize | Reads / writes |
-| --- | ---: | ---: |
-| Partial one-slot progress | `51,474,000 / 4,285` | `8 / 5` |
-| Full-depth bucket removal | `500,351,000 / 56,563` | `39 / 30` |
-| Future-minimum stop | `11,734,000 / 3,906` | `2 / 0` |
-
-The measurements prove bounded path costs, not whole-cursor throughput. Separate tests stop before mutation with either RefTime or ProofSize one unit short.
-
-The accepted 0.7.5 market-safety bundle uses AAA weights `232fed16add937cd4549f56de14675599a53173678e0b7dcc333b7b591df90e7`, compressed Wasm `db97525170fdb3beea3a02777bdc01ad58bd14691aa5649d16ff7421ef2aafca`, and V16 metadata `0x658b742c49027535d21998f8ab7842820c540988d35d7209269cd9cb5d752123`. Production `50 × 20` regeneration follows the explicit market bounds, native exact-output routing, System policy, capped retry backoff, and bounded authority service. These hashes bind accepted artifacts but do not imply whole-block throughput.
+Package benchmarks isolate append, exact replacement, middle-page unlink, partial/full/stale drain, cursor insert/pop/removal, one-slot worker progress, full-depth repair, and future-minimum stop. Every branch reserves complete RefTime and ProofSize before mutation. Hosts select page size and generate production coefficients against their configured depth and database schedule.
 
 ### Starvation Safeguard
 
@@ -448,7 +274,7 @@ Starvation handling then follows these rules:
 - A stale head makes bounded progress even while the breaker remains active; a live head stays in place.
 - With the breaker inactive, `IdleStarvationState` records only first starvation and alert crossing; duration derives from `since`. Positive budget or breaker activation clears state once, alerted recovery emits once, and Healthy blocks perform no telemetry write.
 
-Runtime coverage retains actor-local readiness through ProofSize-only exhaustion and verifies telemetry without beginning an inadmissible drain unit.
+Package coverage retains actor-local readiness through ProofSize-only exhaustion and verifies telemetry without beginning an inadmissible drain unit.
 
 Recovery is governance-operated (circuit breaker or parameter adjustment); no emergency cycle execution occurs in `on_initialize`.
 
@@ -483,76 +309,35 @@ Filter surface:
 Each producer event evaluates every configured source atom without short-circuit. Several atoms matching one event fold into one readiness decision; funding/provenance mutation runs once outside that fold. Distinct producer events still apply funding independently, while pending readiness shares one latch and one bounded actor-queue membership without coalescing value effects.
 When a signalled cycle starts, the latch is consumed atomically.
 
-`OnObservationChange` ships as an append-only SCALE source atom at index `2`. Its payload contains one typed feed identity only; thresholds remain Condition-owned. The runtime Oracle hook enters AAA dirty-feed state without a subscriber walk, amount/revision payload, readiness mutation, or execution path. Deferred fanout owns conversion of latest revisions into the existing readiness latch.
+`OnObservationChange` ships as an append-only SCALE source atom at index `2`. Its payload contains one typed feed identity only; thresholds remain Condition-owned. `note_observation_changed` enters AAA dirty-feed state without a subscriber walk, amount payload, readiness mutation, or execution path. Deferred fanout owns conversion of latest revisions into the existing readiness latch.
 
 `validate_trigger_amount_compatibility` scans bounded `PercentageOfTrigger` surfaces at genesis, creation, activation, schedule replacement, and plan replacement. Such plans admit only nonempty AddressEvent-only source sets whose every asset filter covers every ordinary or runtime-derived staking-share snapshot asset. Manual, observation-only, periodic-only, mixed, and uncovered filters fail before actor mutation.
 
 `ActorObservationFeeds` stores each active actor's canonical source-derived feed set. A reusable dense slot has exact `ObservationSubscriptionSlot` and reverse-owner entries. `ObservationFreeSlotPages` provides one-page LIFO allocation bounded by `MaxActiveActors`, so identity churn reuses slots rather than growing consensus keys.
 
-`ObservationSubscriberPages(feed, slot / QueuePageSize)` stores an optional actor at `slot % QueuePageSize`. Schedule updates touch only old/new feed differences; execution-plan updates touch none. Deactivation and active close remove at most `MaxTriggerSources` exact cells, delete empty pages and zero counts, then return the slot without scanning actors or feed pages.
+`ObservationSubscriberPages(feed, slot / QueuePageSize)` stores an optional actor at `slot % QueuePageSize`. Each page also stores previous/next occupied page ids, while `ObservationSubscriberPageLists(feed)` stores exact head, tail, and live page count. First insertion appends one page; last removal unlinks it through at most two neighbors. Schedule updates still touch only old/new feed differences, and execution-plan updates touch none.
 
-`ObservationSubscriberCount` and `ObservationSubscriptionCount` expose bounded current cardinality. Try-state reconciles both directions, free slots, page cells, and counts.
+`ObservationSubscriberCount` and `ObservationSubscriptionCount` expose bounded current cardinality. Try-state reconciles actor/feed ownership, free slots, page cells, reciprocal occupied links, list bounds, and counts. Fanout initializes from the feed-local head and follows exact page links, so an isolated subscriber in a historically high global slot costs one occupied-page unit rather than every lower page id.
 
-`DirtyObservationFeeds` coalesces each subscribed feed to one `latest_revision`. New state receives a reusable slot and zeroed `fanout_revision`/`next_subscriber_page`; equal revisions are idempotent, greater revisions replace only latest state, and regressions fail. Feeds without subscribers allocate nothing.
+`DirtyObservationFeeds` coalesces each subscribed feed to one `latest_revision`, records the first clean-to-dirty block as `dirty_since`, and stores reciprocal previous/next active-dirty links. New state receives zero `fanout_revision` and no subscriber-page cursor. Equal or greater revisions preserve the uninterrupted interval timestamp; unlinking and later reinsertion starts a new interval.
 
-`DirtyObservationSlotFeed`, `DirtyObservationFreeSlotPages`, and `DirtyObservationFeedCount` bound and reconcile the reverse topology. Removing the last subscriber deletes exact dirty state and releases its slot after bounded lifecycle preflight. Dirty ingress runs transactionally and reports one conservative Weight independent of subscriber count.
+The first fanout unit snapshots the latest revision and exact occupied head; later units retain the next linked page id. Equal revisions are idempotent, greater revisions replace only latest state, and regressions fail. Feeds without subscribers allocate nothing.
 
-`AaaObservationChangeIngress` binds Oracle publication to `AAA::note_observation_changed`. Oracle's existing transactional hook boundary rolls dirty failure back with observation/revision/event state.
+`DirtyObservationListState` stores exact head, tail, fair cursor, and live count. First insertion initializes the list; later insertion appends through the current tail. Completion or last-subscriber removal unlinks at most two neighbors and repairs the cursor. Dirty ingress runs transactionally and reports one conservative Weight independent of subscriber count. Try-state walks the bounded list and reconciles reciprocal links, cursor membership, map ownership, and count.
 
-The independently metered fanout worker runs before actor execution in `on_idle`. One admitted unit probes one reusable dirty slot and processes at most one `QueuePageSize` subscriber page. It sets only `ActorHot.pending_signal`, preserves existing queue/wakeup membership, and requests canonical paged-queue admission only when neither exists. A capacity failure retains the page for retry after ordinary queue cleanup; the scheduler remains the sole execution owner.
+Ingress rejects capacity exhaustion as `DirtyObservationCapacityExceeded` and broken reciprocal ownership as `DirtyObservationInvariant`. Its transaction restores every touched dirty link and list field on failure. The producer decides whether and how to surface rejection; recovery is an explicit later retry after host/operator cleanup, with no package-owned replay queue.
 
-`DirtyObservationScanSlot` rotates across reusable feed slots. Per-feed `fanout_revision` and `next_subscriber_page` preserve bounded progress. Completion deletes state only when `latest_revision == fanout_revision`; a newer revision resets the same state to page zero, so an older pass cannot erase a newer change.
+The independently metered fanout worker runs before actor execution in `on_idle`. One admitted unit selects the exact active-dirty cursor and processes at most one occupied `QueuePageSize` subscriber page. It sets only `ActorHot.pending_signal`, preserves existing queue/wakeup membership, and requests canonical paged-queue admission only when neither exists. A capacity failure retains the exact page for retry after ordinary queue cleanup; the scheduler remains the sole execution owner.
 
-Fanout owns `MaxObservationFanoutPagesPerBlock = 64` and a two-dimensional runtime limit of 20% of maximum block Weight, within the 50% `on_idle` reserve. It admits the complete worst-case page Weight before mutation. RefTime or ProofSize one unit short leaves dirty state, actor latches, queue membership, and cursor unchanged.
+The fair cursor advances to the selected feed's next active neighbor and wraps to the exact head without empty probes. Per-feed `fanout_revision` and `next_subscriber_page` preserve bounded progress. Completion deletes state only when `latest_revision == fanout_revision`; a newer revision resets the same state to the current occupied head, so an older pass cannot erase a newer change.
 
-Production-Wasm `50 × 20` measures the empty dirty-count probe at `6,286,000 / 1,489` with one read. A dense 64-actor page that sets latches, appends scheduler membership, completes the feed, and releases its slot measures `1,040,997,000 / 172,190`, 79 reads, and 73 writes. The count ceiling does not imply pages-per-block throughput.
+Fanout admits one complete worst-case page Weight in RefTime and ProofSize before mutation. Host bounds set the independent per-block page ceiling and weight limit. One unit short leaves dirty state, actor latches, queue membership, and cursor unchanged. Package benchmarks cover empty, completing dense, and queue-blocked branches; production coefficients and delivery envelopes belong to the host integration.
 
-The latest `scheduler_on_idle_base` measurement includes the dirty-count admission read: `20,254,000 / 1,493`, seven reads, and one write. Dirty ingress is `31,010,000 / 3,522` with six reads/four writes. Atomic condition evaluation is `8,590,000 + 7,044,756c` RefTime and `3,675 + 673c` ProofSize for `c = 1..4`, with `1 + c` reads.
+Fallible `notify_address_event*` is the canonical ingress API for signal, filtering, and funding-batch effects. Producers must preflight before value movement, call exactly once in the originating transaction, propagate failure, and never mutate `ActorHot` or funding storage directly.
 
-Behavior-complete `50 × 20` generation produced AAA weights SHA-256 `87861a87d7203e0a5905176953eb85323a6537079534c2f545dbce683bc33f17`. The settled artifact gate produced compact Wasm `c85f9041802da3b398986667b4470e518aeeb176080b6c41cddee6faec487938`, V16 metadata `69f2258d68aca14e7676a5f4e2ddbf747aad4986a48811055b5cecee48cbc724`, and semantic manifest `f7b952b6785d4c7e668a16b36fc92ce593d121424c2de319726756034e6bb190`. These identities and configured ceilings make no pages-per-block or actor-throughput claim.
+The package never scans host events, fingerprints value transfers, or defers ingress correctness to `on_idle`. Missing or unverified provenance may signal readiness and create spendable balance but must remain ineligible for source-authorized funding updates.
 
-Runtime ingress shape in the shipped line:
-
-- Ingress producers go through a runtime-configured adapter interface (`AddressEventIngress` or equivalent)
-- That adapter path ultimately invokes `notify_address_event*`
-- Producers do not mutate `ActorHot.pending_signal` or funding snapshots directly
-- Producer scope includes transfer/mint ingress paths (asset adapters, TMC distribution, router fee routing, XCM/mint where configured)
-
-Ingress matrix (current runtime):
-
-- Standard signed Balances/Assets transfers to a sovereign account: transaction-extension ingress; verified debited signer supplies funding provenance and the caller pays the declared/preflight bound
-- AAA task `Transfer`: `TmctolAssetOps::transfer` ingress; source is transfer sender; weight paid by actor
-- AAA task `Mint`: `TmctolAssetOps::mint` ingress; source is `None`; weight paid by actor
-- TMC distribution to liquidity actors: submit-first mint-output adapter; direct path keeps sender; TMC call pays primary weight
-- Router fee routing to Burn Actor: submit-first `FeeManagerImpl`; direct path keeps fee payer; swap pays primary weight
-- Generic top-level `pallet-assets` and `pallet-balances` producers: `AddressEventIngressExtension` carries a resolved direct candidate; signed transfers keep the debited signer, while mint/force/approved calls use source-less balance-only provenance
-- XCM reserve/local mint ingress: submit-first `AaaAwareAssetTransactor`; source is convertible origin or `None`; `FixedWeightBounds::UnitWeightCost` binds the generated saturated foreign-asset deposit envelope, and `MaxAssetsIntoHolding = 1` prevents one instruction from multiplying synchronous AAA ingress work until an instruction-specific multi-asset weigher ships
-
-Fallible `notify_address_event*` remains the canonical ingress API for signal updates, filtering, and funding-snapshot side effects. Producers preflight before value movement and propagate notification failure in the same transaction; overflow never becomes best effort.
-
-Runtime producers use two integration paths:
-
-- Explicit adapters cover internal protocol and XCM paths.
-- The transaction extension resolves fixed signed balance/asset transfers into a bounded `Pre` candidate containing actor, recipient, asset, source, and amount mode. Successful post-dispatch submits that candidate directly without reading runtime events; `transfer_all` derives actual movement from the recipient balance delta. Unmatched recipients and failed dispatches receive the generated refund.
-- Asset mint, asset force-transfer, approved transfer, and Native force-transfer carry explicit source-less direct candidates. They preserve trigger delivery but remain balance-only because privileged/delegated provenance cannot honestly satisfy signed-source funding policy.
-
-Runtime tests apply signed extrinsics through `Executive::apply_extrinsic` with the complete shipped `TxExtension`. They cover matched fixed transfer, `transfer_all`, non-AAA refund, untracked call, failed tracked transfer, and direct source-less dynamic asset producers.
-
-The ingress contract is direct:
-
-- Fixed signed transfers, dynamic top-level producers, and explicit internal/XCM adapters do not scan runtime events or persist a compatibility ring.
-- Each successful producer call submits once; content fingerprints never coalesce distinct identical transfers, while the boolean readiness latch may coalesce trigger state independently.
-- Preflight rejects funding overflow before supported value movement. The originating path pays and propagates the fallible notification rather than deferring trigger or funding mutation to `on_idle`.
-- Unsupported privileged/delegated provenance remains balance-only rather than impersonating a signed funding source.
-
-A new producer family must add a direct adapter, transaction-extension candidate, or another transactional originating-path resolver before activation.
-
-Funding state follows typed provenance rather than a dedicated value-transfer call; Mutable actors update policy through call `7`:
-
-- User AAA defaults to `OwnerOnly`; standard transfers from the verified owner or an explicitly configured signed allowlist may update tracked funding batches, while rejected and source-less deposits remain spendable balance-only donations.
-- System AAA defaults to `RuntimePolicy`; the reference runtime's launch matrix contains no authorized actor/source pairs and therefore denies signed, internal-protocol, and XCM funding provenance by default. Downstream runtimes must add explicit pairs to `FundingAuthority`; Mutable actors may instead opt into `AnySource`, which still never upgrades missing provenance.
-- The first accepted tracked transfer sets the batch `amount`; later accepted transfers checked-add into `pending_amount` without changing the armed amount. Funding timestamps were removed because promotion and amount resolution never consume them. Producer preflight and transactional adapters reject `FundingBatchOverflow` before value movement, expired actors accept balance only, and successful cycle completion promotes pending funding.
-- `FundingSourcePolicyUpdated`, `FundingBatchActivated`, `FundingBatchPendingAccumulated`, and `FundingBatchPromoted` expose bounded state transitions for indexers and operators.
+Funding state follows typed provenance rather than a dedicated value-transfer call. `OwnerOnly`, `AnySource`, and host-decided `RuntimePolicy` remain explicit. The first accepted tracked transfer arms `amount`; later accepted transfers checked-add into `pending_amount` without changing the armed value. Preflight rejects overflow before supported movement, and successful logical completion promotes pending funding.
 
 ### Manual
 
@@ -583,18 +368,9 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 
 ### Pre-fork storage baseline
 
-The AAA `0.7.x` pre-launch line supports fresh genesis only; it does not claim an in-place state upgrade from `0.6.x`. Pallet genesis writes the reset baseline storage version `1`, and pallet, DEOS-runtime, and independent-runtime tests assert that current/on-chain versions and `try_state` agree on fresh state. No historical `OnRuntimeUpgrade` bridge ships on this pre-fork line; downstream live forks own bounded versioned migrations after launch.
+The package ships a fresh-genesis storage baseline and no historical `OnRuntimeUpgrade` bridge. Pallet genesis writes the current storage version; package and independent-runtime tests reconcile current/on-chain versions with `try_state`. A live downstream host owns any later bounded migration.
 
-The independent zero-topology runtime pins `ConditionSet` variant indices `0/1/2`, exact SCALE round trips, metadata names, a non-empty aggregate `try_state`, and one Executive-submitted three-step `Always → All → Any` plan. Default, try-runtime, no-std, and runtime-benchmark profiles compile or execute independently. A DEOS-runtime integration runs the same three modes through the concrete native adapter; package tests own empty-group rejection and full-observation error semantics.
-
-### Schema delta from the frozen `0.7.1` comparison baseline
-
-- Removed stores: `SweepCursor`, `AaaInstances`, `CurrentQueue`, `NextQueue`, `WakeupIndex`, `MinWakeupBlock`, `ScheduledWakeupBlock`, `WakeupScheduleDrops`, `WakeupRetryPending`, `QueueEpoch`, `ActorQueueEpoch`, `AaaReadiness`, `AddressEventInbox`, `IngressOverflowSlots`, `IngressOverflowHead`, `IngressOverflowLen`, `IdleStarvationBlocks`, and `LastIngressIngestBlock`.
-- Split/replaced values: `AaaInstances` became `ActorHot`, `ActorProgram`, and `ActorFunding`; `FundingBatch` removed `block` and `pending_last_block`; `Timer` removed `probability`; dormant identity and sparse starvation state gained dedicated encodings.
-- Added stores: `DormantAaaIdentities`, `ActorIdentityCount`, paged queue/wakeup stores, `WakeupCursorLen`, and `IdleStarvationState`. Existing owner, sovereign, active-cap, breaker, closed-System, allocator, and active-count stores retain their logical roles under the reset baseline.
-- Removed public variants: `Task::Noop`, `DeferReason::CloseTransitionFailed`, `OnCloseStepFailureKind`, event variants for wakeup reschedule/drop and close-plan execution, `SecureEntropyUnavailable`, and `Error::InsecureEntropyProvider`. Current event/error indices were compacted before `1.0`; activation, deactivation, starvation recovery, identity invariants, and queue-mutation errors occupy the pinned current indices.
-- Call `17` (`update_on_close_execution_plan`) was removed. Transitional dormant calls `18..=20` remain retired; calls `21..=22` own activation/deactivation. Calls `0..=3` now encode one `ProgramInput::Dormant | Active { schedule, schedule_window, execution_plan, funding_source_policy }` instead of parallel active-only arguments.
-- `aaa_0_7_3_scale_variant_indices_are_explicit` and `aaa_0_7_3_storage_schema_is_explicit` pin current discriminants, call indices through `cancel_continuation = 23`, all 21 storage entries, modifiers, hashers, keys, and concrete value types. The independent runtime additionally proves the Continuation prefix in generated runtime metadata.
+The independent zero-topology runtime pins `ConditionSet` variant indices, exact SCALE round trips, metadata names, nonempty aggregate `try_state`, and one Executive-submitted `Always → All → Any` plan. Default, try-runtime, no-std, and runtime-benchmark profiles remain independent of DEOS types.
 
 ## Lifecycle State Machine
 
@@ -606,12 +382,12 @@ Created Dormant ⇄ Active → Ready → Admitted → Running ⇄ Suspended → 
 
 Lifecycle calls preserve the split-store boundary:
 
-- `activate_aaa` accepts typed `ProgramInput` and validates schedule/window, run plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and the production idle envelope. It then creates matching `ActorHot`, `ActorProgram`, and `ActorFunding` entries for a Mutable identity; `ProgramInput::Dormant` is rejected.
+- `activate_aaa` accepts typed `ProgramInput` and validates schedule/window, run plan, funding policy, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorProgram`, and `ActorFunding` entries for a Mutable identity; `ProgramInput::Dormant` is rejected.
 - `deactivate_aaa` clears queues, wakeups, pending signal, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances.
 
 Active and dormant creation normalize into one typed internal boundary. Legacy creation/reopen metadata still supplies separate schedule/run-plan arguments and class-derived defaults; conversion of that external metadata to `ProgramInput` remains open.
 
-Runtime interpretation:
+Package lifecycle interpretation:
 
 - `Normal cycle`: scheduler-owned `execution_plan` run; increments the stored admitted-cycle count before events, so a new actor's first run emits nonce `1` and the run from `u64::MAX - 1` emits and executes nonce `u64::MAX`; a later attempt at stored exhaustion executes no normal steps or cycle events and instead closes User AAA or pauses System AAA
 - `Pure close`: prechecked actor-local state/index deletion; executes no cycle or task and emits `AaaClosed` exactly once
@@ -704,313 +480,16 @@ Calls `4`, `5`, `6`, `7`, `8`, `9`, `12`, `15`, `16`, `21`, and `22` use the cla
 
 ---
 
-## Runtime Adapters (TMCTOL Binding)
-
-Runtime binds `pallet-deos-aaa` in `runtime/src/configs/aaa_config.rs`:
-
-- `FundingAuthority = DeosFundingAuthority`
-  - receives only `RuntimePolicy` decisions after pallet-owned policy evaluation
-  - defaults deny because the reference launch matrix contains no authorized actor/source pairs
-- `AssetOps = TmctolAssetOps`
-  - Native: `pallet-balances`
-  - Local/Foreign: `pallet-assets`
-  - `balance()` is adapter-visible transferable balance; AAA derives `spendable_balance` by subtracting only transient native fee reservation
-  - includes `minimum_balance` plus exact adapter-owned `preflight_transfer` semantics over source withdrawal and recipient deposit consequences
-  - `SplitTransfer` computes every non-zero leg in declared order, preflights all transfers before mutation, and preserves explicit retry classification; task rollback prevents partial fan-out or a success event
-  - Current SDK 2606 `pallet-balances` rejects a new Balances account below ED even when `frame_system` already holds a provider reference, so the exact runtime preflight reports that native transfer as temporarily unavailable until a different ledger mechanism or upstream semantic change exists
-  - successful `retained` value contains only undeclared share plus integer-division dust, never a rejected recipient allocation
-  - exposes only queries used by portable AAA execution; total issuance remains a runtime-local ledger query
-- `DexOps = TmctolDexOps`
-  - exact-input and exact-output swaps execute through Axial Router (`execute_swap_for`)
-  - exposes only swap task methods; the System AAA genesis builder reads reserve depth directly from the runtime AMM
-- `LiquidityOps = TmctolLiquidityOps`
-  - addition and removal execute through `pallet-asset-conversion`
-  - donation delegates pair-ratio, receipt-suppression, reserve-donation, and native-special-case semantics to the runtime adapter
-  - AAA records only deterministic adapter returns in task events, keeping TMCTOL liquidity policy outside the portable execution-plan shape
-- `StakingOps = TmctolStakingOps`
-  - generic `Stake { asset, amount }` delegates to the runtime staking adapter for all staking assets
-  - the DEOS adapter routes its native staking asset representation to `pallet-staking::stake_native(amount)` and routes other staking assets to `pallet-staking::stake(...)`
-  - `share_asset(position_asset)` resolves through the staking pallet's receipt index and forms a stable admitted-plan binding; execution rechecks it and fails before mutation when absent
-  - collator nomination and LP custody remain outside AAA task semantics; they belong to staking/runtime-specific adapter or pallet surfaces, not to the portable AAA execution-plan shape
-
-Additional runtime bindings:
-
-- `WeightToFee` conversion used for execution-fee charging
-- Frozen pre-paged baseline `6ec457c`: `scheduler_queue_bootstrap(n)` charges `10,965,000 + 273,852n` RefTime, two reads/three writes, and `1,827 + 16n` ProofSize for `n = 0..10,000`; each physical queue has an 80,002-byte maximum value.
-- Frozen baseline sample points (`RefTime / ProofSize`, before database weight): `n=32` is `19,728,264 / 2,339`; `64` is `28,491,528 / 2,851`; `128` is `46,018,056 / 3,875`; `10,000` is `2,749,485,000 / 161,827`.
-- Frozen baseline hashes: generated weights `448f2fe1bee9d59bbdfd4cd1a85a6f20b0f90045e862f86984d2752941075b9d`; compressed Wasm `947ddc39ecb1e83ec32d8b1b1200865850d622aaa8def8ad43b5d15342c3e992`. These values provide comparison evidence, not the current paged representation.
-- Split-store metadata replaces the former 8,807-byte `AaaInstances` maximum with a 200-byte `ActorHot`, including run state, exact wakeup, terminal readiness, and compact funding counts, plus an independently loaded 7,144-byte `ActorProgram`. Physical decode/proof separation does not by itself claim end-to-end throughput.
-- Runtime `WeightInfo` uses frame omni bencher 0.22 / benchmark CLI 58 against shipped lifecycle, scheduler, ingress, funding, fee, and pure-close topology; generated storage annotations contain no retired active-list stores.
-- The fieldless `task_stop_cycle` class measures its single explicit event at production `50 × 20`: `5,238,000 / 0`, with zero storage reads or writes and a `3,702,000` picosecond minimum execution time.
-- Lifecycle benchmark evidence: active System creation is `57,061,000 / 3,665`, nine reads, and seven writes.
-- Lifecycle benchmark evidence: activation remains independently generated; Continuation-aware deactivation is `68,306,000 / 10,609`, six reads, and six writes.
-- Continuation-aware pure close, including observation-subscription cleanup, prices the worst-case User branch at `95,404,000 / 10,609`, ten reads, and eight writes.
-- Explicit and automatic close admission use the measured User bound; cleanup charges no fee and executes no plan. When a run is open, cancellation and its cumulative summary precede `AaaClosed`.
-
-| Continuation class | RefTime / ProofSize | Reads / writes |
-| --- | ---: | ---: |
-| Suspend, 0 snapshots | `29,047,777 / 4,188` | `2 / 2` |
-| Suspend, 20 snapshots | `29,536,557 / 4,188` | `2 / 2` |
-| Retry opening | `22,420,000 / 4,270` | `1 / 1` |
-| Successful completion | `18,229,000 / 4,032` | `1 / 2` |
-| Explicit cancel and re-enqueue | `68,656,000 / 9,968` | `9 / 5` |
-
-Suffix-admission scan measurement spans one through ten unresolved steps from `1,489,963` to `1,566,139` RefTime with zero storage proof. Runtime admission composes its incremental RefTime with suffix task bounds while one transition envelope carries the shared Continuation proof, avoiding duplicated maximum-key proof accounting.
-
-- `Transfer`, `Burn`, and System-only `Mint` bind independent generated classes. Transfer and Mint cover possible direct ingress; Burn measures only its ledger mutation and therefore inherits no queue/wakeup proof. `SplitTransfer` retains its generated `task_split_transfer(l)` model over `2..=8` independently notified recipients: `51,201,645 + 121,667,173l` RefTime and `3,675 + 8,978l` proof bytes, with `8 + 5l` reads and `4 + 3l` writes.
-- Full production-Wasm evidence is Transfer `166,993,000 / 9,968` with 14 reads/8 writes, Burn `23,398,000 / 3,593` with one read/write, and Mint `108,884,000 / 9,968` with 12 reads/6 writes.
-- XCM `UnitWeightCost` binds generated `xcm_asset_deposit` measurement of one registered foreign asset through registry conversion, pallet-assets mutation, funding/signal updates, and paged readiness registration; the fixed weigher remains sound by restricting holding to one asset
-- `SwapIn` and `SwapOut` retain separate runtime task-weight owners covering typed actor context, caller-aware routing, fee routing, reference-deviation protection, and ingress effects. Bounded-retry production models are `330,494,000 / 9,968` with 19 reads/11 writes for input and `327,073,000 / 9,968` with 18 reads/11 writes for output.
-- `Stake` and `Unstake` have separate generated runtime task models covering the shipped staking pool, transferable receipt, account, position-query, and reward-touch paths.
-- Liquidity bounds are measured at the adapter boundary: add liquidity is `264,214,000 / 11,426` with 11 reads/10 writes, remove liquidity is `185,571,000 / 8,817` with eight reads/six writes, and donation is `207,432,000 / 14,035` with ten reads/nine writes.
-- `AxialRouter::LpPairByTokenId` owns the reference runtime's `LP token -> canonical pool pair` index outside generic AAA. The same transactional registration admits both exact directional oracle feed identities. Runtime adapters index internal pool creation directly, while `PoolIndexExtension` meters and indexes successful top-level Asset Conversion pool creation or liquidity addition without event scanning; conflicting LP reuse, feed mismatch, or feed-capacity exhaustion fails closed.
-- Full indexed removal evidence is `185,571,000 / 8,817`, eight reads and six writes, replacing the former scan-shaped 38-read / `81,150` ProofSize envelope.
-- All runtime-backed task adapter classes use generated measurements
-- Wakeup placement uses generated append/replacement/invalidation classes over fixed-size pages plus sparse-cursor insertion or exact removal; `MaxActiveActors` bounds global live entries without spillover or drop/retry state
-- Due-wakeup work uses separate generated partial-unit, full-depth removal, and future-minimum classes; each admitted slot reserves its exact queue append and possible cursor repair before mutation
-- `ActorHot` stores bounded tracked/pending funding counts while `ActorFunding` retains canonical policy and full batches. `pending_funding_count > 0` is the sole hot indication. Funding-free cycles skip the funding read and reserve no promotion work; successful cycles add `funding_batch_promotion(K)` only for actual pending `K`, including a zero-cost `K = 0` path.
-- Continuation-aware mutable plan replacement benchmarks cancellation, pending-signal re-enqueue, and a prepopulated bounded funding map. It charges `109,932,000 / 9,968`, seven reads, and eight writes.
-- Producer-owned transaction-extension ingress declares the matched notification envelope and refunds against an unmatched base. The negative path includes one populated proof witness plus the absent recipient lookup: `16,692,000 / 6,052`, two reads.
-- The matched ingress maximum saturates all four canonical trigger sources on a suspended actor and covers full source evaluation, checked pending-batch accumulation, signal latching, queue saturation, and exact paged wakeup registration: `96,313,000 / 9,968`, 11 reads, and six writes.
-- The generated runtime file owns complete method-level numbers and storage annotations; architecture records only load-bearing changed paths and the accepted file identity.
-- `scheduler_on_idle_base` is `20,254,000 / 1,493`, seven reads, and one write. System-page append is `44,699,000 / 5,749` when preserving a page and `39,671,000 / 4,731` when opening one, each with seven reads/four writes. Consume is `24,794,000 / 4,178` with four reads/two writes when preserving a page and `26,190,000 / 4,160` with four reads/four writes when deleting one.
-- System tombstone drain is `19,695,000 + 2,369,058n` RefTime and `2,922 + 2,492n` ProofSize with `3 + n` reads and three writes. Alternating live/tombstone User scan is `21,860,000 + 13,207,189n` RefTime and `3,047 + 2,575n` ProofSize with `3 + n` reads and `2 + n` writes.
-- System-only cheap execution uses `9 + 2n` reads and `3 + n` writes. The alternating System/User model uses `16 + 2n` reads and `10 + n` writes and exercises reserve phases plus shared global-age comparison across both physical page maps; the generated proof slopes are `2,717n` and `2,718n`, respectively.
-- `scheduler_admission_overhead` reserves two typed head probes rather than a configured-id scan. Actor admission retains separate hot-only and program-positive units, while common discovery/cleanup remains outside the actor execution-share claim.
-- `MaxExecutionsPerBlock = 1,000` remains a defense-in-depth count ceiling, not a throughput promise. Two-dimensional phase meters, the System reserve, User guarantee, shared global-age phase, and complete-attempt admission remain authoritative.
-- Continuation-aware funding-policy replacement is `98,548,000 / 9,968` with seven reads/seven writes. Schedule replacement is `92,402,000 / 9,968` with six reads/seven writes. Both include cancellation and pending-signal readiness restoration.
-- The pallet mock implements the complete runtime-benchmark helper surface, including opt-in ingress-aware asset operations isolated from ordinary pallet tests; this keeps standalone `runtime-benchmarks` compilation and its 308-test suite portable while production measurement remains runtime-owned
-- `FeeSink` account is the sovereign account of System AAA `aaa_id = 1` (`FEE_SINK_AAA_ID`)
-- `GenesisSystemAaas = TmctolGenesisSystemAaas`
-
----
-
-## Economic and Safety Controls (Runtime Values)
-
-Selected configured bounds in the current DEOS reference runtime:
-
-- `MaxExecutionsPerBlock = 1,000` as a defense-in-depth count ceiling; complete-plan RefTime/ProofSize admission remains the primary limiter and no global 1,000-cycle reservation exists
-- `MaxActiveActors = 10,000` (compile-time hard cap checked against `ActiveAaaCount`)
-- `QueuePageSize = 64` is the selected active paged-FIFO production granularity: 32/64/128 production-Wasm evidence covers single-page operations, 10,000-entry stale traversal, mixed multi-page consumption, and complete execution through the 1,000-attempt ceiling
-- `MaxQueueEntriesScannedPerBlock = 10,000`, independently bounded by physical queue capacity and not aliased to the execution ceiling
-- `ActiveActorLimit` (governance operational cap, `<= min(MaxActiveActors, MaxQueueLength)`)
-- `WakeupPageSize = 32` is temporal I/O granularity; `MaxActiveActors = 10,000` independently bounds global live wakeups and `MaxWakeupsPerBlock` bounds per-pass slot work
-- Runtime block-weight policy divides capacity equally between transaction dispatch and background execution: `50%` dispatch and `50%` guaranteed `on_idle` headroom; Operational extrinsics retain their priority/fee class but have no dedicated weight reserve until a concrete critical call justifies a measured allocation, and a runtime regression pins the partition plus `reserved = None`
-
-Production-Wasm queue-operation comparison (`50` steps, `20` repeats; each cell is `RefTime / estimated ProofSize`):
-
-| Page entries | Append existing | Append new | Consume preserve | Consume delete |
-| --- | --- | --- | --- | --- |
-| 32 | `27,169,000 / 4,752` | `26,191,000 / 4,566` | `21,442,000 / 4,125` | `22,908,000 / 4,117` |
-| 64 | `31,499,000 / 5,179` | `27,169,000 / 4,665` | `21,511,000 / 4,125` | `22,908,000 / 4,117` |
-| 128 | `37,715,000 / 5,862` | `29,543,000 / 4,670` | `21,372,000 / 4,125` | `22,769,000 / 4,117` |
-
-These measurements establish the generated append and consume/delete models. A second production-Wasm benchmark drains `n` absent-actor tombstones over multiple pages and yields:
-
-| Page entries | RefTime model | Estimated ProofSize model | Page keys at 10,000 entries |
-| --- | --- | --- | --- |
-| 32 | `20,394,000 + 2,313,709n` | `2,949 + 2,484n` | 313 |
-| 64 | `20,254,000 + 2,166,703n` | `2,903 + 2,484n` | 157 |
-| 128 | `20,045,000 + 2,084,347n` | `2,844 + 2,483n` | 79 |
-
-The reusable drain primitive snapshots an explicit cutoff, stops at the first live ticket, persists exact partial progress, reclaims exhausted pages, and reports entries scanned, tombstones skipped, pages touched, and pages deleted independently. A third production-Wasm benchmark alternates stale and live tickets, drains each stale prefix, and physically consumes each live head without executing actor programs:
-
-| Page entries | RefTime model | Estimated ProofSize model |
-| --- | --- | --- |
-| 32 | `22,908,000 + 12,077,660n` | `3,138 + 2,561n` |
-| 64 | `23,328,000 + 12,081,541n` | `3,092 + 2,561n` |
-| 128 | `23,257,000 + 12,397,562n` | `3,034 + 2,560n` |
-
-The mixed queue-only model makes 32 and 64 effectively close in per-entry RefTime while 128 regresses, whereas all-stale traversal favors larger pages and existing-page append favors smaller pages. The final cross-candidate complete-execution benchmark uses the same `50 x 20`, `n = 1..1,000` production-Wasm protocol:
-
-| Page entries | RefTime model | Estimated ProofSize model | Measured ProofSize model | Queue-page keys at 999 |
-| --- | --- | --- | --- | --- |
-| 32 | `90,306,000 + 64,246,015n` | `4,332 + 2,729n` | `875 + 254n` | 32 |
-| 64 | `91,075,000 + 64,544,609n` | `4,332 + 2,729n` | `873 + 253n` | 16 |
-| 128 | `89,188,000 + 64,448,091n` | `4,331 + 2,728n` | `881 + 253n` | 8 |
-
-Complete execution differs by less than 0.5% in per-actor RefTime and has effectively identical proof growth, so actor/program/funding work dominates page granularity.
-
-The reference runtime selects 64 as the balanced minimax choice:
-
-- Compared with 32, it halves page-key churn and improves all-stale traversal without materially changing complete execution.
-- Compared with 128, it avoids the larger rewrite, roughly 20% slower existing-page append, and mixed-scan regression while retaining half of 32's page count.
-
-No throughput claim depends on this selection. Scan and WeightMeter controls independently bound sustained recovery.
-- The `50%` reserve provides `Weight::from_parts(1_000_000_000_000, 2_500_000)` for the guaranteed scheduler envelope, one admitted cycle, and measured pure cleanup. The envelope includes the fixed hook, paged queue, wakeup cursor, and actor probes; saturated housekeeping converges across blocks and may defer a cycle
-- Runtime binds `GuaranteedOnIdleWeight` directly to the reserve. Genesis, create, reopen, activation, and run-plan update validate scheduler + cycle + pure cleanup in both dimensions before fee collection or mutation
-- Every reference genesis actor fits that gate. Across three active genesis actors, the maximum composed RefTime requirement is actor `10` at `4,635,294,475`, and maximum ProofSize is actor `10` at `59,132`, against the reserved `1,000,000,000,000 / 2,500,000`.
-- Scheduler acceptance proves strict FIFO carry-over, independent scan/execution controls, actor-local signal retention, and convergence of 10,000 exact same-block wakeups without drops
-- Maximum bounded vectors do not imply admission; `ExecutionPlanExceedsOnIdleBudget` reports either-dimensional rejection
-- `MaxUserExecutionPlanSteps = 3`
-- `MaxSystemExecutionPlanSteps = 10`
-- `MaxConsecutiveFailures = 10`
-- `MaxAutoCloseNonceHorizon = 10,000`
-- `MinUserBalance = max(5 * ED, ED)` (guarded)
-- `MaxExecutionDelayBlocks = 52,560,000` (10y @ 6s)
-
-These values enforce bounded execution and predictable scheduler behavior under load.
-
-### Zombie-Spam Economic Floor (Current Baseline)
-
-Runtime regression `zombie_spam_attack_cost_dominates_batch_cleanup_cost` checks an active-cap fill scenario against bounded cleanup:
-
-- Scenario: fill `MaxActiveActors=10,000`
-- Attacker floor per actor: `AaaCreationFee + tx_fee(create_user_aaa)`
-- Cleanup floor per batch: `tx_fee(permissionless_sweep_many(MaxSweepPerBlock))`
-- Calls required: `ceil(MaxActiveActors / MaxSweepPerBlock)`
-
-Current measured baseline:
-
-- Attacker total cost floor: `10,068,246,960,000`
-- Cleanup total fee floor: `44,032,000,000`
-- Cost ratio: `~228.66x` attacker cost vs bounded cleanup fee
-
-Interpretation:
-
-- Batch sweep keeps operational cleanup bounded and fast (`len <= MaxSweepPerBlock`)
-- Creation-cost floor currently dominates bounded cleanup cost by a wide margin
-- Keeper incentives are not required at current parameters; they remain an optional fallback if governance changes reduce the dominance margin
-- This metric should be re-checked whenever `AaaCreationFee`, `WeightToFee`, or sweep bounds are changed
-
-### Governance Capacity Tuning Pattern (Operational Cap vs Hard Cap)
-
-Use a two-level model:
-
-1. **Hard cap (`MaxActiveActors`)**
-   - Compile-time upper bound enforced against the O(1) `ActiveAaaCount` state
-   - Defines the absolute deterministic actor-capacity limit
-   - Changed only via runtime upgrade
-2. **Operational cap (`ActiveActorLimit`)**
-   - Runtime storage value controlled by governance extrinsic `set_active_actor_limit`
-   - Must satisfy `0 < ActiveActorLimit <= min(MaxActiveActors, MaxQueueLength)`
-   - Default/effective fallback is queue-bounded, not only hard-cap bounded
-   - May be raised/lowered without runtime rebuild
-
-Recommended governance proposal workflow:
-
-1. Measure current scheduler utilization (executions/block, rotation latency, deferrals)
-2. Pick target SLA (max tolerated rotation blocks)
-3. Propose new `ActiveActorLimit` with explicit rationale
-4. Validate guardrails before dispatch:
-   - new limit is not below current active actors
-   - new limit does not exceed `MaxQueueLength`
-   - throughput/fairness remain within SLA under expected load
-5. Dispatch `set_active_actor_limit(new_limit)`
-6. Observe for at least one full rotation window and rollback if SLA degrades
-
----
-
 ## Validation Coverage
 
-Implementation is covered by:
+Package validation lives in `src/tests.rs`, `src/benchmarking.rs`, the independent `embedding-runtime`, and compile-time exhaustive semantic contracts. Tests pin SCALE indices, storage names and types, actor-state decomposition, scheduler/trigger/lifecycle invariants, task atomicity, retry transitions, funding conservation, subscription topology, and try-state reconciliation.
 
-- `template/pallets/aaa/src/tests.rs` — pallet-level unit/regression suite
-- `template/runtime/src/tests/aaa_integration_tests.rs` — runtime integration suite with explicit fast/stress scheduler lanes
-- `template/pallets/aaa/src/benchmarking.rs` — FRAME v2 benchmarks for all dispatchables + scheduler/close-path diagnostic benchmarks
-- `aaa_0_7_6_scale_variant_indices_are_explicit` — pins core type discriminants, payload-bearing `RetryLater = 2`, `RunState`, suspension/cancellation reasons, Continuation events/errors, retained calls, retired indices `17..=20`, lifecycle calls `21..=22`, and `cancel_continuation = 23`
-- `aaa_0_7_6_storage_schema_is_explicit` — pins the `AAA` pallet prefix plus all 21 entry names, including sparse `ContinuationState`, split actor state, paged queue/wakeup topology, modifiers, map hashers, and concrete SCALE types
-- `seeded_state_machine_preserves_cross_store_and_scheduler_invariants` — runs replayable traces including Suspend, Continue, and Cancel with seed `0xDE05_0730`; every transition reconciles cursor progress, sparse state, queue/wakeup uniqueness, funding conservation/promotion, owner slots, and balances
+Replayable state-machine traces cover suspend, continuation, cancellation, queue/wakeup uniqueness, owner slots, funding promotion, and balances. FRAME benchmarks construct bounded worst-case package branches; every production host must generate and bind runtime-specific weights.
 
-Coverage includes queue-scheduler fairness, fee fairness, trigger behavior, funding semantics, lifecycle transitions, and emergency starvation path.
+External-consumer profiles prove that the crate composes without DEOS types. Concrete runtime adapters, generated artifacts, stress SLOs, and operational gates belong to the integration architecture.
 
-### Operational telemetry surface
+## Integration Handoff
 
-Current runtime exposes enough state/events to treat queue pressure as an operational signal rather than an inferred guess:
-
-- Queue pressure: `NextQueueTicket`, both typed lane heads/tails, combined bounded lane occupancy/pages, and `ActiveActorLimit`
-- Wakeup backlog: `WakeupCursorLen`, `WakeupBuckets.live_entries`, paged cursor minimum, and actor-local `wakeup_pointer`
-- Deferred-cycle rate: `CycleDeferred`
-- Starvation signals: `IdleStarvationDetected` and `IdleStarvationRecovered`
-- Sweep hygiene: `SweepBatchProcessed`
-
-Production-Wasm `scheduler_on_idle_healthy_empty` evidence is `15,784,000 / 1,493`, five reads, zero writes, with a `14,109,000 ps` minimum execution time. It measures the breaker, empty queue, Healthy starvation state, and empty wakeup cursor without actor execution.
-
-## Scheduler Performance Baseline (Release Wall-Clock)
-
-Ignored runtime profilers measure scheduler behavior under isolated actor-set scenarios:
-
-- `profile_scheduler_wallclock_matrix` prints actor count, block count, elapsed ms, ms/block, total executions
-- `profile_scheduler_queue_wakeup_occupancy_10k` prints max queue/wakeup occupancy under 10k over-capacity pressure
-
-Companion stress-lane checks: `scheduler_stress_lane_over_capacity_fairness_matrix`, `scheduler_stress_lane_dense_vs_sparse_topology_matrix`, `scheduler_stress_lane_sparse_topology_long_run_liveness`, and `stress_10k_actors_queue_scheduler`. The 10,000-actor fixture alternates System/User creation while retaining paused genesis actors, then verifies no starvation, nonce spread `<= 3`, the execution ceiling, and high diagnostic utilization over 500 blocks.
-
-Reproducible commands:
-
-```bash
-cd template
-cargo test --release -p deos-runtime profile_scheduler_wallclock_matrix -- --ignored --nocapture
-cargo test --release -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture
-cargo test --release -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored
-cargo test --release -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored
-```
-
-Measurement environment (baseline run):
-
-- CPU: `AMD Ryzen 7 4800H with Radeon Graphics`
-- Logical CPUs: `16`
-
-Observed results:
-
-| Actors | Blocks | Total elapsed (ms) | ms/block | Total executions |
-| ---: | ---: | ---: | ---: | ---: |
-| 48 | 96 | 77.293 | 0.8051 | 4,608 |
-| 100 | 150 | 122.822 | 0.8188 | 7,200 |
-| 1,000 | 252 | 270.794 | 1.0746 | 12,096 |
-| 10,000 | 418 | 2,127.598 | 5.0899 | 20,064 |
-
-10K stress consistency check:
-
-- Full release gate passes the over-capacity fairness matrix, dense/sparse topology matrix, sparse long-run liveness, 10K queue stress, and occupancy profile
-- Every fairness/stress/profile test invoked by `scripts/aaa-release-gate.sh` asserts the documented starvation-free `nonce spread <= 3` oracle; the 10K occupancy profile now fails rather than merely prints when that bound regresses
-- Queue/wakeup occupancy profile (`10,000`, `418`): `min_cycle_nonce = 2`, `max_cycle_nonce = 3`, `spread = 1`, `max_wakeup_backlog = 9,024`, `max_wakeup_buckets = 19`, `max_queue_occupancy = 10,000`
-
-Temporal wakeup measurements (`scheduler_wakeup_*`):
-
-- Production classes cover append, exact replacement/invalidation, partial/full/stale page drain, cursor insert/pop/exact removal, one-slot worker progress, full-depth worker removal, and future-minimum stop.
-- `scheduler_wakeup_cursor_worker_remove` materializes the maximum configured cursor depth and measures page drain, reverse-index repair, bucket deletion, and active-FIFO append as one production path.
-- `scheduler_wakeup_cursor_worker_partial` verifies resumable one-slot progress without cursor removal; `scheduler_wakeup_cursor_worker_future` isolates the non-mutating minimum check.
-- The diagnostic-only `scheduler_cooldown_ineligible_idle` case verifies one cooldown wakeup and no active queue membership at an intermediate block; it remains excluded from production weights.
-
-Pure-close production diagnostics:
-
-- `close_dispatch_weight_upper()` and lifecycle admission both use generated `close_aaa()` pricing; no maximum-plan or fee envelope participates
-- Worst-case User command: `./scripts/benchmarks.sh --extrinsic close_aaa --output /tmp/close_aaa.rs pallet_aaa`
-- User result at production `50 × 20`: `66,420,000 / 8,120`, seven reads, seven writes
-- Diagnostic System command: `./scripts/benchmarks.sh --extrinsic close_aaa_system_pure --output /tmp/close_aaa_system.rs pallet_aaa`
-- System result: `57,690,000 / 8,120`, six reads, seven writes; the benchmark remains excluded from the production weight trait because the User branch component-wise dominates it
-- The former queue-sized envelope was `2,143,325,000 / 86,889`, 72 reads, and 40 writes; the new result demonstrates actor-local work rather than shared-container or plan-size scaling
-
-Interpretation:
-
-- Scheduler overhead remains well below a 6s block budget even at 10K active actors
-- 10K matrix profile aligns with long-run stress check
-- Scaling trend is approximately linear over practical ranges, with visible step-up between 1K and 10K due to full active-set traversal pressure
-
-Caveats:
-
-- Measurements are wall-clock diagnostics, not consensus weight values
-- Results depend on machine and workload profile
-- PoV benchmark numbers above come from synthetic scan-only workloads and should be interpreted as scheduler-path diagnostics, not full-block end-to-end cost
-
-## Release Gates
-
-Current pre-release AAA scheduler gate for the DEOS reference runtime:
-
-Repo-native wrapper: `./scripts/aaa-release-gate.sh`
-
-1. `cargo test --release -p deos-runtime scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored`
-2. `cargo test --release -p deos-runtime scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored`
-3. `cargo test --release -p deos-runtime scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored`
-4. `cargo test --release -p deos-runtime stress_10k_actors_queue_scheduler -- --ignored`
-5. `cargo test --release -p deos-runtime profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture`
-
-Fairness SLO for the current queue topology: high-density matrix and 10K stress runs must stay starvation-free with `nonce spread <= 3` on the documented baseline scenarios, which supply enough recurring `on_idle` budget to admit cycles. This measured SLO does not claim unconditional liveness under arbitrary zero or insufficient scheduler budget.
-
-Local runtime-invariant dry-run wrapper: `./scripts/try-runtime-local.sh --prepare`
-
----
+A production host must bind generated `WeightInfo`, concrete adapters and origins, defensible queue/wakeup/actor bounds, fee conversion and collection, ingress producers, genesis actors, and independent runtime evidence. The package embedding guide owns that checklist; [`docs/aaa.integration.en.md`](../../../../docs/aaa.integration.en.md) records the DEOS realization.
 
 Implementation mirror for [Specification](./specification.en.md).
-
-- `Last Updated`: July 2026

@@ -10,7 +10,7 @@ available_locales:
   - en
   - ru
 sources:
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
   - ../../web-client/src/lib/ui/README.md
   - ../../docs/read-model.contract.en.md
@@ -55,7 +55,7 @@ Widgets должны адаптироваться к ширине и высот�
 
 ## Владение и feedback
 
-Клиент использует [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md), чтобы повторяемые controls и структурные границы жили в owner layers. Widgets должны выражать product intent, а не пересобирать primitive controls и не лезть в adapter internals.
+Клиент держит повторяемые controls и структурные границы в явных UI и domain owner layers. Widgets должны выражать product intent, а не пересобирать primitive controls и не лезть в adapter internals.
 
 Execution feedback централизован: `LogWidget` — главная transaction/progress surface, а action widgets остаются сфокусированы на запуске действий. Это тот же anti-duplication rule, что и для UI primitives и provenance badges.
 
@@ -72,6 +72,5 @@ Execution feedback централизован: `LogWidget` — главная tr
 - [Первые шаги](../getting-started/first-steps.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
-- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

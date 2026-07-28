@@ -119,7 +119,6 @@ Downstream-specific business logic, dApp behavior, token narrative, and ecosyste
 ## Related
 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
-- [What DEOS Is Not](../concepts/what-deos-is-not.en.md)
 - [Repository Structure](../implementation/repository-structure.en.md)
 - [Tech Stack](../implementation/tech-stack.en.md)
 - [Parachain Context](../concepts/parachain-context.en.md)

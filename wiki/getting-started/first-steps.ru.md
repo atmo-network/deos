@@ -72,11 +72,11 @@ confidence: 0.85
 
 ### Governance и защита
 
-Используйте [Обзор Governance](../overview/governance-overview.ru.md), [Домены Governance](../concepts/governance-domains.ru.md) и [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md), когда затронуты полномочия, payload, protection tracks или пути обновлений.
+Используйте [Governance](../overview/governance.ru.md), [Домены Governance](../concepts/governance-domains.ru.md) и [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md), когда затронуты полномочия, payload, protection tracks или пути обновлений.
 
 ### Клиент и wiki
 
-Используйте [Эталонный клиент](../overview/reference-client.ru.md), [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md) и [Generated Wiki](../concepts/generated-wiki.ru.md), когда работа касается браузерного UX, честности read-model, layout, UI-примитивов или рендеринга wiki.
+Используйте [Эталонный клиент](../overview/reference-client.ru.md) и [Generated Wiki](../concepts/generated-wiki.ru.md), когда работа касается браузерного UX, честности read-model, layout, UI-примитивов или рендеринга wiki.
 
 ### Локальные операции
 

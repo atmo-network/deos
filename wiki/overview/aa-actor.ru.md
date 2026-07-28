@@ -12,6 +12,7 @@ available_locales:
 sources:
   - ../../template/pallets/aaa/docs/specification.en.md
   - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../docs/aaa.integration.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -23,7 +24,7 @@ related:
   - Система AAA
   - Токен-управляемая автоматизация
   - Контур маршрутизации и минтинга
-  - Обзор Governance
+  - Governance
   - Базовые термины
 last_compiled: 2026-07-24
 confidence: 0.9
@@ -92,5 +93,5 @@ confidence: 0.9
 - [Система AAA](aaa-system.ru.md)
 - [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
 - [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
-- [Обзор Governance](governance-overview.ru.md)
+- [Governance](governance.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

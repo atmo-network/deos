@@ -1,12 +1,14 @@
-# pallet-oracle
+# pallet-deos-oracle
 
-Reusable bounded typed scalar observation pallet.
+Reusable DEOS Oracle package for bounded typed scalar observations.
 
 ## Purpose
 
 The package admits immutable typed feeds, authorizes typed producers, stores one current scalar observation, applies LastValue or deterministic EMA aggregation, tracks change-only revisions, and invokes one transactional O(1) change hook.
 
-It does not depend on AAA, Axial Router, DEOS topology, off-chain workers, external networks, subscriber iteration, or historical storage. See [`docs/specification.en.md`](./docs/specification.en.md) for the normative contract and [`EMBEDDING.md`](./EMBEDDING.md) for host obligations.
+It does not depend on AAA, DEOS Router, DEOS topology, off-chain workers, external networks, subscriber iteration, or historical storage. See [`docs/specification.en.md`](./docs/specification.en.md) for the normative contract, [`docs/architecture.en.md`](./docs/architecture.en.md) for the reusable package implementation map, and [`docs/embedding.md`](./docs/embedding.md) for host obligations.
+
+Concrete reference-runtime composition belongs to [`docs/oracle.integration.en.md`](../../../docs/oracle.integration.en.md).
 
 ## Validation
 

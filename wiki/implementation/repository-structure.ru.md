@@ -42,7 +42,7 @@ confidence: 0.9
 Основной Rust workspace с runtime и паллетами.
 
 - `/template/runtime/` — сборка парачейна, wiring и runtime-конфигурация
-- `/template/pallets/` — ключевая логика подсистем, например `aaa`, `axial-router`, `staking`, `governance`, `tmc`
+- `/template/pallets/` — ключевая логика подсистем, например `aaa`, `router`, `staking`, `governance`, `tmc`
 - `/template/primitives/` — общие типы и константы
 
 ### `/web-client/`

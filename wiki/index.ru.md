@@ -23,7 +23,7 @@ related:
   - Обзор фреймворка DEOS
   - Первые шаги
   - Система AAA
-  - Обзор Governance
+  - Governance
   - Экономика $BLDR
   - Базовые термины
   - FAQ для новичков
@@ -65,9 +65,10 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Экономика $BLDR](concepts/builder-economy.ru.md) — invoices полезной работы, тактическое финансирование и паттерн основателя как первого работника
 - [Токеновые поверхности](concepts/token-surfaces.ru.md) — роли Native, VETO, BLDR, расписок и LP
 - [Система AAA](overview/aaa-system.ru.md) — автономные protocol actors
-- [Axial Router](overview/axial-router.ru.md) — маршруты, комиссии и решения о протокольной ликвидности
-- [Обзор Governance](overview/governance-overview.ru.md) — полномочия по доменам и защита
-- [Пулы стейкинга](concepts/staking-pools.ru.md) — расписки staking, номинирование LP и вознаграждения
+- [DEOS Router](overview/router.ru.md) — маршруты, комиссии и решения о протокольной ликвидности
+- [Типизированные наблюдения](overview/typed-observations.ru.md) — текущая scalar truth и реактивная доставка
+- [Governance](overview/governance.ru.md) — полномочия по доменам и защита
+- [Стейкинг](overview/staking.ru.md) — расписки, номинирование LP и вознаграждения
 - [Эталонный клиент](overview/reference-client.ru.md) — on-chain-first браузерный продукт и wiki reader
 
 ## Экономика и runtime-понятия
@@ -79,7 +80,6 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Экономические пороги](concepts/economic-thresholds.ru.md)
 - [Уровни экономических утверждений](concepts/economic-claim-levels.ru.md)
 - [Карта инвариантов и угроз](concepts/invariant-map.ru.md)
-- [Чем DEOS не является](concepts/what-deos-is-not.ru.md)
 - [Идентичность активов](overview/asset-identity.ru.md)
 - [Паттерны runtime](overview/runtime-patterns.ru.md)
 - [Контекст parachain](concepts/parachain-context.ru.md)
@@ -90,7 +90,6 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Домены Governance](concepts/governance-domains.ru.md)
 - [Physics-first против politics-first](comparisons/physics-vs-politics.ru.md)
 - [Разделение read-model](concepts/read-model-split.ru.md)
-- [UI Kit и Domain DAG](concepts/ui-kit-and-domain-dag.ru.md)
 - [Generated Wiki](concepts/generated-wiki.ru.md)
 
 ## Процессы и статус
@@ -119,7 +118,7 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
 - [Первые шаги](getting-started/first-steps.ru.md)
 - [Система AAA](overview/aaa-system.ru.md)
-- [Обзор Governance](overview/governance-overview.ru.md)
+- [Governance](overview/governance.ru.md)
 - [Экономика $BLDR](concepts/builder-economy.ru.md)
 - [Базовые термины](glossary/core-terms.ru.md)
 - [FAQ для новичков](faq/newcomer-faq.ru.md)

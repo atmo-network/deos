@@ -3,7 +3,7 @@
 //! Wires the two adapter traits (`AssetOps`, `DexOps`) to concrete runtime pallets:
 //! - Native token: `pallet-balances`
 //! - Foreign assets: `pallet-assets`
-//! - Swaps: Axial Router
+//! - Swaps: DEOS Router
 //! - Liquidity: Asset Conversion
 
 use super::*;

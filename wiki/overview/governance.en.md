@@ -1,9 +1,9 @@
 ---
 page_type: overview
-title: Governance Overview
+title: Governance
 summary: A newcomer-facing map of DEOS Governance as a bounded constitutional layer that separates protocol physics, strategic protection, tactical coordination, and live read-model truth.
 locale: en
-canonical_page_id: governance-overview
+canonical_page_id: governance
 translation_status: source
 available_locales:
   - en
@@ -21,13 +21,13 @@ tags:
 related:
   - Governance Domains
   - Physics-First vs Politics-First
-  - Staking Pools
+  - Staking
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-07-28
 confidence: 0.9
 ---
 
-# Governance Overview
+# Governance
 
 ## Summary
 
@@ -74,15 +74,15 @@ Governance can feed bounded participation-quality signals into staking rewards, 
 
 Use the governance wiki cluster in this order:
 
-1. `Governance Overview` — why the subsystem exists;
+1. `Governance` — why the domain exists;
 2. [Governance Domains](../concepts/governance-domains.en.md) — how one governance cell is typed;
 3. [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md) — why protocol physics stays protected;
-4. [Staking Pools](../concepts/staking-pools.en.md) — where governance-conditioned reward signals meet staking;
+4. [Staking](staking.en.md) — where governance-conditioned reward signals meet staking;
 5. [Core Terms](../glossary/core-terms.en.md) — recurring vocabulary.
 
 ## Related
 
 - [Governance Domains](../concepts/governance-domains.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-- [Staking Pools](../concepts/staking-pools.en.md)
+- [Staking](staking.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

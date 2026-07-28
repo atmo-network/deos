@@ -14,7 +14,7 @@ Deterministic account-abstraction actor runtime for bounded execution plans, sch
 
 Governance-controlled registry for foreign assets and XCM location mappings.
 
-### [Axial Router](./router/README.md)
+### [DEOS Router](./router/README.md)
 
 Multi-AMM trading infrastructure providing intelligent routing across different automated market makers. Implements trait-based architecture for extensible AMM support with optimal price discovery and execution.
 
@@ -26,7 +26,7 @@ Bounded governance reward-memory kernel for winning-vote sliding windows, item-s
 
 Unidirectional minting pallet implementing the TMCTOL standard's curve mechanics on DEOS.
 
-### [Staking](./staking/README.md)
+### [DEOS Staking](./staking/README.md)
 
 Multi-asset share-vault staking pallet with sovereign backing channels, liquid `stXXX` receipts, native `$NTVE -> stNTVE`, locked `NTVE/stNTVE` LP nomination, governance custody, and reward settlement.
 
@@ -43,9 +43,9 @@ Our pallets implement several key architectural patterns:
 
 For detailed technical implementation, architectural decisions, and production deployment patterns, see the comprehensive guides in the [documentation directory](../../docs/):
 
-- **[Axial Router Architecture Guide](./router/docs/architecture.en.md)** - Modern multi-token routing system optimized for TMC ecosystems
+- **[DEOS Router Architecture Guide](./router/docs/architecture.en.md)** - Modern multi-token routing system optimized for TMC ecosystems
 - **[Randomness Strategy](../../docs/randomness.strategy.en.md)** - Post-VRF simplification note covering the relay-beacon-first direction and the conditions for replacing local entropy logic with a relay-chain beacon adapter
-- **[Staking Specification](./staking/docs/specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, share-based ownership accounting, native liquid staking, locked native LP nomination, and governance-conditioned reward channels
+- **[DEOS Staking Specification](./staking/docs/specification.en.md)** - Multi-asset share-vault staking contract with per-asset sovereign pool accounts, share-based ownership accounting, native liquid staking, locked native LP nomination, and governance-conditioned reward channels
 
 ## 🚀 Quick Start
 
@@ -59,9 +59,9 @@ Direct local entrypoints:
 
 - [AAA README](./aaa/README.md)
 - [Asset Registry README](./asset-registry/README.md)
-- [Axial Router README](./router/README.md)
+- [DEOS Router README](./router/README.md)
 - [Governance README](./governance/README.md)
-- [Staking README](./staking/README.md)
+- [DEOS Staking README](./staking/README.md)
 - [TMC README](./tmc/README.md)
 
 Navigate to individual pallet directories for component-specific orientation and development guidance.

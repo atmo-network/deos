@@ -1,4 +1,4 @@
-# pallet-oracle Embedding Contract
+# pallet-deos-oracle Embedding Contract
 
 ## Host Types and Bounds
 

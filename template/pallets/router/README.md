@@ -1,6 +1,6 @@
-# pallet-deus-router
+# pallet-deos-router
 
-`pallet-deus-router` (Rust crate `pallet_axial_router`) is the DEOS deterministic routing and swap pallet for the current TMCTOL route families.
+`pallet-deos-router` (Rust crate `pallet_axial_router`) is the DEOS deterministic routing and swap pallet for the current TMCTOL route families.
 
 ## Scope
 
@@ -23,7 +23,7 @@ It chooses among bounded route families by maximum recipient output and uses the
 
 Execution should remain trustless and economically honest:
 
-- Oracle state updates happen before execution
+- DEOS Oracle state updates happen before execution
 - Route selection is deterministic from runtime-visible liquidity inputs
 - Fees are applied through the configured fee-routing adapter
 - System account flows avoid recursive self-taxation

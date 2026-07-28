@@ -1,11 +1,11 @@
-# pallet-asset-registry
+# pallet-deos-asset-registry
 
-`pallet-asset-registry` is the DEOS foreign-asset identity and mapping pallet.
+`pallet-deos-asset-registry` (Rust crate `pallet_asset_registry`) is the DEOS foreign-asset identity and mapping pallet.
 
 ## SDK baseline
 
 This pallet is maintained against the current DEOS `Polkadot SDK 2606 / node 1.24.0` line.
-The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-asset-registry` core logic.
+The 2606 upgrade did not require pallet-local semantic changes here; the relevant fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in `pallet-deos-asset-registry` core logic.
 
 ## Scope
 

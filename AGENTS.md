@@ -40,18 +40,19 @@
 - `Delivery History`: Record meaningful completed outcomes and impact in `CHANGELOG.md`, not in backlog or durable protocol prose.
 - `Changelog Shape`: Format delivery entries as `- \`Domain\`: Description`, using slash-separated domain qualifiers when needed; exclude package-marker chores, intermediate implementation diaries, and duplicated architecture explanations.
 - `Spec Ownership`: Specifications own intended subsystem contracts, rationale, invariants, and public semantics.
-- `Architecture Ownership`: Architecture docs own shipped implementation maps, runtime bindings, storage topology, operational watchpoints, and code anchors.
+- `Package Architecture Ownership`: Package-owned architecture docs describe the shipped implementation of the independently reusable crate: storage topology, bounded algorithms, modules, generic interfaces, package evidence, and code anchors.
+- `Integration Documentation Ownership`: Root `docs/*.integration.en.md` documents concrete DEOS reference composition across runtime bindings, adapters, cross-pallet flows, System actor topology, production weights, client realization, and operational watchpoints.
 - `Code Ownership`: Code and tests own executable behavior; documentation claims must remain subordinate to verified implementation truth.
 - `Skill Ownership`: Repo-local skills own specialized workflows and audits; do not duplicate their internal procedures here.
 - `README Ownership`: Root and subtree READMEs own human orientation, setup, navigation, and current workspace purpose.
-- `Read-Model Ownership`: `docs/read-model.contract.en.md` owns chain/materialized data classification; `docs/web-client.architecture.en.md` owns browser realization.
+- `Read-Model Ownership`: `docs/read-model.contract.en.md` owns chain/materialized data classification; `web-client/docs/architecture.en.md` owns browser realization.
 - `AAA Control-Plane Ownership`: `docs/aaa-control-plane.contract.en.md` owns off-chain plan artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized AAA history boundaries.
 - `Framework Boundary Ownership`: `docs/framework-instance.contract.en.md` owns the reusable mechanism versus downstream policy contract.
 
 ## 3. Repository Topology
 
-- `/docs`: Cross-system conceptual control plane containing framework contracts, strategy notes, and the canonical documentation index; package-owned documents are linked directly from `docs/README.md` rather than mirrored as redirect stubs.
-- `/template`: Rust reference implementation containing the parachain runtime, pallets, primitives, weights, tests, runtime-adjacent research, and package-owned pallet specifications/architecture under each pallet's `docs/` directory.
+- `/docs`: Cross-system conceptual control plane containing framework contracts, concrete DEOS integration documents, strategy notes, and the canonical documentation index; package-owned documents are linked directly rather than mirrored as redirect stubs.
+- `/template`: Rust reference implementation containing the parachain runtime, pallets, primitives, weights, tests, runtime-adjacent research, and package-owned reusable specifications, implementation architecture, and embedding guidance under each pallet's `docs/` directory.
 - `/web-client`: SvelteKit reference client for browser-facing DEOS and current TMCTOL flows.
 - `/scripts`: Shared human/CI/skill automation; numbered scripts are independent atoms, while named scripts are deterministic compositions or admin utilities.
 - `/simulator`: Historical TMCTOL hypothesis lab and authoritative mathematical reference for formulas, thresholds, conservation, floor/compression scenarios, and parameter behavior.
@@ -60,7 +61,7 @@
 - `Support Priority`: Routine stabilization starts with `/docs`, then `/template`, `/web-client`, and `/scripts`; consult `/simulator` whenever tokenomics or invariant math moves.
 - `Core Entry`: Start system-wide architecture work with `docs/core.architecture.en.md`.
 - `Runtime Entry`: Start Rust workspace work with `template/README.md` and the owning pallet/runtime docs.
-- `Client Entry`: Start browser work with `docs/web-client.architecture.en.md` and `web-client/README.md`.
+- `Client Entry`: Start browser work with `web-client/README.md` and `web-client/docs/architecture.en.md`.
 - `Scripts Entry`: Start automation work with `scripts/README.md`, `_common.sh`, and the touched entrypoint's `--help` contract.
 - `Wiki Entry`: Start wiki work with `/.agents/skills/wiki-sync/SKILL.md`.
 
@@ -68,14 +69,18 @@
 
 - `Terminology Lockstep`: Stable specs, architecture docs, runtime/API surfaces, wiki, and client copy must use one canonical term per domain atom.
 - `Framework Naming`: Use `DEOS` for the framework/runtime/reference stack and `TMCTOL` only for the concrete economic standard.
-- `Governance Naming`: Public prose may say `DEOS Governance`; runtime implementation remains `pallet-governance` and client UI remains `Governance` unless a dedicated rename lands.
+- `Concrete Subsystem Branding`: Use `DEOS Router`, `DEOS Governance`, `DEOS Staking`, and `DEOS Oracle` when naming those concrete framework subsystems; preserve stable Rust crate, runtime pallet/module, source-file, and generated-weight identifiers unless a separate compatibility change lands. Concept, mechanism, and domain labels remain unprefixed when they own a broader semantic object, and distinctive names such as AA-Actor, AAA System, and TMC remain unprefixed.
+- `Cargo Publication Naming`: Independently publishable DEOS packages use globally conflict-resistant framework names such as `pallet-deos-*` and `deos-primitives`; never substitute `deus` or an unqualified generic package name for the DEOS framework identity. Cargo package identity may change without renaming the stable Rust library crate.
+- `Governance Naming`: Use `DEOS Governance` for the concrete subsystem and `Governance` for the broader domain overview; runtime implementation remains `pallet-governance`.
 - `Asset Notation`: Prefix concrete asset symbols with `$` in specs and architecture prose (`$NTVE`, `$VETO`, `$BLDR`); keep bare labels for vote options and non-asset semantics.
 - `AAA Abstraction`: Describe automation by System AAA role and execution-plan family rather than legacy manager/farmer names.
 - `Actor Casing`: In prose, title-case established role names such as `Burn Actor`, `Liquidity Actor`, and `System AAA Actor`; keep ordinary descriptions lowercase and code identifiers idiomatic.
 - `Legacy Names`: Keep manager names only for historical orientation or explicit compatibility aliases at public boundaries.
 - `TMC`: The unidirectional issuance engine implementing the configured minting curve.
 - `TOL`: The protocol-owned liquidity accumulator and bucketed reserve topology of the TMCTOL standard.
-- `Axial Router`: The fee-burning execution gateway selecting the candidate with maximum recipient output across XYK, TMC, and bounded Native-anchored routes.
+- `DEOS Router`: The fee-burning execution gateway selecting the candidate with maximum recipient output across XYK, TMC, and bounded Native-anchored routes.
+- `DEOS Oracle`: The bounded current typed observation owner; runtime implementation remains `pallet-oracle`.
+- `DEOS Staking`: The reference staking subsystem; runtime implementation remains `pallet-staking`.
 - `System AAA Actors`: Runtime-owned AAA instances executing bounded protocol economic flows.
 - `Burn Actor`: The System AAA role that processes configured balances into burn flow.
 - `Liquidity Actor`: The System AAA role family that provisions liquidity for configured pools or lanes.
@@ -92,12 +97,12 @@
 - `AAA Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `template/pallets/aaa/docs/specification.en.md` owns the full contract.
 - `AAA Authority Simplicity`: Keep consensus authority at immutable `AaaType::{User, System}` until a concrete shipped need proves two types insufficient; every System actor receives bounded service through type-derived paged FIFO lanes under one scheduler, one global ticket allocator/cutoff, one actor-local ticket, and one wakeup/Continuation/lifecycle owner, not an AAA-id whitelist, owner-authored priority, a generic policy object, or pre-extrinsic execution.
 - `AAA Market Loss Bounds`: Every market task carries its owning spend/output bound; generic AAA must not impose an asset-agnostic raw-balance System cap. Every System swap additionally obeys the typed reference-deviation guard, and temporary market rejection uses one capped retry/wakeup path rather than accepting an adverse fill.
-- `AAA Observation Reactions`: Derive duplicate-free subscriptions from admitted typed trigger sources into actor-owned reusable slot-addressed pages; Oracle change context may mark bounded dirty state only, deferred fanout may set the existing pending latch, and the existing scheduler alone executes actors.
+- `AAA Observation Reactions`: Derive duplicate-free subscriptions from admitted typed trigger sources into actor-owned reusable slot-addressed pages; DEOS Oracle change context may mark bounded dirty state only, deferred fanout may set the existing pending latch, and the existing scheduler alone executes actors.
 - `Token-Driven Coordination`: Prefer asset movement and runtime hooks over privileged signed calls when token ingress itself defines the event.
 - `Bounded Consensus State`: Every storage collection, iteration, history surface, retry path, and projection must have a defensible bound.
 - `Read-Model Honesty`: Public data must be classified as bounded authoritative on-chain truth or externally indexed/materialized truth; canonical UX must not hide an indexer dependency.
 - `On-Chain Projection`: Keep canonical bounded state and projections on-chain; route archive, search, and unbounded analytics to materialized providers.
-- `Mechanism-Over-Policy`: The Axial Router compares viable candidates by maximum recipient output; price impact and fee fields remain informational quote metadata.
+- `Mechanism-Over-Policy`: DEOS Router compares viable candidates by maximum recipient output; price impact and fee fields remain informational quote metadata.
 - `Transactional Mutation`: Entry points that can fail after touching multiple storage locations must prevalidate fallible conditions or use transactional semantics.
 - `Reverse-Index Preference`: Persist bounded reverse mappings when live bijectivity, inverse conversion, or lookup weight forms part of the contract.
 - `Unified Primitives`: Keep shared asset taxonomy and ecosystem constants in `template/primitives`; avoid duplicated magic numbers.
@@ -150,7 +155,7 @@
 ## 7B. Fee and Security Contracts
 
 - `Liquidity Slippage`: Derive Liquidity Actor swap tolerance from current reserve depth and clamp it between explicit runtime bounds.
-- `Fee Collection`: Keep Axial Router trading fees on the Burn Actor path; collect 100% of transaction, AAA, governance-opening, and XCM-execution fees into the Fee Sink System AAA independently of actor execution liveness, and name the generic AAA boundary by collection rather than trading-route semantics.
+- `Fee Collection`: Keep DEOS Router trading fees on the Burn Actor path; collect 100% of transaction, AAA, governance-opening, and XCM-execution fees into the Fee Sink System AAA independently of actor execution liveness, and name the generic AAA boundary by collection rather than trading-route semantics.
 - `Fee Allocation Phases`: While collators remain permissioned, the Fee Sink distributes its available native balance 50/50 to staking ingress and liquidity provisioning; a future equal-thirds security/staking/liquidity plan requires permissionless collators and an explicit bounded security-reward contract, with indivisible remainder retained in Fee Sink for a later cycle.
 - `Native Flow Anchors`: The DEOS runtime endows System AAA, custody, and staking-ingress accounts admitted for arbitrarily small native flows with one persistent free-balance ED, preserves that anchor through spend resolution, and converts only newly received value. Generic AAA follows exact host-ledger consequences and does not promise provider-only or reserved-only zero-free sub-ED ingress.
 - `Collator Reward Gate`: Treat `CollatorRewardPot` as an unresolved design placeholder, not an accepted pallet or storage topology, until eligibility, contribution accounting, settlement cadence, custody, payout, leftovers, and failure behavior have explicit owners and bounds.
@@ -179,9 +184,13 @@
 ## 9. Documentation Contract
 
 - `Spec Purity`: Specifications define intended source-of-truth contracts only; implementation status, migration notes, and rollout caveats belong in architecture docs.
-- `Delivery Sequence`: For non-trivial subsystems, refine specification, implement and validate code, then update architecture documentation from shipped truth.
-- `Paired Docs`: Non-trivial pallets should have a specification and a separate architecture map.
-- `Doc Filenames`: Use full dotted forms such as `name.specification.en.md`, `name.architecture.en.md`, `name.contract.en.md`, and `name.strategy.en.md`.
+- `Delivery Sequence`: For non-trivial subsystems, refine specification, implement and validate code, then update package architecture and any affected DEOS integration document from shipped truth.
+- `Paired Docs`: Non-trivial reusable pallets should have a specification and a separate package implementation architecture map; add a root integration document only when concrete DEOS composition crosses the package boundary.
+- `Embedding Docs`: Reusable host-runtime obligations live at `template/pallets/<name>/docs/embedding.md`; do not create uppercase package-root `EMBEDDING.md` aliases or redirect shims.
+- `Workspace Architecture`: A self-contained workspace owns its implementation map at `<workspace>/docs/architecture.en.md`; root `/docs` retains cross-system contracts, integration, strategy, and framework-wide architecture only.
+- `Package Purity`: Package architecture and embedding docs must remain useful to an independent host runtime; concrete DEOS actor catalogs, addresses, pallet indices, adapters, runtime parameters, production bindings, and cross-system product realization belong in root integration docs.
+- `Integration Test`: Place a claim in package docs only if it remains true when the crate is embedded in an unrelated runtime; otherwise route it to the owning root integration document.
+- `Doc Filenames`: Use full dotted forms such as `name.specification.en.md`, `name.architecture.en.md`, `name.integration.en.md`, `name.contract.en.md`, and `name.strategy.en.md`.
 - `Markdown Tables`: Use exactly one padding space inside every cell boundary and compact delimiter rows such as `| --- | --- |`, preserving alignment only when meaningful with `| :--- | ---: |`.
 - `Architecture Neutrality`: Architecture docs describe current implementation truth without embedding release-number rhetoric.
 - `Architecture Readability`: Keep each architecture-doc prose paragraph, list item, or table row independently addressable and at most 600 characters; decompose mixed claims rather than hiding growth through hard line wrapping.
@@ -217,6 +226,7 @@
 - `Diff-Aware Gates`: Audits default to changed scope and reserve full-tree or network-backed checks for explicit release/all modes.
 - `Durable Ledgers`: Record reusable hallucinations, ambiguities, dead ends, and boundary drifts only; bare tool failures remain transient output.
 - `Wiki Role`: `/wiki` is a concise, provenance-aware learning lens over canonical root and package-owned project truth, not a release-note mirror or docs dump.
+- `Wiki Owner Naming`: Name each page after the semantic object it owns, not after its directory or implementation package. Before naming, identify whether the owner is a domain, concept, mechanism, concrete subsystem, or product surface; state what readers expect there; test whether the title survives an implementation replacement; and split subsystem from mechanism only when both have enough independent content. The `overview/` directory marks an entry role, not a mandatory `DEOS X` title pattern.
 - `Wiki Locales`: Human pages use explicit locale suffixes and mirrored page IDs/topology; shared metadata represents localized fields; Russian prose prefers natural Russian terminology and minimizes English borrowings except canonical identifiers, code symbols, and terms whose translation would reduce precision.
 - `Wiki Navigation`: New pages need provenance, related links, locale mirrors, and graph/index reachability; merge weak leaflets into stronger owner pages.
 - `Wiki Trust`: Treat repo-local wiki Markdown as reviewed content and enforce the trust boundary with the wiki validation skill.

@@ -236,22 +236,6 @@
           }
         },
         {
-          "id": "ui-kit-and-domain-dag",
-          "title": {
-            "en": "UI Kit and Domain DAG",
-            "ru": "UI Kit и Domain DAG"
-          },
-          "path": {
-            "en": "concepts/ui-kit-and-domain-dag.en.md",
-            "ru": "concepts/ui-kit-and-domain-dag.ru.md"
-          },
-          "page_type": "concept",
-          "summary": {
-            "en": "How the web client centralizes reusable presentation primitives and validates ownership boundaries across widgets, domains, layout, adapters, and system wiring.",
-            "ru": "Как web-client централизует reusable presentation primitives и проверяет ownership boundaries между widgets, domains, layout, adapters и system wiring."
-          }
-        },
-        {
           "id": "generated-wiki",
           "title": {
             "en": "Generated Wiki",
@@ -412,22 +396,6 @@
           }
         },
         {
-          "id": "what-deos-is-not",
-          "title": {
-            "en": "What DEOS Is Not",
-            "ru": "Чем DEOS не является"
-          },
-          "path": {
-            "en": "concepts/what-deos-is-not.en.md",
-            "ru": "concepts/what-deos-is-not.ru.md"
-          },
-          "page_type": "concept",
-          "summary": {
-            "en": "Negative-space boundaries for DAO, stable-asset, smart-contract, oracle, indexer, randomness, and product misconceptions.",
-            "ru": "Отрицательные границы против DAO, stable-asset, smart-contract, oracle, indexer, randomness и product misconceptions."
-          }
-        },
-        {
           "id": "economic-claim-levels",
           "title": {
             "en": "Economic Claim Levels",
@@ -485,19 +453,35 @@
           }
         },
         {
-          "id": "axial-router",
+          "id": "router",
           "title": {
-            "en": "Axial Router",
-            "ru": "Axial Router"
+            "en": "DEOS Router",
+            "ru": "DEOS Router"
           },
           "path": {
-            "en": "overview/axial-router.en.md",
-            "ru": "overview/axial-router.ru.md"
+            "en": "overview/router.en.md",
+            "ru": "overview/router.ru.md"
           },
           "page_type": "overview",
           "summary": {
             "en": "The max-output routing engine that compares bounded market and protocol-liquidity paths and serves as the mandatory gate for canonical swap execution.",
             "ru": "Движок маршрутизации по максимальному выходу, который сравнивает ограниченные пути через рыночную и протокольную ликвидность и служит обязательными воротами канонического обмена."
+          }
+        },
+        {
+          "id": "typed-observations",
+          "title": {
+            "en": "Typed Observations",
+            "ru": "Типизированные наблюдения"
+          },
+          "path": {
+            "en": "overview/typed-observations.en.md",
+            "ru": "overview/typed-observations.ru.md"
+          },
+          "page_type": "overview",
+          "summary": {
+            "en": "Bounded current typed observation truth for producers, Router consumers, reactive AAA, and finalized client inspection.",
+            "ru": "Ограниченная текущая истина типизированных наблюдений для producers, Router consumers, реактивного AAA и финализированной инспекции клиента."
           }
         },
         {
@@ -517,14 +501,14 @@
           }
         },
         {
-          "id": "governance-overview",
+          "id": "governance",
           "title": {
-            "en": "Governance Overview",
-            "ru": "Обзор Governance"
+            "en": "Governance",
+            "ru": "Governance"
           },
           "path": {
-            "en": "overview/governance-overview.en.md",
-            "ru": "overview/governance-overview.ru.md"
+            "en": "overview/governance.en.md",
+            "ru": "overview/governance.ru.md"
           },
           "page_type": "overview",
           "summary": {
@@ -592,21 +576,21 @@
           },
           "page_type": "concept",
           "summary": {
-            "en": "How the Axial Router and TMC work together to compare market and protocol liquidity.",
-            "ru": "Как Axial Router и TMC вместе сравнивают рыночную и протокольную ликвидность."
+            "en": "How DEOS Router and TMC work together to compare market and protocol liquidity.",
+            "ru": "Как DEOS Router и TMC вместе сравнивают рыночную и протокольную ликвидность."
           }
         },
         {
-          "id": "staking-pools",
+          "id": "staking",
           "title": {
-            "en": "Staking Pools",
-            "ru": "Пулы стейкинга"
+            "en": "Staking",
+            "ru": "Стейкинг"
           },
           "path": {
-            "en": "concepts/staking-pools.en.md",
-            "ru": "concepts/staking-pools.ru.md"
+            "en": "overview/staking.en.md",
+            "ru": "overview/staking.ru.md"
           },
-          "page_type": "concept",
+          "page_type": "overview",
           "summary": {
             "en": "How DEOS staking uses share-vault pools, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination, and native-specific reward settlement.",
             "ru": "Как staking DEOS использует share-vault pools, liquid `stNTVE`, locked `NTVE/stNTVE` LP nomination и native-specific reward settlement."

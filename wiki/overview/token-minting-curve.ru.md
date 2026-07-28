@@ -20,7 +20,7 @@ tags:
   - minting
   - tokenomics
 related:
-  - Axial Router
+  - DEOS Router
   - Контур маршрутизации и минтинга
   - Стандарт TMCTOL
   - Формулы TMCTOL
@@ -60,7 +60,7 @@ TMC задает линейный потолок цены для новой эм
 TMC — только один элемент системы. В текущей эталонной линии:
 
 - TMC отвечает за детерминированную эмиссию
-- Axial Router решает, когда mint-путь лучше рыночного маршрута
+- DEOS Router решает, когда mint-путь лучше рыночного маршрута
 - Протокольная аллокация, возникающая при минтинге, дальше подпитывает обеспечение ликвидности
 - Treasury-owned liquidity и burn-потоки взаимодействуют с получающейся динамикой предложения
 
@@ -74,7 +74,7 @@ TMC — только один элемент системы. В текущей �
 
 ## Связанные страницы
 
-- [Axial Router](axial-router.ru.md)
+- [DEOS Router](router.ru.md)
 - [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 - [Формулы TMCTOL](../math/tmctol-formulas.ru.md)

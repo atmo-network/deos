@@ -23,7 +23,6 @@ tags:
 related:
   - DEOS in 60 Seconds
   - Forking DEOS
-  - What DEOS Is Not
 last_compiled: 2026-07-20
 confidence: 0.8
 ---
@@ -93,4 +92,3 @@ DEOS does not remove market risk, product risk, community risk, launch execution
 
 - [DEOS in 60 Seconds](deos-in-60-seconds.en.md)
 - [Forking DEOS](../usage/forking-deos.en.md)
-- [What DEOS Is Not](../concepts/what-deos-is-not.en.md)

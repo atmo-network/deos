@@ -162,6 +162,96 @@ fn oracle_publish_declares_the_subscriber_independent_aaa_hook_weight() {
 }
 
 #[test]
+fn oracle_publication_rejects_aaa_unavailability_and_recovers_after_cleanup() {
+  new_test_ext().execute_with(|| {
+    let producer = axial_router_account();
+    let first = directional_feed(AssetKind::Native, AssetKind::Local(7));
+    let second = directional_feed(AssetKind::Native, AssetKind::Local(8));
+    for feed in [first, second] {
+      assert_ok!(
+        crate::configs::oracle_config::ensure_axial_router_pool_feeds(
+          feed.asset_in,
+          feed.asset_out,
+        )
+      );
+      let schedule = Schedule {
+        trigger: Trigger::Immediate {
+          sources: BoundedVec::try_from(vec![TriggerSource::OnObservationChange { feed }])
+            .expect("one observation source fits"),
+        },
+        cooldown_blocks: 0,
+      };
+      let execution_plan = BoundedVec::try_from(vec![pallet_aaa::Step {
+        conditions: ConditionSet::Always,
+        task: Task::Stake {
+          asset: AssetKind::Native,
+          amount: AmountResolution::Fixed(0),
+        },
+        on_error: StepErrorPolicy::AbortCycle,
+      }])
+      .expect("one inert step fits");
+      assert_ok!(AAA::create_system_aaa(
+        RuntimeOrigin::root(),
+        ALICE,
+        Mutability::Mutable,
+        ProgramInput::Active {
+          schedule,
+          schedule_window: None,
+          execution_plan,
+          completion_policy: pallet_aaa::CompletionPolicy::Persistent,
+          funding_source_policy: FundingSourcePolicy::RuntimePolicy,
+        },
+      ));
+    }
+
+    let maximum = <Runtime as pallet_aaa::Config>::MaxActiveActors::get()
+      * <Runtime as pallet_aaa::Config>::MaxTriggerSources::get();
+    pallet_aaa::DirtyObservationListState::<Runtime>::put(pallet_aaa::DirtyObservationList {
+      count: maximum,
+      ..Default::default()
+    });
+    let events_before_capacity = System::events();
+    assert_noop!(
+      Oracle::publish(RuntimeOrigin::signed(producer.clone()), first, 1_000),
+      pallet_aaa::Error::<Runtime>::DirtyObservationCapacityExceeded
+    );
+    assert!(Oracle::observations(first).is_none());
+    assert!(AAA::dirty_observation_feeds(first).is_none());
+    assert_eq!(System::events(), events_before_capacity);
+
+    pallet_aaa::DirtyObservationListState::<Runtime>::kill();
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer.clone()),
+      first,
+      1_000,
+    ));
+    let healthy_list = AAA::dirty_observation_list();
+    assert!(Oracle::observations(first).is_some());
+    assert!(AAA::dirty_observation_feeds(first).is_some());
+
+    pallet_aaa::DirtyObservationListState::<Runtime>::mutate(|list| list.tail = None);
+    let events_before_invariant = System::events();
+    assert_noop!(
+      Oracle::publish(RuntimeOrigin::signed(producer.clone()), second, 2_000),
+      pallet_aaa::Error::<Runtime>::DirtyObservationInvariant
+    );
+    assert!(Oracle::observations(second).is_none());
+    assert!(AAA::dirty_observation_feeds(second).is_none());
+    assert_eq!(System::events(), events_before_invariant);
+
+    pallet_aaa::DirtyObservationListState::<Runtime>::put(healthy_list);
+    assert_ok!(Oracle::publish(
+      RuntimeOrigin::signed(producer),
+      second,
+      2_000,
+    ));
+    assert!(Oracle::observations(second).is_some());
+    assert!(AAA::dirty_observation_feeds(second).is_some());
+    assert_eq!(AAA::dirty_observation_feed_count(), 2);
+  });
+}
+
+#[test]
 fn pool_feed_cardinality_is_explicitly_bounded() {
   let maximum = crate::configs::oracle_config::AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS;
   assert_eq!(
@@ -229,7 +319,7 @@ fn pair_registration_rejects_before_partial_mutation_when_capacity_is_full() {
 
     assert_noop!(
       crate::configs::assets_config::register_pool_lp_pair(asset_a, asset_b),
-      polkadot_sdk::sp_runtime::DispatchError::Other("Axial Router pool feed capacity reached")
+      polkadot_sdk::sp_runtime::DispatchError::Other("DEOS Router pool feed capacity reached")
     );
     assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 1_000);
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(forward));
@@ -393,16 +483,42 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       <Assets as FungiblesInspect<crate::AccountId>>::balance(OUTPUT_ASSET, &BOB);
     let events_before = System::events();
 
+    pallet_aaa::DirtyObservationListState::<Runtime>::mutate(|list| {
+      list.head = Some(feed);
+    });
+    assert_eq!(
+      AxialRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,),
+      Err(pallet_axial_router::Error::<Runtime>::InvalidOracleData.into())
+    );
+    assert_eq!(Oracle::observations(feed), None);
+    assert!(AAA::dirty_observation_feeds(feed).is_none());
+    assert_eq!(AAA::dirty_observation_feed_count(), 0);
+    assert_eq!(
+      <Balances as Currency<crate::AccountId>>::free_balance(&ALICE),
+      alice_before
+    );
+    assert_eq!(
+      <Balances as Currency<crate::AccountId>>::free_balance(&burning_manager_account()),
+      burn_before
+    );
+    assert_eq!(
+      <Assets as FungiblesInspect<crate::AccountId>>::balance(OUTPUT_ASSET, &BOB),
+      recipient_before
+    );
+    assert_eq!(
+      crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains readable"),
+      pool_before
+    );
+    assert_eq!(System::events(), events_before);
+
+    pallet_aaa::DirtyObservationListState::<Runtime>::kill();
     assert!(
       AxialRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,)
         .is_err()
     );
     assert_eq!(Oracle::observations(feed), None);
     assert!(AAA::dirty_observation_feeds(feed).is_none());
-    assert_eq!(AAA::dirty_observation_feed_count(), 0);
-    assert_eq!(pallet_aaa::NextDirtyObservationSlot::<Runtime>::get(), 0);
-    assert_eq!(pallet_aaa::DirtyObservationFreeSlotLen::<Runtime>::get(), 0);
-    assert_eq!(AAA::dirty_observation_scan_slot(), 0);
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
     assert_eq!(
       <Balances as Currency<crate::AccountId>>::free_balance(&ALICE),
       alice_before

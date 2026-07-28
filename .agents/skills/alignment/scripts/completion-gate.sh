@@ -114,7 +114,7 @@ should_run_simulator() {
     if [[ "$RUN_SIMULATOR" == "0" ]]; then
         return 1
     fi
-    has_changed_path '^simulator/' || has_changed_path '^template/pallets/(tmc|axial-router)/'
+    has_changed_path '^simulator/' || has_changed_path '^template/pallets/(tmc|router)/'
 }
 
 should_run_cargo_check() {

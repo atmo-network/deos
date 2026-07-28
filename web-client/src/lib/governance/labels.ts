@@ -288,7 +288,7 @@ export function treasurySettlementLabel(
 }
 
 export function parameterChangeSurfaceLabel(surface?: string | null) {
-  return surface === 'RouterFee' ? 'Axial Router fee' : 'Unavailable';
+  return surface === 'RouterFee' ? 'DEOS Router fee' : 'Unavailable';
 }
 
 export function treasurySpendScalarLabel(scalar?: string | null) {

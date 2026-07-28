@@ -13,7 +13,7 @@ sources:
   - ../../BACKLOG.md
   - ../../CHANGELOG.md
   - ../../web-client/README.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
 status: active
 audience: newcomer
 tags:

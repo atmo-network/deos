@@ -1,6 +1,6 @@
 # DEOS Web Client Architecture Notes
 
-This note fixes the stable architecture vocabulary for the repository-local web client. It complements [`../web-client/README.md`](../web-client/README.md): the README is the workspace entrypoint, while this document is the durable implementation contract for the shipped client architecture.
+This note fixes the stable architecture vocabulary for the repository-local web client. It complements [`../README.md`](../README.md): the README is the workspace entrypoint, while this document is the durable implementation contract for the shipped client architecture.
 
 The goal is to describe the implementation truth, subsystem boundaries, and contracts used by the reference product surface, not to track release planning or intermediate refactors.
 
@@ -14,7 +14,7 @@ The current product shape includes:
 
 - wallet/session/account selection;
 - bounded balances and tracked-asset transfers;
-- Axial Router quotes and signed swap execution;
+- DEOS Router quotes and signed swap execution;
 - native staking views and signed staking/governance-custody actions;
 - governance viewing, voting, advisory submission, tactical treasury invoice submission, preimage review, and runtime-upgrade relay guidance;
 - automation, status, statistics, chart, and execution-feedback surfaces;
@@ -82,6 +82,12 @@ Its static forecast mirrors pallet amount-resolution policy over an explicitly s
 
 `automation/semantic-manifest.ts` owns canonical task, condition, and amount names so generated-manifest validation does not depend back on its analysis consumer. `automation/analysis.ts` consumes canonical artifact inspection, that Rust-generated versioned semantic manifest, and the existing forecast aggregator. It emits identity-bound `StaticStructuralProjection` trigger admission, ordered rows, economic/failure/data-dependency surfaces, factual unscored findings, and one bounded suffix envelope for every cursor.
 
+`automation/configuration-ir.ts` owns format-neutral configuration IR version `1`, deterministic normalization, diagnostics, structural diff, and JSON/TOML/structured-Markdown adapters. It removes presentation step keys, preserves ordered typed authoring structure, and delegates all validation and lowering to `authoring.ts`. Cross-format fixtures must produce equal runtime projection, SCALE decode, and `planId`; comments and Markdown prose remain non-executable.
+
+`automation/feedback-analysis.ts` composes those analyzed programs into a bounded deterministic graph of actors, exact typed observations, shared assets, exact actor-account signals, and explicitly declared parameter actuators. It reports canonical structural self/cross-actor cycles while fixing stability, probability, and causal strength to `Unknown`; it neither decodes another program model nor predicts runtime behavior.
+
+Its unscored reactive findings separate structural paths from evidence-bound timing and policy comparisons. Delivery-relative rows require a snapshot carrying runtime, weight, cadence, and estimate identities. Actor policy evidence declares cooldown, hysteresis/persistence, gain classification, and reactive-ingress priority; absent or unknown evidence emits no stronger claim.
+
 Trigger projection keeps admission independent from source identity. Manual and AddressEvent remain source kinds; every `OnObservationChange` entry additionally preserves its exact metadata-decoded feed projection without inventing a threshold, condition, callback, or execution result.
 
 Optional minimum-balance evidence carries its own identity and finalized block hash. Fixed SplitTransfer warnings require exact asset, zero recipient-balance, and below-minimum leg evidence; absent evidence produces no state claim.
@@ -92,9 +98,13 @@ Task adapters, assets, typed recipient surfaces, effects, availability, successf
 
 Observation predicates author the complete typed feed identity, raw `u128` threshold, and nonzero `max_age_blocks`. Static analysis labels their read as fresh-only and records unavailable, uninitialized, and stale states as ordinary false.
 
-`observation/` owns the inspection contract. The blockchain adapter reads bounded `Oracle.FeedIds`, then fetches only the selected exact `Oracle.Feeds` and `Oracle.Observations` keys at one finalized hash. It projects scale-preserving formatting, producer, provenance, aggregation, lifecycle, update block, revision, authored maximum age, and the four current statuses under direct canonical-chain provenance. It never reconstructs history.
+`observation/` owns the inspection contract. The blockchain adapter reads bounded DEOS Oracle `Oracle.FeedIds`, then fetches only the selected exact `Oracle.Feeds` and `Oracle.Observations` keys at one finalized hash. It projects scale-preserving formatting, producer, provenance, aggregation, lifecycle, update block, revision, authored maximum age, and the four current statuses under direct canonical-chain provenance. It never reconstructs history.
 
-The Observe view states latest-state coalescing and the equal-value refresh/revision distinction. It labels Axial Router pre-execution reserve feeds as local execution references rather than fair-price, manipulation-resistance, MEV, or ordering proofs. Observation history remains a materialized-provider concern and appears as unavailable rather than browser-derived archive truth.
+`projectObservationDeliveryInspection` owns the fail-closed reactive delivery projection over one finalized input. It distinguishes clean, pending restart, in-progress, and awaiting-cleanup state; derives age only from AAA `dirty_since`; and computes page/block ceilings only from identified runtime, weight, and per-block budget evidence. Impossible revision, active-list, page-count, or mixed-snapshot relationships throw instead of producing partial timing claims. The blockchain adapter pins every Oracle and AAA query to one finalized hash, follows only reciprocal dirty-feed predecessors and occupied subscriber-page links under stored count bounds, and never enumerates subscribers through a storage prefix. The Observe surface renders topology, exact age, estimate assumptions, and runtime/weight identities. Its optional bounded actor selector reads one exact `ActorHot` key and projects actor existence, pending signal, type-derived lane, queue ticket or wakeup pointer, and factual admission status without scanning queue or wakeup pages or predicting execution.
+
+The Observe view states latest-state coalescing and the equal-value refresh/revision distinction. It labels DEOS Router pre-execution reserve feeds as local execution references rather than fair-price, manipulation-resistance, MEV, or ordering proofs. Observation history remains a materialized-provider concern and appears as unavailable rather than browser-derived archive truth.
+
+Atomic publication rejection leaves no canonical observation or dirty-delivery record. Its direct AAA error or DEOS Router `InvalidOracleData` mapping belongs to the existing transaction/log feedback surface; the Observe view must not synthesize a persistent failure state from a rolled-back attempt.
 
 The step editor presents output-authored `SwapOut` first and requires explicit `InputLimit::LiveQuote` or `InputLimit::Absolute` intent. Live mode discloses future-price exposure; absolute mode requires a positive canonical base-unit ceiling. Liquidity minima remain fixed positive runtime `u128` fields, and invalid bounds fail before artifact construction.
 

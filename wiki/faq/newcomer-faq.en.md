@@ -16,7 +16,7 @@ sources:
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/staking/docs/specification.en.md
   - ../../docs/read-model.contract.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
 status: active
 audience: newcomer
@@ -30,7 +30,6 @@ related:
   - Reading Paths
   - AAA System
   - Physics-First vs Politics-First
-  - UI Kit and Domain DAG
   - Generated Wiki
   - Core Terms
 last_compiled: 2026-07-20
@@ -57,13 +56,13 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 
 **Why does TMCTOL avoid redemption?** Because the current standard treats minting as one-way protocol physics instead of a reserve exit door. See [TMCTOL Standard](../concepts/tmctol-standard.en.md) and [Token Minting Curve](../overview/token-minting-curve.en.md).
 
-**Does governance disappear?** No. Governance stays, but its role is narrowed: it steers direction, tactical domains, and bounded upgrade paths instead of manually controlling survival physics. See [Governance Overview](../overview/governance-overview.en.md) and [Governance Domains](../concepts/governance-domains.en.md).
+**Does governance disappear?** No. Governance stays, but its role is narrowed: it steers direction, tactical domains, and bounded upgrade paths instead of manually controlling survival physics. See [Governance](../overview/governance.en.md) and [Governance Domains](../concepts/governance-domains.en.md).
 
 **What does deterministic mean?** Protocol-managed reactions are explicit and repeatable for the same chain state. It does not mean markets become predictable.
 
 **What is AAA versus an AA-Actor?** `AAA` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, execution plans, actor accounts, and task execution. An `AA-Actor` is one concrete runtime instance inside that system. See [AAA System](../overview/aaa-system.en.md) and [AA-Actor](../overview/aa-actor.en.md).
 
-**How does staking work?** Staking is a multi-asset share-vault domain. [Staking Pools](../concepts/staking-pools.en.md) explains native `stNTVE`, LP nomination, and reward snapshots.
+**How does staking work?** Staking is a multi-asset share-vault domain. [Staking](../overview/staking.en.md) explains native `stNTVE`, LP nomination, and reward snapshots.
 
 ## Data, Client, and Wiki Boundaries
 
@@ -72,8 +71,6 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 **Is the web client the source of truth?** No. The web client is a reference product surface that must label data provenance honestly. See [Reference Client](../overview/reference-client.en.md).
 
 **Where do release versions and status notes belong?** Release history belongs in the changelog, open work belongs in the backlog, and newcomer-facing current state belongs in [Development Status](../development/status.en.md). Architecture and wiki pages should explain implementation truth and boundaries.
-
-**What are UI Kit and Domain DAG?** They are client-side anti-duplication and ownership disciplines. See [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md).
 
 **Why can the web client render wiki markdown directly?** Wiki markdown is trusted repo-local content guarded by repository validation, not arbitrary user input. See [Generated Wiki](../concepts/generated-wiki.en.md).
 
@@ -85,6 +82,5 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 - [Reading Paths](../getting-started/reading-paths.en.md)
 - [AAA System](../overview/aaa-system.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
-- [UI Kit and Domain DAG](../concepts/ui-kit-and-domain-dag.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

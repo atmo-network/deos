@@ -4,7 +4,7 @@ Repository-local SvelteKit workspace for the browser-facing DEOS reference clien
 
 The web client is **not** the protocol source of truth. It is the reference product surface that presents bounded chain state, signed actions, generated documentation, and execution feedback for the current DEOS/TMCTOL framework line.
 
-For the full architecture contract, read [`../docs/web-client.architecture.en.md`](../docs/web-client.architecture.en.md).
+For the full architecture contract, read [`docs/architecture.en.md`](./docs/architecture.en.md).
 
 ## Current Product Shape
 
@@ -14,7 +14,7 @@ It provides:
 
 - live wallet/account selection for local dev signers and injected wallets;
 - chain-backed wallet balances, bounded tracked-asset transfers, and receive-address surfaces;
-- Axial Router swap quotes and signed swap submission;
+- DEOS Router swap quotes and signed swap submission;
 - staking views/actions for the current native `stNTVE` / `NTVE-stNTVE` launch-line model;
 - governance proposal viewing, voting, advisory submission, tactical treasury invoice submission, preimage review, and runtime-upgrade relay guidance;
 - automation actor, typed current-observation inspection, and system-status views from finalized canonical state;
@@ -64,7 +64,7 @@ Concrete adapters receive shell/session facts through `system/adapter-context.ts
 ### Layout and widgets
 
 - `src/lib/layout/` owns the workspace frame, center tile tree, pane hosts, tabs, split handles, header, footer, sidebar, reserved lane specs, and mobile linearization.
-- `src/lib/widgets/` owns user-facing product surfaces such as Swap, Wallet, Staking, Governance, Chart, Statistics, Automation, Log, Wiki, Account, Settings, Status, and AccountChip.
+- `src/lib/widgets/` owns user-facing product surfaces such as Swap, Wallet, DEOS Staking, Governance, Chart, Statistics, Automation, Log, Wiki, Account, Settings, Status, and AccountChip.
 - Reserved edge lanes are developer-configured shell zones, not user-reorderable economic panes.
 - Widgets should adapt to pane width/height and keep the main action readable before exposing secondary diagnostics.
 

@@ -1,6 +1,6 @@
 [package]
-name = "pallet-deus-router"
-version = "0.7.7"
+name = "pallet-deos-router"
+version = "0.7.8"
 description = "Minimalist multi-token routing system optimized for TMC ecosystems"
 authors.workspace = true
 homepage.workspace = true

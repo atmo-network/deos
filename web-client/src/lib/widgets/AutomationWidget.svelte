@@ -189,10 +189,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   async function loadObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
+    aaaId?: number,
   ) {
     const load = systemStore.adapter.getObservationInspection;
     if (!load) throw new Error('Canonical observation state unavailable');
-    return await load.call(systemStore.adapter, feed, maxAgeBlocks);
+    return await load.call(systemStore.adapter, feed, maxAgeBlocks, aaaId);
   }
 
   $effect(() => {
@@ -407,6 +408,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
       <ObservationInspector
         refreshKey={systemStore.snapshot?.blockNumber ?? 0}
         compact={compactPane}
+        actorOptions={actors.map(({ aaaId, label }) => ({ aaaId, label }))}
         loadFeeds={systemStore.adapter.getObservationFeeds
           ? loadObservationFeeds
           : null}

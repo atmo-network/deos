@@ -16,7 +16,7 @@ sources:
   - ../../template/pallets/router/docs/architecture.en.md
   - ../../template/pallets/aaa/docs/specification.en.md
   - ../../template/pallets/governance/docs/specification.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
 status: active
 audience: developer
 tags:
@@ -30,7 +30,6 @@ related:
   - Уровни экономических утверждений
   - Трехуровневая валидация
   - Стандарт TMCTOL
-  - Чем DEOS не является
   - Домены Governance
 last_compiled: 2026-07-21
 confidence: 0.85
@@ -80,5 +79,4 @@ confidence: 0.85
 - [Уровни экономических утверждений](economic-claim-levels.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Чем DEOS не является](what-deos-is-not.ru.md)
 - [Домены Governance](governance-domains.ru.md)

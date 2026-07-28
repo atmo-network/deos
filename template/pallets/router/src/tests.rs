@@ -808,7 +808,7 @@ fn tmctol_integration_flow() {
   let bucket_b = Perbill::from_rational(167u32, 1000u32).mul_floor(tol_total);
   let bucket_c = Perbill::from_rational(167u32, 1000u32).mul_floor(tol_total);
   let bucket_d = tol_total.saturating_sub(bucket_a + bucket_b + bucket_c);
-  // 3. User swaps through Axial Router
+  // 3. User swaps through DEOS Router
   let swap_amount = 500u128;
   let router_fee_bps = 50u32; // 0.5%
   let router_fee = (swap_amount * router_fee_bps as u128) / 10_000;

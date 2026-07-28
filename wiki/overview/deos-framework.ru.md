@@ -24,9 +24,9 @@ related:
   - Первые шаги
   - Система AAA
   - AA-Актор
-  - Axial Router
+  - DEOS Router
   - Token Minting Curve
-  - Обзор Governance
+  - Governance
   - Идентичность активов
   - Стратегия случайности
   - Паттерны runtime
@@ -84,7 +84,7 @@ DEOS использует токен-управляемую координаци
 В текущей линии эта модель проявляется через:
 
 - TMC как детерминированный mint-side механизм эмиссии
-- Axial Router как механизм выбора маршрута и сбора/сжигания комиссий
+- DEOS Router как механизм выбора маршрута и сбора/сжигания комиссий
 - AAA как детерминированную инфраструктуру исполнения
 - Staking и governance как ограниченные поверхности социального контроля
 - Явное разделение между каноническими on-chain проекциями и materialized-представлениями
@@ -95,9 +95,9 @@ DEOS использует токен-управляемую координаци
 - [Форк DEOS](../usage/forking-deos.ru.md)
 - [Система AAA](aaa-system.ru.md)
 - [AA-Актор](aa-actor.ru.md)
-- [Axial Router](axial-router.ru.md)
+- [DEOS Router](router.ru.md)
 - [Token Minting Curve](token-minting-curve.ru.md)
-- [Обзор Governance](governance-overview.ru.md)
+- [Governance](governance.ru.md)
 - [Идентичность активов](asset-identity.ru.md)
 - [Стратегия случайности](randomness-strategy.ru.md)
 - [Паттерны runtime](runtime-patterns.ru.md)

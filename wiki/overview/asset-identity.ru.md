@@ -20,7 +20,7 @@ tags:
   - xcm
 related:
   - Контур маршрутизации и минтинга
-  - Пулы стейкинга
+  - Стейкинг
   - Базовые термины
   - FAQ для новичков
 last_compiled: 2026-07-20
@@ -66,6 +66,6 @@ confidence: 0.95
 ## Связанные страницы
 
 - [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
-- [Пулы стейкинга](../concepts/staking-pools.ru.md)
+- [Стейкинг](staking.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)

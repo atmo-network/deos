@@ -20,7 +20,7 @@ tags:
   - launch-line
 related:
   - Physics-first против politics-first
-  - Обзор Governance
+  - Governance
   - AA-Актор
   - FAQ для новичков
 last_compiled: 2026-07-20
@@ -68,6 +68,6 @@ Runtime сейчас исходит из нескольких простых п�
 ## Связанные страницы
 
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
-- [Обзор Governance](governance-overview.ru.md)
+- [Governance](governance.ru.md)
 - [AA-Актор](aa-actor.ru.md)
 - [FAQ для новичков](../faq/newcomer-faq.ru.md)

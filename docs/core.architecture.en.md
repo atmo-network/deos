@@ -6,7 +6,7 @@ The DEOS (Deterministic Economic Operating System) framework, currently instanti
 
 The runtime remains a deterministic state machine. AAA actors become eligible through typed balance ingress, timers, or manual governance/owner signals, then execute only fully admitted work through runtime adapters. Route-specific validation mitigates some manipulation paths, but it does not provide blanket immunity to intra-block ordering, MEV, flash-loan, or sandwich risks.
 
-Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-deos-aaa` execution plans. Fifteen genesis System actors consolidate the reference topology, while TMC, routing, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
+Recurring protocol automation that current bounded tasks/adapters can express — including burning, liquidity provisioning, treasury routing, and protocol-token buyback patterns — uses declarative `pallet-deos-aaa` execution plans. The reference runtime reserves a finite System actor constellation, while TMC, routing, Oracle, staking, balances, and AMM mechanics remain owned by their dedicated pallets. A flow that cannot preserve custody, atomicity, or production-budget admission through existing primitives does not ship merely because its vector shape is bounded.
 
 ## 2. Core Philosophy: The "Omnivorous" Machine
 
@@ -28,34 +28,9 @@ Token-driven actor flows follow this bounded coordination pattern:
 
 ### 3.1 The Actor Constellation
 
-The reference constellation below uses System AAA instances; the pallet also supports bounded owner-controlled User actors. The Axial Router and TMC remain dedicated pallets providing routing and minting infrastructure.
+The reference runtime composes dedicated mechanism pallets with bounded System AAA and User actors. TMC owns issuance, DEOS Router owns route selection, DEOS Oracle owns current typed observations, and AAA owns admitted orchestration through host-provided adapters.
 
-#### L1 Actors (Native Token Domain)
-
-| Role | aaa_id | Genesis state | Program/trigger |
-| --- | --- | --- | --- |
-| Burn Actor | 0 | Active System AAA | Burn plan; omnivorous `OnAddressEvent` |
-| Fee Sink | 1 | Active System AAA | Phase-one fee allocation; omnivorous `OnAddressEvent` |
-| Liquidity Actor | 2 | Dormant System identity | No program until pool-specific activation |
-| TOL Bucket A (Anchor) | 3 | Custody-only account | No generic AAA identity or program |
-| TOL Bucket B (Building) | 4 | Dormant System identity | No program until explicit activation |
-| TOL Bucket C (Capital) | 5 | Dormant System identity | No program until explicit activation |
-| TOL Bucket D (Dormant) | 6 | Dormant System identity | No program until explicit activation |
-| Treasury B (Building) | 7 | Dormant System identity | No program until explicit activation |
-| Treasury C (Capital) | 8 | Dormant System identity | No program until explicit activation |
-| Treasury D (Dormant) | 9 | Dormant System identity | No program until explicit activation |
-| Native Staking LP Farmer | 14 | Dormant System identity | No program until pool-specific activation |
-
-#### L2 Actors (BLDR Protocol Token Domain)
-
-| Role | aaa_id | Genesis state | Program/trigger |
-| --- | --- | --- | --- |
-| BLDR Splitter | 10 | Active System AAA | Split BLDR 50/50; omnivorous `OnAddressEvent` |
-| BLDR Liquidity Actor | 11 | Dormant System identity | No program until NTVE/BLDR pool activation |
-| BLDR Bucket A | 12 | Custody-only account | No generic AAA identity or program |
-| BLDR Treasury | 13 | Dormant System identity | No program until explicit activation |
-
-See [AAA architecture](../template/pallets/aaa/docs/architecture.en.md#current-tmctol-system-aaa-topology-on-deos) for the integrated System AAA topology, execution-plan families, and governance activation flows.
+The concrete DEOS System address catalog, genesis states, execution-plan families, governance activation paths, runtime bounds, and operational surfaces live in [AAA Integration in DEOS](./aaa.integration.en.md). DEOS Oracle publication, Router sampling, reactive AAA ingress, client provenance, and rollback composition live in [DEOS Oracle Integration](./oracle.integration.en.md).
 
 ### 3.2 Type System Foundation: The Bitmask Architecture
 
@@ -97,7 +72,7 @@ This architecture enables "Zero-Cost Inspection" where complex economic properti
 
 ### 3.3 Actor Responsibilities
 
-#### Axial Router (Pallet — The Decision Engine)
+#### DEOS Router (Pallet — The Decision Engine)
 
 _The intellectual layer atop raw liquidity._
 
@@ -120,98 +95,15 @@ _The algorithmic issuer._
 - `MintOutputResolver`: Maps each `minted_asset` to explicit collateral and minted-liquidity output accounts. The reference L1 route sends both outputs to the Liquidity Actor; the BLDR route sends NTVE collateral directly to the BLDR Liquidity Actor and the minted BLDR share to the BLDR Splitter.
 - `Role`: Sets the "Hard Ceiling" on price. If market price > curve price, the Router automatically routes trades through TMC, creating arbitrage that feeds the protocol.
 
-#### Burn Actor (System AAA #0 — The Sink)
+#### System AAA Composition
 
-_The deflationary engine._
+System AAA roles compose bounded burn, fee allocation, liquidity, custody, treasury, protocol-token, and staking-support flows without moving their domain mechanics into the scheduler. Token movement can connect actors, but each receiving role still needs an admitted program, valid trigger and funding policy, healthy adapters, and sufficient two-dimensional budget.
 
-- `Function`: Passive accumulation and destruction. Omnivorous `OnAddressEvent` intake schedules one bounded pass after matched inbound value, subject to the configured cooldown.
-- `Execution Plan`: For each registered foreign asset — `SwapIn(foreign→native, AllBalance, 5% slippage)` with `BalanceAbove` dust guard. Final step — `Burn(native, AllBalance)`.
-- `Resilience`: Swap failures → `ContinueNextStep` → skip to next asset or burn step. Cooldown prevents retry storms.
-
-#### Fee Sink (System AAA #1 — Unified Fee Collection and Phase 1 Redistribution)
-
-_The launch economics fan-out hub._
-
-- `Function`: Collects all non-Axial protocol action fees and routes them into the active reward flows for the current launch phase; Axial Router trading fees remain the dedicated Burn Actor flow.
-- `Collection Rule`: 100% of transaction, AAA, governance-opening, and XCM-execution fees enters Fee Sink before allocation; collection never pays the current author directly.
-- `Phase 1 Execution Plan`: `SplitTransfer(native, AllBalance)` — omnivorous `OnAddressEvent` intake schedules the fan-out after matched inbound value, subject to the configured cooldown:
-  1. 50% → staking-pool ingress holding account as native balance, later burned and minted into the local native-staking asset after AAA #14 donation execution
-  2. 50% → native staking LP provisioning actor AAA #14 as native balance, immediately burned and bridged into the local native-staking asset for donation execution
-- `Release Gate`: the Phase 1 staking-yield and LP-donation bridge is wired; block reward source/amount design remains the separate future gate.
-- `Permissionless Phase (future)`: Equal thirds flow to bounded security rewards, staking ingress, and liquidity provisioning only after permissionless collators and the security-reward settlement contract ship; indivisible remainder stays in Fee Sink for a later cycle, and no `CollatorRewardPot` topology is assumed before that gate.
-- `Resilience`: Phase 1 SplitTransfer legs are unwrapped synchronously, with ED preservation for the Fee Sink sovereign account.
-
-#### Liquidity Actor (System AAA #2 — The Transformer)
-
-_The liquidity compositor._
-
-- `Function`: Transforms raw capital into Protocol-Owned Liquidity.
-- `Execution Plan` (3 steps, activated by governance after pool creation):
-  1. `AddLiquidity` — opportunistic, at current pool ratio (AllBalance native, AllBalance foreign)
-  2. `SwapIn(foreign→native)` — patriotic accumulation of surplus foreign with reserve-aware slippage derived from current native pool depth
-  3. `SplitTransfer(LP → TOL buckets)` — 50/16.67/16.67/16.66% to bucket AAA sovereign accounts
-- `Launch Policy`: The current runtime freezes this reserve-aware slippage at execution-plan build time rather than recomputing it live on every cycle; richer live per-cycle recomputation remains a future opt-in refinement, not launch debt.
-- `Genesis`: Dormant System identity with no program. Activation installs the real execution plan after pools exist.
-
-#### TOL Buckets (System AAA #3..#6 — The Floor)
-
-_The volatility dampener._
-
-- `Function`: Four sovereign accounts separate protocol-owned LP custody and optional policy lanes. Bucket A remains custody-only; B/C/D retain dormant System identities with independently activatable lifecycles.
-- `Genesis`: Bucket A owns no generic AAA program. B/C/D own dormant identities and enroll no scheduler work until activation.
-- `Buckets`:
-  - _Bucket A — Anchor (50%):_ Permanent LP accumulation. No unwind — the mathematical survival layer.
-  - _Bucket B — Building (16.67%):_ Dormant identity; governance may activate bounded LP transfer into Treasury B, whose separate admitted cycle removes liquidity.
-  - _Bucket C — Capital (16.67%):_ Dormant identity; governance may activate bounded LP transfer into Treasury C, whose separate admitted cycle removes liquidity.
-  - _Bucket D — Dormant (16.66%):_ LP held until governance decides future policy.
-
-#### Treasury B — BLDR Buyback & Burn (System AAA #7)
-
-_The deflationary flywheel for protocol tokens._
-
-- `Function`: Receives LP through the optional admitted Bucket B transfer and can remove it into Treasury custody; the downstream buyback plan remains a separate optional policy stage.
-- `Execution Plan` (2-step policy target, not currently production-admissible):
-  1. `SwapIn(NTVE → BLDR, PercentageOfCurrent(~0.042%))` — hourly micro-buyback
-  2. `Burn(BLDR, AllBalance)` — destroy all acquired BLDR
-- `Cadence`: `Timer { every_blocks: 600 }` (~1 hour). Compounding: `(1-0.000418)^24 ≈ 0.99` → ~1% of balance/day.
-- `Design`: Multiple small buybacks create smooth market pressure vs. single lumpy daily purchase.
-
-#### BLDR Splitter (System AAA #10 — L2 Distribution Hub)
-
-_The fan-out actor for BLDR TMC output._
-
-- `Function`: Receives the minted BLDR liquidity share from TMC and distributes it between the BLDR Liquidity Actor and BLDR Treasury; TMC routes NTVE collateral directly to the Liquidity Actor.
-- `Execution Plan`: `SplitTransfer(BLDR, AllBalance, 50% → BLDR Liquidity Actor, 50% → BLDR Treasury)`.
-
-#### BLDR Liquidity Actor (System AAA #11 — L2 Liquidity)
-
-_The BLDR-domain liquidity provisioner._
-
-- `Function`: Provisions NTVE-BLDR LP and routes LP tokens to BLDR Bucket A.
-- `Execution Plan` (2 steps):
-  1. `AddLiquidity(NTVE, BLDR)` — opportunistic at current pool ratio
-  2. `SplitTransfer(LP, AllBalance → BLDR Bucket A)` — 100% to permanent accumulation
+The canonical role-to-address mapping, active versus dormant genesis state, plan ordering, percentages, cadence, and activation prerequisites belong to [AAA Integration in DEOS](./aaa.integration.en.md). Fee routing policy remains governed by the framework and TMCTOL contracts linked from that integration map.
 
 ### 3.4 Token Lifecycle Orchestration
 
-Token onboarding follows a governance-gated process:
-
-**Foreign asset onboarding (L1):**
-
-1. `Asset Registration`: Register foreign asset in `pallet-asset-registry` (`Location → AssetId`).
-2. `Pool Creation`: Create AMM pool via `pallet-asset-conversion`.
-3. `Burn Actor Execution-Plan Extension`: Call `update_execution_plan` on AAA #0 to add `SwapIn(foreign→native)` step.
-4. `Liquidity Actor Execution-Plan Activation`: Call `update_execution_plan` on AAA #2 with `build_zap_execution_plan(foreign, lp_asset, dust)`.
-5. `TMC Curve Activation` (optional): Create emission curve for the token.
-
-**Protocol token onboarding (L2 — BLDR pattern):**
-
-1. `Asset Creation`: Create protocol token in `pallet-assets`.
-2. `TMC Curve Creation`: `create_curve(BLDR, Native, initial_price, slope)`.
-3. `Pool Creation`: Create NTVE-BLDR AMM pool + seed initial liquidity.
-4. `Execution-Plan Activation`: Activate BLDR Splitter and BLDR Liquidity Actor execution plans via governance.
-
-Each step is independently reversible and governance-gated. No implicit cross-pallet coupling — each execution-plan update is explicit and auditable.
+Token onboarding composes explicit asset registration, pool or curve creation, and governance-controlled actor activation. No implicit cross-pallet callback installs an economic policy. The Asset Registry, Router, TMC, governance, and AAA integration documents own the concrete order, prerequisites, and failure boundaries for their respective parts.
 
 ### 3.5 Antifragile Design Principles
 
@@ -271,7 +163,7 @@ AAA delegates host behavior through typed runtime contracts:
 - `StakingOps`: runtime-defined stake positions, shares, and transferable share assets
 - `FeeCollector`, `FundingAuthority`, direct ingress, task-failure retry class, task weights, and atomicity hooks: host-owned authority, metering, provenance, and lifecycle integration
 
-Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The detailed portable contract lives in `aaa.specification.en.md` and the package-owned `../template/pallets/aaa/docs/embedding.md`; the current DEOS binding lives in `aaa.architecture.en.md`.
+Adapters own runtime-specific mechanics while AAA owns plan resolution, admission, task-scoped rollback, and observable error-policy handling. The portable contract lives in the package-owned [specification](../template/pallets/aaa/docs/specification.en.md) and [embedding guide](../template/pallets/aaa/docs/embedding.md); the current DEOS binding lives in [AAA Integration in DEOS](./aaa.integration.en.md).
 
 ### 4.4 Amount Resolution
 
@@ -322,36 +214,9 @@ pub fn swap(from: AssetKind, to: AssetKind, ...) -> DispatchResult {
 
 ### 5.3 Declarative Execution-Plan Pattern
 
-AAA-managed economic automation is expressed as production-admitted execution plans:
+AAA-managed automation uses ordered typed steps with explicit conditions, amount resolution, and failure policy. The scheduler admits the complete bounded attempt before mutation; runtime adapters execute the domain mechanics, and task-scoped rollback contains failed adapter effects without erasing committed prefixes.
 
-```rust
-// Burn Actor execution plan: swap all foreign → native, then burn
-vec![
-    Step { conditions: [BalanceAbove(foreign, dust)],
-           task: SwapIn { asset_in: foreign, amount_in: AllBalance, asset_out: Native, slippage_tolerance: 5% },
-           on_error: ContinueNextStep },
-    Step { conditions: [BalanceAbove(Native, dust)],
-           task: Burn { Native, AllBalance },
-           on_error: AbortCycle },
-]
-
-// BLDR Splitter execution plan: TMC routes collateral directly; actor splits BLDR
-vec![
-    Step { conditions: [BalanceAbove(BLDR, dust)],
-           task: SplitTransfer { BLDR, AllBalance, 50%→Liquidity + 50%→Treasury },
-           on_error: AbortCycle },
-]
-
-// Treasury B buyback: buy BLDR with 0.042% of current NTVE balance, burn
-vec![
-    Step { conditions: [BalanceAbove(Native, dust)],
-           task: SwapIn { asset_in: Native, amount_in: PercentageOfCurrent(0.042%), asset_out: BLDR, slippage_tolerance: 5% },
-           on_error: AbortCycle },
-    Step { conditions: [BalanceAbove(BLDR, dust)],
-           task: Burn { BLDR, AllBalance },
-           on_error: AbortCycle },
-]
-```
+The package specification owns the reusable plan language. [AAA Integration in DEOS](./aaa.integration.en.md#execution-plan-families) owns the concrete Burn, Liquidity, Fee Sink, treasury, protocol-token, and staking-support plan families.
 
 ### 5.4 Unified Type System Pattern
 
@@ -397,12 +262,12 @@ The `ForeignAssetsTransactor` (configured in `xcm_config.rs`) provides the bridg
 The interaction of actors creates a conditionally bounded economy:
 
 - `Ceiling`: Enforced by TMC. Multiple curves such as Native and BLDR each define independent ceilings.
-- `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. L1 support flows through AAA #3..#6; L2 BLDR support flows through AAA #12.
+- `Floor`: Reported from TOL bucket reserves that qualify under the TMCTOL floor metric and bucket-accounting rules. The concrete custody accounts and active-policy lanes belong to the AAA integration map.
 - `Compression`: Burn Actor execution reduces live supply and liquidity-actor LP provisioning can strengthen counted reserves. Bidirectional compression holds only under the named preconditions: protected counted reserves, explicit sellable-pressure assumptions, live burn execution, and healthy liquidity accounting.
 
 ### 7.2 Deflationary Velocity
 
-The `Axial Router` acts as a vacuum for circulating supply.
+`DEOS Router` acts as a vacuum for circulating supply.
 
 - `Mechanism`: High base fee (e.g., 0.5%) + Protocol Priority Routing.
 - `Outcome`: System value capture is prioritized over LP revenue. The protocol captures the spread to burn its own supply.
@@ -426,23 +291,18 @@ BLDR floor support and ceiling pressure can compress over time when LP accumulat
 
 | Pallet | Role | Hooks |
 | --- | --- | --- |
-| `pallet-deos-aaa` | Actor platform: 15 System + Users | `on_initialize`, `on_idle` |
-| `pallet-deus-router` | Routing, fees, oracle | Extrinsic-driven |
-| `pallet-deos-tmc` | Multi-curve native emission | Extrinsic-driven |
-| `pallet-asset-registry` | Foreign asset registry | Extrinsic-driven |
+| `pallet-deos-aaa` | Bounded System and User actor platform | `on_initialize`, `on_idle` |
+| `pallet-deos-router` | Max-output routing and trading fees | Extrinsic-driven |
+| `pallet-deos-oracle` | Current typed observation truth | Extrinsic and producer-hook driven |
+| `pallet-deos-tmc` | Multi-curve issuance | Extrinsic-driven |
+| `pallet-deos-asset-registry` | Foreign asset registry | Extrinsic-driven |
 | `pallet-asset-conversion` | Uniswap V2-like AMM pools | Extrinsic-driven |
 | `pallet-assets` | Fungible asset ledger | — |
 | `pallet-balances` | Native token ledger | — |
 
-### 8.2 Former Pallets (Consolidated into AAA)
+### 8.2 Composition Boundary
 
-| Former Pallet | Replacement | LOC Saved |
-| --- | --- | --- |
-| `pallet-burning-manager` | System AAA #0 (Burn Actor plan) | ~1100 |
-| `pallet-zap-manager` | System AAA #2 (Liquidity Actor plan) | ~2200 |
-| `pallet-treasury-owned-liquidity` | System AAA #3..#6 (4 bucket actors) | ~3100 |
-
-Additional cleanup: the former TMC-to-liquidity adapter traits were removed from TMC (~150 LOC), superseded by `MintOutputResolver` + AAA execution-plan-driven routing.
+AAA replaces bespoke recurring manager loops with one bounded orchestration substrate, while dedicated pallets retain asset, market, staking, governance, and issuance mechanics. [AAA Integration in DEOS](./aaa.integration.en.md) owns the concrete reference composition; package documents remain reusable outside the DEOS actor catalog.
 
 ## 9. Conclusion
 
@@ -450,7 +310,7 @@ The DEOS architecture transforms the blockchain from a passive ledger into an `A
 
 By separating dedicated economic mechanisms from production-admitted `pallet-deos-aaa` automation, the system provides:
 
-1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see Axial Router architecture).
+1. `Bounded trade safety`: Direct routes combine slippage with pre-swap EMA deviation guards; multi-hop and full MEV/sandwich resistance are out of scope for this launch line (see DEOS Router architecture).
 2. `Composable Automation`: bounded AAA tasks and runtime adapters compose reconfigurable flows only when the resulting plan fits production admission and preserves custody/atomicity. New actor graphs avoid runtime code changes when existing primitives satisfy that contract; new mechanics require an admitted adapter or core-task review.
 3. `Multi-Token Economy`: L1 (Native) and L2 (BLDR) economies operate independently with shared infrastructure. Each has its own TMC curve, liquidity pools, liquidity actor, and TOL buckets.
 4. `Bounded Background Execution`: AAA uses budget-capped `on_idle`, bounded `on_initialize` bookkeeping, and durable carry-over rather than claiming zero congestion under every workload.

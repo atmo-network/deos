@@ -27,7 +27,7 @@ related:
   - AAA System
   - AA-Actor
   - TMCTOL Standard
-  - Staking Pools
+  - Staking
   - Read-Model Split
 last_compiled: 2026-07-24
 confidence: 0.85
@@ -41,16 +41,16 @@ This page fills the gap between concept pages and implementation files. It shows
 
 The examples are simplified, but each step names the responsible domain and the page that owns deeper explanation.
 
-## Swap Through Axial Router
+## Swap Through DEOS Router
 
 1. A user asks the reference client for a swap preview.
 2. The client reads bounded route and asset data, then labels the result as live on-chain truth rather than archive analytics.
-3. Axial Router compares available market-liquidity and protocol-liquidity paths.
+3. DEOS Router compares available market-liquidity and protocol-liquidity paths.
 4. If the TMC path is better, the route mints through the curve. If the XYK path is better, it swaps through market liquidity.
 5. Router fees enter the configured Burn Actor flow; the burn occurs only when that actor remains funded, schedulable, and completes execution.
 6. The client shows execution progress through centralized feedback instead of each widget inventing its own transaction log.
 
-Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [Axial Router](../overview/axial-router.en.md), [Read-Model Split](read-model-split.en.md), [Reference Client](../overview/reference-client.en.md).
+Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [DEOS Router](../overview/router.en.md), [Read-Model Split](read-model-split.en.md), [Reference Client](../overview/reference-client.en.md).
 
 ## Actor Wakeup Chain
 
@@ -96,7 +96,7 @@ This is intentionally a domain-level walkthrough. Bucket ratios and formulas bel
 4. Native nomination reward paths stay separate from generic same-asset staking rewards.
 5. Governance-conditioned participation can influence reward coefficients, but governance and staking remain separate subsystems.
 
-Owner page: [Staking Pools](staking-pools.en.md).
+Owner page: [Staking](../overview/staking.en.md).
 
 ## Validation Rule
 
@@ -117,5 +117,5 @@ See [Three-Layer Validation](../development/three-layer-validation.en.md).
 - [AAA System](../overview/aaa-system.en.md)
 - [AA-Actor](../overview/aa-actor.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
-- [Staking Pools](staking-pools.en.md)
+- [Staking](../overview/staking.en.md)
 - [Read-Model Split](read-model-split.en.md)

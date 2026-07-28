@@ -1,25 +1,38 @@
 /*
 Domain: Blockchain observation adapter
-Owns: Exact bounded Oracle registry reads and current typed observation projection at one finalized block.
-Excludes: Observation history, plan authoring, widget state, and fair-price claims.
-Zone: Transport adapter; projects canonical Oracle storage into the observation domain.
+Owns: Exact bounded DEOS Oracle and reactive AAA inspection reads at one finalized block.
+Excludes: Observation history, plan authoring, widget state, actor execution, and fair-price claims.
+Zone: Transport adapter; projects canonical Oracle and AAA storage into the observation domain.
 */
 import { Enum as PapiEnum } from 'polkadot-api';
 
 import {
   canonicalObservationReadModel,
   formatObservationFeed,
+  projectObservationActorDeliveryInspection,
+  projectObservationDeliveryInspection,
   projectObservationInspection,
 } from '$lib/observation/inspection';
 import type {
   ObservationAggregation,
   ObservationAssetIdentity,
+  ObservationDeliveryInspection,
+  ObservationFanoutBudget,
   ObservationFeedIdentity,
   ObservationInspection,
 } from '$lib/observation/types';
 
 import type { DeosChainSnapshot } from './deos';
 import type { RuntimeAssetKind } from './runtime-assets';
+
+export const DEOS_OBSERVATION_FANOUT_BUDGET: ObservationFanoutBudget = {
+  runtimeIdentity: 'deos-runtime@spec-1',
+  weightIdentity:
+    'sha256:6688fe062147259f42666b477b5d1bfb43a339eb8ba2f14cd842352b4f631728',
+  maxPagesPerBlock: 5,
+  maxActiveDirtyFeeds: 40_000,
+  maxSubscriberPagesPerFeed: 157,
+};
 
 function assetIdentity(asset: RuntimeAssetKind): ObservationAssetIdentity {
   return asset.type === 'Native'
@@ -83,6 +96,12 @@ function runtimeFeed(feed: ObservationFeedIdentity) {
   };
 }
 
+function optionalFeedIdentity(
+  feed: ReturnType<typeof runtimeFeed> | null | undefined,
+) {
+  return feed == null ? null : feedIdentity(feed);
+}
+
 function stamp(snapshot: DeosChainSnapshot) {
   return {
     asOfBlock: snapshot.finalizedBlockNumber,
@@ -103,10 +122,169 @@ export class BlockchainObservationReader {
     );
   }
 
+  private async dirtyFeedPosition(
+    snapshot: DeosChainSnapshot,
+    dirty: {
+      previous_dirty_feed?: ReturnType<typeof runtimeFeed>;
+    },
+    activeCount: number,
+  ) {
+    let position = 0;
+    let previous = dirty.previous_dirty_feed;
+    while (previous != null) {
+      position += 1;
+      if (position >= activeCount) {
+        throw new Error('AAA dirty-feed links exceed the active-list bound');
+      }
+      const state =
+        await snapshot.typedApi.query.AAA.DirtyObservationFeeds.getValue(
+          previous,
+          { at: snapshot.at },
+        );
+      if (state == null) {
+        throw new Error('AAA dirty-feed predecessor is missing');
+      }
+      previous = state.previous_dirty_feed;
+    }
+    return position;
+  }
+
+  private async remainingSubscriberPages(
+    snapshot: DeosChainSnapshot,
+    key: ReturnType<typeof runtimeFeed>,
+    firstPage: number | undefined,
+    occupiedCount: number,
+  ) {
+    let remaining = 0;
+    let page = firstPage;
+    while (page != null) {
+      remaining += 1;
+      if (remaining > occupiedCount) {
+        throw new Error(
+          'AAA subscriber-page links exceed the occupied-page bound',
+        );
+      }
+      const state =
+        await snapshot.typedApi.query.AAA.ObservationSubscriberPages.getValue(
+          key,
+          page,
+          { at: snapshot.at },
+        );
+      if (state == null) {
+        throw new Error('AAA next subscriber page is missing');
+      }
+      page = state.next;
+    }
+    return remaining;
+  }
+
+  private async selectedActorInspection(
+    snapshot: DeosChainSnapshot,
+    aaaId: number | undefined,
+  ) {
+    if (aaaId === undefined) return undefined;
+    if (!Number.isSafeInteger(aaaId) || aaaId < 0) {
+      throw new Error('Selected AAA id must be a non-negative safe integer');
+    }
+    const runtimeAaaId = BigInt(aaaId);
+    const hot = await snapshot.typedApi.query.AAA.ActorHot.getValue(
+      runtimeAaaId,
+      {
+        at: snapshot.at,
+      },
+    );
+    return projectObservationActorDeliveryInspection({
+      aaaId: runtimeAaaId,
+      hot:
+        hot == null
+          ? null
+          : {
+              actorClass: hot.actor_class.type,
+              pendingSignal: hot.pending_signal,
+              queueTicket: hot.queue_ticket ?? null,
+              wakeup:
+                hot.wakeup_pointer == null
+                  ? null
+                  : {
+                      block: hot.wakeup_pointer.block,
+                      pageId: hot.wakeup_pointer.page_id,
+                      slot: hot.wakeup_pointer.slot,
+                    },
+            },
+    });
+  }
+
+  private async deliveryInspection(
+    snapshot: DeosChainSnapshot,
+    key: ReturnType<typeof runtimeFeed>,
+    oracleRevision: bigint | null,
+    aaaId: number | undefined,
+  ): Promise<ObservationDeliveryInspection> {
+    const [dirty, activeList, subscriberPages, selectedActor] =
+      await Promise.all([
+        snapshot.typedApi.query.AAA.DirtyObservationFeeds.getValue(key, {
+          at: snapshot.at,
+        }),
+        snapshot.typedApi.query.AAA.DirtyObservationListState.getValue({
+          at: snapshot.at,
+        }),
+        snapshot.typedApi.query.AAA.ObservationSubscriberPageLists.getValue(
+          key,
+          {
+            at: snapshot.at,
+          },
+        ),
+        this.selectedActorInspection(snapshot, aaaId),
+      ]);
+    const occupiedPageCount = subscriberPages?.count ?? 0;
+    const selectedPosition =
+      dirty == null
+        ? null
+        : await this.dirtyFeedPosition(snapshot, dirty, activeList.count);
+    const pendingRestart =
+      dirty != null && dirty.fanout_revision < dirty.latest_revision;
+    const remainingPageCount =
+      dirty == null
+        ? 0
+        : pendingRestart
+          ? occupiedPageCount
+          : await this.remainingSubscriberPages(
+              snapshot,
+              key,
+              dirty.next_subscriber_page,
+              occupiedPageCount,
+            );
+    return projectObservationDeliveryInspection({
+      oracleRevision,
+      dirty:
+        dirty == null
+          ? null
+          : {
+              latestRevision: dirty.latest_revision,
+              fanoutRevision: dirty.fanout_revision,
+              dirtySince: dirty.dirty_since,
+              nextSubscriberPage: dirty.next_subscriber_page ?? null,
+            },
+      activeList: {
+        head: optionalFeedIdentity(activeList.head),
+        tail: optionalFeedIdentity(activeList.tail),
+        cursor: optionalFeedIdentity(activeList.cursor),
+        count: activeList.count,
+        selectedPosition,
+      },
+      occupiedPageCount,
+      remainingPageCount,
+      finalizedBlock: snapshot.finalizedBlockNumber,
+      budget: DEOS_OBSERVATION_FANOUT_BUDGET,
+      selectedActor,
+    });
+  }
+
   async inspection(
     snapshot: DeosChainSnapshot,
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
+    aaaId?: number,
   ) {
     const key = runtimeFeed(feed);
     const [config, observation] = await Promise.all([
@@ -115,6 +293,12 @@ export class BlockchainObservationReader {
         at: snapshot.at,
       }),
     ]);
+    const delivery = await this.deliveryInspection(
+      snapshot,
+      key,
+      observation?.revision ?? null,
+      aaaId,
+    );
     const projection: ObservationInspection = projectObservationInspection({
       feed,
       config:
@@ -144,6 +328,7 @@ export class BlockchainObservationReader {
             },
       finalizedBlock: snapshot.finalizedBlockNumber,
       maxAgeBlocks,
+      delivery,
     });
     return canonicalObservationReadModel(
       projection,

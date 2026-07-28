@@ -9,8 +9,7 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 | `domain-dag` | Generic ownership/DAG review and validator | DEOS subsystem policy; workflow-specific delivery gates | `domain-dag/SKILL.md`; `domain-dag/scripts/validate-domain-dag.sh` |
 | `governance-delivery` | Governance contract-to-runtime/client delivery, bounded evidence, and release handoff | Political decisions; proposal advocacy; signing; upgrade execution | `governance-delivery/SKILL.md`; owning governance and shared validation routes |
 | `indexer-delivery` | Materialized ingestion, finality/replay, schema/provider, client provenance, and operational handoff | Consensus history; generic analytics; credentials; live deployment | `indexer-delivery/SKILL.md`; owning read-model and provider validation routes |
-| `oracle-delivery` | Typed observation package, producer extraction, reactive AAA integration, bounded evidence, and release handoff | Sample generation policy; subscriber execution; history; external networks | `oracle-delivery/SKILL.md`; owning oracle/AAA/Router contracts and shared validation routes |
-| `gscsmof` | Portable qualification, creation, evolution, consolidation, and retirement of epic implementation organs | Feature implementation; backlog priority; child-organ delivery; hidden automation; host-specific control planes | `gscsmof/SKILL.md` |
+| `oracle` | Mature typed-observation feature entry across the Oracle package, producers, reactive AAA, client inspection, bounded evidence, and support | Sample generation policy; subscriber execution; history ownership; external networks | `oracle/SKILL.md`; owning Oracle/AAA/Router contracts and shared validation routes |
 | `benchmarking` | Benchmark design, evidence classification, interpretation, and integration; currently FRAME runtime measurement | Runtime semantics; shared command execution; scheduler stress; release publication; frontend benchmarking without an adopted route | `benchmarking/SKILL.md`; shared `scripts/benchmarks.sh` and `scripts/03-build-runtime.sh` implementations |
 | `upgrade-delivery` | Upgrade preparation sequence, evidence rungs, relay approval boundary, and post-upgrade handoff | Governance authorization decisions; version/migration semantics; credentials; shared commands | `upgrade-delivery/SKILL.md`; shared runtime-build, try-runtime, and authorized-upgrade scripts |
 | `staking-delivery` | Native-staking bootstrap sequence, readiness interpretation, authority boundary, and activation handoff | Staking/AAA semantics; signing; funds; shared commands | `staking-delivery/SKILL.md`; shared `scripts/bootstrap-native-staking-local.sh` implementation |
@@ -18,17 +17,17 @@ Project skills form a small Domain DAG for agent-facing workflow ownership. They
 
 ## Cognitive Scaffolding
 
-Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a skill owns a reusable method for **how work in one domain grows safely** through routing, evidence, gates, interpretation, and handoff. A SMOF may additionally keep bounded pre-consolidation feature insight under the `gscsmof` contract, but it must promote, reconcile, or prune that memory instead of cloning open work.
+Skills do not compete with `BACKLOG.md`. The backlog owns **what remains**; a skill owns a reusable method for **how work in one domain grows safely** through routing, evidence, gates, interpretation, and handoff. Feature-local temporary insight must be promoted, reconciled, or pruned instead of cloning open work.
 
-Some delivery skills become implementation organs for an evolving feature: they maintain its feedback loop from repository reality through the next slice, evidence, gates, and plan reconciliation. They may emerge after repeated implementation friction, improve as real failures expose missing guidance, and help later slices reproduce the stronger method without expanding every backlog item into procedural prose. Capability skills remain reusable instruments rather than feature organs.
+Some delivery skills become continuous feature entry points: during active work they maintain the feedback loop from repository reality through the next slice, evidence, gates, and plan reconciliation. After stabilization they drop stale delivery wording and task routing while preserving compact feature ownership, support guidance, and decisive validation boundaries. Renewed feature pressure regrows delivery guidance in the same skill. Capability skills remain reusable instruments rather than feature owners.
 
-Scaffolding must not become permanent by inertia. Consolidate, generalize, or delete a skill when the subsystem stabilizes, its method moves into deterministic tooling, or it no longer has a distinct reusable decision boundary. `gscsmof` owns this creation/lifecycle method but never the child organ's feature loop. Keep implementation truth in code/docs, open outcomes in the backlog, and completed outcomes in the changelog.
+Stabilization changes a feature skill's emphasis; it does not by itself justify deletion. Retire a feature skill only when the feature disappears, merges into another owned domain, or loses a distinct reusable knowledge or support boundary. Consolidate or generalize duplicated method when a stronger canonical owner exists, but preserve the mature feature entry point while its identity remains useful. Keep implementation truth in code/docs, open outcomes in the backlog, and completed outcomes in the changelog.
 
 ## Dependency Direction
 
 ```text
 human / agent request
-  → delivery or alignment skill
+  → feature, delivery, or alignment skill
     → documented capability contract
       → shared root script when humans, CI, or multiple skills consume it
       → co-located skill leaf only for agent-specific execution

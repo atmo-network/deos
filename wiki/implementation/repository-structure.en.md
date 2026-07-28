@@ -43,7 +43,7 @@ The Knowledge Base and conceptual control plane. Contains normative contracts, a
 The primary Rust workspace containing the runtime kernel and pallets.
 
 - `/template/runtime/`: The Parachain assembly, connecting pallets and defining weights.
-- `/template/pallets/`: The business logic of the network (e.g., `aaa`, `asset-registry`, `axial-router`, `governance`, `staking`, `tmc`).
+- `/template/pallets/`: The business logic of the network (e.g., `aaa`, `asset-registry`, `router`, `governance`, `staking`, `tmc`).
 - `/template/primitives/`: Unified types and constants used across pallets to prevent magic numbers.
 
 ### `/web-client/`

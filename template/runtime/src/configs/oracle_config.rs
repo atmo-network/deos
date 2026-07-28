@@ -45,7 +45,7 @@ pub(crate) fn ensure_axial_router_pool_feeds(
   );
   ensure!(
     current.saturating_add(missing) <= AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS.saturating_mul(2),
-    DispatchError::Other("Axial Router pool feed capacity reached")
+    DispatchError::Other("DEOS Router pool feed capacity reached")
   );
   ensure_axial_router_feed(forward)?;
   ensure_axial_router_feed(reverse)

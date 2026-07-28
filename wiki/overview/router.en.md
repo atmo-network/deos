@@ -1,15 +1,16 @@
 ---
 page_type: overview
-title: Axial Router
-summary: The Axial Router is DEOS's max-output routing engine. It compares bounded route candidates, publishes pre-execution pool samples to typed standalone observations, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
+title: DEOS Router
+summary: DEOS Router is the framework's max-output routing engine. It compares bounded route candidates, publishes pre-execution pool samples to typed standalone observations, uses the native asset as the main routing anchor, and keeps swaps on the canonical protocol path.
 locale: en
-canonical_page_id: axial-router
+canonical_page_id: router
 translation_status: source
 available_locales:
   - en
   - ru
 sources:
   - ../../template/pallets/router/docs/architecture.en.md
+  - ../../docs/oracle.integration.en.md
   - ../../docs/core.architecture.en.md
 status: active
 audience: newcomer
@@ -19,20 +20,21 @@ tags:
   - routing
   - execution
 related:
+  - Typed Observations
   - Token Minting Curve
   - Routing and Minting Loop
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-07-26
+last_compiled: 2026-07-27
 confidence: 0.9
 ---
 
-# Axial Router
+# DEOS Router
 
 ## Summary
 
-The Axial Router is the runtime's route-selection engine. Its job is not to be a general-purpose DEX aggregator, but to make a bounded protocol decision about how a swap should execute inside a DEOS-style economy.
+DEOS Router is the runtime's route-selection engine. Its job is not to be a general-purpose DEX aggregator, but to make a bounded protocol decision about how a swap should execute inside a DEOS-style economy.
 
 In practice, it compares a small set of candidate paths across market liquidity and protocol liquidity, then chooses the route that delivers the most output to the swap recipient. That is pure max-output selection: no additional policy weight influences the result.
 
@@ -61,7 +63,7 @@ The router is not optional glue around canonical product swaps. It is the refere
 
 ## Why It Matters to TMCTOL
 
-TMCTOL needs a way to compare ordinary pool liquidity with protocol liquidity coming from the minting curve. The Axial Router is the subsystem that performs that comparison.
+TMCTOL needs a way to compare ordinary pool liquidity with protocol liquidity coming from the minting curve. DEOS Router is the subsystem that performs that comparison.
 
 That is why the router is a first-class economic actor in the architecture. It is where route choice, fee capture, and protocol-side execution meet.
 
@@ -73,6 +75,7 @@ Long-range analytics and historical route dashboards still belong to materialize
 
 ## Related
 
+- [Typed Observations](typed-observations.en.md)
 - [Token Minting Curve](token-minting-curve.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)

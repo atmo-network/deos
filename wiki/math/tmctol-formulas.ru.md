@@ -115,5 +115,5 @@ dS/dt = completed_mint_rate - completed_burn_rate
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 - [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)
 - [Token Minting Curve](../overview/token-minting-curve.ru.md)
-- [Axial Router](../overview/axial-router.ru.md)
+- [DEOS Router](../overview/router.ru.md)
 - [Трехуровневая валидация](../development/three-layer-validation.ru.md)

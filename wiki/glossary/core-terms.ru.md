@@ -20,7 +20,7 @@ sources:
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
   - ../../docs/read-model.contract.en.md
-  - ../../docs/web-client.architecture.en.md
+  - ../../web-client/docs/architecture.en.md
   - ../../web-client/README.md
 status: active
 audience: newcomer
@@ -31,11 +31,10 @@ related:
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
   - Токен-управляемая автоматизация
-  - Обзор Governance
+  - Governance
   - Домены Governance
   - Экономика $BLDR
   - Разделение read-model
-  - UI Kit и Domain DAG
   - Generated Wiki
   - Маршруты чтения
   - Статус разработки
@@ -76,7 +75,7 @@ confidence: 0.9
 
 Один конкретный ограниченный runtime-экземпляр внутри более широкой системы AAA.
 
-### Axial Router
+### DEOS Router
 
 Ограниченный механизм выбора маршрута для протокольных сделок и потока комиссий.
 
@@ -177,11 +176,10 @@ Wiki-карта текущего состояния для базовых дом
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](../concepts/tmctol-standard.ru.md)
 - [Токен-управляемая автоматизация](../concepts/token-driven-automation.ru.md)
-- [Обзор Governance](../overview/governance-overview.ru.md)
+- [Governance](../overview/governance.ru.md)
 - [Домены Governance](../concepts/governance-domains.ru.md)
 - [Экономика $BLDR](../concepts/builder-economy.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)
-- [UI Kit и Domain DAG](../concepts/ui-kit-and-domain-dag.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
 - [Маршруты чтения](../getting-started/reading-paths.ru.md)
 - [Статус разработки](../development/status.ru.md)

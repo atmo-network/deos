@@ -1,6 +1,6 @@
 [package]
-name = "pallet-asset-registry"
-version = "0.7.7"
+name = "pallet-deos-asset-registry"
+version = "0.7.8"
 description = "Governance-controlled registry for foreign asset metadata"
 authors.workspace = true
 license = "MIT-0"
@@ -8,6 +8,9 @@ homepage.workspace = true
 repository.workspace = true
 edition.workspace = true
 publish = false
+
+[lib]
+name = "pallet_asset_registry"
 
 [lints]
 workspace = true

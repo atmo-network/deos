@@ -91,7 +91,7 @@ impl<T: Config> Pallet<T> {
       {
         let page = ObservationSubscriberPages::<T>::get(feed, page_id).unwrap_or_default();
         ensure!(
-          page.get(offset).is_none_or(Option::is_none),
+          page.entries.get(offset).is_none_or(Option::is_none),
           Error::<T>::ObservationSubscriptionInvariant
         );
         ensure!(
@@ -174,6 +174,126 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
+  fn link_observation_subscriber_page(
+    feed: T::ObservationFeedId,
+    page_id: u32,
+    page: &mut ObservationSubscriberPageOf<T>,
+  ) -> DispatchResult {
+    ensure!(
+      page.entries.is_empty() && page.previous.is_none() && page.next.is_none(),
+      Error::<T>::ObservationSubscriptionInvariant
+    );
+    if let Some(mut list) = ObservationSubscriberPageLists::<T>::get(feed) {
+      let mut tail = ObservationSubscriberPages::<T>::get(feed, list.tail)
+        .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
+      ensure!(
+        tail.next.is_none(),
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+      tail.next = Some(page_id);
+      ObservationSubscriberPages::<T>::insert(feed, list.tail, tail);
+      page.previous = Some(list.tail);
+      list.tail = page_id;
+      list.count = list
+        .count
+        .checked_add(1)
+        .ok_or(Error::<T>::ObservationSubscriptionCapacityExceeded)?;
+      ensure!(
+        list.count <= T::MaxActiveActors::get(),
+        Error::<T>::ObservationSubscriptionCapacityExceeded
+      );
+      ObservationSubscriberPageLists::<T>::insert(feed, list);
+    } else {
+      ObservationSubscriberPageLists::<T>::insert(
+        feed,
+        ObservationSubscriberPageList {
+          head: page_id,
+          tail: page_id,
+          count: 1,
+        },
+      );
+    }
+    Ok(())
+  }
+
+  fn unlink_observation_subscriber_page(
+    feed: T::ObservationFeedId,
+    page_id: u32,
+    page: &ObservationSubscriberPageOf<T>,
+  ) -> DispatchResult {
+    ensure!(
+      page.entries.is_empty(),
+      Error::<T>::ObservationSubscriptionInvariant
+    );
+    let mut list = ObservationSubscriberPageLists::<T>::get(feed)
+      .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
+    ensure!(list.count > 0, Error::<T>::ObservationSubscriptionInvariant);
+    if let Some(previous_id) = page.previous {
+      ensure!(
+        ObservationSubscriberPages::<T>::get(feed, previous_id)
+          .is_some_and(|previous| previous.next == Some(page_id)),
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+    }
+    if let Some(next_id) = page.next {
+      ensure!(
+        ObservationSubscriberPages::<T>::get(feed, next_id)
+          .is_some_and(|next| next.previous == Some(page_id)),
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+    }
+    DirtyObservationFeeds::<T>::mutate(feed, |maybe| {
+      if let Some(state) = maybe
+        && state.next_subscriber_page == Some(page_id)
+      {
+        state.next_subscriber_page = page.next;
+      }
+    });
+    if let Some(previous_id) = page.previous {
+      let mut previous = ObservationSubscriberPages::<T>::get(feed, previous_id)
+        .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
+      ensure!(
+        previous.next == Some(page_id),
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+      previous.next = page.next;
+      ObservationSubscriberPages::<T>::insert(feed, previous_id, previous);
+    } else {
+      ensure!(
+        list.head == page_id,
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+      list.head = page.next.unwrap_or(page_id);
+    }
+    if let Some(next_id) = page.next {
+      let mut next = ObservationSubscriberPages::<T>::get(feed, next_id)
+        .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
+      ensure!(
+        next.previous == Some(page_id),
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+      next.previous = page.previous;
+      ObservationSubscriberPages::<T>::insert(feed, next_id, next);
+    } else {
+      ensure!(
+        list.tail == page_id,
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+      list.tail = page.previous.unwrap_or(page_id);
+    }
+    list.count -= 1;
+    if list.count == 0 {
+      ensure!(
+        page.previous.is_none() && page.next.is_none(),
+        Error::<T>::ObservationSubscriptionInvariant
+      );
+      ObservationSubscriberPageLists::<T>::remove(feed);
+    } else {
+      ObservationSubscriberPageLists::<T>::insert(feed, list);
+    }
+    Ok(())
+  }
+
   fn add_observation_subscriber(
     aaa_id: AaaId,
     slot: u32,
@@ -183,16 +303,21 @@ impl<T: Config> Pallet<T> {
     let page_id = slot / page_size;
     let offset = (slot % page_size) as usize;
     let mut page = ObservationSubscriberPages::<T>::get(feed, page_id).unwrap_or_default();
-    while page.len() <= offset {
+    let page_was_empty = page.entries.is_empty();
+    if page_was_empty {
+      Self::link_observation_subscriber_page(feed, page_id, &mut page)?;
+    }
+    while page.entries.len() <= offset {
       page
+        .entries
         .try_push(None)
         .map_err(|_| Error::<T>::ObservationSubscriptionInvariant)?;
     }
     ensure!(
-      page[offset].is_none(),
+      page.entries[offset].is_none(),
       Error::<T>::ObservationSubscriptionInvariant
     );
-    page[offset] = Some(aaa_id);
+    page.entries[offset] = Some(aaa_id);
     ObservationSubscriberPages::<T>::insert(feed, page_id, page);
     ObservationSubscriberCount::<T>::try_mutate(feed, |count| -> DispatchResult {
       ensure!(
@@ -230,14 +355,15 @@ impl<T: Config> Pallet<T> {
     let mut page = ObservationSubscriberPages::<T>::get(feed, page_id)
       .ok_or(Error::<T>::ObservationSubscriptionInvariant)?;
     ensure!(
-      page.get(offset) == Some(&Some(aaa_id)),
+      page.entries.get(offset) == Some(&Some(aaa_id)),
       Error::<T>::ObservationSubscriptionInvariant
     );
-    page[offset] = None;
-    while page.last().is_some_and(Option::is_none) {
-      page.pop();
+    page.entries[offset] = None;
+    while page.entries.last().is_some_and(Option::is_none) {
+      page.entries.pop();
     }
-    if page.is_empty() {
+    if page.entries.is_empty() {
+      Self::unlink_observation_subscriber_page(feed, page_id, &page)?;
       ObservationSubscriberPages::<T>::remove(feed, page_id);
     } else {
       ObservationSubscriberPages::<T>::insert(feed, page_id, page);
@@ -327,7 +453,7 @@ impl<T: Config> Pallet<T> {
     for feed in &feeds {
       ensure!(
         ObservationSubscriberPages::<T>::get(feed, page_id)
-          .and_then(|page| page.get(offset).copied())
+          .and_then(|page| page.entries.get(offset).copied())
           == Some(Some(aaa_id))
           && ObservationSubscriberCount::<T>::get(feed) > 0,
         Error::<T>::ObservationSubscriptionInvariant
@@ -416,7 +542,7 @@ impl<T: Config> Pallet<T> {
         let page = ObservationSubscriberPages::<T>::get(feed, page_id).ok_or(
           TryRuntimeError::Other("observation subscriber page is missing"),
         )?;
-        if page.get(offset) != Some(&Some(aaa_id)) {
+        if page.entries.get(offset) != Some(&Some(aaa_id)) {
           return Err(TryRuntimeError::Other(
             "observation subscriber page disagrees with actor ownership",
           ));
@@ -474,14 +600,37 @@ impl<T: Config> Pallet<T> {
       ));
     }
     let mut actual_by_feed = BTreeMap::<T::ObservationFeedId, u32>::new();
+    let mut actual_pages_by_feed = BTreeMap::<T::ObservationFeedId, BTreeSet<u32>>::new();
     let subscriber_pages = ObservationSubscriberPages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded subscription-page audit.
     for (feed, page_id, page) in subscriber_pages {
-      if page.is_empty() || page.last().is_some_and(Option::is_none) {
+      let list = ObservationSubscriberPageLists::<T>::get(feed).ok_or(TryRuntimeError::Other(
+        "observation subscriber page has no occupied-page list",
+      ))?;
+      if page.previous.is_none() != (list.head == page_id)
+        || page.next.is_none() != (list.tail == page_id)
+        || page.previous.is_some_and(|previous_id| {
+          ObservationSubscriberPages::<T>::get(feed, previous_id)
+            .is_none_or(|previous| previous.next != Some(page_id))
+        })
+        || page.next.is_some_and(|next_id| {
+          ObservationSubscriberPages::<T>::get(feed, next_id)
+            .is_none_or(|next| next.previous != Some(page_id))
+        })
+        || !actual_pages_by_feed
+          .entry(feed)
+          .or_default()
+          .insert(page_id)
+      {
+        return Err(TryRuntimeError::Other(
+          "observation occupied-page links disagree",
+        ));
+      }
+      if page.entries.is_empty() || page.entries.last().is_some_and(Option::is_none) {
         return Err(TryRuntimeError::Other(
           "observation subscriber page is empty or noncanonical",
         ));
       }
-      for (offset, maybe_aaa_id) in page.into_iter().enumerate() {
+      for (offset, maybe_aaa_id) in page.entries.into_iter().enumerate() {
         let Some(aaa_id) = maybe_aaa_id else { continue };
         let slot = ObservationSubscriptionSlot::<T>::get(aaa_id)
           .ok_or(TryRuntimeError::Other("observation page actor has no slot"))?;
@@ -499,7 +648,26 @@ impl<T: Config> Pallet<T> {
           .ok_or(TryRuntimeError::Other("observation page count overflow"))?;
       }
     }
-    if actual_by_feed != expected_by_feed {
+    let page_lists = ObservationSubscriberPageLists::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded occupied-page audit.
+    let mut page_list_count = 0usize;
+    for (feed, list) in page_lists {
+      let Some(pages) = actual_pages_by_feed.get(&feed) else {
+        return Err(TryRuntimeError::Other(
+          "observation occupied-page list has no pages",
+        ));
+      };
+      if list.count == 0
+        || list.count as usize != pages.len()
+        || !pages.contains(&list.head)
+        || !pages.contains(&list.tail)
+      {
+        return Err(TryRuntimeError::Other(
+          "observation occupied-page list bounds disagree",
+        ));
+      }
+      page_list_count += 1;
+    }
+    if page_list_count != actual_pages_by_feed.len() || actual_by_feed != expected_by_feed {
       return Err(TryRuntimeError::Other(
         "observation subscriber pages disagree with actor feeds",
       ));

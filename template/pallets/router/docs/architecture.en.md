@@ -1,4 +1,4 @@
-# Axial Router: Minimalist Multi-Token Routing Architecture
+# DEOS Router: Minimalist Multi-Token Routing Architecture
 
 > **On-Chain Account** (PalletId: `axialrt0`)
 >
@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-The Axial Router is a specialized `Deterministic Economic Automaton` designed for TMC (Token Minting Curve) ecosystems. Unlike general-purpose aggregators, it operates as a strict `Decision Engine` atop the parachain's internal liquidity. Its Cargo package is `pallet-deus-router` at `template/pallets/router`; the Rust crate and runtime API retain the stable `pallet_axial_router` identity.
+DEOS Router is a specialized `Deterministic Economic Automaton` designed for TMC (Token Minting Curve) ecosystems. Unlike general-purpose aggregators, it operates as a strict `Decision Engine` atop the parachain's internal liquidity. Its Cargo package is `pallet-deos-router` at `template/pallets/router`; the Rust crate and runtime API retain the stable `pallet_axial_router` identity.
 
 It enforces a `Mechanism-Over-Policy` routing rule: it evaluates every viable path and always selects the route that delivers the most output to the recipient, arbitrating between Market Liquidity (XYK pools) and Protocol Liquidity (TMC curves), using the Native token as the sole multi-hop anchor.
 
@@ -25,7 +25,7 @@ It enforces a `Mechanism-Over-Policy` routing rule: it evaluates every viable pa
 
 ```mermaid
 graph TD
-    User[User Transaction] -->|1. Swap Request| Router[Axial Router Logic]
+    User[User Transaction] -->|1. Swap Request| Router[DEOS Router Logic]
 
     subgraph "Atomic Execution Block"
 
@@ -161,7 +161,7 @@ pub trait FeeRoutingAdapter<AccountId, Balance> {
 
 Runtime `FeeManagerImpl` performs direct `Currency::transfer` (Native) or `Assets::transfer` with `Preservation::Protect` (Local/Foreign) to the Burn Actor account.
 
-## EMA Oracle Architecture
+## DEOS Oracle Integration
 
 ### Storage
 
@@ -169,9 +169,9 @@ Runtime `FeeManagerImpl` performs direct `Currency::transfer` (Native) or `Asset
 
 The Router no longer declares local EMA value or update-block storage. Oracle metadata and observations own the complete typed price-observation state.
 
-Canonical local-pool indexing admits two initially uninitialized `pallet-oracle` identities: ordered forward and reverse feeds at scale `12`, `PreExecutionSpot`, EMA half-life `100`, and Axial Router pallet-account provenance. Re-indexing requires an exact immutable match and adds no duplicate. The LP index plus both feed registrations share one transaction, and top-level pool calls declare two worst-case oracle registration Weight envelopes.
+Canonical local-pool indexing admits two initially uninitialized `pallet-oracle` identities: ordered forward and reverse feeds at scale `12`, `PreExecutionSpot`, EMA half-life `100`, and DEOS Router pallet-account provenance. Re-indexing requires an exact immutable match and adds no duplicate. The LP index plus both feed registrations share one transaction, and top-level pool calls declare two worst-case oracle registration Weight envelopes.
 
-`PriceOracleImpl<Runtime>` publishes pre-execution samples through the Axial Router pallet account and reads current standalone EMA truth. The System AAA reference guard consumes Fresh observations and otherwise falls back to direct reserves.
+`PriceOracleImpl<Runtime>` publishes pre-execution samples through the DEOS Router pallet account and reads current standalone EMA truth. The System AAA reference guard consumes Fresh observations and otherwise falls back to direct reserves.
 
 TVL is not oracle-smoothed — it is read directly from pool reserves via `get_pool_reserves()` during route selection, always reflecting the current on-chain state.
 
@@ -185,7 +185,7 @@ EMA_new = α × spot_price + (1 - α) × EMA_previous
 
 Where `α = elapsed_blocks / (EmaHalfLife + elapsed_blocks)` uses `Perbill` floor arithmetic and `elapsed_blocks = max(current - updated_at, 1)`. Presence of an observation distinguishes initialization; the first sample becomes the value directly.
 
-### Pre-Swap Oracle Invariant
+### Pre-Swap DEOS Oracle Invariant
 
 Oracle updates execute before the current swap modifies reserves and record that pre-execution pool ratio. Prior transactions may already have moved or manipulated the pool, so this snapshot is not a fair-price or ordering guarantee:
 
@@ -216,7 +216,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ## Price-Observation Ownership Decision
 
-The historical `0.7.6` extraction gate remained a no-go. The active `0.7.7` line now provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-AAA freshness semantics. This remains local-pool observation rather than generalized market truth.
+The historical `0.7.6` extraction gate remained a no-go. The active `0.7.8` line provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-AAA freshness semantics. This remains local-pool observation rather than generalized market truth.
 
 | Dimension | Current owner and contract |
 | --- | --- |
@@ -232,7 +232,7 @@ The historical `0.7.6` extraction gate remained a no-go. The active `0.7.7` line
 | Governance | Canonical pool indexing admits exact immutable feed configurations; Router governance controls only the bounded fee rate |
 | History | Changed values emit bounded current-revision events; archive/history remains materialized-provider work |
 
-Router-local observation storage, tracking calls, metadata, and generated weights have been removed. The non-noop AAA dirty hook binds at Oracle publication. The composed failed-swap regression installs a real subscriber and preserves pre-execution ordering, directional math, Router outcomes, System-AAA freshness behavior, and whole-swap rollback including dirty slot/count/cursor state. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and AAA oracle predicates remain outside that price-only candidate.
+Router-local observation storage, tracking calls, metadata, and generated weights have been removed. The non-noop AAA dirty hook binds at Oracle publication. The composed failed-swap regression installs a real subscriber and preserves pre-execution ordering, directional math, Router outcomes, System-AAA freshness behavior, and whole-swap rollback including exact AAA dirty-map and active-list state. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and AAA oracle predicates remain outside that price-only candidate.
 
 ## Storage Summary
 
@@ -295,7 +295,7 @@ pub struct GenesisConfig<T: Config> {
 
 Genesis calls `inc_providers` on the pallet account so the account survives zero native balance without Router-owned economic state.
 
-## Axial Router Read-Model Contract
+## DEOS Router Read-Model Contract
 
 This subsystem follows the project-wide [`read-model.contract.en.md`](../../../../docs/read-model.contract.en.md) split.
 
@@ -386,7 +386,7 @@ Production `50 × 20` generation measures `swap` at `323,020,000 / 10,609`, 22 r
 
 ## Conclusion
 
-Axial Router is the central execution gateway of the TMCTOL economic model. `Pre-Swap Oracle Updates` provide bounded local observations, and `One-Hop Fee Routing` keeps fee collection atomic. Viable routes compete by maximum recipient output. The EMA snapshot and deviation guard do not establish external fair price, prevent prior pool manipulation, or protect transaction ordering; user slippage and authored output/input bounds remain independent controls.
+DEOS Router is the central execution gateway of the TMCTOL economic model. `Pre-Swap Oracle Updates` provide bounded local observations, and `One-Hop Fee Routing` keeps fee collection atomic. Viable routes compete by maximum recipient output. The EMA snapshot and deviation guard do not establish external fair price, prevent prior pool manipulation, or protect transaction ordering; user slippage and authored output/input bounds remain independent controls.
 
 ---
 

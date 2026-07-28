@@ -12,7 +12,7 @@ The fixture deliberately uses:
 - Default-deny funding authority and deterministic unsupported DEX, liquidity, and staking adapters in the default profile.
 - An opt-in `dex-fixture` profile with one fixed-rate exact-output pair and one explicitly Temporary exact-input fixture, with no imported pool topology.
 - Mutable User and System Continuation coverage for cooldown, suffix resumption, concurrent Executive ingress, cancellation, pure close, and try-state integrity.
-- No DEOS primitives, TMCTOL topology, governance catalog, Axial Router, TMC, or staking pallet.
+- No DEOS primitives, TMCTOL topology, governance catalog, DEOS Router, TMC, or staking pallet.
 
 Run its focused evidence from `template/`:
 

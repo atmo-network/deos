@@ -31,17 +31,21 @@
       "en": "overview/aa-actor.en.md",
       "ru": "overview/aa-actor.ru.md"
     },
-    "axial-router": {
-      "en": "overview/axial-router.en.md",
-      "ru": "overview/axial-router.ru.md"
+    "router": {
+      "en": "overview/router.en.md",
+      "ru": "overview/router.ru.md"
+    },
+    "typed-observations": {
+      "en": "overview/typed-observations.en.md",
+      "ru": "overview/typed-observations.ru.md"
     },
     "token-minting-curve": {
       "en": "overview/token-minting-curve.en.md",
       "ru": "overview/token-minting-curve.ru.md"
     },
-    "governance-overview": {
-      "en": "overview/governance-overview.en.md",
-      "ru": "overview/governance-overview.ru.md"
+    "governance": {
+      "en": "overview/governance.en.md",
+      "ru": "overview/governance.ru.md"
     },
     "asset-identity": {
       "en": "overview/asset-identity.en.md",
@@ -83,9 +87,9 @@
       "en": "concepts/routing-and-minting-loop.en.md",
       "ru": "concepts/routing-and-minting-loop.ru.md"
     },
-    "staking-pools": {
-      "en": "concepts/staking-pools.en.md",
-      "ru": "concepts/staking-pools.ru.md"
+    "staking": {
+      "en": "overview/staking.en.md",
+      "ru": "overview/staking.ru.md"
     },
     "read-model-split": {
       "en": "concepts/read-model-split.en.md",
@@ -94,10 +98,6 @@
     "governance-domains": {
       "en": "concepts/governance-domains.en.md",
       "ru": "concepts/governance-domains.ru.md"
-    },
-    "ui-kit-and-domain-dag": {
-      "en": "concepts/ui-kit-and-domain-dag.en.md",
-      "ru": "concepts/ui-kit-and-domain-dag.ru.md"
     },
     "generated-wiki": {
       "en": "concepts/generated-wiki.en.md",
@@ -186,10 +186,6 @@
     "invariant-map": {
       "en": "concepts/invariant-map.en.md",
       "ru": "concepts/invariant-map.ru.md"
-    },
-    "what-deos-is-not": {
-      "en": "concepts/what-deos-is-not.en.md",
-      "ru": "concepts/what-deos-is-not.ru.md"
     },
     "economic-claim-levels": {
       "en": "concepts/economic-claim-levels.en.md",

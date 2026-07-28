@@ -47,7 +47,7 @@ User intent
   -> Reference Client
   -> Read-model classification
   -> Runtime surface
-  -> Axial Router / TMC / Staking / Governance
+  -> DEOS Router / TMC / DEOS Staking / DEOS Governance
   -> Events, balances, bounded projections
   -> Reference Client feedback
 ```
@@ -58,7 +58,7 @@ User intent
 
 ```text
 Swap request
-  -> Axial Router
+  -> DEOS Router
       -> Compare XYK market path
       -> Compare TMC protocol path
       -> Choose best bounded route

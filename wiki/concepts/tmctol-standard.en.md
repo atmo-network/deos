@@ -20,11 +20,11 @@ tags:
 related:
   - DEOS Framework Overview
   - Token Minting Curve
-  - Axial Router
+  - DEOS Router
   - Token-Driven Automation
   - Routing and Minting Loop
   - Governance Domains
-  - Staking Pools
+  - Staking
   - Core Terms
 last_compiled: 2026-07-20
 confidence: 0.85
@@ -97,9 +97,9 @@ DEOS provides that wider operating layer. TMCTOL is the current standard; DEOS i
 
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [Token Minting Curve](../overview/token-minting-curve.en.md)
-- [Axial Router](../overview/axial-router.en.md)
+- [DEOS Router](../overview/router.en.md)
 - [Token-Driven Automation](token-driven-automation.en.md)
 - [Routing and Minting Loop](routing-and-minting-loop.en.md)
 - [Governance Domains](governance-domains.en.md)
-- [Staking Pools](staking-pools.en.md)
+- [Staking](../overview/staking.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

@@ -156,7 +156,7 @@ Distribution occurs atomically within minting transaction; no newly minted token
 - `Typical live state`: Governance balances protection, development, capital use, and external deployment; clients MUST report the current bucket-state classification rather than assuming either endpoint
 - `Excess Liquidity Migration`: Token burning increases Bucket_A's relative share of circulating supply. Governance MAY migrate only Bucket_A liquidity above the required anchor target, and the migrated portion MUST stop counting toward in-domain floor support unless it satisfies the external LP reporting rules in Section 6.2
 
-### 2.5 Axial Router Mechanism
+### 2.5 DEOS Router Mechanism
 
 `Price Discovery Gateway`:
 

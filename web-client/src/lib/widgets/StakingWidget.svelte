@@ -803,7 +803,7 @@ Zone: Presentation widget; consumes staking/system projections and UI Kit/read-m
   </div>
 {/snippet}
 
-<SectionCard title="Staking" subtitle="Bounded NTVE/stNTVE read model">
+<SectionCard title="DEOS Staking" subtitle="Bounded NTVE/stNTVE read model">
   {#snippet actions()}
     <ReadModelBadge provenance={nativeStakingProvenance} tone="subtle" />
   {/snippet}

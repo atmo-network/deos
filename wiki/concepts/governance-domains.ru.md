@@ -20,11 +20,11 @@ tags:
   - governance
   - domains
 related:
-  - Обзор Governance
+  - Governance
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
   - Экономика $BLDR
-  - Пулы стейкинга
+  - Стейкинг
   - Разделение read-model
   - Physics-first против politics-first
   - Базовые термины
@@ -38,7 +38,7 @@ confidence: 0.9
 
 Governance-домен — это одна типизированная governance-ячейка внутри DEOS Governance. Она говорит runtime и пользователю, что именно управляется, чьи голоса считаются, какая protection surface может вмешаться, какие proposal-family допустимы и до каких полномочий может дойти успешное исполнение.
 
-[Обзор Governance](../overview/governance-overview.ru.md) объясняет всю подсистему. Эта страница объясняет единицу, которая не дает подсистеме схлопнуться в один плоский voting market.
+[Governance](../overview/governance.ru.md) объясняет всю подсистему. Эта страница объясняет единицу, которая не дает подсистеме схлопнуться в один плоский voting market.
 
 ## Контракт домена
 
@@ -101,11 +101,11 @@ Execution authority ограничивается доменом. `L1RootAction` 
 
 ## Связанные страницы
 
-- [Обзор Governance](../overview/governance-overview.ru.md)
+- [Governance](../overview/governance.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Экономика $BLDR](builder-economy.ru.md)
-- [Пулы стейкинга](staking-pools.ru.md)
+- [Стейкинг](../overview/staking.ru.md)
 - [Разделение read-model](read-model-split.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

@@ -110,5 +110,5 @@ Router fee volume can fund the Burn Actor, but actual burning depends on that ac
 - [TMCTOL Standard](../concepts/tmctol-standard.en.md)
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
 - [Token Minting Curve](../overview/token-minting-curve.en.md)
-- [Axial Router](../overview/axial-router.en.md)
+- [DEOS Router](../overview/router.en.md)
 - [Three-Layer Validation](../development/three-layer-validation.en.md)

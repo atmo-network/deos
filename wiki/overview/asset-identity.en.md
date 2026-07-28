@@ -19,7 +19,7 @@ tags:
   - xcm
 related:
   - Routing and Minting Loop
-  - Staking Pools
+  - Staking
   - Core Terms
   - Newcomer FAQ
 last_compiled: 2026-07-20
@@ -63,6 +63,6 @@ The asset registry is therefore an identity layer that enables economic composit
 ## Related
 
 - [Routing and Minting Loop](../concepts/routing-and-minting-loop.en.md)
-- [Staking Pools](../concepts/staking-pools.en.md)
+- [Staking](staking.en.md)
 - [Core Terms](../glossary/core-terms.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)
