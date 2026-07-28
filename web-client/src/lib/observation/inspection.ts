@@ -9,6 +9,7 @@ import type {
   ObservationAssetIdentity,
   ObservationDeliveryInspection,
   ObservationFanoutBudget,
+  ObservationFanoutEvidence,
   ObservationFeedIdentity,
   ObservationInspection,
 } from './types';
@@ -141,6 +142,99 @@ export function projectObservationActorDeliveryInspection(input: {
   };
 }
 
+export function projectObservationFanoutServiceTopology(input: {
+  latestRevision: bigint;
+  fanoutRevision: bigint;
+  nextSubscriberPage: number | null;
+  occupiedPageCount: number;
+  remainingCurrentRevisionPages: number;
+  activeDirtyFeedCount: number;
+  selectedPosition: number;
+  cursorPosition: number;
+  maxServiceUnitsPerBlock: number;
+}) {
+  const pendingRevision = input.fanoutRevision < input.latestRevision;
+  let remainingFanoutServiceUnits: number;
+  if (input.fanoutRevision === 0n) {
+    if (
+      input.nextSubscriberPage !== null ||
+      input.remainingCurrentRevisionPages !== input.occupiedPageCount
+    ) {
+      throw new Error(
+        'Unstarted fanout must begin from every occupied subscriber page',
+      );
+    }
+    remainingFanoutServiceUnits = input.occupiedPageCount;
+  } else if (pendingRevision) {
+    remainingFanoutServiceUnits =
+      input.remainingCurrentRevisionPages +
+      input.occupiedPageCount +
+      (input.nextSubscriberPage === null ? 1 : 0);
+  } else {
+    remainingFanoutServiceUnits =
+      input.nextSubscriberPage === null
+        ? 1
+        : input.remainingCurrentRevisionPages;
+  }
+  requireBoundedInteger(
+    remainingFanoutServiceUnits,
+    'Remaining fanout service units',
+    Number.MAX_SAFE_INTEGER,
+  );
+  if (remainingFanoutServiceUnits === 0) {
+    throw new Error('Dirty feed must require at least one fanout service unit');
+  }
+  const distanceFromCursor =
+    (input.selectedPosition -
+      input.cursorPosition +
+      input.activeDirtyFeedCount) %
+    input.activeDirtyFeedCount;
+  const fairServiceUnits =
+    distanceFromCursor +
+    1 +
+    (remainingFanoutServiceUnits - 1) * input.activeDirtyFeedCount;
+  requireBoundedInteger(
+    fairServiceUnits,
+    'Fair fanout service units',
+    Number.MAX_SAFE_INTEGER,
+  );
+  return {
+    remainingFanoutServiceUnits,
+    exclusiveBudgetLowerBoundBlocks: Math.ceil(
+      remainingFanoutServiceUnits / input.maxServiceUnitsPerBlock,
+    ),
+    fairServiceCeilingBlocks: Math.ceil(
+      fairServiceUnits / input.maxServiceUnitsPerBlock,
+    ),
+  };
+}
+
+function fanoutEstimateContextIdentity(input: {
+  latestRevision: bigint;
+  fanoutRevision: bigint;
+  nextSubscriberPage: number | null;
+  occupiedPageCount: number;
+  remainingCurrentRevisionPages: number;
+  activeDirtyFeedCount: number;
+  selectedPosition: number;
+  cursorPosition: number;
+  budget: ObservationFanoutBudget;
+}) {
+  return JSON.stringify([
+    input.latestRevision.toString(),
+    input.fanoutRevision.toString(),
+    input.nextSubscriberPage,
+    input.occupiedPageCount,
+    input.remainingCurrentRevisionPages,
+    input.activeDirtyFeedCount,
+    input.selectedPosition,
+    input.cursorPosition,
+    input.budget.runtimeIdentity,
+    input.budget.weightIdentity,
+    input.budget.maxServiceUnitsPerBlock,
+  ]);
+}
+
 export function projectObservationDeliveryInspection(input: {
   oracleRevision: bigint | null;
   dirty: {
@@ -151,9 +245,10 @@ export function projectObservationDeliveryInspection(input: {
   } | null;
   activeList: ObservationDeliveryInspection['activeList'];
   occupiedPageCount: number;
-  remainingPageCount: number;
+  remainingCurrentRevisionPages: number;
   finalizedBlock: number;
   budget: ObservationFanoutBudget;
+  evidence: ObservationFanoutEvidence;
   selectedActor?: ObservationActorDeliveryInspection;
 }): ObservationDeliveryInspection {
   requireBoundedInteger(
@@ -167,12 +262,12 @@ export function projectObservationDeliveryInspection(input: {
     'Occupied subscriber-page count',
   );
   requireBoundedInteger(
-    input.remainingPageCount,
-    'Remaining fanout-page count',
+    input.remainingCurrentRevisionPages,
+    'Remaining current-revision page count',
   );
   requireBoundedInteger(
-    input.budget.maxPagesPerBlock,
-    'Fanout pages per block',
+    input.budget.maxServiceUnitsPerBlock,
+    'Fanout service units per block',
   );
   requireBoundedInteger(
     input.budget.maxActiveDirtyFeeds,
@@ -183,7 +278,7 @@ export function projectObservationDeliveryInspection(input: {
     'Maximum subscriber pages per feed',
   );
   if (
-    input.budget.maxPagesPerBlock === 0 ||
+    input.budget.maxServiceUnitsPerBlock === 0 ||
     input.budget.maxActiveDirtyFeeds === 0 ||
     input.budget.maxSubscriberPagesPerFeed === 0
   ) {
@@ -205,13 +300,31 @@ export function projectObservationDeliveryInspection(input: {
   ) {
     throw new Error('Fanout estimates require runtime and weight identities');
   }
-  if (input.remainingPageCount > input.occupiedPageCount) {
-    throw new Error('Remaining fanout pages exceed occupied subscriber pages');
+  if (input.remainingCurrentRevisionPages > input.occupiedPageCount) {
+    throw new Error(
+      'Remaining current-revision pages exceed occupied subscriber pages',
+    );
+  }
+  const cursorPosition = input.activeList.cursorPosition;
+  if (input.activeList.count === 0) {
+    if (
+      input.activeList.head !== null ||
+      input.activeList.tail !== null ||
+      input.activeList.cursor !== null ||
+      cursorPosition !== null
+    ) {
+      throw new Error('Empty active list must not retain list pointers');
+    }
+  } else if (input.activeList.cursor === null) {
+    throw new Error('Non-empty active dirty-feed list must own a fair cursor');
   }
 
   const selectedPosition = input.activeList.selectedPosition;
   if (input.dirty === null) {
-    if (selectedPosition !== null || input.remainingPageCount !== 0) {
+    if (
+      selectedPosition !== null ||
+      input.remainingCurrentRevisionPages !== 0
+    ) {
       throw new Error(
         'Clean feed cannot own active-list position or remaining fanout pages',
       );
@@ -225,15 +338,39 @@ export function projectObservationDeliveryInspection(input: {
       activeList: input.activeList,
       nextSubscriberPage: null,
       occupiedPageCount: input.occupiedPageCount,
-      estimatedRemainingFanoutPages: 0,
-      estimatedRemainingBlocks: 0,
+      remainingCurrentRevisionPages: 0,
+      remainingFanoutServiceUnits: null,
+      exclusiveBudgetLowerBoundBlocks: null,
+      fairServiceCeilingBlocks: null,
+      estimateStatus:
+        input.evidence.status === 'Verified'
+          ? 'NotApplicable'
+          : 'EvidenceMismatch',
+      estimateContextIdentity: null,
+      evidenceMismatchReasons:
+        input.evidence.status === 'EvidenceMismatch'
+          ? input.evidence.reasons
+          : [],
+      observedEvidenceIdentity: input.evidence.observedIdentity,
       budget: input.budget,
       estimateAssumptions: [],
       selectedActor: input.selectedActor ?? null,
     };
   }
 
+  if (
+    cursorPosition === null ||
+    !Number.isSafeInteger(cursorPosition) ||
+    cursorPosition < 0 ||
+    cursorPosition >= input.activeList.count
+  ) {
+    throw new Error('Dirty feed requires an in-range fair cursor position');
+  }
+
   const dirty = input.dirty;
+  if (input.occupiedPageCount === 0) {
+    throw new Error('Dirty feed requires an occupied subscriber page');
+  }
   if (dirty.latestRevision <= 0n || dirty.fanoutRevision < 0n) {
     throw new Error(
       'Dirty revisions must be non-negative with a nonzero latest revision',
@@ -270,18 +407,21 @@ export function projectObservationDeliveryInspection(input: {
   }
 
   const pendingRestart = dirty.fanoutRevision < dirty.latestRevision;
-  if (pendingRestart && input.remainingPageCount !== input.occupiedPageCount) {
-    throw new Error(
-      'Pending revision must restart from every occupied subscriber page',
-    );
-  }
   if (
-    !pendingRestart &&
-    input.remainingPageCount > 0 &&
-    dirty.nextSubscriberPage === null
+    input.remainingCurrentRevisionPages > 0 &&
+    dirty.nextSubscriberPage === null &&
+    dirty.fanoutRevision !== 0n
   ) {
     throw new Error(
       'In-progress fanout requires an exact next subscriber page',
+    );
+  }
+  if (
+    dirty.nextSubscriberPage !== null &&
+    input.remainingCurrentRevisionPages === 0
+  ) {
+    throw new Error(
+      'Exact next subscriber page requires remaining current-revision work',
     );
   }
   if (dirty.nextSubscriberPage !== null) {
@@ -290,9 +430,27 @@ export function projectObservationDeliveryInspection(input: {
 
   const status = pendingRestart
     ? 'PendingFanout'
-    : input.remainingPageCount > 0
+    : input.remainingCurrentRevisionPages > 0
       ? 'FanoutInProgress'
       : 'AwaitingCleanup';
+  const serviceTopology =
+    input.evidence.status === 'Verified'
+      ? projectObservationFanoutServiceTopology({
+          latestRevision: dirty.latestRevision,
+          fanoutRevision: dirty.fanoutRevision,
+          nextSubscriberPage: dirty.nextSubscriberPage,
+          occupiedPageCount: input.occupiedPageCount,
+          remainingCurrentRevisionPages: input.remainingCurrentRevisionPages,
+          activeDirtyFeedCount: input.activeList.count,
+          selectedPosition,
+          cursorPosition: cursorPosition!,
+          maxServiceUnitsPerBlock: input.budget.maxServiceUnitsPerBlock,
+        })
+      : {
+          remainingFanoutServiceUnits: null,
+          exclusiveBudgetLowerBoundBlocks: null,
+          fairServiceCeilingBlocks: null,
+        };
   return {
     status,
     latestRevision: dirty.latestRevision,
@@ -302,17 +460,41 @@ export function projectObservationDeliveryInspection(input: {
     activeList: input.activeList,
     nextSubscriberPage: dirty.nextSubscriberPage,
     occupiedPageCount: input.occupiedPageCount,
-    estimatedRemainingFanoutPages: input.remainingPageCount,
-    estimatedRemainingBlocks: Math.ceil(
-      input.remainingPageCount / input.budget.maxPagesPerBlock,
-    ),
+    remainingCurrentRevisionPages: input.remainingCurrentRevisionPages,
+    ...serviceTopology,
+    estimateStatus:
+      input.evidence.status === 'Verified' ? 'Available' : 'EvidenceMismatch',
+    estimateContextIdentity:
+      input.evidence.status === 'Verified'
+        ? fanoutEstimateContextIdentity({
+            latestRevision: dirty.latestRevision,
+            fanoutRevision: dirty.fanoutRevision,
+            nextSubscriberPage: dirty.nextSubscriberPage,
+            occupiedPageCount: input.occupiedPageCount,
+            remainingCurrentRevisionPages: input.remainingCurrentRevisionPages,
+            activeDirtyFeedCount: input.activeList.count,
+            selectedPosition,
+            cursorPosition,
+            budget: input.budget,
+          })
+        : null,
+    evidenceMismatchReasons:
+      input.evidence.status === 'EvidenceMismatch'
+        ? input.evidence.reasons
+        : [],
+    observedEvidenceIdentity: input.evidence.observedIdentity,
     budget: input.budget,
-    estimateAssumptions: [
-      'The finalized snapshot remains the common source for every field.',
-      'No newer observation revision restarts latest-state fanout.',
-      'The identified fanout page budget remains available each block.',
-      'The estimate covers fanout pages, not actor queue admission or execution.',
-    ],
+    estimateAssumptions:
+      input.evidence.status === 'Verified'
+        ? [
+            'The finalized snapshot remains the common source for every field.',
+            'The active dirty-feed set and fair cursor remain unchanged.',
+            'No newer observation revision restarts latest-state fanout.',
+            'The identified fanout service-unit budget remains available each block.',
+            'Every selected subscriber page eventually admits its pending actors; queue blocking invalidates the ceiling.',
+            'The estimates end at fanout or cleanup, not actor queue admission, condition evaluation, or execution.',
+          ]
+        : [],
     selectedActor: input.selectedActor ?? null,
   };
 }

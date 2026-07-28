@@ -101,9 +101,9 @@ The new-producer benchmark measured `44,420` ProofSize above its generated `34,2
 
 Changed publication measurement includes the composed no-subscriber AAA hook branch. Dispatch then adds the independently declared worst-branch AAA ingress envelope, currently `430,032,000 / 6,128` with runtime RocksDB charges, so publication remains safe when a clean subscribed feed appends to the active-dirty list.
 
-The component-wise maximum DEOS Oracle publication method plus that hook declares `667,607,000 / 9,687` before execution. Equal refresh receives the same conservative dispatch envelope even though it invokes no hook.
+The component-wise maximum DEOS Oracle publication method plus that hook declares `668,166,000 / 9,687` before execution. Equal refresh receives the same conservative dispatch envelope even though it invokes no hook.
 
-Accepted DEOS Oracle weights SHA-256 is `97d87f3d2bfd1fe43e2df3c86af07b13283a72a40de5862d676592eb863d658a`. These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
+Accepted DEOS Oracle weights SHA-256 is `d4a2d544af9c058d0b3eb9bcaa436a82af20888fbda1dfcf2a645dd4c775bc10`. These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
 
 ## Falsification and Validation
 

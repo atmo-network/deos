@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-aaa` (Rust crate `pallet_aaa`)
-- **Release line**: `0.7.8`
+- **Release line**: `0.7.9`
 - **Audience**: external runtime implementers embedding AAA without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [AAA Specification](./specification.en.md), [DEOS AAA Architecture](./architecture.en.md)
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System AAA catalog standardization, UI product flows

@@ -216,7 +216,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ## Price-Observation Ownership Decision
 
-The historical `0.7.6` extraction gate remained a no-go. The active `0.7.8` line provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-AAA freshness semantics. This remains local-pool observation rather than generalized market truth.
+The historical `0.7.6` extraction gate remained a no-go. The current `0.7.9` line provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-AAA freshness semantics. This remains local-pool observation rather than generalized market truth.
 
 | Dimension | Current owner and contract |
 | --- | --- |

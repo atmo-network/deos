@@ -98,6 +98,10 @@ main() {
             "Generate web-client PAPI descriptors" \
             "" \
             "cd '$PROJECT_ROOT/web-client' && npm run papi:generate"
+        run_shell_step \
+            "Generate observation runtime evidence" \
+            "" \
+            "cd '$PROJECT_ROOT/web-client' && npm run generate:observation-evidence"
     else
         log_info "Skipping PAPI descriptor generation by request"
     fi

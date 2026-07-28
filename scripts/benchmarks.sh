@@ -197,20 +197,31 @@ resolve_runtime_wasm_path() {
 # frame-omni-bencher generates files with bare `frame_system`/`frame_support` imports
 # and `WeightInfo<T>` struct names. Normalize to project conventions.
 normalize_weight_file() {
-    local file="$1"
+    local pallet_name="$1"
+    local file="$2"
     sed -i 's/use frame_support::/use polkadot_sdk::frame_support::/g' "$file"
     sed -i 's/pub struct WeightInfo/pub struct SubstrateWeight/' "$file"
     sed -i 's/impl<T: frame_system::Config>/impl<T: polkadot_sdk::frame_system::Config>/' "$file"
     sed -i 's/for WeightInfo<T>/for SubstrateWeight<T>/' "$file"
     sed -i 's/ pallet_xcm::WeightInfo/ polkadot_sdk::pallet_xcm::WeightInfo/' "$file"
     sed -i "s#${TEMPLATE_DIR}#template#g" "$file"
-    log_info "  Normalized imports, struct name, and local paths"
+    if [[ "$pallet_name" == "pallet_oracle" ]]; then
+        sed -i '/fn register_feed_new_producer()/,/^[[:space:]]*}/ s/Weight::from_parts(0, [0-9][0-9]*)/Weight::from_parts(0, 44420)/' "$file"
+    fi
+    log_info "  Normalized imports, struct name, local paths, and required proof bridges"
 }
 
 verify_weight_file_contract() {
     local pallet_name="$1"
     local output_file="$2"
 
+    if [[ "$pallet_name" == "pallet_oracle" ]]; then
+        if ! grep -q 'Measured:  `44420`' "$output_file" || ! grep -q 'Weight::from_parts(0, 44420)' "$output_file"; then
+            log_error "Weight file contract check failed for pallet_oracle: new-producer registration must bridge measured ProofSize"
+            return 1
+        fi
+        return 0
+    fi
     if [[ "$pallet_name" != "pallet_aaa" ]]; then
         return 0
     fi
@@ -365,7 +376,7 @@ run_pallet_benchmark() {
     fi
 
     if [[ -f "$output_file" ]]; then
-        normalize_weight_file "$output_file"
+        normalize_weight_file "$pallet_name" "$output_file"
         if [[ "$EXTRINSIC_PATTERN" == "*" ]]; then
             verify_weight_file_contract "$pallet_name" "$output_file"
         fi

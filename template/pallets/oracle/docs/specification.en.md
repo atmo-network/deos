@@ -178,4 +178,4 @@ Completion requires:
 - Generated weights bound through the reference runtime with no `()` placeholder.
 - Router parity and enclosing failed-swap rollback before Router storage deletion.
 
-The full 0.7.8 gate additionally requires reactive AAA, control-plane, metadata, Wasm, wiki, context, and release evidence owned by their respective contracts.
+The full 0.7.9 gate additionally requires reactive AAA, control-plane, metadata, Wasm, wiki, context, and release evidence owned by their respective contracts.

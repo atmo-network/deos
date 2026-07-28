@@ -107,7 +107,8 @@ Zone: Observation domain UI; receives provider capabilities from its composition
   $effect(() => {
     const feed = selectedFeed;
     const age = maxAgeBlocks;
-    const actorId = selectedActorId === '' ? undefined : Number(selectedActorId);
+    const actorId =
+      selectedActorId === '' ? undefined : Number(selectedActorId);
     refreshKey;
     if (!feed || !loadInspection || age <= 0 || age > 0xffff_ffff) {
       inspection = null;
@@ -266,9 +267,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
             Reactive delivery
           </div>
           <div
-            class={compact
-              ? 'grid gap-1'
-              : 'grid grid-cols-2 gap-x-4 gap-y-1'}
+            class={compact ? 'grid gap-1' : 'grid grid-cols-2 gap-x-4 gap-y-1'}
           >
             <DetailRow label="Delivery status" value={delivery.status} />
             <DetailRow
@@ -294,7 +293,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
               label="Fair cursor"
               value={delivery.activeList.cursor == null
                 ? 'None'
-                : formatObservationFeed(delivery.activeList.cursor)}
+                : `${formatObservationFeed(delivery.activeList.cursor)} · position ${delivery.activeList.cursorPosition ?? 'unknown'}`}
             />
             <DetailRow
               label="Head / tail"
@@ -306,21 +305,50 @@ Zone: Observation domain UI; receives provider capabilities from its composition
               valueClass="tabnum"
             />
             <DetailRow
-              label="Occupied / remaining pages"
-              value={`${delivery.occupiedPageCount} / ${delivery.estimatedRemainingFanoutPages}`}
+              label="Occupied / current-revision pages"
+              value={`${delivery.occupiedPageCount} / ${delivery.remainingCurrentRevisionPages}`}
               valueClass="tabnum"
             />
             <DetailRow
-              label="Estimated fanout blocks"
-              value={`${delivery.estimatedRemainingBlocks} under ${delivery.budget.maxPagesPerBlock} pages/block`}
-              valueClass="tabnum"
+              label="Estimate evidence"
+              value={delivery.estimateStatus}
             />
+            {#if delivery.estimateStatus === 'Available'}
+              <DetailRow
+                label="Remaining service units"
+                value={delivery.remainingFanoutServiceUnits?.toString() ??
+                  'Unavailable'}
+                valueClass="tabnum"
+              />
+              <DetailRow
+                label="Exclusive-budget lower bound"
+                value={`${delivery.exclusiveBudgetLowerBoundBlocks} blocks`}
+                valueClass="tabnum"
+              />
+              <DetailRow
+                label="Fair-service ceiling"
+                value={`${delivery.fairServiceCeilingBlocks} blocks under ${delivery.budget.maxServiceUnitsPerBlock} units/block`}
+                valueClass="tabnum"
+              />
+            {/if}
             <DetailRow
-              label="Budget evidence"
+              label="Expected budget evidence"
               value={`${delivery.budget.runtimeIdentity} · ${delivery.budget.weightIdentity}`}
               valueClass="font-mono break-all"
             />
+            <DetailRow
+              label="Observed runtime evidence"
+              value={delivery.observedEvidenceIdentity ?? 'Unavailable'}
+              valueClass="font-mono break-all"
+            />
           </div>
+          {#if delivery.estimateStatus === 'EvidenceMismatch'}
+            <Notice variant="warn">
+              Numerical fanout estimates are unavailable: {delivery.evidenceMismatchReasons.join(
+                '; ',
+              )}. Canonical observation and AAA delivery state remain visible.
+            </Notice>
+          {/if}
           {#if delivery.selectedActor}
             {@const actor = delivery.selectedActor}
             <div class="grid gap-1 rounded-lg bg-(--mono-surface) p-2">

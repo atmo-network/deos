@@ -14,7 +14,11 @@ import type {
 import { PRECISION } from '$lib/economics';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
 import type { PricePoint, Quote, SwapResult } from '$lib/market/types';
-import type { ObservationFeedIdentity } from '$lib/observation/types';
+import { compareObservationRuntimeEvidence } from '$lib/observation/runtime-evidence';
+import type {
+  ObservationFanoutEvidence,
+  ObservationFeedIdentity,
+} from '$lib/observation/types';
 import type {
   AssetBalanceProjection,
   TransferAssetKey,
@@ -415,9 +419,27 @@ export class BlockchainAdapter implements Adapter {
     maxAgeBlocks: number,
     aaaId?: number,
   ) {
-    const snapshot = await (await this.ensurePapi()).snapshot();
+    const connection = await this.ensurePapi();
+    const snapshot = await connection.snapshot();
+    let evidence: ObservationFanoutEvidence;
+    try {
+      evidence = compareObservationRuntimeEvidence(
+        await connection.finalizedRuntimeEvidence(snapshot),
+      );
+    } catch (error) {
+      evidence = {
+        status: 'EvidenceMismatch',
+        observedIdentity: `Unavailable at ${snapshot.at}`,
+        reasons: [
+          error instanceof Error
+            ? error.message
+            : 'Finalized runtime evidence is unavailable',
+        ],
+      };
+    }
     return await this.observationReader.inspection(
       snapshot,
+      evidence,
       feed,
       maxAgeBlocks,
       aaaId,

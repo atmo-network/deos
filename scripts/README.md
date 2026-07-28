@@ -57,7 +57,10 @@ Each numbered command is independently callable by a human or CI from any workin
   Run only explicitly selected broad compositions for audits, CI, runtime build, dependency posture, or E2E. No plan runs by default: agents choose changed-scope routes through `alignment`, while humans/releases opt into `--audit-only`, one `--*-only` mode, or `--all`. Audit leaves remain owned by `alignment` and are orchestrated here without duplicating their implementation.
 
 - [aaa-release-gate.sh](./aaa-release-gate.sh)
-  Shared human/GitHub/CI/skill implementation of the AAA generated-manifest freshness, cross-language semantic contract, scheduler stress, and independent-runtime embedding gate. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
+  Shared human/GitHub/CI/skill implementation of the AAA generated-manifest freshness, cross-language semantic contract, scheduler stress, and independent-runtime embedding gate. Quick mode validates the reactive corpus contract; full acceptance executes every corpus anchor in the selected Cargo profile. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
+
+- [reactive-operations-corpus.sh](./reactive-operations-corpus.sh)
+  Validate all or one family of the machine-readable AAA reactive-operations corpus. `--execute` runs every selected Rust anchor, with optional `--release`; validation alone checks composition but does not execute tests. The contract enforces runtime identity, invariants, ordered checkpoints, rollback/weight ownership, deterministic seeds, and live anchors. Failures emit selected seed/initial-state evidence under `${TMPDIR:-/tmp}`.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
@@ -78,7 +81,7 @@ Commands executed through the shared script harness use compact output by defaul
   Idempotently prepare the composite live-chain state needed for local wallet, swap, and native-staking UI testing: verify genesis prerequisites, fund Alice, and create or top up the Native/foreign and `NTVE/stNTVE` pools. This is a named admin workflow rather than an atomic numbered leaf because it coordinates several state checks and transactions.
 
 - [export-papi-metadata.sh](./export-papi-metadata.sh)
-  Export native runtime metadata through the committed `deos-runtime` metadata example and optionally regenerate the web-client PAPI descriptors. This replaces the old ad hoc temporary-test metadata export workflow.
+  Export native runtime metadata through the committed `deos-runtime` metadata example, regenerate PAPI descriptors, and project observation-inspector runtime evidence from the exact metadata, compact Wasm, runtime constants, production AAA weights, and descriptor identity. This replaces ad hoc metadata export and independently maintained inspector constants.
 
 - [bootstrap-native-staking-local.sh](./bootstrap-native-staking-local.sh)
   Consolidated native staking bootstrap helper. `check` reads live readiness for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding. It never signs or submits transactions. The [`staking-delivery` skill](../.agents/skills/staking-delivery/SKILL.md) owns readiness sequencing, authority boundaries, and activation handoff without duplicating this command.

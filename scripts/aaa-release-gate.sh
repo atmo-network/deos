@@ -61,12 +61,19 @@ check_prerequisites() {
 run_gate() {
     run_shell_step "AAA gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-aaa --example semantic_manifest -- --check ../web-client/src/lib/automation/aaa-semantic-manifest.json"
     run_shell_step "AAA gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
+    run_shell_step "AAA gate: reactive operations corpus contract" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\""
 
     if [[ "$QUICK_MODE" == "1" ]]; then
         run_shell_step "AAA quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-deos-aaa -p deos-runtime -p pallet-aaa-embedding-fixture --all-targets -- -D warnings"
         run_shell_step "AAA quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-deos-aaa --lib && cargo test -q -p pallet-aaa-embedding-fixture --lib"
         run_shell_step "AAA quick gate: package archive surface" "" "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-aaa --allow-dirty --locked --list"
         return
+    fi
+
+    if [[ "$CARGO_PROFILE" == "release" ]]; then
+        run_shell_step "AAA gate: executable reactive operations corpus" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\" --execute --release"
+    else
+        run_shell_step "AAA gate: executable reactive operations corpus" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\" --execute"
     fi
 
     run_shell_step \

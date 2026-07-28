@@ -10,7 +10,9 @@ import type {
 } from './analysis.ts';
 import type { AaaPlanProjection } from './plan-artifact.ts';
 
-export const AAA_FEEDBACK_ANALYZER_VERSION = '2' as const;
+import { DEOS_OBSERVATION_RUNTIME_EVIDENCE } from '../observation/runtime-evidence.generated.ts';
+
+export const AAA_FEEDBACK_ANALYZER_VERSION = '3' as const;
 
 export type AaaObservationProvenance = 'Endogenous' | 'Exogenous' | 'Unknown';
 
@@ -22,10 +24,21 @@ export type AaaFeedbackEffectClass =
   | 'Mint'
   | 'Staking';
 
+export type AaaFeedbackExactResource = {
+  kind: 'Pool' | 'Reserve' | 'Tmc';
+  identity: string;
+  access: 'Read' | 'Write';
+  evidence: AaaFeedbackEvidenceReference;
+};
+
 export type AaaFeedbackActor = {
   id: string;
   analysis: ProgramStaticAnalysis;
-  sovereignAccount?: AaaPlanProjection;
+  exactResources?: AaaFeedbackExactResource[];
+  sovereignAccount?: {
+    value: AaaPlanProjection;
+    evidence: AaaFeedbackEvidenceReference;
+  };
 };
 
 export type AaaObservationEffectMatcher = {
@@ -34,15 +47,25 @@ export type AaaObservationEffectMatcher = {
   assetsWritten?: AaaPlanProjection[];
 };
 
+export type AaaFeedbackEvidenceReference = {
+  provenance: AaaFeedbackEvidenceProvenance;
+  identity: string | null;
+};
+
 export type AaaFeedbackObservation = {
   id: string;
   feed: AaaPlanProjection;
-  provenance: AaaObservationProvenance;
-  effectMatchers: AaaObservationEffectMatcher[];
+  producer: 'AxialRouterPreExecutionReserves' | 'DeclaredExternal' | 'Unknown';
+  lifecycle: 'Active' | 'Paused' | 'Deactivated' | 'Unknown';
+  evidence: AaaFeedbackEvidenceReference;
+  effectMatchers: Array<
+    AaaObservationEffectMatcher & { evidenceIdentity: string }
+  >;
 };
 
 export type AaaFeedbackParameterActuator = {
   id: string;
+  evidenceIdentity: string;
   controlledByActorId: string;
   affectsObservationIds: string[];
   affectsAssets: AaaPlanProjection[];
@@ -55,13 +78,44 @@ export type AaaFeedbackNode =
       kind: 'Observation';
       observationId: string;
       provenance: AaaObservationProvenance;
+      lifecycle: AaaFeedbackObservation['lifecycle'];
+      evidence: AaaFeedbackEvidenceReference;
     }
-  | { id: string; kind: 'Asset'; asset: AaaPlanProjection }
+  | {
+      id: string;
+      kind: 'Resource';
+      resourceKind:
+        | 'AccountAsset'
+        | 'AssetClass'
+        | 'Pool'
+        | 'Reserve'
+        | 'Tmc'
+        | 'Unknown';
+      resourceIdentity: string;
+      asset?: AaaPlanProjection;
+      account?: AaaPlanProjection;
+      actorId?: string;
+    }
   | { id: string; kind: 'ParameterActuator'; actuatorId: string };
+
+export type AaaFeedbackEdgeFamily =
+  | 'ReactiveCausal'
+  | 'ResourceCoupling'
+  | 'Coordination'
+  | 'DeclaredExternalCausality';
+
+export type AaaFeedbackEvidenceProvenance =
+  | 'RuntimeDerived'
+  | 'ArtifactDerived'
+  | 'Declared'
+  | 'Unknown';
 
 export type AaaFeedbackEdge = {
   from: string;
   to: string;
+  family: AaaFeedbackEdgeFamily;
+  provenance: AaaFeedbackEvidenceProvenance;
+  evidenceIdentities: string[];
   kind:
     | 'ObservationTrigger'
     | 'ObservationConditionRead'
@@ -71,43 +125,64 @@ export type AaaFeedbackEdge = {
     | 'SharedAssetRead'
     | 'ParameterControl'
     | 'ParameterEffectOnObservation'
-    | 'ParameterEffectOnAsset';
+    | 'ParameterEffectOnAsset'
+    | 'ExactResourceRead'
+    | 'ExactResourceWrite';
   actorId?: string;
   step?: number;
 };
+
+export type AaaFeedbackPathEdge = Pick<
+  AaaFeedbackEdge,
+  'from' | 'to' | 'kind' | 'family' | 'provenance' | 'evidenceIdentities'
+>;
 
 export type AaaFeedbackComponent = {
   kind: 'ReactiveSelfCycle' | 'ReactiveCrossActorCycle';
   actorIds: string[];
   observationIds: string[];
   observationProvenance: AaaObservationProvenance[];
-  assetNodeIds: string[];
+  resourceNodeIds: string[];
   actuatorIds: string[];
   canonicalPath: string[];
+  canonicalEdges: AaaFeedbackPathEdge[];
   interpretation: 'StructuralPossibility';
   stability: 'Unknown';
   probability: 'Unknown';
   causalStrength: 'Unknown';
 };
 
+export type AaaFeedbackRuntimeVerification = {
+  observedIdentity: string;
+  scheduler: {
+    maxServiceUnitsPerBlock: number;
+    maxActiveDirtyFeeds: number;
+    maxSubscriberPagesPerFeed: number;
+  };
+} & (
+  | { status: 'Verified'; reasons: [] }
+  | { status: 'EvidenceMismatch'; reasons: string[] }
+);
+
 export type AaaFeedbackEvidenceSnapshot = {
   identity: string;
   runtimeIdentity: string;
+  runtimeVerification: AaaFeedbackRuntimeVerification;
   weightIdentity: string;
   cadenceIdentity: string;
   estimatedDeliveryBlocks: number;
+  estimatedDeliveryEvidence: AaaFeedbackEvidenceReference;
   observationCadences: Array<{
     observationId: string;
     minimumUpdateIntervalBlocks: number;
+    evidence: AaaFeedbackEvidenceReference;
   }>;
   actorPolicies: Array<{
     actorId: string;
-    cooldownBlocks: number | null;
-    hysteresis: 'Present' | 'Absent' | 'Unknown';
-    persistenceBlocks: number | null;
     gain: 'High' | 'NotHigh' | 'Unknown';
-    gainEvidenceIdentity?: string;
+    gainEvidence: AaaFeedbackEvidenceReference;
     reactiveIngressPriority: 'Explicit' | 'Ordinary' | 'Unknown';
+    reactiveIngressPriorityEvidence: AaaFeedbackEvidenceReference;
   }>;
 };
 
@@ -126,6 +201,7 @@ export type AaaReactiveFinding =
       actorIds: string[];
       observationIds: string[];
       canonicalPath: string[];
+      canonicalEdges: AaaFeedbackPathEdge[];
       interpretation: 'StructuralPossibility';
     }
   | {
@@ -133,7 +209,29 @@ export type AaaReactiveFinding =
       actorIds: string[];
       observationIds: string[];
       canonicalPath: string[];
+      canonicalEdges: AaaFeedbackPathEdge[];
       interpretation: 'StructuralPossibility';
+    }
+  | {
+      kind:
+        | 'SharedAssetCoupling'
+        | 'SharedPoolCoupling'
+        | 'SharedReserveCoupling'
+        | 'SharedTmcCoupling'
+        | 'PotentialResourceContention';
+      resourceNodeId: string;
+      resourceKind:
+        | 'AccountAsset'
+        | 'AssetClass'
+        | 'Pool'
+        | 'Reserve'
+        | 'Tmc'
+        | 'Unknown';
+      actorIds: string[];
+      readerActorIds: string[];
+      writerActorIds: string[];
+      interpretation: 'ResourceCouplingOnly';
+      causalStrength: 'Unknown';
     }
   | {
       kind: 'ThresholdChatterRisk' | 'MissingHysteresisOrPersistence';
@@ -142,6 +240,7 @@ export type AaaReactiveFinding =
       steps: number[];
       interpretation: 'StructuralPossibility';
       evidenceIdentity: string;
+      artifactIdentity: string;
     }
   | {
       kind: 'HighGainActuation';
@@ -179,6 +278,7 @@ export type AaaFeedbackModel = {
   components: AaaFeedbackComponent[];
   findings: AaaReactiveFinding[];
   evidenceIdentity: string | null;
+  evidenceStatus: 'Absent' | 'Verified' | 'EvidenceMismatch';
   evidenceSnapshot: AaaFeedbackEvidenceSnapshot | null;
   limits: {
     maxNodes: number;
@@ -193,6 +293,50 @@ export type AaaFeedbackLimits = {
 
 const DEFAULT_MAX_NODES = 256;
 const DEFAULT_MAX_EDGES = 2_048;
+const EXPECTED_RUNTIME_EVIDENCE = DEOS_OBSERVATION_RUNTIME_EVIDENCE;
+const EXPECTED_OBSERVED_RUNTIME_IDENTITY = `${EXPECTED_RUNTIME_EVIDENCE.runtime.specName}@spec-${EXPECTED_RUNTIME_EVIDENCE.runtime.specVersion} · code:${EXPECTED_RUNTIME_EVIDENCE.runtimeCodeHash} · metadata:${EXPECTED_RUNTIME_EVIDENCE.metadataHash}`;
+
+function edgeEvidence(
+  kind: AaaFeedbackEdge['kind'],
+): Pick<AaaFeedbackEdge, 'family' | 'provenance'> {
+  switch (kind) {
+    case 'ObservationTrigger':
+    case 'ObservationConditionRead':
+      return { family: 'ReactiveCausal', provenance: 'ArtifactDerived' };
+    case 'ActorEffectOnObservation':
+      return { family: 'ReactiveCausal', provenance: 'Declared' };
+    case 'ActorSignal':
+      return { family: 'Coordination', provenance: 'ArtifactDerived' };
+    case 'ParameterControl':
+      return { family: 'Coordination', provenance: 'Declared' };
+    case 'ParameterEffectOnObservation':
+      return {
+        family: 'DeclaredExternalCausality',
+        provenance: 'Declared',
+      };
+    case 'SharedAssetWrite':
+    case 'SharedAssetRead':
+      return { family: 'ResourceCoupling', provenance: 'ArtifactDerived' };
+    case 'ParameterEffectOnAsset':
+      return { family: 'ResourceCoupling', provenance: 'Declared' };
+    case 'ExactResourceRead':
+    case 'ExactResourceWrite':
+      return { family: 'ResourceCoupling', provenance: 'Unknown' };
+  }
+}
+
+function observationProvenance(
+  observation: AaaFeedbackObservation,
+): AaaObservationProvenance {
+  switch (observation.producer) {
+    case 'AxialRouterPreExecutionReserves':
+      return 'Endogenous';
+    case 'DeclaredExternal':
+      return 'Exogenous';
+    case 'Unknown':
+      return 'Unknown';
+  }
+}
 
 function fingerprint(value: AaaPlanProjection) {
   return JSON.stringify(value);
@@ -200,6 +344,46 @@ function fingerprint(value: AaaPlanProjection) {
 
 function uniqueStrings(values: string[]) {
   return [...new Set(values)].sort();
+}
+
+function requireEvidenceReference(
+  evidence: AaaFeedbackEvidenceReference,
+  label: string,
+) {
+  if (evidence.provenance === 'Unknown') {
+    if (evidence.identity != null) {
+      throw new Error(`${label} unknown evidence cannot claim an identity`);
+    }
+    return;
+  }
+  if (evidence.identity == null || evidence.identity.trim().length === 0) {
+    throw new Error(`${label} evidence identity is required`);
+  }
+}
+
+function requireEvidenceProvenance(
+  evidence: AaaFeedbackEvidenceReference,
+  allowed: AaaFeedbackEvidenceProvenance[],
+  expectedIdentity: string | null,
+  label: string,
+) {
+  requireEvidenceReference(evidence, label);
+  if (!allowed.includes(evidence.provenance)) {
+    throw new Error(`${label} uses disallowed evidence provenance`);
+  }
+  if (
+    evidence.provenance !== 'Unknown' &&
+    expectedIdentity != null &&
+    evidence.identity !== expectedIdentity
+  ) {
+    throw new Error(`${label} evidence identity mismatch`);
+  }
+}
+
+function requireEvidenceIdentity(identity: string, label: string) {
+  if (identity.trim().length === 0) {
+    throw new Error(`${label} evidence identity is required`);
+  }
 }
 
 function requireUniqueIds(values: Array<{ id: string }>, label: string) {
@@ -283,6 +467,23 @@ function canonicalCyclePath(
   throw new Error('Feedback component must contain a cycle');
 }
 
+function canonicalPathEdges(
+  path: string[],
+  edges: AaaFeedbackEdge[],
+): AaaFeedbackPathEdge[] {
+  return path.slice(0, -1).map((from, index) => {
+    const to = path[index + 1];
+    const matches = edges
+      .filter((edge) => edge.from === from && edge.to === to)
+      .sort((left, right) => left.kind.localeCompare(right.kind));
+    if (matches.length === 0) {
+      throw new Error('Canonical feedback path is missing edge evidence');
+    }
+    const { kind, family, provenance, evidenceIdentities } = matches[0];
+    return { from, to, kind, family, provenance, evidenceIdentities };
+  });
+}
+
 function stronglyConnectedComponents(
   nodeIds: string[],
   adjacency: Map<string, string[]>,
@@ -351,37 +552,118 @@ export function analyzeAaaFeedback(input: {
   );
   const observationFeeds = new Set<string>();
   for (const observation of input.observations) {
+    const derivedProvenance = observationProvenance(observation);
+    requireEvidenceProvenance(
+      observation.evidence,
+      observation.producer === 'AxialRouterPreExecutionReserves'
+        ? ['RuntimeDerived']
+        : observation.producer === 'DeclaredExternal'
+          ? ['Declared']
+          : ['Unknown'],
+      null,
+      `Observation ${observation.id}`,
+    );
+    if (
+      (observation.lifecycle === 'Unknown') !==
+      (derivedProvenance === 'Unknown')
+    ) {
+      throw new Error(
+        `Observation ${observation.id} lifecycle and producer evidence disagree`,
+      );
+    }
     const feed = fingerprint(observation.feed);
     if (observationFeeds.has(feed)) {
       throw new Error('Observation feed projections must be unique');
     }
     observationFeeds.add(feed);
     if (
-      observation.provenance === 'Exogenous' &&
+      derivedProvenance === 'Exogenous' &&
       observation.effectMatchers.length > 0
     ) {
       throw new Error('Exogenous observations cannot declare actor effects');
     }
     for (const matcher of observation.effectMatchers) {
+      requireEvidenceIdentity(
+        matcher.evidenceIdentity,
+        `Observation ${observation.id} effect matcher`,
+      );
       if (matcher.actorId != null && !actorById.has(matcher.actorId)) {
         throw new Error(`Unknown effect-matcher actor: ${matcher.actorId}`);
       }
     }
   }
   const sovereignAccounts = new Set<string>();
+  const sovereignEvidenceIdentities = new Set<string>();
   for (const actor of input.actors) {
     if (actor.sovereignAccount != null) {
-      const account = fingerprint(actor.sovereignAccount);
+      requireEvidenceProvenance(
+        actor.sovereignAccount.evidence,
+        ['RuntimeDerived'],
+        null,
+        `Actor ${actor.id} sovereign account`,
+      );
+      sovereignEvidenceIdentities.add(
+        actor.sovereignAccount.evidence.identity!,
+      );
+      const account = fingerprint(actor.sovereignAccount.value);
       if (sovereignAccounts.has(account)) {
         throw new Error('Actor sovereign accounts must be unique');
       }
       sovereignAccounts.add(account);
     }
+    const exactResourceKeys = new Set<string>();
+    for (const resource of actor.exactResources ?? []) {
+      requireEvidenceIdentity(
+        resource.identity,
+        `Actor ${actor.id} exact resource`,
+      );
+      requireEvidenceProvenance(
+        resource.evidence,
+        ['RuntimeDerived', 'ArtifactDerived'],
+        resource.evidence.provenance === 'ArtifactDerived'
+          ? actor.analysis.identity.planId
+          : null,
+        `Actor ${actor.id} ${resource.kind} resource`,
+      );
+      if (resource.evidence.provenance === 'RuntimeDerived') {
+        sovereignEvidenceIdentities.add(resource.evidence.identity!);
+      }
+      const key = `${resource.kind}|${resource.identity}|${resource.access}`;
+      if (exactResourceKeys.has(key)) {
+        throw new Error(`Actor ${actor.id} exact resources must be unique`);
+      }
+      exactResourceKeys.add(key);
+    }
+  }
+  if (sovereignEvidenceIdentities.size > 1) {
+    throw new Error(
+      'Runtime-derived actor resources must share one state identity',
+    );
   }
   for (const actor of input.actors) {
     if (actor.analysis.provenance !== 'StaticStructuralProjection') {
       throw new Error('Actors must use manifest-authoritative static analysis');
     }
+    requireEvidenceIdentity(
+      actor.analysis.identity.planId,
+      `Actor ${actor.id} artifact`,
+    );
+  }
+  const runtimeContexts = new Set(
+    input.actors.map((actor) =>
+      JSON.stringify({
+        genesisHash: actor.analysis.identity.genesisHash,
+        metadataHash: actor.analysis.identity.metadataHash,
+        specVersion: actor.analysis.identity.specVersion,
+        transactionVersion: actor.analysis.identity.transactionVersion,
+        runtimeModelIdentity: actor.analysis.identity.runtimeModelIdentity,
+        weightModelIdentity: actor.analysis.identity.weightModelIdentity,
+        analyzerVersion: actor.analysis.identity.analyzerVersion,
+      }),
+    ),
+  );
+  if (runtimeContexts.size > 1) {
+    throw new Error('Actor analyses must share one runtime evidence context');
   }
   for (const actuator of actuators) {
     if (!actorById.has(actuator.controlledByActorId)) {
@@ -389,6 +671,10 @@ export function analyzeAaaFeedback(input: {
         `Unknown actuator controller: ${actuator.controlledByActorId}`,
       );
     }
+    requireEvidenceIdentity(
+      actuator.evidenceIdentity,
+      `Parameter actuator ${actuator.id}`,
+    );
     for (const observationId of actuator.affectsObservationIds) {
       if (!observationById.has(observationId)) {
         throw new Error(`Unknown actuator observation: ${observationId}`);
@@ -406,6 +692,40 @@ export function analyzeAaaFeedback(input: {
       if (identity.trim().length === 0)
         throw new Error(`${label} identity is required`);
     }
+    if (
+      evidence.runtimeIdentity !== evidence.runtimeVerification.observedIdentity
+    ) {
+      throw new Error('Runtime verification identity mismatch');
+    }
+    if (evidence.runtimeVerification.status === 'Verified') {
+      if (evidence.runtimeVerification.reasons.length !== 0) {
+        throw new Error(
+          'Verified runtime evidence cannot carry mismatch reasons',
+        );
+      }
+      if (
+        evidence.runtimeIdentity !== EXPECTED_OBSERVED_RUNTIME_IDENTITY ||
+        evidence.weightIdentity !== EXPECTED_RUNTIME_EVIDENCE.weightIdentity ||
+        evidence.runtimeVerification.scheduler.maxServiceUnitsPerBlock !==
+          EXPECTED_RUNTIME_EVIDENCE.fanout.maxServiceUnitsPerBlock ||
+        evidence.runtimeVerification.scheduler.maxActiveDirtyFeeds !==
+          EXPECTED_RUNTIME_EVIDENCE.fanout.maxActiveDirtyFeeds ||
+        evidence.runtimeVerification.scheduler.maxSubscriberPagesPerFeed !==
+          EXPECTED_RUNTIME_EVIDENCE.fanout.maxSubscriberPagesPerFeed
+      ) {
+        throw new Error(
+          'Verified runtime evidence differs from generated truth',
+        );
+      }
+    } else if (evidence.runtimeVerification.reasons.length === 0) {
+      throw new Error('Runtime evidence mismatch requires reasons');
+    }
+    requireEvidenceProvenance(
+      evidence.estimatedDeliveryEvidence,
+      ['RuntimeDerived'],
+      evidence.identity,
+      'Estimated delivery',
+    );
     if (
       !Number.isSafeInteger(evidence.estimatedDeliveryBlocks) ||
       evidence.estimatedDeliveryBlocks < 0
@@ -430,6 +750,12 @@ export function analyzeAaaFeedback(input: {
           `Unknown cadence observation: ${cadence.observationId}`,
         );
       }
+      requireEvidenceProvenance(
+        cadence.evidence,
+        ['RuntimeDerived'],
+        evidence.cadenceIdentity,
+        `Observation ${cadence.observationId} cadence`,
+      );
       if (
         !Number.isSafeInteger(cadence.minimumUpdateIntervalBlocks) ||
         cadence.minimumUpdateIntervalBlocks < 1
@@ -443,40 +769,85 @@ export function analyzeAaaFeedback(input: {
       if (!actorById.has(policy.actorId)) {
         throw new Error(`Unknown evidence actor: ${policy.actorId}`);
       }
-      for (const [label, blocks] of [
-        ['cooldownBlocks', policy.cooldownBlocks],
-        ['persistenceBlocks', policy.persistenceBlocks],
-      ] as const) {
-        if (blocks != null && (!Number.isSafeInteger(blocks) || blocks < 0)) {
-          throw new Error(
-            `${label} must be a non-negative safe integer or null`,
-          );
-        }
+      requireEvidenceProvenance(
+        policy.gainEvidence,
+        ['Declared', 'Unknown'],
+        null,
+        `Actor ${policy.actorId} gain`,
+      );
+      requireEvidenceProvenance(
+        policy.reactiveIngressPriorityEvidence,
+        ['RuntimeDerived', 'Unknown'],
+        evidence.runtimeIdentity,
+        `Actor ${policy.actorId} reactive ingress priority`,
+      );
+      if (
+        (policy.gain === 'Unknown') !==
+        (policy.gainEvidence.provenance === 'Unknown')
+      ) {
+        throw new Error(`Actor ${policy.actorId} gain evidence disagrees`);
       }
       if (
-        policy.gain === 'High' &&
-        (policy.gainEvidenceIdentity == null ||
-          policy.gainEvidenceIdentity.trim().length === 0)
+        (policy.reactiveIngressPriority === 'Unknown') !==
+        (policy.reactiveIngressPriorityEvidence.provenance === 'Unknown')
       ) {
-        throw new Error('High gain requires gainEvidenceIdentity');
+        throw new Error(
+          `Actor ${policy.actorId} reactive ingress evidence disagrees`,
+        );
       }
     }
   }
 
-  const assetByFingerprint = new Map<string, AaaPlanProjection>();
-  const collectAsset = (asset: AaaPlanProjection) => {
-    assetByFingerprint.set(fingerprint(asset), asset);
+  type ResourceDescriptor =
+    Extract<AaaFeedbackNode, { kind: 'Resource' }> extends infer Resource
+      ? Omit<Resource, 'id' | 'kind'>
+      : never;
+  const resourceByKey = new Map<string, ResourceDescriptor>();
+  const actorResourceKey = (
+    actor: AaaFeedbackActor,
+    asset: AaaPlanProjection,
+  ) => {
+    const assetIdentity = fingerprint(asset);
+    if (actor.sovereignAccount != null) {
+      return `account:${fingerprint(actor.sovereignAccount.value)}|asset:${assetIdentity}`;
+    }
+    return `unknown-actor:${actor.id}|asset:${assetIdentity}`;
   };
   for (const actor of input.actors) {
-    actor.analysis.economicSurface.assetsRead.forEach(collectAsset);
-    actor.analysis.economicSurface.assetsWritten.forEach(collectAsset);
+    for (const asset of [
+      ...actor.analysis.economicSurface.assetsRead,
+      ...actor.analysis.economicSurface.assetsWritten,
+    ]) {
+      const key = actorResourceKey(actor, asset);
+      resourceByKey.set(key, {
+        resourceKind:
+          actor.sovereignAccount == null ? 'Unknown' : 'AccountAsset',
+        resourceIdentity: key,
+        asset,
+        account: actor.sovereignAccount?.value,
+        actorId: actor.id,
+      });
+    }
+    for (const resource of actor.exactResources ?? []) {
+      const key = `exact:${resource.kind}:${resource.identity}`;
+      resourceByKey.set(key, {
+        resourceKind: resource.kind,
+        resourceIdentity: resource.identity,
+      });
+    }
   }
-  actuators.flatMap((actuator) => actuator.affectsAssets).forEach(collectAsset);
-  const assetEntries = [...assetByFingerprint.entries()].sort(
-    ([left], [right]) => left.localeCompare(right),
+  for (const asset of actuators.flatMap((actuator) => actuator.affectsAssets)) {
+    resourceByKey.set(`asset-class:${fingerprint(asset)}`, {
+      resourceKind: 'AssetClass',
+      resourceIdentity: fingerprint(asset),
+      asset,
+    });
+  }
+  const resourceEntries = [...resourceByKey.entries()].sort(([left], [right]) =>
+    left.localeCompare(right),
   );
-  const assetNodeByFingerprint = new Map(
-    assetEntries.map(([key], index) => [key, `asset:${index}`]),
+  const resourceNodeByKey = new Map(
+    resourceEntries.map(([key], index) => [key, `resource:${index}`]),
   );
 
   const actorNode = (id: string) => `actor:${id}`;
@@ -495,13 +866,15 @@ export function analyzeAaaFeedback(input: {
         id: observationNode(observation.id),
         kind: 'Observation' as const,
         observationId: observation.id,
-        provenance: observation.provenance,
+        provenance: observationProvenance(observation),
+        lifecycle: observation.lifecycle,
+        evidence: observation.evidence,
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
-    ...assetEntries.map(([, asset], index) => ({
-      id: `asset:${index}`,
-      kind: 'Asset' as const,
-      asset,
+    ...resourceEntries.map(([, resource], index) => ({
+      id: `resource:${index}`,
+      kind: 'Resource' as const,
+      ...resource,
     })),
     ...actuators
       .map((actuator) => ({
@@ -514,29 +887,75 @@ export function analyzeAaaFeedback(input: {
   if (nodes.length > maxNodes) throw new Error('Feedback node limit exceeded');
 
   const edges: AaaFeedbackEdge[] = [];
-  const addEdge = (edge: AaaFeedbackEdge) => edges.push(edge);
+  const addEdge = (
+    edge: Omit<AaaFeedbackEdge, 'family' | 'provenance' | 'evidenceIdentities'>,
+    suppliedEvidenceIdentities: Array<string | null> = [],
+    provenanceOverride?: AaaFeedbackEvidenceProvenance,
+  ) => {
+    const artifactKinds = new Set<AaaFeedbackEdge['kind']>([
+      'ObservationTrigger',
+      'ObservationConditionRead',
+      'ActorEffectOnObservation',
+      'ActorSignal',
+      'SharedAssetWrite',
+      'SharedAssetRead',
+    ]);
+    const artifactIdentity =
+      edge.actorId != null && artifactKinds.has(edge.kind)
+        ? actorById.get(edge.actorId)?.analysis.identity.planId
+        : null;
+    const evidenceIdentities = uniqueStrings(
+      [artifactIdentity, ...suppliedEvidenceIdentities].filter(
+        (identity): identity is string => identity != null,
+      ),
+    );
+    if (evidenceIdentities.length === 0) {
+      throw new Error(`${edge.kind} edge requires supplying evidence identity`);
+    }
+    const classification = edgeEvidence(edge.kind);
+    edges.push({
+      ...edge,
+      ...classification,
+      provenance: provenanceOverride ?? classification.provenance,
+      evidenceIdentities,
+    });
+  };
   const feedToObservation = new Map(
     input.observations.map((observation) => [
       fingerprint(observation.feed),
       observation.id,
     ]),
   );
+  const observationEvidenceIdentity = new Map(
+    input.observations.map((observation) => [
+      observation.id,
+      observation.evidence.identity,
+    ]),
+  );
   const sovereignToActor = new Map(
     input.actors
       .filter((actor) => actor.sovereignAccount != null)
-      .map((actor) => [fingerprint(actor.sovereignAccount!), actor.id]),
+      .map((actor) => [fingerprint(actor.sovereignAccount!.value), actor.id]),
+  );
+  const sovereignEvidenceByActor = new Map(
+    input.actors
+      .filter((actor) => actor.sovereignAccount != null)
+      .map((actor) => [actor.id, actor.sovereignAccount!.evidence.identity]),
   );
 
   for (const actor of input.actors) {
     for (const feed of actor.analysis.trigger?.observationFeeds ?? []) {
       const observationId = feedToObservation.get(fingerprint(feed));
       if (observationId != null) {
-        addEdge({
-          from: observationNode(observationId),
-          to: actorNode(actor.id),
-          kind: 'ObservationTrigger',
-          actorId: actor.id,
-        });
+        addEdge(
+          {
+            from: observationNode(observationId),
+            to: actorNode(actor.id),
+            kind: 'ObservationTrigger',
+            actorId: actor.id,
+          },
+          [observationEvidenceIdentity.get(observationId) ?? null],
+        );
       }
     }
     for (const step of actor.analysis.steps) {
@@ -545,82 +964,127 @@ export function analyzeAaaFeedback(input: {
         const surface = condition.readSurface as { feed: AaaPlanProjection };
         const observationId = feedToObservation.get(fingerprint(surface.feed));
         if (observationId != null) {
-          addEdge({
-            from: observationNode(observationId),
-            to: actorNode(actor.id),
-            kind: 'ObservationConditionRead',
-            actorId: actor.id,
-            step: step.index,
-          });
+          addEdge(
+            {
+              from: observationNode(observationId),
+              to: actorNode(actor.id),
+              kind: 'ObservationConditionRead',
+              actorId: actor.id,
+              step: step.index,
+            },
+            [observationEvidenceIdentity.get(observationId) ?? null],
+          );
         }
       }
       for (const observation of input.observations) {
-        if (
-          observation.effectMatchers.some((matcher) =>
-            matchesEffect(actor, step, matcher),
-          )
-        ) {
-          addEdge({
-            from: actorNode(actor.id),
-            to: observationNode(observation.id),
-            kind: 'ActorEffectOnObservation',
-            actorId: actor.id,
-            step: step.index,
-          });
+        if (observation.lifecycle === 'Deactivated') continue;
+        const matchingEffects = observation.effectMatchers.filter((matcher) =>
+          matchesEffect(actor, step, matcher),
+        );
+        if (matchingEffects.length > 0) {
+          addEdge(
+            {
+              from: actorNode(actor.id),
+              to: observationNode(observation.id),
+              kind: 'ActorEffectOnObservation',
+              actorId: actor.id,
+              step: step.index,
+            },
+            [
+              observation.evidence.identity,
+              ...matchingEffects.map((matcher) => matcher.evidenceIdentity),
+            ],
+          );
         }
       }
       for (const recipient of step.economicSurface.possibleActorSignals) {
         if (recipient.kind !== 'Explicit') continue;
         const recipientId = sovereignToActor.get(fingerprint(recipient.value));
         if (recipientId != null) {
-          addEdge({
-            from: actorNode(actor.id),
-            to: actorNode(recipientId),
-            kind: 'ActorSignal',
-            actorId: actor.id,
-            step: step.index,
-          });
+          addEdge(
+            {
+              from: actorNode(actor.id),
+              to: actorNode(recipientId),
+              kind: 'ActorSignal',
+              actorId: actor.id,
+              step: step.index,
+            },
+            [sovereignEvidenceByActor.get(recipientId) ?? null],
+          );
         }
       }
     }
     for (const asset of actor.analysis.economicSurface.assetsWritten) {
       addEdge({
         from: actorNode(actor.id),
-        to: assetNodeByFingerprint.get(fingerprint(asset))!,
+        to: resourceNodeByKey.get(actorResourceKey(actor, asset))!,
         kind: 'SharedAssetWrite',
         actorId: actor.id,
       });
     }
     for (const asset of actor.analysis.economicSurface.assetsRead) {
       addEdge({
-        from: assetNodeByFingerprint.get(fingerprint(asset))!,
+        from: resourceNodeByKey.get(actorResourceKey(actor, asset))!,
         to: actorNode(actor.id),
         kind: 'SharedAssetRead',
         actorId: actor.id,
       });
     }
+    for (const resource of actor.exactResources ?? []) {
+      const resourceNode = resourceNodeByKey.get(
+        `exact:${resource.kind}:${resource.identity}`,
+      )!;
+      addEdge(
+        {
+          from: resource.access === 'Read' ? resourceNode : actorNode(actor.id),
+          to: resource.access === 'Read' ? actorNode(actor.id) : resourceNode,
+          kind:
+            resource.access === 'Read'
+              ? 'ExactResourceRead'
+              : 'ExactResourceWrite',
+          actorId: actor.id,
+        },
+        [resource.evidence.identity],
+        resource.evidence.provenance,
+      );
+    }
   }
 
   for (const actuator of actuators) {
-    addEdge({
-      from: actorNode(actuator.controlledByActorId),
-      to: actuatorNode(actuator.id),
-      kind: 'ParameterControl',
-      actorId: actuator.controlledByActorId,
-    });
+    addEdge(
+      {
+        from: actorNode(actuator.controlledByActorId),
+        to: actuatorNode(actuator.id),
+        kind: 'ParameterControl',
+        actorId: actuator.controlledByActorId,
+      },
+      [actuator.evidenceIdentity],
+    );
     for (const observationId of actuator.affectsObservationIds) {
-      addEdge({
-        from: actuatorNode(actuator.id),
-        to: observationNode(observationId),
-        kind: 'ParameterEffectOnObservation',
-      });
+      if (observationById.get(observationId)?.lifecycle === 'Deactivated') {
+        continue;
+      }
+      addEdge(
+        {
+          from: actuatorNode(actuator.id),
+          to: observationNode(observationId),
+          kind: 'ParameterEffectOnObservation',
+        },
+        [
+          actuator.evidenceIdentity,
+          observationEvidenceIdentity.get(observationId) ?? null,
+        ],
+      );
     }
     for (const asset of actuator.affectsAssets) {
-      addEdge({
-        from: actuatorNode(actuator.id),
-        to: assetNodeByFingerprint.get(fingerprint(asset))!,
-        kind: 'ParameterEffectOnAsset',
-      });
+      addEdge(
+        {
+          from: actuatorNode(actuator.id),
+          to: resourceNodeByKey.get(`asset-class:${fingerprint(asset)}`)!,
+          kind: 'ParameterEffectOnAsset',
+        },
+        [actuator.evidenceIdentity],
+      );
     }
   }
 
@@ -640,8 +1104,11 @@ export function analyzeAaaFeedback(input: {
     throw new Error('Feedback edge limit exceeded');
   }
 
+  const cycleEdges = deduplicatedEdges.filter(
+    (edge) => edge.family !== 'ResourceCoupling',
+  );
   const adjacency = new Map(nodes.map((node) => [node.id, [] as string[]]));
-  for (const edge of deduplicatedEdges) adjacency.get(edge.from)!.push(edge.to);
+  for (const edge of cycleEdges) adjacency.get(edge.from)!.push(edge.to);
   for (const targets of adjacency.values()) targets.sort();
   const nodeById = new Map(nodes.map((node) => [node.id, node]));
   const components = stronglyConnectedComponents(
@@ -653,6 +1120,16 @@ export function analyzeAaaFeedback(input: {
         component.length > 1 ||
         (adjacency.get(component[0]) ?? []).includes(component[0]),
     )
+    .filter((component) => {
+      const members = new Set(component);
+      const internalEdges = cycleEdges.filter(
+        (edge) => members.has(edge.from) && members.has(edge.to),
+      );
+      return (
+        component.some((id) => nodeById.get(id)?.kind === 'Observation') &&
+        internalEdges.some((edge) => edge.family === 'ReactiveCausal')
+      );
+    })
     .map((component): AaaFeedbackComponent => {
       const members = component.map((id) => nodeById.get(id)!);
       const actorIds = uniqueStrings(
@@ -667,6 +1144,7 @@ export function analyzeAaaFeedback(input: {
         (node): node is Extract<AaaFeedbackNode, { kind: 'Observation' }> =>
           node.kind === 'Observation',
       );
+      const canonicalPath = canonicalCyclePath(component, adjacency);
       return {
         kind:
           actorIds.length <= 1
@@ -679,9 +1157,9 @@ export function analyzeAaaFeedback(input: {
         observationProvenance: uniqueStrings(
           observations.map((node) => node.provenance),
         ) as AaaObservationProvenance[],
-        assetNodeIds: uniqueStrings(
+        resourceNodeIds: uniqueStrings(
           members
-            .filter((node) => node.kind === 'Asset')
+            .filter((node) => node.kind === 'Resource')
             .map((node) => node.id),
         ),
         actuatorIds: uniqueStrings(
@@ -696,7 +1174,8 @@ export function analyzeAaaFeedback(input: {
             )
             .map((node) => node.actuatorId),
         ),
-        canonicalPath: canonicalCyclePath(component, adjacency),
+        canonicalPath,
+        canonicalEdges: canonicalPathEdges(canonicalPath, cycleEdges),
         interpretation: 'StructuralPossibility',
         stability: 'Unknown',
         probability: 'Unknown',
@@ -714,6 +1193,7 @@ export function analyzeAaaFeedback(input: {
       actorIds: component.actorIds,
       observationIds: component.observationIds,
       canonicalPath: component.canonicalPath,
+      canonicalEdges: component.canonicalEdges,
       interpretation: 'StructuralPossibility',
     });
     if (component.observationProvenance.includes('Endogenous')) {
@@ -721,10 +1201,75 @@ export function analyzeAaaFeedback(input: {
         kind: 'EndogenousObservationFeedback',
         actorIds: component.actorIds,
         observationIds: component.observationIds.filter(
-          (id) => observationById.get(id)?.provenance === 'Endogenous',
+          (id) =>
+            observationProvenance(observationById.get(id)!) === 'Endogenous',
         ),
         canonicalPath: component.canonicalPath,
+        canonicalEdges: component.canonicalEdges,
         interpretation: 'StructuralPossibility',
+      });
+    }
+  }
+
+  for (const node of nodes.filter(
+    (candidate): candidate is Extract<AaaFeedbackNode, { kind: 'Resource' }> =>
+      candidate.kind === 'Resource',
+  )) {
+    const writerActorIds = uniqueStrings(
+      deduplicatedEdges
+        .filter(
+          (edge) =>
+            edge.family === 'ResourceCoupling' &&
+            edge.to === node.id &&
+            (edge.kind === 'SharedAssetWrite' ||
+              edge.kind === 'ExactResourceWrite') &&
+            edge.actorId != null,
+        )
+        .map((edge) => edge.actorId!),
+    );
+    const readerActorIds = uniqueStrings(
+      deduplicatedEdges
+        .filter(
+          (edge) =>
+            edge.family === 'ResourceCoupling' &&
+            edge.from === node.id &&
+            (edge.kind === 'SharedAssetRead' ||
+              edge.kind === 'ExactResourceRead') &&
+            edge.actorId != null,
+        )
+        .map((edge) => edge.actorId!),
+    );
+    const actorIds = uniqueStrings([...writerActorIds, ...readerActorIds]);
+    if (actorIds.length >= 2) {
+      const couplingKind =
+        node.resourceKind === 'Pool'
+          ? 'SharedPoolCoupling'
+          : node.resourceKind === 'Reserve'
+            ? 'SharedReserveCoupling'
+            : node.resourceKind === 'Tmc'
+              ? 'SharedTmcCoupling'
+              : 'SharedAssetCoupling';
+      findings.push({
+        kind: couplingKind,
+        resourceNodeId: node.id,
+        resourceKind: node.resourceKind,
+        actorIds,
+        readerActorIds,
+        writerActorIds,
+        interpretation: 'ResourceCouplingOnly',
+        causalStrength: 'Unknown',
+      });
+    }
+    if (writerActorIds.length >= 2) {
+      findings.push({
+        kind: 'PotentialResourceContention',
+        resourceNodeId: node.id,
+        resourceKind: node.resourceKind,
+        actorIds,
+        readerActorIds,
+        writerActorIds,
+        interpretation: 'ResourceCouplingOnly',
+        causalStrength: 'Unknown',
       });
     }
   }
@@ -748,7 +1293,7 @@ export function analyzeAaaFeedback(input: {
     });
   }
 
-  if (evidence != null) {
+  if (evidence?.runtimeVerification.status === 'Verified') {
     const cadenceByObservation = new Map(
       evidence.observationCadences.map((cadence) => [
         cadence.observationId,
@@ -804,17 +1349,14 @@ export function analyzeAaaFeedback(input: {
             component.actorIds.includes(actor.id) &&
             component.observationIds.includes(observationId),
         );
-        if (
-          participatesInFeedback &&
-          policy?.hysteresis === 'Absent' &&
-          (policy.persistenceBlocks == null || policy.persistenceBlocks === 0)
-        ) {
+        if (participatesInFeedback) {
           const base = {
             actorId: actor.id,
             observationId,
             steps: [...new Set(steps)].sort((left, right) => left - right),
             interpretation: 'StructuralPossibility' as const,
             evidenceIdentity: evidence.identity,
+            artifactIdentity: actor.analysis.identity.planId,
           };
           findings.push({ kind: 'MissingHysteresisOrPersistence', ...base });
           findings.push({ kind: 'ThresholdChatterRisk', ...base });
@@ -826,21 +1368,21 @@ export function analyzeAaaFeedback(input: {
           actorId: actor.id,
           interpretation: 'DeclaredEvidence',
           evidenceIdentity: evidence.identity,
-          gainEvidenceIdentity: policy.gainEvidenceIdentity!,
+          gainEvidenceIdentity: policy.gainEvidence.identity!,
         });
       }
-      if (policy?.cooldownBlocks != null) {
+      if (actor.analysis.cooldownBlocks != null) {
         for (const observationId of triggeredObservationIds) {
           const cadence = cadenceByObservation.get(observationId);
           if (
             cadence != null &&
-            policy.cooldownBlocks > cadence.minimumUpdateIntervalBlocks
+            actor.analysis.cooldownBlocks > cadence.minimumUpdateIntervalBlocks
           ) {
             findings.push({
               kind: 'CooldownFeedRateMismatch',
               actorId: actor.id,
               observationId,
-              cooldownBlocks: policy.cooldownBlocks,
+              cooldownBlocks: actor.analysis.cooldownBlocks,
               minimumUpdateIntervalBlocks: cadence.minimumUpdateIntervalBlocks,
               evidenceIdentity: evidence.identity,
             });
@@ -875,6 +1417,7 @@ export function analyzeAaaFeedback(input: {
     components,
     findings,
     evidenceIdentity: evidence?.identity ?? null,
+    evidenceStatus: evidence?.runtimeVerification.status ?? 'Absent',
     evidenceSnapshot: evidence ?? null,
     limits: { maxNodes, maxEdges },
   };

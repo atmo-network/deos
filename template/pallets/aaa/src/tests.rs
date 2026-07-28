@@ -583,6 +583,42 @@ fn last_subscription_cleanup_unlinks_exact_dirty_feed() {
 }
 
 #[test]
+fn subscription_cleanup_failure_rolls_back_actor_deactivation() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let aaa_id = create_system_with(
+      ALICE,
+      observation_schedule(vec![18]),
+      None,
+      inert_execution_plan(),
+    );
+    assert_ok!(AAA::note_observation_changed(18, 1));
+    crate::DirtyObservationListState::<Test>::mutate(|list| list.tail = None);
+    let actor_before = AAA::actor_hot(aaa_id).expect("active actor");
+    let dirty_before = AAA::dirty_observation_feeds(18).expect("dirty feed");
+    let list_before = AAA::dirty_observation_list();
+    let events_before = System::events();
+
+    assert_noop!(
+      AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), aaa_id),
+      Error::<Test>::DirtyObservationInvariant
+    );
+    assert_eq!(AAA::actor_hot(aaa_id), Some(actor_before));
+    assert_eq!(AAA::observation_subscriber_count(18), 1);
+    assert_eq!(AAA::dirty_observation_feeds(18), Some(dirty_before));
+    assert_eq!(AAA::dirty_observation_list(), list_before);
+    assert_eq!(System::events(), events_before);
+
+    crate::DirtyObservationListState::<Test>::mutate(|list| list.tail = Some(18));
+    assert_ok!(AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
+    assert!(AAA::actor_hot(aaa_id).is_none());
+    assert_eq!(AAA::observation_subscriber_count(18), 0);
+    assert!(AAA::dirty_observation_feeds(18).is_none());
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
+  });
+}
+
+#[test]
 fn active_dirty_list_rotates_fairly_and_repairs_cursor_on_removal() {
   new_test_ext().execute_with(|| {
     frame_system::Pallet::<Test>::set_block_number(1);
@@ -634,6 +670,71 @@ fn active_dirty_list_rotates_fairly_and_repairs_cursor_on_removal() {
     assert!(!crate::Pallet::<Test>::do_fanout_dirty_observation_page().expect("last page"));
     assert_eq!(AAA::dirty_observation_list(), Default::default());
     assert!(AAA::pending_signal(actors[2]));
+    #[cfg(feature = "try-runtime")]
+    assert_ok!(crate::Pallet::<Test>::do_try_state());
+  });
+}
+
+#[test]
+fn multiple_dense_dirty_feeds_receive_round_robin_service() {
+  new_test_ext().execute_with(|| {
+    frame_system::Pallet::<Test>::set_block_number(1);
+    let page_size: u32 = <Test as crate::Config>::QueuePageSize::get();
+    let feeds = [21u32, 22, 23];
+    let actors = feeds
+      .into_iter()
+      .map(|feed| {
+        (0..=page_size)
+          .map(|_| {
+            create_system_with(
+              ALICE,
+              observation_schedule(vec![feed]),
+              None,
+              inert_execution_plan(),
+            )
+          })
+          .collect::<Vec<_>>()
+      })
+      .collect::<Vec<_>>();
+    for feed in feeds {
+      assert_ok!(AAA::note_observation_changed(feed, 1));
+    }
+    let base =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_base();
+    let unit =
+      <<Test as crate::Config>::WeightInfo as crate::WeightInfo>::observation_fanout_page();
+    let budget = base.saturating_add(unit);
+
+    for (index, feed) in feeds.into_iter().enumerate() {
+      assert_eq!(AAA::dirty_observation_list().cursor, Some(feed));
+      assert_eq!(AAA::fanout_dirty_observations(budget), budget);
+      let delivered = actors[index]
+        .iter()
+        .filter(|aaa_id| AAA::pending_signal(**aaa_id))
+        .count();
+      assert!(delivered > 0);
+      assert!(delivered < actors[index].len());
+    }
+    assert_eq!(AAA::dirty_observation_list().cursor, Some(feeds[0]));
+
+    for _ in 0..12 {
+      if AAA::dirty_observation_feed_count() == 0 {
+        break;
+      }
+      AAA::fanout_dirty_observations(budget);
+    }
+    assert_eq!(AAA::dirty_observation_feed_count(), 0);
+    assert_eq!(AAA::dirty_observation_list(), Default::default());
+    let tickets = actors
+      .iter()
+      .flatten()
+      .map(|aaa_id| {
+        let hot = AAA::actor_hot(*aaa_id).expect("dense-feed actor");
+        assert!(hot.pending_signal);
+        hot.queue_ticket.expect("dense-feed actor queued")
+      })
+      .collect::<alloc::collections::BTreeSet<_>>();
+    assert_eq!(tickets.len(), feeds.len() * (page_size as usize + 1));
     #[cfg(feature = "try-runtime")]
     assert_ok!(crate::Pallet::<Test>::do_try_state());
   });

@@ -50,10 +50,26 @@ export type ObservationInspection = {
 export type ObservationFanoutBudget = {
   runtimeIdentity: string;
   weightIdentity: string;
-  maxPagesPerBlock: number;
+  maxServiceUnitsPerBlock: number;
   maxActiveDirtyFeeds: number;
   maxSubscriberPagesPerFeed: number;
 };
+
+export type ObservationFanoutEvidence =
+  | {
+      status: 'Verified';
+      observedIdentity: string;
+    }
+  | {
+      status: 'EvidenceMismatch';
+      observedIdentity: string;
+      reasons: readonly string[];
+    };
+
+export type ObservationEstimateStatus =
+  | 'NotApplicable'
+  | 'Available'
+  | 'EvidenceMismatch';
 
 export type ObservationDeliveryStatus =
   | 'Clean'
@@ -94,11 +110,18 @@ export type ObservationDeliveryInspection = {
     cursor: ObservationFeedIdentity | null;
     count: number;
     selectedPosition: number | null;
+    cursorPosition: number | null;
   };
   nextSubscriberPage: number | null;
   occupiedPageCount: number;
-  estimatedRemainingFanoutPages: number;
-  estimatedRemainingBlocks: number;
+  remainingCurrentRevisionPages: number;
+  remainingFanoutServiceUnits: number | null;
+  exclusiveBudgetLowerBoundBlocks: number | null;
+  fairServiceCeilingBlocks: number | null;
+  estimateStatus: ObservationEstimateStatus;
+  estimateContextIdentity: string | null;
+  evidenceMismatchReasons: readonly string[];
+  observedEvidenceIdentity: string | null;
   budget: ObservationFanoutBudget;
   estimateAssumptions: readonly string[];
   selectedActor: ObservationActorDeliveryInspection | null;

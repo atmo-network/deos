@@ -14,6 +14,20 @@ import { type StatusChange, WsEvent, createWsClient } from 'polkadot-api/ws';
 
 export const DEFAULT_DEOS_WS_ENDPOINT = 'ws://127.0.0.1:9988';
 
+const RUNTIME_CODE_STORAGE_KEY = '0x3a636f6465' as HexString;
+const METADATA_VERSION = 16;
+
+function decodeRuntimeBytes(value: string | null, label: string) {
+  if (value === null || !/^0x(?:[0-9a-fA-F]{2})+$/.test(value)) {
+    throw new Error(`${label} must contain canonical hex bytes`);
+  }
+  const bytes = new Uint8Array((value.length - 2) / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number(`0x${value.slice(2 + index * 2, 4 + index * 2)}`);
+  }
+  return bytes;
+}
+
 export type DeosChainConnectionState = {
   status: 'connected' | 'unconfigured' | 'error';
   label: string;
@@ -289,6 +303,36 @@ export class DeosPapiConnection {
           .join(' · '),
       };
     }
+  }
+
+  async finalizedRuntimeEvidence(snapshot: DeosChainSnapshot) {
+    const { client, typedApi } = await this.ensureConnected();
+    const [version, metadata, runtimeCodeHex] = await Promise.all([
+      typedApi.apis.Core.version({ at: snapshot.at }),
+      typedApi.apis.Metadata.metadata_at_version(METADATA_VERSION, {
+        at: snapshot.at,
+      }),
+      client._request<string | null>('state_getStorage', [
+        RUNTIME_CODE_STORAGE_KEY,
+        snapshot.at,
+      ]),
+    ]);
+    if (!(metadata instanceof Uint8Array)) {
+      throw new Error('Finalized runtime does not expose V16 metadata');
+    }
+    return {
+      runtime: {
+        specName: version.spec_name,
+        implName: version.impl_name,
+        authoringVersion: version.authoring_version,
+        specVersion: version.spec_version,
+        implVersion: version.impl_version,
+        systemVersion: version.system_version,
+        transactionVersion: version.transaction_version,
+      },
+      runtimeCodeBytes: decodeRuntimeBytes(runtimeCodeHex, 'Runtime code'),
+      metadataBytes: metadata,
+    };
   }
 
   async snapshot(): Promise<DeosChainSnapshot> {
