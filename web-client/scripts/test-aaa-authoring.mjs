@@ -160,6 +160,29 @@ test('authoring controls cover every current task and condition variant', () => 
   assert.equal(AAA_AUTHORING_CONDITION_TYPES.length, 10);
 });
 
+test('one metadata-aligned eight-step baseline applies to both actor classes', () => {
+  const steps = Array.from({ length: 9 }, (_, index) =>
+    authoringStep(`step-${index}`),
+  );
+  for (const aaaType of ['User', 'System']) {
+    assert.equal(
+      validateAaaAuthoringProgram(program(steps.slice(0, 8), { aaaType }))
+        .valid,
+      true,
+    );
+    const tooLong = validateAaaAuthoringProgram(program(steps, { aaaType }));
+    assert.equal(tooLong.valid, false);
+    if (!tooLong.valid) {
+      assert(
+        tooLong.issues.some(
+          (issue) =>
+            issue.path === 'steps' && /1\.\.8 steps/.test(issue.message),
+        ),
+      );
+    }
+  }
+});
+
 test('completion policy lowers exactly and rejects unknown lifecycle values', () => {
   const persistent = lowerAaaAuthoringProgram(program());
   assert.deepEqual(persistent.value.completion_policy, {
@@ -181,6 +204,24 @@ test('completion policy lowers exactly and rejects unknown lifecycle values', ()
   );
   assert.match(automationWidgetSource, /Close after productive run/);
   assert.match(automationWidgetSource, /committed effectful task/);
+});
+
+test('optional auto-close target lowers exactly and rejects invalid u64 values', () => {
+  const target = lowerAaaAuthoringProgram(
+    program(undefined, { autoCloseAtCycleNonce: 7n }),
+  );
+  assert.equal(target.value.auto_close_at_cycle_nonce, 7n);
+  assert.match(automationWidgetSource, /Auto-close run \(optional\)/);
+  assert.match(automationWidgetSource, /logical-run nonce completes/);
+  for (const autoCloseAtCycleNonce of [0n, -1n, 1n << 64n]) {
+    const result = validateAaaAuthoringProgram(
+      program(undefined, { autoCloseAtCycleNonce }),
+    );
+    assert.equal(result.valid, false);
+    assert(
+      result.issues.some((issue) => issue.path === 'autoCloseAtCycleNonce'),
+    );
+  }
 });
 
 test('observation authoring exposes freshness and validates bounded identity', () => {
@@ -464,7 +505,9 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
     {
       type: 'RemoveLiquidity',
       lpAsset: local,
-      amount: fixed(),
+      assetA: native,
+      assetB: local,
+      lpAmount: fixed(),
       minAmountA: '1',
       minAmountB: '1',
     },
@@ -475,7 +518,7 @@ test('every current Task lowers through metadata and remains analyzer-visible', 
       type: 'DonateLiquidity',
       assetA: native,
       assetB: local,
-      amount: fixed(),
+      maxAmountA: fixed(),
       maxRatioErrorParts: 0,
     },
     { type: 'Unstake', asset: native, shares: fixed() },
@@ -627,7 +670,7 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     { mutability: 'Immutable' },
   );
   assert.equal(validateAaaAuthoringProgram(immutableRetry).valid, false);
-  for (const maxAttempts of [0, 4_294_967_296, 1.5]) {
+  for (const maxAttempts of [0, 11, 4_294_967_296, 1.5]) {
     const invalidRetryLimit = program([
       authoringStep('only', transferTask(), {
         errorPolicy: { type: 'RetryLater', maxAttempts },
@@ -635,10 +678,54 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
     ]);
     assert.equal(validateAaaAuthoringProgram(invalidRetryLimit).valid, false);
   }
+  assert.equal(
+    validateAaaAuthoringProgram(
+      program([
+        authoringStep('retry-ten', transferTask(), {
+          errorPolicy: { type: 'RetryLater', maxAttempts: 10 },
+        }),
+      ]),
+    ).valid,
+    true,
+  );
   const userMint = program([
     authoringStep('only', { type: 'Mint', asset: native, amount: fixed() }),
   ]);
   assert.equal(validateAaaAuthoringProgram(userMint).valid, false);
+  for (const amount of [
+    { type: 'Fixed', value: '0' },
+    { type: 'PercentageOfCurrent', parts: 0 },
+    { type: 'PercentageOfTrigger', parts: 0 },
+    { type: 'PercentageOfLastFunding', parts: 0 },
+  ]) {
+    assert.equal(
+      validateAaaAuthoringProgram(
+        program([authoringStep('zero', transferTask(amount))]),
+      ).valid,
+      false,
+    );
+  }
+  for (const task of [
+    { ...createAaaAuthoringTask('SwapIn'), assetIn: native, assetOut: native },
+    { ...createAaaAuthoringTask('SwapOut'), assetIn: native, assetOut: native },
+    {
+      ...createAaaAuthoringTask('AddLiquidity'),
+      assetA: native,
+      assetB: native,
+    },
+    {
+      ...createAaaAuthoringTask('DonateLiquidity'),
+      assetA: native,
+      assetB: native,
+    },
+  ]) {
+    assert.equal(
+      validateAaaAuthoringProgram(
+        program([authoringStep('identical-assets', task)]),
+      ).valid,
+      false,
+    );
+  }
   const zeroAbsoluteInputLimit = program([
     authoringStep('only', {
       type: 'SwapOut',
@@ -912,7 +999,7 @@ test('trigger, completion, and funding policy variants lower as typed ProgramInp
           ],
         },
       },
-      fundingPolicy: { type: 'AnySource' },
+      fundingPolicy: { type: 'AnyVerifiedIngress' },
     }),
   ];
   for (const draft of drafts) {

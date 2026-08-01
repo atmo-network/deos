@@ -183,5 +183,5 @@ test('structural diagnostics and diff remain path-addressed and deterministic', 
   assert.equal(diagnostics.length, 1);
   assert.equal(diagnostics[0].severity, 'Error');
   assert.match(diagnostics[0].path, /steps\[0\]/);
-  assert.match(diagnostics[0].message, /integer from 1/);
+  assert.match(diagnostics[0].message, /within 1\.\.10/);
 });

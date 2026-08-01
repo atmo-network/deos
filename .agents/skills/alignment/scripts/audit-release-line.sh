@@ -9,7 +9,8 @@ Usage: audit-release-line.sh [OPTIONS]
 
 Checks release-line consistency across CHANGELOG.md, the current framework
 boundary, package metadata, and AAA package-owned documentation. The audit
-prevents release fragmentation and stale specification identity/navigation.
+prevents release fragmentation while preserving standalone normative
+specification authority and stable package navigation.
 
 Options:
   -h, --help  Show this help message
@@ -259,7 +260,11 @@ run_audit() {
     fi
     check_changelog_order
 
-    check_template_workspace_versions "$latest_version"
+    local prepared_version="$latest_version"
+    check_template_workspace_versions "$prepared_version"
+    check_exact_line "$PROJECT_ROOT/web-client/package.json" "  \"version\": \"${prepared_version}\"," "Web-client package-version drift"
+    check_exact_line "$PROJECT_ROOT/web-client/package-lock.json" "  \"version\": \"${prepared_version}\"," "Web-client lockfile-version drift"
+    check_exact_line "$PROJECT_ROOT/web-client/package-lock.json" "      \"version\": \"${prepared_version}\"," "Web-client root-package lockfile drift"
     check_exact_line "$TEMPLATE_DIR/pallets/router/Cargo.toml" "name = \"pallet-deos-router\"" "DEOS Router Cargo-package identity drift"
     check_exact_line "$TEMPLATE_DIR/pallets/asset-registry/Cargo.toml" "name = \"pallet-deos-asset-registry\"" "DEOS Asset Registry Cargo-package identity drift"
     check_exact_line "$TEMPLATE_DIR/primitives/Cargo.toml" "name = \"deos-primitives\"" "DEOS primitives Cargo-package identity drift"
@@ -271,9 +276,16 @@ run_audit() {
     fi
 
     local aaa_spec="$TEMPLATE_DIR/pallets/aaa/docs/specification.en.md"
-    check_markdown_release_marker "$aaa_spec" "Specification line" "$latest_version"
-    check_exact_line "$aaa_spec" "- **Release focus**: ${latest_title}" "AAA release-focus drift"
-    check_exact_line "$aaa_spec" "- **Source basis**: This accepted specification and the verified \`${latest_version}\` ${latest_title} implementation, generated evidence, and release-validation baseline." "AAA source-basis drift"
+    check_exact_line "$aaa_spec" "- **Scope**: Account Abstraction Actors runtime contract" "AAA specification-scope drift"
+    check_exact_line "$aaa_spec" "- **Status**: Normative" "AAA specification-status drift"
+    if rg -q '^- \*\*(Specification line|Release focus|Source basis)\*\*:' "$aaa_spec"; then
+        log_error "AAA specification purity drift: implementation markers must remain outside the normative specification"
+        exit 1
+    fi
+    if rg -q '\b(DEOS|TMCTOL)\b' "$aaa_spec"; then
+        log_error "AAA specification purity drift: DEOS product/runtime framing remains in the standalone contract"
+        exit 1
+    fi
     check_markdown_release_marker "$TEMPLATE_DIR/pallets/aaa/docs/embedding.md" "Release line" "$latest_version"
     local package
     local integration_label
@@ -373,7 +385,6 @@ run_audit() {
         exit 1
     fi
 
-    check_exact_line "$PROJECT_ROOT/BACKLOG.md" "> Release boundary: \`DEOS ${latest_version} — ${latest_title}\` is the current framework line. Completed semantics and release evidence live in \`CHANGELOG.md\` and the owning DEOS Oracle, DEOS Router, AAA, control-plane, and architecture documents." "Current framework-boundary drift"
     check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[AAA Specification](../template/pallets/aaa/docs/specification.en.md)" "AAA package-navigation drift"
     check_fixed_reference "$TEMPLATE_DIR/pallets/aaa/README.md" "[AAA Specification](./docs/specification.en.md)" "AAA package-navigation drift"
     check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[Web Client Architecture](../web-client/docs/architecture.en.md)" "Web-client architecture-navigation drift"

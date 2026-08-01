@@ -7,6 +7,10 @@ Zone: Automation domain capability; composes the canonical plan-artifact codec w
 import { decodeAddress } from '@polkadot/util-crypto';
 
 import {
+  AAA_MAX_EXECUTION_PLAN_STEPS,
+  AAA_MAX_RETRY_ATTEMPTS,
+} from './aaa-protocol-bounds.ts';
+import {
   type AaaPlanArtifact,
   type AaaPlanRuntimeIdentity,
   type AaaPlanType,
@@ -109,7 +113,9 @@ export type AaaAuthoringTask =
   | {
       type: 'RemoveLiquidity';
       lpAsset: AaaAuthoringAsset;
-      amount: AaaAuthoringAmount;
+      assetA: AaaAuthoringAsset;
+      assetB: AaaAuthoringAsset;
+      lpAmount: AaaAuthoringAmount;
       minAmountA: string;
       minAmountB: string;
     }
@@ -122,7 +128,7 @@ export type AaaAuthoringTask =
       type: 'DonateLiquidity';
       assetA: AaaAuthoringAsset;
       assetB: AaaAuthoringAsset;
-      amount: AaaAuthoringAmount;
+      maxAmountA: AaaAuthoringAmount;
       maxRatioErrorParts: number;
     }
   | {
@@ -174,7 +180,7 @@ export type AaaAuthoringStep = {
 export type AaaAuthoringFundingPolicy =
   | { type: 'OwnerOnly' }
   | { type: 'RuntimePolicy' }
-  | { type: 'AnySource' }
+  | { type: 'AnyVerifiedIngress' }
   | { type: 'SignedAllowlist'; accounts: string[] };
 
 export type AaaAuthoringTriggerSource =
@@ -209,6 +215,7 @@ export type AaaAuthoringProgram = {
   aaaType: AaaPlanType;
   mutability: AutomationMutability;
   completionPolicy: AaaAuthoringCompletionPolicy;
+  autoCloseAtCycleNonce: bigint | null;
   trigger: AaaAuthoringTrigger;
   cooldownBlocks: number;
   scheduleWindow: { start: number; end: number } | null;
@@ -217,8 +224,8 @@ export type AaaAuthoringProgram = {
 };
 
 export type AaaAuthoringLimits = {
-  maxUserSteps: number;
-  maxSystemSteps: number;
+  maxExecutionPlanSteps: number;
+  maxRetryAttempts: number;
   maxConditionsPerStep: number;
   maxSplitTransferLegs: number;
   maxWhitelistSize: number;
@@ -226,8 +233,8 @@ export type AaaAuthoringLimits = {
 };
 
 export const DEOS_AAA_AUTHORING_LIMITS: AaaAuthoringLimits = {
-  maxUserSteps: 3,
-  maxSystemSteps: 10,
+  maxExecutionPlanSteps: AAA_MAX_EXECUTION_PLAN_STEPS,
+  maxRetryAttempts: AAA_MAX_RETRY_ATTEMPTS,
   maxConditionsPerStep: 4,
   maxSplitTransferLegs: 8,
   maxWhitelistSize: 16,
@@ -292,7 +299,9 @@ export function createAaaAuthoringTask(
       return {
         type,
         lpAsset: local(),
-        amount: fixed(),
+        assetA: native(),
+        assetB: local(),
+        lpAmount: fixed(),
         minAmountA: '1',
         minAmountB: '1',
       };
@@ -305,7 +314,7 @@ export function createAaaAuthoringTask(
         type,
         assetA: native(),
         assetB: local(),
-        amount: fixed(),
+        maxAmountA: fixed(),
         maxRatioErrorParts: 10_000_000,
       };
     case 'Unstake':
@@ -363,6 +372,7 @@ export function createAaaAuthoringProgram(): AaaAuthoringProgram {
     aaaType: 'User',
     mutability: 'Mutable',
     completionPolicy: 'Persistent',
+    autoCloseAtCycleNonce: null,
     trigger: { type: 'Immediate', sources: [{ type: 'Manual' }] },
     cooldownBlocks: 0,
     scheduleWindow: null,
@@ -372,6 +382,7 @@ export function createAaaAuthoringProgram(): AaaAuthoringProgram {
 }
 
 const U32_MAX = 0xffff_ffff;
+const U64_MAX = (1n << 64n) - 1n;
 const U128_MAX = (1n << 128n) - 1n;
 const PERBILL_MAX = 1_000_000_000;
 const UNSIGNED_INTEGER = /^(?:0|[1-9][0-9]*)$/;
@@ -441,10 +452,14 @@ function validateAmount(
           message:
             'Fixed amount must be a canonical unsigned base-unit integer',
         });
-      } else if (BigInt(amount.value) > U128_MAX) {
+      } else if (
+        BigInt(amount.value) === 0n ||
+        BigInt(amount.value) > U128_MAX
+      ) {
         issues.push({
           path: `${path}.value`,
-          message: 'Fixed amount must fit the runtime u128 balance type',
+          message:
+            'Fixed amount must be nonzero and fit the runtime u128 balance type',
         });
       }
       return;
@@ -452,6 +467,12 @@ function validateAmount(
     case 'PercentageOfTrigger':
     case 'PercentageOfLastFunding':
       validatePerbill(amount.parts, `${path}.parts`, issues);
+      if (amount.parts === 0) {
+        issues.push({
+          path: `${path}.parts`,
+          message: 'Percentage amount must be nonzero',
+        });
+      }
       return;
     case 'AllBalance':
       return;
@@ -552,6 +573,20 @@ function validateCondition(
   }
 }
 
+function validateDistinctAssets(
+  assetA: AaaAuthoringAsset,
+  assetB: AaaAuthoringAsset,
+  path: string,
+  issues: AaaAuthoringIssue[],
+) {
+  if (
+    bytesKey(assetCanonicalBytes(assetA)) ===
+    bytesKey(assetCanonicalBytes(assetB))
+  ) {
+    issues.push({ path, message: 'Market task assets must be distinct' });
+  }
+}
+
 function validateTask(
   task: AaaAuthoringTask,
   path: string,
@@ -613,6 +648,7 @@ function validateTask(
     case 'SwapIn':
       validateAsset(task.assetIn, `${path}.assetIn`, issues);
       validateAsset(task.assetOut, `${path}.assetOut`, issues);
+      validateDistinctAssets(task.assetIn, task.assetOut, path, issues);
       validateAmount(task.amountIn, `${path}.amountIn`, issues);
       validatePerbill(task.slippageParts, `${path}.slippageParts`, issues);
       return;
@@ -620,6 +656,7 @@ function validateTask(
       validateAsset(task.assetOut, `${path}.assetOut`, issues);
       validateAmount(task.amountOut, `${path}.amountOut`, issues);
       validateAsset(task.assetIn, `${path}.assetIn`, issues);
+      validateDistinctAssets(task.assetIn, task.assetOut, path, issues);
       if (task.inputLimit.type === 'Absolute') {
         validatePositiveBalanceBound(
           task.inputLimit.amount,
@@ -633,6 +670,7 @@ function validateTask(
     case 'AddLiquidity':
       validateAsset(task.assetA, `${path}.assetA`, issues);
       validateAsset(task.assetB, `${path}.assetB`, issues);
+      validateDistinctAssets(task.assetA, task.assetB, path, issues);
       validateAmount(task.amountA, `${path}.amountA`, issues);
       validateAmount(task.amountB, `${path}.amountB`, issues);
       validatePositiveBalanceBound(
@@ -644,7 +682,9 @@ function validateTask(
       return;
     case 'RemoveLiquidity':
       validateAsset(task.lpAsset, `${path}.lpAsset`, issues);
-      validateAmount(task.amount, `${path}.amount`, issues);
+      validateAsset(task.assetA, `${path}.assetA`, issues);
+      validateAsset(task.assetB, `${path}.assetB`, issues);
+      validateAmount(task.lpAmount, `${path}.lpAmount`, issues);
       validatePositiveBalanceBound(
         task.minAmountA,
         `${path}.minAmountA`,
@@ -673,7 +713,8 @@ function validateTask(
     case 'DonateLiquidity':
       validateAsset(task.assetA, `${path}.assetA`, issues);
       validateAsset(task.assetB, `${path}.assetB`, issues);
-      validateAmount(task.amount, `${path}.amount`, issues);
+      validateDistinctAssets(task.assetA, task.assetB, path, issues);
+      validateAmount(task.maxAmountA, `${path}.maxAmountA`, issues);
       validatePerbill(
         task.maxRatioErrorParts,
         `${path}.maxRatioErrorParts`,
@@ -729,10 +770,10 @@ function collectTriggerAmountSurfaces(
       push(task.amountB, task.assetB, `${path}.amountB`);
       break;
     case 'RemoveLiquidity':
-      push(task.amount, task.lpAsset, `${path}.amount`);
+      push(task.lpAmount, task.lpAsset, `${path}.lpAmount`);
       break;
     case 'DonateLiquidity':
-      push(task.amount, task.assetA, `${path}.amount`);
+      push(task.maxAmountA, task.assetA, `${path}.maxAmountA`);
       break;
     case 'Unstake':
       push(task.shares, task.asset, `${path}.shares`, true);
@@ -925,8 +966,7 @@ export function validateAaaAuthoringProgram(
   limits = DEOS_AAA_AUTHORING_LIMITS,
 ): AaaAuthoringValidation {
   const issues: AaaAuthoringIssue[] = [];
-  const maxSteps =
-    program.aaaType === 'User' ? limits.maxUserSteps : limits.maxSystemSteps;
+  const maxSteps = limits.maxExecutionPlanSteps;
   if (
     program.completionPolicy !== 'Persistent' &&
     program.completionPolicy !== 'CloseAfterProductiveRun'
@@ -935,6 +975,16 @@ export function validateAaaAuthoringProgram(
       path: 'completionPolicy',
       message:
         'Completion policy must be Persistent or CloseAfterProductiveRun',
+    });
+  }
+  if (
+    program.autoCloseAtCycleNonce != null &&
+    (program.autoCloseAtCycleNonce <= 0n ||
+      program.autoCloseAtCycleNonce > U64_MAX)
+  ) {
+    issues.push({
+      path: 'autoCloseAtCycleNonce',
+      message: 'Auto-close target must be a nonzero u64 logical-run nonce',
     });
   }
   if (program.steps.length === 0 || program.steps.length > maxSteps) {
@@ -1014,12 +1064,11 @@ export function validateAaaAuthoringProgram(
       step.errorPolicy.type === 'RetryLater' &&
       (!Number.isSafeInteger(step.errorPolicy.maxAttempts) ||
         step.errorPolicy.maxAttempts <= 0 ||
-        step.errorPolicy.maxAttempts > 0xffff_ffff)
+        step.errorPolicy.maxAttempts > limits.maxRetryAttempts)
     ) {
       issues.push({
         path: `${path}.errorPolicy.maxAttempts`,
-        message:
-          'RetryLater max attempts must be an integer from 1 to 4294967295',
+        message: `RetryLater max attempts must be within 1..${limits.maxRetryAttempts}`,
       });
     }
     validateTask(step.task, `${path}.task`, issues, limits, program.aaaType);
@@ -1201,7 +1250,9 @@ function lowerTask(task: AaaAuthoringTask) {
     case 'RemoveLiquidity':
       return runtimeVariant('RemoveLiquidity', {
         lp_asset: lowerAsset(task.lpAsset),
-        amount: lowerAmount(task.amount),
+        asset_a: lowerAsset(task.assetA),
+        asset_b: lowerAsset(task.assetB),
+        lp_amount: lowerAmount(task.lpAmount),
         min_amount_a: BigInt(task.minAmountA),
         min_amount_b: BigInt(task.minAmountB),
       });
@@ -1216,7 +1267,7 @@ function lowerTask(task: AaaAuthoringTask) {
       return runtimeVariant('DonateLiquidity', {
         asset_a: lowerAsset(task.assetA),
         asset_b: lowerAsset(task.assetB),
-        amount: lowerAmount(task.amount),
+        max_amount_a: lowerAmount(task.maxAmountA),
         max_ratio_error: task.maxRatioErrorParts,
       });
     case 'Unstake':
@@ -1429,7 +1480,7 @@ function lowerFundingPolicy(policy: AaaAuthoringFundingPolicy) {
   switch (policy.type) {
     case 'OwnerOnly':
     case 'RuntimePolicy':
-    case 'AnySource':
+    case 'AnyVerifiedIngress':
       return runtimeVariant(policy.type);
     case 'SignedAllowlist':
       return runtimeVariant(
@@ -1481,6 +1532,7 @@ export function lowerAaaAuthoringProgram(
     })),
     completion_policy: runtimeVariant(program.completionPolicy),
     funding_source_policy: lowerFundingPolicy(program.fundingPolicy),
+    auto_close_at_cycle_nonce: program.autoCloseAtCycleNonce ?? undefined,
   });
 }
 

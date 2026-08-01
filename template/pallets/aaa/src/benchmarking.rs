@@ -10,7 +10,6 @@ use polkadot_sdk::frame_benchmarking::{account, v2::*};
 use polkadot_sdk::frame_support::traits::Hooks;
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::sp_runtime::Perbill;
-use polkadot_sdk::sp_weights::WeightToFee;
 
 #[benchmarks]
 mod benches {
@@ -29,38 +28,34 @@ mod benches {
     schedule: ScheduleOf<T>,
     execution_plan: ExecutionPlanOf<T>,
   ) -> ProgramInputOf<T> {
-    ProgramInput::Active {
+    ProgramInput::Active(ActiveProgramInput {
       schedule,
       schedule_window: None,
       execution_plan,
       completion_policy: CompletionPolicy::Persistent,
       funding_source_policy: FundingSourcePolicy::OwnerOnly,
-    }
+      auto_close_at_cycle_nonce: None,
+    })
   }
 
   fn system_program<T: Config>(
     schedule: ScheduleOf<T>,
     execution_plan: ExecutionPlanOf<T>,
   ) -> ProgramInputOf<T> {
-    ProgramInput::Active {
+    ProgramInput::Active(ActiveProgramInput {
       schedule,
       schedule_window: None,
       execution_plan,
       completion_policy: CompletionPolicy::Persistent,
       funding_source_policy: FundingSourcePolicy::RuntimePolicy,
-    }
+      auto_close_at_cycle_nonce: None,
+    })
   }
 
   fn cycle_fee_upper<T: Config>(execution_plan: &ExecutionPlanOf<T>) -> T::Balance {
-    let mut total = T::Balance::zero();
-    for step in execution_plan.iter() {
-      let eval_fee = T::StepBaseFee::get()
-        .saturating_add(T::ConditionReadFee::get().saturating_mul(step.conditions.len().into()));
-      total = total.saturating_add(eval_fee);
-      let exec_fee = T::WeightToFee::weight_to_fee(&Pallet::<T>::weight_upper_bound(&step.task));
-      total = total.saturating_add(exec_fee);
-    }
-    total
+    Pallet::<T>::attempt_fee_envelope(AaaType::User, execution_plan, 0)
+      .expect("benchmark execution plan has a checked fee envelope")
+      .total
   }
 
   fn make_execution_plan<T: Config>(recipient: T::AccountId) -> ExecutionPlanOf<T> {
@@ -91,13 +86,17 @@ mod benches {
 
   fn make_remove_liquidity_execution_plan<T: Config>(
     lp_asset: T::AssetId,
+    asset_a: T::AssetId,
+    asset_b: T::AssetId,
     amount: T::Balance,
   ) -> ExecutionPlanOf<T> {
     let step = Step {
       conditions: ConditionSet::Always,
       task: AaaTask::RemoveLiquidity {
         lp_asset,
-        amount: AmountResolution::Fixed(amount),
+        asset_a,
+        asset_b,
+        lp_amount: AmountResolution::Fixed(amount),
         min_amount_a: One::one(),
         min_amount_b: One::one(),
       },
@@ -109,14 +108,12 @@ mod benches {
   fn prefill_owner_slots_for_worst_case<T: Config>(owner: &T::AccountId) -> u8 {
     let max_slots = T::MaxOwnerSlots::get();
     assert!(max_slots > 0, "MaxOwnerSlots must be greater than zero");
-    assert!(max_slots <= 8, "MaxOwnerSlots must fit in u8 bitmask");
     let target_slot = max_slots.saturating_sub(1);
-    let occupied_mask = if target_slot == 0 {
-      0
-    } else {
-      ((1u16 << target_slot) - 1) as u8
-    };
-    OwnerSlotMask::<T>::insert(owner.clone(), occupied_mask);
+    let mut bitmap = [0; 32];
+    for slot in 0..target_slot {
+      bitmap[(slot / 8) as usize] |= 1u8 << (slot % 8);
+    }
+    OwnerSlotBitmaps::<T>::insert(owner.clone(), bitmap);
     target_slot
   }
 
@@ -227,11 +224,16 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst =
       Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after create_system_aaa");
-    assert_eq!(inst.actor_class, ActorClass::System);
+    assert_eq!(
+      inst.actor_class,
+      ActorClass::System {
+        sovereign_id: aaa_id,
+      }
+    );
   }
 
   #[benchmark]
-  fn reopen_system_aaa() {
+  fn create_system_aaa_at_sovereign_id() {
     let owner: T::AccountId = whitelisted_caller();
     let recipient =
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
@@ -251,15 +253,16 @@ mod benches {
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     Pallet::<T>::close_aaa(RawOrigin::Root.into(), aaa_id)
       .expect("close_aaa must succeed in benchmark setup");
+    let fresh_id = NextAaaId::<T>::get();
     #[extrinsic_call]
-    reopen_system_aaa(
+    create_system_aaa_at_sovereign_id(
       RawOrigin::Root,
       aaa_id,
       owner,
       Mutability::Mutable,
       system_program::<T>(schedule, execution_plan),
     );
-    assert!(Pallet::<T>::active_actor_exists(aaa_id));
+    assert!(Pallet::<T>::active_actor_exists(fresh_id));
   }
 
   #[benchmark]
@@ -276,7 +279,7 @@ mod benches {
       .expect("dormant System identity creation must succeed");
     }
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    assert!(DormantAaaIdentities::<T>::contains_key(aaa_id));
+    assert!(ActorIdentities::<T>::contains_key(aaa_id));
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
   }
 
@@ -302,7 +305,7 @@ mod benches {
     #[extrinsic_call]
     activate_aaa(RawOrigin::Signed(owner), aaa_id, program);
     assert!(Pallet::<T>::active_actor_exists(aaa_id));
-    assert!(!DormantAaaIdentities::<T>::contains_key(aaa_id));
+    assert!(ActorIdentities::<T>::contains_key(aaa_id));
   }
 
   #[benchmark]
@@ -328,7 +331,7 @@ mod benches {
     #[extrinsic_call]
     deactivate_aaa(RawOrigin::Signed(owner), aaa_id);
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
-    assert!(DormantAaaIdentities::<T>::contains_key(aaa_id));
+    assert!(ActorIdentities::<T>::contains_key(aaa_id));
   }
 
   #[benchmark]
@@ -480,28 +483,27 @@ mod benches {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
       for asset in funding_assets {
         funding
-          .funding_snapshots
-          .try_insert(
-            asset,
-            FundingBatch {
-              amount: One::one(),
-              pending_amount: One::one(),
-            },
-          )
-          .expect("funding snapshot benchmark bound fits");
+          .funding_accumulated
+          .try_insert(asset, One::one())
+          .expect("funding accumulator benchmark bound fits");
       }
     });
     let recipient = account("recipient", 0, 0);
     let replacement = make_execution_plan::<T>(recipient);
     #[extrinsic_call]
-    update_execution_plan(RawOrigin::Signed(caller), aaa_id, replacement.clone());
+    update_execution_plan(
+      RawOrigin::Signed(caller),
+      aaa_id,
+      replacement.clone(),
+      CompletionPolicy::Persistent,
+    );
     let inst = Pallet::<T>::active_actor_snapshot(aaa_id)
       .expect("AAA must exist after update_execution_plan");
     assert_eq!(inst.execution_plan, replacement);
     assert!(
       ActorFunding::<T>::get(aaa_id)
         .expect("actor funding exists")
-        .funding_snapshots
+        .funding_accumulated
         .is_empty()
     );
   }
@@ -803,7 +805,7 @@ mod benches {
       .expect("benchmark helper must prepare liquidity-donation state");
     #[block]
     {
-      T::LiquidityOps::donate_liquidity(&caller, asset_a, asset_b, amount, Perbill::zero())
+      T::LiquidityOps::donate_liquidity(&caller, asset_a, asset_b, amount, amount, Perbill::zero())
         .expect("liquidity-donation benchmark operation must succeed");
     }
   }
@@ -811,12 +813,21 @@ mod benches {
   #[benchmark]
   fn task_remove_liquidity() {
     let caller: T::AccountId = whitelisted_caller();
-    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity(&caller)
-      .expect("benchmark helper must prepare indexed remove-liquidity state");
+    let (lp_asset, asset_a, asset_b, lp_amount) =
+      T::BenchmarkHelper::setup_remove_liquidity(&caller)
+        .expect("benchmark helper must prepare indexed remove-liquidity state");
     #[block]
     {
-      T::LiquidityOps::remove_liquidity(&caller, lp_asset, lp_amount, One::one(), One::one())
-        .expect("remove-liquidity benchmark operation must succeed");
+      T::LiquidityOps::remove_liquidity(
+        &caller,
+        lp_asset,
+        asset_a,
+        asset_b,
+        lp_amount,
+        One::one(),
+        One::one(),
+      )
+      .expect("remove-liquidity benchmark operation must succeed");
     }
   }
 
@@ -887,13 +898,15 @@ mod benches {
   fn process_remove_liquidity_indexed() {
     let caller: T::AccountId = whitelisted_caller();
     ensure_creation_balance::<T>(&caller);
-    let (lp_asset, lp_amount) = T::BenchmarkHelper::setup_remove_liquidity(&caller)
-      .expect("benchmark helper must prepare indexed remove-liquidity state");
+    let (lp_asset, asset_a, asset_b, lp_amount) =
+      T::BenchmarkHelper::setup_remove_liquidity(&caller)
+        .expect("benchmark helper must prepare indexed remove-liquidity state");
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
-    let execution_plan = make_remove_liquidity_execution_plan::<T>(lp_asset, lp_amount);
+    let execution_plan =
+      make_remove_liquidity_execution_plan::<T>(lp_asset, asset_a, asset_b, lp_amount);
     Pallet::<T>::create_user_aaa(
       RawOrigin::Signed(caller.clone()).into(),
       Mutability::Mutable,
@@ -923,10 +936,7 @@ mod benches {
   fn make_inert_execution_plan<T: Config>() -> ExecutionPlanOf<T> {
     let step = Step {
       conditions: ConditionSet::Always,
-      task: AaaTask::Stake {
-        asset: T::NativeAssetId::get(),
-        amount: AmountResolution::Fixed(T::Balance::zero()),
-      },
+      task: AaaTask::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     };
     BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
@@ -996,7 +1006,7 @@ mod benches {
         .expect("benchmark actor program exists")
         .execution_plan[0]
         .on_error = StepErrorPolicy::RetryLater {
-        max_attempts: u32::MAX,
+        max_attempts: T::MaxRetryAttempts::get(),
       };
     });
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
@@ -1004,10 +1014,15 @@ mod benches {
         .as_mut()
         .expect("benchmark actor hot state exists");
       hot.run_state = RunState::Suspended;
-      hot.cycle_nonce = 1;
       hot.pending_signal = false;
       hot.queue_ticket = None;
       hot.wakeup_pointer = None;
+    });
+    ActorIdentities::<T>::mutate(aaa_id, |maybe_identity| {
+      maybe_identity
+        .as_mut()
+        .expect("benchmark actor identity exists")
+        .cycle_nonce = 1;
     });
     ContinuationStateStore::<T>::insert(
       aaa_id,
@@ -1017,6 +1032,7 @@ mod benches {
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1u32.into(),
         trigger_snapshot,
+        funding_snapshot: Default::default(),
         cumulative_outcomes: OutcomeTotals::default(),
       },
     );
@@ -1093,6 +1109,29 @@ mod benches {
     1_000_000u32.saturating_add(start_index).into()
   }
 
+  fn install_saturated_tombstone_queue<T: Config>() {
+    let page_size = T::QueuePageSize::get();
+    let capacity = T::MaxQueueLength::get();
+    for page_id in 0..capacity.div_ceil(page_size) {
+      let first = page_id.saturating_mul(page_size);
+      let len = page_size.min(capacity.saturating_sub(first));
+      let entries = (0..len)
+        .map(|offset| QueueEntry {
+          ticket: u64::from(first.saturating_add(offset)),
+          aaa_id: u64::MAX.saturating_sub(u64::from(first.saturating_add(offset))),
+        })
+        .collect::<alloc::vec::Vec<_>>();
+      QueuePages::<T>::insert(
+        u64::from(page_id),
+        BoundedVec::try_from(entries).expect("saturated queue page fits"),
+      );
+    }
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(capacity));
+    QueueOccupancy::<T>::put(capacity);
+    NextQueueTicket::<T>::put(u64::from(capacity));
+  }
+
   fn prepare_saturated_address_actor<T: Config>(seed: u32) -> (AaaId, T::AccountId) {
     let owner: T::AccountId = account("ingress_owner", seed, 0);
     let native = T::NativeAssetId::get();
@@ -1138,20 +1177,13 @@ mod benches {
     frame_system::Pallet::<T>::set_block_number(1u32.into());
     ActorFunding::<T>::mutate(aaa_id, |maybe| {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
-      funding.funding_source_policy = FundingSourcePolicy::AnySource;
+      funding.funding_source_policy = FundingSourcePolicy::AnyVerifiedIngress;
       funding
-        .funding_snapshots
-        .try_insert(
-          T::NativeAssetId::get(),
-          FundingBatch {
-            amount: One::one(),
-            pending_amount: One::one(),
-          },
-        )
-        .expect("tracked funding batch fits");
+        .funding_accumulated
+        .try_insert(T::NativeAssetId::get(), One::one())
+        .expect("tracked funding accumulator fits");
     });
-    SystemQueueHead::<T>::put(0);
-    SystemQueueTail::<T>::put(u64::from(T::MaxQueueLength::get()));
+    install_saturated_tombstone_queue::<T>();
     (aaa_id, recipient)
   }
 
@@ -1203,13 +1235,12 @@ mod benches {
     IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { since: 1u32.into() });
     #[block]
     {
-      let breaker_active = GlobalCircuitBreaker::<T>::get();
-      core::hint::black_box(SystemQueueHead::<T>::get());
-      core::hint::black_box(SystemQueueTail::<T>::get());
-      core::hint::black_box(UserQueueHead::<T>::get());
-      core::hint::black_box(UserQueueTail::<T>::get());
+      let _breaker_active = GlobalCircuitBreaker::<T>::get();
+      core::hint::black_box(QueueHead::<T>::get());
+      core::hint::black_box(QueueTail::<T>::get());
+      core::hint::black_box(QueueOccupancy::<T>::get());
       core::hint::black_box(DirtyObservationListState::<T>::get());
-      Pallet::<T>::update_idle_starvation_state(now, breaker_active, Weight::zero());
+      Pallet::<T>::update_idle_starvation_state(now, true);
     }
   }
 
@@ -1219,10 +1250,9 @@ mod benches {
     let now: BlockNumberFor<T> = 1u32.into();
     frame_system::Pallet::<T>::set_block_number(now);
     GlobalCircuitBreaker::<T>::put(false);
-    SystemQueueHead::<T>::put(0);
-    SystemQueueTail::<T>::put(0);
-    UserQueueHead::<T>::put(0);
-    UserQueueTail::<T>::put(0);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
     WakeupCursorLen::<T>::put(0);
     IdleStarvationState::<T>::kill();
     #[block]
@@ -1268,6 +1298,36 @@ mod benches {
     }
   }
 
+  #[benchmark]
+  fn scheduler_cycle_deferral_dimension() {
+    let aaa_id = bench_create_system_manual::<T>(3_002);
+    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+      maybe_hot
+        .as_mut()
+        .expect("benchmark actor hot state must exist")
+        .pending_signal = true;
+    });
+    let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
+    // The three dimensional deferral branches are all measured; the helper forces
+    // each dimension through the admitted meter so RefTime, ProofSize, and Both
+    // each get a production envelope.
+    #[block]
+    {
+      Pallet::<T>::benchmark_scheduler_cycle_deferral_dimension(
+        aaa_id,
+        hot.clone(),
+        DeferReason::RefTime,
+      );
+      Pallet::<T>::benchmark_scheduler_cycle_deferral_dimension(
+        aaa_id,
+        hot.clone(),
+        DeferReason::ProofSize,
+      );
+      Pallet::<T>::benchmark_scheduler_cycle_deferral_dimension(aaa_id, hot, DeferReason::Both);
+    }
+  }
+
   #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_append_existing_page() {
     let page_size = T::QueuePageSize::get();
@@ -1284,7 +1344,7 @@ mod benches {
     {
       assert!(Pallet::<T>::paged_enqueue(aaa_id));
     }
-    assert_eq!(SystemQueueTail::<T>::get(), u64::from(page_size));
+    assert_eq!(QueueTail::<T>::get(), u64::from(page_size));
     assert_eq!(
       ActorHot::<T>::get(aaa_id).and_then(|hot| hot.queue_ticket),
       Some(u64::from(page_size - 1))
@@ -1304,13 +1364,10 @@ mod benches {
       assert!(Pallet::<T>::paged_enqueue(aaa_id));
     }
     assert_eq!(
-      SystemQueueTail::<T>::get(),
+      QueueTail::<T>::get(),
       u64::from(page_size).saturating_add(1)
     );
-    assert_eq!(
-      SystemQueuePages::<T>::get(1).map(|page| page.len()),
-      Some(1)
-    );
+    assert_eq!(QueuePages::<T>::get(1).map(|page| page.len()), Some(1));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1680,8 +1737,8 @@ mod benches {
     {
       assert!(Pallet::<T>::paged_consume_head(0));
     }
-    assert_eq!(SystemQueueHead::<T>::get(), 1);
-    assert!(SystemQueuePages::<T>::contains_key(0));
+    assert_eq!(QueueHead::<T>::get(), 1);
+    assert!(QueuePages::<T>::contains_key(0));
     assert_eq!(
       ActorHot::<T>::get(first).and_then(|hot| hot.queue_ticket),
       None
@@ -1696,15 +1753,9 @@ mod benches {
     {
       assert!(Pallet::<T>::paged_consume_head(0));
     }
-    assert_eq!(
-      SystemQueueHead::<T>::get(),
-      u64::from(T::QueuePageSize::get())
-    );
-    assert_eq!(
-      SystemQueueTail::<T>::get(),
-      u64::from(T::QueuePageSize::get())
-    );
-    assert!(!SystemQueuePages::<T>::contains_key(0));
+    assert_eq!(QueueHead::<T>::get(), u64::from(T::QueuePageSize::get()));
+    assert_eq!(QueueTail::<T>::get(), u64::from(T::QueuePageSize::get()));
+    assert!(!QueuePages::<T>::contains_key(0));
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1722,26 +1773,27 @@ mod benches {
           aaa_id: 37_000_000u64.saturating_add(ticket).saturating_add(offset),
         })
         .collect::<alloc::vec::Vec<_>>();
-      SystemQueuePages::<T>::insert(
+      QueuePages::<T>::insert(
         page_id,
         BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
           .expect("benchmark queue page must fit configured page size"),
       );
       ticket = ticket.saturating_add(entries);
     }
-    SystemQueueHead::<T>::put(0);
-    SystemQueueTail::<T>::put(u64::from(bounded));
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(bounded));
+    QueueOccupancy::<T>::put(bounded);
     NextQueueTicket::<T>::put(u64::from(bounded));
     #[block]
     {
-      core::hint::black_box(Pallet::<T>::paged_drain_group_tombstones(
-        QueueGroup::System,
-        u64::from(bounded),
-        bounded,
-      ));
+      core::hint::black_box(
+        Pallet::<T>::paged_drain_tombstones(u64::from(bounded), bounded)
+          .expect("benchmark queue topology is valid"),
+      );
     }
-    assert!(SystemQueueHead::<T>::get() >= u64::from(bounded));
-    assert_eq!(SystemQueueHead::<T>::get(), SystemQueueTail::<T>::get());
+    assert!(QueueHead::<T>::get() >= u64::from(bounded));
+    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+    assert_eq!(QueueOccupancy::<T>::get(), 0);
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1749,8 +1801,10 @@ mod benches {
     let bounded = n.min(T::MaxQueueLength::get());
     let page_size = T::QueuePageSize::get();
     let template_id = bench_create_system_manual::<T>(38_000_000);
-    let mut hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
-    hot_template.actor_class = ActorClass::User { owner_slot: 0 };
+    let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    let mut identity_template =
+      ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
+    identity_template.actor_class = ActorClass::User { owner_slot: 0 };
     let mut ticket = 0u64;
     while ticket < u64::from(bounded) {
       let page_id = ticket / u64::from(page_size);
@@ -1763,6 +1817,7 @@ mod benches {
           if logical_ticket % 2 == 1 {
             let mut hot = hot_template.clone();
             hot.queue_ticket = Some(logical_ticket);
+            ActorIdentities::<T>::insert(aaa_id, identity_template.clone());
             ActorHot::<T>::insert(aaa_id, hot);
           }
           QueueEntry {
@@ -1771,49 +1826,49 @@ mod benches {
           }
         })
         .collect::<alloc::vec::Vec<_>>();
-      UserQueuePages::<T>::insert(
+      QueuePages::<T>::insert(
         page_id,
         BoundedVec::<QueueEntry, T::QueuePageSize>::try_from(page)
           .expect("benchmark queue page must fit configured page size"),
       );
       ticket = ticket.saturating_add(entries);
     }
+    ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
-    UserQueueHead::<T>::put(0);
-    UserQueueTail::<T>::put(u64::from(bounded));
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(u64::from(bounded));
+    QueueOccupancy::<T>::put(bounded);
     NextQueueTicket::<T>::put(u64::from(bounded));
     let cutoff = u64::from(bounded);
     #[block]
     {
-      while UserQueueHead::<T>::get() < cutoff {
-        core::hint::black_box(Pallet::<T>::paged_drain_group_tombstones(
-          QueueGroup::User,
-          cutoff,
-          bounded,
-        ));
-        if let Some((head, _)) = Pallet::<T>::paged_group_head_entry(QueueGroup::User) {
-          assert!(Pallet::<T>::paged_consume_group_head(
-            QueueGroup::User,
-            head
-          ));
+      while QueueHead::<T>::get() < cutoff {
+        core::hint::black_box(
+          Pallet::<T>::paged_drain_tombstones(cutoff, bounded)
+            .expect("benchmark mixed queue topology is valid"),
+        );
+        if let Some((_, entry)) = Pallet::<T>::paged_head_entry() {
+          assert!(Pallet::<T>::paged_consume_head(entry.ticket));
         }
       }
     }
-    assert!(UserQueueHead::<T>::get() >= cutoff);
-    assert_eq!(UserQueueHead::<T>::get(), UserQueueTail::<T>::get());
+    assert!(QueueHead::<T>::get() >= cutoff);
+    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
+    assert_eq!(QueueOccupancy::<T>::get(), 0);
   }
 
   /// Measures actual scheduler admission and complete execution for up to 1,000
   /// minimal one-step System actors. `Weight::MAX` exposes the full production-Wasm
   /// cost curve; separate guaranteed-budget stress evidence determines how many
-  /// executions the reference block budget actually admits. Setup writes the split actor stores and paged FIFO outside
+  /// executions the reference block budget actually admits. Setup writes the split actor stores and canonical paged FIFO outside
   /// the measured block so the result isolates queue scanning, admission,
   /// execution, and consumption rather than actor creation.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_execute_cheap(n: Linear<1, 1_000>) {
-    let _ = SystemQueuePages::<T>::clear(u32::MAX, None);
-    SystemQueueHead::<T>::put(0);
-    SystemQueueTail::<T>::put(0);
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
     NextQueueTicket::<T>::put(0);
     GlobalCircuitBreaker::<T>::put(false);
     let bounded = n
@@ -1823,8 +1878,11 @@ mod benches {
     assert!(bounded > 0, "runtime limits must admit at least one sample");
     let template_id = bench_create_system_manual::<T>(40_000_000);
     let hot_template = ActorHot::<T>::get(template_id).expect("benchmark hot template");
+    let identity_template =
+      ActorIdentities::<T>::get(template_id).expect("benchmark identity template");
     let program_template = ActorProgram::<T>::get(template_id).expect("benchmark program template");
     let funding_template = ActorFunding::<T>::get(template_id).expect("benchmark funding template");
+    ActorIdentities::<T>::remove(template_id);
     ActorHot::<T>::remove(template_id);
     ActorProgram::<T>::remove(template_id);
     ActorFunding::<T>::remove(template_id);
@@ -1833,10 +1891,12 @@ mod benches {
     for offset in 0..bounded {
       let aaa_id = first_id.saturating_add(u64::from(offset));
       let mut hot = hot_template.clone();
-      hot.cycle_nonce = 0;
-      hot.last_cycle_block = Zero::zero();
+      let mut identity = identity_template.clone();
+      identity.cycle_nonce = 0;
+      hot.last_cycle_block = None;
       hot.pending_signal = true;
       hot.queue_ticket = None;
+      ActorIdentities::<T>::insert(aaa_id, identity);
       ActorHot::<T>::insert(aaa_id, hot);
       ActorProgram::<T>::insert(aaa_id, program_template.clone());
       ActorFunding::<T>::insert(aaa_id, funding_template.clone());
@@ -1851,50 +1911,55 @@ mod benches {
     let executed = (0..bounded)
       .filter(|offset| {
         let aaa_id = first_id.saturating_add(u64::from(*offset));
-        ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.cycle_nonce == 1)
+        ActorIdentities::<T>::get(aaa_id).is_some_and(|identity| identity.cycle_nonce == 1)
       })
       .count() as u32;
     assert_eq!(
       executed, bounded,
       "unbounded diagnostic budget completed only {executed} of {bounded} requested cheap actors"
     );
-    assert_eq!(SystemQueueHead::<T>::get(), SystemQueueTail::<T>::get());
+    assert_eq!(QueueHead::<T>::get(), QueueTail::<T>::get());
   }
 
-  /// Measures the full three-phase scheduler over alternating System/User actors.
-  /// Setup materializes both typed lanes outside the measured block; global tickets
-  /// alternate across lanes so shared service must compare current head ages.
+  /// Measures canonical FIFO execution over alternating System/User actors.
+  /// Setup materializes one ticket-ordered queue outside the measured block.
   #[benchmark(pov_mode = Measured)]
   fn scheduler_paged_execute_cheap_mixed(n: Linear<2, 1_000>) {
-    let _ = SystemQueuePages::<T>::clear(u32::MAX, None);
-    let _ = UserQueuePages::<T>::clear(u32::MAX, None);
-    SystemQueueHead::<T>::put(0);
-    SystemQueueTail::<T>::put(0);
-    UserQueueHead::<T>::put(0);
-    UserQueueTail::<T>::put(0);
+    let _ = QueuePages::<T>::clear(u32::MAX, None);
+    QueueHead::<T>::put(0);
+    QueueTail::<T>::put(0);
+    QueueOccupancy::<T>::put(0);
     NextQueueTicket::<T>::put(0);
     GlobalCircuitBreaker::<T>::put(false);
     let bounded = n
       .min(T::MaxExecutionsPerBlock::get())
       .min(T::MaxQueueEntriesScannedPerBlock::get())
       .min(T::MaxQueueLength::get());
-    assert!(bounded >= 2, "runtime limits must admit both typed lanes");
+    assert!(
+      bounded >= 2,
+      "runtime limits must admit alternating actor classes"
+    );
 
     let system_template_id = bench_create_system_manual::<T>(42_000_000);
+    let system_identity =
+      ActorIdentities::<T>::take(system_template_id).expect("System identity template");
     let system_hot = ActorHot::<T>::take(system_template_id).expect("System hot template");
     let program_template =
       ActorProgram::<T>::take(system_template_id).expect("System program template");
     let funding_template =
       ActorFunding::<T>::take(system_template_id).expect("System funding template");
-    let mut user_hot = system_hot.clone();
-    user_hot.actor_class = ActorClass::User { owner_slot: 0 };
-    let user_reserve = user_hot
-      .cycle_fee_upper
+    let mut user_identity = system_identity.clone();
+    user_identity.actor_class = ActorClass::User { owner_slot: 0 };
+    let user_fee_envelope =
+      Pallet::<T>::attempt_fee_envelope(AaaType::User, &program_template.execution_plan, 0)
+        .expect("benchmark User program has a checked fee envelope");
+    let user_reserve = user_fee_envelope
+      .total
       .saturating_add(T::MinUserBalance::get())
       .saturating_add(One::one());
     for _ in 0..bounded.div_ceil(2) {
       let _ = T::AssetOps::mint(
-        &user_hot.sovereign_account,
+        &user_identity.sovereign_account,
         T::NativeAssetId::get(),
         user_reserve,
       );
@@ -1903,15 +1968,23 @@ mod benches {
     let first_id = 43_000_000u64;
     for offset in 0..bounded {
       let aaa_id = first_id.saturating_add(u64::from(offset));
-      let mut hot = if offset % 2 == 0 {
-        system_hot.clone()
+      let is_user = offset % 2 != 0;
+      let mut identity = if is_user {
+        user_identity.clone()
       } else {
-        user_hot.clone()
+        system_identity.clone()
       };
-      hot.cycle_nonce = 0;
-      hot.last_cycle_block = Zero::zero();
+      identity.cycle_nonce = 0;
+      let mut hot = system_hot.clone();
+      hot.cycle_fee_upper = if is_user {
+        user_fee_envelope.total
+      } else {
+        Zero::zero()
+      };
+      hot.last_cycle_block = None;
       hot.pending_signal = true;
       hot.queue_ticket = None;
+      ActorIdentities::<T>::insert(aaa_id, identity);
       ActorHot::<T>::insert(aaa_id, hot);
       ActorProgram::<T>::insert(aaa_id, program_template.clone());
       ActorFunding::<T>::insert(aaa_id, funding_template.clone());
@@ -1926,12 +1999,12 @@ mod benches {
     let executed = (0..bounded)
       .filter(|offset| {
         let aaa_id = first_id.saturating_add(u64::from(*offset));
-        ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.cycle_nonce == 1)
+        ActorIdentities::<T>::get(aaa_id).is_some_and(|identity| identity.cycle_nonce == 1)
       })
       .count() as u32;
     assert_eq!(
       executed, bounded,
-      "mixed typed-lane benchmark must complete"
+      "mixed canonical-FIFO benchmark must complete"
     );
     assert!((0..bounded).all(|offset| {
       let aaa_id = first_id.saturating_add(u64::from(offset));
@@ -2011,7 +2084,7 @@ mod benches {
 
   #[benchmark]
   fn continuation_suffix_admission(n: Linear<1, 10>) {
-    let bounded = n.min(T::MaxSystemExecutionPlanSteps::get());
+    let bounded = n.min(T::MaxExecutionPlanSteps::get());
     let recipient: T::AccountId = account("continuation_suffix_recipient", 0, 0);
     let mut plan = ExecutionPlanOf::<T>::default();
     for _ in 0..bounded {
@@ -2119,25 +2192,7 @@ mod benches {
       let owner: T::AccountId = account("observation-fanout-blocked", index, 0);
       actors.push(bench_create_system_observation::<T>(owner, feed));
     }
-    let page_size = T::QueuePageSize::get();
-    let capacity = T::MaxQueueLength::get();
-    for page_id in 0..capacity.div_ceil(page_size) {
-      let first = page_id.saturating_mul(page_size);
-      let len = page_size.min(capacity.saturating_sub(first));
-      let entries = (0..len)
-        .map(|offset| QueueEntry {
-          ticket: u64::from(first.saturating_add(offset)),
-          aaa_id: u64::MAX.saturating_sub(u64::from(first.saturating_add(offset))),
-        })
-        .collect::<alloc::vec::Vec<_>>();
-      SystemQueuePages::<T>::insert(
-        u64::from(page_id),
-        BoundedVec::try_from(entries).expect("saturated queue page fits"),
-      );
-    }
-    SystemQueueHead::<T>::put(0);
-    SystemQueueTail::<T>::put(u64::from(capacity));
-    NextQueueTicket::<T>::put(u64::from(capacity));
+    install_saturated_tombstone_queue::<T>();
     Pallet::<T>::note_observation_changed(feed, 1)
       .expect("observation change ingress must succeed");
     #[block]
@@ -2201,7 +2256,7 @@ mod benches {
   }
 
   #[benchmark]
-  fn funding_batch_promotion(a: Linear<1, 10>) {
+  fn funding_snapshot_open(a: Linear<1, 10>) {
     let owner: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(owner);
     let assets = T::BenchmarkHelper::funding_assets(a);
@@ -2209,31 +2264,27 @@ mod benches {
       let funding = maybe.as_mut().expect("benchmark actor funding exists");
       for asset in assets {
         funding
-          .funding_snapshots
-          .try_insert(
-            asset,
-            FundingBatch {
-              amount: One::one(),
-              pending_amount: 2u32.into(),
-            },
-          )
-          .expect("promotion benchmark bound fits");
+          .funding_accumulated
+          .try_insert(asset, 2u32.into())
+          .expect("snapshot-open benchmark bound fits");
       }
     });
-    ActorHot::<T>::mutate(aaa_id, |maybe| {
-      let hot = maybe.as_mut().expect("benchmark actor hot state exists");
-      hot.pending_funding_count = a;
-    });
+    let snapshot;
     #[block]
     {
-      Pallet::<T>::promote_pending_funding(aaa_id);
+      snapshot = ActorFunding::<T>::mutate(aaa_id, |maybe| {
+        maybe
+          .as_mut()
+          .map(|funding| core::mem::take(&mut funding.funding_accumulated))
+          .expect("benchmark actor funding exists")
+      });
     }
-    let funding = ActorFunding::<T>::get(aaa_id).expect("benchmark actor funding exists");
+    assert_eq!(snapshot.len() as u32, a);
     assert!(
-      funding
-        .funding_snapshots
-        .values()
-        .all(|batch| batch.amount == 2u32.into() && batch.pending_amount.is_zero())
+      ActorFunding::<T>::get(aaa_id)
+        .expect("benchmark actor funding exists")
+        .funding_accumulated
+        .is_empty()
     );
   }
 
@@ -2286,8 +2337,13 @@ mod benches {
         on_error: StepErrorPolicy::AbortCycle,
       }])
       .expect("transfer execution_plan fits");
-      Pallet::<T>::update_execution_plan(RawOrigin::Root.into(), *aaa_id, transfer_execution_plan)
-        .expect("update_execution_plan must succeed");
+      Pallet::<T>::update_execution_plan(
+        RawOrigin::Root.into(),
+        *aaa_id,
+        transfer_execution_plan,
+        CompletionPolicy::Persistent,
+      )
+      .expect("update_execution_plan must succeed");
     }
     let total_before: T::Balance = sovereigns
       .iter()

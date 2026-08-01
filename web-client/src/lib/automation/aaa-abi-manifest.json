@@ -1,0 +1,5250 @@
+{
+  "format": "deos.aaa.abi-manifest",
+  "formatVersion": 1,
+  "metadata": {
+    "sha256": "ecd60da93343e7bee44751e5640c9ac458a56725cef7172fcc3317e7fd58c063",
+    "version": 16
+  },
+  "pallet": {
+    "associatedTypes": [
+      { "name": "AssetId", "type": 197 },
+      { "name": "Balance", "type": 49 },
+      { "name": "ObservationFeedId", "type": 215 }
+    ],
+    "calls": [
+      {
+        "fields": [
+          { "name": "mutability", "type": 223, "typeName": "Mutability" },
+          { "name": "program", "type": 224, "typeName": "ProgramInputOf<T>" }
+        ],
+        "index": 0,
+        "name": "create_user_aaa"
+      },
+      {
+        "fields": [
+          { "name": "owner_slot", "type": 3, "typeName": "u8" },
+          { "name": "mutability", "type": 223, "typeName": "Mutability" },
+          { "name": "program", "type": 224, "typeName": "ProgramInputOf<T>" }
+        ],
+        "index": 1,
+        "name": "create_user_aaa_at_slot"
+      },
+      {
+        "fields": [
+          { "name": "owner", "type": 1, "typeName": "T::AccountId" },
+          { "name": "mutability", "type": 223, "typeName": "Mutability" },
+          { "name": "program", "type": 224, "typeName": "ProgramInputOf<T>" }
+        ],
+        "index": 2,
+        "name": "create_system_aaa"
+      },
+      {
+        "fields": [
+          {
+            "name": "sovereign_id",
+            "type": 10,
+            "typeName": "SystemSovereignId"
+          },
+          { "name": "owner", "type": 1, "typeName": "T::AccountId" },
+          { "name": "mutability", "type": 223, "typeName": "Mutability" },
+          { "name": "program", "type": 224, "typeName": "ProgramInputOf<T>" }
+        ],
+        "index": 3,
+        "name": "create_system_aaa_at_sovereign_id"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 4,
+        "name": "pause_aaa"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 5,
+        "name": "resume_aaa"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 6,
+        "name": "manual_trigger"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          {
+            "name": "policy",
+            "type": 250,
+            "typeName": "FundingSourcePolicyOf<T>"
+          }
+        ],
+        "index": 7,
+        "name": "update_funding_source_policy"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 8,
+        "name": "close_aaa"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "schedule", "type": 225, "typeName": "ScheduleOf<T>" },
+          {
+            "name": "schedule_window",
+            "type": 254,
+            "typeName": "Option<ScheduleWindow<BlockNumberFor<T>>>"
+          }
+        ],
+        "index": 9,
+        "name": "update_schedule"
+      },
+      {
+        "fields": [{ "name": "paused", "type": 50, "typeName": "bool" }],
+        "index": 10,
+        "name": "set_global_circuit_breaker"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 11,
+        "name": "permissionless_sweep"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          {
+            "name": "execution_plan",
+            "type": 236,
+            "typeName": "ExecutionPlanOf<T>"
+          },
+          {
+            "name": "completion_policy",
+            "type": 256,
+            "typeName": "CompletionPolicy"
+          }
+        ],
+        "index": 12,
+        "name": "update_execution_plan"
+      },
+      {
+        "fields": [{ "name": "new_limit", "type": 14, "typeName": "u32" }],
+        "index": 13,
+        "name": "set_active_actor_limit"
+      },
+      {
+        "fields": [
+          {
+            "name": "aaa_ids",
+            "type": 257,
+            "typeName": "BoundedVec<AaaId, T::MaxSweepPerBlock>"
+          }
+        ],
+        "index": 14,
+        "name": "permissionless_sweep_many"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "target", "type": 189, "typeName": "Option<u64>" }
+        ],
+        "index": 15,
+        "name": "set_auto_close_at_cycle_nonce"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "by", "type": 10, "typeName": "u64" }
+        ],
+        "index": 16,
+        "name": "increment_auto_close_nonce"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "program", "type": 224, "typeName": "ProgramInputOf<T>" }
+        ],
+        "index": 21,
+        "name": "activate_aaa"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 22,
+        "name": "deactivate_aaa"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 23,
+        "name": "cancel_continuation"
+      }
+    ],
+    "constants": [
+      { "name": "NativeAssetId", "type": 197, "value": "0x00" },
+      { "name": "MinWindowLength", "type": 14, "value": "0x64000000" },
+      { "name": "PalletId", "type": 427, "value": "0x61616163746f7230" },
+      { "name": "MaxExecutionPlanSteps", "type": 14, "value": "0x08000000" },
+      { "name": "MaxFundingTrackedAssets", "type": 14, "value": "0x0a000000" },
+      {
+        "name": "MaxContinuationSnapshotEntries",
+        "type": 14,
+        "value": "0x10000000"
+      },
+      { "name": "MaxConditionsPerStep", "type": 14, "value": "0x04000000" },
+      { "name": "MaxOwnerSlots", "type": 3, "value": "0xff" },
+      { "name": "MaxExecutionsPerBlock", "type": 14, "value": "0xe8030000" },
+      { "name": "MaxQueueLength", "type": 14, "value": "0x10270000" },
+      { "name": "QueuePageSize", "type": 14, "value": "0x40000000" },
+      { "name": "WakeupPageSize", "type": 14, "value": "0x20000000" },
+      {
+        "name": "MaxQueueEntriesScannedPerBlock",
+        "type": 14,
+        "value": "0x10270000"
+      },
+      {
+        "name": "MaxObservationFanoutPagesPerBlock",
+        "type": 14,
+        "value": "0x40000000"
+      },
+      {
+        "name": "ObservationFanoutWeightLimit",
+        "type": 109,
+        "value": "0x0700a0db215d02093d00"
+      },
+      {
+        "name": "WakeupWeightLimit",
+        "type": 109,
+        "value": "0x0700a0db215d02093d00"
+      },
+      { "name": "MaxWakeupsPerBlock", "type": 14, "value": "0x00020000" },
+      { "name": "MaxSweepPerBlock", "type": 14, "value": "0x05000000" },
+      { "name": "MaxWhitelistSize", "type": 14, "value": "0x10000000" },
+      { "name": "MaxTriggerSources", "type": 14, "value": "0x04000000" },
+      { "name": "MaxSplitTransferLegs", "type": 14, "value": "0x08000000" },
+      { "name": "MaxExecutionDelayBlocks", "type": 14, "value": "0x208d2203" },
+      { "name": "MaxTimerJitterBlocks", "type": 14, "value": "0x40000000" },
+      { "name": "MaxIdleStarvationBlocks", "type": 14, "value": "0x19000000" },
+      {
+        "name": "GuaranteedOnIdleWeight",
+        "type": 109,
+        "value": "0x070010a5d4e882969800"
+      },
+      {
+        "name": "MaxAutoCloseNonceHorizon",
+        "type": 10,
+        "value": "0x1027000000000000"
+      },
+      { "name": "MaxActiveActors", "type": 14, "value": "0x10270000" },
+      { "name": "MaxActorIdentities", "type": 14, "value": "0x10270000" },
+      { "name": "MaxSystemSovereigns", "type": 14, "value": "0x10270000" },
+      {
+        "name": "StepBaseFee",
+        "type": 49,
+        "value": "0x00943577000000000000000000000000"
+      },
+      {
+        "name": "ConditionReadFee",
+        "type": 49,
+        "value": "0x0065cd1d000000000000000000000000"
+      },
+      {
+        "name": "AaaCreationFee",
+        "type": 49,
+        "value": "0x00ca9a3b000000000000000000000000"
+      },
+      { "name": "MaxConsecutiveFailures", "type": 14, "value": "0x0a000000" },
+      { "name": "MaxRetryAttempts", "type": 14, "value": "0x0a000000" },
+      {
+        "name": "MinUserBalance",
+        "type": 49,
+        "value": "0x00f2052a010000000000000000000000"
+      }
+    ],
+    "errors": [
+      { "fields": [], "index": 0, "name": "AaaIdOverflow" },
+      { "fields": [], "index": 1, "name": "AaaNotFound" },
+      { "fields": [], "index": 2, "name": "ActiveAaaCapacityExceeded" },
+      { "fields": [], "index": 3, "name": "ActiveAaaCountInvariant" },
+      { "fields": [], "index": 4, "name": "ActorIdentityCapacityExceeded" },
+      { "fields": [], "index": 5, "name": "ActorIdentityCountInvariant" },
+      { "fields": [], "index": 6, "name": "AaaAlreadyActive" },
+      { "fields": [], "index": 7, "name": "AaaDormant" },
+      {
+        "fields": [],
+        "index": 8,
+        "name": "ActiveAaaLimitExceedsQueueCapacity"
+      },
+      { "fields": [], "index": 9, "name": "ActiveAaaLimitTooHigh" },
+      { "fields": [], "index": 10, "name": "ActiveAaaLimitTooLow" },
+      { "fields": [], "index": 11, "name": "ActiveAaaLimitBelowCurrent" },
+      { "fields": [], "index": 12, "name": "AaaPaused" },
+      { "fields": [], "index": 13, "name": "EmptyExecutionPlan" },
+      { "fields": [], "index": 14, "name": "ExecutionPlanExceedsOnIdleBudget" },
+      { "fields": [], "index": 15, "name": "ExecutionDelayTooLong" },
+      { "fields": [], "index": 16, "name": "GlobalCircuitBreakerActive" },
+      { "fields": [], "index": 17, "name": "ImmutableAaa" },
+      { "fields": [], "index": 18, "name": "InsufficientBalance" },
+      { "fields": [], "index": 19, "name": "InsufficientFee" },
+      { "fields": [], "index": 20, "name": "InvalidAmountResolution" },
+      { "fields": [], "index": 21, "name": "InvalidCondition" },
+      { "fields": [], "index": 22, "name": "InvalidAutoCloseNonce" },
+      { "fields": [], "index": 23, "name": "InvalidScheduleWindow" },
+      { "fields": [], "index": 24, "name": "InvalidSplitTransfer" },
+      { "fields": [], "index": 25, "name": "SelfTransferNotAllowed" },
+      { "fields": [], "index": 26, "name": "InvalidTriggerConfiguration" },
+      { "fields": [], "index": 27, "name": "MintNotAllowedForUserAaa" },
+      { "fields": [], "index": 28, "name": "NotGovernance" },
+      { "fields": [], "index": 29, "name": "NotOwner" },
+      { "fields": [], "index": 30, "name": "NotPaused" },
+      { "fields": [], "index": 31, "name": "OwnerSlotCapacityExceeded" },
+      { "fields": [], "index": 32, "name": "OwnerSlotOccupied" },
+      { "fields": [], "index": 33, "name": "InvalidOwnerSlot" },
+      { "fields": [], "index": 34, "name": "AaaIdOccupied" },
+      { "fields": [], "index": 35, "name": "SystemSovereignCapacityExceeded" },
+      { "fields": [], "index": 36, "name": "SystemSovereignUnknown" },
+      { "fields": [], "index": 37, "name": "SystemSovereignOccupied" },
+      { "fields": [], "index": 38, "name": "ExecutionPlanTooLong" },
+      { "fields": [], "index": 39, "name": "SnapshotUnavailable" },
+      { "fields": [], "index": 40, "name": "FundingAccumulatorOverflow" },
+      { "fields": [], "index": 41, "name": "SovereignAccountCollision" },
+      { "fields": [], "index": 42, "name": "ReservedSovereignAccount" },
+      { "fields": [], "index": 43, "name": "QueueTicketExhausted" },
+      { "fields": [], "index": 44, "name": "SchedulerIndexExhausted" },
+      { "fields": [], "index": 45, "name": "SystemSovereignInvariant" },
+      { "fields": [], "index": 46, "name": "AutoCloseNonceHorizonExceeded" },
+      { "fields": [], "index": 47, "name": "AutoCloseNonceOverflow" },
+      { "fields": [], "index": 48, "name": "AutoCloseNonceIncrementZero" },
+      { "fields": [], "index": 49, "name": "QueueMutationRateLimited" },
+      { "fields": [], "index": 50, "name": "QueueCapacityUnavailable" },
+      {
+        "fields": [],
+        "index": 51,
+        "name": "RetryLaterNotAllowedForImmutableAaa"
+      },
+      { "fields": [], "index": 52, "name": "ContinuationNotFound" },
+      { "fields": [], "index": 53, "name": "ContinuationInvariant" },
+      { "fields": [], "index": 54, "name": "EmptyConditionSet" },
+      { "fields": [], "index": 55, "name": "ManualSourceDisabled" },
+      { "fields": [], "index": 56, "name": "InvalidTradeBound" },
+      { "fields": [], "index": 57, "name": "InvalidRetryAttemptLimit" },
+      { "fields": [], "index": 58, "name": "RecipientDepositUnavailable" },
+      { "fields": [], "index": 59, "name": "InvalidObservationMaxAge" },
+      {
+        "fields": [],
+        "index": 60,
+        "name": "ObservationSubscriptionCapacityExceeded"
+      },
+      { "fields": [], "index": 61, "name": "ObservationSubscriptionInvariant" },
+      { "fields": [], "index": 62, "name": "InvalidObservationRevision" },
+      { "fields": [], "index": 63, "name": "DirtyObservationCapacityExceeded" },
+      { "fields": [], "index": 64, "name": "DirtyObservationInvariant" },
+      {
+        "fields": [],
+        "index": 65,
+        "name": "InvalidTriggerAmountCompatibility"
+      },
+      { "fields": [], "index": 66, "name": "AdmissionBoundOverflow" }
+    ],
+    "events": [
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "owner", "type": 1, "typeName": "T::AccountId" },
+          { "name": "actor_class", "type": 337, "typeName": "ActorClass" },
+          { "name": "mutability", "type": 223, "typeName": "Mutability" },
+          {
+            "name": "sovereign_account",
+            "type": 1,
+            "typeName": "T::AccountId"
+          },
+          {
+            "name": "initial_lifecycle",
+            "type": 338,
+            "typeName": "InitialLifecycle"
+          }
+        ],
+        "index": 0,
+        "name": "AaaCreated"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 1,
+        "name": "AaaActivated"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 2,
+        "name": "AaaDeactivated"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "reason", "type": 339, "typeName": "PauseReason" }
+        ],
+        "index": 3,
+        "name": "AaaPaused"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 4,
+        "name": "AaaResumed"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "reason", "type": 340, "typeName": "CloseReason" }
+        ],
+        "index": 5,
+        "name": "AaaClosed"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "candidate_cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "candidate_attempt", "type": 14, "typeName": "u32" },
+          { "name": "cursor", "type": 14, "typeName": "u32" },
+          { "name": "reason", "type": 341, "typeName": "DeferReason" }
+        ],
+        "index": 6,
+        "name": "CycleDeferred"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" }
+        ],
+        "index": 7,
+        "name": "CycleStarted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "result", "type": 342, "typeName": "CycleResult" },
+          { "name": "executed_steps", "type": 14, "typeName": "u32" },
+          {
+            "name": "committed_effectful_tasks",
+            "type": 14,
+            "typeName": "u32"
+          },
+          { "name": "skipped_conditions", "type": 14, "typeName": "u32" },
+          { "name": "skipped_resolution", "type": 14, "typeName": "u32" },
+          {
+            "name": "skipped_funding_unavailable",
+            "type": 14,
+            "typeName": "u32"
+          },
+          { "name": "failed_steps", "type": 14, "typeName": "u32" }
+        ],
+        "index": 8,
+        "name": "CycleSummary"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "reason", "type": 343, "typeName": "StepSkippedReason" }
+        ],
+        "index": 9,
+        "name": "StepSkipped"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "retry_class", "type": 344, "typeName": "RetryClass" },
+          { "name": "error", "type": 288, "typeName": "DispatchError" }
+        ],
+        "index": 10,
+        "name": "StepFailed"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount", "type": 49, "typeName": "T::Balance" },
+          { "name": "to", "type": 1, "typeName": "T::AccountId" }
+        ],
+        "index": 11,
+        "name": "TransferExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "total", "type": 49, "typeName": "T::Balance" },
+          { "name": "distributed", "type": 49, "typeName": "T::Balance" },
+          { "name": "retained", "type": 49, "typeName": "T::Balance" },
+          { "name": "legs", "type": 14, "typeName": "u32" },
+          { "name": "effective_legs", "type": 14, "typeName": "u32" }
+        ],
+        "index": 12,
+        "name": "SplitTransferExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset_in", "type": 197, "typeName": "T::AssetId" },
+          { "name": "asset_out", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount_in", "type": 49, "typeName": "T::Balance" },
+          { "name": "amount_out", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 13,
+        "name": "SwapExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 14,
+        "name": "BurnExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 15,
+        "name": "MintExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 16,
+        "name": "StakeExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "shares", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 17,
+        "name": "UnstakeExecuted"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset_a", "type": 197, "typeName": "T::AssetId" },
+          { "name": "asset_b", "type": 197, "typeName": "T::AssetId" },
+          { "name": "max_amount_a", "type": 49, "typeName": "T::Balance" },
+          { "name": "max_amount_b", "type": 49, "typeName": "T::Balance" },
+          { "name": "amount_a", "type": 49, "typeName": "T::Balance" },
+          { "name": "amount_b", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 18,
+        "name": "LiquidityDonated"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "asset_a", "type": 197, "typeName": "T::AssetId" },
+          { "name": "asset_b", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount_a", "type": 49, "typeName": "T::Balance" },
+          { "name": "amount_b", "type": 49, "typeName": "T::Balance" },
+          { "name": "lp_minted", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 19,
+        "name": "LiquidityAdded"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" },
+          { "name": "lp_asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "lp_amount", "type": 49, "typeName": "T::Balance" },
+          { "name": "asset_a", "type": 197, "typeName": "T::AssetId" },
+          { "name": "asset_b", "type": 197, "typeName": "T::AssetId" },
+          { "name": "amount_a", "type": 49, "typeName": "T::Balance" },
+          { "name": "amount_b", "type": 49, "typeName": "T::Balance" }
+        ],
+        "index": 20,
+        "name": "LiquidityRemoved"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 21,
+        "name": "ScheduleUpdated"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          {
+            "name": "completion_policy",
+            "type": 256,
+            "typeName": "CompletionPolicy"
+          }
+        ],
+        "index": 22,
+        "name": "ExecutionPlanUpdated"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "target", "type": 189, "typeName": "Option<u64>" }
+        ],
+        "index": 23,
+        "name": "AutoCloseNonceSet"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "old_target", "type": 189, "typeName": "Option<u64>" },
+          { "name": "new_target", "type": 10, "typeName": "u64" },
+          { "name": "by", "type": 10, "typeName": "u64" }
+        ],
+        "index": 24,
+        "name": "AutoCloseNonceIncremented"
+      },
+      {
+        "fields": [
+          { "name": "old_limit", "type": 14, "typeName": "u32" },
+          { "name": "new_limit", "type": 14, "typeName": "u32" }
+        ],
+        "index": 25,
+        "name": "ActiveActorLimitSet"
+      },
+      {
+        "fields": [{ "name": "paused", "type": 50, "typeName": "bool" }],
+        "index": 26,
+        "name": "GlobalCircuitBreakerSet"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 27,
+        "name": "ManualTriggerSet"
+      },
+      {
+        "fields": [
+          { "name": "requested", "type": 14, "typeName": "u32" },
+          { "name": "closed", "type": 14, "typeName": "u32" },
+          { "name": "alive", "type": 14, "typeName": "u32" },
+          { "name": "missing", "type": 14, "typeName": "u32" }
+        ],
+        "index": 28,
+        "name": "SweepBatchProcessed"
+      },
+      {
+        "fields": [
+          { "name": "consecutive_blocks", "type": 14, "typeName": "u32" }
+        ],
+        "index": 29,
+        "name": "IdleStarvationDetected"
+      },
+      {
+        "fields": [
+          { "name": "consecutive_blocks", "type": 14, "typeName": "u32" }
+        ],
+        "index": 30,
+        "name": "IdleStarvationRecovered"
+      },
+      {
+        "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
+        "index": 31,
+        "name": "FundingSourcePolicyUpdated"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "asset", "type": 197, "typeName": "T::AssetId" },
+          { "name": "added", "type": 49, "typeName": "BalanceOf<T>" },
+          { "name": "accumulated", "type": 49, "typeName": "BalanceOf<T>" }
+        ],
+        "index": 32,
+        "name": "FundingAccumulated"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "attempt", "type": 14, "typeName": "u32" },
+          { "name": "cursor", "type": 14, "typeName": "u32" },
+          { "name": "reason", "type": 345, "typeName": "SuspensionReason" },
+          {
+            "name": "cumulative_outcomes",
+            "type": 346,
+            "typeName": "OutcomeTotals"
+          }
+        ],
+        "index": 33,
+        "name": "CycleSuspended"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "attempt", "type": 14, "typeName": "u32" },
+          { "name": "cursor", "type": 14, "typeName": "u32" }
+        ],
+        "index": 34,
+        "name": "CycleContinued"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "reason", "type": 347, "typeName": "CancellationReason" }
+        ],
+        "index": 35,
+        "name": "CycleCancelled"
+      },
+      {
+        "fields": [
+          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+          { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
+          { "name": "step_index", "type": 14, "typeName": "u32" }
+        ],
+        "index": 36,
+        "name": "CycleStopped"
+      }
+    ],
+    "index": 55,
+    "name": "AAA",
+    "storage": [
+      {
+        "modifier": 1,
+        "name": "NextAaaId",
+        "type": { "tag": "plain", "value": 10 }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorHot",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 616
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorProgram",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 621
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorFunding",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 622
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ContinuationState",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 627
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorIdentities",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 633
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ActorIdentityCount",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 1,
+        "name": "ActiveAaaCount",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 0,
+        "name": "SystemSovereigns",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 634
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "SystemSovereignCount",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 1,
+        "name": "NextQueueTicket",
+        "type": { "tag": "plain", "value": 10 }
+      },
+      {
+        "modifier": 1,
+        "name": "QueueHead",
+        "type": { "tag": "plain", "value": 10 }
+      },
+      {
+        "modifier": 1,
+        "name": "QueueTail",
+        "type": { "tag": "plain", "value": 10 }
+      },
+      {
+        "modifier": 1,
+        "name": "QueueOccupancy",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 0,
+        "name": "QueuePages",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 635
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "WakeupPages",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 638,
+            "value": 639
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "WakeupBuckets",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 14,
+            "value": 644
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "WakeupCursorPages",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 645
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "WakeupCursorLen",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 1,
+        "name": "OwnerSlotBitmaps",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 1,
+            "value": 2
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "SovereignIndex",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 1,
+            "value": 10
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ActiveActorLimit",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 0,
+        "name": "ActorObservationFeeds",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 646
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ObservationSubscriptionSlot",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 10,
+            "value": 14
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ObservationSubscriptionSlotOwner",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 14,
+            "value": 10
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "NextObservationSubscriptionSlot",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 1,
+        "name": "ObservationFreeSlotLen",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 0,
+        "name": "ObservationFreeSlotPages",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 14,
+            "value": 647
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ObservationSubscriberPages",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [
+              { "tag": "Blake2128Concat" },
+              { "tag": "Blake2128Concat" }
+            ],
+            "key": 648,
+            "value": 649
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "ObservationSubscriberPageLists",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 215,
+            "value": 652
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ObservationSubscriberCount",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 215,
+            "value": 14
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "ObservationSubscriptionCount",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 0,
+        "name": "ObservationIngressRevisions",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 215,
+            "value": 10
+          }
+        }
+      },
+      {
+        "modifier": 0,
+        "name": "DirtyObservationFeeds",
+        "type": {
+          "tag": "map",
+          "value": {
+            "hashers": [{ "tag": "Blake2128Concat" }],
+            "key": 215,
+            "value": 653
+          }
+        }
+      },
+      {
+        "modifier": 1,
+        "name": "DirtyObservationListState",
+        "type": { "tag": "plain", "value": 655 }
+      },
+      {
+        "modifier": 1,
+        "name": "GlobalCircuitBreaker",
+        "type": { "tag": "plain", "value": 50 }
+      },
+      {
+        "modifier": 1,
+        "name": "IdleStarvationState",
+        "type": { "tag": "plain", "value": 656 }
+      }
+    ]
+  },
+  "types": [
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 2, "typeName": "[u8; 32]" }]
+      },
+      "id": 1,
+      "params": [],
+      "path": ["sp_core", "crypto", "AccountId32"]
+    },
+    {
+      "def": { "tag": "array", "value": { "len": 32, "type": 3 } },
+      "id": 2,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "primitive", "value": { "tag": "u8" } },
+      "id": 3,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "primitive", "value": { "tag": "u64" } },
+      "id": 10,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "primitive", "value": { "tag": "u32" } },
+      "id": 14,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "array", "value": { "len": 4, "type": 3 } },
+      "id": 28,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "compact", "value": 10 },
+      "id": 45,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "primitive", "value": { "tag": "u128" } },
+      "id": 49,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "primitive", "value": { "tag": "bool" } },
+      "id": 50,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "sequence", "value": 1 },
+      "id": 51,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "array", "value": { "len": 8, "type": 3 } },
+      "id": 103,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "ref_time", "type": 45, "typeName": "u64" },
+          { "docs": [], "name": "proof_size", "type": 45, "typeName": "u64" }
+        ]
+      },
+      "id": 109,
+      "params": [],
+      "path": ["sp_weights", "weight_v2", "Weight"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 14 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 186,
+      "params": [{ "name": "T", "type": 14 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 10 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 189,
+      "params": [{ "name": "T", "type": 10 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Native" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 14, "typeName": "u32" }],
+            "index": 1,
+            "name": "Local"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 14, "typeName": "u32" }],
+            "index": 2,
+            "name": "Foreign"
+          }
+        ]
+      },
+      "id": 197,
+      "params": [],
+      "path": ["primitives", "assets", "AssetKind"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 14, "typeName": "u32" }]
+      },
+      "id": 202,
+      "params": [],
+      "path": ["sp_arithmetic", "per_things", "Perbill"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 14 },
+      "id": 204,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "asset_in",
+            "type": 197,
+            "typeName": "AssetKind"
+          },
+          {
+            "docs": [],
+            "name": "asset_out",
+            "type": 197,
+            "typeName": "AssetKind"
+          },
+          {
+            "docs": [],
+            "name": "method",
+            "type": 216,
+            "typeName": "LocalPoolObservationMethod"
+          },
+          {
+            "docs": [],
+            "name": "aggregation",
+            "type": 217,
+            "typeName": "OracleAggregationId"
+          },
+          { "docs": [], "name": "scale", "type": 3, "typeName": "u8" }
+        ]
+      },
+      "id": 215,
+      "params": [],
+      "path": ["primitives", "oracle", "OracleFeedId"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "PreExecutionSpot" }
+        ]
+      },
+      "id": 216,
+      "params": [],
+      "path": ["primitives", "oracle", "LocalPoolObservationMethod"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "LastValue" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "half_life_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 1,
+            "name": "Ema"
+          }
+        ]
+      },
+      "id": 217,
+      "params": [],
+      "path": ["primitives", "oracle", "OracleAggregationId"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "mutability",
+                "type": 223,
+                "typeName": "Mutability"
+              },
+              {
+                "docs": [],
+                "name": "program",
+                "type": 224,
+                "typeName": "ProgramInputOf<T>"
+              }
+            ],
+            "index": 0,
+            "name": "create_user_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "owner_slot", "type": 3, "typeName": "u8" },
+              {
+                "docs": [],
+                "name": "mutability",
+                "type": 223,
+                "typeName": "Mutability"
+              },
+              {
+                "docs": [],
+                "name": "program",
+                "type": 224,
+                "typeName": "ProgramInputOf<T>"
+              }
+            ],
+            "index": 1,
+            "name": "create_user_aaa_at_slot"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "owner",
+                "type": 1,
+                "typeName": "T::AccountId"
+              },
+              {
+                "docs": [],
+                "name": "mutability",
+                "type": 223,
+                "typeName": "Mutability"
+              },
+              {
+                "docs": [],
+                "name": "program",
+                "type": 224,
+                "typeName": "ProgramInputOf<T>"
+              }
+            ],
+            "index": 2,
+            "name": "create_system_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "sovereign_id",
+                "type": 10,
+                "typeName": "SystemSovereignId"
+              },
+              {
+                "docs": [],
+                "name": "owner",
+                "type": 1,
+                "typeName": "T::AccountId"
+              },
+              {
+                "docs": [],
+                "name": "mutability",
+                "type": 223,
+                "typeName": "Mutability"
+              },
+              {
+                "docs": [],
+                "name": "program",
+                "type": 224,
+                "typeName": "ProgramInputOf<T>"
+              }
+            ],
+            "index": 3,
+            "name": "create_system_aaa_at_sovereign_id"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 4,
+            "name": "pause_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 5,
+            "name": "resume_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 6,
+            "name": "manual_trigger"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "policy",
+                "type": 250,
+                "typeName": "FundingSourcePolicyOf<T>"
+              }
+            ],
+            "index": 7,
+            "name": "update_funding_source_policy"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 8,
+            "name": "close_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "schedule",
+                "type": 225,
+                "typeName": "ScheduleOf<T>"
+              },
+              {
+                "docs": [],
+                "name": "schedule_window",
+                "type": 254,
+                "typeName": "Option<ScheduleWindow<BlockNumberFor<T>>>"
+              }
+            ],
+            "index": 9,
+            "name": "update_schedule"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "paused", "type": 50, "typeName": "bool" }
+            ],
+            "index": 10,
+            "name": "set_global_circuit_breaker"
+          },
+          {
+            "docs": ["Force lifecycle evaluation for a specific actor"],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 11,
+            "name": "permissionless_sweep"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "execution_plan",
+                "type": 236,
+                "typeName": "ExecutionPlanOf<T>"
+              },
+              {
+                "docs": [],
+                "name": "completion_policy",
+                "type": 256,
+                "typeName": "CompletionPolicy"
+              }
+            ],
+            "index": 12,
+            "name": "update_execution_plan"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "new_limit", "type": 14, "typeName": "u32" }
+            ],
+            "index": 13,
+            "name": "set_active_actor_limit"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "aaa_ids",
+                "type": 257,
+                "typeName": "BoundedVec<AaaId, T::MaxSweepPerBlock>"
+              }
+            ],
+            "index": 14,
+            "name": "permissionless_sweep_many"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "target",
+                "type": 189,
+                "typeName": "Option<u64>"
+              }
+            ],
+            "index": 15,
+            "name": "set_auto_close_at_cycle_nonce"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              { "docs": [], "name": "by", "type": 10, "typeName": "u64" }
+            ],
+            "index": 16,
+            "name": "increment_auto_close_nonce"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "program",
+                "type": 224,
+                "typeName": "ProgramInputOf<T>"
+              }
+            ],
+            "index": 21,
+            "name": "activate_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 22,
+            "name": "deactivate_aaa"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 23,
+            "name": "cancel_continuation"
+          }
+        ]
+      },
+      "id": 222,
+      "params": [{ "name": "T" }],
+      "path": ["pallet_aaa", "pallet", "Call"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Mutable" },
+          { "docs": [], "fields": [], "index": 1, "name": "Immutable" }
+        ]
+      },
+      "id": 223,
+      "params": [],
+      "path": ["pallet_aaa", "types", "Mutability"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Dormant" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 253,
+                "typeName": "ActiveProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy>"
+              }
+            ],
+            "index": 1,
+            "name": "Active"
+          }
+        ]
+      },
+      "id": 224,
+      "params": [
+        { "name": "Schedule", "type": 225 },
+        { "name": "BlockNumber", "type": 14 },
+        { "name": "ExecutionPlan", "type": 236 },
+        { "name": "FundingPolicy", "type": 250 }
+      ],
+      "path": ["pallet_aaa", "types", "ProgramInput"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "trigger",
+            "type": 226,
+            "typeName": "Trigger<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources,\nObservationFeedId>"
+          },
+          {
+            "docs": [],
+            "name": "cooldown_blocks",
+            "type": 14,
+            "typeName": "u32"
+          }
+        ]
+      },
+      "id": 225,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "AssetId", "type": 197 },
+        { "name": "MaxWhitelistSize" },
+        { "name": "MaxTriggerSources" },
+        { "name": "ObservationFeedId", "type": 215 }
+      ],
+      "path": ["pallet_aaa", "types", "Schedule"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "sources",
+                "type": 227,
+                "typeName": "TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources,\nObservationFeedId>"
+              }
+            ],
+            "index": 0,
+            "name": "Immediate"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "every_blocks",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "mode",
+                "type": 235,
+                "typeName": "CadenceMode<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources,\nObservationFeedId>"
+              }
+            ],
+            "index": 1,
+            "name": "Cadenced"
+          }
+        ]
+      },
+      "id": 226,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "AssetId", "type": 197 },
+        { "name": "MaxWhitelistSize" },
+        { "name": "MaxTriggerSources" },
+        { "name": "ObservationFeedId", "type": 215 }
+      ],
+      "path": ["pallet_aaa", "types", "TriggerPolicy"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 234, "typeName": "Vec<T>" }]
+      },
+      "id": 227,
+      "params": [{ "name": "T", "type": 228 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Manual" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "source_filter",
+                "type": 229,
+                "typeName": "SourceFilter<AccountId, MaxWhitelistSize>"
+              },
+              {
+                "docs": [],
+                "name": "asset_filter",
+                "type": 231,
+                "typeName": "AssetFilter<AssetId, MaxWhitelistSize>"
+              }
+            ],
+            "index": 1,
+            "name": "OnAddressEvent"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "feed",
+                "type": 215,
+                "typeName": "ObservationFeedId"
+              }
+            ],
+            "index": 2,
+            "name": "OnObservationChange"
+          }
+        ]
+      },
+      "id": 228,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "AssetId", "type": 197 },
+        { "name": "MaxWhitelistSize" },
+        { "name": "ObservationFeedId", "type": 215 }
+      ],
+      "path": ["pallet_aaa", "types", "TriggerSource"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Any" },
+          { "docs": [], "fields": [], "index": 1, "name": "OwnerOnly" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 230,
+                "typeName": "BoundedVec<AccountId, MaxWhitelistSize>"
+              }
+            ],
+            "index": 2,
+            "name": "Whitelist"
+          }
+        ]
+      },
+      "id": 229,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "MaxWhitelistSize" }
+      ],
+      "path": ["pallet_aaa", "types", "SourceFilter"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 51, "typeName": "Vec<T>" }]
+      },
+      "id": 230,
+      "params": [{ "name": "T", "type": 1 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Any" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 232,
+                "typeName": "BoundedVec<AssetId, MaxWhitelistSize>"
+              }
+            ],
+            "index": 1,
+            "name": "Whitelist"
+          }
+        ]
+      },
+      "id": 231,
+      "params": [
+        { "name": "AssetId", "type": 197 },
+        { "name": "MaxWhitelistSize" }
+      ],
+      "path": ["pallet_aaa", "types", "AssetFilter"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 233, "typeName": "Vec<T>" }]
+      },
+      "id": 232,
+      "params": [{ "name": "T", "type": 197 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 197 },
+      "id": 233,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "sequence", "value": 228 },
+      "id": 234,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Always" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 227,
+                "typeName": "TriggerSources<AccountId, AssetId, MaxWhitelistSize, MaxTriggerSources,\nObservationFeedId>"
+              }
+            ],
+            "index": 1,
+            "name": "WhenSignalled"
+          }
+        ]
+      },
+      "id": 235,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "AssetId", "type": 197 },
+        { "name": "MaxWhitelistSize" },
+        { "name": "MaxTriggerSources" },
+        { "name": "ObservationFeedId", "type": 215 }
+      ],
+      "path": ["pallet_aaa", "types", "CadenceMode"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 249, "typeName": "Vec<T>" }]
+      },
+      "id": 236,
+      "params": [{ "name": "T", "type": 237 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "conditions",
+            "type": 238,
+            "typeName": "ConditionSet<Condition<AssetId, Balance, u32, ObservationFeedId>,\nMaxConditionsPerStep>"
+          },
+          {
+            "docs": [],
+            "name": "task",
+            "type": 242,
+            "typeName": "Task<AssetId, Balance, AccountId, MaxSplitTransferLegs>"
+          },
+          {
+            "docs": [],
+            "name": "on_error",
+            "type": 248,
+            "typeName": "StepErrorPolicy"
+          }
+        ]
+      },
+      "id": 237,
+      "params": [
+        { "name": "AssetId", "type": 197 },
+        { "name": "Balance", "type": 49 },
+        { "name": "AccountId", "type": 1 },
+        { "name": "MaxConditionsPerStep" },
+        { "name": "MaxSplitTransferLegs" },
+        { "name": "ObservationFeedId", "type": 215 }
+      ],
+      "path": ["pallet_aaa", "types", "Step"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Always" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 240,
+                "typeName": "BoundedVec<C, MaxConditions>"
+              }
+            ],
+            "index": 1,
+            "name": "All"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 240,
+                "typeName": "BoundedVec<C, MaxConditions>"
+              }
+            ],
+            "index": 2,
+            "name": "Any"
+          }
+        ]
+      },
+      "id": 238,
+      "params": [{ "name": "C", "type": 239 }, { "name": "MaxConditions" }],
+      "path": ["pallet_aaa", "types", "ConditionSet"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "Balance"
+              }
+            ],
+            "index": 0,
+            "name": "BalanceAbove"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "Balance"
+              }
+            ],
+            "index": 1,
+            "name": "BalanceBelow"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "Balance"
+              }
+            ],
+            "index": 2,
+            "name": "BalanceEquals"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "Balance"
+              }
+            ],
+            "index": 3,
+            "name": "BalanceNotEquals"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 14,
+                "typeName": "BlockNumber"
+              }
+            ],
+            "index": 4,
+            "name": "BlockNumberAbove"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 14,
+                "typeName": "BlockNumber"
+              }
+            ],
+            "index": 5,
+            "name": "BlockNumberBelow"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "feed",
+                "type": 215,
+                "typeName": "ObservationFeedId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "u128"
+              },
+              {
+                "docs": [],
+                "name": "max_age_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 6,
+            "name": "ObservationAbove"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "feed",
+                "type": 215,
+                "typeName": "ObservationFeedId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "u128"
+              },
+              {
+                "docs": [],
+                "name": "max_age_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 7,
+            "name": "ObservationBelow"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "feed",
+                "type": 215,
+                "typeName": "ObservationFeedId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "u128"
+              },
+              {
+                "docs": [],
+                "name": "max_age_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 8,
+            "name": "ObservationEquals"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "feed",
+                "type": 215,
+                "typeName": "ObservationFeedId"
+              },
+              {
+                "docs": [],
+                "name": "threshold",
+                "type": 49,
+                "typeName": "u128"
+              },
+              {
+                "docs": [],
+                "name": "max_age_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 9,
+            "name": "ObservationNotEquals"
+          }
+        ]
+      },
+      "id": 239,
+      "params": [
+        { "name": "AssetId", "type": 197 },
+        { "name": "Balance", "type": 49 },
+        { "name": "BlockNumber", "type": 14 },
+        { "name": "ObservationFeedId", "type": 215 }
+      ],
+      "path": ["pallet_aaa", "types", "Condition"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 241, "typeName": "Vec<T>" }]
+      },
+      "id": 240,
+      "params": [{ "name": "T", "type": 239 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 239 },
+      "id": 241,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "to", "type": 1, "typeName": "AccountId" },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              }
+            ],
+            "index": 0,
+            "name": "Transfer"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "legs",
+                "type": 244,
+                "typeName": "BoundedVec<SplitLeg<AccountId>, MaxSplitTransferLegs>"
+              }
+            ],
+            "index": 1,
+            "name": "SplitTransfer"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset_in",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount_in",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "asset_out",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "slippage_tolerance",
+                "type": 202,
+                "typeName": "Perbill"
+              }
+            ],
+            "index": 2,
+            "name": "SwapIn"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset_out",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount_out",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "asset_in",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "input_limit",
+                "type": 247,
+                "typeName": "InputLimit<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "slippage_tolerance",
+                "type": 202,
+                "typeName": "Perbill"
+              }
+            ],
+            "index": 3,
+            "name": "SwapOut"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset_a",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_b",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount_a",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "amount_b",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "min_lp_out",
+                "type": 49,
+                "typeName": "Balance"
+              }
+            ],
+            "index": 4,
+            "name": "AddLiquidity"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "lp_asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_a",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_b",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "lp_amount",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "min_amount_a",
+                "type": 49,
+                "typeName": "Balance"
+              },
+              {
+                "docs": [],
+                "name": "min_amount_b",
+                "type": 49,
+                "typeName": "Balance"
+              }
+            ],
+            "index": 5,
+            "name": "RemoveLiquidity"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              }
+            ],
+            "index": 6,
+            "name": "Burn"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              }
+            ],
+            "index": 7,
+            "name": "Mint"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              }
+            ],
+            "index": 8,
+            "name": "Stake"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset_a",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_b",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "max_amount_a",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              },
+              {
+                "docs": [],
+                "name": "max_ratio_error",
+                "type": 202,
+                "typeName": "Perbill"
+              }
+            ],
+            "index": 9,
+            "name": "DonateLiquidity"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "AssetId"
+              },
+              {
+                "docs": [],
+                "name": "shares",
+                "type": 243,
+                "typeName": "AmountResolution<Balance>"
+              }
+            ],
+            "index": 10,
+            "name": "Unstake"
+          },
+          { "docs": [], "fields": [], "index": 11, "name": "StopCycle" }
+        ]
+      },
+      "id": 242,
+      "params": [
+        { "name": "AssetId", "type": 197 },
+        { "name": "Balance", "type": 49 },
+        { "name": "AccountId", "type": 1 },
+        { "name": "MaxSplitTransferLegs" }
+      ],
+      "path": ["pallet_aaa", "types", "Task"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 49, "typeName": "Balance" }],
+            "index": 0,
+            "name": "Fixed"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 202, "typeName": "Perbill" }],
+            "index": 1,
+            "name": "PercentageOfCurrent"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 202, "typeName": "Perbill" }],
+            "index": 2,
+            "name": "PercentageOfTrigger"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 202, "typeName": "Perbill" }],
+            "index": 3,
+            "name": "PercentageOfLastFunding"
+          },
+          { "docs": [], "fields": [], "index": 4, "name": "AllBalance" }
+        ]
+      },
+      "id": 243,
+      "params": [{ "name": "Balance", "type": 49 }],
+      "path": ["pallet_aaa", "types", "AmountResolution"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 246, "typeName": "Vec<T>" }]
+      },
+      "id": 244,
+      "params": [{ "name": "T", "type": 245 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "to", "type": 1, "typeName": "AccountId" },
+          { "docs": [], "name": "share", "type": 202, "typeName": "Perbill" }
+        ]
+      },
+      "id": 245,
+      "params": [{ "name": "AccountId", "type": 1 }],
+      "path": ["pallet_aaa", "types", "SplitLeg"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 245 },
+      "id": 246,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "LiveQuote" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 49, "typeName": "Balance" }],
+            "index": 1,
+            "name": "Absolute"
+          }
+        ]
+      },
+      "id": 247,
+      "params": [{ "name": "Balance", "type": 49 }],
+      "path": ["pallet_aaa", "types", "InputLimit"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "AbortCycle" },
+          { "docs": [], "fields": [], "index": 1, "name": "ContinueNextStep" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "max_attempts",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 2,
+            "name": "RetryLater"
+          }
+        ]
+      },
+      "id": 248,
+      "params": [],
+      "path": ["pallet_aaa", "types", "StepErrorPolicy"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 237 },
+      "id": 249,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "OwnerOnly" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "type": 251,
+                "typeName": "BoundedBTreeSet<AccountId, MaxSignedFundingSources>"
+              }
+            ],
+            "index": 1,
+            "name": "SignedAllowlist"
+          },
+          { "docs": [], "fields": [], "index": 2, "name": "RuntimePolicy" },
+          { "docs": [], "fields": [], "index": 3, "name": "AnyVerifiedIngress" }
+        ]
+      },
+      "id": 250,
+      "params": [
+        { "name": "AccountId", "type": 1 },
+        { "name": "MaxSignedFundingSources" }
+      ],
+      "path": ["pallet_aaa", "types", "FundingSourcePolicy"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 252, "typeName": "BTreeSet<T>" }]
+      },
+      "id": 251,
+      "params": [{ "name": "T", "type": 1 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
+    },
+    {
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 51 }] },
+      "id": 252,
+      "params": [{ "name": "T", "type": 1 }],
+      "path": ["BTreeSet"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "schedule",
+            "type": 225,
+            "typeName": "Schedule"
+          },
+          {
+            "docs": [],
+            "name": "schedule_window",
+            "type": 254,
+            "typeName": "Option<ScheduleWindow<BlockNumber>>"
+          },
+          {
+            "docs": [],
+            "name": "execution_plan",
+            "type": 236,
+            "typeName": "ExecutionPlan"
+          },
+          {
+            "docs": [],
+            "name": "completion_policy",
+            "type": 256,
+            "typeName": "CompletionPolicy"
+          },
+          {
+            "docs": [],
+            "name": "funding_source_policy",
+            "type": 250,
+            "typeName": "FundingPolicy"
+          },
+          {
+            "docs": [],
+            "name": "auto_close_at_cycle_nonce",
+            "type": 189,
+            "typeName": "Option<u64>"
+          }
+        ]
+      },
+      "id": 253,
+      "params": [
+        { "name": "Schedule", "type": 225 },
+        { "name": "BlockNumber", "type": 14 },
+        { "name": "ExecutionPlan", "type": 236 },
+        { "name": "FundingPolicy", "type": 250 }
+      ],
+      "path": ["pallet_aaa", "types", "ActiveProgramInput"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 255 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 254,
+      "params": [{ "name": "T", "type": 255 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "start",
+            "type": 14,
+            "typeName": "BlockNumber"
+          },
+          { "docs": [], "name": "end", "type": 14, "typeName": "BlockNumber" }
+        ]
+      },
+      "id": 255,
+      "params": [{ "name": "BlockNumber", "type": 14 }],
+      "path": ["pallet_aaa", "types", "ScheduleWindow"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Persistent" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 1,
+            "name": "CloseAfterProductiveRun"
+          }
+        ]
+      },
+      "id": 256,
+      "params": [],
+      "path": ["pallet_aaa", "types", "CompletionPolicy"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 258, "typeName": "Vec<T>" }]
+      },
+      "id": 257,
+      "params": [{ "name": "T", "type": 10 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 10 },
+      "id": 258,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Other" },
+          { "docs": [], "fields": [], "index": 1, "name": "CannotLookup" },
+          { "docs": [], "fields": [], "index": 2, "name": "BadOrigin" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 289, "typeName": "ModuleError" }],
+            "index": 3,
+            "name": "Module"
+          },
+          { "docs": [], "fields": [], "index": 4, "name": "ConsumerRemaining" },
+          { "docs": [], "fields": [], "index": 5, "name": "NoProviders" },
+          { "docs": [], "fields": [], "index": 6, "name": "TooManyConsumers" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 290, "typeName": "TokenError" }],
+            "index": 7,
+            "name": "Token"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "type": 291, "typeName": "ArithmeticError" }
+            ],
+            "index": 8,
+            "name": "Arithmetic"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "type": 292, "typeName": "TransactionalError" }
+            ],
+            "index": 9,
+            "name": "Transactional"
+          },
+          { "docs": [], "fields": [], "index": 10, "name": "Exhausted" },
+          { "docs": [], "fields": [], "index": 11, "name": "Corruption" },
+          { "docs": [], "fields": [], "index": 12, "name": "Unavailable" },
+          { "docs": [], "fields": [], "index": 13, "name": "RootNotAllowed" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 293, "typeName": "TrieError" }],
+            "index": 14,
+            "name": "Trie"
+          }
+        ]
+      },
+      "id": 288,
+      "params": [],
+      "path": ["sp_runtime", "DispatchError"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "index", "type": 3, "typeName": "u8" },
+          {
+            "docs": [],
+            "name": "error",
+            "type": 28,
+            "typeName": "[u8; MAX_MODULE_ERROR_ENCODED_SIZE]"
+          }
+        ]
+      },
+      "id": 289,
+      "params": [],
+      "path": ["sp_runtime", "ModuleError"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "FundsUnavailable" },
+          { "docs": [], "fields": [], "index": 1, "name": "OnlyProvider" },
+          { "docs": [], "fields": [], "index": 2, "name": "BelowMinimum" },
+          { "docs": [], "fields": [], "index": 3, "name": "CannotCreate" },
+          { "docs": [], "fields": [], "index": 4, "name": "UnknownAsset" },
+          { "docs": [], "fields": [], "index": 5, "name": "Frozen" },
+          { "docs": [], "fields": [], "index": 6, "name": "Unsupported" },
+          { "docs": [], "fields": [], "index": 7, "name": "CannotCreateHold" },
+          { "docs": [], "fields": [], "index": 8, "name": "NotExpendable" },
+          { "docs": [], "fields": [], "index": 9, "name": "Blocked" }
+        ]
+      },
+      "id": 290,
+      "params": [],
+      "path": ["sp_runtime", "TokenError"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Underflow" },
+          { "docs": [], "fields": [], "index": 1, "name": "Overflow" },
+          { "docs": [], "fields": [], "index": 2, "name": "DivisionByZero" }
+        ]
+      },
+      "id": 291,
+      "params": [],
+      "path": ["sp_arithmetic", "ArithmeticError"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "LimitReached" },
+          { "docs": [], "fields": [], "index": 1, "name": "NoLayer" }
+        ]
+      },
+      "id": 292,
+      "params": [],
+      "path": ["sp_runtime", "TransactionalError"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "InvalidStateRoot" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 1,
+            "name": "IncompleteDatabase"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 2,
+            "name": "ValueAtIncompleteKey"
+          },
+          { "docs": [], "fields": [], "index": 3, "name": "DecoderError" },
+          { "docs": [], "fields": [], "index": 4, "name": "InvalidHash" },
+          { "docs": [], "fields": [], "index": 5, "name": "DuplicateKey" },
+          { "docs": [], "fields": [], "index": 6, "name": "ExtraneousNode" },
+          { "docs": [], "fields": [], "index": 7, "name": "ExtraneousValue" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 8,
+            "name": "ExtraneousHashReference"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 9,
+            "name": "InvalidChildReference"
+          },
+          { "docs": [], "fields": [], "index": 10, "name": "ValueMismatch" },
+          { "docs": [], "fields": [], "index": 11, "name": "IncompleteProof" },
+          { "docs": [], "fields": [], "index": 12, "name": "RootMismatch" },
+          { "docs": [], "fields": [], "index": 13, "name": "DecodeError" }
+        ]
+      },
+      "id": 293,
+      "params": [],
+      "path": ["sp_runtime", "proving_trie", "TrieError"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 318 },
+      "id": 317,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "tuple", "value": [197, 49] },
+      "id": 318,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "owner",
+                "type": 1,
+                "typeName": "T::AccountId"
+              },
+              {
+                "docs": [],
+                "name": "actor_class",
+                "type": 337,
+                "typeName": "ActorClass"
+              },
+              {
+                "docs": [],
+                "name": "mutability",
+                "type": 223,
+                "typeName": "Mutability"
+              },
+              {
+                "docs": [],
+                "name": "sovereign_account",
+                "type": 1,
+                "typeName": "T::AccountId"
+              },
+              {
+                "docs": [],
+                "name": "initial_lifecycle",
+                "type": 338,
+                "typeName": "InitialLifecycle"
+              }
+            ],
+            "index": 0,
+            "name": "AaaCreated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 1,
+            "name": "AaaActivated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 2,
+            "name": "AaaDeactivated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "reason",
+                "type": 339,
+                "typeName": "PauseReason"
+              }
+            ],
+            "index": 3,
+            "name": "AaaPaused"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 4,
+            "name": "AaaResumed"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "reason",
+                "type": 340,
+                "typeName": "CloseReason"
+              }
+            ],
+            "index": 5,
+            "name": "AaaClosed"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "candidate_cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "candidate_attempt",
+                "type": 14,
+                "typeName": "u32"
+              },
+              { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
+              {
+                "docs": [],
+                "name": "reason",
+                "type": 341,
+                "typeName": "DeferReason"
+              }
+            ],
+            "index": 6,
+            "name": "CycleDeferred"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              }
+            ],
+            "index": 7,
+            "name": "CycleStarted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "result",
+                "type": 342,
+                "typeName": "CycleResult"
+              },
+              {
+                "docs": [],
+                "name": "executed_steps",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "committed_effectful_tasks",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "skipped_conditions",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "skipped_resolution",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "skipped_funding_unavailable",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "failed_steps",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 8,
+            "name": "CycleSummary"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "reason",
+                "type": 343,
+                "typeName": "StepSkippedReason"
+              }
+            ],
+            "index": 9,
+            "name": "StepSkipped"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "retry_class",
+                "type": 344,
+                "typeName": "RetryClass"
+              },
+              {
+                "docs": [],
+                "name": "error",
+                "type": 288,
+                "typeName": "DispatchError"
+              }
+            ],
+            "index": 10,
+            "name": "StepFailed"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "to",
+                "type": 1,
+                "typeName": "T::AccountId"
+              }
+            ],
+            "index": 11,
+            "name": "TransferExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "total",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "distributed",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "retained",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              { "docs": [], "name": "legs", "type": 14, "typeName": "u32" },
+              {
+                "docs": [],
+                "name": "effective_legs",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 12,
+            "name": "SplitTransferExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset_in",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_out",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount_in",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "amount_out",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 13,
+            "name": "SwapExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 14,
+            "name": "BurnExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 15,
+            "name": "MintExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 16,
+            "name": "StakeExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "shares",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 17,
+            "name": "UnstakeExecuted"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset_a",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_b",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "max_amount_a",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "max_amount_b",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "amount_a",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "amount_b",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 18,
+            "name": "LiquidityDonated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "asset_a",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_b",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount_a",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "amount_b",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "lp_minted",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 19,
+            "name": "LiquidityAdded"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              },
+              {
+                "docs": [],
+                "name": "lp_asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "lp_amount",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "asset_a",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "asset_b",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "amount_a",
+                "type": 49,
+                "typeName": "T::Balance"
+              },
+              {
+                "docs": [],
+                "name": "amount_b",
+                "type": 49,
+                "typeName": "T::Balance"
+              }
+            ],
+            "index": 20,
+            "name": "LiquidityRemoved"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 21,
+            "name": "ScheduleUpdated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "completion_policy",
+                "type": 256,
+                "typeName": "CompletionPolicy"
+              }
+            ],
+            "index": 22,
+            "name": "ExecutionPlanUpdated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "target",
+                "type": 189,
+                "typeName": "Option<u64>"
+              }
+            ],
+            "index": 23,
+            "name": "AutoCloseNonceSet"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "old_target",
+                "type": 189,
+                "typeName": "Option<u64>"
+              },
+              {
+                "docs": [],
+                "name": "new_target",
+                "type": 10,
+                "typeName": "u64"
+              },
+              { "docs": [], "name": "by", "type": 10, "typeName": "u64" }
+            ],
+            "index": 24,
+            "name": "AutoCloseNonceIncremented"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "old_limit",
+                "type": 14,
+                "typeName": "u32"
+              },
+              { "docs": [], "name": "new_limit", "type": 14, "typeName": "u32" }
+            ],
+            "index": 25,
+            "name": "ActiveActorLimitSet"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "paused", "type": 50, "typeName": "bool" }
+            ],
+            "index": 26,
+            "name": "GlobalCircuitBreakerSet"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 27,
+            "name": "ManualTriggerSet"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "requested",
+                "type": 14,
+                "typeName": "u32"
+              },
+              { "docs": [], "name": "closed", "type": 14, "typeName": "u32" },
+              { "docs": [], "name": "alive", "type": 14, "typeName": "u32" },
+              { "docs": [], "name": "missing", "type": 14, "typeName": "u32" }
+            ],
+            "index": 28,
+            "name": "SweepBatchProcessed"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "consecutive_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 29,
+            "name": "IdleStarvationDetected"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "consecutive_blocks",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 30,
+            "name": "IdleStarvationRecovered"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+            ],
+            "index": 31,
+            "name": "FundingSourcePolicyUpdated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "asset",
+                "type": 197,
+                "typeName": "T::AssetId"
+              },
+              {
+                "docs": [],
+                "name": "added",
+                "type": 49,
+                "typeName": "BalanceOf<T>"
+              },
+              {
+                "docs": [],
+                "name": "accumulated",
+                "type": 49,
+                "typeName": "BalanceOf<T>"
+              }
+            ],
+            "index": 32,
+            "name": "FundingAccumulated"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
+              { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
+              {
+                "docs": [],
+                "name": "reason",
+                "type": 345,
+                "typeName": "SuspensionReason"
+              },
+              {
+                "docs": [],
+                "name": "cumulative_outcomes",
+                "type": 346,
+                "typeName": "OutcomeTotals"
+              }
+            ],
+            "index": 33,
+            "name": "CycleSuspended"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
+              { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" }
+            ],
+            "index": 34,
+            "name": "CycleContinued"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "reason",
+                "type": 347,
+                "typeName": "CancellationReason"
+              }
+            ],
+            "index": 35,
+            "name": "CycleCancelled"
+          },
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
+              {
+                "docs": [],
+                "name": "cycle_nonce",
+                "type": 10,
+                "typeName": "u64"
+              },
+              {
+                "docs": [],
+                "name": "step_index",
+                "type": 14,
+                "typeName": "u32"
+              }
+            ],
+            "index": 36,
+            "name": "CycleStopped"
+          }
+        ]
+      },
+      "id": 336,
+      "params": [{ "name": "T" }],
+      "path": ["pallet_aaa", "pallet", "Event"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [
+              { "docs": [], "name": "owner_slot", "type": 3, "typeName": "u8" }
+            ],
+            "index": 0,
+            "name": "User"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "sovereign_id",
+                "type": 10,
+                "typeName": "SystemSovereignId"
+              }
+            ],
+            "index": 1,
+            "name": "System"
+          }
+        ]
+      },
+      "id": 337,
+      "params": [],
+      "path": ["pallet_aaa", "types", "ActorClass"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Dormant" },
+          { "docs": [], "fields": [], "index": 1, "name": "Active" }
+        ]
+      },
+      "id": 338,
+      "params": [],
+      "path": ["pallet_aaa", "types", "InitialLifecycle"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [{ "docs": [], "fields": [], "index": 0, "name": "Manual" }]
+      },
+      "id": 339,
+      "params": [],
+      "path": ["pallet_aaa", "types", "PauseReason"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "OwnerInitiated" },
+          { "docs": [], "fields": [], "index": 1, "name": "BalanceExhausted" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 2,
+            "name": "ConsecutiveFailures"
+          },
+          { "docs": [], "fields": [], "index": 3, "name": "WindowExpired" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 4,
+            "name": "CycleNonceExhausted"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 5,
+            "name": "FeeBudgetExhausted"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 6,
+            "name": "AutoCloseNonceReached"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 7,
+            "name": "RetryAttemptsExhausted"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 8,
+            "name": "ProductiveRunCompleted"
+          }
+        ]
+      },
+      "id": 340,
+      "params": [],
+      "path": ["pallet_aaa", "types", "CloseReason"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "RefTime" },
+          { "docs": [], "fields": [], "index": 1, "name": "ProofSize" },
+          { "docs": [], "fields": [], "index": 2, "name": "Both" }
+        ]
+      },
+      "id": 341,
+      "params": [],
+      "path": ["pallet_aaa", "types", "DeferReason"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Completed" },
+          { "docs": [], "fields": [], "index": 1, "name": "Failed" },
+          { "docs": [], "fields": [], "index": 2, "name": "Cancelled" }
+        ]
+      },
+      "id": 342,
+      "params": [],
+      "path": ["pallet_aaa", "types", "CycleResult"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "ConditionsNotMet" },
+          { "docs": [], "fields": [], "index": 1, "name": "ResolutionSkipped" },
+          { "docs": [], "fields": [], "index": 2, "name": "FundingUnavailable" }
+        ]
+      },
+      "id": 343,
+      "params": [],
+      "path": ["pallet_aaa", "types", "StepSkippedReason"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Permanent" },
+          { "docs": [], "fields": [], "index": 1, "name": "Temporary" }
+        ]
+      },
+      "id": 344,
+      "params": [],
+      "path": ["pallet_aaa", "adapters", "RetryClass"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [],
+            "index": 0,
+            "name": "FundingUnavailable"
+          },
+          { "docs": [], "fields": [], "index": 1, "name": "Temporary" }
+        ]
+      },
+      "id": 345,
+      "params": [],
+      "path": ["pallet_aaa", "types", "SuspensionReason"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "executed_steps",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "committed_effectful_tasks",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "skipped_conditions",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "skipped_resolution",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "skipped_funding_unavailable",
+            "type": 14,
+            "typeName": "u32"
+          },
+          { "docs": [], "name": "failed_steps", "type": 14, "typeName": "u32" }
+        ]
+      },
+      "id": 346,
+      "params": [],
+      "path": ["pallet_aaa", "types", "OutcomeTotals"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Explicit" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 1,
+            "name": "ExecutionPlanChanged"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 2,
+            "name": "CompletionPolicyChanged"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 3,
+            "name": "FundingPolicyChanged"
+          },
+          { "docs": [], "fields": [], "index": 4, "name": "ScheduleChanged" },
+          { "docs": [], "fields": [], "index": 5, "name": "Deactivated" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 340, "typeName": "CloseReason" }],
+            "index": 6,
+            "name": "Closing"
+          },
+          { "docs": [], "fields": [], "index": 7, "name": "RuntimeUpgrade" }
+        ]
+      },
+      "id": 347,
+      "params": [],
+      "path": ["pallet_aaa", "types", "CancellationReason"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 103, "typeName": "[u8; 8]" }]
+      },
+      "id": 427,
+      "params": [],
+      "path": ["frame_support", "PalletId"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 215 },
+      "id": 609,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "lifecycle",
+            "type": 617,
+            "typeName": "ActiveLifecycle"
+          },
+          {
+            "docs": [],
+            "name": "run_state",
+            "type": 618,
+            "typeName": "RunState"
+          },
+          {
+            "docs": [],
+            "name": "auto_close_at_cycle_nonce",
+            "type": 189,
+            "typeName": "Option<u64>"
+          },
+          {
+            "docs": [],
+            "name": "consecutive_failures",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "pending_signal",
+            "type": 50,
+            "typeName": "bool"
+          },
+          {
+            "docs": [],
+            "name": "queue_ticket",
+            "type": 189,
+            "typeName": "Option<u64>"
+          },
+          {
+            "docs": [],
+            "name": "wakeup_pointer",
+            "type": 619,
+            "typeName": "Option<WakeupPointer<BlockNumber>>"
+          },
+          {
+            "docs": [],
+            "name": "terminal_at",
+            "type": 186,
+            "typeName": "Option<BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "last_control_queue_mutation_block",
+            "type": 186,
+            "typeName": "Option<BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "cycle_weight_upper",
+            "type": 109,
+            "typeName": "Weight"
+          },
+          {
+            "docs": [],
+            "name": "cycle_fee_upper",
+            "type": 49,
+            "typeName": "Balance"
+          },
+          {
+            "docs": [],
+            "name": "funding_tracked_count",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "schedule_anchor",
+            "type": 14,
+            "typeName": "BlockNumber"
+          },
+          {
+            "docs": [],
+            "name": "last_cycle_block",
+            "type": 186,
+            "typeName": "Option<BlockNumber>"
+          }
+        ]
+      },
+      "id": 616,
+      "params": [
+        { "name": "BlockNumber", "type": 14 },
+        { "name": "Balance", "type": 49 }
+      ],
+      "path": ["pallet_aaa", "types", "ActorHotState"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Active" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 339, "typeName": "PauseReason" }],
+            "index": 1,
+            "name": "Paused"
+          }
+        ]
+      },
+      "id": 617,
+      "params": [],
+      "path": ["pallet_aaa", "types", "ActiveLifecycle"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Idle" },
+          { "docs": [], "fields": [], "index": 1, "name": "Suspended" }
+        ]
+      },
+      "id": 618,
+      "params": [],
+      "path": ["pallet_aaa", "types", "RunState"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 620 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 619,
+      "params": [{ "name": "T", "type": 620 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "block",
+            "type": 14,
+            "typeName": "BlockNumber"
+          },
+          {
+            "docs": [],
+            "name": "page_id",
+            "type": 10,
+            "typeName": "WakeupPageId"
+          },
+          { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
+        ]
+      },
+      "id": 620,
+      "params": [{ "name": "BlockNumber", "type": 14 }],
+      "path": ["pallet_aaa", "types", "WakeupPointer"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "schedule",
+            "type": 225,
+            "typeName": "Schedule"
+          },
+          {
+            "docs": [],
+            "name": "schedule_window",
+            "type": 254,
+            "typeName": "Option<ScheduleWindow<BlockNumber>>"
+          },
+          {
+            "docs": [],
+            "name": "execution_plan",
+            "type": 236,
+            "typeName": "ExecutionPlan"
+          },
+          {
+            "docs": [],
+            "name": "completion_policy",
+            "type": 256,
+            "typeName": "CompletionPolicy"
+          }
+        ]
+      },
+      "id": 621,
+      "params": [
+        { "name": "Schedule", "type": 225 },
+        { "name": "BlockNumber", "type": 14 },
+        { "name": "ExecutionPlan", "type": 236 }
+      ],
+      "path": ["pallet_aaa", "types", "ActorProgramState"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "funding_source_policy",
+            "type": 250,
+            "typeName": "FundingPolicy"
+          },
+          {
+            "docs": [],
+            "name": "funding_accumulated",
+            "type": 623,
+            "typeName": "FundingAccumulated"
+          },
+          {
+            "docs": [],
+            "name": "funding_tracked_assets",
+            "type": 625,
+            "typeName": "FundingTrackedAssets"
+          }
+        ]
+      },
+      "id": 622,
+      "params": [
+        { "name": "FundingPolicy", "type": 250 },
+        { "name": "FundingAccumulated", "type": 623 },
+        { "name": "FundingTrackedAssets", "type": 625 }
+      ],
+      "path": ["pallet_aaa", "types", "ActorFundingState"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 624, "typeName": "BTreeMap<K, V>" }]
+      },
+      "id": 623,
+      "params": [
+        { "name": "K", "type": 197 },
+        { "name": "V", "type": 49 },
+        { "name": "S" }
+      ],
+      "path": ["bounded_collections", "bounded_btree_map", "BoundedBTreeMap"]
+    },
+    {
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 317 }] },
+      "id": 624,
+      "params": [
+        { "name": "K", "type": 197 },
+        { "name": "V", "type": 49 }
+      ],
+      "path": ["BTreeMap"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 626, "typeName": "BTreeSet<T>" }]
+      },
+      "id": 625,
+      "params": [{ "name": "T", "type": 197 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
+    },
+    {
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 233 }] },
+      "id": 626,
+      "params": [{ "name": "T", "type": 197 }],
+      "path": ["BTreeSet"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
+          { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
+          {
+            "docs": [],
+            "name": "unsuccessful_attempts_at_cursor",
+            "type": 14,
+            "typeName": "u32"
+          },
+          {
+            "docs": [],
+            "name": "last_attempt_block",
+            "type": 14,
+            "typeName": "BlockNumber"
+          },
+          {
+            "docs": [],
+            "name": "trigger_snapshot",
+            "type": 628,
+            "typeName": "BoundedBTreeMap<ResolutionSurface<AssetId>, Balance, MaxSnapshotEntries\n>"
+          },
+          {
+            "docs": [],
+            "name": "funding_snapshot",
+            "type": 623,
+            "typeName": "BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>"
+          },
+          {
+            "docs": [],
+            "name": "cumulative_outcomes",
+            "type": 346,
+            "typeName": "OutcomeTotals"
+          }
+        ]
+      },
+      "id": 627,
+      "params": [
+        { "name": "AssetId", "type": 197 },
+        { "name": "Balance", "type": 49 },
+        { "name": "BlockNumber", "type": 14 },
+        { "name": "MaxSnapshotEntries" },
+        { "name": "MaxFundingTrackedAssets" }
+      ],
+      "path": ["pallet_aaa", "types", "ContinuationState"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 630, "typeName": "BTreeMap<K, V>" }]
+      },
+      "id": 628,
+      "params": [
+        { "name": "K", "type": 629 },
+        { "name": "V", "type": 49 },
+        { "name": "S" }
+      ],
+      "path": ["bounded_collections", "bounded_btree_map", "BoundedBTreeMap"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 197, "typeName": "AssetId" }],
+            "index": 0,
+            "name": "Asset"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 197, "typeName": "AssetId" }],
+            "index": 1,
+            "name": "StakingShares"
+          }
+        ]
+      },
+      "id": 629,
+      "params": [{ "name": "AssetId", "type": 197 }],
+      "path": ["pallet_aaa", "types", "ResolutionSurface"]
+    },
+    {
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 631 }] },
+      "id": 630,
+      "params": [
+        { "name": "K", "type": 629 },
+        { "name": "V", "type": 49 }
+      ],
+      "path": ["BTreeMap"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 632 },
+      "id": 631,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "tuple", "value": [629, 49] },
+      "id": 632,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "sovereign_account",
+            "type": 1,
+            "typeName": "AccountId"
+          },
+          { "docs": [], "name": "owner", "type": 1, "typeName": "AccountId" },
+          {
+            "docs": [],
+            "name": "actor_class",
+            "type": 337,
+            "typeName": "ActorClass"
+          },
+          {
+            "docs": [],
+            "name": "mutability",
+            "type": 223,
+            "typeName": "Mutability"
+          },
+          { "docs": [], "name": "cycle_nonce", "type": 10, "typeName": "u64" }
+        ]
+      },
+      "id": 633,
+      "params": [{ "name": "AccountId", "type": 1 }],
+      "path": ["pallet_aaa", "types", "ActorIdentity"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Vacant" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 10, "typeName": "AaaId" }],
+            "index": 1,
+            "name": "Occupied"
+          }
+        ]
+      },
+      "id": 634,
+      "params": [],
+      "path": ["pallet_aaa", "types", "SystemSovereignState"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 637, "typeName": "Vec<T>" }]
+      },
+      "id": 635,
+      "params": [{ "name": "T", "type": 636 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "ticket",
+            "type": 10,
+            "typeName": "QueueTicket"
+          },
+          { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+        ]
+      },
+      "id": 636,
+      "params": [],
+      "path": ["pallet_aaa", "types", "QueueEntry"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 636 },
+      "id": 637,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": { "tag": "tuple", "value": [14, 10] },
+      "id": 638,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "entries", "type": 640, "typeName": "Entries" },
+          { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
+          {
+            "docs": [],
+            "name": "scan_slot",
+            "type": 14,
+            "typeName": "WakeupSlot"
+          },
+          {
+            "docs": [],
+            "name": "previous_page",
+            "type": 189,
+            "typeName": "Option<WakeupPageId>"
+          },
+          {
+            "docs": [],
+            "name": "next_page",
+            "type": 189,
+            "typeName": "Option<WakeupPageId>"
+          }
+        ]
+      },
+      "id": 639,
+      "params": [{ "name": "Entries", "type": 640 }],
+      "path": ["pallet_aaa", "types", "WakeupPage"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 643, "typeName": "Vec<T>" }]
+      },
+      "id": 640,
+      "params": [{ "name": "T", "type": 641 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 642 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 641,
+      "params": [{ "name": "T", "type": 642 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
+        ]
+      },
+      "id": 642,
+      "params": [],
+      "path": ["pallet_aaa", "types", "WakeupEntry"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 641 },
+      "id": 643,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "head_page",
+            "type": 10,
+            "typeName": "WakeupPageId"
+          },
+          {
+            "docs": [],
+            "name": "tail_page",
+            "type": 10,
+            "typeName": "WakeupPageId"
+          },
+          {
+            "docs": [],
+            "name": "next_page_id",
+            "type": 10,
+            "typeName": "WakeupPageId"
+          },
+          { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
+          {
+            "docs": [],
+            "name": "cursor_index",
+            "type": 186,
+            "typeName": "Option<WakeupCursorIndex>"
+          }
+        ]
+      },
+      "id": 644,
+      "params": [],
+      "path": ["pallet_aaa", "types", "WakeupBucketState"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 204, "typeName": "Vec<T>" }]
+      },
+      "id": 645,
+      "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 609, "typeName": "Vec<T>" }]
+      },
+      "id": 646,
+      "params": [{ "name": "T", "type": 215 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 204, "typeName": "Vec<T>" }]
+      },
+      "id": 647,
+      "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": { "tag": "tuple", "value": [215, 14] },
+      "id": 648,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "previous",
+            "type": 186,
+            "typeName": "Option<u32>"
+          },
+          {
+            "docs": [],
+            "name": "next",
+            "type": 186,
+            "typeName": "Option<u32>"
+          },
+          {
+            "docs": [],
+            "name": "entries",
+            "type": 650,
+            "typeName": "BoundedVec<Option<AaaId>, MaxEntries>"
+          }
+        ]
+      },
+      "id": 649,
+      "params": [{ "name": "MaxEntries" }],
+      "path": ["pallet_aaa", "types", "ObservationSubscriberPage"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [{ "docs": [], "type": 651, "typeName": "Vec<T>" }]
+      },
+      "id": 650,
+      "params": [{ "name": "T", "type": 189 }, { "name": "S" }],
+      "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
+    },
+    {
+      "def": { "tag": "sequence", "value": 189 },
+      "id": 651,
+      "params": [],
+      "path": []
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          { "docs": [], "name": "head", "type": 14, "typeName": "u32" },
+          { "docs": [], "name": "tail", "type": 14, "typeName": "u32" },
+          { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
+        ]
+      },
+      "id": 652,
+      "params": [],
+      "path": ["pallet_aaa", "types", "ObservationSubscriberPageList"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "latest_revision",
+            "type": 10,
+            "typeName": "ObservationRevision"
+          },
+          {
+            "docs": [],
+            "name": "fanout_revision",
+            "type": 10,
+            "typeName": "ObservationRevision"
+          },
+          {
+            "docs": [],
+            "name": "dirty_since",
+            "type": 14,
+            "typeName": "BlockNumber"
+          },
+          {
+            "docs": [],
+            "name": "next_subscriber_page",
+            "type": 186,
+            "typeName": "Option<u32>"
+          },
+          {
+            "docs": [],
+            "name": "previous_dirty_feed",
+            "type": 654,
+            "typeName": "Option<FeedId>"
+          },
+          {
+            "docs": [],
+            "name": "next_dirty_feed",
+            "type": 654,
+            "typeName": "Option<FeedId>"
+          }
+        ]
+      },
+      "id": 653,
+      "params": [
+        { "name": "FeedId", "type": 215 },
+        { "name": "BlockNumber", "type": 14 }
+      ],
+      "path": ["pallet_aaa", "types", "DirtyObservationState"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "None" },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 215 }],
+            "index": 1,
+            "name": "Some"
+          }
+        ]
+      },
+      "id": 654,
+      "params": [{ "name": "T", "type": 215 }],
+      "path": ["Option"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "head",
+            "type": 654,
+            "typeName": "Option<FeedId>"
+          },
+          {
+            "docs": [],
+            "name": "tail",
+            "type": 654,
+            "typeName": "Option<FeedId>"
+          },
+          {
+            "docs": [],
+            "name": "cursor",
+            "type": 654,
+            "typeName": "Option<FeedId>"
+          },
+          { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
+        ]
+      },
+      "id": 655,
+      "params": [{ "name": "FeedId", "type": 215 }],
+      "path": ["pallet_aaa", "types", "DirtyObservationList"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "Healthy" },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "since",
+                "type": 14,
+                "typeName": "BlockNumber"
+              }
+            ],
+            "index": 1,
+            "name": "Starving"
+          },
+          {
+            "docs": [],
+            "fields": [
+              {
+                "docs": [],
+                "name": "since",
+                "type": 14,
+                "typeName": "BlockNumber"
+              }
+            ],
+            "index": 2,
+            "name": "Alerted"
+          }
+        ]
+      },
+      "id": 656,
+      "params": [{ "name": "BlockNumber", "type": 14 }],
+      "path": ["pallet_aaa", "types", "IdleStarvationPhase"]
+    },
+    {
+      "def": {
+        "tag": "variant",
+        "value": [
+          { "docs": [], "fields": [], "index": 0, "name": "AaaIdOverflow" },
+          { "docs": [], "fields": [], "index": 1, "name": "AaaNotFound" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 2,
+            "name": "ActiveAaaCapacityExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 3,
+            "name": "ActiveAaaCountInvariant"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 4,
+            "name": "ActorIdentityCapacityExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 5,
+            "name": "ActorIdentityCountInvariant"
+          },
+          { "docs": [], "fields": [], "index": 6, "name": "AaaAlreadyActive" },
+          { "docs": [], "fields": [], "index": 7, "name": "AaaDormant" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 8,
+            "name": "ActiveAaaLimitExceedsQueueCapacity"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 9,
+            "name": "ActiveAaaLimitTooHigh"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 10,
+            "name": "ActiveAaaLimitTooLow"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 11,
+            "name": "ActiveAaaLimitBelowCurrent"
+          },
+          { "docs": [], "fields": [], "index": 12, "name": "AaaPaused" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 13,
+            "name": "EmptyExecutionPlan"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 14,
+            "name": "ExecutionPlanExceedsOnIdleBudget"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 15,
+            "name": "ExecutionDelayTooLong"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 16,
+            "name": "GlobalCircuitBreakerActive"
+          },
+          { "docs": [], "fields": [], "index": 17, "name": "ImmutableAaa" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 18,
+            "name": "InsufficientBalance"
+          },
+          { "docs": [], "fields": [], "index": 19, "name": "InsufficientFee" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 20,
+            "name": "InvalidAmountResolution"
+          },
+          { "docs": [], "fields": [], "index": 21, "name": "InvalidCondition" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 22,
+            "name": "InvalidAutoCloseNonce"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 23,
+            "name": "InvalidScheduleWindow"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 24,
+            "name": "InvalidSplitTransfer"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 25,
+            "name": "SelfTransferNotAllowed"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 26,
+            "name": "InvalidTriggerConfiguration"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 27,
+            "name": "MintNotAllowedForUserAaa"
+          },
+          { "docs": [], "fields": [], "index": 28, "name": "NotGovernance" },
+          { "docs": [], "fields": [], "index": 29, "name": "NotOwner" },
+          { "docs": [], "fields": [], "index": 30, "name": "NotPaused" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 31,
+            "name": "OwnerSlotCapacityExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 32,
+            "name": "OwnerSlotOccupied"
+          },
+          { "docs": [], "fields": [], "index": 33, "name": "InvalidOwnerSlot" },
+          { "docs": [], "fields": [], "index": 34, "name": "AaaIdOccupied" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 35,
+            "name": "SystemSovereignCapacityExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 36,
+            "name": "SystemSovereignUnknown"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 37,
+            "name": "SystemSovereignOccupied"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 38,
+            "name": "ExecutionPlanTooLong"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 39,
+            "name": "SnapshotUnavailable"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 40,
+            "name": "FundingAccumulatorOverflow"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 41,
+            "name": "SovereignAccountCollision"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 42,
+            "name": "ReservedSovereignAccount"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 43,
+            "name": "QueueTicketExhausted"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 44,
+            "name": "SchedulerIndexExhausted"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 45,
+            "name": "SystemSovereignInvariant"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 46,
+            "name": "AutoCloseNonceHorizonExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 47,
+            "name": "AutoCloseNonceOverflow"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 48,
+            "name": "AutoCloseNonceIncrementZero"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 49,
+            "name": "QueueMutationRateLimited"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 50,
+            "name": "QueueCapacityUnavailable"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 51,
+            "name": "RetryLaterNotAllowedForImmutableAaa"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 52,
+            "name": "ContinuationNotFound"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 53,
+            "name": "ContinuationInvariant"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 54,
+            "name": "EmptyConditionSet"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 55,
+            "name": "ManualSourceDisabled"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 56,
+            "name": "InvalidTradeBound"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 57,
+            "name": "InvalidRetryAttemptLimit"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 58,
+            "name": "RecipientDepositUnavailable"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 59,
+            "name": "InvalidObservationMaxAge"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 60,
+            "name": "ObservationSubscriptionCapacityExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 61,
+            "name": "ObservationSubscriptionInvariant"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 62,
+            "name": "InvalidObservationRevision"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 63,
+            "name": "DirtyObservationCapacityExceeded"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 64,
+            "name": "DirtyObservationInvariant"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 65,
+            "name": "InvalidTriggerAmountCompatibility"
+          },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 66,
+            "name": "AdmissionBoundOverflow"
+          }
+        ]
+      },
+      "id": 657,
+      "params": [{ "name": "T" }],
+      "path": ["pallet_aaa", "pallet", "Error"]
+    }
+  ]
+}

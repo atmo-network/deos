@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
+import { AAA_MAX_OWNER_SLOTS } from '../src/lib/automation/aaa-protocol-bounds.ts';
 import { composeAaaRuntimeCall } from '../src/lib/automation/governance-composition.ts';
 import {
   createAaaPlanArtifact,
@@ -55,6 +56,33 @@ test('User AAA create and slot calls encode exact direct-call bytes', () => {
     target: { type: 'Create', ownerSlot: 7 },
   });
   assert.equal(slotted.call.bytes, '0x3701070000');
+});
+
+test('User owner-slot authoring enforces the metadata-derived MaxOwnerSlots bound', () => {
+  assert.equal(
+    AAA_MAX_OWNER_SLOTS,
+    255,
+    'reference baseline is 255 valid slots',
+  );
+  // Highest valid slot is accepted.
+  const highest = composeAaaRuntimeCall({
+    artifact: artifact('User'),
+    metadataBytes,
+    runtime,
+    target: { type: 'Create', ownerSlot: AAA_MAX_OWNER_SLOTS - 1 },
+  });
+  assert.equal(highest.call.bytes, '0x3701fe0000');
+  // The hard ceiling itself is rejected before artifact submission.
+  assert.throws(
+    () =>
+      composeAaaRuntimeCall({
+        artifact: artifact('User'),
+        metadataBytes,
+        runtime,
+        target: { type: 'Create', ownerSlot: AAA_MAX_OWNER_SLOTS },
+      }),
+    /MaxOwnerSlots/,
+  );
 });
 
 test('System AAA composition exposes exact Root call but denies current governance admission', () => {
@@ -108,7 +136,7 @@ test('System AAA composition exposes exact Root call but denies current governan
   assert.match(composed.preimage.reason, /runtime-upgrade payload/);
 });
 
-test('activation and reopening preserve artifact identity and reject invalid targets', () => {
+test('activation and custody reattachment preserve artifact identity and reject invalid targets', () => {
   const userArtifact = artifact('User');
   const activation = composeAaaRuntimeCall({
     artifact: userArtifact,
@@ -125,7 +153,7 @@ test('activation and reopening preserve artifact identity and reject invalid tar
         artifact: userArtifact,
         metadataBytes,
         runtime,
-        target: { type: 'ReopenSystem', aaaId: 9n, owner },
+        target: { type: 'ReattachSystem', sovereignId: 9n, owner },
       }),
     /System AAA artifact/,
   );

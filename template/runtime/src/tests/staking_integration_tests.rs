@@ -783,6 +783,7 @@ fn runtime_governance_bldr_native_vote_power_is_frozen_against_lp_reserve_change
       crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
         &CHARLIE,
         200,
+        100,
         polkadot_sdk::sp_runtime::Perbill::zero(),
       ),
       (100, 100)
@@ -2198,6 +2199,7 @@ fn ntve_stntve_pool_direct_balanced_donation_increases_lp_value_without_minting_
       crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
         &BOB,
         80,
+        40,
         polkadot_sdk::sp_runtime::Perbill::zero(),
       ),
       (40, 40)

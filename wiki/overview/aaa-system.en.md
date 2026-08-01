@@ -48,7 +48,7 @@ AAA gives the runtime one reusable way to run bounded execution plans instead of
 
 The normative system contract requires:
 
-- Deterministic scheduling with durable late, paused, cooldown, and pre-window signals;
+- Deterministic scheduling with durable late, paused, cooldown, and pre-window signals; one strict global-ticket FIFO where a live or weight-blocked head holds the only execution offer and light followers keep their exact physical order until it advances. The overdue-wakeup and observation-fanout workers each stop at their own two-dimensional weight ceiling, leaving actor service the remaining budget without guarantee lending. One placement owner maps immediate readiness, cadence/cooldown/window targets, fixed retry backoff, capacity recovery, and terminal expiry to the FIFO or an exact wakeup, and the post-worker cutoff guarantees at most one execution per actor per block. Physical queue occupancy counts tombstones until drained, and namespace overflow fails closed without losing an actor's existing ticket or pointer.
 - Balance/event-driven triggering through direct producer-owned adapters without an event scanner or deferred compatibility queue;
 - Two-dimensional RefTime and ProofSize admission before each housekeeping, queue, wakeup, close, or cycle operation, including a generated fixed hook base before any `on_idle` storage access;
 - Typed tasks such as transfer, swap, liquidity, burn, mint, stake, and unstake;
@@ -85,7 +85,7 @@ Permanent and unsupported-adapter failures never create Continuation. Immutable 
 
 ## Operational Observability
 
-AAA keeps current starvation observability sparse. `IdleStarvationState` is absent/Healthy during normal operation, becomes `Starving { since }` on the first exhausted post-housekeeping budget, and becomes `Alerted { since }` at the configured threshold. Duration derives from block number, so unchanged starving or alerted blocks do not rewrite a counter.
+AAA keeps current starvation observability sparse. `IdleStarvationState` is absent/Healthy during normal operation. With the breaker inactive it becomes `Starving { since }` only when live FIFO work exists, no attempt was admitted, and the actor pass returns `BlockedByWeight`; it becomes `Alerted { since }` at the configured threshold. No live work, an admitted attempt, a non-Weight block result, or breaker activation clears state once, so an empty or tombstone-only queue with an exhausted budget is not starvation. Duration derives from block number, so unchanged starving or alerted blocks do not rewrite a counter.
 
 `IdleStarvationDetected` and `IdleStarvationRecovered` each emit once per alerted interval. The current phase is canonical chain state; long-term alert history and duration trends belong in an indexed view built from those events. The production-Wasm healthy-empty probe confirms five reads and zero writes. Distinct wakeup blocks live in a paged binary min-heap with exact reverse indices. Insert, pop-min, and exact removal use at most `ceil(log2(MaxActiveActors))` sift steps, covered by maximum-depth generated benchmarks.
 

@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-asset-registry"
-version = "0.7.9"
+version = "0.7.10"
 description = "Governance-controlled registry for foreign asset metadata"
 authors.workspace = true
 license = "MIT-0"

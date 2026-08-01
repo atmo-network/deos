@@ -16,6 +16,7 @@ use polkadot_sdk::frame_support::traits::{
   tokens::{DepositConsequence, Fortitude, Precision, Preservation, Provenance},
 };
 use polkadot_sdk::pallet_asset_conversion::PoolLocator;
+use polkadot_sdk::sp_core::U256;
 use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenError};
 
 use crate::{AssetConversion, RuntimeOrigin};
@@ -30,21 +31,19 @@ parameter_types! {
   pub const AaaPalletId: PalletId = PalletId(*ecosystem::pallet_ids::AAA_PALLET_ID);
   pub const AaaNativeAssetId: AssetKind = AssetKind::Native;
   /// User AAA slot capacity per owner; System AAA is not constrained by this limit
-  pub const AaaMaxOwnerSlots: u8 = 8;
+  pub const AaaMaxOwnerSlots: u8 = 255;
 
   // --- Execution-plan and task bounds ---
 
-  pub const AaaMaxExecutionPlanSteps: u32 = 10;
-  pub const AaaMaxSystemExecutionPlanSteps: u32 = 10;
-  pub const AaaMaxUserExecutionPlanSteps: u32 = 3;
+  pub const AaaMaxExecutionPlanSteps: u32 = 8;
   pub const AaaMaxFundingTrackedAssets: u32 = 10;
-  pub const AaaMaxContinuationSnapshotEntries: u32 = 20;
+  pub const AaaMaxContinuationSnapshotEntries: u32 = 16;
   pub const AaaMaxConditionsPerStep: u32 = 4;
   pub const AaaMaxSplitTransferLegs: u32 = 8;
 
   // --- Trigger and schedule bounds ---
 
-  pub const AaaMaxExecutionDelayBlocks: BlockNumber = 52_560_000;
+  pub const AaaMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
   pub const AaaMaxTimerJitterBlocks: u32 = 64;
   pub const AaaMinWindowLength: BlockNumber = 100;
   pub const AaaMaxWhitelistSize: u32 = 16;
@@ -54,10 +53,6 @@ parameter_types! {
 
   /// Defense-in-depth count ceiling; RefTime and ProofSize admission remain primary.
   pub const AaaMaxExecutionsPerBlock: u32 = 1_000;
-  /// Maximum share of admitted actor-execution Weight/count offered to System first.
-  pub const AaaSystemExecutionReserve: Perbill = Perbill::from_percent(20);
-  /// Minimum share of admitted actor-execution Weight/count offered to User next.
-  pub const AaaUserExecutionGuarantee: Perbill = Perbill::from_percent(20);
   pub const AaaMaxQueueLength: u32 = 10_000;
   /// Balanced production granularity selected from 32/64/128 production-Wasm evidence.
   pub const AaaQueuePageSize: u32 = 64;
@@ -68,12 +63,16 @@ parameter_types! {
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
   pub AaaObservationFanoutWeightLimit: Weight =
     Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
+  /// Dedicated overdue-wakeup worker envelope: one worst-case complete wakeup unit plus cursor
+  /// probe remains inside it (spec 15.2.9), and it stays below the guaranteed on_idle headroom.
+  pub AaaWakeupWeightLimit: Weight = Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
   pub AaaGuaranteedOnIdleWeight: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
 
   // --- Lifecycle and sweep controls ---
 
   pub const AaaMaxConsecutiveFailures: u32 = 10;
+  pub const AaaMaxRetryAttempts: u32 = 10;
   pub const AaaMaxAutoCloseNonceHorizon: u64 = 10_000;
   pub const AaaMinUserBalance: Balance = 5 * ExistentialDeposit::get();
   pub const AaaMaxSweepPerBlock: u32 = 5;
@@ -124,7 +123,29 @@ impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
     if amount == 0 {
       return Ok(());
     }
-    TmctolAssetOps::transfer(payer, fee_sink, native_asset, amount).map_err(|failure| failure.error)
+    // Fee collection is one explicit certified producer: exactly one read-only
+    // ingress preflight, one fee-native ledger movement, and one post-movement
+    // notification in the same transaction. The ledger-only primitive performs
+    // NO generic AssetOps ingress, transaction-extension ingress, or native-
+    // staking bridge, so notifying the same movement twice is impossible.
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> DispatchResult {
+        TmctolAssetOps::transfer_native_ledger_only(payer, fee_sink, amount)
+          .map_err(|failure| failure.error)?;
+        crate::configs::RuntimeAddressEventIngress::on_internal_inbound(
+          fee_sink,
+          native_asset,
+          amount,
+          payer,
+        )
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
   }
 }
 
@@ -195,6 +216,47 @@ impl TmctolAssetOps {
       }
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
     })
+  }
+
+  /// Private ledger-only native transfer used by the certified `FeeCollector`
+  /// producer. It performs one read-only ingress preflight and one fee-native
+  /// ledger movement, but deliberately NO generic `AssetOps` ingress, NO
+  /// transaction-extension ingress, and NO native-staking bridge side effect.
+  /// The caller (FeeCollector) submits exactly one post-movement notification,
+  /// so one charge yields exactly one preflight/one movement/one notification.
+  pub(crate) fn transfer_native_ledger_only(
+    from: &AccountId,
+    to: &AccountId,
+    amount: Balance,
+  ) -> Result<(), TaskFailure> {
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      if let Err(error) =
+        <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
+          to,
+          AssetKind::Native,
+          amount,
+          from,
+        )
+      {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      }
+      let result = (|| -> DispatchResult {
+        <Balances as Currency<AccountId>>::transfer(
+          from,
+          to,
+          amount,
+          polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
+        )?;
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      }
+    })
+    .map_err(TaskFailure::permanent)
   }
 }
 
@@ -472,9 +534,24 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       amount_out,
     )
     .map_err(classify_router_failure)?;
-    let quoted_max_in = quote
-      .amount_in
-      .saturating_add(slippage_tolerance.mul_ceil(quote.amount_in));
+    // Tolerance-bound cap with checked widened ceiling arithmetic: no saturation or
+    // silent clamp. The ceiling is quote.amount_in + ceil(slippage * quote.amount_in),
+    // computed in U256 and narrowed to the balance width; overflow fails closed.
+    let quoted_max_in = U256::from(quote.amount_in)
+      .checked_add(
+        U256::from(quote.amount_in)
+          .checked_mul(U256::from(slippage_tolerance.deconstruct()))
+          .and_then(|value| value.checked_add(U256::from(1_000_000_000u64 - 1)))
+          .map(|value| value / U256::from(1_000_000_000u64))
+          .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("ExactOutCapOverflow")))?,
+      )
+      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("ExactOutCapOverflow")))?;
+    let quoted_max_in: Balance = quoted_max_in
+      .try_into()
+      .map_err(|_| TaskFailure::permanent(DispatchError::Other("ExactOutCapOverflow")))?;
+    // The tolerance-bound cap, not merely the larger preservable balance, bounds the
+    // Router exact-output execution boundary.
+    let execution_cap = quoted_max_in.min(max_amount_in);
     if quoted_max_in > max_amount_in {
       return Err(TaskFailure::temporary(DispatchError::Other(
         "ExactOutInputCapacityExceeded",
@@ -499,7 +576,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       asset_in,
       asset_out,
       amount_out,
-      max_amount_in,
+      execution_cap,
       who,
     )
     .map_err(TaskFailure::permanent)
@@ -507,6 +584,13 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
 }
 
 impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
+  fn lp_assets(lp_asset: AssetKind) -> Option<(AssetKind, AssetKind)> {
+    let AssetKind::Local(lp_id) = lp_asset else {
+      return None;
+    };
+    crate::AxialRouter::lp_pair_by_token_id(lp_id)
+  }
+
   fn add_liquidity(
     who: &AccountId,
     asset_a: AssetKind,
@@ -529,6 +613,8 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
         super::assets_config::register_pool_lp_pair(asset_a, asset_b)
           .map_err(TaskFailure::permanent)?;
         let lp_before = liquidity_lp_balance(who, asset_a, asset_b);
+        let a_before = TmctolAssetOps::balance(who, asset_a);
+        let b_before = TmctolAssetOps::balance(who, asset_b);
         AssetConversion::add_liquidity(
           RuntimeOrigin::signed(who.clone()),
           Box::new(asset_a),
@@ -542,12 +628,16 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
         .map_err(TaskFailure::permanent)?;
         let lp_after = liquidity_lp_balance(who, asset_a, asset_b);
         let lp_minted = lp_after.saturating_sub(lp_before);
+        // Factual outcomes: measure the actual asset debits and LP output rather than
+        // returning the authored caps as if fully consumed (spec 3.4).
+        let used_a = a_before.saturating_sub(TmctolAssetOps::balance(who, asset_a));
+        let used_b = b_before.saturating_sub(TmctolAssetOps::balance(who, asset_b));
         if lp_minted < min_lp_out {
           return Err(TaskFailure::temporary(DispatchError::Other(
             "MinimumLpOutputNotMet",
           )));
         }
-        Ok((amount_a, amount_b, lp_minted))
+        Ok((used_a, used_b, lp_minted))
       })();
       match result {
         Ok(value) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(value)),
@@ -561,6 +651,8 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
   fn remove_liquidity(
     who: &AccountId,
     lp_asset: AssetKind,
+    asset_a: AssetKind,
+    asset_b: AssetKind,
     lp_amount: Balance,
     min_amount_a: Balance,
     min_amount_b: Balance,
@@ -576,10 +668,17 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
             )));
           }
         };
-        let (asset_a, asset_b) =
+        let (registry_a, registry_b) =
           crate::AxialRouter::lp_pair_by_token_id(lp_id).ok_or_else(|| {
             TaskFailure::permanent(DispatchError::Other("Pool not found for LP token"))
           })?;
+        // The expected ordered pair must match the stable registry binding; an
+        // admitted LP token is never silently reinterpreted.
+        if (registry_a, registry_b) != (asset_a, asset_b) {
+          return Err(TaskFailure::permanent(DispatchError::Other(
+            "LiquidityPairBindingMismatch",
+          )));
+        }
         let before_a = TmctolAssetOps::balance(who, asset_a);
         let before_b = TmctolAssetOps::balance(who, asset_b);
         AssetConversion::remove_liquidity(
@@ -612,7 +711,8 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
     who: &AccountId,
     asset_a: AssetKind,
     asset_b: AssetKind,
-    amount: Balance,
+    max_amount_a: Balance,
+    max_amount_b: Balance,
     max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure> {
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
@@ -620,10 +720,16 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
       .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable")))?;
     if asset_a == AssetKind::Local(native_asset_id) && asset_b == AssetKind::Local(staked_asset_id)
     {
+      if max_amount_a.is_zero() {
+        return Err(TaskFailure::permanent(DispatchError::Other(
+          "DonationAmountTooSmall",
+        )));
+      }
       let donation =
         crate::configs::AssetConversionAdapter::donate_native_staking_liquidity_from_ntve(
           who,
-          amount,
+          max_amount_a,
+          max_amount_b,
           max_ratio_error,
         )?;
       TmctolAssetOps::bridge_native_staking_pool_yield().map_err(TaskFailure::permanent)?;
@@ -674,11 +780,32 @@ impl TmctolDexOps {
     let reference = ema_reference.or(reserve_reference).ok_or_else(|| {
       TaskFailure::temporary(DispatchError::Other("SystemReferencePriceUnavailable"))
     })?;
-    let current = amount_out
-      .saturating_mul(ecosystem::params::PRECISION)
-      .saturating_div(amount_in);
-    let deviation = Perbill::from_rational(current.abs_diff(reference), reference);
-    if deviation > AaaMaxSystemPriceDeviation::get() {
+    // Checked cross-multiplication deviation guard (spec 5.3): the scaled reference
+    // price is ref_out/ref_in * PRECISION; comparing without division requires
+    //   abs(exec_out * ref_in - ref_out * exec_in) * ACCURACY
+    //     <= deviation * ref_out * exec_in
+    // computed with a sufficient widened integer type (U256) and checked narrowing.
+    // The products ref_out * exec_in and the deviation product use PRECISION-scaled
+    // values consistently; a widening overflow fails closed as Permanent.
+    let exec_in = U256::from(amount_in);
+    let exec_out = U256::from(amount_out);
+    let ref_in = U256::from(ecosystem::params::PRECISION);
+    let ref_out = U256::from(reference);
+    let a = exec_out
+      .checked_mul(ref_in)
+      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("ReferenceGuardOverflow")))?;
+    let b = exec_in
+      .checked_mul(ref_out)
+      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("ReferenceGuardOverflow")))?;
+    let abs_diff = a.max(b) - a.min(b);
+    let left = abs_diff
+      .checked_mul(U256::from(1_000_000_000u64))
+      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("ReferenceGuardOverflow")))?;
+    let right = U256::from(AaaMaxSystemPriceDeviation::get().deconstruct())
+      .checked_mul(ref_out)
+      .and_then(|value| value.checked_mul(exec_in))
+      .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("ReferenceGuardOverflow")))?;
+    if left > right {
       return Err(TaskFailure::temporary(DispatchError::Other(
         "SystemPriceDeviationExceeded",
       )));
@@ -936,7 +1063,7 @@ impl TmctolGenesisSystemAaas {
     });
     steps
       .try_into()
-      .expect("burn execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("burn execution_plan fits within MaxExecutionPlanSteps")
   }
 
   /// Builds the Liquidity Actor execution_plan for a specific foreign asset / LP pair.
@@ -1038,7 +1165,7 @@ impl TmctolGenesisSystemAaas {
     ];
     steps
       .try_into()
-      .expect("Liquidity Actor execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("Liquidity Actor execution_plan fits within MaxExecutionPlanSteps")
   }
 
   /// Builds the Bucket-side half of production-admissible LP unwind.
@@ -1078,6 +1205,12 @@ impl TmctolGenesisSystemAaas {
     dust_threshold: Balance,
   ) -> pallet_aaa::ExecutionPlanOf<Runtime> {
     use pallet_aaa::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
+    let lp_id = match lp_asset {
+      AssetKind::Local(id) => id,
+      _ => panic!("Treasury LP unwind requires a Local LP asset"),
+    };
+    let (asset_a, asset_b) = crate::AxialRouter::lp_pair_by_token_id(lp_id)
+      .expect("Treasury LP unwind requires a registered LP pair");
     alloc::vec![Step {
       conditions: Self::all_conditions(alloc::vec![Condition::BalanceAbove {
         asset: lp_asset,
@@ -1085,7 +1218,9 @@ impl TmctolGenesisSystemAaas {
       }]),
       task: Task::RemoveLiquidity {
         lp_asset,
-        amount: AmountResolution::AllBalance,
+        asset_a,
+        asset_b,
+        lp_amount: AmountResolution::AllBalance,
         min_amount_a: 1,
         min_amount_b: 1,
       },
@@ -1139,7 +1274,7 @@ impl TmctolGenesisSystemAaas {
     },];
     steps
       .try_into()
-      .expect("BLDR splitter execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("BLDR splitter execution_plan fits within MaxExecutionPlanSteps")
   }
 
   /// Builds the BLDR Liquidity Actor execution_plan for NTVE-BLDR provisioning.
@@ -1198,7 +1333,7 @@ impl TmctolGenesisSystemAaas {
     ];
     steps
       .try_into()
-      .expect("BLDR Liquidity Actor execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("BLDR Liquidity Actor execution_plan fits within MaxExecutionPlanSteps")
   }
 
   /// Builds the Native Staking LP Farmer execution_plan.
@@ -1213,7 +1348,7 @@ impl TmctolGenesisSystemAaas {
     crate::AAA::activate_aaa(
       RuntimeOrigin::root(),
       ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
-      pallet_aaa::ProgramInput::Active {
+      pallet_aaa::ProgramInput::Active(pallet_aaa::ActiveProgramInput {
         schedule: pallet_aaa::Schedule {
           trigger: pallet_aaa::Trigger::immediate_manual_and_address_event(
             pallet_aaa::SourceFilter::Any,
@@ -1225,7 +1360,8 @@ impl TmctolGenesisSystemAaas {
         execution_plan,
         completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: pallet_aaa::FundingSourcePolicy::RuntimePolicy,
-      },
+        auto_close_at_cycle_nonce: None,
+      }),
     )
   }
 
@@ -1242,7 +1378,7 @@ impl TmctolGenesisSystemAaas {
       .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
     let actor_id = ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID;
     if crate::AAA::aaa_instances(actor_id).is_none()
-      && crate::AAA::dormant_aaa_identities(actor_id).is_none()
+      && crate::AAA::actor_identities(actor_id).is_none()
     {
       return Err(DispatchError::Other("NativeStakingLpFarmerUnavailable"));
     }
@@ -1271,14 +1407,14 @@ impl TmctolGenesisSystemAaas {
       task: Task::DonateLiquidity {
         asset_a: native_asset,
         asset_b: staked_asset,
-        amount: AmountResolution::AllBalance,
+        max_amount_a: AmountResolution::AllBalance,
         max_ratio_error: ecosystem::params::NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR,
       },
       on_error: StepErrorPolicy::AbortCycle,
     }];
     steps
       .try_into()
-      .expect("native staking LP farming execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("native staking LP farming execution_plan fits within MaxExecutionPlanSteps")
   }
 
   /// Builds the Treasury B BLDR buyback-and-burn execution_plan.
@@ -1327,7 +1463,7 @@ impl TmctolGenesisSystemAaas {
     ];
     steps
       .try_into()
-      .expect("Treasury B buyback execution_plan fits within MaxSystemExecutionPlanSteps")
+      .expect("Treasury B buyback execution_plan fits within MaxExecutionPlanSteps")
   }
 }
 
@@ -1385,10 +1521,11 @@ impl pallet_aaa::adapters::StakingOps<AccountId, AssetKind, Balance> for TmctolS
 pub struct DeosFundingAuthority;
 
 impl FundingAuthority<AccountId> for DeosFundingAuthority {
-  fn allows(
+  fn permits(
     _: pallet_aaa::AaaId,
     _: &AccountId,
-    _: &pallet_aaa::FundingProvenance<AccountId>,
+    _: Option<&AccountId>,
+    _: Option<&pallet_aaa::FundingProvenance>,
   ) -> bool {
     // The reference launch line has no source/actor authorization entries.
     // Downstream runtimes must add explicit pairs rather than inheriting trust
@@ -1397,17 +1534,37 @@ impl FundingAuthority<AccountId> for DeosFundingAuthority {
   }
 }
 
+/// Derived sovereign accounts must never collide with host-reserved identities.
+///
+/// The reference runtime marks the Fee Sink and the reserved deterministic System AAA custody
+/// accounts as reserved so a hashed sovereign derivation can never alias them.
+pub struct DeosSovereignAccountPolicy;
+
+impl pallet_aaa::adapters::SovereignAccountPolicy<AccountId> for DeosSovereignAccountPolicy {
+  fn is_reserved(account: &AccountId) -> bool {
+    // The deterministic genesis System AAA custody accounts (including the Fee Sink) are
+    // host-reserved; a hashed sovereign derivation can never alias them.
+    (primitives::ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID
+      ..=primitives::ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID)
+      .any(|id| account == &pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(id))
+  }
+}
+
 pub struct TmctolObservationProvider;
 
-impl pallet_aaa::ObservationProvider<primitives::OracleFeedId> for TmctolObservationProvider {
-  fn observation(
-    feed: primitives::OracleFeedId,
+impl pallet_aaa::ObservationProvider<primitives::OracleFeedId, crate::BlockNumber>
+  for TmctolObservationProvider
+{
+  fn observe(
+    feed: &primitives::OracleFeedId,
+    _now: crate::BlockNumber,
     max_age_blocks: u32,
-  ) -> pallet_aaa::ScalarObservationState {
-    match crate::Oracle::observation_state(feed, max_age_blocks) {
+  ) -> pallet_aaa::ScalarObservationState<crate::BlockNumber> {
+    match crate::Oracle::observation_state(*feed, max_age_blocks) {
       Ok(pallet_oracle::ObservationState::Fresh(observation)) => {
         pallet_aaa::ScalarObservationState::Fresh {
           value: observation.value,
+          observed_at: observation.updated_at,
         }
       }
       Ok(pallet_oracle::ObservationState::Uninitialized) => {
@@ -1431,6 +1588,7 @@ impl pallet_aaa::Config for Runtime {
   type ObservationFeedId = primitives::OracleFeedId;
   type ObservationProvider = TmctolObservationProvider;
   type FundingAuthority = DeosFundingAuthority;
+  type SovereignAccountPolicy = DeosSovereignAccountPolicy;
   type DexOps = TmctolDexOps;
   type StakingOps = TmctolStakingOps;
   type LiquidityOps = TmctolLiquidityOps;
@@ -1442,20 +1600,21 @@ impl pallet_aaa::Config for Runtime {
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxActiveActors = AaaMaxActiveActors;
   type MaxActorIdentities = AaaMaxActiveActors;
+  type MaxSystemSovereigns = AaaMaxActiveActors;
   type MaxConditionsPerStep = AaaMaxConditionsPerStep;
   type MaxConsecutiveFailures = AaaMaxConsecutiveFailures;
+  type MaxRetryAttempts = AaaMaxRetryAttempts;
   type MaxAutoCloseNonceHorizon = AaaMaxAutoCloseNonceHorizon;
   type MaxExecutionDelayBlocks = AaaMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = AaaMaxTimerJitterBlocks;
   type MaxExecutionsPerBlock = AaaMaxExecutionsPerBlock;
-  type SystemExecutionReserve = AaaSystemExecutionReserve;
-  type UserExecutionGuarantee = AaaUserExecutionGuarantee;
   type MaxQueueLength = AaaMaxQueueLength;
   type QueuePageSize = AaaQueuePageSize;
   type WakeupPageSize = AaaWakeupPageSize;
   type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
   type MaxObservationFanoutPagesPerBlock = AaaMaxObservationFanoutPagesPerBlock;
   type ObservationFanoutWeightLimit = AaaObservationFanoutWeightLimit;
+  type WakeupWeightLimit = AaaWakeupWeightLimit;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
   type MaxContinuationSnapshotEntries = AaaMaxContinuationSnapshotEntries;
@@ -1465,8 +1624,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxExecutionPlanSteps = AaaMaxExecutionPlanSteps;
   type MaxSplitTransferLegs = AaaMaxSplitTransferLegs;
   type MaxSweepPerBlock = AaaMaxSweepPerBlock;
-  type MaxSystemExecutionPlanSteps = AaaMaxSystemExecutionPlanSteps;
-  type MaxUserExecutionPlanSteps = AaaMaxUserExecutionPlanSteps;
   type MaxWhitelistSize = AaaMaxWhitelistSize;
   type MaxTriggerSources = AaaMaxTriggerSources;
   type MinUserBalance = AaaMinUserBalanceGuard;
@@ -1593,7 +1750,9 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance, primitives::Orac
     Ok((asset_a, asset_b, liquidity / 10))
   }
 
-  fn setup_remove_liquidity(owner: &AccountId) -> Result<(AssetKind, Balance), DispatchError> {
+  fn setup_remove_liquidity(
+    owner: &AccountId,
+  ) -> Result<(AssetKind, AssetKind, AssetKind, Balance), DispatchError> {
     let pool_count = 1u32;
     let lp_namespace_start = primitives::assets::TYPE_LP | 1;
     let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
@@ -1603,7 +1762,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance, primitives::Orac
     let liquidity = 1_000_000_000_000u128;
     let native_seed = liquidity.saturating_mul(pool_count.saturating_add(1) as u128);
     let _ = <Balances as Currency<AccountId>>::deposit_creating(owner, native_seed);
-    let mut target_lp: Option<(AssetKind, Balance)> = None;
+    let mut target_lp: Option<(AssetKind, AssetKind, AssetKind, Balance)> = None;
     for i in 0..pool_count {
       let local_asset_id = 100_000u32.saturating_add(i);
       if Self::ensure_local_asset(local_asset_id, owner).is_err() {
@@ -1676,7 +1835,12 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance, primitives::Orac
         if benchmark_lp_amount == 0 {
           return Err(DispatchError::Other("LpAmountTooSmallForBenchmark"));
         }
-        target_lp = Some((AssetKind::Local(pool_info.lp_token), benchmark_lp_amount));
+        target_lp = Some((
+          AssetKind::Local(pool_info.lp_token),
+          asset_a,
+          asset_b,
+          benchmark_lp_amount,
+        ));
       }
     }
     target_lp.ok_or(DispatchError::Other("TargetLpMissing"))

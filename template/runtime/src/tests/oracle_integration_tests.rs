@@ -8,8 +8,8 @@ use crate::{
 use alloc::boxed::Box;
 use codec::Encode;
 use pallet_aaa::{
-  AmountResolution, ConditionSet, FundingSourcePolicy, Mutability, ProgramInput, Schedule,
-  StepErrorPolicy, Task, Trigger, TriggerSource,
+  ConditionSet, FundingSourcePolicy, Mutability, ProgramInput, Schedule, StepErrorPolicy, Task,
+  Trigger, TriggerSource,
 };
 use pallet_oracle::{Aggregation, ObservationState, WeightInfo as _, ZeroPolicy};
 use polkadot_sdk::{
@@ -183,10 +183,7 @@ fn oracle_publication_rejects_aaa_unavailability_and_recovers_after_cleanup() {
       };
       let execution_plan = BoundedVec::try_from(vec![pallet_aaa::Step {
         conditions: ConditionSet::Always,
-        task: Task::Stake {
-          asset: AssetKind::Native,
-          amount: AmountResolution::Fixed(0),
-        },
+        task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       }])
       .expect("one inert step fits");
@@ -194,13 +191,14 @@ fn oracle_publication_rejects_aaa_unavailability_and_recovers_after_cleanup() {
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        ProgramInput::Active {
+        ProgramInput::Active(pallet_aaa::ActiveProgramInput {
           schedule,
           schedule_window: None,
           execution_plan,
           completion_policy: pallet_aaa::CompletionPolicy::Persistent,
           funding_source_policy: FundingSourcePolicy::RuntimePolicy,
-        },
+          auto_close_at_cycle_nonce: None,
+        }),
       ));
     }
 
@@ -454,10 +452,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
     };
     let execution_plan = BoundedVec::try_from(vec![pallet_aaa::Step {
       conditions: ConditionSet::Always,
-      task: Task::Stake {
-        asset: AssetKind::Native,
-        amount: AmountResolution::Fixed(0),
-      },
+      task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     }])
     .expect("one inert step fits");
@@ -465,13 +460,14 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Active {
+      ProgramInput::Active(pallet_aaa::ActiveProgramInput {
         schedule,
         schedule_window: None,
         execution_plan,
         completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: FundingSourcePolicy::RuntimePolicy,
-      },
+        auto_close_at_cycle_nonce: None,
+      }),
     ));
     assert_eq!(AAA::observation_subscriber_count(feed), 1);
     let pool_before =

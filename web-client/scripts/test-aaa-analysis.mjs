@@ -157,7 +157,9 @@ function taskValue(name, amount = fixed()) {
     case 'RemoveLiquidity':
       return {
         lp_asset: local,
-        amount,
+        asset_a: native,
+        asset_b: local,
+        lp_amount: amount,
         min_amount_a: 1n,
         min_amount_b: 1n,
       };
@@ -169,7 +171,7 @@ function taskValue(name, amount = fixed()) {
       return {
         asset_a: native,
         asset_b: local,
-        amount,
+        max_amount_a: amount,
         max_ratio_error: 10_000_000,
       };
     case 'Unstake':

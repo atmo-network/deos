@@ -83,6 +83,8 @@ pub enum TaskAmountRole {
   AmountOut,
   AmountA,
   AmountB,
+  LpAmount,
+  MaxAmountA,
   Shares,
 }
 
@@ -128,12 +130,16 @@ where
   match task {
     Task::Transfer { amount, .. }
     | Task::SplitTransfer { amount, .. }
-    | Task::RemoveLiquidity { amount, .. }
     | Task::Burn { amount, .. }
     | Task::Mint { amount, .. }
-    | Task::Stake { amount, .. }
-    | Task::DonateLiquidity { amount, .. } => {
+    | Task::Stake { amount, .. } => {
       alloc::vec![surface(TaskAmountRole::Amount, amount)]
+    }
+    Task::DonateLiquidity { max_amount_a, .. } => {
+      alloc::vec![surface(TaskAmountRole::MaxAmountA, max_amount_a)]
+    }
+    Task::RemoveLiquidity { lp_amount, .. } => {
+      alloc::vec![surface(TaskAmountRole::LpAmount, lp_amount)]
     }
     Task::SwapIn { amount_in, .. } => {
       alloc::vec![surface(TaskAmountRole::AmountIn, amount_in)]
@@ -695,7 +701,9 @@ mod tests {
       (
         Task::RemoveLiquidity {
           lp_asset: 3,
-          amount: fixed(),
+          asset_a: 1,
+          asset_b: 2,
+          lp_amount: fixed(),
           min_amount_a: 1,
           min_amount_b: 1,
         },
@@ -730,7 +738,7 @@ mod tests {
         Task::DonateLiquidity {
           asset_a: 1,
           asset_b: 2,
-          amount: fixed(),
+          max_amount_a: fixed(),
           max_ratio_error: Perbill::zero(),
         },
         AdapterRequirement::LiquidityOps,
@@ -763,9 +771,9 @@ mod tests {
         | TaskWeightOwner::SplitTransfer
         | TaskWeightOwner::Burn
         | TaskWeightOwner::Mint
-        | TaskWeightOwner::RemoveLiquidity
-        | TaskWeightOwner::Stake
-        | TaskWeightOwner::DonateLiquidity => alloc::vec![TaskAmountRole::Amount],
+        | TaskWeightOwner::Stake => alloc::vec![TaskAmountRole::Amount],
+        TaskWeightOwner::DonateLiquidity => alloc::vec![TaskAmountRole::MaxAmountA],
+        TaskWeightOwner::RemoveLiquidity => alloc::vec![TaskAmountRole::LpAmount],
         TaskWeightOwner::DexSwapIn => alloc::vec![TaskAmountRole::AmountIn],
         TaskWeightOwner::DexSwapOut => alloc::vec![TaskAmountRole::AmountOut],
         TaskWeightOwner::AddLiquidity => {

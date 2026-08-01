@@ -4,6 +4,11 @@ Owns: State-pinned amount resolution, separated Weight/fee aggregation, and stal
 Excludes: Chain queries, adapter quote execution, state mutation, simulation, signing, and history persistence.
 Zone: Automation domain capability; consumers must supply one coherent runtime/state snapshot.
 */
+import {
+  type AaaFeeEnvelopeActorType,
+  aaaFeeNativeProtectedMinimum,
+  aaaFeeStepCharge,
+} from './fee-envelope-vectors.ts';
 import type { AaaPlanArtifact, AaaPlanHex } from './plan-artifact';
 
 export const PERBILL_DENOMINATOR = 1_000_000_000n;
@@ -28,8 +33,10 @@ export type AaaAmountPolicy =
 export type AaaAmountObservation = {
   resolution: AaaAmountResolution;
   policy: AaaAmountPolicy;
+  actorType: AaaFeeEnvelopeActorType;
   current: bigint;
   minimumBalance: bigint;
+  minUserBalance: bigint;
   reservedFee: bigint;
   isFeeNative: boolean;
   trigger?: bigint;
@@ -113,6 +120,7 @@ export function resolveAaaAmount(
 ): AaaAmountForecast {
   validateBalance(input.current, 'current');
   validateBalance(input.minimumBalance, 'minimumBalance');
+  validateBalance(input.minUserBalance, 'minUserBalance');
   validateBalance(input.reservedFee, 'reservedFee');
   if (input.trigger != null) validateBalance(input.trigger, 'trigger');
   if (input.lastFunding != null)
@@ -125,9 +133,15 @@ export function resolveAaaAmount(
         input.current,
         input.isFeeNative ? input.reservedFee : 0n,
       );
+  const protectedMinimum = aaaFeeNativeProtectedMinimum(
+    input.actorType,
+    input.isFeeNative,
+    input.minimumBalance,
+    input.minUserBalance,
+  );
   const spendLimit =
     input.policy === 'PreserveSpend'
-      ? saturatingSubtract(spendableCurrent, input.minimumBalance)
+      ? saturatingSubtract(spendableCurrent, protectedMinimum)
       : spendableCurrent;
 
   let basis: bigint | null = null;
@@ -257,11 +271,21 @@ export function forecastAaaCosts(input: {
       step.executionFeeUpper,
       `steps[${index}].executionFeeUpper`,
     );
-    const evaluationFee =
-      input.actorType === 'User'
-        ? input.stepBaseFee +
-          input.conditionReadFee * BigInt(step.conditionCount)
-        : 0n;
+    const rawEvaluationFee =
+      input.stepBaseFee + input.conditionReadFee * BigInt(step.conditionCount);
+    const evaluationFee = aaaFeeStepCharge(
+      input.actorType,
+      rawEvaluationFee,
+      step.executionFeeUpper,
+      'EvaluationOnly',
+    );
+    const attemptedStepFee = aaaFeeStepCharge(
+      input.actorType,
+      rawEvaluationFee,
+      step.executionFeeUpper,
+      'Attempted',
+    );
+    const executionFee = attemptedStepFee - evaluationFee;
     evaluation = addSegment(evaluation, {
       weight: step.evaluationWeight,
       fee: evaluationFee,
@@ -277,13 +301,13 @@ export function forecastAaaCosts(input: {
     if (mayExecute) {
       executionUpper = addSegment(executionUpper, {
         weight: step.executionWeightUpper,
-        fee: input.actorType === 'User' ? step.executionFeeUpper : 0n,
+        fee: executionFee,
       });
     }
     if (mustExecute) {
       executionMinimum = addSegment(executionMinimum, {
         weight: step.executionWeightUpper,
-        fee: input.actorType === 'User' ? step.executionFeeUpper : 0n,
+        fee: executionFee,
       });
     }
     return {
@@ -291,10 +315,8 @@ export function forecastAaaCosts(input: {
       conditionOutcome: step.conditionOutcome,
       executionDisposition: step.executionDisposition,
       evaluationFee,
-      executionFeeMinimum:
-        input.actorType === 'User' && mustExecute ? step.executionFeeUpper : 0n,
-      executionFeeUpper:
-        input.actorType === 'User' && mayExecute ? step.executionFeeUpper : 0n,
+      executionFeeMinimum: mustExecute ? executionFee : 0n,
+      executionFeeUpper: mayExecute ? executionFee : 0n,
     };
   });
 

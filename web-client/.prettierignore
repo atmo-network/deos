@@ -3,3 +3,5 @@ node_modules/
 build/
 .papi
 src/lib/automation/aaa-semantic-manifest.json
+src/lib/automation/aaa-fee-envelope-vectors.json
+src/lib/automation/aaa-abi-manifest.json

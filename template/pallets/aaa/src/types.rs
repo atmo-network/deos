@@ -156,12 +156,6 @@ pub struct QueueEntry {
   pub aaa_id: AaaId,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum QueueGroup {
-  System,
-  User,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct QueueDrainStats {
   pub entries_scanned: u32,
@@ -178,8 +172,6 @@ pub struct WakeupDrainStats {
   pub pages_touched: u32,
   pub pages_deleted: u32,
 }
-pub const SYSTEM_OWNER_SLOT_SENTINEL: u8 = 0;
-
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
@@ -242,7 +234,9 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
   },
   RemoveLiquidity {
     lp_asset: AssetId,
-    amount: AmountResolution<Balance>,
+    asset_a: AssetId,
+    asset_b: AssetId,
+    lp_amount: AmountResolution<Balance>,
     min_amount_a: Balance,
     min_amount_b: Balance,
   },
@@ -261,7 +255,7 @@ pub enum Task<AssetId, Balance, AccountId, MaxSplitTransferLegs: Get<u32>> {
   DonateLiquidity {
     asset_a: AssetId,
     asset_b: AssetId,
-    amount: AmountResolution<Balance>,
+    max_amount_a: AmountResolution<Balance>,
     max_ratio_error: Perbill,
   },
   Unstake {
@@ -329,12 +323,16 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
       },
       Self::RemoveLiquidity {
         lp_asset,
-        amount,
+        asset_a,
+        asset_b,
+        lp_amount,
         min_amount_a,
         min_amount_b,
       } => Self::RemoveLiquidity {
         lp_asset: lp_asset.clone(),
-        amount: amount.clone(),
+        asset_a: asset_a.clone(),
+        asset_b: asset_b.clone(),
+        lp_amount: lp_amount.clone(),
         min_amount_a: min_amount_a.clone(),
         min_amount_b: min_amount_b.clone(),
       },
@@ -353,12 +351,12 @@ impl<AssetId: Clone, Balance: Clone, AccountId: Clone, MaxSplitTransferLegs: Get
       Self::DonateLiquidity {
         asset_a,
         asset_b,
-        amount,
+        max_amount_a,
         max_ratio_error,
       } => Self::DonateLiquidity {
         asset_a: asset_a.clone(),
         asset_b: asset_b.clone(),
-        amount: amount.clone(),
+        max_amount_a: max_amount_a.clone(),
         max_ratio_error: *max_ratio_error,
       },
       Self::Unstake { asset, shares } => Self::Unstake {
@@ -437,13 +435,17 @@ impl<
         .finish(),
       Self::RemoveLiquidity {
         lp_asset,
-        amount,
+        asset_a,
+        asset_b,
+        lp_amount,
         min_amount_a,
         min_amount_b,
       } => f
         .debug_struct("RemoveLiquidity")
         .field("lp_asset", lp_asset)
-        .field("amount", amount)
+        .field("asset_a", asset_a)
+        .field("asset_b", asset_b)
+        .field("lp_amount", lp_amount)
         .field("min_amount_a", min_amount_a)
         .field("min_amount_b", min_amount_b)
         .finish(),
@@ -465,13 +467,13 @@ impl<
       Self::DonateLiquidity {
         asset_a,
         asset_b,
-        amount,
+        max_amount_a,
         max_ratio_error,
       } => f
         .debug_struct("DonateLiquidity")
         .field("asset_a", asset_a)
         .field("asset_b", asset_b)
-        .field("amount", amount)
+        .field("max_amount_a", max_amount_a)
         .field("max_ratio_error", max_ratio_error)
         .finish(),
       Self::Unstake { asset, shares } => f
@@ -579,19 +581,25 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
       (
         Self::RemoveLiquidity {
           lp_asset: left_lp_asset,
-          amount: left_amount,
+          asset_a: left_asset_a,
+          asset_b: left_asset_b,
+          lp_amount: left_lp_amount,
           min_amount_a: left_min_amount_a,
           min_amount_b: left_min_amount_b,
         },
         Self::RemoveLiquidity {
           lp_asset: right_lp_asset,
-          amount: right_amount,
+          asset_a: right_asset_a,
+          asset_b: right_asset_b,
+          lp_amount: right_lp_amount,
           min_amount_a: right_min_amount_a,
           min_amount_b: right_min_amount_b,
         },
       ) => {
         left_lp_asset == right_lp_asset
-          && left_amount == right_amount
+          && left_asset_a == right_asset_a
+          && left_asset_b == right_asset_b
+          && left_lp_amount == right_lp_amount
           && left_min_amount_a == right_min_amount_a
           && left_min_amount_b == right_min_amount_b
       }
@@ -629,19 +637,19 @@ impl<AssetId: PartialEq, Balance: PartialEq, AccountId: PartialEq, MaxSplitTrans
         Self::DonateLiquidity {
           asset_a: left_asset_a,
           asset_b: left_asset_b,
-          amount: left_amount,
+          max_amount_a: left_max_amount_a,
           max_ratio_error: left_max_ratio_error,
         },
         Self::DonateLiquidity {
           asset_a: right_asset_a,
           asset_b: right_asset_b,
-          amount: right_amount,
+          max_amount_a: right_max_amount_a,
           max_ratio_error: right_max_ratio_error,
         },
       ) => {
         left_asset_a == right_asset_a
           && left_asset_b == right_asset_b
-          && left_amount == right_amount
+          && left_max_amount_a == right_max_amount_a
           && left_max_ratio_error == right_max_ratio_error
       }
       (
@@ -673,26 +681,53 @@ pub enum AaaType {
   System,
 }
 
+/// Lifecycle at the moment a fresh actor identity is created. Excludes Paused by
+/// construction; a newly created actor is either Dormant or Active.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum InitialLifecycle {
+  Dormant,
+  Active,
+}
+
+pub type SystemSovereignId = u64;
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum SystemSovereignState {
+  Vacant,
+  Occupied(AaaId),
+}
+
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub enum ActorClass {
   User { owner_slot: u8 },
-  System,
+  System { sovereign_id: SystemSovereignId },
 }
 
 impl ActorClass {
   pub fn aaa_type(self) -> AaaType {
     match self {
       Self::User { .. } => AaaType::User,
-      Self::System => AaaType::System,
+      Self::System { .. } => AaaType::System,
     }
   }
 
   pub fn owner_slot(self) -> Option<u8> {
     match self {
       Self::User { owner_slot } => Some(owner_slot),
-      Self::System => None,
+      Self::System { .. } => None,
+    }
+  }
+
+  pub fn system_sovereign_id(self) -> Option<SystemSovereignId> {
+    match self {
+      Self::User { .. } => None,
+      Self::System { sovereign_id } => Some(sovereign_id),
     }
   }
 }
@@ -721,7 +756,6 @@ pub enum Mutability {
 )]
 pub enum PauseReason {
   Manual,
-  CycleNonceExhausted,
 }
 
 #[derive(
@@ -794,7 +828,9 @@ impl StepErrorPolicy {
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub enum DeferReason {
-  InsufficientWeightBudget,
+  RefTime,
+  ProofSize,
+  Both,
 }
 
 #[derive(
@@ -808,15 +844,24 @@ pub enum SuspensionReason {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub enum CycleResult {
+  Completed,
+  Failed,
+  Cancelled,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub enum CancellationReason {
   Explicit,
   ExecutionPlanChanged,
+  CompletionPolicyChanged,
   FundingPolicyChanged,
   ScheduleChanged,
-  WindowExpired,
   Deactivated,
-  Terminal,
-  Closed,
+  Closing(CloseReason),
+  RuntimeUpgrade,
 }
 
 #[derive(
@@ -1766,21 +1811,13 @@ pub struct ScheduleWindow<BlockNumber> {
   pub end: BlockNumber,
 }
 
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct FundingBatch<Balance> {
-  pub amount: Balance,
-  pub pending_amount: Balance,
-}
-
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
 #[scale_info(skip_type_params(MaxSignedFundingSources))]
 pub enum FundingSourcePolicy<AccountId, MaxSignedFundingSources: Get<u32>> {
   OwnerOnly,
   SignedAllowlist(BoundedBTreeSet<AccountId, MaxSignedFundingSources>),
   RuntimePolicy,
-  AnySource,
+  AnyVerifiedIngress,
 }
 
 impl<AccountId: Clone, MaxSignedFundingSources: Get<u32>> Clone
@@ -1791,7 +1828,7 @@ impl<AccountId: Clone, MaxSignedFundingSources: Get<u32>> Clone
       Self::OwnerOnly => Self::OwnerOnly,
       Self::SignedAllowlist(allowed) => Self::SignedAllowlist(allowed.clone()),
       Self::RuntimePolicy => Self::RuntimePolicy,
-      Self::AnySource => Self::AnySource,
+      Self::AnyVerifiedIngress => Self::AnyVerifiedIngress,
     }
   }
 }
@@ -1804,7 +1841,7 @@ impl<AccountId: core::fmt::Debug, MaxSignedFundingSources: Get<u32>> core::fmt::
       Self::OwnerOnly => f.write_str("OwnerOnly"),
       Self::SignedAllowlist(allowed) => f.debug_tuple("SignedAllowlist").field(allowed).finish(),
       Self::RuntimePolicy => f.write_str("RuntimePolicy"),
-      Self::AnySource => f.write_str("AnySource"),
+      Self::AnyVerifiedIngress => f.write_str("AnyVerifiedIngress"),
     }
   }
 }
@@ -1816,7 +1853,7 @@ impl<AccountId: PartialEq, MaxSignedFundingSources: Get<u32>> PartialEq
     match (self, other) {
       (Self::OwnerOnly, Self::OwnerOnly)
       | (Self::RuntimePolicy, Self::RuntimePolicy)
-      | (Self::AnySource, Self::AnySource) => true,
+      | (Self::AnyVerifiedIngress, Self::AnyVerifiedIngress) => true,
       (Self::SignedAllowlist(left), Self::SignedAllowlist(right)) => left == right,
       _ => false,
     }
@@ -1831,15 +1868,21 @@ impl<AccountId: Eq, MaxSignedFundingSources: Get<u32>> Eq
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
+pub struct ActiveProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
+  pub schedule: Schedule,
+  pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
+  pub execution_plan: ExecutionPlan,
+  pub completion_policy: CompletionPolicy,
+  pub funding_source_policy: FundingPolicy,
+  pub auto_close_at_cycle_nonce: Option<u64>,
+}
+
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
 pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
   Dormant,
-  Active {
-    schedule: Schedule,
-    schedule_window: Option<ScheduleWindow<BlockNumber>>,
-    execution_plan: ExecutionPlan,
-    completion_policy: CompletionPolicy,
-    funding_source_policy: FundingPolicy,
-  },
+  Active(ActiveProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy>),
 }
 
 #[derive(
@@ -1903,50 +1946,52 @@ pub struct OutcomeTotals {
 }
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
-#[scale_info(skip_type_params(MaxSnapshotEntries))]
-pub struct ContinuationState<AssetId, Balance, BlockNumber, MaxSnapshotEntries: Get<u32>> {
+#[scale_info(skip_type_params(MaxSnapshotEntries, MaxFundingTrackedAssets))]
+pub struct ContinuationState<
+  AssetId,
+  Balance,
+  BlockNumber,
+  MaxSnapshotEntries: Get<u32>,
+  MaxFundingTrackedAssets: Get<u32>,
+> {
   pub cursor: u32,
   pub attempt: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
   pub trigger_snapshot: BoundedBTreeMap<ResolutionSurface<AssetId>, Balance, MaxSnapshotEntries>,
+  pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
   pub cumulative_outcomes: OutcomeTotals,
 }
 
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct DormantAaaIdentity<AccountId> {
+pub struct ActorIdentity<AccountId> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
   pub mutability: Mutability,
+  pub cycle_nonce: u64,
 }
 
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorHotState<AccountId, BlockNumber, Balance> {
-  pub sovereign_account: AccountId,
-  pub owner: AccountId,
-  pub actor_class: ActorClass,
-  pub mutability: Mutability,
+pub struct ActorHotState<BlockNumber, Balance> {
   pub lifecycle: ActiveLifecycle,
   pub run_state: RunState,
-  pub cycle_nonce: u64,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
   pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
   pub terminal_at: Option<BlockNumber>,
-  pub last_user_queue_mutation_block: Option<BlockNumber>,
+  pub last_control_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
   pub funding_tracked_count: u32,
-  pub pending_funding_count: u32,
-  pub first_eligible_at: BlockNumber,
-  pub last_cycle_block: BlockNumber,
+  pub schedule_anchor: BlockNumber,
+  pub last_cycle_block: Option<BlockNumber>,
 }
 
 #[derive(
@@ -1978,37 +2023,28 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub consecutive_failures: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
-  pub last_user_queue_mutation_block: Option<BlockNumber>,
+  pub last_control_queue_mutation_block: Option<BlockNumber>,
   pub cycle_weight_upper: Weight,
   pub cycle_fee_upper: Balance,
   pub funding_tracked_count: u32,
-  pub pending_funding_count: u32,
-  pub first_eligible_at: BlockNumber,
-  pub last_cycle_block: BlockNumber,
+  pub schedule_anchor: BlockNumber,
+  pub last_cycle_block: Option<BlockNumber>,
 }
 
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorFundingState<FundingPolicy, FundingSnapshots, FundingTrackedAssets> {
+pub struct ActorFundingState<FundingPolicy, FundingAccumulated, FundingTrackedAssets> {
   pub funding_source_policy: FundingPolicy,
-  pub funding_snapshots: FundingSnapshots,
+  pub funding_accumulated: FundingAccumulated,
   pub funding_tracked_assets: FundingTrackedAssets,
 }
 
 #[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum FundingProvenance<AccountId> {
-  Signed(AccountId),
-  InternalProtocol(AccountId),
-  Xcm(AccountId),
-}
-
-impl<AccountId> FundingProvenance<AccountId> {
-  pub fn account(&self) -> &AccountId {
-    match self {
-      Self::Signed(account) | Self::InternalProtocol(account) | Self::Xcm(account) => account,
-    }
-  }
+pub enum FundingProvenance {
+  Signed,
+  InternalProtocol,
+  Xcm,
 }

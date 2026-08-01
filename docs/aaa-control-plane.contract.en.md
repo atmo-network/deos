@@ -33,7 +33,7 @@ A canonical artifact is executable only when live genesis hash, runtime versions
 
 ## Configuration IR and Tokenomic Genome
 
-`deos.aaa.configuration-ir` version `1` is the format-neutral typed authoring structure. It preserves actor type, mutability, completion policy, trigger/admission policy, exact observation feeds, cooldown and schedule window, funding policy, ordered linear steps, exact `ConditionSet`, task parameters, amount resolutions, and failure policy. Presentation-only step keys never enter the IR.
+`deos.aaa.configuration-ir` version `1` is the format-neutral typed authoring structure. It preserves actor type, mutability, completion policy, optional auto-close nonce, trigger/admission policy, exact observation feeds, cooldown and schedule window, funding policy, ordered linear steps, exact `ConditionSet`, task parameters, amount resolutions, and failure policy. Presentation-only step keys never enter the IR.
 
 JSON, TOML, and structured Markdown adapters preserve the same normalized IR. The TOML and Markdown forms store each top-level typed field as exact JSON data, so adapter grammar cannot reinterpret runtime concepts. Comments, surrounding Markdown prose, object-key order, whitespace, and file extension do not affect normalization, canonical lowering, SCALE bytes, or `planId`.
 
@@ -41,7 +41,7 @@ Normalization rejects unknown format versions, missing required fields, and unkn
 
 ## Human Projection
 
-A human projection must decode `programScale` through the exact metadata identified by `metadataHash`. It must show every `ProgramInput`, trigger, schedule window, funding policy, step, exact `ConditionSet` mode, atomic condition, task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact nonzero `RetryLater.maxAttempts` payload without lossy defaults. `Always`, `All`, and `Any` remain distinct typed objects rather than an ambiguous raw array.
+A human projection must decode `programScale` through the exact metadata identified by `metadataHash`. It must show every `ProgramInput`, trigger, schedule window, funding policy, step, exact `ConditionSet` mode, atomic condition, task, amount-resolution variant, asset id, account id, ratio, and error policy including the exact `RetryLater.maxAttempts` payload within metadata-derived `1..=MaxRetryAttempts` without lossy defaults. `Always`, `All`, and `Any` remain distinct typed objects rather than an ambiguous raw array.
 
 Balances and identifiers use full base-unit decimal strings in transport JSON. Accounts and opaque bytes use canonical hex. Ratios expose their integer `Perbill` parts as well as optional display percentages. Token symbols, labels, localized prose, and decimal formatting remain annotations resolved from an explicitly identified registry snapshot.
 
@@ -65,7 +65,9 @@ Both estimates require stable active topology, no newer selected-feed revision, 
 
 One deterministic client projection MUST derive expected runtime versions, compact runtime-code identity, exact V16 metadata identity, generated descriptor identity, AAA weight identity, fanout Weight values, and effective service bounds from their canonical files. Changed-scope validation MUST reject a stale projection. Live numerical estimates additionally require finalized runtime/code/metadata evidence matching that projection; mismatch withholds estimates without hiding factual chain state.
 
-Optional selected-actor inspection reads only exact `ActorHot(aaa_id)` at that finalized hash. It reports actor existence, pending signal, type-derived System/User lane, queue ticket or wakeup block/page/slot, and one factual status: ActorMissing, NoPendingSignal, PendingQueueAdmission, Queued, or WakeupScheduled. Queue and wakeup pointers are mutually exclusive. PendingQueueAdmission means a signal lacks both paths at the snapshot; it does not predict when capacity returns.
+The complete AAA ABI manifest derives from the same exact metadata bytes and projects the AAA pallet index, calls, events, errors, storage, constants, associated types, and recursively reachable SCALE types without handwritten discriminants. Its checked JSON artifact is a reviewable pre-launch projection, not a second authority or a frozen compatibility promise. Changed metadata MUST regenerate it; launch acceptance binds its metadata hash to the accepted Wasm, and only that accepted epoch establishes append-only compatibility.
+
+Optional selected-actor inspection reads only exact `ActorHot(aaa_id)` and `ActorIdentities(aaa_id)` at that finalized hash. It reports actor existence, pending signal, actor class (System/User), queue ticket or wakeup block/page/slot, and one factual status: ActorMissing, NoPendingSignal, PendingQueueAdmission, Queued, or WakeupScheduled. Queue and wakeup pointers are mutually exclusive. PendingQueueAdmission means a signal lacks both paths at the snapshot; it does not predict when capacity returns.
 
 `AxialRouterPreExecutionReserves` identifies local pool reserves observed before Router execution. The inspection surface MUST state that this is not an external fair-price, manipulation-resistance, MEV-protection, or ordering proof. Authored slippage, System reference-deviation guards, and execution-time conditions remain separate contracts.
 
@@ -75,7 +77,7 @@ The canonical authoring model is a typed ordered `Step[]`, not a graph or a gene
 
 Authoring follows `select trigger sources and admission → add/reorder step → select condition mode and atoms → select task → configure typed parameters → select error policy → validate → analyze → forecast/simulate → encode`. Mode changes preserve atoms only through an explicit lossless operation. Validation rejects empty groups and enforces actor and primitive bounds, bounded canonical trigger sources, Mutable-only retry with a nonzero `u32` attempt limit, System-only minting, bounded/unique split and allowlist values, canonical integer/ratio/address shapes, and active-plan cardinality before canonical encoding.
 
-`authoring.ts` lowers each typed field directly to the metadata-discovered `ProgramInput` shape, then delegates SCALE bytes and `planId` to the canonical artifact codec. Reordering changes array order only; no authoring operation creates a successor index, branch, callback, nested program, runtime call, recipe identity, or runtime dependency on presentation state. `StopCycle` reveals its fixed successful terminal transition directly and never accepts a target cursor.
+`authoring.ts` lowers each typed field directly to the metadata-discovered `ProgramInput::Active(ActiveProgramInput)` shape, then delegates SCALE bytes and `planId` to the canonical artifact codec. Reordering changes array order only; no authoring operation creates a successor index, branch, callback, nested program, runtime call, recipe identity, or runtime dependency on presentation state. `StopCycle` reveals its fixed successful terminal transition directly and never accepts a target cursor.
 
 A high-level recipe may exist only when deterministic lowering reveals the complete editable ordered steps before artifact creation. Recipe labels never enter runtime bytes, governance semantics, or `planId` except through the exact lowered `ProgramInput` they produce.
 
@@ -117,7 +119,7 @@ Authoring presentation distinguishes a false condition, resolution skip, funding
 
 Forward data dependencies report an earlier asset write read by a later condition, task, or amount surface. They describe behavioral predication and live/frozen data flow, not workflow branches. Without supplied runtime observations, analysis MUST NOT claim current balances, adapter health, active Continuation state, execution outcome, or scheduler position.
 
-For every cursor from zero through plan length, the analyzer emits one suffix envelope with remaining-step count, maximum RefTime and ProofSize, evaluation and execution fee upper bounds, lifecycle and funding-promotion overhead, adapters, asset surfaces, committed effect classes, and retryable indexes. Suffix zero is the full-program envelope; remaining-step count decreases exactly once per cursor. Every result stays bound to the artifact and model identities used to derive it.
+For every cursor from zero through plan length, the analyzer emits one suffix envelope with remaining-step count, maximum RefTime and ProofSize, evaluation and execution fee upper bounds, lifecycle and funding-snapshot-opening overhead, adapters, asset surfaces, committed effect classes, and retryable indexes. Suffix zero is the full-program envelope; remaining-step count decreases exactly once per cursor. Every result stays bound to the artifact and model identities used to derive it.
 
 Findings remain factual and unscored: trigger admission shape, committed effects before a retryable step, retry-live observations, current-balance mixing after an earlier write, unsupported/unknown adapters, unknown Temporary-failure classification, potential actor-signal edges, budget-relative ProofSize dominance, and the conditional administrative actions that invalidate an active Continuation. Capability claims remain unknown unless an identified profile proves them.
 
@@ -143,7 +145,7 @@ Sovereign accounts require runtime-derived evidence from one finalized state ide
 
 Reactive findings remain factual and unscored. Structural evidence may report endogenous feedback, self/cross-actor cycles, and shared-observation actuator contention. Timing and policy findings require one explicit evidence snapshot identifying runtime, weights, cadence, estimated delivery, hysteresis/persistence, declared gain, and reactive-ingress priority; absent or unknown evidence produces no claim.
 
-The static analyzer derives actor cooldown directly from canonical `ProgramInput.Active.schedule.cooldown_blocks`; dormant programs expose no cooldown. The current linear Condition language has no stateful hysteresis or temporal persistence primitive, so threshold feedback derives their absence from the plan instead of accepting policy declarations. Chatter findings carry the plan identity.
+The static analyzer derives actor cooldown directly from canonical `ActiveProgramInput.schedule.cooldown_blocks`; dormant programs expose no cooldown. The current linear Condition language has no stateful hysteresis or temporal persistence primitive, so threshold feedback derives their absence from the plan instead of accepting policy declarations. Chatter findings carry the plan identity.
 
 Delivery and cadence require runtime-derived evidence, gain remains declared or unknown, and reactive-ingress priority remains runtime-derived or unknown. Wrong provenance, identity substitution, and known/unknown disagreement fail closed.
 
@@ -163,7 +165,7 @@ The runtime API runs only after normal liveness, lifecycle, window, nonce, fee-b
 
 The minimum result carries status `Completed | Aborted | Suspended`, cycle nonce, attempt, start cursor, optional unresolved cursor, finalized-through index, cumulative outcome totals, ordered bounded step outcomes, and canonical SCALE result bytes. A suspended result keeps its cursor unresolved; completed or aborted results expose no live Continuation cursor.
 
-The entire API call executes inside an outer rollback transaction. Successful task effects remain visible to later simulated suffix tasks, failed task-local effects roll back under the existing pallet transaction boundary, and all simulated writes, events, fees, scheduler changes, funding promotion, closure, and adapter effects roll back before the API returns. Explicit rollback remains mandatory even when the host normally discards runtime-API overlays.
+The entire API call executes inside an outer rollback transaction. Successful task effects remain visible to later simulated suffix tasks, failed task-local effects roll back under the existing pallet transaction boundary, and all simulated writes, events, fees, scheduler changes, funding snapshot opening, closure, and adapter effects roll back before the API returns. Explicit rollback remains mandatory even when the host normally discards runtime-API overlays.
 
 A provider calls this API against the exact finalized block named by the request, obtains runtime code and metadata from that same state, and returns their hashes with the block header state root. Remote RPC execution remains trusted-provider evidence unless a verified local executor or state proof independently establishes the same code and state.
 

@@ -390,6 +390,7 @@ impl<T: Config> Pallet<T> {
     })?;
     if removed_last {
       Self::clear_dirty_observation_feed(feed)?;
+      ObservationIngressRevisions::<T>::remove(feed);
     }
     Ok(())
   }

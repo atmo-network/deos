@@ -100,12 +100,15 @@ impl<T: Config> Pallet<T> {
         .take()
         .unwrap_or_else(|| Self::fresh_resolution_window(current_epoch));
       Self::rotate_resolution_window_to(&mut window, current_epoch);
-      let item_already_resolved = window.epochs.iter().any(|slot| {
-        slot
-          .item_ids
-          .iter()
-          .any(|existing_item_id| *existing_item_id == item_id)
-      });
+      let item_already_resolved = window
+        .epochs
+        .iter() // deos-bypass: bounded-iter — WinningVoteLookbackEpochs window
+        .any(|slot| {
+          slot
+            .item_ids
+            .iter() // deos-bypass: bounded-iter — MaxWinningItemsPerEpoch ids
+            .any(|existing_item_id| *existing_item_id == item_id)
+        });
       ensure!(
         !item_already_resolved,
         Error::<T>::DuplicateWinningVoteResolutionItem
@@ -161,12 +164,15 @@ impl<T: Config> Pallet<T> {
         .take()
         .unwrap_or_else(|| Self::fresh_window(current_epoch));
       Self::rotate_window_to(&mut window, current_epoch);
-      let item_already_counted = window.epochs.iter().any(|slot| {
-        slot
-          .item_ids
-          .iter()
-          .any(|existing_item_id| *existing_item_id == item_id)
-      });
+      let item_already_counted = window
+        .epochs
+        .iter() // deos-bypass: bounded-iter — WinningVoteLookbackEpochs window
+        .any(|slot| {
+          slot
+            .item_ids
+            .iter() // deos-bypass: bounded-iter — MaxWinningItemsPerEpoch ids
+            .any(|existing_item_id| *existing_item_id == item_id)
+        });
       ensure!(!item_already_counted, Error::<T>::DuplicateWinningVoteItem);
       let slot_index = Self::slot_index(current_epoch);
       let epoch_slot = window

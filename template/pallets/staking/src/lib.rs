@@ -1773,7 +1773,10 @@ pub mod pallet {
       Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
       let current_epoch = T::RewardEpochProvider::current_reward_epoch();
       let mut seen_epochs = BTreeSet::new();
-      for epoch in epochs.iter().copied() {
+      for epoch in epochs
+        .iter(/* deos-bypass: bounded-iter — MaxRewardEpochClaims input */)
+        .copied()
+      {
         ensure!(seen_epochs.insert(epoch), Error::<T>::DuplicateRewardEpoch);
         Self::ensure_reward_epoch_claimable(&account, asset_id, epoch, current_epoch)?;
       }
@@ -2172,7 +2175,10 @@ pub mod pallet {
       }
       let epoch = T::RewardEpochProvider::current_reward_epoch();
       RewardEpochTouchedAccounts::<T>::mutate(epoch, asset_id, |accounts| {
-        if accounts.iter().any(|existing| existing == account) {
+        if accounts
+          .iter() // deos-bypass: bounded-iter — MaxRewardTouchedAccountsPerEpoch accounts
+          .any(|existing| existing == account)
+        {
           return true;
         }
         if accounts.try_push(account.clone()).is_err() {

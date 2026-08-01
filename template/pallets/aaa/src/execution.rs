@@ -1,15 +1,25 @@
 use super::pallet::*;
 use super::types::{InputLimit, Task as AaaTask};
 use super::{
-  AssetOps, DexOps, FeeCollector, LiquidityOps, ObservationProvider as _, RetryClass,
-  ScalarObservationState, StakingOps, TaskFailure,
+  AssetOps, DexOps, FeeChargeKind, FeeCollector, LiquidityOps, ObservationProvider as _,
+  RetryClass, ScalarObservationState, StakingOps, TaskFailure, fee_native_protected_minimum,
+  settle_attempt_fee_step,
 };
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
   Perbill,
-  traits::{SaturatedConversion, Zero},
+  traits::{CheckedAdd, CheckedMul, SaturatedConversion, Zero},
 };
-use polkadot_sdk::sp_weights::WeightToFee as _;
+
+/// Checked increment for protocol-semantic counters. The admitted bound
+/// (`MaxExecutionPlanSteps * (MaxRetryAttempts + 1)` for outcome totals) precludes
+/// overflow; a violation fails closed before mutation with an invariant error rather
+/// than silently saturating (spec 4.4).
+fn checked_semantic_increment(counter: u32) -> Result<u32, DispatchError> {
+  counter
+    .checked_add(1)
+    .ok_or(DispatchError::Other("SemanticCounterOverflow"))
+}
 
 // Any extrinsic or runtime entrypoint that can fail after mutating multiple storage
 // locations SHOULD either pre-validate all fallible conditions first or use
@@ -75,7 +85,9 @@ enum PreparedTask<T: Config> {
   },
   RemoveLiquidity {
     lp_asset: T::AssetId,
-    amount: T::Balance,
+    asset_a: T::AssetId,
+    asset_b: T::AssetId,
+    lp_amount: T::Balance,
     min_amount_a: T::Balance,
     min_amount_b: T::Balance,
   },
@@ -87,6 +99,7 @@ enum PreparedTask<T: Config> {
     asset_a: T::AssetId,
     asset_b: T::AssetId,
     amount: T::Balance,
+    max_amount_b: T::Balance,
     max_ratio_error: Perbill,
   },
   Unstake {
@@ -183,39 +196,6 @@ fn resolve_step_control(
 }
 
 impl<T: Config> Pallet<T> {
-  pub(crate) fn promote_pending_funding(aaa_id: AaaId) {
-    let mut promotions = alloc::vec::Vec::new();
-    ActorFunding::<T>::mutate(aaa_id, |maybe| {
-      let Some(funding) = maybe.as_mut() else {
-        return;
-      };
-      let assets: alloc::vec::Vec<_> = funding.funding_snapshots.keys().copied().collect();
-      for asset in assets {
-        let Some(batch) = funding.funding_snapshots.get_mut(&asset) else {
-          continue;
-        };
-        if batch.pending_amount.is_zero() {
-          continue;
-        }
-        batch.amount = batch.pending_amount;
-        batch.pending_amount = Zero::zero();
-        promotions.push((asset, batch.amount));
-      }
-    });
-    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
-      if let Some(hot) = maybe_hot {
-        hot.pending_funding_count = 0;
-      }
-    });
-    for (asset, amount) in promotions {
-      Self::deposit_event(Event::FundingBatchPromoted {
-        aaa_id,
-        asset,
-        amount,
-      });
-    }
-  }
-
   pub(crate) fn cancel_continuation_internal(
     aaa_id: AaaId,
     reason: CancellationReason,
@@ -225,8 +205,9 @@ impl<T: Config> Pallet<T> {
       return Ok(false);
     };
     let hot = ActorHot::<T>::get(aaa_id).ok_or(Error::<T>::ContinuationInvariant)?;
+    let identity = ActorIdentities::<T>::get(aaa_id).ok_or(Error::<T>::ContinuationInvariant)?;
     ensure!(
-      hot.run_state == RunState::Suspended && hot.cycle_nonce > 0,
+      hot.run_state == RunState::Suspended && identity.cycle_nonce > 0,
       Error::<T>::ContinuationInvariant
     );
     ActorHot::<T>::mutate(aaa_id, |maybe| {
@@ -241,12 +222,13 @@ impl<T: Config> Pallet<T> {
     let totals = outcomes.unwrap_or(continuation.cumulative_outcomes);
     Self::deposit_event(Event::CycleCancelled {
       aaa_id,
-      cycle_nonce: hot.cycle_nonce,
+      cycle_nonce: identity.cycle_nonce,
       reason,
     });
     Self::deposit_event(Event::CycleSummary {
       aaa_id,
-      cycle_nonce: hot.cycle_nonce,
+      cycle_nonce: identity.cycle_nonce,
+      result: CycleResult::Cancelled,
       executed_steps: totals.executed_steps,
       committed_effectful_tasks: totals.committed_effectful_tasks,
       skipped_conditions: totals.skipped_conditions,
@@ -261,11 +243,12 @@ impl<T: Config> Pallet<T> {
     aaa_id: AaaId,
     state: Option<ContinuationStateOf<T>>,
   ) -> DispatchResult {
-    let hot = ActorHot::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+    ensure!(ActorHot::<T>::contains_key(aaa_id), Error::<T>::AaaNotFound);
+    let identity = ActorIdentities::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
     if let Some(continuation) = state.as_ref() {
       let program = ActorProgram::<T>::get(aaa_id).ok_or(Error::<T>::ContinuationInvariant)?;
       ensure!(
-        hot.mutability == Mutability::Mutable
+        identity.mutability == Mutability::Mutable
           && continuation.cursor < program.execution_plan.len() as u32,
         Error::<T>::ContinuationInvariant
       );
@@ -329,7 +312,8 @@ impl<T: Config> Pallet<T> {
       let continuation = maybe
         .as_mut()
         .expect("Suspended run_state requires ContinuationState");
-      continuation.attempt = continuation.attempt.saturating_add(1);
+      continuation.attempt = checked_semantic_increment(continuation.attempt)
+        .expect("attempt bound (MaxRetryAttempts) is precluded by admission");
       continuation.last_attempt_block = now;
     });
     let continuation = ContinuationStateStore::<T>::get(aaa_id)
@@ -387,6 +371,7 @@ impl<T: Config> Pallet<T> {
       attempt,
       prior_unsuccessful_attempts_at_cursor,
       cumulative_outcomes,
+      funding_snapshot,
     ) = if is_continuation {
       let continuation = Self::begin_continuation_attempt(aaa_id, instance.cycle_nonce, now);
       persisted_trigger_snapshot = Some(continuation.trigger_snapshot);
@@ -396,57 +381,57 @@ impl<T: Config> Pallet<T> {
         continuation.attempt,
         continuation.unsuccessful_attempts_at_cursor,
         continuation.cumulative_outcomes,
+        continuation.funding_snapshot,
       )
     } else {
       if instance.cycle_nonce == u64::MAX {
-        if instance.actor_class.aaa_type() == AaaType::User {
-          Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted)
-            .expect("fresh execution snapshot satisfies terminal preconditions");
-        } else {
-          ActorHot::<T>::mutate(aaa_id, |maybe| {
-            if let Some(inst) = maybe.as_mut() {
-              inst.lifecycle = ActiveLifecycle::Paused(PauseReason::CycleNonceExhausted);
-            }
-          });
-          Self::deposit_event(Event::AaaPaused {
-            aaa_id,
-            reason: PauseReason::CycleNonceExhausted,
-          });
-        }
-        return (
-          base_weight,
-          true,
-          (instance.actor_class.aaa_type() == AaaType::User)
-            .then_some(CloseReason::CycleNonceExhausted),
-        );
+        Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted)
+          .expect("fresh execution snapshot satisfies terminal preconditions");
+        return (base_weight, true, Some(CloseReason::CycleNonceExhausted));
       }
-      let Some(cycle_nonce) = ActorHot::<T>::mutate(aaa_id, |maybe| {
-        let inst = maybe.as_mut()?;
-        inst.cycle_nonce = inst.cycle_nonce.saturating_add(1);
-        inst.pending_signal = false;
-        inst.last_cycle_block = now;
-        Some(inst.cycle_nonce)
+      let Some(cycle_nonce) = ActorIdentities::<T>::mutate(aaa_id, |maybe| {
+        let identity = maybe.as_mut()?;
+        identity.cycle_nonce = identity
+          .cycle_nonce
+          .checked_add(1)
+          .expect("nonce-exhausted actors close before run opening");
+        Some(identity.cycle_nonce)
       }) else {
         return (base_weight, true, None);
+      };
+      ActorHot::<T>::mutate(aaa_id, |maybe| {
+        if let Some(hot) = maybe.as_mut() {
+          hot.pending_signal = false;
+          hot.last_cycle_block = Some(now);
+        }
+      });
+      let funding_snapshot = if instance.funding_tracked_count == 0 {
+        FundingSnapshotOf::<T>::default()
+      } else {
+        ActorFunding::<T>::mutate(aaa_id, |maybe| {
+          maybe
+            .as_mut()
+            .map(|funding| core::mem::take(&mut funding.funding_accumulated))
+            .unwrap_or_default()
+        })
       };
       Self::deposit_event(Event::CycleStarted {
         aaa_id,
         cycle_nonce,
       });
-      (cycle_nonce, 0, 0, 0, OutcomeTotals::default())
+      (
+        cycle_nonce,
+        0,
+        0,
+        0,
+        OutcomeTotals::default(),
+        funding_snapshot,
+      )
     };
-    let funding = if instance.funding_tracked_count == 0 {
-      None
-    } else {
-      Some(ActorFunding::<T>::get(aaa_id).expect("active actor funding existence was prevalidated"))
-    };
-    let empty_funding_snapshots = FundingSnapshotsOf::<T>::default();
     let actor = instance.sovereign_account.clone();
     let is_user = instance.actor_class.aaa_type() == AaaType::User;
     let execution_plan = &instance.execution_plan;
-    let funding_snapshots = funding
-      .as_ref()
-      .map_or(&empty_funding_snapshots, |state| &state.funding_snapshots);
+    let funding_snapshots = &funding_snapshot;
     let mut executed_steps = cumulative_outcomes.executed_steps;
     let mut committed_effectful_tasks = cumulative_outcomes.committed_effectful_tasks;
     let mut skipped_conditions = cumulative_outcomes.skipped_conditions;
@@ -457,35 +442,32 @@ impl<T: Config> Pallet<T> {
     let mut execution_plan_failed = false;
     let mut failure_close_reason = None;
     let mut suspended_at: Option<(u32, SuspensionReason)> = None;
-    let mut reserved_fee_remaining = if is_user {
-      Self::attempt_fee_upper_bound(&instance, start_cursor as usize)
-    } else {
-      T::Balance::zero()
-    };
+    let fee_envelope = Self::attempt_fee_envelope(
+      instance.actor_class.aaa_type(),
+      execution_plan,
+      start_cursor as usize,
+    )
+    .expect("admitted execution plans have a checked fee envelope");
+    let mut reserved_fee_remaining = fee_envelope.total;
     let trigger_snapshot = persisted_trigger_snapshot.unwrap_or_else(|| {
       Self::capture_trigger_snapshot(&actor, execution_plan, reserved_fee_remaining)
     });
     for step_idx in start_cursor as usize..execution_plan.len() {
       let step = &execution_plan[step_idx];
       let step_num = step_idx as u32;
-      let eval_fee = if is_user {
-        Self::compute_eval_fee(step.conditions.len())
-      } else {
-        T::Balance::zero()
-      };
-      let exec_fee = if is_user {
-        T::WeightToFee::weight_to_fee(&Self::weight_upper_bound(&step.task))
-      } else {
-        T::Balance::zero()
-      };
-      let reserved_step_fee = eval_fee.saturating_add(exec_fee);
+      let step_fee = &fee_envelope.steps[step_idx - start_cursor as usize];
       match Self::evaluate_condition_set(&step.conditions, &actor, reserved_fee_remaining) {
         Ok(true) => {}
         Ok(false) => {
           if is_user {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
-            if let Err(error) = Self::collect_user_step_fee(&actor, eval_fee) {
-              failed_steps = failed_steps.saturating_add(1);
+            let charged_fee = Self::settle_user_step_fee(
+              &mut reserved_fee_remaining,
+              step_fee,
+              FeeChargeKind::EvaluationOnly,
+            );
+            if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+              failed_steps = checked_semantic_increment(failed_steps)
+                .expect("semantic counter bound is precluded by admission");
               Self::record_simulation_step(
                 &mut trace,
                 step_num,
@@ -495,6 +477,7 @@ impl<T: Config> Pallet<T> {
                 aaa_id,
                 cycle_nonce,
                 step_index: step_num,
+                retry_class: RetryClass::Permanent,
                 error,
               });
               execution_plan_failed =
@@ -505,7 +488,8 @@ impl<T: Config> Pallet<T> {
               continue;
             }
           }
-          skipped_conditions = skipped_conditions.saturating_add(1);
+          skipped_conditions = checked_semantic_increment(skipped_conditions)
+            .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
             &mut trace,
             step_num,
@@ -521,14 +505,19 @@ impl<T: Config> Pallet<T> {
         }
         Err(error) => {
           let charged_error = if is_user {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
-            Self::collect_user_step_fee(&actor, eval_fee)
+            let charged_fee = Self::settle_user_step_fee(
+              &mut reserved_fee_remaining,
+              step_fee,
+              FeeChargeKind::EvaluationOnly,
+            );
+            Self::collect_user_step_fee(&actor, charged_fee)
               .err()
               .unwrap_or(error)
           } else {
             error
           };
-          failed_steps = failed_steps.saturating_add(1);
+          failed_steps = checked_semantic_increment(failed_steps)
+            .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
             &mut trace,
             step_num,
@@ -538,6 +527,7 @@ impl<T: Config> Pallet<T> {
             aaa_id,
             cycle_nonce,
             step_index: step_num,
+            retry_class: RetryClass::Permanent,
             error: charged_error,
           });
           execution_plan_failed =
@@ -559,9 +549,14 @@ impl<T: Config> Pallet<T> {
         Ok(PreparedTaskOutcome::Executable(task)) => task,
         Ok(PreparedTaskOutcome::Skipped) => {
           if is_user {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
-            if let Err(error) = Self::collect_user_step_fee(&actor, eval_fee) {
-              failed_steps = failed_steps.saturating_add(1);
+            let charged_fee = Self::settle_user_step_fee(
+              &mut reserved_fee_remaining,
+              step_fee,
+              FeeChargeKind::EvaluationOnly,
+            );
+            if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+              failed_steps = checked_semantic_increment(failed_steps)
+                .expect("semantic counter bound is precluded by admission");
               Self::record_simulation_step(
                 &mut trace,
                 step_num,
@@ -571,6 +566,7 @@ impl<T: Config> Pallet<T> {
                 aaa_id,
                 cycle_nonce,
                 step_index: step_num,
+                retry_class: RetryClass::Permanent,
                 error,
               });
               execution_plan_failed =
@@ -581,7 +577,8 @@ impl<T: Config> Pallet<T> {
               continue;
             }
           }
-          skipped_resolution = skipped_resolution.saturating_add(1);
+          skipped_resolution = checked_semantic_increment(skipped_resolution)
+            .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
             &mut trace,
             step_num,
@@ -597,9 +594,14 @@ impl<T: Config> Pallet<T> {
         }
         Ok(PreparedTaskOutcome::FundingUnavailable) => {
           if is_user {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
-            if let Err(error) = Self::collect_user_step_fee(&actor, eval_fee) {
-              failed_steps = failed_steps.saturating_add(1);
+            let charged_fee = Self::settle_user_step_fee(
+              &mut reserved_fee_remaining,
+              step_fee,
+              FeeChargeKind::EvaluationOnly,
+            );
+            if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+              failed_steps = checked_semantic_increment(failed_steps)
+                .expect("semantic counter bound is precluded by admission");
               Self::record_simulation_step(
                 &mut trace,
                 step_num,
@@ -609,6 +611,7 @@ impl<T: Config> Pallet<T> {
                 aaa_id,
                 cycle_nonce,
                 step_index: step_num,
+                retry_class: RetryClass::Permanent,
                 error,
               });
               execution_plan_failed =
@@ -642,7 +645,8 @@ impl<T: Config> Pallet<T> {
               break;
             }
           }
-          skipped_funding_unavailable = skipped_funding_unavailable.saturating_add(1);
+          skipped_funding_unavailable = checked_semantic_increment(skipped_funding_unavailable)
+            .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
             &mut trace,
             step_num,
@@ -658,14 +662,19 @@ impl<T: Config> Pallet<T> {
         }
         Err(error) => {
           let charged_error = if is_user {
-            reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
-            Self::collect_user_step_fee(&actor, eval_fee)
+            let charged_fee = Self::settle_user_step_fee(
+              &mut reserved_fee_remaining,
+              step_fee,
+              FeeChargeKind::EvaluationOnly,
+            );
+            Self::collect_user_step_fee(&actor, charged_fee)
               .err()
               .unwrap_or(error)
           } else {
             error
           };
-          failed_steps = failed_steps.saturating_add(1);
+          failed_steps = checked_semantic_increment(failed_steps)
+            .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
             &mut trace,
             step_num,
@@ -675,6 +684,7 @@ impl<T: Config> Pallet<T> {
             aaa_id,
             cycle_nonce,
             step_index: step_num,
+            retry_class: RetryClass::Permanent,
             error: charged_error,
           });
           execution_plan_failed =
@@ -686,9 +696,14 @@ impl<T: Config> Pallet<T> {
         }
       };
       if is_user {
-        reserved_fee_remaining = reserved_fee_remaining.saturating_sub(reserved_step_fee);
-        if let Err(error) = Self::collect_user_step_fee(&actor, reserved_step_fee) {
-          failed_steps = failed_steps.saturating_add(1);
+        let charged_fee = Self::settle_user_step_fee(
+          &mut reserved_fee_remaining,
+          step_fee,
+          FeeChargeKind::Attempted,
+        );
+        if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+          failed_steps = checked_semantic_increment(failed_steps)
+            .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
             &mut trace,
             step_num,
@@ -698,6 +713,7 @@ impl<T: Config> Pallet<T> {
             aaa_id,
             cycle_nonce,
             step_index: step_num,
+            retry_class: RetryClass::Permanent,
             error,
           });
           execution_plan_failed =
@@ -711,10 +727,13 @@ impl<T: Config> Pallet<T> {
       if let Err(failure) = Self::execute_prepared_task(
         prepared_task,
         aaa_id,
+        cycle_nonce,
+        step_num,
         &actor,
         instance.actor_class.aaa_type(),
       ) {
-        failed_steps = failed_steps.saturating_add(1);
+        failed_steps = checked_semantic_increment(failed_steps)
+          .expect("semantic counter bound is precluded by admission");
         let retry = failure.retry;
         let control = resolve_step_control(
           instance.mutability,
@@ -726,6 +745,7 @@ impl<T: Config> Pallet<T> {
           aaa_id,
           cycle_nonce,
           step_index: step_num,
+          retry_class: retry,
           error: failure.error,
         });
         match control {
@@ -758,10 +778,13 @@ impl<T: Config> Pallet<T> {
         SimulationStepOutcome::Executed
       };
       Self::record_simulation_step(&mut trace, step_num, simulation_outcome);
-      executed_steps = executed_steps.saturating_add(1);
-      attempt_executed_steps = attempt_executed_steps.saturating_add(1);
+      executed_steps = checked_semantic_increment(executed_steps)
+        .expect("semantic counter bound is precluded by admission");
+      attempt_executed_steps = checked_semantic_increment(attempt_executed_steps)
+        .expect("semantic counter bound is precluded by admission");
       if successful_control != StepControl::CompleteCycle {
-        committed_effectful_tasks = committed_effectful_tasks.saturating_add(1);
+        committed_effectful_tasks = checked_semantic_increment(committed_effectful_tasks)
+          .expect("semantic counter bound is precluded by admission");
       }
       if successful_control == StepControl::CompleteCycle {
         break;
@@ -777,12 +800,17 @@ impl<T: Config> Pallet<T> {
         let Some(hot) = maybe.as_mut() else {
           return 0;
         };
-        hot.consecutive_failures = hot.consecutive_failures.saturating_add(1);
+        hot.consecutive_failures = hot
+          .consecutive_failures
+          .checked_add(1)
+          .expect("attempt admission excludes an exhausted failure counter");
         hot.consecutive_failures
       });
       failure_already_recorded = true;
       let unsuccessful_attempts_at_cursor = if is_continuation && cursor == start_cursor {
-        prior_unsuccessful_attempts_at_cursor.saturating_add(1)
+        prior_unsuccessful_attempts_at_cursor
+          .checked_add(1)
+          .expect("admitted cursor-local retry counter remains below its u32 bound")
       } else {
         1
       };
@@ -814,6 +842,7 @@ impl<T: Config> Pallet<T> {
               cursor as usize,
               &trigger_snapshot,
             ),
+            funding_snapshot: funding_snapshot.clone(),
             cumulative_outcomes,
           },
           suspension_reason,
@@ -828,57 +857,38 @@ impl<T: Config> Pallet<T> {
       });
       execution_plan_failed = true;
     }
-    let terminal_outcomes = OutcomeTotals {
+    if is_continuation {
+      Self::write_continuation_state(aaa_id, None)
+        .expect("terminal Continuation can be cleared atomically");
+    }
+    ActorHot::<T>::mutate(aaa_id, |maybe| {
+      let Some(hot) = maybe.as_mut() else {
+        return;
+      };
+      if execution_plan_failed {
+        if !failure_already_recorded {
+          hot.consecutive_failures = checked_semantic_increment(hot.consecutive_failures)
+            .expect("failure bound (MaxConsecutiveFailures) is precluded by admission");
+        }
+      } else {
+        hot.consecutive_failures = 0;
+      }
+    });
+    Self::deposit_event(Event::CycleSummary {
+      aaa_id,
+      cycle_nonce,
+      result: if execution_plan_failed {
+        CycleResult::Failed
+      } else {
+        CycleResult::Completed
+      },
       executed_steps,
       committed_effectful_tasks,
       skipped_conditions,
       skipped_resolution,
       skipped_funding_unavailable,
       failed_steps,
-    };
-    let continuation_cancelled = if is_continuation && execution_plan_failed {
-      Self::cancel_continuation_internal(
-        aaa_id,
-        CancellationReason::Terminal,
-        Some(terminal_outcomes),
-      )
-      .expect("terminal Continuation cancellation satisfies stored invariants")
-    } else {
-      if is_continuation {
-        Self::write_continuation_state(aaa_id, None)
-          .expect("successful Continuation can be cleared atomically");
-      }
-      false
-    };
-    let should_promote_funding = ActorHot::<T>::mutate(aaa_id, |maybe| {
-      let Some(hot) = maybe.as_mut() else {
-        return false;
-      };
-      if execution_plan_failed {
-        if !failure_already_recorded {
-          hot.consecutive_failures = hot.consecutive_failures.saturating_add(1);
-        }
-        false
-      } else {
-        hot.consecutive_failures = 0;
-        hot.pending_funding_count > 0
-      }
     });
-    if !continuation_cancelled {
-      Self::deposit_event(Event::CycleSummary {
-        aaa_id,
-        cycle_nonce,
-        executed_steps,
-        committed_effectful_tasks,
-        skipped_conditions,
-        skipped_resolution,
-        skipped_funding_unavailable,
-        failed_steps,
-      });
-    }
-    if should_promote_funding {
-      Self::promote_pending_funding(aaa_id);
-    }
     let mut terminal_close_reason = None;
     if execution_plan_failed {
       if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
@@ -926,13 +936,14 @@ impl<T: Config> Pallet<T> {
     if instance.mutability != expected_mutability {
       return Err(SimulationError::MutabilityMismatch);
     }
-    let ProgramInput::Active {
+    let ProgramInput::Active(ActiveProgramInput {
       schedule,
       schedule_window,
       execution_plan,
       completion_policy,
       funding_source_policy,
-    } = expected_program
+      auto_close_at_cycle_nonce,
+    }) = expected_program
     else {
       return Err(SimulationError::ProgramMismatch);
     };
@@ -943,6 +954,7 @@ impl<T: Config> Pallet<T> {
       || stored_program.execution_plan != execution_plan
       || stored_program.completion_policy != completion_policy
       || stored_funding.funding_source_policy != funding_source_policy
+      || instance.auto_close_at_cycle_nonce != auto_close_at_cycle_nonce
     {
       return Err(SimulationError::ProgramMismatch);
     }
@@ -1045,10 +1057,30 @@ impl<T: Config> Pallet<T> {
     max_failures > 0 && consecutive_failures >= max_failures
   }
 
+  pub(crate) fn compute_eval_fee_checked(num_conditions: u32) -> Result<BalanceOf<T>, Error<T>> {
+    let condition_fee = T::ConditionReadFee::get()
+      .checked_mul(&num_conditions.saturated_into())
+      .ok_or(Error::<T>::AdmissionBoundOverflow)?;
+    T::StepBaseFee::get()
+      .checked_add(&condition_fee)
+      .ok_or(Error::<T>::AdmissionBoundOverflow)
+  }
+
+  #[cfg(test)]
   pub(crate) fn compute_eval_fee(num_conditions: u32) -> BalanceOf<T> {
-    let base = T::StepBaseFee::get();
-    let per_cond = T::ConditionReadFee::get();
-    base.saturating_add(per_cond.saturating_mul(num_conditions.into()))
+    Self::compute_eval_fee_checked(num_conditions)
+      .expect("admitted execution plans have checked evaluation fees")
+  }
+
+  fn settle_user_step_fee(
+    reservation: &mut T::Balance,
+    step: &super::StepFeeEnvelope<T::Balance>,
+    charge_kind: FeeChargeKind,
+  ) -> T::Balance {
+    let settlement = settle_attempt_fee_step(AaaType::User, *reservation, step, charge_kind)
+      .expect("admitted User plans preserve their fee reservation");
+    *reservation = settlement.reservation_remaining;
+    settlement.charged
   }
 
   fn collect_user_step_fee(actor: &T::AccountId, fee: T::Balance) -> DispatchResult {
@@ -1096,12 +1128,14 @@ impl<T: Config> Pallet<T> {
       AaaTask::Transfer { asset, amount, .. }
       | AaaTask::SplitTransfer { asset, amount, .. }
       | AaaTask::Burn { asset, amount }
-      | AaaTask::Mint { asset, amount }
-      | AaaTask::RemoveLiquidity {
+      | AaaTask::Mint { asset, amount } => {
+        Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces)
+      }
+      AaaTask::RemoveLiquidity {
         lp_asset: asset,
-        amount,
+        lp_amount,
         ..
-      } => Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces),
+      } => Self::push_trigger_surface(lp_amount, ResolutionSurface::Asset(*asset), surfaces),
       AaaTask::SwapIn {
         asset_in,
         amount_in,
@@ -1126,9 +1160,11 @@ impl<T: Config> Pallet<T> {
         Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces);
       }
       AaaTask::DonateLiquidity {
-        asset_a, amount, ..
+        asset_a,
+        max_amount_a,
+        ..
       } => {
-        Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset_a), surfaces);
+        Self::push_trigger_surface(max_amount_a, ResolutionSurface::Asset(*asset_a), surfaces);
       }
       AaaTask::Unstake { asset, shares } => {
         Self::push_trigger_surface(shares, ResolutionSurface::StakingShares(*asset), surfaces)
@@ -1198,11 +1234,7 @@ impl<T: Config> Pallet<T> {
     aaa_type: AaaType,
     reserved: T::Balance,
     trigger_balances: &ContinuationSnapshotOf<T>,
-    funding_snapshots: &BoundedBTreeMap<
-      T::AssetId,
-      FundingBatch<T::Balance>,
-      T::MaxFundingTrackedAssets,
-    >,
+    funding_snapshots: &FundingSnapshotOf<T>,
   ) -> Result<PreparedTaskOutcome<T>, DispatchError> {
     match task {
       AaaTask::Transfer { to, asset, amount } => {
@@ -1210,6 +1242,7 @@ impl<T: Config> Pallet<T> {
           amount,
           *asset,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1237,6 +1270,7 @@ impl<T: Config> Pallet<T> {
           amount,
           *asset,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1248,6 +1282,11 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
+        if resolved.is_zero() {
+          // An all-zero SplitTransfer total is an explicit resolution skip, not a silent
+          // zero-leg transfer: no balance read, preflight, or event mutation occurs.
+          return Ok(PreparedTaskOutcome::Skipped);
+        }
         Ok(PreparedTaskOutcome::Executable(
           PreparedTask::SplitTransfer {
             asset: *asset,
@@ -1261,6 +1300,7 @@ impl<T: Config> Pallet<T> {
           amount,
           *asset,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1286,6 +1326,7 @@ impl<T: Config> Pallet<T> {
           amount,
           *asset,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1312,6 +1353,7 @@ impl<T: Config> Pallet<T> {
           amount_in,
           *asset_in,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1341,6 +1383,7 @@ impl<T: Config> Pallet<T> {
           amount_out,
           *asset_out,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1352,8 +1395,8 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
-        let preservable_input_capacity = Self::spendable_balance(actor, *asset_in, reserved)
-          .saturating_sub(T::AssetOps::minimum_balance(*asset_in));
+        let preservable_input_capacity =
+          Self::preservable_balance(aaa_type, actor, *asset_in, reserved);
         let max_amount_in = match input_limit {
           InputLimit::LiveQuote => preservable_input_capacity,
           InputLimit::Absolute(authored_max) => (*authored_max).min(preservable_input_capacity),
@@ -1380,6 +1423,7 @@ impl<T: Config> Pallet<T> {
           amount_a,
           *asset_a,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1389,6 +1433,7 @@ impl<T: Config> Pallet<T> {
           amount_b,
           *asset_b,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1415,14 +1460,17 @@ impl<T: Config> Pallet<T> {
       }
       AaaTask::RemoveLiquidity {
         lp_asset,
-        amount,
+        asset_a,
+        asset_b,
+        lp_amount,
         min_amount_a,
         min_amount_b,
       } => {
         let resolved = match Self::resolve_for_task(
-          amount,
+          lp_amount,
           *lp_asset,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1437,7 +1485,9 @@ impl<T: Config> Pallet<T> {
         Ok(PreparedTaskOutcome::Executable(
           PreparedTask::RemoveLiquidity {
             lp_asset: *lp_asset,
-            amount: resolved,
+            asset_a: *asset_a,
+            asset_b: *asset_b,
+            lp_amount: resolved,
             min_amount_a: *min_amount_a,
             min_amount_b: *min_amount_b,
           },
@@ -1448,6 +1498,7 @@ impl<T: Config> Pallet<T> {
           amount,
           *asset,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1467,13 +1518,14 @@ impl<T: Config> Pallet<T> {
       AaaTask::DonateLiquidity {
         asset_a,
         asset_b,
-        amount,
+        max_amount_a,
         max_ratio_error,
       } => {
         let resolved = match Self::resolve_for_task(
-          amount,
+          max_amount_a,
           *asset_a,
           actor,
+          aaa_type,
           reserved,
           trigger_balances,
           funding_snapshots,
@@ -1490,6 +1542,7 @@ impl<T: Config> Pallet<T> {
             asset_a: *asset_a,
             asset_b: *asset_b,
             amount: resolved,
+            max_amount_b: Self::preservable_balance(aaa_type, actor, *asset_b, reserved),
             max_ratio_error: *max_ratio_error,
           },
         ))
@@ -1520,6 +1573,8 @@ impl<T: Config> Pallet<T> {
   fn execute_prepared_task(
     task: PreparedTask<T>,
     aaa_id: AaaId,
+    cycle_nonce: u64,
+    step_index: u32,
     actor: &T::AccountId,
     aaa_type: AaaType,
   ) -> Result<(), TaskFailure> {
@@ -1530,6 +1585,8 @@ impl<T: Config> Pallet<T> {
             T::AssetOps::transfer(actor, &to, asset, amount)?;
             Self::deposit_event(Event::TransferExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               to,
               asset,
               amount,
@@ -1558,6 +1615,8 @@ impl<T: Config> Pallet<T> {
             }
             Self::deposit_event(Event::SplitTransferExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset,
               total,
               distributed: effective_distributed,
@@ -1570,6 +1629,8 @@ impl<T: Config> Pallet<T> {
             T::AssetOps::burn(actor, asset, amount)?;
             Self::deposit_event(Event::BurnExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset,
               amount,
             });
@@ -1578,6 +1639,8 @@ impl<T: Config> Pallet<T> {
             T::AssetOps::mint(actor, asset, amount)?;
             Self::deposit_event(Event::MintExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset,
               amount,
             });
@@ -1597,6 +1660,8 @@ impl<T: Config> Pallet<T> {
             )?;
             Self::deposit_event(Event::SwapExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset_in,
               asset_out,
               amount_in,
@@ -1620,6 +1685,8 @@ impl<T: Config> Pallet<T> {
             )?;
             Self::deposit_event(Event::SwapExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset_in,
               asset_out,
               amount_in,
@@ -1636,30 +1703,52 @@ impl<T: Config> Pallet<T> {
             let (used_a, used_b, lp_minted) = T::LiquidityOps::add_liquidity(
               actor, asset_a, asset_b, amount_a, amount_b, min_lp_out,
             )?;
-            let _ = (used_a, used_b);
             Self::deposit_event(Event::LiquidityAdded {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset_a,
               asset_b,
+              amount_a: used_a,
+              amount_b: used_b,
               lp_minted,
             });
           }
           PreparedTask::RemoveLiquidity {
             lp_asset,
-            amount,
+            asset_a,
+            asset_b,
+            lp_amount,
             min_amount_a,
             min_amount_b,
           } => {
+            // The stable ordered pair is host-owned; an admitted LP token must not be
+            // silently reinterpreted. Execution rejects a changed/mismatched binding
+            // before mutation.
+            let registered = T::LiquidityOps::lp_assets(lp_asset)
+              .ok_or_else(|| TaskFailure::permanent(DispatchError::Other("UnregisteredLpAsset")))?;
+            if registered != (asset_a, asset_b) {
+              return Err(TaskFailure::permanent(DispatchError::Other(
+                "LiquidityPairBindingMismatch",
+              )));
+            }
             let (out_a, out_b) = T::LiquidityOps::remove_liquidity(
               actor,
               lp_asset,
-              amount,
+              asset_a,
+              asset_b,
+              lp_amount,
               min_amount_a,
               min_amount_b,
             )?;
             Self::deposit_event(Event::LiquidityRemoved {
               aaa_id,
+              cycle_nonce,
+              step_index,
               lp_asset,
+              lp_amount,
+              asset_a,
+              asset_b,
               amount_a: out_a,
               amount_b: out_b,
             });
@@ -1668,6 +1757,8 @@ impl<T: Config> Pallet<T> {
             T::StakingOps::stake(actor, asset, amount)?;
             Self::deposit_event(Event::StakeExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset,
               amount,
             });
@@ -1676,15 +1767,25 @@ impl<T: Config> Pallet<T> {
             asset_a,
             asset_b,
             amount,
+            max_amount_b,
             max_ratio_error,
           } => {
-            let (amount_a, amount_b) =
-              T::LiquidityOps::donate_liquidity(actor, asset_a, asset_b, amount, max_ratio_error)?;
-            Self::deposit_event(Event::LiquidityDonated {
-              aaa_id,
+            let (amount_a, amount_b) = T::LiquidityOps::donate_liquidity(
+              actor,
               asset_a,
               asset_b,
               amount,
+              max_amount_b,
+              max_ratio_error,
+            )?;
+            Self::deposit_event(Event::LiquidityDonated {
+              aaa_id,
+              cycle_nonce,
+              step_index,
+              asset_a,
+              asset_b,
+              max_amount_a: amount,
+              max_amount_b,
               amount_a,
               amount_b,
             });
@@ -1693,6 +1794,8 @@ impl<T: Config> Pallet<T> {
             T::StakingOps::unstake(actor, asset, shares)?;
             Self::deposit_event(Event::UnstakeExecuted {
               aaa_id,
+              cycle_nonce,
+              step_index,
               asset,
               shares,
             });
@@ -1712,13 +1815,10 @@ impl<T: Config> Pallet<T> {
     spec: &AmountResolution<T::Balance>,
     asset: T::AssetId,
     actor: &T::AccountId,
+    aaa_type: AaaType,
     reserved: T::Balance,
     trigger_balances: &ContinuationSnapshotOf<T>,
-    funding_snapshots: &BoundedBTreeMap<
-      T::AssetId,
-      FundingBatch<T::Balance>,
-      T::MaxFundingTrackedAssets,
-    >,
+    funding_snapshots: &FundingSnapshotOf<T>,
     policy: AmountResolutionPolicy,
   ) -> Result<Result<T::Balance, TaskResolutionOutcome>, DispatchError> {
     Ok(
@@ -1726,6 +1826,7 @@ impl<T: Config> Pallet<T> {
         spec,
         asset,
         actor,
+        aaa_type,
         reserved,
         trigger_balances,
         funding_snapshots,
@@ -1780,35 +1881,46 @@ impl<T: Config> Pallet<T> {
         feed,
         threshold,
         max_age_blocks,
-      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value > *threshold),
       Condition::ObservationBelow {
         feed,
         threshold,
         max_age_blocks,
-      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value < *threshold),
       Condition::ObservationEquals {
         feed,
         threshold,
         max_age_blocks,
-      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value == *threshold),
       Condition::ObservationNotEquals {
         feed,
         threshold,
         max_age_blocks,
-      } => Self::fresh_observation_value(*feed, *max_age_blocks)
+      } => Self::fresh_observation_value(*feed, *max_age_blocks)?
         .is_some_and(|value| value != *threshold),
     })
   }
 
-  fn fresh_observation_value(feed: T::ObservationFeedId, max_age_blocks: u32) -> Option<u128> {
-    match T::ObservationProvider::observation(feed, max_age_blocks) {
-      ScalarObservationState::Fresh { value } => Some(value),
+  fn fresh_observation_value(
+    feed: T::ObservationFeedId,
+    max_age_blocks: u32,
+  ) -> Result<Option<u128>, DispatchError> {
+    let now = frame_system::Pallet::<T>::block_number();
+    match T::ObservationProvider::observe(&feed, now, max_age_blocks) {
+      ScalarObservationState::Fresh { value, observed_at } => {
+        let maximum_age: BlockNumberFor<T> = max_age_blocks.saturated_into();
+        ensure!(
+          observed_at <= now && now.saturating_sub(observed_at) <= maximum_age,
+          Error::<T>::InvalidCondition
+        );
+        Ok(Some(value))
+      }
       ScalarObservationState::Unavailable
       | ScalarObservationState::Uninitialized
-      | ScalarObservationState::Stale => None,
+      | ScalarObservationState::Stale => Ok(None),
     }
   }
 
@@ -1822,16 +1934,31 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  fn protected_minimum(aaa_type: AaaType, asset: T::AssetId) -> T::Balance {
+    fee_native_protected_minimum(
+      aaa_type,
+      asset == T::NativeAssetId::get(),
+      T::AssetOps::minimum_balance(asset),
+      T::MinUserBalance::get(),
+    )
+  }
+
+  fn preservable_balance(
+    aaa_type: AaaType,
+    who: &T::AccountId,
+    asset: T::AssetId,
+    reserved: T::Balance,
+  ) -> T::Balance {
+    Self::spendable_balance(who, asset, reserved)
+      .saturating_sub(Self::protected_minimum(aaa_type, asset))
+  }
+
   fn resolve_unstake_shares(
     spec: &AmountResolution<T::Balance>,
     position_asset: T::AssetId,
     who: &T::AccountId,
     trigger_share_balances: &ContinuationSnapshotOf<T>,
-    funding_snapshots: &BoundedBTreeMap<
-      T::AssetId,
-      FundingBatch<T::Balance>,
-      T::MaxFundingTrackedAssets,
-    >,
+    funding_snapshots: &FundingSnapshotOf<T>,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     let current_shares = T::StakingOps::share_balance(who, position_asset);
     let resolved = match spec {
@@ -1848,10 +1975,10 @@ impl<T: Config> Pallet<T> {
         let Some(snapshot) = funding_snapshots.get(&share_asset) else {
           return Ok(AmountResolutionOutcome::FundingUnavailable);
         };
-        if snapshot.amount.is_zero() {
+        if snapshot.is_zero() {
           return Ok(AmountResolutionOutcome::FundingUnavailable);
         }
-        pct.mul_floor(snapshot.amount)
+        pct.mul_floor(*snapshot)
       }
     };
     if resolved.is_zero() {
@@ -1867,18 +1994,15 @@ impl<T: Config> Pallet<T> {
     spec: &AmountResolution<T::Balance>,
     asset: T::AssetId,
     who: &T::AccountId,
+    aaa_type: AaaType,
     reserved: T::Balance,
     trigger_balances: &ContinuationSnapshotOf<T>,
-    funding_snapshots: &BoundedBTreeMap<
-      T::AssetId,
-      FundingBatch<T::Balance>,
-      T::MaxFundingTrackedAssets,
-    >,
+    funding_snapshots: &FundingSnapshotOf<T>,
     policy: AmountResolutionPolicy,
   ) -> Result<AmountResolutionOutcome<T::Balance>, DispatchError> {
     let spendable_current = Self::spendable_balance(who, asset, reserved);
     let policy_spend_limit = if policy == AmountResolutionPolicy::PreserveSpend {
-      spendable_current.saturating_sub(T::AssetOps::minimum_balance(asset))
+      Self::preservable_balance(aaa_type, who, asset, reserved)
     } else {
       spendable_current
     };
@@ -1905,10 +2029,10 @@ impl<T: Config> Pallet<T> {
         let Some(snapshot) = funding_snapshots.get(&asset) else {
           return Ok(AmountResolutionOutcome::FundingUnavailable);
         };
-        if snapshot.amount.is_zero() {
+        if snapshot.is_zero() {
           return Ok(AmountResolutionOutcome::FundingUnavailable);
         }
-        let value = pct.mul_floor(snapshot.amount);
+        let value = pct.mul_floor(*snapshot);
         if !pct.is_zero() && value.is_zero() {
           return Ok(AmountResolutionOutcome::Skipped);
         }
@@ -2075,13 +2199,14 @@ mod step_control_tests {
       );
 
       let trigger_snapshot = ContinuationSnapshotOf::<Test>::default();
-      let funding_snapshots = FundingSnapshotsOf::<Test>::default();
+      let funding_snapshots = FundingSnapshotOf::<Test>::default();
       let before_resolution = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       assert_eq!(
         Pallet::<Test>::resolve_amount_with_policy(
           &AmountResolution::PercentageOfCurrent(Perbill::from_percent(50)),
           TestAsset::Native,
           &ALICE,
+          AaaType::System,
           0,
           &trigger_snapshot,
           &funding_snapshots,

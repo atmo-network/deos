@@ -125,6 +125,34 @@ function automationContinuationSnapshot(
   };
 }
 
+function automationQueueTicket(hot: unknown): bigint | null {
+  const actor = triggerRecord(hot);
+  const ticket = actor?.queue_ticket;
+  return typeof ticket === 'bigint' ? ticket : null;
+}
+
+function automationFundingAccumulated(
+  funding: unknown,
+): ReadonlyArray<[string, bigint]> {
+  const value = triggerRecord(funding);
+  const accumulated = value?.funding_accumulated;
+  if (!Array.isArray(accumulated)) {
+    return [];
+  }
+  return accumulated.flatMap((entry) => {
+    if (!Array.isArray(entry) || entry.length !== 2) return [];
+    const [asset, amount] = entry;
+    if (typeof amount !== 'bigint') return [];
+    return [[String(asset), amount]];
+  });
+}
+
+function automationFundingSourcePolicy(funding: unknown): string | null {
+  const value = triggerRecord(funding);
+  const policy = triggerRecord(value?.funding_source_policy);
+  return typeof policy?.type === 'string' ? policy.type : null;
+}
+
 function triggerSourceLabel(source: unknown): string {
   const variant = triggerRecord(source);
   switch (variant?.type) {
@@ -451,22 +479,34 @@ export class BlockchainAdapter implements Adapter {
       const snapshot = await (await this.ensurePapi()).snapshot();
       return await Promise.all(
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
-          const [hot, program, continuation] = await Promise.all([
-            snapshot.typedApi.query.AAA.ActorHot.getValue(BigInt(actor.aaaId), {
-              at: snapshot.at,
-            }),
-            snapshot.typedApi.query.AAA.ActorProgram.getValue(
-              BigInt(actor.aaaId),
-              { at: snapshot.at },
-            ),
-            snapshot.typedApi.query.AAA.ContinuationState.getValue(
-              BigInt(actor.aaaId),
-              { at: snapshot.at },
-            ),
-          ]);
-          const exists = hot != null && program != null;
+          const [identity, hot, program, continuation, funding] =
+            await Promise.all([
+              snapshot.typedApi.query.AAA.ActorIdentities.getValue(
+                BigInt(actor.aaaId),
+                { at: snapshot.at },
+              ),
+              snapshot.typedApi.query.AAA.ActorHot.getValue(
+                BigInt(actor.aaaId),
+                {
+                  at: snapshot.at,
+                },
+              ),
+              snapshot.typedApi.query.AAA.ActorProgram.getValue(
+                BigInt(actor.aaaId),
+                { at: snapshot.at },
+              ),
+              snapshot.typedApi.query.AAA.ContinuationState.getValue(
+                BigInt(actor.aaaId),
+                { at: snapshot.at },
+              ),
+              snapshot.typedApi.query.AAA.ActorFunding.getValue(
+                BigInt(actor.aaaId),
+                { at: snapshot.at },
+              ),
+            ]);
+          const exists = identity != null && hot != null && program != null;
           const sovereignAccount =
-            hot?.sovereign_account ??
+            identity?.sovereign_account ??
             deriveSystemAaaSovereignAccount(actor.aaaId);
           const account = await snapshot.typedApi.query.System.Account.getValue(
             sovereignAccount,
@@ -477,14 +517,23 @@ export class BlockchainAdapter implements Adapter {
             label: actor.label,
             role: actor.role,
             exists,
+            actorClass:
+              identity?.actor_class?.type === 'System'
+                ? 'System'
+                : identity?.actor_class?.type === 'User'
+                  ? 'User'
+                  : null,
             paused: automationActorPaused(hot),
             runState: automationActorRunState(hot),
-            cycleNonce: hot?.cycle_nonce ?? 0n,
+            cycleNonce: identity?.cycle_nonce ?? 0n,
             continuation: automationContinuationSnapshot(continuation),
             lastCycleBlock: hot?.last_cycle_block ?? null,
             completionPolicy: program?.completion_policy.type ?? null,
             triggerLabel: automationTriggerLabel(program?.schedule.trigger),
             nativeBalance: account?.data?.free ?? 0n,
+            queueTicket: automationQueueTicket(hot),
+            fundingAccumulated: automationFundingAccumulated(funding),
+            fundingSourcePolicy: automationFundingSourcePolicy(funding),
           } satisfies AutomationActorSnapshot;
         }),
       );

@@ -4,6 +4,7 @@ Owns: Honest adapter-local partial-execution projection, task rollback, scalar C
 Excludes: Runtime-Wasm execution, chain queries, scheduler prediction, signing, submission, and persistence.
 Zone: Automation domain capability; matching-runtime truth requires a separate Wasm/state-proof adapter.
 */
+import { AAA_MAX_RETRY_ATTEMPTS } from './aaa-protocol-bounds.ts';
 import type { AaaPlanArtifact, AaaPlanHex } from './plan-artifact';
 
 export type AaaLocalSimulationProvenance = {
@@ -175,9 +176,11 @@ export function simulateAaaLocally<State, Condition>(input: {
       step.onError.type === 'RetryLater' &&
       (!Number.isSafeInteger(step.onError.maxAttempts) ||
         step.onError.maxAttempts <= 0 ||
-        step.onError.maxAttempts > 0xffff_ffff)
+        step.onError.maxAttempts > AAA_MAX_RETRY_ATTEMPTS)
     ) {
-      throw new Error('RetryLater maxAttempts must be a nonzero u32');
+      throw new Error(
+        `RetryLater maxAttempts must be within 1..${AAA_MAX_RETRY_ATTEMPTS}`,
+      );
     }
     if (
       step.conditionSet.type !== 'Always' &&

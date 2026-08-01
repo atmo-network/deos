@@ -275,7 +275,9 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
       bind:asset={task.lpAsset}
       {compact}
     />
-    <AutomationAmountEditor bind:amount={task.amount} {compact} />
+    <AutomationAssetEditor label="Asset A" bind:asset={task.assetA} {compact} />
+    <AutomationAssetEditor label="Asset B" bind:asset={task.assetB} {compact} />
+    <AutomationAmountEditor bind:amount={task.lpAmount} {compact} />
     <div class={fieldGrid}>
       <TextField
         label="Minimum asset A output"
@@ -308,7 +310,7 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
         compact={true}
       />
     </div>
-    <AutomationAmountEditor bind:amount={task.amount} {compact} />
+    <AutomationAmountEditor bind:amount={task.maxAmountA} {compact} />
     <NumberInput
       label="Maximum ratio error (perbill)"
       min={0}
