@@ -4,6 +4,7 @@ Owns: Identity-bound structural composition, semantic surfaces, forward dependen
 Excludes: Runtime state claims, adapter execution, SCALE implementation, independent weight calculation, signing, submission, and graph authoring.
 Zone: Automation domain capability; consumes canonical plan inspection and forecast contracts.
 */
+import { AAA_MAX_RETRY_ATTEMPTS } from './aaa-protocol-bounds.ts';
 import {
   type AaaCostSegment,
   type AaaStepCostInput,
@@ -541,9 +542,9 @@ function errorPolicy(value: AaaPlanProjection) {
         member(parsed.value, 'max_attempts', 'StepErrorPolicy.RetryLater'),
         'StepErrorPolicy.RetryLater.max_attempts',
       );
-      if (maxAttempts === 0) {
+      if (maxAttempts === 0 || maxAttempts > AAA_MAX_RETRY_ATTEMPTS) {
         throw new Error(
-          'StepErrorPolicy.RetryLater.max_attempts must be nonzero',
+          `StepErrorPolicy.RetryLater.max_attempts must be within 1..${AAA_MAX_RETRY_ATTEMPTS}`,
         );
       }
       return { type: parsed.type, maxAttempts } as const;

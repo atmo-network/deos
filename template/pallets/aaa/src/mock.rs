@@ -147,35 +147,49 @@ thread_local! {
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
   static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
+  static STEP_BASE_FEE: RefCell<Balance> = RefCell::new(1);
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
+  static CORRUPT_QUEUE_AFTER_TRANSFER: RefCell<bool> = RefCell::new(false);
   static ASSET_MINIMUM_BALANCE: RefCell<Balance> = RefCell::new(1);
-  static OBSERVATIONS: RefCell<alloc::collections::BTreeMap<u32, crate::ScalarObservationState>> =
-    RefCell::new(alloc::collections::BTreeMap::new());
+  static OBSERVATIONS: RefCell<
+    alloc::collections::BTreeMap<u32, crate::ScalarObservationState<u64>>,
+  > = RefCell::new(alloc::collections::BTreeMap::new());
   static FAIL_DEX_AFTER_INPUT_TRANSFER: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_DEX_FAILURE: RefCell<bool> = RefCell::new(false);
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
   static LAST_DEX_AAA_TYPE: RefCell<Option<AaaType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
-  static SYSTEM_EXECUTION_RESERVE: RefCell<Perbill> = RefCell::new(Perbill::from_percent(20));
-  static USER_EXECUTION_GUARANTEE: RefCell<Perbill> = RefCell::new(Perbill::from_percent(20));
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
   static FAIL_LIQUIDITY_DONATION_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_LIQUIDITY_DONATION_AFTER_FIRST_BURN: RefCell<bool> = RefCell::new(false);
+  static LP_PAIR_BY_TOKEN: RefCell<alloc::collections::BTreeMap<TestAsset, (TestAsset, TestAsset)>> =
+    RefCell::new(alloc::collections::BTreeMap::new());
+  static RESERVED_SOVEREIGN_ACCOUNTS: RefCell<alloc::collections::BTreeSet<AccountId>> =
+    RefCell::new(alloc::collections::BTreeSet::new());
   #[cfg(feature = "runtime-benchmarks")]
   static BENCHMARK_INGRESS: RefCell<Option<(AccountId, AccountId, Balance)>> = RefCell::new(None);
   #[cfg(feature = "runtime-benchmarks")]
   static BENCHMARK_ASSET_OPS_INGRESS: RefCell<bool> = RefCell::new(false);
 }
 
+pub fn set_corrupt_queue_after_transfer(enabled: bool) {
+  CORRUPT_QUEUE_AFTER_TRANSFER.with(|value| *value.borrow_mut() = enabled);
+}
+
 pub fn set_asset_minimum_balance(amount: Balance) {
   ASSET_MINIMUM_BALANCE.with(|value| *value.borrow_mut() = amount);
 }
 
-pub fn set_observation(feed: u32, state: crate::ScalarObservationState) {
+pub fn set_reserved_sovereign_account(account: AccountId) {
+  RESERVED_SOVEREIGN_ACCOUNTS.with(|set| {
+    set.borrow_mut().insert(account);
+  });
+}
+pub fn set_observation(feed: u32, state: crate::ScalarObservationState<u64>) {
   OBSERVATIONS.with(|values| {
     values.borrow_mut().insert(feed, state);
   });
@@ -200,6 +214,10 @@ pub fn set_pool_reserves(
   POOL_RESERVES.with(|p| p.borrow_mut().insert(key, (ra, rb)));
 }
 
+pub fn register_lp_pair(lp_asset: TestAsset, asset_a: TestAsset, asset_b: TestAsset) {
+  LP_PAIR_BY_TOKEN.with(|pairs| pairs.borrow_mut().insert(lp_asset, (asset_a, asset_b)));
+}
+
 pub fn reset_mock_adapters() {
   ASSET_BALANCES.with(|b| b.borrow_mut().clear());
   BURNED.with(|b| b.borrow_mut().clear());
@@ -210,9 +228,11 @@ pub fn reset_mock_adapters() {
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
   FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
+  STEP_BASE_FEE.with(|v| *v.borrow_mut() = 1);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
+  CORRUPT_QUEUE_AFTER_TRANSFER.with(|v| *v.borrow_mut() = false);
   ASSET_MINIMUM_BALANCE.with(|v| *v.borrow_mut() = 1);
   OBSERVATIONS.with(|values| values.borrow_mut().clear());
   FAIL_DEX_AFTER_INPUT_TRANSFER.with(|v| *v.borrow_mut() = false);
@@ -220,8 +240,6 @@ pub fn reset_mock_adapters() {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
   LAST_DEX_AAA_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
-  SYSTEM_EXECUTION_RESERVE.with(|share| *share.borrow_mut() = Perbill::from_percent(20));
-  USER_EXECUTION_GUARANTEE.with(|share| *share.borrow_mut() = Perbill::from_percent(20));
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
@@ -235,12 +253,12 @@ pub fn reset_mock_adapters() {
 }
 
 pub struct MockObservationProvider;
-impl crate::ObservationProvider<u32> for MockObservationProvider {
-  fn observation(feed: u32, _: u32) -> crate::ScalarObservationState {
+impl crate::ObservationProvider<u32, u64> for MockObservationProvider {
+  fn observe(feed: &u32, _: u64, _: u32) -> crate::ScalarObservationState<u64> {
     OBSERVATIONS.with(|values| {
       values
         .borrow()
-        .get(&feed)
+        .get(feed)
         .copied()
         .unwrap_or(crate::ScalarObservationState::Unavailable)
     })
@@ -298,6 +316,13 @@ impl AssetOps<AccountId, TestAsset, Balance> for MockAssetOps {
         map.insert((*to, asset), dst + amount);
         Ok(())
       })?,
+    }
+    if CORRUPT_QUEUE_AFTER_TRANSFER.with(|enabled| {
+      let corrupt = *enabled.borrow();
+      *enabled.borrow_mut() = false;
+      corrupt
+    }) {
+      crate::QueueTail::<Test>::mutate(|tail| *tail = tail.saturating_add(1));
     }
     #[cfg(feature = "runtime-benchmarks")]
     if BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow()) {
@@ -469,11 +494,6 @@ pub fn set_max_consecutive_failures(value: u32) {
   MAX_CONSECUTIVE_FAILURES.with(|maximum| *maximum.borrow_mut() = value);
 }
 
-pub fn set_execution_service_shares(system_reserve: Perbill, user_guarantee: Perbill) {
-  SYSTEM_EXECUTION_RESERVE.with(|share| *share.borrow_mut() = system_reserve);
-  USER_EXECUTION_GUARANTEE.with(|share| *share.borrow_mut() = user_guarantee);
-}
-
 pub fn set_fail_staking_ops(value: bool) {
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = value);
 }
@@ -642,6 +662,10 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
 pub struct MockLiquidityOps;
 
 impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
+  fn lp_assets(lp_asset: TestAsset) -> Option<(TestAsset, TestAsset)> {
+    LP_PAIR_BY_TOKEN.with(|pairs| pairs.borrow().get(&lp_asset).copied())
+  }
+
   fn add_liquidity(
     _who: &AccountId,
     _asset_a: TestAsset,
@@ -664,11 +688,16 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
 
   fn remove_liquidity(
     _who: &AccountId,
-    _lp_asset: TestAsset,
+    lp_asset: TestAsset,
+    asset_a: TestAsset,
+    asset_b: TestAsset,
     lp_amount: Balance,
     min_amount_a: Balance,
     min_amount_b: Balance,
   ) -> Result<(Balance, Balance), TaskFailure> {
+    // Bind the ordered pair for the LP token so the event exposes it and later
+    // steps cannot reinterpret the admitted binding.
+    LP_PAIR_BY_TOKEN.with(|pairs| pairs.borrow_mut().insert(lp_asset, (asset_a, asset_b)));
     let half = lp_amount / 2;
     if half < min_amount_a || half < min_amount_b {
       return Err(DispatchError::Other("MinimumLiquidityOutputNotMet").into());
@@ -680,12 +709,14 @@ impl LiquidityOps<AccountId, TestAsset, Balance> for MockLiquidityOps {
     who: &AccountId,
     asset_a: TestAsset,
     asset_b: TestAsset,
-    amount: Balance,
+    max_amount_a: Balance,
+    max_amount_b: Balance,
     _max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure> {
     if FAIL_LIQUIDITY_DONATION_OPS.with(|v| *v.borrow()) {
       return Err(DispatchError::Other("MockLiquidityOpsFailed").into());
     }
+    let amount = max_amount_a.min(max_amount_b);
     if MockAssetOps::balance(who, asset_a) < amount || MockAssetOps::balance(who, asset_b) < amount
     {
       return Err(
@@ -802,7 +833,13 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
 
   fn setup_observation_feeds(max: u32) -> Result<alloc::vec::Vec<u32>, DispatchError> {
     for feed in 1..=max {
-      set_observation(feed, crate::ScalarObservationState::Fresh { value: 1 });
+      set_observation(
+        feed,
+        crate::ScalarObservationState::Fresh {
+          value: 1,
+          observed_at: frame_system::Pallet::<Test>::block_number(),
+        },
+      );
     }
     Ok((1..=max).collect())
   }
@@ -858,11 +895,16 @@ impl crate::BenchmarkHelper<AccountId, TestAsset, Balance, u32> for MockBenchmar
     Ok(())
   }
 
-  fn setup_remove_liquidity(owner: &AccountId) -> Result<(TestAsset, Balance), DispatchError> {
+  fn setup_remove_liquidity(
+    owner: &AccountId,
+  ) -> Result<(TestAsset, TestAsset, TestAsset, Balance), DispatchError> {
     let lp_asset = TestAsset::Local(1);
+    let asset_a = TestAsset::Local(2);
+    let asset_b = TestAsset::Local(3);
     let lp_amount = 1_000_000u128;
     MockAssetOps::mint(owner, lp_asset, lp_amount).map_err(|failure| failure.error)?;
-    Ok((lp_asset, lp_amount))
+    LP_PAIR_BY_TOKEN.with(|pairs| pairs.borrow_mut().insert(lp_asset, (asset_a, asset_b)));
+    Ok((lp_asset, asset_a, asset_b, lp_amount))
   }
 }
 
@@ -879,10 +921,14 @@ fn integer_sqrt(n: u128) -> u128 {
   x
 }
 
+pub fn set_step_base_fee(value: Balance) {
+  STEP_BASE_FEE.with(|fee| *fee.borrow_mut() = value);
+}
+
 pub struct TestStepBaseFee;
 impl Get<Balance> for TestStepBaseFee {
   fn get() -> Balance {
-    1
+    STEP_BASE_FEE.with(|fee| *fee.borrow())
   }
 }
 
@@ -936,6 +982,13 @@ impl Get<polkadot_sdk::sp_weights::Weight> for TestObservationFanoutWeightLimit 
   }
 }
 
+pub struct TestWakeupWeightLimit;
+impl Get<polkadot_sdk::sp_weights::Weight> for TestWakeupWeightLimit {
+  fn get() -> polkadot_sdk::sp_weights::Weight {
+    polkadot_sdk::sp_weights::Weight::MAX
+  }
+}
+
 pub struct TestGuaranteedOnIdleWeight;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestGuaranteedOnIdleWeight {
   fn get() -> polkadot_sdk::sp_weights::Weight {
@@ -951,20 +1004,6 @@ pub struct TestMaxAutoCloseNonceHorizon;
 impl Get<u64> for TestMaxAutoCloseNonceHorizon {
   fn get() -> u64 {
     10_000
-  }
-}
-
-pub struct TestSystemExecutionReserve;
-impl Get<Perbill> for TestSystemExecutionReserve {
-  fn get() -> Perbill {
-    SYSTEM_EXECUTION_RESERVE.with(|share| *share.borrow())
-  }
-}
-
-pub struct TestUserExecutionGuarantee;
-impl Get<Perbill> for TestUserExecutionGuarantee {
-  fn get() -> Perbill {
-    USER_EXECUTION_GUARANTEE.with(|share| *share.borrow())
   }
 }
 
@@ -992,8 +1031,21 @@ impl Get<u32> for TestMaxSweepPerBlock {
 pub struct MockFundingAuthority;
 
 impl crate::adapters::FundingAuthority<AccountId> for MockFundingAuthority {
-  fn allows(_: crate::AaaId, _: &AccountId, _: &crate::FundingProvenance<AccountId>) -> bool {
+  fn permits(
+    _: crate::AaaId,
+    _: &AccountId,
+    _: Option<&AccountId>,
+    _: Option<&crate::FundingProvenance>,
+  ) -> bool {
     true
+  }
+}
+
+pub struct MockSovereignAccountPolicy;
+
+impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccountPolicy {
+  fn is_reserved(account: &AccountId) -> bool {
+    RESERVED_SOVEREIGN_ACCOUNTS.with(|set| set.borrow().contains(account))
   }
 }
 
@@ -1005,6 +1057,7 @@ impl pallet_aaa::Config for Test {
   type ObservationFeedId = u32;
   type ObservationProvider = MockObservationProvider;
   type FundingAuthority = MockFundingAuthority;
+  type SovereignAccountPolicy = MockSovereignAccountPolicy;
   type DexOps = MockDexOps;
   type StakingOps = MockStakingOps;
   type LiquidityOps = MockLiquidityOps;
@@ -1012,22 +1065,19 @@ impl pallet_aaa::Config for Test {
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
-  type MaxExecutionPlanSteps = ConstU32<10>;
-  type MaxUserExecutionPlanSteps = ConstU32<3>;
-  type MaxSystemExecutionPlanSteps = ConstU32<10>;
+  type MaxExecutionPlanSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxContinuationSnapshotEntries = ConstU32<20>;
+  type MaxContinuationSnapshotEntries = ConstU32<16>;
   type MaxConditionsPerStep = ConstU32<4>;
-  type MaxOwnerSlots = ConstU8<8>;
+  type MaxOwnerSlots = ConstU8<255>;
   type MaxExecutionsPerBlock = ConstU32<3>;
-  type SystemExecutionReserve = TestSystemExecutionReserve;
-  type UserExecutionGuarantee = TestUserExecutionGuarantee;
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
   type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
+  type WakeupWeightLimit = TestWakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<64>;
   type MaxSweepPerBlock = TestMaxSweepPerBlock;
   type MaxWhitelistSize = ConstU32<16>;
@@ -1040,6 +1090,7 @@ impl pallet_aaa::Config for Test {
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
   type MaxActiveActors = ConstU32<10_000>;
   type MaxActorIdentities = ConstU32<10_000>;
+  type MaxSystemSovereigns = ConstU32<10_000>;
   type StepBaseFee = TestStepBaseFee;
   type ConditionReadFee = TestConditionReadFee;
   type AaaCreationFee = TestAaaCreationFee;
@@ -1048,6 +1099,7 @@ impl pallet_aaa::Config for Test {
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
+  type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = TestMinUserBalance;
   type WeightInfo = ();
   type GenesisSystemAaas = ();

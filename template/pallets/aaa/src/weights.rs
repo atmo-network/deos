@@ -13,7 +13,7 @@ pub trait WeightInfo {
   fn create_user_aaa() -> Weight;
   fn create_user_aaa_at_slot() -> Weight;
   fn create_system_aaa() -> Weight;
-  fn reopen_system_aaa() -> Weight;
+  fn create_system_aaa_at_sovereign_id() -> Weight;
   fn create_dormant_system_aaa() -> Weight;
   fn activate_aaa() -> Weight;
   fn deactivate_aaa() -> Weight;
@@ -70,9 +70,10 @@ pub trait WeightInfo {
   fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
   fn scheduler_actor_hot_probe() -> Weight;
   fn scheduler_actor_program_probe() -> Weight;
+  fn scheduler_cycle_deferral_dimension() -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
-  fn funding_batch_promotion(assets: u32) -> Weight;
+  fn funding_snapshot_open(assets: u32) -> Weight;
   fn continuation_suspend(snapshot_entries: u32) -> Weight;
   fn continuation_retry() -> Weight;
   fn continuation_complete() -> Weight;
@@ -105,9 +106,8 @@ pub trait TaskWeightInfo {
 pub struct SubstrateWeight<T>(PhantomData<T>);
 impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for SubstrateWeight<T> {
   fn create_user_aaa() -> Weight {
-    let slot_scan_reads = u64::from(T::MaxOwnerSlots::get());
     Weight::from_parts(25_000_000, 2000)
-      .saturating_add(T::DbWeight::get().reads(slot_scan_reads.saturating_add(3)))
+      .saturating_add(T::DbWeight::get().reads(4))
       .saturating_add(T::DbWeight::get().writes(5))
   }
 
@@ -121,7 +121,7 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(4))
   }
 
-  fn reopen_system_aaa() -> Weight {
+  fn create_system_aaa_at_sovereign_id() -> Weight {
     Weight::from_parts(100_642_000, 174_945)
       .saturating_add(T::DbWeight::get().reads(20))
       .saturating_add(T::DbWeight::get().writes(4))
@@ -369,6 +369,11 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().reads(2))
   }
 
+  fn scheduler_cycle_deferral_dimension() -> Weight {
+    Weight::from_parts(26_000_000, 12_000)
+      .saturating_add(T::DbWeight::get().reads(2))
+  }
+
   fn transaction_extension_ingress_base() -> Weight {
     Weight::from_parts(15_226_000, 6_052).saturating_add(T::DbWeight::get().reads(2))
   }
@@ -379,10 +384,10 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(6))
   }
 
-  fn funding_batch_promotion(assets: u32) -> Weight {
-    Weight::from_parts(24_907_138, 4_425)
-      .saturating_add(Weight::from_parts(2_349_643, 0).saturating_mul(assets.into()))
-      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+  fn funding_snapshot_open(assets: u32) -> Weight {
+    Weight::from_parts(15_653_872, 4_265)
+      .saturating_add(Weight::from_parts(146_253, 0).saturating_mul(assets.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
   }
 
   fn continuation_suspend(snapshot_entries: u32) -> Weight {
@@ -507,7 +512,7 @@ impl WeightInfo for () {
   fn create_user_aaa() -> Weight { Weight::from_parts(25_000_000, 2000) }
   fn create_user_aaa_at_slot() -> Weight { Self::create_user_aaa() }
   fn create_system_aaa() -> Weight { Weight::from_parts(25_000_000, 2000) }
-  fn reopen_system_aaa() -> Weight { Weight::from_parts(100_642_000, 174_945) }
+  fn create_system_aaa_at_sovereign_id() -> Weight { Weight::from_parts(100_642_000, 174_945) }
   fn create_dormant_system_aaa() -> Weight { Self::create_system_aaa() }
   fn activate_aaa() -> Weight { Self::create_system_aaa() }
   fn deactivate_aaa() -> Weight { Weight::from_parts(60_623_000, 8_120) }
@@ -578,11 +583,12 @@ impl WeightInfo for () {
   }
   fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
   fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
+  fn scheduler_cycle_deferral_dimension() -> Weight { Weight::from_parts(26_000_000, 12_000) }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
-  fn funding_batch_promotion(assets: u32) -> Weight {
-    Weight::from_parts(24_907_138, 4_425)
-      .saturating_add(Weight::from_parts(2_349_643, 0).saturating_mul(assets.into()))
+  fn funding_snapshot_open(assets: u32) -> Weight {
+    Weight::from_parts(15_653_872, 4_265)
+      .saturating_add(Weight::from_parts(146_253, 0).saturating_mul(assets.into()))
   }
   fn continuation_suspend(snapshot_entries: u32) -> Weight {
     Weight::from_parts(27_920_348, 4_178)

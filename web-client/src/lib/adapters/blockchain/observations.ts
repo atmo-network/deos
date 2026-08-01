@@ -206,19 +206,21 @@ export class BlockchainObservationReader {
       throw new Error('Selected AAA id must be a non-negative safe integer');
     }
     const runtimeAaaId = BigInt(aaaId);
-    const hot = await snapshot.typedApi.query.AAA.ActorHot.getValue(
-      runtimeAaaId,
-      {
+    const [identity, hot] = await Promise.all([
+      snapshot.typedApi.query.AAA.ActorIdentities.getValue(runtimeAaaId, {
         at: snapshot.at,
-      },
-    );
+      }),
+      snapshot.typedApi.query.AAA.ActorHot.getValue(runtimeAaaId, {
+        at: snapshot.at,
+      }),
+    ]);
     return projectObservationActorDeliveryInspection({
       aaaId: runtimeAaaId,
       hot:
-        hot == null
+        hot == null || identity == null
           ? null
           : {
-              actorClass: hot.actor_class.type,
+              actorClass: identity.actor_class.type,
               pendingSignal: hot.pending_signal,
               queueTicket: hot.queue_ticket ?? null,
               wakeup:

@@ -13,6 +13,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   import {
     type AaaAuthoringIssue,
     type AaaAuthoringTrigger,
+    DEOS_AAA_AUTHORING_LIMITS,
     appendAaaStep,
     createAaaArtifactFromAuthoring,
     createAaaAuthoringProgram,
@@ -51,6 +52,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   let actors = $state<AutomationActorSnapshot[]>([]);
   let view = $state<AutomationView>('actors');
   let draft = $state(createAaaAuthoringProgram());
+  let autoCloseTargetText = $state('');
   let nextStepId = $state(2);
   let artifact = $state<AaaPlanArtifact | null>(null);
   let artifactContext = $state<AutomationAuthoringContext | null>(null);
@@ -61,7 +63,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account',
+    'automationWidget <- AAA.ActorIdentities + AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account',
   ).provenance;
 
   function syncViewport() {
@@ -76,13 +78,15 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   }
 
   function draftFingerprint() {
-    return JSON.stringify(draft);
+    return JSON.stringify(draft, (_key, value) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    );
   }
 
   const compactPane = $derived(viewport.width > 0 && viewport.width < 520);
   const densePane = $derived(viewport.width > 0 && viewport.width < 340);
   const validation = $derived.by(() => validateAaaAuthoringProgram(draft));
-  const maxSteps = $derived(draft.aaaType === 'User' ? 3 : 10);
+  const maxSteps = DEOS_AAA_AUTHORING_LIMITS.maxExecutionPlanSteps;
   const canAddStep = $derived(draft.steps.length < maxSteps);
   const rootIssues = $derived(
     validation.issues.filter((issue) => !issue.path.startsWith('steps[')),
@@ -118,6 +122,18 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     draft.aaaType = aaaType;
     draft.fundingPolicy =
       aaaType === 'System' ? { type: 'RuntimePolicy' } : { type: 'OwnerOnly' };
+  }
+
+  function setAutoCloseTarget(event: Event) {
+    autoCloseTargetText = (
+      event.currentTarget as HTMLInputElement
+    ).value.trim();
+    draft.autoCloseAtCycleNonce =
+      autoCloseTargetText === ''
+        ? null
+        : /^[0-9]+$/.test(autoCloseTargetText)
+          ? BigInt(autoCloseTargetText)
+          : 0n;
   }
 
   function addStep() {
@@ -366,6 +382,25 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                     valueClass="tabnum text-(--mono-text)"
                   />
+                  <DetailRow
+                    label="FIFO"
+                    value={actor.queueTicket != null
+                      ? `ticket #${actor.queueTicket}`
+                      : 'not queued'}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Funding"
+                    value={actor.fundingAccumulated.length > 0
+                      ? actor.fundingAccumulated
+                          .map(
+                            ([asset, amount]) =>
+                              `${fmt(toFloat(amount))} ${asset}`,
+                          )
+                          .join(' · ')
+                      : 'none'}
+                    valueClass="text-(--mono-text)"
+                  />
                 </div>
               {:else}
                 <div class="grid gap-1 text-[10px] text-(--mono-muted)">
@@ -397,6 +432,30 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     label="Native balance"
                     value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                     valueClass="tabnum text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="FIFO"
+                    value={actor.queueTicket != null
+                      ? `ticket #${actor.queueTicket}`
+                      : 'not queued'}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Funding"
+                    value={actor.fundingAccumulated.length > 0
+                      ? actor.fundingAccumulated
+                          .map(
+                            ([asset, amount]) =>
+                              `${fmt(toFloat(amount))} ${asset}`,
+                          )
+                          .join(' · ')
+                      : 'none'}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Funding policy"
+                    value={actor.fundingSourcePolicy ?? 'Unavailable'}
+                    valueClass="text-(--mono-text)"
                   />
                 </div>
               {/if}
@@ -455,6 +514,22 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                 >Close after productive run</option
               >
             </SelectField>
+            <label class="grid gap-1 text-xs text-(--mono-muted)">
+              Auto-close run (optional)
+              <input
+                type="text"
+                inputmode="numeric"
+                pattern="[0-9]*"
+                placeholder="No automatic close"
+                value={autoCloseTargetText}
+                oninput={setAutoCloseTarget}
+                class="h-9 w-full rounded-xl border border-(--mono-border) bg-white px-3 py-1.5 text-xs text-(--mono-text) tabnum focus:border-(--mono-purple) focus:outline-none"
+                aria-describedby="auto-close-help"
+              />
+              <span id="auto-close-help" class="text-[10px] text-(--mono-muted)"
+                >Close when this logical-run nonce completes.</span
+              >
+            </label>
             <NumberInput
               label="Cooldown (blocks)"
               min={0}
@@ -479,6 +554,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               value={draft.completionPolicy === 'Persistent'
                 ? 'Persistent'
                 : 'Close after committed effect'}
+              valueClass="text-(--mono-text)"
+            />
+            <DetailRow
+              label="Auto-close"
+              value={draft.autoCloseAtCycleNonce == null
+                ? 'Not configured'
+                : `Run ${draft.autoCloseAtCycleNonce}`}
               valueClass="text-(--mono-text)"
             />
             <DetailRow

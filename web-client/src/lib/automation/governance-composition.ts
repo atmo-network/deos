@@ -14,6 +14,7 @@ import {
 } from '@polkadot-api/substrate-bindings';
 import { blake2AsHex } from '@polkadot/util-crypto';
 
+import { AAA_MAX_OWNER_SLOTS } from './aaa-protocol-bounds.ts';
 import {
   type AaaPlanArtifact,
   type AaaPlanHex,
@@ -24,7 +25,7 @@ import {
 export type AaaCompositionTarget =
   | { type: 'Create'; owner?: string; ownerSlot?: number }
   | { type: 'Activate'; aaaId: bigint }
-  | { type: 'ReopenSystem'; aaaId: bigint; owner: string };
+  | { type: 'ReattachSystem'; sovereignId: bigint; owner: string };
 
 export type AaaGovernanceComposition = {
   planId: AaaPlanHex;
@@ -36,7 +37,7 @@ export type AaaGovernanceComposition = {
       | 'create_user_aaa_at_slot'
       | 'create_system_aaa'
       | 'activate_aaa'
-      | 'reopen_system_aaa';
+      | 'create_system_aaa_at_sovereign_id';
     bytes: AaaPlanHex;
     byteLength: number;
     hash: AaaPlanHex;
@@ -111,9 +112,11 @@ export function composeAaaRuntimeCall(input: {
           if (
             !Number.isSafeInteger(input.target.ownerSlot) ||
             input.target.ownerSlot < 0 ||
-            input.target.ownerSlot > 0xff
+            input.target.ownerSlot >= AAA_MAX_OWNER_SLOTS
           ) {
-            throw new Error('ownerSlot must fit the runtime u8 contract');
+            throw new Error(
+              `ownerSlot must be within 0..${AAA_MAX_OWNER_SLOTS - 1} per runtime MaxOwnerSlots`,
+            );
           }
           method = 'create_user_aaa_at_slot';
           callValue = {
@@ -143,14 +146,16 @@ export function composeAaaRuntimeCall(input: {
       requiredOrigin =
         input.artifact.aaaType === 'User' ? 'OwnerSigned' : 'Root';
       break;
-    case 'ReopenSystem':
+    case 'ReattachSystem':
       if (input.artifact.aaaType !== 'System') {
-        throw new Error('Only a System AAA artifact can reopen a System AAA');
+        throw new Error(
+          'Only a System AAA artifact can attach to System custody',
+        );
       }
-      validateAaaId(input.target.aaaId);
-      method = 'reopen_system_aaa';
+      validateAaaId(input.target.sovereignId);
+      method = 'create_system_aaa_at_sovereign_id';
       callValue = {
-        aaa_id: input.target.aaaId,
+        sovereign_id: input.target.sovereignId,
         owner: validateOwner(input.target.owner),
         mutability,
         program,

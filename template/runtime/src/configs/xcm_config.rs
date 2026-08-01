@@ -176,7 +176,7 @@ impl AaaAwareAssetTransactor {
     <RuntimeAddressEventIngress as AddressEventIngress>::preflight_xcm_inbound(
       &recipient, asset, amount, &source,
     )
-    .map_err(|_| XcmError::FailedToTransactAsset("AAA funding batch preflight failed"))
+    .map_err(|_| XcmError::FailedToTransactAsset("AAA funding accumulator preflight failed"))
   }
 
   fn notify_ingress(

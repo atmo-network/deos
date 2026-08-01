@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-aaa` (Rust crate `pallet_aaa`)
-- **Release line**: `0.7.9`
+- **Release line**: `0.7.10`
 - **Audience**: external runtime implementers embedding AAA without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [AAA Specification](./specification.en.md), [DEOS AAA Architecture](./architecture.en.md)
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System AAA catalog standardization, UI product flows
@@ -48,7 +48,7 @@ An embedding runtime must provide only the bounded host surface that AAA cannot 
 - `FeeCollector` + `FeeSink`: One atomic runtime boundary that transfers every User fee in full into the mandatory deposit-capable collection destination.
 - `AddressEventIngress`: A bounded, fallible path into `preflight_funding_event` and `notify_address_event*` for asset ingress triggers.
 - Governance/system origins, a two-dimensional hook weight meter, gross `GuaranteedOnIdleWeight`, owner-slot/queue/wakeup/active/total-identity/sweep bounds, `MaxContinuationSnapshotEntries`, `MaxIdleStarvationBlocks`, and fee constants.
-- Bounded authority-service configuration: non-zero `SystemExecutionReserve` and `UserExecutionGuarantee` whose sum does not exceed one. These shares reserve admitted actor-execution Weight/count and independent lane-scan offers; common cleanup, wakeups, probes, admission, and bookkeeping remain outside the execution percentage claim. Shared discovery compares global tickets only after each lane returns a live head or proves empty; blocked inspection stops. Both paged lanes share `NextQueueTicket`, one cutoff, one actor-local ticket, one scheduler, one wakeup substrate, and one Continuation owner.
+- Canonical FIFO configuration: non-zero page size, bounded `MaxQueueLength`, `MaxQueueEntriesScannedPerBlock`, and `MaxExecutionsPerBlock`. One `NextQueueTicket`, one cutoff, one actor-local ticket, one scheduler, one wakeup substrate, and one Continuation owner govern every actor. Actor class, AAA id, execution share, and priority policy never change service order.
 - Under `runtime-benchmarks`, `setup_condition_assets` must provide enough valid distinct assets to measure the maximum condition group honestly; repeated keys do not establish worst-case ProofSize.
 
 The host runtime owns those bindings. AAA core owns scheduling, admission, task orchestration, lifecycle, bounded state, fee reservation, amount resolution, task-scoped transactions, and observability events. Dormant identities retain address/ownership lineage under the total-identity bound but own no program or scheduler state; runtime-specific custody-only addresses remain outside generic actor storage.
@@ -77,7 +77,7 @@ Business policy belongs in runtime adapters or genesis actor configuration, not 
 
 ## 4. Actor Permission Model
 
-User actors are signed-owner controlled, fee-bearing, slot-bounded, and cannot mint. System actors are governance-created, slotless, fee-exempt, and may be Mutable or Immutable. No runtime extrinsic may mutate, pause, trigger, close, or reopen a System Immutable actor, but that control guard must not block mandatory internal terminal transitions such as consecutive-failure closure.
+User actors are signed-owner controlled, fee-bearing, slot-bounded, and cannot mint. System actors are governance-created, slotless, fee-exempt, and may be Mutable or Immutable. No runtime extrinsic may mutate, pause, trigger, or close a System Immutable actor, but that control guard must not block mandatory internal terminal transitions such as consecutive-failure closure. A later attachment to its vacant custody locator creates a fresh identity rather than reopening the former actor.
 
 A downstream runtime decides whether to ship any genesis System actors. Genesis System AAA topology is runtime-owned configuration, not a pallet requirement.
 
@@ -103,10 +103,10 @@ The DEOS/TMCTOL catalog of burn actors, fee sink, liquidity actors, buckets, tre
 - `Ingress triggers`: Every supported producer must call fallible `notify_address_event*` through an explicit adapter, a bounded weight-charging transaction-extension candidate, or an equivalent originating-path resolver. The producer must run `preflight_funding_event` before value movement and propagate notification failure in the same transaction. Runtime event scanning and deferred compatibility ingress storage are unsupported.
 - `Hook admission`: `on_idle` must reserve its generated fixed base before storage access. `GuaranteedOnIdleWeight` must equal genuinely reserved gross headroom. Opening plans and bounded `RetryLater` suffixes plus measured pure cleanup must fit after `scheduler_admission_overhead` in both Weight dimensions. Temporal and explicit repair units consume only available headroom and may defer actor execution, so exact actor-local markers and cross-block convergence form part of the embedding contract.
 - `Starvation observability`: `IdleStarvationState` is `Healthy`, `Starving { since }`, or `Alerted { since }`. Duration derives from block number; unchanged Healthy/starving/alerted blocks perform no telemetry write. Threshold detection and alerted recovery emit once, while breaker activation clears non-Healthy state once without creating an execution fallback.
-- `Continuation`: Mutation adapters return explicit `TaskFailure { error, retry }`; unknown failures and unsupported unit adapters are Permanent. Only Mutable actors admit nonzero `RetryLater { max_attempts }`. Runtimes bind generated suspension, retry, completion, cancellation, snapshot-surface, and suffix-admission classes without adding another scheduler or off-chain keeper dependency.
+- `Continuation`: Mutation adapters return explicit `TaskFailure { error, retry }`; unknown failures and unsupported unit adapters are Permanent. Only Mutable actors admit `RetryLater { max_attempts: 1..=MaxRetryAttempts }`; the protocol-fixed host constant is 10. Runtimes bind generated suspension, retry, completion, cancellation, snapshot-surface, and suffix-admission classes without adding another scheduler or off-chain keeper dependency.
 - `Task weight class`: The runtime must classify every task with a deterministic upper bound. Admission may be conservative; it must not underprice execution.
 - `Core task admission`: Extend the portable `Task` enum only for a reusable economic primitive that existing composition plus an adapter cannot express without violating atomicity or custody. The change must ship bounded typed parameters, amount/funding/donation semantics, adapter ownership, events/errors/rollback behavior, generated two-dimensional weights, production-budget evidence, semantic tests, and an explicit SCALE/schema-version decision together; runtime topology and product policy stay in adapters and actor graphs.
-- `Compatibility/versioning`: `0.7.x` is a fresh-genesis pre-launch line. After AAA `1.0`, existing public enum discriminants and dispatch indices are append-only; encoded argument or storage-layout changes require the owning major/migration contract, while additive host adapters and weight recalibration follow package/runtime version policy. A Cargo version never substitutes for pallet `StorageVersion`, runtime `spec_version`, or a bounded live-chain migration.
+- `Compatibility/versioning`: `0.7.x` is a fresh-genesis pre-launch line. The first launched downstream compatibility epoch, not an unrelated package-major declaration, begins append-only public enum discriminants and dispatch indices for that chain. Later encoded argument or storage-layout changes require the owning compatibility/migration contract, while additive host adapters and weight recalibration follow package/runtime version policy. A Cargo version never substitutes for pallet `StorageVersion`, runtime `spec_version`, or a bounded live-chain migration.
 - `Read model`: Known actor state, owner-slot recovery, scheduler state, current `IdleStarvationState`, and bounded events are canonical on-chain surfaces. Historical starvation duration, fleet dashboards, long timelines, rankings, and analytics are indexed/materialized views reconstructed from detection/recovery events.
 
 ## 7. Task-Scoped Atomicity Contract
@@ -141,14 +141,14 @@ A runtime embedding AAA should add local tests for any adapter that mutates more
 - Unsupported no-op adapters fail deterministically without panics or hidden state mutation.
 - Adapter-level success events do not survive a failed task unless they are explicitly outside the AAA transaction boundary and documented as such.
 - Fee collection failure rolls back the payer debit and leaves Fee Sink unchanged.
-- Funding overflow fails before or transactionally rolls back signed, internal-protocol, and XCM value movement; expired actors receive balance without readiness or funding-batch mutation.
+- Funding-accumulator overflow fails before or transactionally rolls back signed, internal-protocol, and XCM value movement; expired actors receive balance without readiness or accumulator mutation.
 - Exact-out never debits above the AAA-provided capacity, and Unstake dynamic modes resolve against shares rather than the base asset.
 - Healthy empty `on_idle` leaves no starvation-state key or recovery event; first starvation, one-time alert, prolonged alert, breaker clearing, and one-time recovery match the transition contract.
 - Mutable User and System plans suspend only on explicitly Temporary failures or `FundingUnavailable` under `RetryLater { max_attempts }`; retry starts at the same cursor without prefix replay and uses one nonce across attempts.
 - Permanent and unsupported-adapter failures create no Continuation; Immutable admission rejects bounded `RetryLater`; User `SwapOut` requires explicit `InputLimit::LiveQuote` or `InputLimit::Absolute(nonzero)` intent, always enforced with current preservable capacity; liquidity addition/removal require fixed non-zero output minima at every adapter boundary; System-only `Mint` remains unchanged.
-- Direct ingress during suspension preserves one queue ticket/wakeup, latches the next signal, and keeps new funding pending until full logical-run success.
-- Saturated opposing-group load preserves FIFO within both typed lanes, bounds System and User reserve Weight/count independently, orders shared service by the older global head ticket, supports borrowing only after the corresponding reserve offer, and never executes one actor twice in a block.
-- Explicit cancellation, plan/policy/schedule replacement, deactivation, terminal transition, and pure close delete Continuation without compensation, prefix rollback, promotion, or sovereign-balance movement.
+- Direct ingress during suspension preserves one queue ticket/wakeup and latches the next signal. The current retry retains its frozen funding snapshot; accepted later ingress checked-adds into `funding_accumulated` for the next fresh run regardless of current-run completion, failure, or cancellation.
+- Saturated mixed-class load preserves one strict global ticket order, drains only tombstones before the oldest live head, blocks followers behind an unadmitted head, preserves exact physical occupancy through lazy tombstones, and never executes one actor twice in a block.
+- Explicit cancellation, plan/policy/schedule replacement, deactivation, terminal transition, and pure close delete Continuation without compensation, prefix rollback, funding restoration, or sovereign-balance movement.
 
 ## 9. Non-Goals
 

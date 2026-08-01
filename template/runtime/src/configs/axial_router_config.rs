@@ -288,6 +288,7 @@ impl AssetConversionAdapter {
   pub fn donate_native_staking_liquidity_from_ntve(
     donor: &AccountId,
     total_native: Balance,
+    max_staked_debit: Balance,
     max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), pallet_aaa::TaskFailure> {
     if total_native.is_zero() {
@@ -352,6 +353,17 @@ impl AssetConversionAdapter {
       if staked_donation.is_zero() {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
           pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationAmountTooSmall")),
+        ));
+      }
+      // The asset-B cap bounds the debit against the actor's pre-existing staked balance: the
+      // donation may not drive the staked position below the preservable floor (existing minus
+      // max_amount_b). A donation that staked-then-donated the same amount never consumes
+      // existing balance, so the cap is trivially satisfied; any donation consuming pre-existing
+      // staked balance beyond the preservable capacity is rejected before mutation.
+      let staked_after_donation = staked_after.saturating_sub(staked_donation);
+      if staked_after_donation < staked_before.saturating_sub(max_staked_debit) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationExceedsAssetBCap")),
         ));
       }
       if let Err(error) = Self::donate_balanced_liquidity_classified(

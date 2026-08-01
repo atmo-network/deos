@@ -55,15 +55,18 @@ impl From<DispatchError> for TaskFailure {
 
 /// Runtime authorization for actors whose stored funding policy is `RuntimePolicy`.
 ///
-/// The pallet handles `OwnerOnly`, `SignedAllowlist`, and `AnySource` itself. This adapter must
+/// The pallet handles `OwnerOnly`, `SignedAllowlist`, and `AnyVerifiedIngress` itself. This adapter must
 /// default deny and authorize only explicit actor/source pairs over runtime-verified provenance.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
-pub enum ScalarObservationState {
+pub enum ScalarObservationState<BlockNumber> {
   Unavailable,
   Uninitialized,
-  Fresh { value: u128 },
+  Fresh {
+    value: u128,
+    observed_at: BlockNumber,
+  },
   Stale,
 }
 
@@ -71,26 +74,51 @@ pub enum ScalarObservationState {
 ///
 /// The provider classifies availability and freshness. AAA never depends on a concrete oracle,
 /// history store, producer, or off-chain service through this boundary.
-pub trait ObservationProvider<FeedId> {
-  fn observation(feed: FeedId, max_age_blocks: u32) -> ScalarObservationState;
+pub trait ObservationProvider<FeedId, BlockNumber> {
+  fn observe(
+    feed: &FeedId,
+    now: BlockNumber,
+    max_age_blocks: u32,
+  ) -> ScalarObservationState<BlockNumber>;
 }
 
-impl<FeedId> ObservationProvider<FeedId> for () {
-  fn observation(_: FeedId, _: u32) -> ScalarObservationState {
+impl<FeedId, BlockNumber> ObservationProvider<FeedId, BlockNumber> for () {
+  fn observe(_: &FeedId, _: BlockNumber, _: u32) -> ScalarObservationState<BlockNumber> {
     ScalarObservationState::Unavailable
   }
 }
 
+/// Host-declared reservation check for derived sovereign accounts.
+///
+/// AAA derives sovereign accounts from a hashed seed; the host MUST reject any derived account
+/// that is already a runtime-controlled reserved account (treasury, staking pool, pallet account,
+/// and so on) so a sovereign collision with host-reserved identity fails closed in O(1).
+pub trait SovereignAccountPolicy<AccountId> {
+  fn is_reserved(account: &AccountId) -> bool;
+}
+
+impl<AccountId> SovereignAccountPolicy<AccountId> for () {
+  fn is_reserved(_: &AccountId) -> bool {
+    false
+  }
+}
+
 pub trait FundingAuthority<AccountId> {
-  fn allows(
+  fn permits(
     aaa_id: crate::AaaId,
     owner: &AccountId,
-    provenance: &crate::FundingProvenance<AccountId>,
+    source: Option<&AccountId>,
+    provenance: Option<&crate::FundingProvenance>,
   ) -> bool;
 }
 
 impl<AccountId> FundingAuthority<AccountId> for () {
-  fn allows(_: crate::AaaId, _: &AccountId, _: &crate::FundingProvenance<AccountId>) -> bool {
+  fn permits(
+    _: crate::AaaId,
+    _: &AccountId,
+    _: Option<&AccountId>,
+    _: Option<&crate::FundingProvenance>,
+  ) -> bool {
     false
   }
 }
@@ -159,6 +187,11 @@ pub trait DexOps<AccountId, AssetId, Balance> {
 
 /// Runtime liquidity operations. Required when a liquidity task appears in a plan.
 pub trait LiquidityOps<AccountId, AssetId, Balance> {
+  /// Resolve the stable ordered asset pair for an admitted LP token. The host owns
+  /// pool creation, routing, and the pair registry; an admitted LP token must not be
+  /// silently reinterpreted.
+  fn lp_assets(lp_asset: AssetId) -> Option<(AssetId, AssetId)>;
+
   fn add_liquidity(
     who: &AccountId,
     asset_a: AssetId,
@@ -171,6 +204,8 @@ pub trait LiquidityOps<AccountId, AssetId, Balance> {
   fn remove_liquidity(
     who: &AccountId,
     lp_asset: AssetId,
+    asset_a: AssetId,
+    asset_b: AssetId,
     lp_amount: Balance,
     min_amount_a: Balance,
     min_amount_b: Balance,
@@ -180,7 +215,8 @@ pub trait LiquidityOps<AccountId, AssetId, Balance> {
     who: &AccountId,
     asset_a: AssetId,
     asset_b: AssetId,
-    amount: Balance,
+    max_amount_a: Balance,
+    max_amount_b: Balance,
     max_ratio_error: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure>;
 }
@@ -255,6 +291,10 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
 
 /// Fail-closed `LiquidityOps` fallback for runtimes without liquidity support.
 impl<AccountId, AssetId, Balance: Default> LiquidityOps<AccountId, AssetId, Balance> for () {
+  fn lp_assets(_: AssetId) -> Option<(AssetId, AssetId)> {
+    None
+  }
+
   fn add_liquidity(
     _: &AccountId,
     _: AssetId,
@@ -271,6 +311,8 @@ impl<AccountId, AssetId, Balance: Default> LiquidityOps<AccountId, AssetId, Bala
   fn remove_liquidity(
     _: &AccountId,
     _: AssetId,
+    _: AssetId,
+    _: AssetId,
     _: Balance,
     _: Balance,
     _: Balance,
@@ -284,6 +326,7 @@ impl<AccountId, AssetId, Balance: Default> LiquidityOps<AccountId, AssetId, Bala
     _: &AccountId,
     _: AssetId,
     _: AssetId,
+    _: Balance,
     _: Balance,
     _: Perbill,
   ) -> Result<(Balance, Balance), TaskFailure> {

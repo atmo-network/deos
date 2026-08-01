@@ -1,14 +1,9 @@
 # DEOS Backlog
 
 > Open framework work only; durable protocol lives in `AGENTS.md`, and completed delivery history lives in `CHANGELOG.md`.
->
-> Release boundary: `DEOS 0.7.9 — Reactive Truth Closure` is the current framework line. Completed semantics and release evidence live in `CHANGELOG.md` and the owning DEOS Oracle, DEOS Router, AAA, control-plane, and architecture documents.
+> Completed delivery history lives in `CHANGELOG.md`; unreleased correction and release gates remain open here until their annotated tag exists.
 
-## DEOS 0.7.10 — Router Route Truth Closure
-
-> Release framing: `DEOS Router Route Truth Closure + Canonical Route Evidence`.
->
-> Dependency: start from accepted `0.7.9` reactive truth and evidence binding. Delivery order: (1) canonical `PreparedRoute` and route-truth contract, (2) protection/publication/outcome and AAA adapter closure, (3) adversarial route corpus and invariants, and (4) production route-class benchmarks, `0.7.10` evidence, documentation, and release audit.
+## DEOS 0.7.11 — Router Route Truth Closure
 
 ### Canonical Prepared Route and Execution Truth
 
@@ -36,13 +31,13 @@
 
 ### Production Evidence, Documentation, and Release Acceptance
 
-- [ ] `DEOS 0.7.10 / Production Benchmarks`: Benchmark all five Router route classes under production Wasm with accepted steps/repeats and execution mode, regenerate Router and affected AAA/Oracle weights, return actual post-dispatch weight where route-class dispatch permits it, and prove AAA admission covers its maximum permitted route class.
-  - [ ] `DEOS 0.7.10 / Canonical Evidence`: Define the 0.7.10 evidence owner and bind every accepted Router route-class weight identity, affected AAA/Oracle weight identity, exact runtime/metadata/Wasm/client evidence, benchmark parameters, and candidate commit without independent accepted hashes.
-  - [ ] `DEOS 0.7.10 / Documentation Sync`: Synchronize Router README/package architecture/runtime APIs, AAA and Oracle integration, AAA control-plane and client route projections, benchmark evidence, compatibility identity, wiki projections where owners changed, `CHANGELOG.md`, and canonical release evidence.
-  - [ ] `DEOS 0.7.10 / Validation`: Pass Router package/runtime matrices, adversarial route corpus, AAA adapter and admission tests, Oracle publication/rollback tests, production benchmark freshness, generated weights, try-runtime/`try_state`, package/workspace tests, Clippy with `-D warnings`, client/control-plane tests, documentation checks, completion gate, and release-line audit.
-  - [ ] `DEOS 0.7.10 / Definition of Done`: Close only when `quote projection = prepared route = protected route = executed route = event route = weight class`; Oracle publications match exactly the executed XYK legs; both intents share one route ontology; AAA duplicates no Router route logic; all route failures roll back atomically; tie-breaking ignores insertion order; every route class has production evidence; one canonical evidence owner binds release identity; and no new route family ships.
+- [ ] `DEOS 0.7.11 / Production Benchmarks`: Benchmark all five Router route classes under production Wasm with accepted steps/repeats and execution mode, regenerate Router and affected AAA/Oracle weights, return actual post-dispatch weight where route-class dispatch permits it, and prove AAA admission covers its maximum permitted route class.
+  - [ ] `DEOS 0.7.11 / Canonical Evidence`: Define the 0.7.11 evidence owner and bind every accepted Router route-class weight identity, affected AAA/Oracle weight identity, exact runtime/metadata/Wasm/client evidence, benchmark parameters, and candidate commit without independent accepted hashes.
+  - [ ] `DEOS 0.7.11 / Documentation Sync`: Synchronize Router README/package architecture/runtime APIs, AAA and Oracle integration, AAA control-plane and client route projections, benchmark evidence, compatibility identity, wiki projections where owners changed, `CHANGELOG.md`, and canonical release evidence.
+  - [ ] `DEOS 0.7.11 / Validation`: Pass Router package/runtime matrices, adversarial route corpus, AAA adapter and admission tests, Oracle publication/rollback tests, production benchmark freshness, generated weights, try-runtime/`try_state`, package/workspace tests, Clippy with `-D warnings`, client/control-plane tests, documentation checks, completion gate, and release-line audit.
+  - [ ] `DEOS 0.7.11 / Definition of Done`: Close only when `quote projection = prepared route = protected route = executed route = event route = weight class`; Oracle publications match exactly the executed XYK legs; both intents share one route ontology; AAA duplicates no Router route logic; all route failures roll back atomically; tie-breaking ignores insertion order; every route class has production evidence; one canonical evidence owner binds release identity; and no new route family ships.
 
-### DEOS 0.7.10 Non-Goals
+### DEOS 0.7.11 Non-Goals
 
 - No arbitrary graph routing, unrestricted path lengths, external DEX aggregation, generalized intent marketplace, CoW or frequent-batch settlement inside Router, solver competition, or new market family.
 - No new AAA task, condition, authority, scheduler, retry, or history surface beyond adapter and admission synchronization required by canonical Router outcomes.

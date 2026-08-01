@@ -85,8 +85,8 @@ impl AddressEventIngress for RuntimeAddressEventIngress {
     let Some(aaa_id) = Self::resolve_aaa(recipient) else {
       return Ok(());
     };
-    let provenance = pallet_aaa::FundingProvenance::InternalProtocol(source.clone());
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(&provenance))
+    let provenance = pallet_aaa::FundingProvenance::InternalProtocol;
+    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(source), Some(&provenance))
   }
 
   fn on_internal_inbound(
@@ -110,8 +110,8 @@ impl AddressEventIngress for RuntimeAddressEventIngress {
     let Some(aaa_id) = Self::resolve_aaa(recipient) else {
       return Ok(());
     };
-    let provenance = pallet_aaa::FundingProvenance::Xcm(source.clone());
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(&provenance))
+    let provenance = pallet_aaa::FundingProvenance::Xcm;
+    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(source), Some(&provenance))
   }
 
   fn on_xcm_inbound(
@@ -298,9 +298,15 @@ impl AddressEventIngressExtension {
     let Some(aaa_id) = RuntimeAddressEventIngress::resolve_aaa(&recipient) else {
       return Ok(None);
     };
-    let provenance = pallet_aaa::FundingProvenance::Signed(source.clone());
-    crate::AAA::preflight_funding_event(aaa_id, asset, preflight_amount, Some(&provenance))
-      .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
+    let provenance = pallet_aaa::FundingProvenance::Signed;
+    crate::AAA::preflight_funding_event(
+      aaa_id,
+      asset,
+      preflight_amount,
+      Some(&source),
+      Some(&provenance),
+    )
+    .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
     Ok(Some(PreparedIngressCandidate {
       aaa_id,
       recipient,
@@ -347,7 +353,7 @@ impl AddressEventIngressExtension {
     let Some(aaa_id) = RuntimeAddressEventIngress::resolve_aaa(&recipient) else {
       return Ok(None);
     };
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, None)
+    crate::AAA::preflight_funding_event(aaa_id, asset, amount, None, None)
       .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
     Ok(Some(PreparedIngressCandidate {
       aaa_id,

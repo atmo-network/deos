@@ -66,7 +66,7 @@ impl<T: Config> Pallet<T> {
       expiry_epoch,
       |bucket| -> DispatchResult {
         let exists = bucket
-          .iter()
+          .iter() // deos-bypass: bounded-iter — finalized-outcome expiry bucket
           .any(|entry| entry.domain == domain && entry.item_id == item_id);
         if !exists {
           bucket

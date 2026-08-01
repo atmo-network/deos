@@ -92,20 +92,32 @@ impl<T: Config> Pallet<T> {
     ensure!(revision > 0, Error::<T>::InvalidObservationRevision);
     if ObservationSubscriberCount::<T>::get(feed) == 0 {
       ensure!(
-        !DirtyObservationFeeds::<T>::contains_key(feed),
+        !ObservationIngressRevisions::<T>::contains_key(feed)
+          && !DirtyObservationFeeds::<T>::contains_key(feed),
         Error::<T>::DirtyObservationInvariant
       );
       return Ok(());
     }
-    if let Some(mut state) = DirtyObservationFeeds::<T>::get(feed) {
-      ensure!(
-        revision >= state.latest_revision,
-        Error::<T>::InvalidObservationRevision
-      );
-      if revision > state.latest_revision {
-        state.latest_revision = revision;
-        DirtyObservationFeeds::<T>::insert(feed, state);
+    let baseline = ObservationIngressRevisions::<T>::get(feed);
+    if let Some(current) = baseline {
+      ensure!(revision >= current, Error::<T>::InvalidObservationRevision);
+      if revision == current {
+        return Ok(());
       }
+    }
+    let dirty = DirtyObservationFeeds::<T>::get(feed);
+    ensure!(
+      match (&baseline, &dirty) {
+        (Some(current), Some(state)) => state.latest_revision == *current,
+        (Some(_), None) | (None, None) => true,
+        (None, Some(_)) => false,
+      },
+      Error::<T>::DirtyObservationInvariant
+    );
+    ObservationIngressRevisions::<T>::insert(feed, revision);
+    if let Some(mut state) = dirty {
+      state.latest_revision = revision;
+      DirtyObservationFeeds::<T>::insert(feed, state);
       return Ok(());
     }
     Self::append_dirty_observation_feed(feed, revision)
@@ -392,6 +404,7 @@ impl<T: Config> Pallet<T> {
           .is_some_and(|page_id| ObservationSubscriberPages::<T>::get(feed, page_id).is_none())
         || ObservationSubscriberCount::<T>::get(feed) == 0
         || ObservationSubscriberPageLists::<T>::get(feed).is_none()
+        || ObservationIngressRevisions::<T>::get(feed) != Some(state.latest_revision)
         || !stored_feeds.insert(feed)
         || !linked_feeds.contains(&feed)
         || !Self::dirty_observation_links_are_valid(feed, &state, &list)
@@ -405,6 +418,14 @@ impl<T: Config> Pallet<T> {
       return Err(TryRuntimeError::Other(
         "dirty observation map and list disagree",
       ));
+    }
+    let baselines = ObservationIngressRevisions::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded subscribed-feed audit.
+    for (feed, revision) in baselines {
+      if revision == 0 || ObservationSubscriberCount::<T>::get(feed) == 0 {
+        return Err(TryRuntimeError::Other(
+          "observation ingress revision baseline disagrees",
+        ));
+      }
     }
     Ok(())
   }

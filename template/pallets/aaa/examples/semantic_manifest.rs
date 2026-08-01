@@ -265,7 +265,9 @@ fn task_cases() -> Vec<(&'static str, ManifestTask)> {
       "RemoveLiquidity",
       Task::RemoveLiquidity {
         lp_asset: LP_ASSET,
-        amount: fixed(),
+        asset_a: ASSET_A,
+        asset_b: ASSET_B,
+        lp_amount: fixed(),
         min_amount_a: 1,
         min_amount_b: 1,
       },
@@ -296,7 +298,7 @@ fn task_cases() -> Vec<(&'static str, ManifestTask)> {
       Task::DonateLiquidity {
         asset_a: ASSET_A,
         asset_b: ASSET_B,
-        amount: fixed(),
+        max_amount_a: fixed(),
         max_ratio_error: Perbill::zero(),
       },
     ),
@@ -401,6 +403,8 @@ fn amount_role(value: TaskAmountRole) -> (&'static str, &'static str) {
     TaskAmountRole::AmountOut => ("AmountOut", "/amount_out"),
     TaskAmountRole::AmountA => ("AmountA", "/amount_a"),
     TaskAmountRole::AmountB => ("AmountB", "/amount_b"),
+    TaskAmountRole::LpAmount => ("LpAmount", "/lp_amount"),
+    TaskAmountRole::MaxAmountA => ("MaxAmountA", "/max_amount_a"),
     TaskAmountRole::Shares => ("Shares", "/shares"),
   }
 }

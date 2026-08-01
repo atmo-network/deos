@@ -32,8 +32,10 @@ function observation(overrides) {
   return {
     resolution: { type: 'Fixed', value: 1n },
     policy: 'PreserveSpend',
+    actorType: 'User',
     current: 1_000n,
     minimumBalance: 100n,
+    minUserBalance: 100n,
     reservedFee: 50n,
     isFeeNative: true,
     ...overrides,
@@ -63,6 +65,23 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
       amount: 425n,
       basis: 850n,
       spendLimit: 850n,
+    },
+  );
+  assert.deepEqual(
+    resolveAaaAmount(
+      observation({
+        resolution: { type: 'AllBalance' },
+        current: 201n,
+        minimumBalance: 1n,
+        minUserBalance: 50n,
+        reservedFee: 101n,
+      }),
+    ),
+    {
+      status: 'Resolved',
+      amount: 50n,
+      basis: 50n,
+      spendLimit: 50n,
     },
   );
 });

@@ -47,6 +47,8 @@ export type AutomationActorSnapshot = {
   label: string;
   role: string;
   exists: boolean;
+  /** Actor class from the identity locator: 'System' or 'User'. */
+  actorClass: 'System' | 'User' | null;
   paused: boolean;
   runState: AutomationRunState;
   cycleNonce: bigint;
@@ -55,4 +57,10 @@ export type AutomationActorSnapshot = {
   completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null;
   triggerLabel: string;
   nativeBalance: bigint;
+  /** One-FIFO membership: the live queue ticket, or null when the actor is not queued. */
+  queueTicket: bigint | null;
+  /** Bounded per-asset funding accumulator awaiting the next cycle open. */
+  fundingAccumulated: ReadonlyArray<[string, bigint]>;
+  /** Funding source policy as a typed variant label. */
+  fundingSourcePolicy: string | null;
 };

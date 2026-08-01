@@ -18,9 +18,13 @@ export const AAA_CONFIGURATION_IR_VERSION = 1 as const;
 
 export type AaaConfigurationIrStep = Omit<AaaAuthoringStep, 'key'>;
 
-export type AaaConfigurationIr = Omit<AaaAuthoringProgram, 'steps'> & {
+export type AaaConfigurationIr = Omit<
+  AaaAuthoringProgram,
+  'steps' | 'autoCloseAtCycleNonce'
+> & {
   format: typeof AAA_CONFIGURATION_IR_FORMAT;
   formatVersion: typeof AAA_CONFIGURATION_IR_VERSION;
+  autoCloseAtCycleNonce: string | null;
   steps: AaaConfigurationIrStep[];
 };
 
@@ -41,6 +45,7 @@ const FIELD_NAMES = [
   'aaaType',
   'mutability',
   'completionPolicy',
+  'autoCloseAtCycleNonce',
   'trigger',
   'cooldownBlocks',
   'scheduleWindow',
@@ -98,6 +103,15 @@ export function normalizeAaaConfigurationIr(
     if (!allowedFields.has(field))
       throw new Error(`Unknown AAA configuration IR field: ${field}`);
   }
+  if (
+    record.autoCloseAtCycleNonce !== null &&
+    (typeof record.autoCloseAtCycleNonce !== 'string' ||
+      !/^[1-9][0-9]*$/.test(record.autoCloseAtCycleNonce))
+  ) {
+    throw new Error(
+      'autoCloseAtCycleNonce must be null or a canonical positive integer string',
+    );
+  }
   const normalized = stableValue(record) as AaaConfigurationIr;
   return JSON.parse(
     stableAaaConfigurationIrJson(normalized),
@@ -113,6 +127,7 @@ export function authoringProgramToConfigurationIr(
     aaaType: program.aaaType,
     mutability: program.mutability,
     completionPolicy: program.completionPolicy,
+    autoCloseAtCycleNonce: program.autoCloseAtCycleNonce?.toString() ?? null,
     trigger: program.trigger,
     cooldownBlocks: program.cooldownBlocks,
     scheduleWindow: program.scheduleWindow,
@@ -133,6 +148,10 @@ export function configurationIrToAuthoringProgram(
     aaaType: ir.aaaType,
     mutability: ir.mutability,
     completionPolicy: ir.completionPolicy,
+    autoCloseAtCycleNonce:
+      ir.autoCloseAtCycleNonce == null
+        ? null
+        : BigInt(ir.autoCloseAtCycleNonce),
     trigger: ir.trigger,
     cooldownBlocks: ir.cooldownBlocks,
     scheduleWindow: ir.scheduleWindow,

@@ -73,8 +73,7 @@ impl TmctolReadModel {
       (AnchorDomain::Tol, ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID)
         | (AnchorDomain::Bldr, ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID)
     );
-    let actor_identity_exists = pallet_aaa::ActorHot::<Runtime>::contains_key(aaa_id)
-      || pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(aaa_id);
+    let actor_identity_exists = pallet_aaa::ActorIdentities::<Runtime>::contains_key(aaa_id);
     let scheduler_state_exists = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).is_some_and(|hot| {
       hot.pending_signal || hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some()
     });
@@ -239,7 +238,8 @@ impl TmctolReadModel {
     let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
     let target_balance = Self::asset_balance(target_asset, &sovereign_account);
     let dust_threshold = ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
-    let maybe_actor = pallet_aaa::ActorHot::<Runtime>::get(actor_id)
+    let maybe_actor = pallet_aaa::ActorIdentities::<Runtime>::get(actor_id)
+      .zip(pallet_aaa::ActorHot::<Runtime>::get(actor_id))
       .zip(pallet_aaa::ActorProgram::<Runtime>::get(actor_id));
     let (
       actor_exists,
@@ -249,7 +249,7 @@ impl TmctolReadModel {
       has_required_burn_step,
       has_required_swap_step,
     ) = maybe_actor
-      .map(|(hot, program)| {
+      .map(|((identity, hot), program)| {
         let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
         let has_required_burn_step = program
           .execution_plan
@@ -262,7 +262,7 @@ impl TmctolReadModel {
             .any(|step| swap_match(&step.task));
         (
           true,
-          hot.actor_class.aaa_type() == AaaType::System,
+          identity.actor_class.aaa_type() == AaaType::System,
           hot.lifecycle.is_paused(),
           has_address_event_trigger,
           has_required_burn_step,
@@ -270,7 +270,8 @@ impl TmctolReadModel {
         )
       })
       .unwrap_or((false, false, false, false, false, !requires_swap));
-    let dormant = pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(actor_id);
+    let dormant = pallet_aaa::ActorIdentities::<Runtime>::contains_key(actor_id)
+      && !pallet_aaa::ActorHot::<Runtime>::contains_key(actor_id);
     let status = if domain == BurnDomain::BldrBuyback && dormant {
       GuaranteeStatus::NotInitialized
     } else if !actor_exists || !is_system || is_paused || !has_address_event_trigger {
@@ -308,10 +309,11 @@ impl TmctolReadModel {
   fn zap_postconditions() -> ZapPostconditionState<AccountId> {
     let actor_id = ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
     let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
-    let maybe_actor = pallet_aaa::ActorHot::<Runtime>::get(actor_id)
+    let maybe_actor = pallet_aaa::ActorIdentities::<Runtime>::get(actor_id)
+      .zip(pallet_aaa::ActorHot::<Runtime>::get(actor_id))
       .zip(pallet_aaa::ActorProgram::<Runtime>::get(actor_id));
-    let Some((hot, program)) = maybe_actor else {
-      let status = if pallet_aaa::DormantAaaIdentities::<Runtime>::contains_key(actor_id) {
+    let Some(((identity, hot), program)) = maybe_actor else {
+      let status = if pallet_aaa::ActorIdentities::<Runtime>::contains_key(actor_id) {
         GuaranteeStatus::NotInitialized
       } else {
         GuaranteeStatus::Violated
@@ -335,7 +337,7 @@ impl TmctolReadModel {
       };
     };
 
-    let is_system = hot.actor_class.aaa_type() == AaaType::System;
+    let is_system = identity.actor_class.aaa_type() == AaaType::System;
     let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;

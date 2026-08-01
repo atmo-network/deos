@@ -341,7 +341,7 @@ impl<T: Config> Pallet<T> {
             );
             if let Some(position) = votes
               .passes
-              .iter()
+              .iter() // deos-bypass: bounded-iter — MaxVotesPerProposal ballots
               .position(|existing| existing.account == account)
             {
               votes.passes.remove(position);
@@ -350,7 +350,7 @@ impl<T: Config> Pallet<T> {
               ensure!(
                 !votes
                   .vetoes
-                  .iter()
+                  .iter() // deos-bypass: bounded-iter — MaxVotesPerProposal ballots
                   .any(|existing| existing.account == account),
                 Error::<T>::ProposalVoteAlreadyCast
               );
@@ -375,7 +375,7 @@ impl<T: Config> Pallet<T> {
             );
             if let Some(position) = votes
               .vetoes
-              .iter()
+              .iter() // deos-bypass: bounded-iter — MaxVotesPerProposal ballots
               .position(|existing| existing.account == account)
             {
               votes.vetoes.remove(position);
@@ -384,7 +384,7 @@ impl<T: Config> Pallet<T> {
               ensure!(
                 !votes
                   .passes
-                  .iter()
+                  .iter() // deos-bypass: bounded-iter — MaxVotesPerProposal ballots
                   .any(|existing| existing.account == account),
                 Error::<T>::ProposalVoteAlreadyCast
               );
@@ -1270,7 +1270,10 @@ impl<T: Config> Pallet<T> {
     if let Some(ref votes) = votes {
       Self::note_winning_participation_batch(
         domain,
-        votes.vetoes.iter().map(|ballot| ballot.account.clone()),
+        votes
+          .vetoes
+          .iter() // deos-bypass: bounded-iter — MaxVotesPerProposal ballots
+          .map(|ballot| ballot.account.clone()),
       );
     }
     Self::remove_active_proposal_storage(domain, item_id, true, true);

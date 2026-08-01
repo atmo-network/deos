@@ -161,7 +161,7 @@ impl<T: Config> Pallet<T> {
   ) -> DispatchResult {
     ProposalMaturityBuckets::<T>::try_mutate(maturity_epoch, |bucket| -> DispatchResult {
       let exists = bucket
-        .iter()
+        .iter() // deos-bypass: bounded-iter — MaxMaturitiesPerEpoch bucket
         .any(|entry| entry.domain == domain && entry.item_id == item_id);
       if !exists {
         bucket
@@ -177,7 +177,10 @@ impl<T: Config> Pallet<T> {
     item_id: T::WinningVoteItemId,
   ) -> DispatchResult {
     ActiveProposalIdsByDomain::<T>::try_mutate(domain, |item_ids| -> DispatchResult {
-      if item_ids.iter().all(|existing| *existing != item_id) {
+      if item_ids
+        .iter() // deos-bypass: bounded-iter — MaxActiveProposalsPerDomain ids
+        .all(|existing| *existing != item_id)
+      {
         item_ids
           .try_push(item_id)
           .map_err(|_| Error::<T>::ActiveProposalCapReached)?;
@@ -188,7 +191,10 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn remove_active_proposal_id(domain: T::DomainId, item_id: T::WinningVoteItemId) {
     ActiveProposalIdsByDomain::<T>::mutate(domain, |item_ids| {
-      if let Some(position) = item_ids.iter().position(|existing| *existing == item_id) {
+      if let Some(position) = item_ids
+        .iter() // deos-bypass: bounded-iter — MaxActiveProposalsPerDomain ids
+        .position(|existing| *existing == item_id)
+      {
         item_ids.remove(position);
       }
     });
@@ -232,7 +238,7 @@ impl<T: Config> Pallet<T> {
     let expiry_epoch: T::Epoch = expiry_epoch_u32.saturated_into();
     ExpiryBuckets::<T>::try_mutate(expiry_epoch, |bucket| -> DispatchResult {
       let exists = bucket
-        .iter()
+        .iter() // deos-bypass: bounded-iter — MaxExpiriesPerEpoch bucket
         .any(|entry| entry.domain == domain && entry.account == *account);
       if !exists {
         bucket

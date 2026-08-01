@@ -16,7 +16,7 @@ use polkadot_sdk::{
   },
   frame_system::EnsureRoot,
   sp_runtime::{
-    DispatchError, DispatchResult, Perbill, generic, impl_tx_ext_default,
+    DispatchError, DispatchResult, generic, impl_tx_ext_default,
     traits::{
       BlakeTwo256, DispatchInfoOf, IdentifyAccount, IdentityLookup, Lazy, PostDispatchInfoOf,
       TransactionExtension, Verify,
@@ -227,8 +227,8 @@ pub fn transfer_and_notify_actor(
   amount: Balance,
 ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
   let actor = AAA::aaa_instances(aaa_id).ok_or(pallet_aaa::Error::<Runtime>::AaaNotFound)?;
-  let provenance = pallet_aaa::FundingProvenance::Signed(*source);
-  AAA::preflight_funding_event(aaa_id, asset, amount, Some(&provenance))?;
+  let provenance = pallet_aaa::FundingProvenance::Signed;
+  AAA::preflight_funding_event(aaa_id, asset, amount, Some(source), Some(&provenance))?;
   polkadot_sdk::frame_support::storage::with_transaction(|| {
     let result = NativeAssetOps::transfer(source, &actor.sovereign_account, asset, amount)
       .and_then(|()| {
@@ -348,9 +348,15 @@ impl TransactionExtension<RuntimeCall> for NativeIngressExtension {
     let Some(aaa_id) = AAA::sovereign_index(dest) else {
       return Ok(None);
     };
-    let provenance = pallet_aaa::FundingProvenance::Signed(source);
-    AAA::preflight_funding_event(aaa_id, NATIVE_ASSET, *value, Some(&provenance))
-      .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
+    let provenance = pallet_aaa::FundingProvenance::Signed;
+    AAA::preflight_funding_event(
+      aaa_id,
+      NATIVE_ASSET,
+      *value,
+      Some(&source),
+      Some(&provenance),
+    )
+    .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
     Ok(Some(NativeIngressPre {
       aaa_id,
       source,
@@ -400,6 +406,13 @@ impl Get<PalletId> for AaaPalletId {
 
 pub struct ObservationFanoutWeightLimit;
 impl Get<Weight> for ObservationFanoutWeightLimit {
+  fn get() -> Weight {
+    Weight::MAX
+  }
+}
+
+pub struct WakeupWeightLimit;
+impl Get<Weight> for WakeupWeightLimit {
   fn get() -> Weight {
     Weight::MAX
   }
@@ -506,13 +519,6 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance, u32> for FixtureBe
   }
 }
 
-pub struct ExecutionServiceShare;
-impl Get<Perbill> for ExecutionServiceShare {
-  fn get() -> Perbill {
-    Perbill::from_percent(20)
-  }
-}
-
 impl pallet_aaa::Config for Runtime {
   type AssetId = AssetId;
   type Balance = Balance;
@@ -521,6 +527,7 @@ impl pallet_aaa::Config for Runtime {
   type ObservationFeedId = u32;
   type ObservationProvider = ();
   type FundingAuthority = ();
+  type SovereignAccountPolicy = ();
   type DexOps = RuntimeDexOps;
   type StakingOps = ();
   type LiquidityOps = ();
@@ -528,22 +535,19 @@ impl pallet_aaa::Config for Runtime {
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
-  type MaxExecutionPlanSteps = ConstU32<6>;
-  type MaxUserExecutionPlanSteps = ConstU32<3>;
-  type MaxSystemExecutionPlanSteps = ConstU32<6>;
+  type MaxExecutionPlanSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<4>;
-  type MaxContinuationSnapshotEntries = ConstU32<12>;
+  type MaxContinuationSnapshotEntries = ConstU32<16>;
   type MaxConditionsPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
-  type SystemExecutionReserve = ExecutionServiceShare;
-  type UserExecutionGuarantee = ExecutionServiceShare;
   type MaxQueueLength = ConstU32<128>;
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<128>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<8>;
   type ObservationFanoutWeightLimit = ObservationFanoutWeightLimit;
+  type WakeupWeightLimit = WakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<16>;
   type MaxSweepPerBlock = ConstU32<4>;
   type MaxWhitelistSize = ConstU32<4>;
@@ -556,6 +560,7 @@ impl pallet_aaa::Config for Runtime {
   type MaxAutoCloseNonceHorizon = ConstU64<1_000>;
   type MaxActiveActors = ConstU32<64>;
   type MaxActorIdentities = ConstU32<96>;
+  type MaxSystemSovereigns = ConstU32<96>;
   type StepBaseFee = ConstU128<10>;
   type ConditionReadFee = ConstU128<1>;
   type AaaCreationFee = ConstU128<100>;
@@ -564,6 +569,7 @@ impl pallet_aaa::Config for Runtime {
   type FeeSink = FeeSink;
   type FeeCollector = NativeFeeCollector;
   type MaxConsecutiveFailures = ConstU32<2>;
+  type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = ConstU128<10>;
   type WeightInfo = pallet_aaa::weights::SubstrateWeight<Runtime>;
   type GenesisSystemAaas = ();
@@ -608,7 +614,7 @@ mod tests {
   #[test]
   fn observation_boundary_is_independently_fail_closed() {
     assert_eq!(
-      <() as pallet_aaa::ObservationProvider<u32>>::observation(7, 10),
+      <() as pallet_aaa::ObservationProvider<u32, BlockNumber>>::observe(&7, 1, 10),
       pallet_aaa::ScalarObservationState::Unavailable
     );
   }
@@ -643,7 +649,7 @@ mod tests {
     task: pallet_aaa::TaskOf<Runtime>,
   ) -> pallet_aaa::ProgramInputOf<Runtime> {
     let plan = execution_plan(task);
-    pallet_aaa::ProgramInput::Active {
+    pallet_aaa::ProgramInput::Active(pallet_aaa::ActiveProgramInput {
       schedule: pallet_aaa::Schedule {
         trigger,
         cooldown_blocks: 0,
@@ -651,8 +657,9 @@ mod tests {
       schedule_window: None,
       execution_plan: plan,
       completion_policy: pallet_aaa::CompletionPolicy::Persistent,
-      funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
-    }
+      funding_source_policy: pallet_aaa::FundingSourcePolicy::AnyVerifiedIngress,
+      auto_close_at_cycle_nonce: None,
+    })
   }
 
   fn transfer_program(
@@ -685,7 +692,7 @@ mod tests {
     cooldown_blocks: u32,
     steps: Vec<pallet_aaa::StepOf<Runtime>>,
   ) -> pallet_aaa::ProgramInputOf<Runtime> {
-    pallet_aaa::ProgramInput::Active {
+    pallet_aaa::ProgramInput::Active(pallet_aaa::ActiveProgramInput {
       schedule: pallet_aaa::Schedule {
         trigger,
         cooldown_blocks,
@@ -693,8 +700,9 @@ mod tests {
       schedule_window: None,
       execution_plan: BoundedVec::try_from(steps).expect("fixture plan fits"),
       completion_policy: pallet_aaa::CompletionPolicy::Persistent,
-      funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
-    }
+      funding_source_policy: pallet_aaa::FundingSourcePolicy::AnyVerifiedIngress,
+      auto_close_at_cycle_nonce: None,
+    })
   }
 
   #[cfg(feature = "dex-fixture")]
@@ -805,7 +813,7 @@ mod tests {
         pallet_aaa::ProgramInput::Dormant,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let identity = AAA::dormant_aaa_identities(aaa_id).expect("identity exists");
+      let identity = AAA::actor_identities(aaa_id).expect("identity exists");
       assert!(AAA::aaa_instances(aaa_id).is_none());
       assert_eq!(AAA::active_aaa_count(), 0);
       assert!(pallet_aaa::ActorHot::<Runtime>::get(aaa_id).is_none());
@@ -820,13 +828,14 @@ mod tests {
         1_000,
         ExistenceRequirement::AllowDeath,
       ));
+      System::set_block_number(2);
       assert_ok!(AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
       assert!(AAA::aaa_instances(aaa_id).is_none());
       assert_eq!(Balances::free_balance(identity.sovereign_account), 1_000);
       assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-      assert!(AAA::dormant_aaa_identities(aaa_id).is_none());
+      assert!(AAA::actor_identities(aaa_id).is_none());
       assert_eq!(AAA::actor_identity_count(), 0);
-      assert_eq!(AAA::owner_slot_mask(ALICE), 0);
+      assert_eq!(AAA::owner_slot_bitmap(ALICE), [0; 32]);
       assert_eq!(Balances::free_balance(identity.sovereign_account), 1_000);
     });
   }
@@ -1012,33 +1021,38 @@ mod tests {
         },
         on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
       };
-      let oversized = BoundedVec::try_from(alloc::vec![step(), step(), step(), step()])
-        .expect("four steps fit the global six-step bound");
-      let oversized_program = pallet_aaa::ProgramInput::Active {
-        schedule: pallet_aaa::Schedule {
-          trigger: pallet_aaa::Trigger::immediate_manual(),
-          cooldown_blocks: 0,
-        },
-        schedule_window: None,
-        execution_plan: oversized,
-        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
-        funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
-      };
-      assert_noop!(
-        AAA::create_user_aaa(
-          RuntimeOrigin::signed(ALICE),
-          pallet_aaa::Mutability::Mutable,
-          oversized_program,
-        ),
-        pallet_aaa::Error::<Runtime>::ExecutionPlanTooLong
+      assert!(
+        BoundedVec::<_, <Runtime as pallet_aaa::Config>::MaxExecutionPlanSteps>::try_from(
+          alloc::vec![
+            step(),
+            step(),
+            step(),
+            step(),
+            step(),
+            step(),
+            step(),
+            step(),
+            step()
+          ],
+        )
+        .is_err()
       );
 
-      let admitted = BoundedVec::try_from(alloc::vec![step(), step(), step()])
-        .expect("three steps fit the User bound");
+      let admitted = BoundedVec::try_from(alloc::vec![
+        step(),
+        step(),
+        step(),
+        step(),
+        step(),
+        step(),
+        step(),
+        step(),
+      ])
+      .expect("eight steps fit the shared bound");
       let admission =
         AAA::execution_plan_admission_weight_upper(pallet_aaa::AaaType::User, &admitted);
       assert!(admission.all_lte(GuaranteedOnIdleWeight::get()));
-      let admitted_program = pallet_aaa::ProgramInput::Active {
+      let admitted_program = pallet_aaa::ProgramInput::Active(pallet_aaa::ActiveProgramInput {
         schedule: pallet_aaa::Schedule {
           trigger: pallet_aaa::Trigger::immediate_manual(),
           cooldown_blocks: 0,
@@ -1046,8 +1060,9 @@ mod tests {
         schedule_window: None,
         execution_plan: admitted,
         completion_policy: pallet_aaa::CompletionPolicy::Persistent,
-        funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
-      };
+        funding_source_policy: pallet_aaa::FundingSourcePolicy::AnyVerifiedIngress,
+        auto_close_at_cycle_nonce: None,
+      });
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1128,8 +1143,7 @@ mod tests {
               == 1
           })
       );
-      assert_eq!(pallet_aaa::SystemQueuePages::<Runtime>::iter().count(), 0);
-      assert_eq!(pallet_aaa::UserQueuePages::<Runtime>::iter().count(), 0);
+      assert_eq!(pallet_aaa::QueuePages::<Runtime>::iter().count(), 0);
       assert!(
         actor_ids
           .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
@@ -1161,14 +1175,15 @@ mod tests {
       let _ = <Balances as Currency<AccountId>>::deposit_creating(&sovereign, 777);
       assert_ok!(AAA::close_aaa(RuntimeOrigin::root(), aaa_id));
       assert_eq!(Balances::free_balance(sovereign), 777);
-      assert_ok!(AAA::reopen_system_aaa(
+      let fresh_id = pallet_aaa::NextAaaId::<Runtime>::get();
+      assert_ok!(AAA::create_system_aaa_at_sovereign_id(
         RuntimeOrigin::root(),
         aaa_id,
         ALICE,
         pallet_aaa::Mutability::Mutable,
         pallet_aaa::ProgramInput::Dormant,
       ));
-      let identity = AAA::dormant_aaa_identities(aaa_id).expect("system identity reattaches");
+      let identity = AAA::actor_identities(fresh_id).expect("fresh system identity reattaches");
       assert_eq!(identity.sovereign_account, sovereign);
       assert_eq!(Balances::free_balance(sovereign), 777);
     });
@@ -1215,6 +1230,7 @@ mod tests {
           RuntimeOrigin::signed(ALICE),
           active_id,
           execution_plan(mint_task()),
+          pallet_aaa::CompletionPolicy::Persistent,
         ),
         pallet_aaa::Error::<Runtime>::MintNotAllowedForUserAaa
       );
@@ -1606,7 +1622,7 @@ mod tests {
         },
       ])
       .expect("two-step plan fits");
-      let program = pallet_aaa::ProgramInput::Active {
+      let program = pallet_aaa::ProgramInput::Active(pallet_aaa::ActiveProgramInput {
         schedule: pallet_aaa::Schedule {
           trigger: pallet_aaa::Trigger::immediate_manual(),
           cooldown_blocks: 0,
@@ -1614,8 +1630,9 @@ mod tests {
         schedule_window: None,
         execution_plan: plan,
         completion_policy: pallet_aaa::CompletionPolicy::Persistent,
-        funding_source_policy: pallet_aaa::FundingSourcePolicy::AnySource,
-      };
+        funding_source_policy: pallet_aaa::FundingSourcePolicy::AnyVerifiedIngress,
+        auto_close_at_cycle_nonce: None,
+      });
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1720,6 +1737,8 @@ mod tests {
       <() as pallet_aaa::LiquidityOps<AccountId, AssetId, Balance>>::remove_liquidity(
         &ALICE,
         NATIVE_ASSET,
+        NATIVE_ASSET,
+        1,
         10,
         1,
         1,
@@ -1733,6 +1752,7 @@ mod tests {
         &ALICE,
         NATIVE_ASSET,
         1,
+        10,
         10,
         Perbill::zero(),
       ),

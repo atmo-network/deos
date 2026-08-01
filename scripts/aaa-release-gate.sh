@@ -7,6 +7,16 @@ CARGO_PROFILE="${CARGO_PROFILE:-release}"
 INCLUDE_OCCUPANCY_PROFILE="${INCLUDE_OCCUPANCY_PROFILE:-1}"
 QUICK_MODE="${QUICK_MODE:-0}"
 
+REQUIRED_HEAVY_PROFILES=(
+    "scheduler_stress_fifo_over_capacity_fairness_matrix"
+    "scheduler_stress_fifo_dense_vs_sparse_topology_matrix"
+    "scheduler_stress_fifo_sparse_topology_long_run_liveness"
+    "stress_10k_actors_queue_scheduler"
+    "checkpoint_a_s6_dense_10k_wakeups_converge_without_drops"
+)
+OCCUPANCY_HEAVY_PROFILE="profile_scheduler_queue_wakeup_occupancy_10k"
+DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
+
 usage() {
     cat <<'EOF'
 Usage: aaa-release-gate.sh [OPTIONS]
@@ -14,8 +24,10 @@ Usage: aaa-release-gate.sh [OPTIONS]
 Runs the AAA release gate across the package archive, external-consumer fixture, and deos-runtime.
 
 Options:
-  --skip-occupancy-profile   Skip the 10k occupancy diagnostics profile
+  --skip-occupancy-profile   Skip the gating 10k occupancy profile
   --quick                    Run only fast checks (Clippy + light tests)
+
+The wall-clock matrix is diagnostic/non-gating and is not executed by this gate.
   -h, --help                 Show this help message
 
 Environment:
@@ -58,8 +70,42 @@ check_prerequisites() {
     log_success "Release gate prerequisites checked"
 }
 
+required_heavy_profiles() {
+    printf '%s\n' "${REQUIRED_HEAVY_PROFILES[@]}"
+    if [[ "$INCLUDE_OCCUPANCY_PROFILE" == "1" ]]; then
+        printf '%s\n' "$OCCUPANCY_HEAVY_PROFILE"
+    fi
+}
+
+# Lists every test in the deos-runtime test harness and fails unless each
+# required heavy profile resolves to exactly one test. The same inventory owns
+# execution below, so a renamed/deleted/duplicated profile cannot turn green.
+verify_heavy_profiles_resolve_exactly_once() {
+    phase_banner "Step 1b: Exact heavy-profile resolution"
+    local profile
+    local required_profiles=()
+    mapfile -t required_profiles < <(required_heavy_profiles)
+    local listing
+    listing="$(cd "$TEMPLATE_DIR" && cargo test --$CARGO_PROFILE -p deos-runtime --locked -- --list 2>/dev/null)"
+    for profile in "${required_profiles[@]}"; do
+        local matches
+        matches="$(printf '%s\n' "$listing" | grep -c "${profile}:" || true)"
+        if [[ "$matches" -ne 1 ]]; then
+            log_error "Heavy profile '${profile}' resolved to ${matches} test(s); expected exactly 1. Zero-match success is impossible by design."
+            return 1
+        fi
+        log_info "  exact profile: ${profile} (1 test)"
+    done
+    log_success "All required heavy profiles resolve to exactly one test"
+}
+
 run_gate() {
     run_shell_step "AAA gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-aaa --example semantic_manifest -- --check ../web-client/src/lib/automation/aaa-semantic-manifest.json"
+    run_shell_step "AAA gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-aaa --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/aaa-fee-envelope-vectors.json"
+    run_shell_step "AAA gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:aaa-abi"
+    run_shell_step "AAA gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:aaa-normative-drift"
+    run_shell_step "AAA gate: funding terminology drift" "" "\"$PROJECT_ROOT/.agents/skills/alignment/scripts/audit-aaa-funding-terminology.sh\""
+    run_shell_step "AAA gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"
     run_shell_step "AAA gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
     run_shell_step "AAA gate: reactive operations corpus contract" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\""
 
@@ -101,39 +147,23 @@ run_gate() {
         "" \
         "cd \"$TEMPLATE_DIR\" && cargo check --$CARGO_PROFILE -p pallet-aaa-embedding-fixture --locked --no-default-features"
 
-    run_shell_step \
-        "AAA gate: over-capacity fairness matrix" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked scheduler_stress_lane_over_capacity_fairness_matrix -- --ignored --nocapture"
+    if [[ "$QUICK_MODE" != "1" ]]; then
+        verify_heavy_profiles_resolve_exactly_once
+    fi
 
-    run_shell_step \
-        "AAA gate: dense vs sparse topology matrix" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked scheduler_stress_lane_dense_vs_sparse_topology_matrix -- --ignored --nocapture"
-
-    run_shell_step \
-        "AAA gate: sparse topology long-run liveness" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked scheduler_stress_lane_sparse_topology_long_run_liveness -- --ignored --nocapture"
-
-    run_shell_step \
-        "AAA gate: 10k queue scheduler stress" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked stress_10k_actors_queue_scheduler -- --ignored --nocapture"
-
-    run_shell_step \
-        "AAA gate: 10k dense wakeup convergence" \
-        "" \
-        "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked checkpoint_a_s6_dense_10k_wakeups_converge_without_drops -- --ignored --nocapture"
-
-    if [[ "$INCLUDE_OCCUPANCY_PROFILE" == "1" ]]; then
+    local profile
+    local required_profiles=()
+    mapfile -t required_profiles < <(required_heavy_profiles)
+    for profile in "${required_profiles[@]}"; do
         run_shell_step \
-            "AAA gate: 10k queue/wakeup occupancy profile" \
+            "AAA gate: exact heavy profile ${profile}" \
             "" \
-            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked profile_scheduler_queue_wakeup_occupancy_10k -- --ignored --nocapture"
-    else
+            "cd \"$TEMPLATE_DIR\" && cargo test --$CARGO_PROFILE -p deos-runtime --locked ${profile} -- --ignored --nocapture"
+    done
+    if [[ "$INCLUDE_OCCUPANCY_PROFILE" != "1" ]]; then
         log_warning "Skipping occupancy profile"
     fi
+    log_info "Non-gating diagnostics (not resolved or executed by this gate): ${DIAGNOSTIC_HEAVY_PROFILES[*]}"
 }
 
 main() {

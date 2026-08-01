@@ -7,6 +7,43 @@ Zone: Foundation format helper; dependency-free and safe for domain slices to im
 
 const UNSIGNED_DECIMAL_INTEGER = /^\d+$/u;
 const UNSIGNED_DECIMAL_NUMBER = /^\d+(?:\.\d+)?$/u;
+const UNSIGNED_HEX = /^[0-9a-f]+$/iu;
+
+function hexDigitValue(digit: string): number {
+  const code = digit.charCodeAt(0);
+  if (code >= 48 && code <= 57) {
+    return code - 48;
+  }
+  return code >= 97 ? code - 87 : code - 55;
+}
+
+export function parseUnsignedHexByte(byte: string): number | null {
+  if (!/^[0-9a-f]{2}$/iu.test(byte)) {
+    return null;
+  }
+  return hexDigitValue(byte[0]) * 16 + hexDigitValue(byte[1]);
+}
+
+export function parseUnsignedHexNumber(value: string): number | null {
+  const trimmed = value.trim();
+  if (!UNSIGNED_HEX.test(trimmed) || trimmed.length % 2 !== 0) {
+    return null;
+  }
+  const bytes = Uint8Array.from(
+    trimmed.match(/.{2}/gu)!.map((byte) => {
+      const decoded = parseUnsignedHexByte(byte);
+      if (decoded === null) {
+        throw new Error(`invalid hex byte: ${byte}`);
+      }
+      return decoded;
+    }),
+  );
+  if (bytes.length > 6) {
+    return null;
+  }
+  const parsed = bytes.reduce((acc, byte) => acc * 256 + byte, 0);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
 
 export type DecimalNumberBounds = {
   min?: number;
