@@ -21,6 +21,10 @@ const outputPath = path.join(
   webClientRoot,
   'src/lib/automation/aaa-abi-manifest.json',
 );
+const boundsOutputPath = path.join(
+  webClientRoot,
+  'src/lib/automation/aaa-protocol-bounds.generated.ts',
+);
 const check = process.argv.includes('--check');
 
 function canonical(value) {
@@ -177,17 +181,46 @@ async function buildManifest() {
   });
 }
 
-const generated = await format(JSON.stringify(await buildManifest()), {
-  parser: 'json',
-});
+function decodeUnsignedConstant(manifest, name, bytes) {
+  const constant = manifest.pallet.constants.find(
+    (candidate) => candidate.name === name,
+  );
+  if (
+    !constant ||
+    !new RegExp(`^0x[0-9a-f]{${bytes * 2}}$`, 'i').test(constant.value)
+  ) {
+    throw new Error(
+      `AAA ABI manifest lacks a valid ${bytes}-byte ${name} constant`,
+    );
+  }
+  const encoded = Buffer.from(constant.value.slice(2), 'hex');
+  return bytes === 1 ? encoded.readUInt8(0) : encoded.readUInt32LE(0);
+}
+
+const manifest = await buildManifest();
+const generated = await format(JSON.stringify(manifest), { parser: 'json' });
+const generatedBounds = await format(
+  `/* Generated from AAA runtime metadata ${manifest.metadata.sha256}; do not edit. */\n` +
+    `export const AAA_MAX_EXECUTION_PLAN_STEPS = ${decodeUnsignedConstant(manifest, 'MaxExecutionPlanSteps', 4)};\n` +
+    `export const AAA_MAX_RETRY_ATTEMPTS = ${decodeUnsignedConstant(manifest, 'MaxRetryAttempts', 4)};\n` +
+    `export const AAA_MAX_OWNER_SLOTS = ${decodeUnsignedConstant(manifest, 'MaxOwnerSlots', 1)};\n`,
+  { parser: 'typescript' },
+);
 if (check) {
-  const existing = await readFile(outputPath, 'utf8').catch(() => '');
-  if (existing !== generated) {
-    console.error('AAA ABI manifest is stale; run npm run generate:aaa-abi');
+  const [existing, existingBounds] = await Promise.all([
+    readFile(outputPath, 'utf8').catch(() => ''),
+    readFile(boundsOutputPath, 'utf8').catch(() => ''),
+  ]);
+  if (existing !== generated || existingBounds !== generatedBounds) {
+    console.error('AAA ABI artifacts are stale; run npm run generate:aaa-abi');
     process.exit(1);
   }
-  console.log('AAA ABI manifest is current');
+  console.log('AAA ABI manifest and compact bounds are current');
 } else {
-  await writeFile(outputPath, generated);
+  await Promise.all([
+    writeFile(outputPath, generated),
+    writeFile(boundsOutputPath, generatedBounds),
+  ]);
   console.log(`Wrote ${path.relative(webClientRoot, outputPath)}`);
+  console.log(`Wrote ${path.relative(webClientRoot, boundsOutputPath)}`);
 }

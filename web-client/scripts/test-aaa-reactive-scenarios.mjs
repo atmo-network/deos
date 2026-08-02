@@ -164,7 +164,7 @@ const partialScenarios = [
       task: {
         type: 'SplitTransfer',
         asset: native,
-        amount: { type: 'AllBalance' },
+        amount: { type: 'AllAvailable' },
         legs: [
           { to: recipient, shareParts: 500_000_000 },
           {

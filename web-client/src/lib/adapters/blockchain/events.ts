@@ -4,7 +4,6 @@ Owns: Chain event labels, messages, dispatch-error text, transaction highlights,
 Excludes: Log store ownership, network polling, transaction watch lifecycle, and widget rendering.
 Zone: Transport formatting helper; may depend on log contracts but not stores or UI components.
 */
-import { projectAaaCycleDeferred } from '$lib/automation/cycle-deferred';
 import { PRECISION } from '$lib/economics';
 import type { LogEntry } from '$lib/log/types';
 
@@ -163,13 +162,6 @@ export function buildTransactionHighlights(
     if (event.type === 'AAA' && event.value?.type === 'SwapExecuted') {
       highlights.push(
         `AAA swap · in ${formatUnknownAmount(objectProperty(payload, 'amount_in'))} → out ${formatUnknownAmount(objectProperty(payload, 'amount_out'))}`,
-      );
-      continue;
-    }
-    if (event.type === 'AAA' && event.value?.type === 'CycleDeferred') {
-      const deferred = projectAaaCycleDeferred(payload);
-      highlights.push(
-        `AAA cycle deferred (${deferred.reason}) · nonce ${deferred.candidateCycleNonce} attempt ${deferred.candidateAttempt} cursor ${deferred.cursor}`,
       );
       continue;
     }

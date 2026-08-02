@@ -83,8 +83,9 @@ impl pallet_tmc::MintDistributionHook<AccountId> for TmctolMintDistributionIngre
     account: &AccountId,
     amount: Balance,
   ) -> Result<(), DispatchError> {
-    use super::address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
+    use super::address_event_ingress::RuntimeAddressEventIngress;
     RuntimeAddressEventIngress::preflight_internal_inbound(account, asset, amount, source)
+      .map_err(|failure| failure.error)
   }
 
   fn before_sink_mint(
@@ -93,8 +94,9 @@ impl pallet_tmc::MintDistributionHook<AccountId> for TmctolMintDistributionIngre
     account: &AccountId,
     amount: Balance,
   ) -> Result<(), DispatchError> {
-    use super::address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
+    use super::address_event_ingress::RuntimeAddressEventIngress;
     RuntimeAddressEventIngress::preflight_internal_inbound(account, minted_asset, amount, source)
+      .map_err(|failure| failure.error)
   }
 
   fn after_distribution(
@@ -106,19 +108,21 @@ impl pallet_tmc::MintDistributionHook<AccountId> for TmctolMintDistributionIngre
     minted_account: &AccountId,
     minted_amount: Balance,
   ) -> Result<(), DispatchError> {
-    use super::address_event_ingress::{AddressEventIngress, RuntimeAddressEventIngress};
+    use super::address_event_ingress::RuntimeAddressEventIngress;
     RuntimeAddressEventIngress::on_internal_inbound(
       collateral_account,
       collateral_asset,
       collateral_amount,
       source,
-    )?;
+    )
+    .map_err(|failure| failure.error)?;
     RuntimeAddressEventIngress::on_internal_inbound(
       minted_account,
       minted_asset,
       minted_amount,
       source,
     )
+    .map_err(|failure| failure.error)
   }
 }
 

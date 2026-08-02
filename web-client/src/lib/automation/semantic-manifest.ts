@@ -35,9 +35,9 @@ export type AaaConditionName =
 export type AaaAmountName =
   | 'Fixed'
   | 'PercentageOfCurrent'
-  | 'PercentageOfTrigger'
+  | 'PercentageAtOpening'
   | 'PercentageOfLastFunding'
-  | 'AllBalance';
+  | 'AllAvailable';
 
 const TASK_NAMES = [
   'Transfer',
@@ -70,9 +70,9 @@ const CONDITION_NAMES = [
 const AMOUNT_NAMES = [
   'Fixed',
   'PercentageOfCurrent',
-  'PercentageOfTrigger',
+  'PercentageAtOpening',
   'PercentageOfLastFunding',
-  'AllBalance',
+  'AllAvailable',
 ] as const satisfies readonly AaaAmountName[];
 
 export type AaaSemanticRecipient =
@@ -132,7 +132,7 @@ export type AaaSemanticAmountResolution = {
   dataDependencies: Array<
     | 'ArtifactValue'
     | 'CurrentBalanceOrShares'
-    | 'TriggerSnapshot'
+    | 'OpeningSnapshot'
     | 'LastFundingSnapshot'
     | 'TaskPolicyCapacity'
   >;

@@ -70,7 +70,7 @@ test('asset amount resolution preserves fee reserve and minimum balance', () => 
   assert.deepEqual(
     resolveAaaAmount(
       observation({
-        resolution: { type: 'AllBalance' },
+        resolution: { type: 'AllAvailable' },
         current: 201n,
         minimumBalance: 1n,
         minUserBalance: 50n,
@@ -90,7 +90,7 @@ test('snapshot, funding, rounding, mint, and staking-share outcomes remain disti
   assert.equal(
     resolveAaaAmount(
       observation({
-        resolution: { type: 'PercentageOfTrigger', parts: 1_000_000_000 },
+        resolution: { type: 'PercentageAtOpening', parts: 1_000_000_000 },
       }),
     ).status,
     'SnapshotUnavailable',

@@ -4,6 +4,15 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.7.11: AAA Kernel Cooling and Transactional Closure
+
+- `AAA / Transactional Kernel`: Unified control, execution, fees, scheduling, reactive delivery, and cleanup under explicit transactional ownership. This prevents rejected or interrupted operations from leaving partial protocol state while preserving valid committed execution prefixes.
+- `AAA / Deterministic Failure and Scheduling`: Consolidated step outcomes, retry accounting, temporal eligibility, FIFO service, deferral, starvation telemetry, and terminal handling under single bounded authorities. This removes competing interpretations and makes actor progress reproducible under congestion and failure.
+- `AAA / Resource and Upgrade Safety`: Bound actor service and cache revalidation to measured runtime capacity, with resumable progress and fail-closed admission during cache changes. This keeps runtime upgrades and saturated operation from weakening ordering, liveness accounting, or Weight safety.
+- `AAA / Economic and Reactive Boundaries`: Clarified opening snapshots, funding, protected balances, fee envelopes, task limits, certified value ingress, and typed observation publication. This prevents trigger payloads, unverified transfers, slippage settings, or adapter failures from silently changing economic authority.
+- `AAA / State and Public Contract Cooling`: Separated custody domains, made temporal and cache ownership explicit, removed writable aggregate round trips, and contracted the pre-launch ABI to canonical names and read-only projections. This reduces state ambiguity and leaves downstream runtimes and clients with one stable contract rather than compatibility shadows.
+- `AAA / Client and Delivery Evidence`: Moved readiness and eligibility arithmetic behind authoritative runtime reads, regenerated production artifacts, and expanded adversarial package, runtime, embedding, client, and stress validation. This lets operators and clients rely on generated runtime truth without duplicating protocol logic or trusting unverified release claims.
+
 ## 0.7.10: AAA Runtime Closure and Fail-Closed Release Truth
 
 - `AAA Contract and Runtime Closure`: Delivered the bounded User/System actor kernel with typed lifecycle, linear plans, deterministic triggers, task-local atomicity, Mutable-only Continuation, checked temporal arithmetic, explicit funding snapshots, fixed owner slots, custody locators, and one canonical strict FIFO. Runtime, storage, SCALE, errors, events, and host boundaries now implement the standalone normative specification without migrations or compatibility shadows.

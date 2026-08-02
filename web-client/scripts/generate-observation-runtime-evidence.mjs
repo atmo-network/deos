@@ -6,7 +6,7 @@ Zone: Web-client validation/generation entrypoint for observation evidence.
 */
 import { blake2AsHex } from '@polkadot/util-crypto';
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, readdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
@@ -21,9 +21,14 @@ const paths = {
   metadata: path.join(webClientRoot, '.papi/metadata/deos.scale'),
   descriptors: path.join(webClientRoot, '.papi/descriptors/package.json'),
   runtime: path.join(projectRoot, 'template/runtime/src/lib.rs'),
+  runtimeConfigs: path.join(projectRoot, 'template/runtime/src/configs'),
   aaaConfig: path.join(
     projectRoot,
     'template/runtime/src/configs/aaa_config.rs',
+  ),
+  oracleConfig: path.join(
+    projectRoot,
+    'template/runtime/src/configs/oracle_config.rs',
   ),
   aaaWeights: path.join(
     projectRoot,
@@ -158,6 +163,59 @@ function sha256(bytes) {
   return createHash('sha256').update(bytes).digest('hex');
 }
 
+async function rustSources(root) {
+  const sources = [];
+  for (const entry of await readdir(root, { withFileTypes: true })) {
+    const entryPath = path.join(root, entry.name);
+    if (entry.isDirectory()) sources.push(...(await rustSources(entryPath)));
+    else if (entry.isFile() && entry.name.endsWith('.rs')) {
+      sources.push({
+        path: entryPath,
+        source: await readFile(entryPath, 'utf8'),
+      });
+    }
+  }
+  return sources;
+}
+
+function certifiedObservationPublishers(source, runtimeConfigSources) {
+  const body = requireMatch(
+    source,
+    /AAA_OBSERVATION_PUBLISHER_INVENTORY[^=]*=\s*&\[([^\]]*)\]/,
+    'AAA observation publisher inventory',
+  );
+  const publishers = [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  if (
+    publishers.length === 0 ||
+    new Set(publishers).size !== publishers.length
+  ) {
+    fail('AAA observation publisher inventory must be nonempty and unique');
+  }
+  const ingressCalls = runtimeConfigSources.filter(({ source: candidate }) =>
+    /ObservationChangeIngress<[^>]+>>::note_observation_changed\(/.test(
+      candidate,
+    ),
+  );
+  if (
+    ingressCalls.length !== 1 ||
+    path.basename(ingressCalls[0].path) !== 'oracle_config.rs'
+  ) {
+    fail(
+      'Every runtime observation ingress call must have one Oracle-owned inventory entry',
+    );
+  }
+  if (
+    runtimeConfigSources.some(({ source: candidate }) =>
+      /(?:crate::)?AAA::note_observation_changed\(/.test(candidate),
+    )
+  ) {
+    fail(
+      'Runtime configuration bypasses the typed observation ingress boundary',
+    );
+  }
+  return publishers;
+}
+
 async function generatedSource(runtimeCodeHashFallback = null) {
   const [
     metadata,
@@ -165,16 +223,20 @@ async function generatedSource(runtimeCodeHashFallback = null) {
     runtimeCode,
     runtime,
     aaaConfig,
+    oracleConfig,
     aaaWeights,
     databaseWeightSource,
+    runtimeConfigSources,
   ] = await Promise.all([
     readFile(paths.metadata),
     readFile(paths.descriptors),
     readFile(paths.runtimeCode).catch(() => null),
     readFile(paths.runtime, 'utf8'),
     readFile(paths.aaaConfig, 'utf8'),
+    readFile(paths.oracleConfig, 'utf8'),
     readFile(paths.aaaWeights, 'utf8'),
     readFile(paths.databaseWeights, 'utf8'),
+    rustSources(paths.runtimeConfigs),
   ]);
   const runtimeCodeHash =
     runtimeCode === null
@@ -231,6 +293,10 @@ async function generatedSource(runtimeCodeHashFallback = null) {
     metadataSha256: sha256(metadata),
     descriptorIdentity: descriptorPackage.version,
     weightIdentity: `sha256:${sha256(Buffer.from(aaaWeights))}`,
+    certifiedPublishers: certifiedObservationPublishers(
+      oracleConfig,
+      runtimeConfigSources,
+    ),
     fanout: {
       configuredServiceUnitsPerBlock: configuredUnits,
       fanoutWeightLimit,

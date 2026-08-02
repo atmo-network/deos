@@ -29,7 +29,7 @@ parameter_types! {
   // --- Identity and ownership ---
 
   pub const AaaPalletId: PalletId = PalletId(*ecosystem::pallet_ids::AAA_PALLET_ID);
-  pub const AaaNativeAssetId: AssetKind = AssetKind::Native;
+  pub const AaaFeeNativeAssetId: AssetKind = AssetKind::Native;
   /// User AAA slot capacity per owner; System AAA is not constrained by this limit
   pub const AaaMaxOwnerSlots: u8 = 255;
 
@@ -37,13 +37,14 @@ parameter_types! {
 
   pub const AaaMaxExecutionPlanSteps: u32 = 8;
   pub const AaaMaxFundingTrackedAssets: u32 = 10;
-  pub const AaaMaxContinuationSnapshotEntries: u32 = 16;
+  pub const AaaMaxOpeningSnapshotEntries: u32 = 16;
   pub const AaaMaxConditionsPerStep: u32 = 4;
   pub const AaaMaxSplitTransferLegs: u32 = 8;
 
   // --- Trigger and schedule bounds ---
 
-  pub const AaaMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
+  pub const AaaTargetBlockTime: u64 = 6;
+pub const AaaMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
   pub const AaaMaxTimerJitterBlocks: u32 = 64;
   pub const AaaMinWindowLength: BlockNumber = 100;
   pub const AaaMaxWhitelistSize: u32 = 16;
@@ -58,6 +59,8 @@ parameter_types! {
   pub const AaaQueuePageSize: u32 = 64;
   /// Production temporal page granularity selected from 32/64/128 Wasm operation evidence.
   pub const AaaWakeupPageSize: u32 = 32;
+  /// Independent observation subscriber/fanout page granularity.
+  pub const AaaObservationPageSize: u32 = 64;
   pub const AaaMaxQueueEntriesScannedPerBlock: u32 = 10_000;
   pub const AaaMaxObservationFanoutPagesPerBlock: u32 = 64;
   pub const AaaMaxWakeupsPerBlock: u32 = 512;
@@ -66,8 +69,10 @@ parameter_types! {
   /// Dedicated overdue-wakeup worker envelope: one worst-case complete wakeup unit plus cursor
   /// probe remains inside it (spec 15.2.9), and it stays below the guaranteed on_idle headroom.
   pub AaaWakeupWeightLimit: Weight = Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
-  pub AaaGuaranteedOnIdleWeight: Weight =
+  pub AaaOnIdleReserve: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
+  /// Count ceiling for one bounded cache-revalidation worker pass (spec 10.3).
+  pub const AaaMaxCacheRevalidationUnitsPerBlock: u32 = 16;
 
   // --- Lifecycle and sweep controls ---
 
@@ -75,7 +80,7 @@ parameter_types! {
   pub const AaaMaxRetryAttempts: u32 = 10;
   pub const AaaMaxAutoCloseNonceHorizon: u64 = 10_000;
   pub const AaaMinUserBalance: Balance = 5 * ExistentialDeposit::get();
-  pub const AaaMaxSweepPerBlock: u32 = 5;
+  pub const AaaMaxSweepBatch: u32 = 5;
 
   // --- Starvation safeguard controls ---
 
@@ -103,6 +108,18 @@ pub struct AaaMinUserBalanceGuard;
 impl Get<Balance> for AaaMinUserBalanceGuard {
   fn get() -> Balance {
     AaaMinUserBalance::get().max(ExistentialDeposit::get())
+  }
+}
+
+/// No migration ships in this release, so the migration-specific no-admit disposition is
+/// absent and a cache-affecting runtime change cannot activate (spec 6.4); a concrete
+/// downstream migration names its disposition here.
+pub struct AaaCacheRevalidationNoAdmitDisposition;
+impl Get<Option<pallet_aaa::types::RevalidationDisposition>>
+  for AaaCacheRevalidationNoAdmitDisposition
+{
+  fn get() -> Option<pallet_aaa::types::RevalidationDisposition> {
+    None
   }
 }
 
@@ -138,6 +155,8 @@ impl FeeCollector<AccountId, AssetKind, Balance> for TmctolFeeCollector {
           amount,
           payer,
         )
+        .map_err(|failure| failure.error)?;
+        Ok(())
       })();
       match result {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
@@ -230,17 +249,14 @@ impl TmctolAssetOps {
     amount: Balance,
   ) -> Result<(), TaskFailure> {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if let Err(error) =
-        <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
-          to,
-          AssetKind::Native,
-          amount,
-          from,
-        )
+      if let Err(failure) =
+        RuntimeAddressEventIngress::preflight_internal_inbound(to, AssetKind::Native, amount, from)
       {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          failure.into(),
+        ));
       }
-      let result = (|| -> DispatchResult {
+      let result = (|| -> Result<(), DispatchError> {
         <Balances as Currency<AccountId>>::transfer(
           from,
           to,
@@ -251,12 +267,11 @@ impl TmctolAssetOps {
       })();
       match result {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
+        Err(error) => polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          TaskFailure::permanent(error),
+        )),
       }
     })
-    .map_err(TaskFailure::permanent)
   }
 }
 
@@ -268,14 +283,14 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
     amount: Balance,
   ) -> Result<(), TaskFailure> {
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if let Err(error) =
-        <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
-          to, asset, amount, from,
-        )
+      if let Err(failure) =
+        RuntimeAddressEventIngress::preflight_internal_inbound(to, asset, amount, from)
       {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          failure.into(),
+        ));
       }
-      let result = (|| -> Result<(), DispatchError> {
+      let result = (|| -> Result<(), TaskFailure> {
         match asset {
           AssetKind::Native => {
             <Balances as Currency<AccountId>>::transfer(
@@ -283,8 +298,9 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
               to,
               amount,
               polkadot_sdk::frame_support::traits::ExistenceRequirement::AllowDeath,
-            )?;
-            Self::bridge_native_staking_ingress(to, amount)?;
+            )
+            .map_err(TaskFailure::permanent)?;
+            Self::bridge_native_staking_ingress(to, amount).map_err(TaskFailure::permanent)?;
           }
           AssetKind::Local(id) | AssetKind::Foreign(id) => {
             <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::transfer(
@@ -293,22 +309,25 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
               to,
               amount,
               Preservation::Expendable,
-            )?;
+            )
+            .map_err(TaskFailure::permanent)?;
           }
         }
-        <RuntimeAddressEventIngress as AddressEventIngress>::on_internal_inbound(
-          to, asset, amount, from,
-        )?;
+        // A certified destination ingress consequence keeps its closed retry
+        // classification through TaskFailure (spec 6.1): recoverable queue/wakeup
+        // capacity is Temporary, exhaustion/corruption/invariant failure is
+        // Permanent, so the owning task retries rather than aborting.
+        RuntimeAddressEventIngress::on_internal_inbound(to, asset, amount, from)
+          .map_err(TaskFailure::from)?;
         Ok(())
       })();
       match result {
         Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        Err(failure) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(failure))
         }
       }
     })
-    .map_err(TaskFailure::permanent)
   }
 
   fn burn(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
@@ -338,23 +357,32 @@ impl AssetOps<AccountId, AssetKind, Balance> for TmctolAssetOps {
   }
 
   fn mint(to: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), TaskFailure> {
-    (|| -> DispatchResult {
-      match asset {
-        AssetKind::Native => {
-          let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
+    polkadot_sdk::frame_support::storage::with_transaction(|| {
+      let result = (|| -> Result<(), TaskFailure> {
+        match asset {
+          AssetKind::Native => {
+            let _ = <Balances as Currency<AccountId>>::deposit_creating(to, amount);
+          }
+          AssetKind::Local(id) | AssetKind::Foreign(id) => {
+            <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
+              id, to, amount,
+            )
+            .map_err(TaskFailure::permanent)?;
+          }
         }
-        AssetKind::Local(id) | AssetKind::Foreign(id) => {
-          <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
-            id, to, amount,
-          )?;
+        // Source-less certified Mint keeps the placement classification through
+        // TaskFailure so the owning task retries on recoverable capacity.
+        RuntimeAddressEventIngress::on_inbound_without_source(to, asset, amount)
+          .map_err(TaskFailure::from)?;
+        Ok(())
+      })();
+      match result {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(failure) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(failure))
         }
       }
-      <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_without_source(
-        to, asset, amount,
-      )?;
-      Ok(())
-    })()
-    .map_err(TaskFailure::permanent)
+    })
   }
 
   fn balance(who: &AccountId, asset: AssetKind) -> Balance {
@@ -1004,7 +1032,7 @@ impl TmctolGenesisSystemAaas {
       conditions: Default::default(),
       task: Task::SplitTransfer {
         asset: AssetKind::Native,
-        amount: AmountResolution::AllBalance,
+        amount: AmountResolution::AllAvailable,
         legs: alloc::vec![
           SplitLeg {
             to: crate::Staking::pool_account_for(0),
@@ -1045,7 +1073,7 @@ impl TmctolGenesisSystemAaas {
         conditions: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::AllBalance,
+          amount_in: AmountResolution::AllAvailable,
           asset_out: AssetKind::Native,
           slippage_tolerance: ecosystem::params::SYSTEM_AAA_MAX_SWAP_SLIPPAGE,
         },
@@ -1057,7 +1085,7 @@ impl TmctolGenesisSystemAaas {
       conditions: dust_guard(AssetKind::Native),
       task: Task::Burn {
         asset: AssetKind::Native,
-        amount: AmountResolution::AllBalance,
+        amount: AmountResolution::AllAvailable,
       },
       on_error: StepErrorPolicy::AbortCycle,
     });
@@ -1102,14 +1130,14 @@ impl TmctolGenesisSystemAaas {
     let slippage_tolerance = Self::resolve_zap_slippage_tolerance(foreign);
     let steps: alloc::vec::Vec<pallet_aaa::StepOf<Runtime>> = alloc::vec![
       // Step 1: Opportunistic LP provisioning — add both sides at current pool ratio
-      // AllBalance for native subtracts ED at resolution layer, safe with Preserve semantics
+      // AllAvailable for native subtracts ED at resolution layer, safe with Preserve semantics
       Step {
         conditions: dual_dust_guard(AssetKind::Native, foreign),
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::AllBalance,
-          amount_b: AmountResolution::AllBalance,
+          amount_a: AmountResolution::AllAvailable,
+          amount_b: AmountResolution::AllAvailable,
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -1119,7 +1147,7 @@ impl TmctolGenesisSystemAaas {
         conditions: dust_guard(foreign),
         task: Task::SwapIn {
           asset_in: foreign,
-          amount_in: AmountResolution::AllBalance,
+          amount_in: AmountResolution::AllAvailable,
           asset_out: AssetKind::Native,
           slippage_tolerance,
         },
@@ -1130,7 +1158,7 @@ impl TmctolGenesisSystemAaas {
         conditions: dust_guard(lp_asset),
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::AllBalance,
+          amount: AmountResolution::AllAvailable,
           legs: alloc::vec![
             SplitLeg {
               to: pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
@@ -1220,7 +1248,7 @@ impl TmctolGenesisSystemAaas {
         lp_asset,
         asset_a,
         asset_b,
-        lp_amount: AmountResolution::AllBalance,
+        lp_amount: AmountResolution::AllAvailable,
         min_amount_a: 1,
         min_amount_b: 1,
       },
@@ -1256,7 +1284,7 @@ impl TmctolGenesisSystemAaas {
       conditions: dust_guard(bldr_asset),
       task: Task::SplitTransfer {
         asset: bldr_asset,
-        amount: AmountResolution::AllBalance,
+        amount: AmountResolution::AllAvailable,
         legs: alloc::vec![
           SplitLeg {
             to: bldr_zm_account,
@@ -1315,8 +1343,8 @@ impl TmctolGenesisSystemAaas {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: bldr_asset,
-          amount_a: AmountResolution::AllBalance,
-          amount_b: AmountResolution::AllBalance,
+          amount_a: AmountResolution::AllAvailable,
+          amount_b: AmountResolution::AllAvailable,
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -1326,7 +1354,7 @@ impl TmctolGenesisSystemAaas {
         task: Task::Transfer {
           to: bldr_bucket_a,
           asset: lp_asset,
-          amount: AmountResolution::AllBalance,
+          amount: AmountResolution::AllAvailable,
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -1377,7 +1405,7 @@ impl TmctolGenesisSystemAaas {
     pallet_staking::Pools::<Runtime>::get(native_asset_id)
       .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
     let actor_id = ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID;
-    if crate::AAA::aaa_instances(actor_id).is_none()
+    if crate::AAA::active_actor_view(actor_id).is_none()
       && crate::AAA::actor_identities(actor_id).is_none()
     {
       return Err(DispatchError::Other("NativeStakingLpFarmerUnavailable"));
@@ -1407,7 +1435,7 @@ impl TmctolGenesisSystemAaas {
       task: Task::DonateLiquidity {
         asset_a: native_asset,
         asset_b: staked_asset,
-        max_amount_a: AmountResolution::AllBalance,
+        max_amount_a: AmountResolution::AllAvailable,
         max_ratio_error: ecosystem::params::NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR,
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -1421,7 +1449,7 @@ impl TmctolGenesisSystemAaas {
   ///
   /// ExecutionPlan steps:
   /// 1. SwapIn(NTVE → target) — amount resolved as % of current NTVE balance
-  /// 2. Burn(target, AllBalance) — destroy all acquired tokens
+  /// 2. Burn(target, AllAvailable) — destroy all acquired tokens
   ///
   /// Multiple small buybacks per day create smooth market pressure.
   pub fn build_treasury_b_buyback_execution_plan(
@@ -1456,7 +1484,7 @@ impl TmctolGenesisSystemAaas {
         conditions: target_dust,
         task: Task::Burn {
           asset: target_asset,
-          amount: AmountResolution::AllBalance,
+          amount: AmountResolution::AllAvailable,
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -1582,7 +1610,7 @@ impl pallet_aaa::Config for Runtime {
   type PalletId = AaaPalletId;
   type SystemOrigin = EnsureRoot<AccountId>;
   type AssetId = AssetKind;
-  type NativeAssetId = AaaNativeAssetId;
+  type FeeNativeAssetId = AaaFeeNativeAssetId;
   type Balance = Balance;
   type AssetOps = TmctolAssetOps;
   type ObservationFeedId = primitives::OracleFeedId;
@@ -1605,25 +1633,29 @@ impl pallet_aaa::Config for Runtime {
   type MaxConsecutiveFailures = AaaMaxConsecutiveFailures;
   type MaxRetryAttempts = AaaMaxRetryAttempts;
   type MaxAutoCloseNonceHorizon = AaaMaxAutoCloseNonceHorizon;
+  type TargetBlockTime = AaaTargetBlockTime;
   type MaxExecutionDelayBlocks = AaaMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = AaaMaxTimerJitterBlocks;
   type MaxExecutionsPerBlock = AaaMaxExecutionsPerBlock;
   type MaxQueueLength = AaaMaxQueueLength;
   type QueuePageSize = AaaQueuePageSize;
   type WakeupPageSize = AaaWakeupPageSize;
+  type ObservationPageSize = AaaObservationPageSize;
   type MaxQueueEntriesScannedPerBlock = AaaMaxQueueEntriesScannedPerBlock;
   type MaxObservationFanoutPagesPerBlock = AaaMaxObservationFanoutPagesPerBlock;
   type ObservationFanoutWeightLimit = AaaObservationFanoutWeightLimit;
   type WakeupWeightLimit = AaaWakeupWeightLimit;
   type MaxWakeupsPerBlock = AaaMaxWakeupsPerBlock;
   type MaxFundingTrackedAssets = AaaMaxFundingTrackedAssets;
-  type MaxContinuationSnapshotEntries = AaaMaxContinuationSnapshotEntries;
+  type MaxOpeningSnapshotEntries = AaaMaxOpeningSnapshotEntries;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
-  type GuaranteedOnIdleWeight = AaaGuaranteedOnIdleWeight;
+  type AaaOnIdleReserve = AaaOnIdleReserve;
+  type MaxCacheRevalidationUnitsPerBlock = AaaMaxCacheRevalidationUnitsPerBlock;
+  type CacheRevalidationNoAdmitDisposition = AaaCacheRevalidationNoAdmitDisposition;
   type MaxOwnerSlots = AaaMaxOwnerSlots;
   type MaxExecutionPlanSteps = AaaMaxExecutionPlanSteps;
   type MaxSplitTransferLegs = AaaMaxSplitTransferLegs;
-  type MaxSweepPerBlock = AaaMaxSweepPerBlock;
+  type MaxSweepBatch = AaaMaxSweepBatch;
   type MaxWhitelistSize = AaaMaxWhitelistSize;
   type MaxTriggerSources = AaaMaxTriggerSources;
   type MinUserBalance = AaaMinUserBalanceGuard;
@@ -1632,7 +1664,6 @@ impl pallet_aaa::Config for Runtime {
   type WeightInfo = crate::weights::pallet_aaa::SubstrateWeight<Runtime>;
   type WeightToFee = crate::WeightToFee;
   // Runtime binds task upper bounds so fee admission stays chain-specific and auditable
-  type TaskWeightInfo = pallet_aaa::weights::SubstrateTaskWeightInfo<Runtime>;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = RuntimeAaaBenchmarkHelper;
 }
@@ -1959,12 +1990,24 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetKind, Balance, primitives::Orac
   }
 
   fn run_address_event_ingress(recipient: &AccountId, source: &AccountId, amount: Balance) -> bool {
-    let Some(aaa_id) = crate::AAA::sovereign_index(recipient) else {
+    // The benchmark mirrors the extension's resolved-match semantics: an absent
+    // sovereign is not a producer event at all.
+    if crate::AAA::sovereign_index(recipient).is_none() {
       return false;
+    }
+    let event = pallet_aaa::AddressEvent {
+      destination: recipient.clone(),
+      source: Some(source.clone()),
+      asset: AssetKind::Native,
+      amount,
+      provenance: Some(pallet_aaa::FundingProvenance::Signed),
     };
-    crate::AAA::notify_address_event(aaa_id, AssetKind::Native, amount, source)
-      .expect("benchmark ingress notification must succeed");
-    true
+    <crate::configs::RuntimeAddressEventIngress as pallet_aaa::AddressEventIngress<
+      AccountId,
+      AssetKind,
+      Balance,
+    >>::notify(&event)
+    .is_ok()
   }
 
   fn setup_xcm_asset_deposit() -> DispatchResult {

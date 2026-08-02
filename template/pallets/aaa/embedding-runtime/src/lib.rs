@@ -226,7 +226,7 @@ pub fn transfer_and_notify_actor(
   asset: AssetId,
   amount: Balance,
 ) -> polkadot_sdk::frame_support::dispatch::DispatchResult {
-  let actor = AAA::aaa_instances(aaa_id).ok_or(pallet_aaa::Error::<Runtime>::AaaNotFound)?;
+  let actor = AAA::active_actor_view(aaa_id).ok_or(pallet_aaa::Error::<Runtime>::AaaNotFound)?;
   let provenance = pallet_aaa::FundingProvenance::Signed;
   AAA::preflight_funding_event(aaa_id, asset, amount, Some(source), Some(&provenance))?;
   polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -404,24 +404,41 @@ impl Get<PalletId> for AaaPalletId {
   }
 }
 
+/// Fixture worker and reserve budgets mirror the reference runtime ratios over
+/// the default maximum block weight: 20% per worker and a 50% guaranteed
+/// on_idle reserve so the derived ActorServiceReserve stays strictly positive
+/// (spec 5.4). `Weight::MAX` placeholders would underflow the checked reserve
+/// derivation and reject every plan.
 pub struct ObservationFanoutWeightLimit;
 impl Get<Weight> for ObservationFanoutWeightLimit {
   fn get() -> Weight {
-    Weight::MAX
+    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
+      polkadot_sdk::frame_system::limits::BlockWeights,
+    >>::get()
+    .max_block;
+    polkadot_sdk::sp_runtime::Perbill::from_percent(20) * max_block
   }
 }
 
 pub struct WakeupWeightLimit;
 impl Get<Weight> for WakeupWeightLimit {
   fn get() -> Weight {
-    Weight::MAX
+    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
+      polkadot_sdk::frame_system::limits::BlockWeights,
+    >>::get()
+    .max_block;
+    polkadot_sdk::sp_runtime::Perbill::from_percent(20) * max_block
   }
 }
 
-pub struct GuaranteedOnIdleWeight;
-impl Get<Weight> for GuaranteedOnIdleWeight {
+pub struct AaaOnIdleReserve;
+impl Get<Weight> for AaaOnIdleReserve {
   fn get() -> Weight {
-    Weight::MAX
+    let max_block = <() as polkadot_sdk::frame_support::traits::Get<
+      polkadot_sdk::frame_system::limits::BlockWeights,
+    >>::get()
+    .max_block;
+    polkadot_sdk::sp_runtime::Perbill::from_percent(50) * max_block
   }
 }
 
@@ -441,6 +458,15 @@ impl Get<AccountId> for FeeSink {
   }
 }
 
+/// No cache-affecting migration ships in the fixture, so no no-admit disposition is named and
+/// a cache-affecting runtime change cannot activate (spec 6.4).
+pub struct NoAdmitDisposition;
+impl Get<Option<pallet_aaa::types::RevalidationDisposition>> for NoAdmitDisposition {
+  fn get() -> Option<pallet_aaa::types::RevalidationDisposition> {
+    None
+  }
+}
+
 #[cfg(feature = "runtime-benchmarks")]
 pub struct FixtureBenchmarkHelper;
 
@@ -456,7 +482,9 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance, u32> for FixtureBe
     Err(DispatchError::Other("BenchmarkCapabilityUnsupported"))
   }
 
-  fn setup_remove_liquidity(_: &AccountId) -> Result<(AssetId, Balance), DispatchError> {
+  fn setup_remove_liquidity(
+    _: &AccountId,
+  ) -> Result<(AssetId, AssetId, AssetId, Balance), DispatchError> {
     Err(DispatchError::Other("BenchmarkCapabilityUnsupported"))
   }
 
@@ -522,7 +550,7 @@ impl pallet_aaa::BenchmarkHelper<AccountId, AssetId, Balance, u32> for FixtureBe
 impl pallet_aaa::Config for Runtime {
   type AssetId = AssetId;
   type Balance = Balance;
-  type NativeAssetId = ConstU32<NATIVE_ASSET>;
+  type FeeNativeAssetId = ConstU32<NATIVE_ASSET>;
   type AssetOps = NativeAssetOps;
   type ObservationFeedId = u32;
   type ObservationProvider = ();
@@ -537,26 +565,30 @@ impl pallet_aaa::Config for Runtime {
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxExecutionPlanSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<4>;
-  type MaxContinuationSnapshotEntries = ConstU32<16>;
+  type MaxOpeningSnapshotEntries = ConstU32<16>;
   type MaxConditionsPerStep = ConstU32<2>;
   type MaxOwnerSlots = ConstU8<2>;
   type MaxExecutionsPerBlock = ConstU32<16>;
   type MaxQueueLength = ConstU32<128>;
   type QueuePageSize = ConstU32<8>;
   type WakeupPageSize = ConstU32<8>;
+  type ObservationPageSize = ConstU32<8>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<128>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<8>;
   type ObservationFanoutWeightLimit = ObservationFanoutWeightLimit;
   type WakeupWeightLimit = WakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<16>;
-  type MaxSweepPerBlock = ConstU32<4>;
+  type MaxSweepBatch = ConstU32<4>;
   type MaxWhitelistSize = ConstU32<4>;
   type MaxTriggerSources = ConstU32<4>;
   type MaxSplitTransferLegs = ConstU32<4>;
+  type TargetBlockTime = ConstU64<315_576>;
   type MaxExecutionDelayBlocks = ConstU64<1_000>;
   type MaxTimerJitterBlocks = ConstU32<0>;
   type MaxIdleStarvationBlocks = ConstU32<3>;
-  type GuaranteedOnIdleWeight = GuaranteedOnIdleWeight;
+  type AaaOnIdleReserve = AaaOnIdleReserve;
+  type MaxCacheRevalidationUnitsPerBlock = ConstU32<4>;
+  type CacheRevalidationNoAdmitDisposition = NoAdmitDisposition;
   type MaxAutoCloseNonceHorizon = ConstU64<1_000>;
   type MaxActiveActors = ConstU32<64>;
   type MaxActorIdentities = ConstU32<96>;
@@ -565,7 +597,6 @@ impl pallet_aaa::Config for Runtime {
   type ConditionReadFee = ConstU128<1>;
   type AaaCreationFee = ConstU128<100>;
   type WeightToFee = LinearWeightToFee;
-  type TaskWeightInfo = pallet_aaa::weights::SubstrateTaskWeightInfo<Runtime>;
   type FeeSink = FeeSink;
   type FeeCollector = NativeFeeCollector;
   type MaxConsecutiveFailures = ConstU32<2>;
@@ -642,6 +673,63 @@ mod tests {
       on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
     }])
     .expect("one-step plan fits")
+  }
+
+  /// Spec 7.1 prefunding requirement: `MinUserBalance + attempt fee envelope`.
+  fn user_prefunding_requirement(plan: &pallet_aaa::ExecutionPlanOf<Runtime>) -> Balance {
+    let min_user_balance: Balance = <Runtime as pallet_aaa::Config>::MinUserBalance::get();
+    min_user_balance.saturating_add(
+      AAA::attempt_fee_envelope(pallet_aaa::AaaType::User, plan, 0)
+        .expect("fixture plan has a checked fee envelope")
+        .total,
+    )
+  }
+
+  fn lowest_free_owner_slot(owner: AccountId) -> u8 {
+    let bitmap = pallet_aaa::OwnerSlotBitmaps::<Runtime>::get(owner);
+    let max_slots: u8 = <Runtime as pallet_aaa::Config>::MaxOwnerSlots::get();
+    for (byte_index, byte) in bitmap.into_iter().enumerate() {
+      let first_slot = byte_index * 8;
+      if first_slot >= max_slots as usize {
+        break;
+      }
+      let remaining = (max_slots as usize).saturating_sub(first_slot);
+      let valid_bits = if remaining >= 8 {
+        u8::MAX
+      } else {
+        (1u8 << remaining) - 1
+      };
+      let free_bits = !byte & valid_bits;
+      if free_bits != 0 {
+        return (first_slot + free_bits.trailing_zeros() as usize) as u8;
+      }
+    }
+    panic!("fixture owner has no free User owner slot");
+  }
+
+  /// Pre-funds the next automatically allocated User slot so Active creation or
+  /// activation admits under the fixture's spec 7.1 prefunding requirement.
+  fn prefund_user_sovereign(
+    owner: AccountId,
+    slot: u8,
+    plan: &pallet_aaa::ExecutionPlanOf<Runtime>,
+  ) {
+    let sovereign = AAA::sovereign_account_id(&owner, slot);
+    let _ = <Balances as Currency<AccountId>>::deposit_creating(
+      &sovereign,
+      user_prefunding_requirement(plan),
+    );
+  }
+
+  fn prefund_active_user_creation(owner: AccountId, plan: &pallet_aaa::ExecutionPlanOf<Runtime>) {
+    let slot = lowest_free_owner_slot(owner);
+    prefund_user_sovereign(owner, slot, plan);
+  }
+
+  fn prefund_active_program(owner: AccountId, program: &pallet_aaa::ProgramInputOf<Runtime>) {
+    if let pallet_aaa::ProgramInput::Active(input) = program {
+      prefund_active_user_creation(owner, &input.execution_plan);
+    }
   }
 
   fn program_with_task(
@@ -782,6 +870,7 @@ mod tests {
           on_error: pallet_aaa::StepErrorPolicy::AbortCycle,
         }],
       );
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -814,9 +903,20 @@ mod tests {
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       let identity = AAA::actor_identities(aaa_id).expect("identity exists");
-      assert!(AAA::aaa_instances(aaa_id).is_none());
+      assert!(AAA::active_actor_view(aaa_id).is_none());
       assert_eq!(AAA::active_aaa_count(), 0);
       assert!(pallet_aaa::ActorHot::<Runtime>::get(aaa_id).is_none());
+      // Spec 7.1: the existing dormant sovereign must cover the activation
+      // prefunding requirement before the Active program commits.
+      let activate_plan = execution_plan(pallet_aaa::Task::Transfer {
+        to: BOB,
+        asset: NATIVE_ASSET,
+        amount: pallet_aaa::AmountResolution::Fixed(5),
+      });
+      let _ = <Balances as Currency<AccountId>>::deposit_creating(
+        &identity.sovereign_account,
+        user_prefunding_requirement(&activate_plan),
+      );
       assert_ok!(AAA::activate_aaa(
         RuntimeOrigin::signed(ALICE),
         aaa_id,
@@ -830,13 +930,14 @@ mod tests {
       ));
       System::set_block_number(2);
       assert_ok!(AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-      assert!(AAA::aaa_instances(aaa_id).is_none());
-      assert_eq!(Balances::free_balance(identity.sovereign_account), 1_000);
+      assert!(AAA::active_actor_view(aaa_id).is_none());
+      let expected = user_prefunding_requirement(&activate_plan).saturating_add(1_000);
+      assert_eq!(Balances::free_balance(identity.sovereign_account), expected);
       assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
       assert!(AAA::actor_identities(aaa_id).is_none());
       assert_eq!(AAA::actor_identity_count(), 0);
       assert_eq!(AAA::owner_slot_bitmap(ALICE), [0; 32]);
-      assert_eq!(Balances::free_balance(identity.sovereign_account), 1_000);
+      assert_eq!(Balances::free_balance(identity.sovereign_account), expected);
     });
   }
 
@@ -845,13 +946,14 @@ mod tests {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
       let program = transfer_program(pallet_aaa::Trigger::immediate_manual(), 50);
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
         program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let actor = AAA::aaa_instances(aaa_id)
+      let actor = AAA::active_actor_view(aaa_id)
         .expect("actor exists")
         .sovereign_account;
       let actor_funding = 10_000_000_000u128;
@@ -866,7 +968,7 @@ mod tests {
       let _ = AAA::on_idle(1, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("actor remains")
           .cycle_nonce,
         1
@@ -917,6 +1019,7 @@ mod tests {
           },
         ],
       );
+      prefund_active_program(ALICE, &program);
       let create = RuntimeCall::AAA(pallet_aaa::Call::create_user_aaa {
         mutability: pallet_aaa::Mutability::Mutable,
         program,
@@ -926,7 +1029,7 @@ mod tests {
         Ok(Ok(_))
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let actor = AAA::aaa_instances(aaa_id)
+      let actor = AAA::active_actor_view(aaa_id)
         .expect("actor exists")
         .sovereign_account;
       assert_ok!(<Balances as Currency<AccountId>>::transfer(
@@ -954,13 +1057,15 @@ mod tests {
         pallet_aaa::SourceFilter::Any,
         pallet_aaa::AssetFilter::Any,
       );
+      let program = transfer_program(trigger, 50);
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        transfer_program(trigger, 50),
+        program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let sovereign = AAA::aaa_instances(aaa_id)
+      let sovereign = AAA::active_actor_view(aaa_id)
         .expect("actor exists")
         .sovereign_account;
       let call = RuntimeCall::Balances(polkadot_sdk::pallet_balances::Call::transfer_allow_death {
@@ -987,13 +1092,15 @@ mod tests {
         pallet_aaa::SourceFilter::Any,
         pallet_aaa::AssetFilter::Any,
       );
+      let program = transfer_program(trigger, 50);
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        transfer_program(trigger, 50),
+        program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let sovereign = AAA::aaa_instances(aaa_id)
+      let sovereign = AAA::active_actor_view(aaa_id)
         .expect("actor exists")
         .sovereign_account;
       let before = Balances::free_balance(sovereign);
@@ -1051,25 +1158,26 @@ mod tests {
       .expect("eight steps fit the shared bound");
       let admission =
         AAA::execution_plan_admission_weight_upper(pallet_aaa::AaaType::User, &admitted);
-      assert!(admission.all_lte(GuaranteedOnIdleWeight::get()));
+      assert!(admission.all_lte(AaaOnIdleReserve::get()));
       let admitted_program = pallet_aaa::ProgramInput::Active(pallet_aaa::ActiveProgramInput {
         schedule: pallet_aaa::Schedule {
           trigger: pallet_aaa::Trigger::immediate_manual(),
           cooldown_blocks: 0,
         },
         schedule_window: None,
-        execution_plan: admitted,
+        execution_plan: admitted.clone(),
         completion_policy: pallet_aaa::CompletionPolicy::Persistent,
         funding_source_policy: pallet_aaa::FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       });
+      prefund_active_program(ALICE, &admitted_program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
         admitted_program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let cached = AAA::aaa_instances(aaa_id)
+      let cached = AAA::active_actor_view(aaa_id)
         .expect("admitted actor exists")
         .cycle_weight_upper;
       assert_ne!(cached, Weight::zero());
@@ -1085,10 +1193,12 @@ mod tests {
         pallet_aaa::SourceFilter::Any,
         pallet_aaa::AssetFilter::Any,
       );
+      let program = transfer_program(trigger, 50);
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        transfer_program(trigger, 50),
+        program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       let bob_before = Balances::free_balance(BOB);
@@ -1104,7 +1214,7 @@ mod tests {
       let _ = AAA::on_idle(2, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(50));
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("actor remains")
           .cycle_nonce,
         1
@@ -1133,27 +1243,23 @@ mod tests {
         System::set_block_number(block);
         let _ = AAA::on_idle(block, Weight::MAX);
       }
-      assert!(
-        actor_ids
-          .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
-          .all(|aaa_id| {
-            AAA::aaa_instances(*aaa_id)
-              .expect("actor remains")
-              .cycle_nonce
-              == 1
-          })
-      );
+      for aaa_id in &actor_ids {
+        assert_eq!(
+          AAA::active_actor_view(*aaa_id)
+            .expect("actor remains")
+            .cycle_nonce,
+          1
+        );
+      }
       assert_eq!(pallet_aaa::QueuePages::<Runtime>::iter().count(), 0);
-      assert!(
-        actor_ids
-          .iter() // deos-bypass: bounded-iter — fixed nine-actor fixture assertion
-          .all(|aaa_id| {
-            pallet_aaa::ActorHot::<Runtime>::get(*aaa_id)
-              .expect("hot state remains")
-              .wakeup_pointer
-              .is_some()
-          })
-      );
+      for aaa_id in &actor_ids {
+        assert!(
+          pallet_aaa::ActorHot::<Runtime>::get(*aaa_id)
+            .expect("hot state remains")
+            .wakeup_pointer
+            .is_some()
+        );
+      }
       assert!(pallet_aaa::WakeupPages::<Runtime>::iter().count() >= 2);
     });
   }
@@ -1169,7 +1275,7 @@ mod tests {
         transfer_program(pallet_aaa::Trigger::immediate_manual(), 5),
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let sovereign = AAA::aaa_instances(aaa_id)
+      let sovereign = AAA::active_actor_view(aaa_id)
         .expect("system actor exists")
         .sovereign_account;
       let _ = <Balances as Currency<AccountId>>::deposit_creating(&sovereign, 777);
@@ -1219,10 +1325,12 @@ mod tests {
         ),
         pallet_aaa::Error::<Runtime>::MintNotAllowedForUserAaa
       );
+      let plan = transfer_program(pallet_aaa::Trigger::immediate_manual(), 1);
+      prefund_active_program(ALICE, &plan);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        transfer_program(pallet_aaa::Trigger::immediate_manual(), 1),
+        plan,
       ));
       let active_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       assert_noop!(
@@ -1242,14 +1350,14 @@ mod tests {
         program_with_task(pallet_aaa::Trigger::immediate_manual(), mint_task()),
       ));
       let system_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let sovereign = AAA::aaa_instances(system_id)
+      let sovereign = AAA::active_actor_view(system_id)
         .expect("system mint actor exists")
         .sovereign_account;
       assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), system_id));
       let _ = AAA::on_idle(1, Weight::MAX);
       assert_eq!(Balances::free_balance(sovereign), 100);
       assert_eq!(
-        AAA::aaa_instances(system_id)
+        AAA::active_actor_view(system_id)
           .expect("system actor remains")
           .cycle_nonce,
         1
@@ -1285,6 +1393,7 @@ mod tests {
           ),
         ],
       );
+      prefund_active_program(ALICE, &plan);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1318,7 +1427,7 @@ mod tests {
       let _ = AAA::on_idle(3, Weight::MAX);
       assert!(AAA::continuation_state(aaa_id).is_none());
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("actor completes")
           .cycle_nonce,
         1
@@ -1352,17 +1461,17 @@ mod tests {
       assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
       let _ = AAA::on_idle(1, Weight::MAX);
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("system actor suspends")
-          .run_state,
-        pallet_aaa::RunState::Suspended
+          .cycle_state,
+        pallet_aaa::CycleState::Suspended
       );
 
       System::set_block_number(2);
       let _ = AAA::on_idle(2, Weight::MAX);
       assert!(AAA::continuation_state(aaa_id).is_none());
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("system actor completes")
           .cycle_nonce,
         1
@@ -1379,10 +1488,12 @@ mod tests {
         pallet_aaa::SourceFilter::Any,
         pallet_aaa::AssetFilter::Any,
       );
+      let program = active_program(trigger, 2, alloc::vec![temporary_swap_step()]);
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        active_program(trigger, 2, alloc::vec![temporary_swap_step()]),
+        program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1392,9 +1503,9 @@ mod tests {
         100_000_000_000,
       ));
       let _ = AAA::on_idle(1, Weight::MAX);
-      let before = AAA::aaa_instances(aaa_id).expect("actor suspends");
+      let before = AAA::active_actor_view(aaa_id).expect("actor suspends");
       let before_hot = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).expect("hot state exists");
-      assert_eq!(before.run_state, pallet_aaa::RunState::Suspended);
+      assert_eq!(before.cycle_state, pallet_aaa::CycleState::Suspended);
 
       let sovereign = before.sovereign_account;
       let first_call =
@@ -1406,7 +1517,7 @@ mod tests {
         Executive::apply_extrinsic(signed_extrinsic(ALICE, 0, first_call)),
         Ok(Ok(_))
       ));
-      let after = AAA::aaa_instances(aaa_id).expect("actor remains suspended");
+      let after = AAA::active_actor_view(aaa_id).expect("actor remains suspended");
       let after_hot = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).expect("hot state remains");
       assert!(after.pending_signal);
       assert_eq!(after_hot.wakeup_pointer, before_hot.wakeup_pointer);
@@ -1434,7 +1545,7 @@ mod tests {
       let _ = AAA::on_idle(3, Weight::MAX);
       assert!(AAA::continuation_state(aaa_id).is_none());
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("latched run completes")
           .cycle_nonce,
         2
@@ -1447,17 +1558,19 @@ mod tests {
   fn continuation_cancel_then_pure_close_preserves_sovereign_balance() {
     new_test_ext().execute_with(|| {
       System::set_block_number(1);
+      let program = active_program(
+        pallet_aaa::Trigger::immediate_manual(),
+        1,
+        alloc::vec![temporary_swap_step()],
+      );
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        active_program(
-          pallet_aaa::Trigger::immediate_manual(),
-          1,
-          alloc::vec![temporary_swap_step()],
-        ),
+        program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let sovereign = AAA::aaa_instances(aaa_id)
+      let sovereign = AAA::active_actor_view(aaa_id)
         .expect("actor exists")
         .sovereign_account;
       assert_ok!(transfer_and_notify_actor(
@@ -1475,7 +1588,7 @@ mod tests {
         aaa_id,
       ));
       assert_ok!(AAA::close_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
-      assert!(AAA::aaa_instances(aaa_id).is_none());
+      assert!(AAA::active_actor_view(aaa_id).is_none());
       assert_eq!(Balances::free_balance(sovereign), balance_before);
     });
   }
@@ -1504,9 +1617,9 @@ mod tests {
       assert_ok!(transfer_and_notify_actor(aaa_id, &ALICE, NATIVE_ASSET, 100));
       assert_ok!(AAA::manual_trigger(RuntimeOrigin::signed(ALICE), aaa_id));
       let _ = AAA::on_idle(1, Weight::MAX);
-      let actor = AAA::aaa_instances(aaa_id).expect("actor remains after first failure");
+      let actor = AAA::active_actor_view(aaa_id).expect("actor remains after first failure");
       assert_eq!(actor.consecutive_failures, 1);
-      assert_eq!(actor.run_state, pallet_aaa::RunState::Idle);
+      assert_eq!(actor.cycle_state, pallet_aaa::CycleState::Idle);
       assert!(AAA::continuation_state(aaa_id).is_none());
     });
   }
@@ -1535,6 +1648,7 @@ mod tests {
         ),
         pallet_aaa::Error::<Runtime>::RetryLaterNotAllowedForImmutableAaa
       );
+      prefund_active_program(ALICE, &unsupported_retry);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1551,8 +1665,10 @@ mod tests {
       let _ = AAA::on_idle(1, Weight::MAX);
       assert!(AAA::continuation_state(aaa_id).is_none());
       assert_eq!(
-        AAA::aaa_instances(aaa_id).expect("actor remains").run_state,
-        pallet_aaa::RunState::Idle
+        AAA::active_actor_view(aaa_id)
+          .expect("actor remains")
+          .cycle_state,
+        pallet_aaa::CycleState::Idle
       );
     });
   }
@@ -1633,6 +1749,7 @@ mod tests {
         funding_source_policy: pallet_aaa::FundingSourcePolicy::AnyVerifiedIngress,
         auto_close_at_cycle_nonce: None,
       });
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
@@ -1650,7 +1767,7 @@ mod tests {
       let _ = AAA::on_idle(1, Weight::MAX);
       assert_eq!(Balances::free_balance(BOB), bob_before.saturating_add(5));
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("actor remains")
           .cycle_nonce,
         1
@@ -1670,10 +1787,12 @@ mod tests {
         input_limit: pallet_aaa::InputLimit::Absolute(100),
         slippage_tolerance: Perbill::zero(),
       };
+      let program = program_with_task(pallet_aaa::Trigger::immediate_manual(), task);
+      prefund_active_program(ALICE, &program);
       assert_ok!(AAA::create_user_aaa(
         RuntimeOrigin::signed(ALICE),
         pallet_aaa::Mutability::Mutable,
-        program_with_task(pallet_aaa::Trigger::immediate_manual(), task),
+        program,
       ));
       let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
       assert_ok!(transfer_and_notify_actor(
@@ -1690,7 +1809,7 @@ mod tests {
         sink_before.saturating_add(50)
       );
       assert_eq!(
-        AAA::aaa_instances(aaa_id)
+        AAA::active_actor_view(aaa_id)
           .expect("actor remains")
           .cycle_nonce,
         1

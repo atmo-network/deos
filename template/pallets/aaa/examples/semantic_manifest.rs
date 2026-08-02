@@ -119,14 +119,14 @@ fn amount_resolution_cases() -> Vec<(&'static str, AmountResolution<u128>)> {
       AmountResolution::PercentageOfCurrent(Perbill::one()),
     ),
     (
-      "PercentageOfTrigger",
-      AmountResolution::PercentageOfTrigger(Perbill::one()),
+      "PercentageAtOpening",
+      AmountResolution::PercentageAtOpening(Perbill::one()),
     ),
     (
       "PercentageOfLastFunding",
       AmountResolution::PercentageOfLastFunding(Perbill::one()),
     ),
-    ("AllBalance", AmountResolution::AllBalance),
+    ("AllAvailable", AmountResolution::AllAvailable),
   ]
 }
 
@@ -413,7 +413,7 @@ fn dependency(value: AmountDataDependency) -> &'static str {
   match value {
     AmountDataDependency::ArtifactValue => "ArtifactValue",
     AmountDataDependency::CurrentBalanceOrShares => "CurrentBalanceOrShares",
-    AmountDataDependency::TriggerSnapshot => "TriggerSnapshot",
+    AmountDataDependency::OpeningSnapshot => "OpeningSnapshot",
     AmountDataDependency::LastFundingSnapshot => "LastFundingSnapshot",
     AmountDataDependency::TaskPolicyCapacity => "TaskPolicyCapacity",
   }

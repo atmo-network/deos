@@ -20,9 +20,9 @@ use sp_version::RuntimeVersion;
 
 // Local module imports
 use super::{
-  AAA, AccountId, AssetConversion, Balance, Block, ConsensusHook, Executive, InherentDataExt,
-  Nonce, ParachainInfo, ParachainSystem, Runtime, RuntimeCall, RuntimeGenesisConfig, SLOT_DURATION,
-  SessionKeys, System, TransactionPayment, VERSION,
+  AAA, AccountId, AssetConversion, Balance, Block, BlockNumber, ConsensusHook, Executive,
+  InherentDataExt, Nonce, ParachainInfo, ParachainSystem, Runtime, RuntimeCall,
+  RuntimeGenesisConfig, SLOT_DURATION, SessionKeys, System, TransactionPayment, VERSION,
 };
 use crate::configs::AssetKind;
 
@@ -111,14 +111,18 @@ impl_runtime_apis! {
         }
     }
 
-    impl pallet_aaa::AaaSimulationApi<Block, pallet_aaa::ProgramInputOf<Runtime>> for Runtime {
+    impl pallet_aaa::AaaSimulationApi<
+        Block,
+        pallet_aaa::ProgramInputOf<Runtime>,
+        pallet_aaa::SimulationResultOf<Runtime>,
+    > for Runtime {
         fn simulate_current_program(
             aaa_id: pallet_aaa::AaaId,
             expected_type: pallet_aaa::AaaType,
             expected_mutability: pallet_aaa::Mutability,
             expected_program: pallet_aaa::ProgramInputOf<Runtime>,
             mode: pallet_aaa::SimulationMode,
-        ) -> Result<pallet_aaa::SimulationResult, pallet_aaa::SimulationError> {
+        ) -> Result<pallet_aaa::SimulationResultOf<Runtime>, pallet_aaa::SimulationError> {
             AAA::simulate_current_program(
                 aaa_id,
                 expected_type,
@@ -126,6 +130,17 @@ impl_runtime_apis! {
                 expected_program,
                 mode,
             )
+        }
+    }
+
+    impl pallet_aaa::AaaEligibilityApi<Block, BlockNumber> for Runtime {
+        fn aaa_eligibility(
+            aaa_id: pallet_aaa::AaaId,
+        ) -> Result<
+            pallet_aaa::AaaEligibilityProjection<BlockNumber>,
+            pallet_aaa::AaaEligibilityError,
+        > {
+            AAA::aaa_eligibility(aaa_id)
         }
     }
 

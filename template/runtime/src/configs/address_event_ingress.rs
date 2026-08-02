@@ -1,11 +1,14 @@
 //! Runtime ingress adapter for AAA `OnAddressEvent` trigger.
 //!
 //! Ingress producers (router fees, TMC distribution, asset transfer/mint hooks)
-//! call this adapter instead of touching AAA storage directly.
+//! call this adapter instead of touching AAA storage directly. Every movement path
+//! that claims AAA ingress must be registered in `AAA_ADDRESS_EVENT_PRODUCER_INVENTORY`;
+//! movement outside that inventory is balance-only.
 
 use super::*;
 
 use codec::{Decode, DecodeWithMemTracking, Encode};
+use pallet_aaa::{AddressEvent, FundingProvenance, IngressFailure};
 use polkadot_sdk::sp_runtime::{
   DispatchResult, impl_tx_ext_default,
   traits::{DispatchInfoOf, PostDispatchInfoOf, StaticLookup, TransactionExtension},
@@ -13,38 +16,6 @@ use polkadot_sdk::sp_runtime::{
 };
 use primitives::assets::TYPE_FOREIGN;
 use scale_info::TypeInfo;
-
-pub trait AddressEventIngress {
-  fn preflight_internal_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult;
-  fn on_internal_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult;
-  fn preflight_xcm_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult;
-  fn on_xcm_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult;
-  fn on_inbound_without_source(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-  ) -> DispatchResult;
-}
 
 pub struct RuntimeAddressEventIngress;
 
@@ -60,78 +31,196 @@ impl RuntimeAddressEventIngress {
     crate::AAA::sovereign_index(recipient)
   }
 
-  fn notify_inbound_without_source(
+  /// Sole certified-producer inventory accessor (spec 5.3). The generated ingress
+  /// evidence parses the same constant; the runtime test binds both.
+  #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
+  pub const fn certified_producer_inventory() -> &'static [AddressEventProducer] {
+    AAA_ADDRESS_EVENT_PRODUCER_INVENTORY
+  }
+
+  /// Provenance-specific certified-ingress helpers. Each constructs one typed
+  /// `AddressEvent` and routes it through the single typed boundary, so every
+  /// producer movement shares one preflight/notify surface and one error class.
+  pub fn preflight_internal_inbound(
     recipient: &AccountId,
     asset: AssetKind,
     amount: Balance,
-  ) -> DispatchResult {
-    if amount == 0 {
-      return Ok(());
-    }
-    let Some(aaa_id) = Self::resolve_aaa(recipient) else {
-      return Ok(());
-    };
-    crate::AAA::notify_address_event_without_source(aaa_id, asset, amount)
+    source: &AccountId,
+  ) -> Result<(), IngressFailure> {
+    crate::AAA::preflight_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: Some(source.clone()),
+      asset,
+      amount,
+      provenance: Some(FundingProvenance::InternalProtocol),
+    })
+  }
+
+  pub fn on_internal_inbound(
+    recipient: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+    source: &AccountId,
+  ) -> Result<(), IngressFailure> {
+    crate::AAA::notify_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: Some(source.clone()),
+      asset,
+      amount,
+      provenance: Some(FundingProvenance::InternalProtocol),
+    })
+  }
+
+  pub fn preflight_xcm_inbound(
+    recipient: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+    source: &AccountId,
+  ) -> Result<(), IngressFailure> {
+    crate::AAA::preflight_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: Some(source.clone()),
+      asset,
+      amount,
+      provenance: Some(FundingProvenance::Xcm),
+    })
+  }
+
+  pub fn on_xcm_inbound(
+    recipient: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+    source: &AccountId,
+  ) -> Result<(), IngressFailure> {
+    crate::AAA::notify_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: Some(source.clone()),
+      asset,
+      amount,
+      provenance: Some(FundingProvenance::Xcm),
+    })
+  }
+
+  pub fn on_inbound_without_source(
+    recipient: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+  ) -> Result<(), IngressFailure> {
+    crate::AAA::notify_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: None,
+      asset,
+      amount,
+      provenance: None,
+    })
   }
 }
 
-impl AddressEventIngress for RuntimeAddressEventIngress {
-  fn preflight_internal_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult {
-    let Some(aaa_id) = Self::resolve_aaa(recipient) else {
-      return Ok(());
-    };
-    let provenance = pallet_aaa::FundingProvenance::InternalProtocol;
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(source), Some(&provenance))
+/// One named certified AddressEvent movement path (spec 5.3).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
+pub struct AddressEventProducer {
+  pub id: &'static str,
+  pub credited_surface: &'static str,
+  pub source_provenance: &'static str,
+  pub preflight_owner: &'static str,
+  pub notify_owner: &'static str,
+  pub rollback_owner: &'static str,
+  pub weight_owner: &'static str,
+}
+
+#[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
+pub const AAA_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
+  AddressEventProducer {
+    id: "AddressEventIngressExtension::signed_transfer",
+    credited_surface: "Recipient sovereign",
+    source_provenance: "Signer / Signed",
+    preflight_owner: "TransactionExtension::prepare",
+    notify_owner: "TransactionExtension::post_dispatch_details",
+    rollback_owner: "Balances/Assets ledger revert",
+    weight_owner: "transaction_extension_ingress_base/_notify",
+  },
+  AddressEventProducer {
+    id: "AddressEventIngressExtension::transfer_all",
+    credited_surface: "Recipient sovereign",
+    source_provenance: "Signer / Signed, actual recipient delta",
+    preflight_owner: "TransactionExtension::prepare",
+    notify_owner: "TransactionExtension::post_dispatch_details",
+    rollback_owner: "Balances ledger revert",
+    weight_owner: "transaction_extension_ingress_base/_notify",
+  },
+  AddressEventProducer {
+    id: "TmctolAssetOps::transfer",
+    credited_surface: "Task `to` sovereign",
+    source_provenance: "Sender / InternalProtocol",
+    preflight_owner: "TmctolAssetOps::transfer preflight",
+    notify_owner: "RuntimeAddressEventIngress::on_internal_inbound",
+    rollback_owner: "Asset ops storage transaction",
+    weight_owner: "task_transfer/task_split_transfer generated weights",
+  },
+  AddressEventProducer {
+    id: "TmctolAssetOps::mint",
+    credited_surface: "Task `to` sovereign",
+    source_provenance: "Source-less / none",
+    preflight_owner: "Source-less preflight inside notify",
+    notify_owner: "RuntimeAddressEventIngress::on_inbound_without_source",
+    rollback_owner: "Asset ops storage transaction",
+    weight_owner: "task_mint generated weight",
+  },
+  AddressEventProducer {
+    id: "TmctolMintDistributionIngress",
+    credited_surface: "Collateral/minted recipients",
+    source_provenance: "Mint source / InternalProtocol",
+    preflight_owner: "before_collateral_transfer/before_sink_mint",
+    notify_owner: "after_distribution",
+    rollback_owner: "TMC distribution transaction",
+    weight_owner: "TMC distribution generated weights",
+  },
+  AddressEventProducer {
+    id: "AxialRouter::route_fee",
+    credited_surface: "Burn Actor sovereign",
+    source_provenance: "Fee payer / InternalProtocol",
+    preflight_owner: "FeeManagerImpl::route_fee preflight",
+    notify_owner: "FeeManagerImpl::route_fee notify",
+    rollback_owner: "Router fee transaction",
+    weight_owner: "Router fee routing generated weights",
+  },
+  AddressEventProducer {
+    id: "XCM asset deposit",
+    credited_surface: "Recipient sovereign",
+    source_provenance: "XCM origin / Xcm",
+    preflight_owner: "AaaAwareAssetTransactor::preflight_ingress",
+    notify_owner: "AaaAwareAssetTransactor::notify_ingress",
+    rollback_owner: "AaaAwareAssetTransactor deposit revert",
+    weight_owner: "One-asset deposit generated weight",
+  },
+  AddressEventProducer {
+    id: "XCM deposit without origin",
+    credited_surface: "Recipient sovereign",
+    source_provenance: "Source-less / none",
+    preflight_owner: "Source-less preflight inside notify",
+    notify_owner: "AaaAwareAssetTransactor::on_inbound_without_source",
+    rollback_owner: "AaaAwareAssetTransactor deposit revert",
+    weight_owner: "One-asset deposit generated weight",
+  },
+  AddressEventProducer {
+    id: "TmctolFeeCollector",
+    credited_surface: "Fee Sink sovereign",
+    source_provenance: "Payer / InternalProtocol",
+    preflight_owner: "Ledger-only preflight inside transfer_native_ledger_only",
+    notify_owner: "TmctolFeeCollector::collect_fee single notify",
+    rollback_owner: "Fee Sink transfer + ingress transaction revert",
+    weight_owner: "Fee collection generated weights",
+  },
+];
+
+impl pallet_aaa::AddressEventIngress<AccountId, AssetKind, Balance> for RuntimeAddressEventIngress {
+  fn preflight(event: &AddressEvent<AccountId, AssetKind, Balance>) -> Result<(), IngressFailure> {
+    crate::AAA::preflight_ingress(event)
   }
 
-  fn on_internal_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult {
-    let Some(aaa_id) = Self::resolve_aaa(recipient) else {
-      return Ok(());
-    };
-    crate::AAA::notify_internal_address_event(aaa_id, asset, amount, source)
-  }
-
-  fn preflight_xcm_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult {
-    let Some(aaa_id) = Self::resolve_aaa(recipient) else {
-      return Ok(());
-    };
-    let provenance = pallet_aaa::FundingProvenance::Xcm;
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, Some(source), Some(&provenance))
-  }
-
-  fn on_xcm_inbound(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-    source: &AccountId,
-  ) -> DispatchResult {
-    let Some(aaa_id) = Self::resolve_aaa(recipient) else {
-      return Ok(());
-    };
-    crate::AAA::notify_xcm_address_event(aaa_id, asset, amount, source)
-  }
-
-  fn on_inbound_without_source(
-    recipient: &AccountId,
-    asset: AssetKind,
-    amount: Balance,
-  ) -> DispatchResult {
-    Self::notify_inbound_without_source(recipient, asset, amount)
+  fn notify(event: &AddressEvent<AccountId, AssetKind, Balance>) -> Result<(), IngressFailure> {
+    crate::AAA::notify_ingress(event)
   }
 }
 
@@ -151,7 +240,6 @@ pub enum PreparedIngressAmount {
 
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct PreparedIngressCandidate {
-  aaa_id: pallet_aaa::AaaId,
   recipient: AccountId,
   asset: AssetKind,
   source: Option<AccountId>,
@@ -295,20 +383,21 @@ impl AddressEventIngressExtension {
     let Some((recipient, asset, preflight_amount, amount)) = candidate else {
       return Ok(None);
     };
-    let Some(aaa_id) = RuntimeAddressEventIngress::resolve_aaa(&recipient) else {
+    // Only movements to an AAA sovereign are certified: a non-sovereign recipient
+    // is balance-only and must not carry the notification envelope.
+    if RuntimeAddressEventIngress::resolve_aaa(&recipient).is_none() {
       return Ok(None);
-    };
+    }
     let provenance = pallet_aaa::FundingProvenance::Signed;
-    crate::AAA::preflight_funding_event(
-      aaa_id,
+    crate::AAA::preflight_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: Some(source.clone()),
       asset,
-      preflight_amount,
-      Some(&source),
-      Some(&provenance),
-    )
+      amount: preflight_amount,
+      provenance: Some(provenance),
+    })
     .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
     Ok(Some(PreparedIngressCandidate {
-      aaa_id,
       recipient,
       asset,
       source: Some(source),
@@ -350,13 +439,20 @@ impl AddressEventIngressExtension {
     let Some((recipient, asset, amount)) = candidate else {
       return Ok(None);
     };
-    let Some(aaa_id) = RuntimeAddressEventIngress::resolve_aaa(&recipient) else {
+    // Only movements to an AAA sovereign are certified: a non-sovereign recipient
+    // is balance-only and must not carry the notification envelope.
+    if RuntimeAddressEventIngress::resolve_aaa(&recipient).is_none() {
       return Ok(None);
-    };
-    crate::AAA::preflight_funding_event(aaa_id, asset, amount, None, None)
-      .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
+    }
+    crate::AAA::preflight_ingress(&AddressEvent {
+      destination: recipient.clone(),
+      source: None,
+      asset,
+      amount,
+      provenance: None,
+    })
+    .map_err(|_| TransactionValidityError::from(InvalidTransaction::Custom(40)))?;
     Ok(Some(PreparedIngressCandidate {
-      aaa_id,
       recipient,
       asset,
       source: None,
@@ -459,16 +555,16 @@ impl TransactionExtension<RuntimeCall> for AddressEventIngressExtension {
         if amount == 0 {
           false
         } else {
-          match candidate.source.as_ref() {
-            Some(source) => {
-              crate::AAA::notify_address_event(candidate.aaa_id, candidate.asset, amount, source)
-            }
-            None => crate::AAA::notify_address_event_without_source(
-              candidate.aaa_id,
-              candidate.asset,
-              amount,
-            ),
-          }
+          crate::AAA::notify_ingress(&AddressEvent {
+            destination: candidate.recipient.clone(),
+            source: candidate.source.clone(),
+            asset: candidate.asset,
+            amount,
+            provenance: candidate
+              .source
+              .as_ref()
+              .map(|_| pallet_aaa::FundingProvenance::Signed),
+          })
           .map_err(|_| InvalidTransaction::Custom(40))?;
           true
         }

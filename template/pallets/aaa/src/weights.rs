@@ -6,7 +6,7 @@
 use core::marker::PhantomData;
 use polkadot_sdk::frame_support::{
   traits::Get,
-  weights::{constants::RocksDbWeight, Weight},
+  weights::Weight,
 };
 
 pub trait WeightInfo {
@@ -20,18 +20,14 @@ pub trait WeightInfo {
   fn pause_aaa() -> Weight;
   fn resume_aaa() -> Weight;
   fn manual_trigger() -> Weight;
-  fn observation_change_ingress() -> Weight {
-    Weight::from_parts(75_000_000, 24_000)
-  }
-  fn observation_fanout_base() -> Weight {
-    Weight::from_parts(15_000_000, 4_000)
-  }
-  fn observation_fanout_page() -> Weight {
-    Weight::from_parts(8_000_000_000, 750_000)
-  }
+  fn observation_change_ingress() -> Weight;
+  fn observation_fanout_base() -> Weight;
+  fn observation_fanout_page() -> Weight;
   fn close_aaa() -> Weight;
   fn fee_collection() -> Weight;
   fn condition_set_evaluation(conditions: u32) -> Weight;
+  fn cycle_orchestration() -> Weight;
+  fn step_orchestration(steps: u32) -> Weight;
   fn task_transfer() -> Weight;
   fn task_burn() -> Weight;
   fn task_mint() -> Weight;
@@ -70,7 +66,7 @@ pub trait WeightInfo {
   fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
   fn scheduler_actor_hot_probe() -> Weight;
   fn scheduler_actor_program_probe() -> Weight;
-  fn scheduler_cycle_deferral_dimension() -> Weight;
+  fn cache_revalidation_units(units: u32) -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
   fn funding_snapshot_open(assets: u32) -> Weight;
@@ -86,21 +82,6 @@ pub trait WeightInfo {
   fn set_active_actor_limit() -> Weight;
   fn permissionless_sweep() -> Weight;
   fn permissionless_sweep_many(batch: u32) -> Weight;
-}
-
-pub trait TaskWeightInfo {
-  fn transfer() -> Weight;
-  fn burn() -> Weight;
-  fn mint() -> Weight;
-  fn split_transfer(legs: u32) -> Weight;
-  fn dex_exact_in() -> Weight;
-  fn dex_exact_out() -> Weight;
-  fn add_liquidity() -> Weight;
-  fn donate_liquidity() -> Weight;
-  fn remove_liquidity() -> Weight;
-  fn stake() -> Weight;
-  fn unstake() -> Weight;
-  fn stop_cycle() -> Weight;
 }
 
 pub struct SubstrateWeight<T>(PhantomData<T>);
@@ -159,6 +140,18 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().writes(2))
   }
 
+  fn observation_change_ingress() -> Weight {
+    Weight::from_parts(75_000_000, 24_000)
+  }
+
+  fn observation_fanout_base() -> Weight {
+    Weight::from_parts(15_000_000, 4_000)
+  }
+
+  fn observation_fanout_page() -> Weight {
+    Weight::from_parts(8_000_000_000, 750_000)
+  }
+
   fn close_aaa() -> Weight {
     Weight::from_parts(84_719_000, 8_120)
       .saturating_add(T::DbWeight::get().reads(8))
@@ -179,6 +172,16 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
       .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
+  }
+
+  fn cycle_orchestration() -> Weight {
+    Weight::from_parts(44_699_000, 9667).saturating_add(T::DbWeight::get().reads_writes(3, 2))
+  }
+
+  fn step_orchestration(steps: u32) -> Weight {
+    Weight::from_parts(44_555_323, 9667)
+      .saturating_add(Weight::from_parts(215_321, 0).saturating_mul(steps.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(3, 2))
   }
 
   fn task_transfer() -> Weight {
@@ -369,9 +372,14 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().reads(2))
   }
 
-  fn scheduler_cycle_deferral_dimension() -> Weight {
-    Weight::from_parts(26_000_000, 12_000)
+  fn cache_revalidation_units(units: u32) -> Weight {
+    let bounded = u64::from(units.min(T::MaxCacheRevalidationUnitsPerBlock::get()));
+    // Fixed per-pass orchestration plus one worst-case actor unit each (spec 5.4).
+    Weight::from_parts(25_000_000, 2_500)
+      .saturating_add(Weight::from_parts(340_000_000, 48_000).saturating_mul(bounded))
       .saturating_add(T::DbWeight::get().reads(2))
+      .saturating_add(T::DbWeight::get().writes(1))
+      .saturating_add(T::DbWeight::get().reads_writes(8, 4).saturating_mul(bounded))
   }
 
   fn transaction_extension_ingress_base() -> Weight {
@@ -445,7 +453,7 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 
   fn permissionless_sweep_many(batch: u32) -> Weight {
-    let bounded = u64::from(batch.min(T::MaxSweepPerBlock::get()));
+    let bounded = u64::from(batch.min(T::MaxSweepBatch::get()));
     Weight::from_parts(
       12_000_000u64.saturating_add(18_000_000u64.saturating_mul(bounded)),
       1200u64.saturating_add(384u64.saturating_mul(bounded)),
@@ -455,60 +463,11 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
   }
 }
 
-pub struct SubstrateTaskWeightInfo<T>(PhantomData<T>);
-impl<T: polkadot_sdk::frame_system::Config + crate::Config> TaskWeightInfo
-  for SubstrateTaskWeightInfo<T>
-{
-  fn transfer() -> Weight {
-    <T as crate::Config>::WeightInfo::task_transfer()
-  }
+#[cfg(any(test, feature = "runtime-benchmarks"))]
+pub struct TestWeightInfo;
 
-  fn burn() -> Weight {
-    <T as crate::Config>::WeightInfo::task_burn()
-  }
-
-  fn mint() -> Weight {
-    <T as crate::Config>::WeightInfo::task_mint()
-  }
-
-  fn split_transfer(legs: u32) -> Weight {
-    <T as crate::Config>::WeightInfo::task_split_transfer(legs.min(T::MaxSplitTransferLegs::get()))
-  }
-
-  fn dex_exact_in() -> Weight {
-    <T as crate::Config>::WeightInfo::task_dex_exact_in()
-  }
-
-  fn dex_exact_out() -> Weight {
-    <T as crate::Config>::WeightInfo::task_dex_exact_out()
-  }
-
-  fn add_liquidity() -> Weight {
-    <T as crate::Config>::WeightInfo::task_add_liquidity()
-  }
-
-  fn donate_liquidity() -> Weight {
-    <T as crate::Config>::WeightInfo::task_donate_liquidity()
-  }
-
-  fn remove_liquidity() -> Weight {
-    <T as crate::Config>::WeightInfo::task_remove_liquidity()
-  }
-
-  fn stake() -> Weight {
-    <T as crate::Config>::WeightInfo::task_stake()
-  }
-
-  fn unstake() -> Weight {
-    <T as crate::Config>::WeightInfo::task_unstake()
-  }
-
-  fn stop_cycle() -> Weight {
-    <T as crate::Config>::WeightInfo::task_stop_cycle()
-  }
-}
-
-impl WeightInfo for () {
+#[cfg(any(test, feature = "runtime-benchmarks"))]
+impl WeightInfo for TestWeightInfo {
   fn create_user_aaa() -> Weight { Weight::from_parts(25_000_000, 2000) }
   fn create_user_aaa_at_slot() -> Weight { Self::create_user_aaa() }
   fn create_system_aaa() -> Weight { Weight::from_parts(25_000_000, 2000) }
@@ -519,6 +478,9 @@ impl WeightInfo for () {
   fn pause_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn resume_aaa() -> Weight { Weight::from_parts(15_000_000, 1200) }
   fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
+  fn observation_change_ingress() -> Weight { Weight::from_parts(75_000_000, 24_000) }
+  fn observation_fanout_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
+  fn observation_fanout_page() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
   fn close_aaa() -> Weight { Weight::from_parts(84_719_000, 8_120) }
   fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
   fn condition_set_evaluation(conditions: u32) -> Weight {
@@ -528,7 +490,12 @@ impl WeightInfo for () {
     let bounded = u64::from(conditions.min(4));
     Weight::from_parts(8_660_000, 3_675)
       .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
-      .saturating_add(RocksDbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
+
+  }
+  fn cycle_orchestration() -> Weight { Weight::from_parts(44_699_000, 9667) }
+  fn step_orchestration(steps: u32) -> Weight {
+    Weight::from_parts(44_555_323, 9667)
+      .saturating_add(Weight::from_parts(215_321, 0).saturating_mul(steps.into()))
   }
   fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
   fn task_burn() -> Weight { Weight::from_parts(23_397_000, 3_593) }
@@ -560,9 +527,9 @@ impl WeightInfo for () {
   fn scheduler_wakeup_cursor_insert() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
   fn scheduler_wakeup_cursor_pop_min() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
   fn scheduler_wakeup_cursor_remove_exact() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
-  fn scheduler_wakeup_cursor_worker_partial() -> Weight { Weight::from_parts(51_474_000, 4_285) }
-  fn scheduler_wakeup_cursor_worker_remove() -> Weight { Weight::from_parts(500_351_000, 56_563) }
-  fn scheduler_wakeup_cursor_worker_future() -> Weight { Weight::from_parts(11_734_000, 3_906) }
+  fn scheduler_wakeup_cursor_worker_partial() -> Weight { Weight::from_parts(3_000_000_000, 750_000) }
+  fn scheduler_wakeup_cursor_worker_remove() -> Weight { Weight::from_parts(3_000_000_000, 750_000) }
+  fn scheduler_wakeup_cursor_worker_future() -> Weight { Weight::from_parts(500_000_000, 100_000) }
   fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_consume_delete_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
   fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {
@@ -583,7 +550,10 @@ impl WeightInfo for () {
   }
   fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
   fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
-  fn scheduler_cycle_deferral_dimension() -> Weight { Weight::from_parts(26_000_000, 12_000) }
+  fn cache_revalidation_units(units: u32) -> Weight {
+    Weight::from_parts(25_000_000, 2_500)
+      .saturating_add(Weight::from_parts(340_000_000, 48_000).saturating_mul(units.into()))
+  }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
   fn funding_snapshot_open(assets: u32) -> Weight {
@@ -608,25 +578,11 @@ impl WeightInfo for () {
   fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
   fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }
   fn permissionless_sweep_many(batch: u32) -> Weight {
-    let bounded = u64::from(batch.min(16));
+    let bounded = u64::from(batch.min(3));
     Weight::from_parts(
       12_000_000u64.saturating_add(18_000_000u64.saturating_mul(bounded)),
-      1200,
+      1200u64.saturating_add(384u64.saturating_mul(bounded)),
     )
   }
 }
 
-impl TaskWeightInfo for () {
-  fn transfer() -> Weight { <() as WeightInfo>::task_transfer() }
-  fn burn() -> Weight { <() as WeightInfo>::task_burn() }
-  fn mint() -> Weight { <() as WeightInfo>::task_mint() }
-  fn split_transfer(legs: u32) -> Weight { <() as WeightInfo>::task_split_transfer(legs) }
-  fn dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
-  fn dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
-  fn add_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
-  fn donate_liquidity() -> Weight { Weight::from_parts(600_000_000, 48_000) }
-  fn remove_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
-  fn stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
-  fn unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
-  fn stop_cycle() -> Weight { <() as WeightInfo>::task_stop_cycle() }
-}

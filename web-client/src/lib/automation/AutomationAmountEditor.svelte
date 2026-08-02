@@ -26,7 +26,7 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     amount =
       type === 'Fixed'
         ? { type, value: '0' }
-        : type === 'AllBalance'
+        : type === 'AllAvailable'
           ? { type }
           : { type, parts: 500_000_000 };
   }
@@ -36,9 +36,9 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
       case 'Fixed':
         return 'Artifact value; live capacity still applies';
       case 'PercentageOfCurrent':
-      case 'AllBalance':
+      case 'AllAvailable':
         return 'Re-observed at each step attempt';
-      case 'PercentageOfTrigger':
+      case 'PercentageAtOpening':
         return 'Frozen at logical-run start';
       case 'PercentageOfLastFunding':
         return 'Frozen from the promoted funding batch';
@@ -56,9 +56,9 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
     >
       <option value="Fixed">Fixed</option>
       <option value="PercentageOfCurrent">% current</option>
-      <option value="PercentageOfTrigger">% trigger</option>
+      <option value="PercentageAtOpening">% at opening</option>
       <option value="PercentageOfLastFunding">% last funding</option>
-      <option value="AllBalance">All balance</option>
+      <option value="AllAvailable">All available</option>
     </SelectField>
     {#if amount.type === 'Fixed'}
       <TextField
@@ -68,7 +68,7 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
         bind:value={amount.value}
         inputClass="h-9 py-1.5 text-xs tabnum"
       />
-    {:else if amount.type !== 'AllBalance'}
+    {:else if amount.type !== 'AllAvailable'}
       <NumberInput
         label="Perbill parts"
         min={0}

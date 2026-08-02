@@ -283,7 +283,7 @@ verify_weight_file_contract() {
     fi
 
     if ! grep -q 'The range of component `n` is `\[1, 5\]`.' "$output_file"; then
-        log_error "Weight file contract check failed for pallet_aaa: permissionless_sweep_many must cover MaxSweepPerBlock=5"
+        log_error "Weight file contract check failed for pallet_aaa: permissionless_sweep_many must cover MaxSweepBatch=5"
         return 1
     fi
 

@@ -31,11 +31,11 @@ export type AaaAuthoringAmount =
   | {
       type:
         | 'PercentageOfCurrent'
-        | 'PercentageOfTrigger'
+        | 'PercentageAtOpening'
         | 'PercentageOfLastFunding';
       parts: number;
     }
-  | { type: 'AllBalance' };
+  | { type: 'AllAvailable' };
 
 export type AaaAuthoringObservationFeed = {
   assetIn: AaaAuthoringAsset;
@@ -464,7 +464,7 @@ function validateAmount(
       }
       return;
     case 'PercentageOfCurrent':
-    case 'PercentageOfTrigger':
+    case 'PercentageAtOpening':
     case 'PercentageOfLastFunding':
       validatePerbill(amount.parts, `${path}.parts`, issues);
       if (amount.parts === 0) {
@@ -474,7 +474,7 @@ function validateAmount(
         });
       }
       return;
-    case 'AllBalance':
+    case 'AllAvailable':
       return;
   }
 }
@@ -730,108 +730,6 @@ function validateTask(
   }
 }
 
-type TriggerAmountSurface = {
-  asset: AaaAuthoringAsset;
-  runtimeDerived: boolean;
-  path: string;
-};
-
-function collectTriggerAmountSurfaces(
-  task: AaaAuthoringTask,
-  path: string,
-): TriggerAmountSurface[] {
-  const surfaces: TriggerAmountSurface[] = [];
-  const push = (
-    amount: AaaAuthoringAmount,
-    asset: AaaAuthoringAsset,
-    amountPath: string,
-    runtimeDerived = false,
-  ) => {
-    if (amount.type === 'PercentageOfTrigger') {
-      surfaces.push({ asset, runtimeDerived, path: amountPath });
-    }
-  };
-  switch (task.type) {
-    case 'Transfer':
-    case 'SplitTransfer':
-    case 'Burn':
-    case 'Mint':
-    case 'Stake':
-      push(task.amount, task.asset, `${path}.amount`);
-      break;
-    case 'SwapIn':
-      push(task.amountIn, task.assetIn, `${path}.amountIn`);
-      break;
-    case 'SwapOut':
-      push(task.amountOut, task.assetOut, `${path}.amountOut`);
-      break;
-    case 'AddLiquidity':
-      push(task.amountA, task.assetA, `${path}.amountA`);
-      push(task.amountB, task.assetB, `${path}.amountB`);
-      break;
-    case 'RemoveLiquidity':
-      push(task.lpAmount, task.lpAsset, `${path}.lpAmount`);
-      break;
-    case 'DonateLiquidity':
-      push(task.maxAmountA, task.assetA, `${path}.maxAmountA`);
-      break;
-    case 'Unstake':
-      push(task.shares, task.asset, `${path}.shares`, true);
-      break;
-    case 'StopCycle':
-      break;
-  }
-  return surfaces;
-}
-
-function validateTriggerAmountCompatibility(
-  program: AaaAuthoringProgram,
-  issues: AaaAuthoringIssue[],
-) {
-  const surfaces = program.steps.flatMap((step, index) =>
-    collectTriggerAmountSurfaces(step.task, `steps[${index}].task`),
-  );
-  if (surfaces.length === 0) return;
-  const sources =
-    program.trigger.type === 'Immediate'
-      ? program.trigger.sources
-      : program.trigger.mode.type === 'WhenSignalled'
-        ? program.trigger.mode.sources
-        : [];
-  if (
-    sources.length === 0 ||
-    sources.some((source) => source.type !== 'OnAddressEvent')
-  ) {
-    issues.push({
-      path: 'trigger',
-      message:
-        'PercentageOfTrigger requires only address-event readiness sources; Manual, observation, and cadence-only admission provide no trigger amount',
-    });
-    return;
-  }
-  for (const source of sources) {
-    if (source.type !== 'OnAddressEvent') continue;
-    for (const surface of surfaces) {
-      const covered =
-        source.assetFilter.type === 'Any' ||
-        (!surface.runtimeDerived &&
-          source.assetFilter.assets.some(
-            (asset) =>
-              bytesKey(assetCanonicalBytes(asset)) ===
-              bytesKey(assetCanonicalBytes(surface.asset)),
-          ));
-      if (!covered) {
-        issues.push({
-          path: surface.path,
-          message: surface.runtimeDerived
-            ? 'PercentageOfTrigger for Unstake requires an Any-asset address source because the receipt asset is runtime-derived'
-            : 'PercentageOfTrigger asset must be admitted by every address-event source',
-        });
-      }
-    }
-  }
-}
-
 function validateUniqueAddresses(
   accounts: string[],
   path: string,
@@ -1063,17 +961,16 @@ export function validateAaaAuthoringProgram(
     if (
       step.errorPolicy.type === 'RetryLater' &&
       (!Number.isSafeInteger(step.errorPolicy.maxAttempts) ||
-        step.errorPolicy.maxAttempts <= 0 ||
+        step.errorPolicy.maxAttempts < 2 ||
         step.errorPolicy.maxAttempts > limits.maxRetryAttempts)
     ) {
       issues.push({
         path: `${path}.errorPolicy.maxAttempts`,
-        message: `RetryLater max attempts must be within 1..${limits.maxRetryAttempts}`,
+        message: `RetryLater max attempts must be within 2..${limits.maxRetryAttempts}`,
       });
     }
     validateTask(step.task, `${path}.task`, issues, limits, program.aaaType);
   });
-  validateTriggerAmountCompatibility(program, issues);
   return issues.length === 0
     ? { valid: true, issues: [] }
     : { valid: false, issues };
@@ -1156,11 +1053,11 @@ function lowerAmount(amount: AaaAuthoringAmount) {
     case 'Fixed':
       return runtimeVariant('Fixed', BigInt(amount.value));
     case 'PercentageOfCurrent':
-    case 'PercentageOfTrigger':
+    case 'PercentageAtOpening':
     case 'PercentageOfLastFunding':
       return runtimeVariant(amount.type, amount.parts);
-    case 'AllBalance':
-      return runtimeVariant('AllBalance');
+    case 'AllAvailable':
+      return runtimeVariant('AllAvailable');
   }
 }
 

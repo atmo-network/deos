@@ -8,7 +8,33 @@ pub type WakeupPageId = u64;
 pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
 pub type ObservationRevision = u64;
-pub type ObservationDirtySlot = u32;
+
+/// Global cache epoch stamp shared by every executable Active actor (spec 2.1, 5.4).
+pub type CacheEpoch = u32;
+
+/// Durable global cache-revalidation progress (spec 5.4). The workset is the exact set of
+/// Active actors at upgrade start; `cursor` marks the last processed workset key, and
+/// `remaining` counts members not yet confirmed, shrinking on close/deactivation removal and
+/// on each stamped or skipped worker visit. The state clears atomically at `remaining == 0`.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct CacheRevalidationState<Cursor> {
+  pub target_epoch: CacheEpoch,
+  pub cursor: Cursor,
+  pub remaining: u32,
+}
+
+/// Disposition applied by the bounded revalidation worker to an Active actor whose plan no
+/// longer admits under current bindings (spec 6.4). The migration-specific contract MUST name
+/// one; without it a cache-affecting runtime change MUST NOT activate.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RevalidationDisposition {
+  /// Remove the Active epoch while preserving identity, locator, nonce, and balances.
+  Deactivate,
+  /// Delete actor semantics while preserving sovereign balances.
+  Close(CloseReason),
+}
 
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
@@ -20,7 +46,15 @@ pub struct ObservationSubscriberPageList {
 }
 
 #[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+  polkadot_sdk::frame_support::CloneNoBound,
+  polkadot_sdk::frame_support::DebugNoBound,
+  polkadot_sdk::frame_support::PartialEqNoBound,
+  polkadot_sdk::frame_support::EqNoBound,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  TypeInfo,
+  MaxEncodedLen,
 )]
 #[scale_info(skip_type_params(MaxEntries))]
 pub struct ObservationSubscriberPage<MaxEntries: Get<u32>> {
@@ -178,9 +212,9 @@ pub struct WakeupDrainStats {
 pub enum AmountResolution<Balance> {
   Fixed(Balance),
   PercentageOfCurrent(Perbill),
-  PercentageOfTrigger(Perbill),
+  PercentageAtOpening(Perbill),
   PercentageOfLastFunding(Perbill),
-  AllBalance,
+  AllAvailable,
 }
 
 #[derive(
@@ -827,15 +861,6 @@ impl StepErrorPolicy {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum DeferReason {
-  RefTime,
-  ProofSize,
-  Both,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
 pub enum SuspensionReason {
   FundingUnavailable,
   Temporary,
@@ -918,7 +943,8 @@ pub enum SimulationError {
   ProgramMismatch,
   TypeMismatch,
   MutabilityMismatch,
-  ModeRunStateMismatch,
+  ModeCycleStateMismatch,
+  CacheRevalidationActive,
   GlobalCircuitBreaker,
   WindowExpired,
   Paused,
@@ -937,8 +963,18 @@ impl From<polkadot_sdk::sp_runtime::DispatchError> for SimulationError {
   }
 }
 
-#[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
-pub struct SimulationResult {
+#[derive(
+  polkadot_sdk::frame_support::CloneNoBound,
+  polkadot_sdk::frame_support::DebugNoBound,
+  polkadot_sdk::frame_support::PartialEqNoBound,
+  polkadot_sdk::frame_support::EqNoBound,
+  Decode,
+  DecodeWithMemTracking,
+  Encode,
+  TypeInfo,
+)]
+#[scale_info(skip_type_params(MaxExecutionPlanSteps))]
+pub struct SimulationResult<MaxExecutionPlanSteps: Get<u32>> {
   pub status: SimulationStatus,
   pub cycle_nonce: u64,
   pub attempt: u32,
@@ -947,7 +983,64 @@ pub struct SimulationResult {
   pub unsuccessful_attempts_at_cursor: Option<u32>,
   pub finalized_through: Option<u32>,
   pub cumulative_outcomes: OutcomeTotals,
-  pub steps: alloc::vec::Vec<SimulationStepRecord>,
+  pub steps: BoundedVec<SimulationStepRecord, MaxExecutionPlanSteps>,
+}
+
+/// Read-only scheduler-owned readiness phase for the eligibility projection
+/// (spec 7.3). Clients read one runtime API instead of reimplementing cadence
+/// phase, cooldown, window floor, retry backoff, breaker, and latch arithmetic.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum AaaEligibilityPhase {
+  /// No identity is registered under the id.
+  NotRegistered,
+  /// A dormant identity exists without an Active program.
+  Dormant,
+  /// The actor is temporally and trigger-ready for scheduler admission now.
+  Ready,
+  /// Manual pause blocks execution.
+  Paused,
+  /// The global circuit breaker blocks all execution.
+  GlobalCircuitBreaker,
+  /// The schedule window ended; window-expiry closure is due.
+  WindowExpired,
+  /// Cycle nonce exhausted; closure is due.
+  CycleNonceExhausted,
+  /// The consecutive-failure limit is reached; closure is due.
+  ConsecutiveFailureLimit,
+  /// The configured auto-close nonce is reached; closure precedes the next cycle.
+  AutoCloseDue,
+  /// The temporal gate is open but the pending-signal latch is absent.
+  WaitingSignal,
+  /// A suspended run waits for retry backoff or cooldown before the next attempt.
+  WaitingRetry,
+  /// Cooldown, window floor, or cadence has not yet opened the temporal gate.
+  WaitingTemporal,
+}
+
+/// One read-only eligibility projection (spec 7.3). `ready` is the scheduler
+/// verdict at the read block; `phase` explains it; `next_eligible_block` is the
+/// next block at which temporal eligibility opens (`now` when `ready`), or
+/// `None` when no future temporal gate is computable.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct AaaEligibilityProjection<BlockNumber> {
+  pub ready: bool,
+  pub phase: AaaEligibilityPhase,
+  pub next_eligible_block: Option<BlockNumber>,
+}
+
+/// Why the eligibility projection could not be computed.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum AaaEligibilityError {
+  /// Next-eligible arithmetic overflowed the block-number domain.
+  ComputationOverflow,
+  /// A suspended actor lacks its mandatory Continuation state.
+  ContinuationInvariant,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -1461,9 +1554,13 @@ impl<
     let Some(sources) = self.sources() else {
       return true;
     };
-    let filters_are_canonical = sources
-      .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds policy validation.
-      .all(TriggerSource::has_canonical_filters);
+    let mut filters_are_canonical = true;
+    for source in sources.as_slice() {
+      if !source.has_canonical_filters() {
+        filters_are_canonical = false;
+        break;
+      }
+    }
     !sources.is_empty()
       && filters_are_canonical
       && sources.windows(2).all(|pair| {
@@ -1480,28 +1577,31 @@ impl<
     }
   }
 
+  fn source_enabled(
+    &self,
+    predicate: impl Fn(&TriggerSource<AccountId, AssetId, MaxWhitelistSize, ObservationFeedId>) -> bool,
+  ) -> bool {
+    let Some(sources) = self.sources() else {
+      return false;
+    };
+    for source in sources.as_slice() {
+      if predicate(source) {
+        return true;
+      }
+    }
+    false
+  }
+
   pub fn manual_source_enabled(&self) -> bool {
-    self.sources().is_some_and(|sources| {
-      sources
-        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds source lookup.
-        .any(|source| matches!(source, TriggerSource::Manual))
-    })
+    self.source_enabled(|source| matches!(source, TriggerSource::Manual))
   }
 
   pub fn address_event_source_enabled(&self) -> bool {
-    self.sources().is_some_and(|sources| {
-      sources
-        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds source lookup.
-        .any(|source| matches!(source, TriggerSource::OnAddressEvent { .. }))
-    })
+    self.source_enabled(|source| matches!(source, TriggerSource::OnAddressEvent { .. }))
   }
 
   pub fn observation_source_enabled(&self) -> bool {
-    self.sources().is_some_and(|sources| {
-      sources
-        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds source lookup.
-        .any(|source| matches!(source, TriggerSource::OnObservationChange { .. }))
-    })
+    self.source_enabled(|source| matches!(source, TriggerSource::OnObservationChange { .. }))
   }
 }
 
@@ -1898,7 +1998,7 @@ pub enum ProgramInput<Schedule, BlockNumber, ExecutionPlan, FundingPolicy> {
   TypeInfo,
   MaxEncodedLen,
 )]
-pub enum RunState {
+pub enum CycleState {
   #[default]
   Idle,
   Suspended,
@@ -1918,8 +2018,9 @@ pub enum RunState {
   TypeInfo,
   MaxEncodedLen,
 )]
-pub enum ResolutionSurface<AssetId> {
-  Asset(AssetId),
+pub enum OpeningSurface<AssetId> {
+  PreservableAsset(AssetId),
+  TargetAsset(AssetId),
   StakingShares(AssetId),
 }
 
@@ -1958,7 +2059,7 @@ pub struct ContinuationState<
   pub attempt: u32,
   pub unsuccessful_attempts_at_cursor: u32,
   pub last_attempt_block: BlockNumber,
-  pub trigger_snapshot: BoundedBTreeMap<ResolutionSurface<AssetId>, Balance, MaxSnapshotEntries>,
+  pub opening_snapshot: BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>,
   pub funding_snapshot: BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>,
   pub cumulative_outcomes: OutcomeTotals,
 }
@@ -1979,7 +2080,7 @@ pub struct ActorIdentity<AccountId> {
 )]
 pub struct ActorHotState<BlockNumber, Balance> {
   pub lifecycle: ActiveLifecycle,
-  pub run_state: RunState,
+  pub cycle_state: CycleState,
   pub auto_close_at_cycle_nonce: Option<u64>,
   pub consecutive_failures: u32,
   pub pending_signal: bool,
@@ -1992,6 +2093,9 @@ pub struct ActorHotState<BlockNumber, Balance> {
   pub funding_tracked_count: u32,
   pub schedule_anchor: BlockNumber,
   pub last_cycle_block: Option<BlockNumber>,
+  /// Current global cache epoch stamp; an Active actor is executable only while this
+  /// equals `CurrentCacheEpoch` and no `CacheRevalidationState` exists (spec 2.1).
+  pub cache_epoch: CacheEpoch,
 }
 
 #[derive(
@@ -2007,13 +2111,13 @@ pub struct ActorProgramState<Schedule, BlockNumber, ExecutionPlan> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance> {
+pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
   pub mutability: Mutability,
   pub lifecycle: ActiveLifecycle,
-  pub run_state: RunState,
+  pub cycle_state: CycleState,
   pub schedule: Schedule,
   pub schedule_window: Option<ScheduleWindow<BlockNumber>>,
   pub execution_plan: ExecutionPlan,
@@ -2029,6 +2133,8 @@ pub struct AaaInstance<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance>
   pub funding_tracked_count: u32,
   pub schedule_anchor: BlockNumber,
   pub last_cycle_block: Option<BlockNumber>,
+  /// Read-only cache stamp mirroring `ActorHotState.cache_epoch` (spec 2.1).
+  pub cache_epoch: CacheEpoch,
 }
 
 #[derive(
@@ -2047,4 +2153,20 @@ pub enum FundingProvenance {
   Signed,
   InternalProtocol,
   Xcm,
+}
+
+/// One certified AddressEvent ingress movement (spec 3.1, 5.3, 6.2).
+///
+/// Only certified producers construct this value; the runtime adapter implements
+/// `AddressEventIngress::preflight`/`notify` on it. `provenance == None` with
+/// `source == None` is the source-less movement surface.
+#[derive(
+  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
+)]
+pub struct AddressEvent<AccountId, AssetId, Balance> {
+  pub destination: AccountId,
+  pub source: Option<AccountId>,
+  pub asset: AssetId,
+  pub amount: Balance,
+  pub provenance: Option<FundingProvenance>,
 }

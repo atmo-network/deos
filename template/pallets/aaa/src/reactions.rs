@@ -132,12 +132,7 @@ impl<T: Config> Pallet<T> {
     feed: T::ObservationFeedId,
     revision: ObservationRevision,
   ) -> DispatchResult {
-    polkadot_sdk::frame_support::storage::with_transaction(|| {
-      match Self::do_note_observation_changed(feed, revision) {
-        Ok(()) => TransactionOutcome::Commit(Ok(())),
-        Err(error) => TransactionOutcome::Rollback(Err(error)),
-      }
-    })
+    Self::with_reused_transaction(|| Self::do_note_observation_changed(feed, revision))
   }
 
   pub(crate) fn preflight_clear_dirty_observation_feeds(
@@ -282,7 +277,6 @@ impl<T: Config> Pallet<T> {
     let next_page = page.next;
     let mut page_complete = true;
     for aaa_id in page.entries.into_iter().flatten() {
-      // deos-bypass: bounded-iter — QueuePageSize bounds one fanout unit.
       page_complete &= Self::signal_observation_subscriber(aaa_id);
     }
     if !page_complete {
@@ -371,7 +365,6 @@ impl<T: Config> Pallet<T> {
     let mut current = list.head;
     let mut previous = None;
     while let Some(feed) = current {
-      // deos-bypass: bounded-iter — try-state-only walk is bounded by maximum dirty feeds.
       let state = DirtyObservationFeeds::<T>::get(feed).ok_or(TryRuntimeError::Other(
         "dirty observation list owner is missing",
       ))?;
@@ -394,8 +387,9 @@ impl<T: Config> Pallet<T> {
       ));
     }
     let mut stored_feeds = BTreeSet::<T::ObservationFeedId>::new();
-    let dirty_feeds = DirtyObservationFeeds::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded dirty-feed audit.
-    for (feed, state) in dirty_feeds {
+    for feed in DirtyObservationFeeds::<T>::iter_keys() {
+      let state = DirtyObservationFeeds::<T>::get(feed)
+        .ok_or(TryRuntimeError::Other("dirty observation key has no state"))?;
       if state.latest_revision == 0
         || state.fanout_revision > state.latest_revision
         || (state.fanout_revision == 0 && state.next_subscriber_page.is_some())
@@ -419,8 +413,10 @@ impl<T: Config> Pallet<T> {
         "dirty observation map and list disagree",
       ));
     }
-    let baselines = ObservationIngressRevisions::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded subscribed-feed audit.
-    for (feed, revision) in baselines {
+    for feed in ObservationIngressRevisions::<T>::iter_keys() {
+      let revision = ObservationIngressRevisions::<T>::get(feed).ok_or(TryRuntimeError::Other(
+        "observation revision key has no value",
+      ))?;
       if revision == 0 || ObservationSubscriberCount::<T>::get(feed) == 0 {
         return Err(TryRuntimeError::Other(
           "observation ingress revision baseline disagrees",
@@ -428,5 +424,11 @@ impl<T: Config> Pallet<T> {
       }
     }
     Ok(())
+  }
+}
+
+impl<T: Config> crate::ObservationChangeIngress<T::ObservationFeedId> for Pallet<T> {
+  fn note_observation_changed(feed: T::ObservationFeedId, revision: u64) -> DispatchResult {
+    Pallet::<T>::note_observation_changed(feed, revision)
   }
 }

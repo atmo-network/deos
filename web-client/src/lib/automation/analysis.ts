@@ -112,7 +112,7 @@ export type AaaAmountSemantics = {
   dataDependencies: Array<
     | 'artifact-value'
     | 'current-balance-or-shares'
-    | 'trigger-snapshot'
+    | 'opening-snapshot'
     | 'last-funding-snapshot'
     | 'task-policy-capacity'
   >;
@@ -614,8 +614,8 @@ function taskAmounts(
             return 'artifact-value';
           case 'CurrentBalanceOrShares':
             return 'current-balance-or-shares';
-          case 'TriggerSnapshot':
-            return 'trigger-snapshot';
+          case 'OpeningSnapshot':
+            return 'opening-snapshot';
           case 'LastFundingSnapshot':
             return 'last-funding-snapshot';
           case 'TaskPolicyCapacity':
@@ -1212,7 +1212,7 @@ function findings(
   const triggerAmountSteps = steps
     .filter((step) =>
       step.amounts.some(
-        (amount) => amount.resolution === 'PercentageOfTrigger',
+        (amount) => amount.resolution === 'PercentageAtOpening',
       ),
     )
     .map((step) => step.index);
@@ -1393,7 +1393,7 @@ function findings(
       reader.amounts.some(
         (amount) =>
           amount.resolution === 'PercentageOfCurrent' ||
-          amount.resolution === 'AllBalance',
+          amount.resolution === 'AllAvailable',
       )
     ) {
       results.push({

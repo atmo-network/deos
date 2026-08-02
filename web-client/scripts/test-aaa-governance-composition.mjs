@@ -144,7 +144,7 @@ test('activation and custody reattachment preserve artifact identity and reject 
     runtime,
     target: { type: 'Activate', aaaId: 9n },
   });
-  assert.equal(activation.call.bytes, '0x3715090000000000000000');
+  assert.equal(activation.call.bytes, '0x3711090000000000000000');
   assert.equal(activation.planId, userArtifact.planId);
 
   assert.throws(

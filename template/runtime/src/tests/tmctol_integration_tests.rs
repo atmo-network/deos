@@ -235,8 +235,8 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::AddLiquidity {
           asset_a: AssetKind::Native,
           asset_b: foreign,
-          amount_a: AmountResolution::AllBalance,
-          amount_b: AmountResolution::AllBalance,
+          amount_a: AmountResolution::AllAvailable,
+          amount_b: AmountResolution::AllAvailable,
           min_lp_out: 1,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -246,7 +246,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         task: Task::SwapIn {
           asset_in: foreign,
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllBalance,
+          amount_in: AmountResolution::AllAvailable,
           slippage_tolerance: primitives::ecosystem::params::SYSTEM_AAA_MAX_SWAP_SLIPPAGE,
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -255,7 +255,7 @@ fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
         conditions: Default::default(),
         task: Task::SplitTransfer {
           asset: lp_asset,
-          amount: AmountResolution::AllBalance,
+          amount: AmountResolution::AllAvailable,
           legs: alloc::vec![
             pallet_aaa::SplitLeg {
               to: AAA::sovereign_account_id_system(aaa_ids::TOL_BUCKET_A_AAA_ID),
@@ -325,7 +325,8 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
 fn genesis_burning_manager_aaa_has_deterministic_sovereign_and_correct_state() {
   new_test_ext().execute_with(|| {
     let aaa_id = aaa_ids::BURNING_MANAGER_AAA_ID;
-    let instance = AAA::aaa_instances(aaa_id).expect("Burning Manager AAA must exist at genesis");
+    let instance =
+      AAA::active_actor_view(aaa_id).expect("Burning Manager AAA must exist at genesis");
     let expected_sovereign = AAA::sovereign_account_id_system(aaa_id);
     assert_eq!(instance.sovereign_account, expected_sovereign);
     assert_eq!(
@@ -366,7 +367,7 @@ fn genesis_value_driven_programs_use_omnivorous_address_event_triggers() {
       aaa_ids::FEE_SINK_AAA_ID,
       aaa_ids::BLDR_SPLITTER_AAA_ID,
     ] {
-      let instance = AAA::aaa_instances(aaa_id).expect("genesis active actor exists");
+      let instance = AAA::active_actor_view(aaa_id).expect("genesis active actor exists");
       assert!(
         instance.schedule.trigger.address_event_source_enabled(),
         "value-driven actor {aaa_id} must react to verified inbound value without polling"
@@ -458,7 +459,7 @@ fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
     let fee_received = bm_after_swap.saturating_sub(bm_before);
     assert!(fee_received > 0, "BM sovereign must receive router fee");
     let issuance_before_burn = Balances::total_issuance();
-    let bm_before_signal = AAA::aaa_instances(bm_id).expect("BM must exist");
+    let bm_before_signal = AAA::active_actor_view(bm_id).expect("BM must exist");
     let target_cycle_nonce = bm_before_signal.cycle_nonce.saturating_add(1);
     assert!(
       bm_before_signal
@@ -538,7 +539,7 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
         task: Task::SwapIn {
           asset_in: AssetKind::Local(super::common::ASSET_A),
           asset_out: AssetKind::Native,
-          amount_in: AmountResolution::AllBalance,
+          amount_in: AmountResolution::AllAvailable,
           slippage_tolerance: Perbill::from_percent(5),
         },
         on_error: StepErrorPolicy::ContinueNextStep,
@@ -554,7 +555,7 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
         ),
         task: Task::Burn {
           asset: AssetKind::Native,
-          amount: AmountResolution::AllBalance,
+          amount: AmountResolution::AllAvailable,
         },
         on_error: StepErrorPolicy::AbortCycle,
       },
@@ -1284,7 +1285,7 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
     let treasury_foreign_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(ASSET_A, &treasury);
     assert_ok!(AAA::manual_trigger(RuntimeOrigin::root(), bucket_id));
-    let budget = <<Runtime as pallet_aaa::Config>::GuaranteedOnIdleWeight as
+    let budget = <<Runtime as pallet_aaa::Config>::AaaOnIdleReserve as
       polkadot_sdk::frame_support::traits::Get<Weight>>::get();
     for block in 2..=8 {
       System::set_block_number(block);

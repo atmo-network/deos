@@ -11,10 +11,7 @@ use frame::hashing::sha2_256;
 type Inputs = BoundedVec<FeeEnvelopeInput<u128>, ConstU32<4>>;
 
 fn hex(bytes: &[u8]) -> String {
-  bytes
-    .iter() // deos-bypass: bounded-iter — fixed-size off-chain digest rendering
-    .map(|byte| format!("{byte:02x}"))
-    .collect()
+  bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Hash a committed runtime evidence file into a hex identity. The metadata and

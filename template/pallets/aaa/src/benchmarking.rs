@@ -21,7 +21,42 @@ mod benches {
       return;
     }
     let amount = creation_fee.saturating_add(One::one());
-    let _ = T::AssetOps::mint(owner, T::NativeAssetId::get(), amount);
+    let _ = T::AssetOps::mint(owner, T::FeeNativeAssetId::get(), amount);
+  }
+
+  fn prefund_user_sovereign<T: Config>(
+    owner: &T::AccountId,
+    slot: u8,
+    execution_plan: &ExecutionPlanOf<T>,
+  ) {
+    let envelope = Pallet::<T>::attempt_fee_envelope(AaaType::User, execution_plan, 0)
+      .expect("benchmark execution plan has a checked fee envelope");
+    let required = T::MinUserBalance::get().saturating_add(envelope.total);
+    let sovereign = Pallet::<T>::sovereign_account_id(owner, slot);
+    let _ = T::AssetOps::mint(&sovereign, T::FeeNativeAssetId::get(), required);
+  }
+
+  fn prefund_active_user_creation<T: Config>(
+    owner: &T::AccountId,
+    execution_plan: &ExecutionPlanOf<T>,
+  ) {
+    let slot =
+      Pallet::<T>::available_owner_slot(owner, None).expect("benchmark owner has a free User slot");
+    prefund_user_sovereign::<T>(owner, slot, execution_plan);
+  }
+
+  fn deplete_user_sovereign<T: Config>(aaa_id: AaaId) {
+    let instance =
+      Pallet::<T>::active_actor_view(aaa_id).expect("benchmark actor must exist for depletion");
+    let requirement = Pallet::<T>::attempt_fee_envelope(AaaType::User, &instance.execution_plan, 0)
+      .expect("benchmark execution plan has a checked fee envelope");
+    let required = T::MinUserBalance::get().saturating_add(requirement.total);
+    T::AssetOps::burn(
+      &instance.sovereign_account,
+      T::FeeNativeAssetId::get(),
+      required,
+    )
+    .expect("benchmark depletion must not overdraw the sovereign");
   }
 
   fn user_program<T: Config>(
@@ -63,8 +98,8 @@ mod benches {
       conditions: ConditionSet::Always,
       task: AaaTask::Transfer {
         to: recipient,
-        asset: T::NativeAssetId::get(),
-        amount: AmountResolution::AllBalance,
+        asset: T::FeeNativeAssetId::get(),
+        amount: AmountResolution::AllAvailable,
       },
       on_error: StepErrorPolicy::AbortCycle,
     };
@@ -76,7 +111,7 @@ mod benches {
       conditions: ConditionSet::Always,
       task: AaaTask::Transfer {
         to: recipient,
-        asset: T::NativeAssetId::get(),
+        asset: T::FeeNativeAssetId::get(),
         amount: AmountResolution::PercentageOfLastFunding(polkadot_sdk::sp_runtime::Perbill::one()),
       },
       on_error: StepErrorPolicy::AbortCycle,
@@ -118,7 +153,7 @@ mod benches {
   }
 
   fn seed_actor_for_cycle<T: Config>(aaa_id: AaaId) {
-    let Some(instance) = Pallet::<T>::active_actor_snapshot(aaa_id) else {
+    let Some(instance) = Pallet::<T>::active_actor_view(aaa_id) else {
       return;
     };
     let reserve = cycle_fee_upper::<T>(&instance.execution_plan)
@@ -126,7 +161,7 @@ mod benches {
       .saturating_add(One::one());
     let _ = T::AssetOps::mint(
       &instance.sovereign_account,
-      T::NativeAssetId::get(),
+      T::FeeNativeAssetId::get(),
       reserve,
     );
   }
@@ -137,6 +172,7 @@ mod benches {
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
+    prefund_active_user_creation::<T>(&caller, &execution_plan);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
@@ -161,6 +197,7 @@ mod benches {
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
+    prefund_user_sovereign::<T>(&caller, expected_slot, &execution_plan);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
@@ -173,7 +210,7 @@ mod benches {
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst =
-      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after create_user_aaa");
+      Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after create_user_aaa");
     assert_eq!(inst.actor_class.owner_slot(), Some(expected_slot));
   }
 
@@ -186,6 +223,7 @@ mod benches {
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::zeroes())
         .expect("decode zero account");
     let execution_plan = make_execution_plan::<T>(recipient);
+    prefund_user_sovereign::<T>(&caller, requested_slot, &execution_plan);
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
@@ -198,8 +236,8 @@ mod benches {
       user_program::<T>(schedule, execution_plan),
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let inst = Pallet::<T>::active_actor_snapshot(aaa_id)
-      .expect("AAA must exist after create_user_aaa_at_slot");
+    let inst =
+      Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after create_user_aaa_at_slot");
     assert_eq!(inst.actor_class.owner_slot(), Some(requested_slot));
   }
 
@@ -223,7 +261,7 @@ mod benches {
     );
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
     let inst =
-      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after create_system_aaa");
+      Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after create_system_aaa");
     assert_eq!(
       inst.actor_class,
       ActorClass::System {
@@ -327,7 +365,7 @@ mod benches {
     )
     .expect("System AAA creation must succeed");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     #[extrinsic_call]
     deactivate_aaa(RawOrigin::Signed(owner), aaa_id);
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
@@ -340,7 +378,7 @@ mod benches {
     let aaa_id = bench_create_user::<T>(caller.clone());
     #[extrinsic_call]
     pause_aaa(RawOrigin::Signed(caller), aaa_id);
-    let inst = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after pause_aaa");
+    let inst = Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after pause_aaa");
     assert!(inst.lifecycle.is_paused());
   }
 
@@ -352,7 +390,7 @@ mod benches {
       .expect("pause_aaa must succeed in setup");
     #[extrinsic_call]
     resume_aaa(RawOrigin::Signed(caller), aaa_id);
-    let inst = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after resume_aaa");
+    let inst = Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after resume_aaa");
     assert!(!inst.lifecycle.is_paused());
   }
 
@@ -362,8 +400,7 @@ mod benches {
     let aaa_id = bench_create_user::<T>(caller.clone());
     #[extrinsic_call]
     manual_trigger(RawOrigin::Signed(caller), aaa_id);
-    let inst =
-      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after manual_trigger");
+    let inst = Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after manual_trigger");
     assert!(inst.pending_signal);
   }
 
@@ -378,6 +415,7 @@ mod benches {
       cooldown_blocks: 1,
     };
     let execution_plan = make_execution_plan::<T>(recipient);
+    prefund_user_sovereign::<T>(&owner, owner_slot, &execution_plan);
     Pallet::<T>::create_user_aaa_at_slot(
       RawOrigin::Signed(owner.clone()).into(),
       owner_slot,
@@ -386,7 +424,7 @@ mod benches {
     )
     .expect("create_user_aaa_at_slot must succeed in close_aaa benchmark setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     #[extrinsic_call]
     close_aaa(RawOrigin::Signed(owner), aaa_id);
     assert!(!Pallet::<T>::active_actor_exists(aaa_id));
@@ -421,7 +459,7 @@ mod benches {
   fn update_schedule() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -435,7 +473,7 @@ mod benches {
     #[extrinsic_call]
     update_schedule(RawOrigin::Signed(caller), aaa_id, new_schedule, None);
     let inst =
-      Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA must exist after update_schedule");
+      Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after update_schedule");
     assert_eq!(inst.schedule.cooldown_blocks, 20);
   }
 
@@ -443,7 +481,7 @@ mod benches {
   fn update_funding_source_policy() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -471,7 +509,7 @@ mod benches {
   fn update_execution_plan() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -497,8 +535,8 @@ mod benches {
       replacement.clone(),
       CompletionPolicy::Persistent,
     );
-    let inst = Pallet::<T>::active_actor_snapshot(aaa_id)
-      .expect("AAA must exist after update_execution_plan");
+    let inst =
+      Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after update_execution_plan");
     assert_eq!(inst.execution_plan, replacement);
     assert!(
       ActorFunding::<T>::get(aaa_id)
@@ -535,17 +573,18 @@ mod benches {
   #[benchmark]
   fn permissionless_sweep_many(n: Linear<1, 5>) {
     let caller: T::AccountId = whitelisted_caller();
-    let mut aaa_ids: BoundedVec<AaaId, T::MaxSweepPerBlock> = BoundedVec::default();
+    let mut aaa_ids: BoundedVec<AaaId, T::MaxSweepBatch> = BoundedVec::default();
     let schedule = Schedule {
       trigger: Trigger::immediate_manual(),
       cooldown_blocks: 10,
     };
-    let bounded_n = n.min(T::MaxSweepPerBlock::get());
+    let bounded_n = n.min(T::MaxSweepBatch::get());
     for i in 0..bounded_n {
       let owner: T::AccountId = account("sweep-owner", i, 0);
       let recipient: T::AccountId = account("sweep-recipient", i, 0);
       ensure_creation_balance::<T>(&owner);
       let execution_plan = make_execution_plan::<T>(recipient);
+      prefund_active_user_creation::<T>(&owner, &execution_plan);
       Pallet::<T>::create_user_aaa(
         RawOrigin::Signed(owner).into(),
         Mutability::Mutable,
@@ -553,9 +592,12 @@ mod benches {
       )
       .expect("create_user_aaa must succeed in permissionless_sweep_many setup");
       let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
+      // Restore the zombie fixture state: swept actors must be balance-exhausted so the
+      // sweep closes them, keeping the prefunding admission honest but the postcondition real.
+      deplete_user_sovereign::<T>(aaa_id);
       aaa_ids
         .try_push(aaa_id)
-        .expect("benchmark n must fit MaxSweepPerBlock");
+        .expect("benchmark n must fit MaxSweepBatch");
     }
     let expected_len = aaa_ids.len();
     #[extrinsic_call]
@@ -583,7 +625,7 @@ mod benches {
     .expect("fee-collection benchmark sink must be created");
     let fee_sink_id = NextAaaId::<T>::get().saturating_sub(1);
     let fee_sink = Pallet::<T>::sovereign_account_id_system(fee_sink_id);
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     T::AssetOps::mint(&payer, native, amount.saturating_mul(2u32.into()))
       .expect("fee-collection benchmark payer must be funded");
@@ -599,7 +641,7 @@ mod benches {
   fn task_transfer() {
     let caller: T::AccountId = account("transfer-caller", 0, 0);
     let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     T::AssetOps::mint(&caller, native, amount.saturating_mul(2u32.into()))
       .expect("simple-transfer benchmark caller must be funded");
@@ -615,7 +657,7 @@ mod benches {
   #[benchmark]
   fn task_burn() {
     let caller: T::AccountId = account("burn-caller", 0, 0);
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     T::AssetOps::mint(&caller, native, amount.saturating_mul(2u32.into()))
       .expect("burn benchmark caller must be funded");
@@ -633,7 +675,7 @@ mod benches {
   #[benchmark]
   fn task_mint() {
     let (target_id, recipient) = prepare_saturated_address_actor::<T>(0);
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     T::BenchmarkHelper::enable_asset_ops_ingress();
     #[block]
@@ -747,7 +789,7 @@ mod benches {
   fn task_split_transfer(l: Linear<2, 8>) {
     let caller: T::AccountId = whitelisted_caller();
     let bounded_legs = l.min(T::MaxSplitTransferLegs::get());
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let amount = T::MinUserBalance::get().saturating_add(One::one());
     let mut targets: alloc::vec::Vec<(AaaId, T::AccountId)> = alloc::vec::Vec::new();
     for seed in 0..bounded_legs {
@@ -907,6 +949,7 @@ mod benches {
     };
     let execution_plan =
       make_remove_liquidity_execution_plan::<T>(lp_asset, asset_a, asset_b, lp_amount);
+    prefund_active_user_creation::<T>(&caller, &execution_plan);
     Pallet::<T>::create_user_aaa(
       RawOrigin::Signed(caller.clone()).into(),
       Mutability::Mutable,
@@ -914,7 +957,7 @@ mod benches {
     )
     .expect("create_user_aaa must succeed in setup");
     let aaa_id = NextAaaId::<T>::get().saturating_sub(1);
-    let actor = Pallet::<T>::active_actor_snapshot(aaa_id)
+    let actor = Pallet::<T>::active_actor_view(aaa_id)
       .map(|instance| instance.sovereign_account)
       .expect("actor must exist after setup");
     seed_actor_for_cycle::<T>(aaa_id);
@@ -927,8 +970,7 @@ mod benches {
     {
       let _ = Pallet::<T>::on_idle(1u32.into(), Weight::MAX);
     }
-    let inst =
-      Pallet::<T>::active_actor_snapshot(aaa_id).expect("actor must survive benchmark cycle");
+    let inst = Pallet::<T>::active_actor_view(aaa_id).expect("actor must survive benchmark cycle");
     assert_eq!(inst.cycle_nonce, 1);
     assert_eq!(inst.consecutive_failures, 0);
   }
@@ -940,6 +982,38 @@ mod benches {
       on_error: StepErrorPolicy::AbortCycle,
     };
     BoundedVec::try_from(vec![step]).expect("single-step execution_plan must fit")
+  }
+
+  fn inert_execution_plan_of_len<T: Config>(steps: u32) -> ExecutionPlanOf<T> {
+    let bounded = steps.min(T::MaxExecutionPlanSteps::get());
+    let mut plan = alloc::vec::Vec::new();
+    for _ in 0..bounded {
+      plan.push(Step {
+        conditions: ConditionSet::Always,
+        task: AaaTask::StopCycle,
+        on_error: StepErrorPolicy::AbortCycle,
+      });
+    }
+    BoundedVec::try_from(plan).expect("benchmark inert execution_plan must fit")
+  }
+
+  fn bench_create_system_with_plan<T: Config>(
+    seed: u32,
+    execution_plan: ExecutionPlanOf<T>,
+  ) -> AaaId {
+    let owner: T::AccountId = account("cycle_owner", seed, 0);
+    let schedule = Schedule {
+      trigger: Trigger::immediate_manual(),
+      cooldown_blocks: 0,
+    };
+    Pallet::<T>::create_system_aaa(
+      RawOrigin::Root.into(),
+      owner,
+      Mutability::Mutable,
+      system_program::<T>(schedule, execution_plan),
+    )
+    .expect("create_system_aaa must succeed in cycle benchmark setup");
+    NextAaaId::<T>::get().saturating_sub(1)
   }
 
   fn bench_create_system_observation<T: Config>(
@@ -981,25 +1055,25 @@ mod benches {
   }
 
   fn install_continuation<T: Config>(aaa_id: AaaId, snapshot_entries: u32) {
-    let bounded = snapshot_entries.min(T::MaxContinuationSnapshotEntries::get());
+    let bounded = snapshot_entries.min(T::MaxOpeningSnapshotEntries::get());
     let asset_count = bounded.saturating_add(1) / 2;
     let assets = T::BenchmarkHelper::funding_assets(asset_count);
-    let mut trigger_snapshot = ContinuationSnapshotOf::<T>::default();
+    let mut opening_snapshot = ContinuationSnapshotOf::<T>::default();
     for asset in assets {
-      if trigger_snapshot.len() as u32 >= bounded {
+      if opening_snapshot.len() as u32 >= bounded {
         break;
       }
-      trigger_snapshot
-        .try_insert(ResolutionSurface::Asset(asset), One::one())
+      opening_snapshot
+        .try_insert(OpeningSurface::PreservableAsset(asset), One::one())
         .expect("benchmark snapshot asset entry fits");
-      if trigger_snapshot.len() as u32 >= bounded {
+      if opening_snapshot.len() as u32 >= bounded {
         break;
       }
-      trigger_snapshot
-        .try_insert(ResolutionSurface::StakingShares(asset), One::one())
+      opening_snapshot
+        .try_insert(OpeningSurface::StakingShares(asset), One::one())
         .expect("benchmark snapshot staking entry fits");
     }
-    assert_eq!(trigger_snapshot.len() as u32, bounded);
+    assert_eq!(opening_snapshot.len() as u32, bounded);
     ActorProgram::<T>::mutate(aaa_id, |maybe_program| {
       maybe_program
         .as_mut()
@@ -1013,7 +1087,7 @@ mod benches {
       let hot = maybe_hot
         .as_mut()
         .expect("benchmark actor hot state exists");
-      hot.run_state = RunState::Suspended;
+      hot.cycle_state = CycleState::Suspended;
       hot.pending_signal = false;
       hot.queue_ticket = None;
       hot.wakeup_pointer = None;
@@ -1031,7 +1105,7 @@ mod benches {
         attempt: 0,
         unsuccessful_attempts_at_cursor: 1,
         last_attempt_block: 1u32.into(),
-        trigger_snapshot,
+        opening_snapshot,
         funding_snapshot: Default::default(),
         cumulative_outcomes: OutcomeTotals::default(),
       },
@@ -1134,7 +1208,7 @@ mod benches {
 
   fn prepare_saturated_address_actor<T: Config>(seed: u32) -> (AaaId, T::AccountId) {
     let owner: T::AccountId = account("ingress_owner", seed, 0);
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let native_only =
       BoundedVec::try_from(vec![native]).expect("one asset must fit the trigger filter bound");
     let mut candidates = vec![
@@ -1180,7 +1254,7 @@ mod benches {
       funding.funding_source_policy = FundingSourcePolicy::AnyVerifiedIngress;
       funding
         .funding_accumulated
-        .try_insert(T::NativeAssetId::get(), One::one())
+        .try_insert(T::FeeNativeAssetId::get(), One::one())
         .expect("tracked funding accumulator fits");
     });
     install_saturated_tombstone_queue::<T>();
@@ -1217,7 +1291,7 @@ mod benches {
     {
       let _ = Pallet::<T>::execute_cycle(Weight::MAX);
     }
-    let instance = Pallet::<T>::active_actor_snapshot(aaa_id).expect("AAA exists");
+    let instance = Pallet::<T>::active_actor_view(aaa_id).expect("AAA exists");
     assert_eq!(instance.cycle_nonce, 1);
     assert_eq!(
       ActorHot::<T>::get(aaa_id).and_then(|hot| hot.wakeup_pointer.map(|pointer| pointer.block)),
@@ -1236,6 +1310,7 @@ mod benches {
     #[block]
     {
       let _breaker_active = GlobalCircuitBreaker::<T>::get();
+      let _revalidation_active = crate::CacheRevalidation::<T>::exists();
       core::hint::black_box(QueueHead::<T>::get());
       core::hint::black_box(QueueTail::<T>::get());
       core::hint::black_box(QueueOccupancy::<T>::get());
@@ -1299,33 +1374,84 @@ mod benches {
   }
 
   #[benchmark]
-  fn scheduler_cycle_deferral_dimension() {
-    let aaa_id = bench_create_system_manual::<T>(3_002);
-    ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
-      maybe_hot
-        .as_mut()
-        .expect("benchmark actor hot state must exist")
-        .pending_signal = true;
+  fn cache_revalidation_units(n: Linear<1, 8>) {
+    let max_units = T::MaxCacheRevalidationUnitsPerBlock::get();
+    let bounded = n.min(max_units);
+    let mut aaa_ids = alloc::vec::Vec::new();
+    for index in 0..bounded {
+      let aaa_id = bench_create_system_manual::<T>(40_000u32.saturating_add(index));
+      ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
+        maybe_hot
+          .as_mut()
+          .expect("benchmark actor hot state must exist")
+          .cache_epoch = 0;
+      });
+      aaa_ids.push(aaa_id);
+    }
+    // Isolate the workset: the worker iterates every `ActorHot` key, so a host that seeds
+    // genesis System AAA would otherwise consume worker units outside `remaining` and clear
+    // the gate before this benchmark's actors are stamped (framework-forkable measurement).
+    let foreign: alloc::vec::Vec<AaaId> = ActorHot::<T>::iter_keys()
+      .filter(|candidate| !aaa_ids.contains(candidate))
+      .collect();
+    for foreign_id in foreign {
+      ActorHot::<T>::remove(foreign_id);
+    }
+    CurrentCacheEpoch::<T>::put(1);
+    CacheRevalidation::<T>::put(CacheRevalidationState {
+      target_epoch: 1,
+      cursor: None,
+      remaining: bounded,
     });
-    let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
-    frame_system::Pallet::<T>::set_block_number(1u32.into());
-    // The three dimensional deferral branches are all measured; the helper forces
-    // each dimension through the admitted meter so RefTime, ProofSize, and Both
-    // each get a production envelope.
     #[block]
     {
-      Pallet::<T>::benchmark_scheduler_cycle_deferral_dimension(
-        aaa_id,
-        hot.clone(),
-        DeferReason::RefTime,
-      );
-      Pallet::<T>::benchmark_scheduler_cycle_deferral_dimension(
-        aaa_id,
-        hot.clone(),
-        DeferReason::ProofSize,
-      );
-      Pallet::<T>::benchmark_scheduler_cycle_deferral_dimension(aaa_id, hot, DeferReason::Both);
+      core::hint::black_box(Pallet::<T>::run_cache_revalidation_worker(Weight::MAX));
     }
+    for aaa_id in aaa_ids {
+      let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor must survive revalidation");
+      assert_eq!(
+        hot.cache_epoch, 1,
+        "benchmark revalidation must stamp every survivor"
+      );
+    }
+    assert!(
+      !CacheRevalidation::<T>::exists(),
+      "benchmark revalidation must clear its gate"
+    );
+  }
+
+  /// One complete minimal cycle execution over one inert StopCycle step (fixed cycle
+  /// orchestration plus finalization), measured on the execution path only; queue probes and
+  /// head consumption are separate scheduler classes.
+  #[benchmark]
+  fn cycle_orchestration() {
+    let aaa_id = bench_create_system_with_plan::<T>(3_100, make_inert_execution_plan::<T>());
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let instance = Pallet::<T>::active_actor_view(aaa_id).expect("cycle actor exists");
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_single_cycle(aaa_id, instance, now));
+    }
+    let updated = Pallet::<T>::active_actor_view(aaa_id).expect("cycle actor survives");
+    assert_eq!(updated.cycle_nonce, 1);
+  }
+
+  /// One complete cycle execution over `steps` inert StopCycle steps: the linear model prices
+  /// the fixed cycle orchestration plus per-step bookkeeping, the exact cycle overhead the
+  /// admission composition uses for arbitrary plans.
+  #[benchmark]
+  fn step_orchestration(n: Linear<1, 8>) {
+    let aaa_id = bench_create_system_with_plan::<T>(3_200, inert_execution_plan_of_len::<T>(n));
+    let now: BlockNumberFor<T> = 1u32.into();
+    frame_system::Pallet::<T>::set_block_number(now);
+    let instance = Pallet::<T>::active_actor_view(aaa_id).expect("cycle actor exists");
+    #[block]
+    {
+      core::hint::black_box(Pallet::<T>::execute_single_cycle(aaa_id, instance, now));
+    }
+    let updated = Pallet::<T>::active_actor_view(aaa_id).expect("cycle actor survives");
+    assert_eq!(updated.cycle_nonce, 1);
   }
 
   #[benchmark(pov_mode = Measured)]
@@ -1960,7 +2086,7 @@ mod benches {
     for _ in 0..bounded.div_ceil(2) {
       let _ = T::AssetOps::mint(
         &user_identity.sovereign_account,
-        T::NativeAssetId::get(),
+        T::FeeNativeAssetId::get(),
         user_reserve,
       );
     }
@@ -2021,7 +2147,7 @@ mod benches {
       maybe_hot
         .as_mut()
         .expect("benchmark actor hot state exists")
-        .run_state = RunState::Idle;
+        .cycle_state = CycleState::Idle;
     });
     #[block]
     {
@@ -2034,7 +2160,7 @@ mod benches {
   #[benchmark(pov_mode = Measured)]
   fn continuation_retry() {
     let aaa_id = bench_create_system_manual::<T>(50_000_001);
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
       core::hint::black_box(Pallet::<T>::begin_continuation_attempt(
@@ -2054,20 +2180,20 @@ mod benches {
   #[benchmark(pov_mode = Measured)]
   fn continuation_complete() {
     let aaa_id = bench_create_system_manual::<T>(50_000_002);
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     #[block]
     {
       Pallet::<T>::write_continuation_state(aaa_id, None)
         .expect("benchmark completion must clear continuation");
     }
     assert!(ContinuationStateStore::<T>::get(aaa_id).is_none());
-    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.run_state == RunState::Idle));
+    assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.cycle_state == CycleState::Idle));
   }
 
   #[benchmark]
   fn continuation_cancel() {
     let aaa_id = bench_create_system_manual::<T>(50_000_003);
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
       maybe_hot
         .as_mut()
@@ -2078,7 +2204,7 @@ mod benches {
     cancel_continuation(RawOrigin::Root, aaa_id);
     assert!(ContinuationStateStore::<T>::get(aaa_id).is_none());
     assert!(ActorHot::<T>::get(aaa_id).is_some_and(|hot| {
-      hot.run_state == RunState::Idle && hot.pending_signal && hot.queue_ticket.is_some()
+      hot.cycle_state == CycleState::Idle && hot.pending_signal && hot.queue_ticket.is_some()
     }));
   }
 
@@ -2093,7 +2219,7 @@ mod benches {
           conditions: ConditionSet::Always,
           task: AaaTask::Transfer {
             to: recipient.clone(),
-            asset: T::NativeAssetId::get(),
+            asset: T::FeeNativeAssetId::get(),
             amount: AmountResolution::Fixed(One::one()),
           },
           on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
@@ -2153,7 +2279,7 @@ mod benches {
     let feed = feeds.next().expect("measured observation feed is required");
     let next_feed = feeds.next().expect("next observation feed is required");
     let mut actors = alloc::vec::Vec::new();
-    for index in 0..T::QueuePageSize::get() {
+    for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-fanout", index, 0);
       actors.push(bench_create_system_observation::<T>(owner, feed));
     }
@@ -2188,7 +2314,7 @@ mod benches {
       .next()
       .expect("one observation benchmark feed is required");
     let mut actors = alloc::vec::Vec::new();
-    for index in 0..T::QueuePageSize::get() {
+    for index in 0..T::ObservationPageSize::get() {
       let owner: T::AccountId = account("observation-fanout-blocked", index, 0);
       actors.push(bench_create_system_observation::<T>(owner, feed));
     }
@@ -2213,7 +2339,7 @@ mod benches {
   fn transaction_extension_ingress_base() {
     let owner: T::AccountId = whitelisted_caller();
     let populated_aaa_id = bench_create_user::<T>(owner);
-    let proof_witness = Pallet::<T>::active_actor_snapshot(populated_aaa_id)
+    let proof_witness = Pallet::<T>::active_actor_view(populated_aaa_id)
       .expect("benchmark actor exists")
       .sovereign_account;
     let recipient: T::AccountId = account("unmatched_ingress_recipient", 0, 0);
@@ -2238,7 +2364,7 @@ mod benches {
   fn transaction_extension_ingress_notify() {
     let source: T::AccountId = account("ingress_source", 0, 0);
     let (aaa_id, recipient) = prepare_saturated_address_actor::<T>(0);
-    install_continuation::<T>(aaa_id, T::MaxContinuationSnapshotEntries::get());
+    install_continuation::<T>(aaa_id, T::MaxOpeningSnapshotEntries::get());
     T::BenchmarkHelper::setup_address_event_ingress(&recipient, &source, One::one())
       .expect("benchmark helper must prepare a matched producer event");
     #[block]
@@ -2302,7 +2428,7 @@ mod benches {
     );
     let pct = polkadot_sdk::sp_runtime::Perbill::from_percent(1);
     let initial_balance = T::MinUserBalance::get().saturating_mul(1_000_000u32.into());
-    let native = T::NativeAssetId::get();
+    let native = T::FeeNativeAssetId::get();
     let schedule = Schedule {
       trigger: Trigger::cadenced_always(1),
       cooldown_blocks: 0,

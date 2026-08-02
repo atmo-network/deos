@@ -293,8 +293,12 @@ test('trigger editor exposes admission and bounded source controls without graph
   }
 });
 
-test('observation sources lower exactly and cannot supply PercentageOfTrigger', () => {
-  const observationOnly = program([authoringStep('only', transferTask())], {
+test('observation sources lower exactly and PercentageAtOpening is trigger-independent', () => {
+  const openingAmountStep = authoringStep(
+    'opening-amount',
+    transferTask({ type: 'PercentageAtOpening', parts: 500_000_000 }),
+  );
+  const observationOnly = program([openingAmountStep], {
     trigger: observationTrigger,
   });
   assert.equal(validateAaaAuthoringProgram(observationOnly).valid, true);
@@ -311,51 +315,13 @@ test('observation sources lower exactly and cannot supply PercentageOfTrigger', 
       },
     },
   });
-
-  const triggerAmountStep = authoringStep(
-    'trigger-amount',
-    transferTask({ type: 'PercentageOfTrigger', parts: 500_000_000 }),
-  );
-  const observationAmount = program([triggerAmountStep], {
-    trigger: observationTrigger,
-  });
-  const observationValidation = validateAaaAuthoringProgram(observationAmount);
-  assert.equal(observationValidation.valid, false);
-  assert(
-    observationValidation.issues.some((issue) =>
-      issue.message.includes('provide no trigger amount'),
-    ),
-  );
-  const mixed = program([triggerAmountStep], {
+  const mixed = program([openingAmountStep], {
     trigger: {
       type: 'Immediate',
       sources: [addressTrigger.sources[0], observationTrigger.sources[0]],
     },
   });
-  assert.equal(validateAaaAuthoringProgram(mixed).valid, false);
-  assert.equal(
-    validateAaaAuthoringProgram(
-      program([triggerAmountStep], { trigger: addressTrigger }),
-    ).valid,
-    true,
-  );
-  assert.equal(
-    validateAaaAuthoringProgram(
-      program([triggerAmountStep], {
-        trigger: {
-          type: 'Immediate',
-          sources: [
-            {
-              type: 'OnAddressEvent',
-              sourceFilter: { type: 'Any' },
-              assetFilter: { type: 'Whitelist', assets: [local] },
-            },
-          ],
-        },
-      }),
-    ).valid,
-    false,
-  );
+  assert.equal(validateAaaAuthoringProgram(mixed).valid, true);
 });
 
 test('typed authoring lowers to one deterministic exact canonical artifact', () => {
@@ -369,7 +335,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
         inputLimit: { type: 'Absolute', amount: '100' },
         slippageParts: 10_000_000,
       }),
-      authoringStep('transfer', transferTask({ type: 'AllBalance' }), {
+      authoringStep('transfer', transferTask({ type: 'AllAvailable' }), {
         conditionSet: {
           type: 'All',
           conditions: [
@@ -640,18 +606,13 @@ test('every Condition and AmountResolution lowers without changing step topology
   const amounts = [
     fixed(),
     { type: 'PercentageOfCurrent', parts: 500_000_000 },
-    { type: 'PercentageOfTrigger', parts: 500_000_000 },
+    { type: 'PercentageAtOpening', parts: 500_000_000 },
     { type: 'PercentageOfLastFunding', parts: 500_000_000 },
-    { type: 'AllBalance' },
+    { type: 'AllAvailable' },
   ];
   for (const amount of amounts) {
     const lowered = lowerAaaAuthoringProgram(
-      program(
-        [authoringStep('only', transferTask(amount))],
-        amount.type === 'PercentageOfTrigger'
-          ? { trigger: addressTrigger }
-          : {},
-      ),
+      program([authoringStep('only', transferTask(amount))]),
     );
     assert.equal(
       lowered.value.execution_plan[0].task.value.amount.type,
@@ -695,7 +656,7 @@ test('typed validation rejects control-flow-adjacent and runtime-invalid drafts'
   for (const amount of [
     { type: 'Fixed', value: '0' },
     { type: 'PercentageOfCurrent', parts: 0 },
-    { type: 'PercentageOfTrigger', parts: 0 },
+    { type: 'PercentageAtOpening', parts: 0 },
     { type: 'PercentageOfLastFunding', parts: 0 },
   ]) {
     assert.equal(
@@ -811,7 +772,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   const split = (asset = native) => ({
     type: 'SplitTransfer',
     asset,
-    amount: { type: 'AllBalance' },
+    amount: { type: 'AllAvailable' },
     legs: [
       { to: accountA, shareParts: 500_000_000 },
       { to: accountB, shareParts: 500_000_000 },
@@ -820,7 +781,7 @@ test('scenario corpus lowers every expressible or partial execution core without
   const swap = {
     type: 'SwapIn',
     assetIn: local,
-    amountIn: { type: 'AllBalance' },
+    amountIn: { type: 'AllAvailable' },
     assetOut: native,
     slippageParts: 10_000_000,
   };
@@ -835,7 +796,7 @@ test('scenario corpus lowers every expressible or partial execution core without
           authoringStep('burn', {
             type: 'Burn',
             asset: native,
-            amount: { type: 'AllBalance' },
+            amount: { type: 'AllAvailable' },
           }),
         ],
         { aaaType: 'System', fundingPolicy: { type: 'RuntimePolicy' } },

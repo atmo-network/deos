@@ -19,8 +19,9 @@ The current kernel/runtime slice provides:
 - Fee admission, lifecycle controls, pause/resume, and pure prechecked terminal cleanup
 - Sparse progress-preserving Continuation for Mutable actors, with scalar suffix cursor, Temporary-only retry, deterministic cancellation, and no prefix replay
 - A bounded `simulate_current_program` rollback core and versioned `AaaSimulationApi` declaration that require exact stored-program identity, follow fresh/Continuation readiness, return ordered outcomes, and roll the entire attempt back
+- A read-only `aaa_eligibility` projection behind the versioned `AaaEligibilityApi` declaration that reports current readiness, the scheduler-owned phase, and the next eligible block by reusing the same cadence/cooldown/window/backoff/breaker/latch owners as admission
 - Runtime-configured adapters for assets, swaps, liquidity, staking, typed failure retryability, fee collection, direct ingress, and weights; swap adapters receive only the actor account and authoritative immutable `AaaType` through a minimal execution context
-- Exhaustive package-owned instruction contracts for every task, condition, amount resolution, and error policy, with weight ownership delegated to `TaskWeightInfo`
+- Exhaustive package-owned instruction contracts for every task, condition, amount resolution, and error policy, with weight ownership delegated to the single `WeightInfo` interface
 - Genesis provisioning of System actors through runtime configuration
 
 ## Key rule
@@ -28,7 +29,7 @@ The current kernel/runtime slice provides:
 AAA is a **bounded deterministic actor runtime**, not a general-purpose smart-contract VM.
 Actors execute declarative plans against runtime adapters under explicit queue, scheduler, fee, weight, and lifecycle limits. Event-driven triggers such as matched asset ingress are one important part of that model, but they live alongside deterministic scheduling and bounded execution rather than replacing them.
 
-Observation readiness carries no asset amount. Plans using `PercentageOfTrigger` therefore require applicable AddressEvent-only sources and fail admission under Manual, observation, periodic-only, or mixed source sets.
+`PercentageAtOpening` reads a typed balance/share snapshot captured when a fresh cycle opens. Its values remain independent of trigger kind, signal payload, and AddressEvent amount.
 
 Active programs choose `Persistent` or `CloseAfterProductiveRun`. Productive closure requires successful logical-run completion with at least one committed effectful task; false conditions, skips, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
 
@@ -71,7 +72,8 @@ Minimal checklist:
 - Provide deterministic genesis System AAA definitions only for actor roles the runtime actually wants to ship.
 - Treat example execution plans as reusable task-language patterns; treat the DEOS/TMCTOL System AAA catalog as one runtime's topology, not as the pallet's required deployment shape.
 - Classify adapter mutation failures explicitly as Permanent or Temporary; unknown and unsupported failures stay Permanent.
-- Bind `MaxContinuationSnapshotEntries`, fixed `MaxRetryAttempts`, and generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater { max_attempts: 1..=MaxRetryAttempts }`.
+- Bind `MaxOpeningSnapshotEntries`, fixed `MaxRetryAttempts`, and generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater { max_attempts: 2..=MaxRetryAttempts }`.
+- Bind `MaxCacheRevalidationUnitsPerBlock` and name a `CacheRevalidationNoAdmitDisposition` only when a concrete cache-affecting migration ships; the reference runtime leaves the disposition `None` and fails closed (spec 6.4).
 - Validate adapter failure atomicity and Mutable User/System Continuation with runtime-local tests when adapters perform multi-step mutations.
 
 ## Non-goals of the current slice

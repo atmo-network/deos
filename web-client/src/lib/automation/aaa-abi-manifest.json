@@ -2,7 +2,7 @@
   "format": "deos.aaa.abi-manifest",
   "formatVersion": 1,
   "metadata": {
-    "sha256": "ecd60da93343e7bee44751e5640c9ac458a56725cef7172fcc3317e7fd58c063",
+    "sha256": "667a91e69bbf649f7aa8a2011f34d0ea6621b021ba5d59ec623f17548c96b8af",
     "version": 16
   },
   "pallet": {
@@ -134,7 +134,7 @@
           {
             "name": "aaa_ids",
             "type": 257,
-            "typeName": "BoundedVec<AaaId, T::MaxSweepPerBlock>"
+            "typeName": "BoundedVec<AaaId, T::MaxSweepBatch>"
           }
         ],
         "index": 14,
@@ -161,28 +161,28 @@
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "program", "type": 224, "typeName": "ProgramInputOf<T>" }
         ],
-        "index": 21,
+        "index": 17,
         "name": "activate_aaa"
       },
       {
         "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
-        "index": 22,
+        "index": 18,
         "name": "deactivate_aaa"
       },
       {
         "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
-        "index": 23,
+        "index": 19,
         "name": "cancel_continuation"
       }
     ],
     "constants": [
-      { "name": "NativeAssetId", "type": 197, "value": "0x00" },
+      { "name": "FeeNativeAssetId", "type": 197, "value": "0x00" },
       { "name": "MinWindowLength", "type": 14, "value": "0x64000000" },
-      { "name": "PalletId", "type": 427, "value": "0x61616163746f7230" },
+      { "name": "PalletId", "type": 426, "value": "0x61616163746f7230" },
       { "name": "MaxExecutionPlanSteps", "type": 14, "value": "0x08000000" },
       { "name": "MaxFundingTrackedAssets", "type": 14, "value": "0x0a000000" },
       {
-        "name": "MaxContinuationSnapshotEntries",
+        "name": "MaxOpeningSnapshotEntries",
         "type": 14,
         "value": "0x10000000"
       },
@@ -192,6 +192,7 @@
       { "name": "MaxQueueLength", "type": 14, "value": "0x10270000" },
       { "name": "QueuePageSize", "type": 14, "value": "0x40000000" },
       { "name": "WakeupPageSize", "type": 14, "value": "0x20000000" },
+      { "name": "ObservationPageSize", "type": 14, "value": "0x40000000" },
       {
         "name": "MaxQueueEntriesScannedPerBlock",
         "type": 14,
@@ -213,17 +214,23 @@
         "value": "0x0700a0db215d02093d00"
       },
       { "name": "MaxWakeupsPerBlock", "type": 14, "value": "0x00020000" },
-      { "name": "MaxSweepPerBlock", "type": 14, "value": "0x05000000" },
+      { "name": "MaxSweepBatch", "type": 14, "value": "0x05000000" },
       { "name": "MaxWhitelistSize", "type": 14, "value": "0x10000000" },
       { "name": "MaxTriggerSources", "type": 14, "value": "0x04000000" },
       { "name": "MaxSplitTransferLegs", "type": 14, "value": "0x08000000" },
+      { "name": "TargetBlockTime", "type": 10, "value": "0x0600000000000000" },
       { "name": "MaxExecutionDelayBlocks", "type": 14, "value": "0x208d2203" },
       { "name": "MaxTimerJitterBlocks", "type": 14, "value": "0x40000000" },
       { "name": "MaxIdleStarvationBlocks", "type": 14, "value": "0x19000000" },
       {
-        "name": "GuaranteedOnIdleWeight",
+        "name": "AaaOnIdleReserve",
         "type": 109,
         "value": "0x070010a5d4e882969800"
+      },
+      {
+        "name": "MaxCacheRevalidationUnitsPerBlock",
+        "type": 14,
+        "value": "0x10000000"
       },
       {
         "name": "MaxAutoCloseNonceHorizon",
@@ -278,67 +285,63 @@
       { "fields": [], "index": 14, "name": "ExecutionPlanExceedsOnIdleBudget" },
       { "fields": [], "index": 15, "name": "ExecutionDelayTooLong" },
       { "fields": [], "index": 16, "name": "GlobalCircuitBreakerActive" },
-      { "fields": [], "index": 17, "name": "ImmutableAaa" },
-      { "fields": [], "index": 18, "name": "InsufficientBalance" },
-      { "fields": [], "index": 19, "name": "InsufficientFee" },
-      { "fields": [], "index": 20, "name": "InvalidAmountResolution" },
-      { "fields": [], "index": 21, "name": "InvalidCondition" },
-      { "fields": [], "index": 22, "name": "InvalidAutoCloseNonce" },
-      { "fields": [], "index": 23, "name": "InvalidScheduleWindow" },
-      { "fields": [], "index": 24, "name": "InvalidSplitTransfer" },
-      { "fields": [], "index": 25, "name": "SelfTransferNotAllowed" },
-      { "fields": [], "index": 26, "name": "InvalidTriggerConfiguration" },
-      { "fields": [], "index": 27, "name": "MintNotAllowedForUserAaa" },
-      { "fields": [], "index": 28, "name": "NotGovernance" },
-      { "fields": [], "index": 29, "name": "NotOwner" },
-      { "fields": [], "index": 30, "name": "NotPaused" },
-      { "fields": [], "index": 31, "name": "OwnerSlotCapacityExceeded" },
-      { "fields": [], "index": 32, "name": "OwnerSlotOccupied" },
-      { "fields": [], "index": 33, "name": "InvalidOwnerSlot" },
-      { "fields": [], "index": 34, "name": "AaaIdOccupied" },
-      { "fields": [], "index": 35, "name": "SystemSovereignCapacityExceeded" },
-      { "fields": [], "index": 36, "name": "SystemSovereignUnknown" },
-      { "fields": [], "index": 37, "name": "SystemSovereignOccupied" },
-      { "fields": [], "index": 38, "name": "ExecutionPlanTooLong" },
-      { "fields": [], "index": 39, "name": "SnapshotUnavailable" },
-      { "fields": [], "index": 40, "name": "FundingAccumulatorOverflow" },
-      { "fields": [], "index": 41, "name": "SovereignAccountCollision" },
-      { "fields": [], "index": 42, "name": "ReservedSovereignAccount" },
-      { "fields": [], "index": 43, "name": "QueueTicketExhausted" },
-      { "fields": [], "index": 44, "name": "SchedulerIndexExhausted" },
-      { "fields": [], "index": 45, "name": "SystemSovereignInvariant" },
-      { "fields": [], "index": 46, "name": "AutoCloseNonceHorizonExceeded" },
-      { "fields": [], "index": 47, "name": "AutoCloseNonceOverflow" },
-      { "fields": [], "index": 48, "name": "AutoCloseNonceIncrementZero" },
-      { "fields": [], "index": 49, "name": "QueueMutationRateLimited" },
-      { "fields": [], "index": 50, "name": "QueueCapacityUnavailable" },
+      { "fields": [], "index": 17, "name": "CacheRevalidationActive" },
+      { "fields": [], "index": 18, "name": "ImmutableAaa" },
+      { "fields": [], "index": 19, "name": "InsufficientBalance" },
+      { "fields": [], "index": 20, "name": "InsufficientFee" },
+      { "fields": [], "index": 21, "name": "InvalidAmountResolution" },
+      { "fields": [], "index": 22, "name": "InvalidCondition" },
+      { "fields": [], "index": 23, "name": "InvalidAutoCloseNonce" },
+      { "fields": [], "index": 24, "name": "InvalidScheduleWindow" },
+      { "fields": [], "index": 25, "name": "InvalidSplitTransfer" },
+      { "fields": [], "index": 26, "name": "SelfTransferNotAllowed" },
+      { "fields": [], "index": 27, "name": "InvalidTriggerConfiguration" },
+      { "fields": [], "index": 28, "name": "MintNotAllowedForUserAaa" },
+      { "fields": [], "index": 29, "name": "NotGovernance" },
+      { "fields": [], "index": 30, "name": "NotOwner" },
+      { "fields": [], "index": 31, "name": "NotPaused" },
+      { "fields": [], "index": 32, "name": "OwnerSlotCapacityExceeded" },
+      { "fields": [], "index": 33, "name": "OwnerSlotOccupied" },
+      { "fields": [], "index": 34, "name": "InvalidOwnerSlot" },
+      { "fields": [], "index": 35, "name": "AaaIdOccupied" },
+      { "fields": [], "index": 36, "name": "SystemSovereignCapacityExceeded" },
+      { "fields": [], "index": 37, "name": "SystemSovereignUnknown" },
+      { "fields": [], "index": 38, "name": "SystemSovereignOccupied" },
+      { "fields": [], "index": 39, "name": "ExecutionPlanTooLong" },
+      { "fields": [], "index": 40, "name": "SnapshotUnavailable" },
+      { "fields": [], "index": 41, "name": "FundingAccumulatorOverflow" },
+      { "fields": [], "index": 42, "name": "SovereignAccountCollision" },
+      { "fields": [], "index": 43, "name": "ReservedSovereignAccount" },
+      { "fields": [], "index": 44, "name": "QueueTicketExhausted" },
+      { "fields": [], "index": 45, "name": "SchedulerIndexExhausted" },
+      { "fields": [], "index": 46, "name": "SystemSovereignInvariant" },
+      { "fields": [], "index": 47, "name": "AutoCloseNonceHorizonExceeded" },
+      { "fields": [], "index": 48, "name": "AutoCloseNonceOverflow" },
+      { "fields": [], "index": 49, "name": "AutoCloseNonceIncrementZero" },
+      { "fields": [], "index": 50, "name": "ControlMutationRateLimited" },
+      { "fields": [], "index": 51, "name": "QueueCapacityUnavailable" },
       {
         "fields": [],
-        "index": 51,
+        "index": 52,
         "name": "RetryLaterNotAllowedForImmutableAaa"
       },
-      { "fields": [], "index": 52, "name": "ContinuationNotFound" },
-      { "fields": [], "index": 53, "name": "ContinuationInvariant" },
-      { "fields": [], "index": 54, "name": "EmptyConditionSet" },
-      { "fields": [], "index": 55, "name": "ManualSourceDisabled" },
-      { "fields": [], "index": 56, "name": "InvalidTradeBound" },
-      { "fields": [], "index": 57, "name": "InvalidRetryAttemptLimit" },
-      { "fields": [], "index": 58, "name": "RecipientDepositUnavailable" },
-      { "fields": [], "index": 59, "name": "InvalidObservationMaxAge" },
+      { "fields": [], "index": 53, "name": "ContinuationNotFound" },
+      { "fields": [], "index": 54, "name": "ContinuationInvariant" },
+      { "fields": [], "index": 55, "name": "EmptyConditionSet" },
+      { "fields": [], "index": 56, "name": "ManualSourceDisabled" },
+      { "fields": [], "index": 57, "name": "InvalidTradeBound" },
+      { "fields": [], "index": 58, "name": "InvalidRetryAttemptLimit" },
+      { "fields": [], "index": 59, "name": "RecipientDepositUnavailable" },
+      { "fields": [], "index": 60, "name": "InvalidObservationMaxAge" },
       {
         "fields": [],
-        "index": 60,
+        "index": 61,
         "name": "ObservationSubscriptionCapacityExceeded"
       },
-      { "fields": [], "index": 61, "name": "ObservationSubscriptionInvariant" },
-      { "fields": [], "index": 62, "name": "InvalidObservationRevision" },
-      { "fields": [], "index": 63, "name": "DirtyObservationCapacityExceeded" },
-      { "fields": [], "index": 64, "name": "DirtyObservationInvariant" },
-      {
-        "fields": [],
-        "index": 65,
-        "name": "InvalidTriggerAmountCompatibility"
-      },
+      { "fields": [], "index": 62, "name": "ObservationSubscriptionInvariant" },
+      { "fields": [], "index": 63, "name": "InvalidObservationRevision" },
+      { "fields": [], "index": 64, "name": "DirtyObservationCapacityExceeded" },
+      { "fields": [], "index": 65, "name": "DirtyObservationInvariant" },
       { "fields": [], "index": 66, "name": "AdmissionBoundOverflow" }
     ],
     "events": [
@@ -396,27 +399,16 @@
       {
         "fields": [
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
-          { "name": "candidate_cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "candidate_attempt", "type": 14, "typeName": "u32" },
-          { "name": "cursor", "type": 14, "typeName": "u32" },
-          { "name": "reason", "type": 341, "typeName": "DeferReason" }
-        ],
-        "index": 6,
-        "name": "CycleDeferred"
-      },
-      {
-        "fields": [
-          { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" }
         ],
-        "index": 7,
+        "index": 6,
         "name": "CycleStarted"
       },
       {
         "fields": [
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "result", "type": 342, "typeName": "CycleResult" },
+          { "name": "result", "type": 341, "typeName": "CycleResult" },
           { "name": "executed_steps", "type": 14, "typeName": "u32" },
           {
             "name": "committed_effectful_tasks",
@@ -432,7 +424,7 @@
           },
           { "name": "failed_steps", "type": 14, "typeName": "u32" }
         ],
-        "index": 8,
+        "index": 7,
         "name": "CycleSummary"
       },
       {
@@ -440,9 +432,9 @@
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
           { "name": "step_index", "type": 14, "typeName": "u32" },
-          { "name": "reason", "type": 343, "typeName": "StepSkippedReason" }
+          { "name": "reason", "type": 342, "typeName": "StepSkippedReason" }
         ],
-        "index": 9,
+        "index": 8,
         "name": "StepSkipped"
       },
       {
@@ -450,10 +442,10 @@
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
           { "name": "step_index", "type": 14, "typeName": "u32" },
-          { "name": "retry_class", "type": 344, "typeName": "RetryClass" },
+          { "name": "retry_class", "type": 343, "typeName": "RetryClass" },
           { "name": "error", "type": 288, "typeName": "DispatchError" }
         ],
-        "index": 10,
+        "index": 9,
         "name": "StepFailed"
       },
       {
@@ -465,7 +457,7 @@
           { "name": "amount", "type": 49, "typeName": "T::Balance" },
           { "name": "to", "type": 1, "typeName": "T::AccountId" }
         ],
-        "index": 11,
+        "index": 10,
         "name": "TransferExecuted"
       },
       {
@@ -480,7 +472,7 @@
           { "name": "legs", "type": 14, "typeName": "u32" },
           { "name": "effective_legs", "type": 14, "typeName": "u32" }
         ],
-        "index": 12,
+        "index": 11,
         "name": "SplitTransferExecuted"
       },
       {
@@ -493,7 +485,7 @@
           { "name": "amount_in", "type": 49, "typeName": "T::Balance" },
           { "name": "amount_out", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 13,
+        "index": 12,
         "name": "SwapExecuted"
       },
       {
@@ -504,7 +496,7 @@
           { "name": "asset", "type": 197, "typeName": "T::AssetId" },
           { "name": "amount", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 14,
+        "index": 13,
         "name": "BurnExecuted"
       },
       {
@@ -515,7 +507,7 @@
           { "name": "asset", "type": 197, "typeName": "T::AssetId" },
           { "name": "amount", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 15,
+        "index": 14,
         "name": "MintExecuted"
       },
       {
@@ -526,7 +518,7 @@
           { "name": "asset", "type": 197, "typeName": "T::AssetId" },
           { "name": "amount", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 16,
+        "index": 15,
         "name": "StakeExecuted"
       },
       {
@@ -537,7 +529,7 @@
           { "name": "asset", "type": 197, "typeName": "T::AssetId" },
           { "name": "shares", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 17,
+        "index": 16,
         "name": "UnstakeExecuted"
       },
       {
@@ -552,7 +544,7 @@
           { "name": "amount_a", "type": 49, "typeName": "T::Balance" },
           { "name": "amount_b", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 18,
+        "index": 17,
         "name": "LiquidityDonated"
       },
       {
@@ -566,7 +558,7 @@
           { "name": "amount_b", "type": 49, "typeName": "T::Balance" },
           { "name": "lp_minted", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 19,
+        "index": 18,
         "name": "LiquidityAdded"
       },
       {
@@ -581,12 +573,12 @@
           { "name": "amount_a", "type": 49, "typeName": "T::Balance" },
           { "name": "amount_b", "type": 49, "typeName": "T::Balance" }
         ],
-        "index": 20,
+        "index": 19,
         "name": "LiquidityRemoved"
       },
       {
         "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
-        "index": 21,
+        "index": 20,
         "name": "ScheduleUpdated"
       },
       {
@@ -598,7 +590,7 @@
             "typeName": "CompletionPolicy"
           }
         ],
-        "index": 22,
+        "index": 21,
         "name": "ExecutionPlanUpdated"
       },
       {
@@ -606,7 +598,7 @@
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "target", "type": 189, "typeName": "Option<u64>" }
         ],
-        "index": 23,
+        "index": 22,
         "name": "AutoCloseNonceSet"
       },
       {
@@ -616,7 +608,7 @@
           { "name": "new_target", "type": 10, "typeName": "u64" },
           { "name": "by", "type": 10, "typeName": "u64" }
         ],
-        "index": 24,
+        "index": 23,
         "name": "AutoCloseNonceIncremented"
       },
       {
@@ -624,17 +616,17 @@
           { "name": "old_limit", "type": 14, "typeName": "u32" },
           { "name": "new_limit", "type": 14, "typeName": "u32" }
         ],
-        "index": 25,
+        "index": 24,
         "name": "ActiveActorLimitSet"
       },
       {
         "fields": [{ "name": "paused", "type": 50, "typeName": "bool" }],
-        "index": 26,
+        "index": 25,
         "name": "GlobalCircuitBreakerSet"
       },
       {
         "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
-        "index": 27,
+        "index": 26,
         "name": "ManualTriggerSet"
       },
       {
@@ -644,26 +636,26 @@
           { "name": "alive", "type": 14, "typeName": "u32" },
           { "name": "missing", "type": 14, "typeName": "u32" }
         ],
-        "index": 28,
+        "index": 27,
         "name": "SweepBatchProcessed"
       },
       {
         "fields": [
           { "name": "consecutive_blocks", "type": 14, "typeName": "u32" }
         ],
-        "index": 29,
+        "index": 28,
         "name": "IdleStarvationDetected"
       },
       {
         "fields": [
           { "name": "consecutive_blocks", "type": 14, "typeName": "u32" }
         ],
-        "index": 30,
+        "index": 29,
         "name": "IdleStarvationRecovered"
       },
       {
         "fields": [{ "name": "aaa_id", "type": 10, "typeName": "AaaId" }],
-        "index": 31,
+        "index": 30,
         "name": "FundingSourcePolicyUpdated"
       },
       {
@@ -673,7 +665,7 @@
           { "name": "added", "type": 49, "typeName": "BalanceOf<T>" },
           { "name": "accumulated", "type": 49, "typeName": "BalanceOf<T>" }
         ],
-        "index": 32,
+        "index": 31,
         "name": "FundingAccumulated"
       },
       {
@@ -682,14 +674,14 @@
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
           { "name": "attempt", "type": 14, "typeName": "u32" },
           { "name": "cursor", "type": 14, "typeName": "u32" },
-          { "name": "reason", "type": 345, "typeName": "SuspensionReason" },
+          { "name": "reason", "type": 344, "typeName": "SuspensionReason" },
           {
             "name": "cumulative_outcomes",
-            "type": 346,
+            "type": 345,
             "typeName": "OutcomeTotals"
           }
         ],
-        "index": 33,
+        "index": 32,
         "name": "CycleSuspended"
       },
       {
@@ -699,16 +691,16 @@
           { "name": "attempt", "type": 14, "typeName": "u32" },
           { "name": "cursor", "type": 14, "typeName": "u32" }
         ],
-        "index": 34,
+        "index": 33,
         "name": "CycleContinued"
       },
       {
         "fields": [
           { "name": "aaa_id", "type": 10, "typeName": "AaaId" },
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
-          { "name": "reason", "type": 347, "typeName": "CancellationReason" }
+          { "name": "reason", "type": 346, "typeName": "CancellationReason" }
         ],
-        "index": 35,
+        "index": 34,
         "name": "CycleCancelled"
       },
       {
@@ -717,7 +709,7 @@
           { "name": "cycle_nonce", "type": 10, "typeName": "u64" },
           { "name": "step_index", "type": 14, "typeName": "u32" }
         ],
-        "index": 36,
+        "index": 35,
         "name": "CycleStopped"
       }
     ],
@@ -737,7 +729,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 616
+            "value": 615
           }
         }
       },
@@ -749,7 +741,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 621
+            "value": 620
           }
         }
       },
@@ -761,7 +753,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 622
+            "value": 621
           }
         }
       },
@@ -773,7 +765,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 627
+            "value": 626
           }
         }
       },
@@ -785,7 +777,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 633
+            "value": 632
           }
         }
       },
@@ -807,7 +799,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 634
+            "value": 633
           }
         }
       },
@@ -844,7 +836,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 635
+            "value": 634
           }
         }
       },
@@ -855,8 +847,8 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 638,
-            "value": 639
+            "key": 637,
+            "value": 638
           }
         }
       },
@@ -868,7 +860,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 644
+            "value": 643
           }
         }
       },
@@ -880,7 +872,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 645
+            "value": 644
           }
         }
       },
@@ -926,7 +918,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 646
+            "value": 645
           }
         }
       },
@@ -972,7 +964,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 647
+            "value": 646
           }
         }
       },
@@ -986,8 +978,8 @@
               { "tag": "Blake2128Concat" },
               { "tag": "Blake2128Concat" }
             ],
-            "key": 648,
-            "value": 649
+            "key": 647,
+            "value": 648
           }
         }
       },
@@ -999,7 +991,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 215,
-            "value": 652
+            "value": 651
           }
         }
       },
@@ -1040,14 +1032,14 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 215,
-            "value": 653
+            "value": 652
           }
         }
       },
       {
         "modifier": 1,
         "name": "DirtyObservationListState",
-        "type": { "tag": "plain", "value": 655 }
+        "type": { "tag": "plain", "value": 654 }
       },
       {
         "modifier": 1,
@@ -1057,6 +1049,16 @@
       {
         "modifier": 1,
         "name": "IdleStarvationState",
+        "type": { "tag": "plain", "value": 655 }
+      },
+      {
+        "modifier": 1,
+        "name": "CurrentCacheEpoch",
+        "type": { "tag": "plain", "value": 14 }
+      },
+      {
+        "modifier": 0,
+        "name": "CacheRevalidation",
         "type": { "tag": "plain", "value": 656 }
       }
     ]
@@ -1501,7 +1503,7 @@
                 "docs": [],
                 "name": "aaa_ids",
                 "type": 257,
-                "typeName": "BoundedVec<AaaId, T::MaxSweepPerBlock>"
+                "typeName": "BoundedVec<AaaId, T::MaxSweepBatch>"
               }
             ],
             "index": 14,
@@ -1541,7 +1543,7 @@
                 "typeName": "ProgramInputOf<T>"
               }
             ],
-            "index": 21,
+            "index": 17,
             "name": "activate_aaa"
           },
           {
@@ -1549,7 +1551,7 @@
             "fields": [
               { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
             ],
-            "index": 22,
+            "index": 18,
             "name": "deactivate_aaa"
           },
           {
@@ -1557,7 +1559,7 @@
             "fields": [
               { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
             ],
-            "index": 23,
+            "index": 19,
             "name": "cancel_continuation"
           }
         ]
@@ -2498,7 +2500,7 @@
             "docs": [],
             "fields": [{ "docs": [], "type": 202, "typeName": "Perbill" }],
             "index": 2,
-            "name": "PercentageOfTrigger"
+            "name": "PercentageAtOpening"
           },
           {
             "docs": [],
@@ -2506,7 +2508,7 @@
             "index": 3,
             "name": "PercentageOfLastFunding"
           },
-          { "docs": [], "fields": [], "index": 4, "name": "AllBalance" }
+          { "docs": [], "fields": [], "index": 4, "name": "AllAvailable" }
         ]
       },
       "id": 243,
@@ -3020,39 +3022,12 @@
               { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
               {
                 "docs": [],
-                "name": "candidate_cycle_nonce",
-                "type": 10,
-                "typeName": "u64"
-              },
-              {
-                "docs": [],
-                "name": "candidate_attempt",
-                "type": 14,
-                "typeName": "u32"
-              },
-              { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" },
-              {
-                "docs": [],
-                "name": "reason",
-                "type": 341,
-                "typeName": "DeferReason"
-              }
-            ],
-            "index": 6,
-            "name": "CycleDeferred"
-          },
-          {
-            "docs": [],
-            "fields": [
-              { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" },
-              {
-                "docs": [],
                 "name": "cycle_nonce",
                 "type": 10,
                 "typeName": "u64"
               }
             ],
-            "index": 7,
+            "index": 6,
             "name": "CycleStarted"
           },
           {
@@ -3068,7 +3043,7 @@
               {
                 "docs": [],
                 "name": "result",
-                "type": 342,
+                "type": 341,
                 "typeName": "CycleResult"
               },
               {
@@ -3108,7 +3083,7 @@
                 "typeName": "u32"
               }
             ],
-            "index": 8,
+            "index": 7,
             "name": "CycleSummary"
           },
           {
@@ -3130,11 +3105,11 @@
               {
                 "docs": [],
                 "name": "reason",
-                "type": 343,
+                "type": 342,
                 "typeName": "StepSkippedReason"
               }
             ],
-            "index": 9,
+            "index": 8,
             "name": "StepSkipped"
           },
           {
@@ -3156,7 +3131,7 @@
               {
                 "docs": [],
                 "name": "retry_class",
-                "type": 344,
+                "type": 343,
                 "typeName": "RetryClass"
               },
               {
@@ -3166,7 +3141,7 @@
                 "typeName": "DispatchError"
               }
             ],
-            "index": 10,
+            "index": 9,
             "name": "StepFailed"
           },
           {
@@ -3204,7 +3179,7 @@
                 "typeName": "T::AccountId"
               }
             ],
-            "index": 11,
+            "index": 10,
             "name": "TransferExecuted"
           },
           {
@@ -3255,7 +3230,7 @@
                 "typeName": "u32"
               }
             ],
-            "index": 12,
+            "index": 11,
             "name": "SplitTransferExecuted"
           },
           {
@@ -3299,7 +3274,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 13,
+            "index": 12,
             "name": "SwapExecuted"
           },
           {
@@ -3331,7 +3306,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 14,
+            "index": 13,
             "name": "BurnExecuted"
           },
           {
@@ -3363,7 +3338,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 15,
+            "index": 14,
             "name": "MintExecuted"
           },
           {
@@ -3395,7 +3370,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 16,
+            "index": 15,
             "name": "StakeExecuted"
           },
           {
@@ -3427,7 +3402,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 17,
+            "index": 16,
             "name": "UnstakeExecuted"
           },
           {
@@ -3483,7 +3458,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 18,
+            "index": 17,
             "name": "LiquidityDonated"
           },
           {
@@ -3533,7 +3508,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 19,
+            "index": 18,
             "name": "LiquidityAdded"
           },
           {
@@ -3589,7 +3564,7 @@
                 "typeName": "T::Balance"
               }
             ],
-            "index": 20,
+            "index": 19,
             "name": "LiquidityRemoved"
           },
           {
@@ -3597,7 +3572,7 @@
             "fields": [
               { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
             ],
-            "index": 21,
+            "index": 20,
             "name": "ScheduleUpdated"
           },
           {
@@ -3611,7 +3586,7 @@
                 "typeName": "CompletionPolicy"
               }
             ],
-            "index": 22,
+            "index": 21,
             "name": "ExecutionPlanUpdated"
           },
           {
@@ -3625,7 +3600,7 @@
                 "typeName": "Option<u64>"
               }
             ],
-            "index": 23,
+            "index": 22,
             "name": "AutoCloseNonceSet"
           },
           {
@@ -3646,7 +3621,7 @@
               },
               { "docs": [], "name": "by", "type": 10, "typeName": "u64" }
             ],
-            "index": 24,
+            "index": 23,
             "name": "AutoCloseNonceIncremented"
           },
           {
@@ -3660,7 +3635,7 @@
               },
               { "docs": [], "name": "new_limit", "type": 14, "typeName": "u32" }
             ],
-            "index": 25,
+            "index": 24,
             "name": "ActiveActorLimitSet"
           },
           {
@@ -3668,7 +3643,7 @@
             "fields": [
               { "docs": [], "name": "paused", "type": 50, "typeName": "bool" }
             ],
-            "index": 26,
+            "index": 25,
             "name": "GlobalCircuitBreakerSet"
           },
           {
@@ -3676,7 +3651,7 @@
             "fields": [
               { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
             ],
-            "index": 27,
+            "index": 26,
             "name": "ManualTriggerSet"
           },
           {
@@ -3692,7 +3667,7 @@
               { "docs": [], "name": "alive", "type": 14, "typeName": "u32" },
               { "docs": [], "name": "missing", "type": 14, "typeName": "u32" }
             ],
-            "index": 28,
+            "index": 27,
             "name": "SweepBatchProcessed"
           },
           {
@@ -3705,7 +3680,7 @@
                 "typeName": "u32"
               }
             ],
-            "index": 29,
+            "index": 28,
             "name": "IdleStarvationDetected"
           },
           {
@@ -3718,7 +3693,7 @@
                 "typeName": "u32"
               }
             ],
-            "index": 30,
+            "index": 29,
             "name": "IdleStarvationRecovered"
           },
           {
@@ -3726,7 +3701,7 @@
             "fields": [
               { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
             ],
-            "index": 31,
+            "index": 30,
             "name": "FundingSourcePolicyUpdated"
           },
           {
@@ -3752,7 +3727,7 @@
                 "typeName": "BalanceOf<T>"
               }
             ],
-            "index": 32,
+            "index": 31,
             "name": "FundingAccumulated"
           },
           {
@@ -3770,17 +3745,17 @@
               {
                 "docs": [],
                 "name": "reason",
-                "type": 345,
+                "type": 344,
                 "typeName": "SuspensionReason"
               },
               {
                 "docs": [],
                 "name": "cumulative_outcomes",
-                "type": 346,
+                "type": 345,
                 "typeName": "OutcomeTotals"
               }
             ],
-            "index": 33,
+            "index": 32,
             "name": "CycleSuspended"
           },
           {
@@ -3796,7 +3771,7 @@
               { "docs": [], "name": "attempt", "type": 14, "typeName": "u32" },
               { "docs": [], "name": "cursor", "type": 14, "typeName": "u32" }
             ],
-            "index": 34,
+            "index": 33,
             "name": "CycleContinued"
           },
           {
@@ -3812,11 +3787,11 @@
               {
                 "docs": [],
                 "name": "reason",
-                "type": 347,
+                "type": 346,
                 "typeName": "CancellationReason"
               }
             ],
-            "index": 35,
+            "index": 34,
             "name": "CycleCancelled"
           },
           {
@@ -3836,7 +3811,7 @@
                 "typeName": "u32"
               }
             ],
-            "index": 36,
+            "index": 35,
             "name": "CycleStopped"
           }
         ]
@@ -3950,25 +3925,12 @@
       "def": {
         "tag": "variant",
         "value": [
-          { "docs": [], "fields": [], "index": 0, "name": "RefTime" },
-          { "docs": [], "fields": [], "index": 1, "name": "ProofSize" },
-          { "docs": [], "fields": [], "index": 2, "name": "Both" }
-        ]
-      },
-      "id": 341,
-      "params": [],
-      "path": ["pallet_aaa", "types", "DeferReason"]
-    },
-    {
-      "def": {
-        "tag": "variant",
-        "value": [
           { "docs": [], "fields": [], "index": 0, "name": "Completed" },
           { "docs": [], "fields": [], "index": 1, "name": "Failed" },
           { "docs": [], "fields": [], "index": 2, "name": "Cancelled" }
         ]
       },
-      "id": 342,
+      "id": 341,
       "params": [],
       "path": ["pallet_aaa", "types", "CycleResult"]
     },
@@ -3981,7 +3943,7 @@
           { "docs": [], "fields": [], "index": 2, "name": "FundingUnavailable" }
         ]
       },
-      "id": 343,
+      "id": 342,
       "params": [],
       "path": ["pallet_aaa", "types", "StepSkippedReason"]
     },
@@ -3993,7 +3955,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Temporary" }
         ]
       },
-      "id": 344,
+      "id": 343,
       "params": [],
       "path": ["pallet_aaa", "adapters", "RetryClass"]
     },
@@ -4010,7 +3972,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Temporary" }
         ]
       },
-      "id": 345,
+      "id": 344,
       "params": [],
       "path": ["pallet_aaa", "types", "SuspensionReason"]
     },
@@ -4051,7 +4013,7 @@
           { "docs": [], "name": "failed_steps", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 346,
+      "id": 345,
       "params": [],
       "path": ["pallet_aaa", "types", "OutcomeTotals"]
     },
@@ -4089,7 +4051,7 @@
           { "docs": [], "fields": [], "index": 7, "name": "RuntimeUpgrade" }
         ]
       },
-      "id": 347,
+      "id": 346,
       "params": [],
       "path": ["pallet_aaa", "types", "CancellationReason"]
     },
@@ -4098,13 +4060,13 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 103, "typeName": "[u8; 8]" }]
       },
-      "id": 427,
+      "id": 426,
       "params": [],
       "path": ["frame_support", "PalletId"]
     },
     {
       "def": { "tag": "sequence", "value": 215 },
-      "id": 609,
+      "id": 608,
       "params": [],
       "path": []
     },
@@ -4115,14 +4077,14 @@
           {
             "docs": [],
             "name": "lifecycle",
-            "type": 617,
+            "type": 616,
             "typeName": "ActiveLifecycle"
           },
           {
             "docs": [],
-            "name": "run_state",
-            "type": 618,
-            "typeName": "RunState"
+            "name": "cycle_state",
+            "type": 617,
+            "typeName": "CycleState"
           },
           {
             "docs": [],
@@ -4151,7 +4113,7 @@
           {
             "docs": [],
             "name": "wakeup_pointer",
-            "type": 619,
+            "type": 618,
             "typeName": "Option<WakeupPointer<BlockNumber>>"
           },
           {
@@ -4195,10 +4157,16 @@
             "name": "last_cycle_block",
             "type": 186,
             "typeName": "Option<BlockNumber>"
+          },
+          {
+            "docs": [],
+            "name": "cache_epoch",
+            "type": 14,
+            "typeName": "CacheEpoch"
           }
         ]
       },
-      "id": 616,
+      "id": 615,
       "params": [
         { "name": "BlockNumber", "type": 14 },
         { "name": "Balance", "type": 49 }
@@ -4218,7 +4186,7 @@
           }
         ]
       },
-      "id": 617,
+      "id": 616,
       "params": [],
       "path": ["pallet_aaa", "types", "ActiveLifecycle"]
     },
@@ -4230,9 +4198,9 @@
           { "docs": [], "fields": [], "index": 1, "name": "Suspended" }
         ]
       },
-      "id": 618,
+      "id": 617,
       "params": [],
-      "path": ["pallet_aaa", "types", "RunState"]
+      "path": ["pallet_aaa", "types", "CycleState"]
     },
     {
       "def": {
@@ -4241,14 +4209,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 620 }],
+            "fields": [{ "docs": [], "type": 619 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 619,
-      "params": [{ "name": "T", "type": 620 }],
+      "id": 618,
+      "params": [{ "name": "T", "type": 619 }],
       "path": ["Option"]
     },
     {
@@ -4270,7 +4238,7 @@
           { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
         ]
       },
-      "id": 620,
+      "id": 619,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_aaa", "types", "WakeupPointer"]
     },
@@ -4304,7 +4272,7 @@
           }
         ]
       },
-      "id": 621,
+      "id": 620,
       "params": [
         { "name": "Schedule", "type": 225 },
         { "name": "BlockNumber", "type": 14 },
@@ -4325,31 +4293,31 @@
           {
             "docs": [],
             "name": "funding_accumulated",
-            "type": 623,
+            "type": 622,
             "typeName": "FundingAccumulated"
           },
           {
             "docs": [],
             "name": "funding_tracked_assets",
-            "type": 625,
+            "type": 624,
             "typeName": "FundingTrackedAssets"
           }
         ]
       },
-      "id": 622,
+      "id": 621,
       "params": [
         { "name": "FundingPolicy", "type": 250 },
-        { "name": "FundingAccumulated", "type": 623 },
-        { "name": "FundingTrackedAssets", "type": 625 }
+        { "name": "FundingAccumulated", "type": 622 },
+        { "name": "FundingTrackedAssets", "type": 624 }
       ],
       "path": ["pallet_aaa", "types", "ActorFundingState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 624, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 623, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 623,
+      "id": 622,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 },
@@ -4359,7 +4327,7 @@
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 317 }] },
-      "id": 624,
+      "id": 623,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 }
@@ -4369,15 +4337,15 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 626, "typeName": "BTreeSet<T>" }]
+        "value": [{ "docs": [], "type": 625, "typeName": "BTreeSet<T>" }]
       },
-      "id": 625,
+      "id": 624,
       "params": [{ "name": "T", "type": 197 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 233 }] },
-      "id": 626,
+      "id": 625,
       "params": [{ "name": "T", "type": 197 }],
       "path": ["BTreeSet"]
     },
@@ -4401,25 +4369,25 @@
           },
           {
             "docs": [],
-            "name": "trigger_snapshot",
-            "type": 628,
-            "typeName": "BoundedBTreeMap<ResolutionSurface<AssetId>, Balance, MaxSnapshotEntries\n>"
+            "name": "opening_snapshot",
+            "type": 627,
+            "typeName": "BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>"
           },
           {
             "docs": [],
             "name": "funding_snapshot",
-            "type": 623,
+            "type": 622,
             "typeName": "BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>"
           },
           {
             "docs": [],
             "name": "cumulative_outcomes",
-            "type": 346,
+            "type": 345,
             "typeName": "OutcomeTotals"
           }
         ]
       },
-      "id": 627,
+      "id": 626,
       "params": [
         { "name": "AssetId", "type": 197 },
         { "name": "Balance", "type": 49 },
@@ -4432,11 +4400,11 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 630, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 629, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 628,
+      "id": 627,
       "params": [
-        { "name": "K", "type": 629 },
+        { "name": "K", "type": 628 },
         { "name": "V", "type": 49 },
         { "name": "S" }
       ],
@@ -4450,38 +4418,44 @@
             "docs": [],
             "fields": [{ "docs": [], "type": 197, "typeName": "AssetId" }],
             "index": 0,
-            "name": "Asset"
+            "name": "PreservableAsset"
           },
           {
             "docs": [],
             "fields": [{ "docs": [], "type": 197, "typeName": "AssetId" }],
             "index": 1,
+            "name": "TargetAsset"
+          },
+          {
+            "docs": [],
+            "fields": [{ "docs": [], "type": 197, "typeName": "AssetId" }],
+            "index": 2,
             "name": "StakingShares"
           }
         ]
       },
-      "id": 629,
+      "id": 628,
       "params": [{ "name": "AssetId", "type": 197 }],
-      "path": ["pallet_aaa", "types", "ResolutionSurface"]
+      "path": ["pallet_aaa", "types", "OpeningSurface"]
     },
     {
-      "def": { "tag": "composite", "value": [{ "docs": [], "type": 631 }] },
-      "id": 630,
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 630 }] },
+      "id": 629,
       "params": [
-        { "name": "K", "type": 629 },
+        { "name": "K", "type": 628 },
         { "name": "V", "type": 49 }
       ],
       "path": ["BTreeMap"]
     },
     {
-      "def": { "tag": "sequence", "value": 632 },
-      "id": 631,
+      "def": { "tag": "sequence", "value": 631 },
+      "id": 630,
       "params": [],
       "path": []
     },
     {
-      "def": { "tag": "tuple", "value": [629, 49] },
-      "id": 632,
+      "def": { "tag": "tuple", "value": [628, 49] },
+      "id": 631,
       "params": [],
       "path": []
     },
@@ -4511,7 +4485,7 @@
           { "docs": [], "name": "cycle_nonce", "type": 10, "typeName": "u64" }
         ]
       },
-      "id": 633,
+      "id": 632,
       "params": [{ "name": "AccountId", "type": 1 }],
       "path": ["pallet_aaa", "types", "ActorIdentity"]
     },
@@ -4528,17 +4502,17 @@
           }
         ]
       },
-      "id": 634,
+      "id": 633,
       "params": [],
       "path": ["pallet_aaa", "types", "SystemSovereignState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 637, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 636, "typeName": "Vec<T>" }]
       },
-      "id": 635,
-      "params": [{ "name": "T", "type": 636 }, { "name": "S" }],
+      "id": 634,
+      "params": [{ "name": "T", "type": 635 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -4554,19 +4528,19 @@
           { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
         ]
       },
-      "id": 636,
+      "id": 635,
       "params": [],
       "path": ["pallet_aaa", "types", "QueueEntry"]
     },
     {
-      "def": { "tag": "sequence", "value": 636 },
-      "id": 637,
+      "def": { "tag": "sequence", "value": 635 },
+      "id": 636,
       "params": [],
       "path": []
     },
     {
       "def": { "tag": "tuple", "value": [14, 10] },
-      "id": 638,
+      "id": 637,
       "params": [],
       "path": []
     },
@@ -4574,7 +4548,7 @@
       "def": {
         "tag": "composite",
         "value": [
-          { "docs": [], "name": "entries", "type": 640, "typeName": "Entries" },
+          { "docs": [], "name": "entries", "type": 639, "typeName": "Entries" },
           { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
           {
             "docs": [],
@@ -4596,17 +4570,17 @@
           }
         ]
       },
-      "id": 639,
-      "params": [{ "name": "Entries", "type": 640 }],
+      "id": 638,
+      "params": [{ "name": "Entries", "type": 639 }],
       "path": ["pallet_aaa", "types", "WakeupPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 643, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 642, "typeName": "Vec<T>" }]
       },
-      "id": 640,
-      "params": [{ "name": "T", "type": 641 }, { "name": "S" }],
+      "id": 639,
+      "params": [{ "name": "T", "type": 640 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -4616,14 +4590,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 642 }],
+            "fields": [{ "docs": [], "type": 641 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 641,
-      "params": [{ "name": "T", "type": 642 }],
+      "id": 640,
+      "params": [{ "name": "T", "type": 641 }],
       "path": ["Option"]
     },
     {
@@ -4633,13 +4607,13 @@
           { "docs": [], "name": "aaa_id", "type": 10, "typeName": "AaaId" }
         ]
       },
-      "id": 642,
+      "id": 641,
       "params": [],
       "path": ["pallet_aaa", "types", "WakeupEntry"]
     },
     {
-      "def": { "tag": "sequence", "value": 641 },
-      "id": 643,
+      "def": { "tag": "sequence", "value": 640 },
+      "id": 642,
       "params": [],
       "path": []
     },
@@ -4674,7 +4648,7 @@
           }
         ]
       },
-      "id": 644,
+      "id": 643,
       "params": [],
       "path": ["pallet_aaa", "types", "WakeupBucketState"]
     },
@@ -4683,16 +4657,16 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 204, "typeName": "Vec<T>" }]
       },
-      "id": 645,
+      "id": 644,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 609, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 608, "typeName": "Vec<T>" }]
       },
-      "id": 646,
+      "id": 645,
       "params": [{ "name": "T", "type": 215 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
@@ -4701,13 +4675,13 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 204, "typeName": "Vec<T>" }]
       },
-      "id": 647,
+      "id": 646,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "tuple", "value": [215, 14] },
-      "id": 648,
+      "id": 647,
       "params": [],
       "path": []
     },
@@ -4730,27 +4704,27 @@
           {
             "docs": [],
             "name": "entries",
-            "type": 650,
+            "type": 649,
             "typeName": "BoundedVec<Option<AaaId>, MaxEntries>"
           }
         ]
       },
-      "id": 649,
+      "id": 648,
       "params": [{ "name": "MaxEntries" }],
       "path": ["pallet_aaa", "types", "ObservationSubscriberPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 651, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 650, "typeName": "Vec<T>" }]
       },
-      "id": 650,
+      "id": 649,
       "params": [{ "name": "T", "type": 189 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "sequence", "value": 189 },
-      "id": 651,
+      "id": 650,
       "params": [],
       "path": []
     },
@@ -4763,7 +4737,7 @@
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 652,
+      "id": 651,
       "params": [],
       "path": ["pallet_aaa", "types", "ObservationSubscriberPageList"]
     },
@@ -4798,18 +4772,18 @@
           {
             "docs": [],
             "name": "previous_dirty_feed",
-            "type": 654,
+            "type": 653,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "next_dirty_feed",
-            "type": 654,
+            "type": 653,
             "typeName": "Option<FeedId>"
           }
         ]
       },
-      "id": 653,
+      "id": 652,
       "params": [
         { "name": "FeedId", "type": 215 },
         { "name": "BlockNumber", "type": 14 }
@@ -4829,7 +4803,7 @@
           }
         ]
       },
-      "id": 654,
+      "id": 653,
       "params": [{ "name": "T", "type": 215 }],
       "path": ["Option"]
     },
@@ -4840,25 +4814,25 @@
           {
             "docs": [],
             "name": "head",
-            "type": 654,
+            "type": 653,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "tail",
-            "type": 654,
+            "type": 653,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "cursor",
-            "type": 654,
+            "type": 653,
             "typeName": "Option<FeedId>"
           },
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 655,
+      "id": 654,
       "params": [{ "name": "FeedId", "type": 215 }],
       "path": ["pallet_aaa", "types", "DirtyObservationList"]
     },
@@ -4895,9 +4869,27 @@
           }
         ]
       },
-      "id": 656,
+      "id": 655,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_aaa", "types", "IdleStarvationPhase"]
+    },
+    {
+      "def": {
+        "tag": "composite",
+        "value": [
+          {
+            "docs": [],
+            "name": "target_epoch",
+            "type": 14,
+            "typeName": "CacheEpoch"
+          },
+          { "docs": [], "name": "cursor", "type": 189, "typeName": "Cursor" },
+          { "docs": [], "name": "remaining", "type": 14, "typeName": "u32" }
+        ]
+      },
+      "id": 656,
+      "params": [{ "name": "Cursor", "type": 189 }],
+      "path": ["pallet_aaa", "types", "CacheRevalidationState"]
     },
     {
       "def": {
@@ -4980,259 +4972,259 @@
             "index": 16,
             "name": "GlobalCircuitBreakerActive"
           },
-          { "docs": [], "fields": [], "index": 17, "name": "ImmutableAaa" },
           {
             "docs": [],
             "fields": [],
-            "index": 18,
+            "index": 17,
+            "name": "CacheRevalidationActive"
+          },
+          { "docs": [], "fields": [], "index": 18, "name": "ImmutableAaa" },
+          {
+            "docs": [],
+            "fields": [],
+            "index": 19,
             "name": "InsufficientBalance"
           },
-          { "docs": [], "fields": [], "index": 19, "name": "InsufficientFee" },
+          { "docs": [], "fields": [], "index": 20, "name": "InsufficientFee" },
           {
             "docs": [],
             "fields": [],
-            "index": 20,
+            "index": 21,
             "name": "InvalidAmountResolution"
           },
-          { "docs": [], "fields": [], "index": 21, "name": "InvalidCondition" },
+          { "docs": [], "fields": [], "index": 22, "name": "InvalidCondition" },
           {
             "docs": [],
             "fields": [],
-            "index": 22,
+            "index": 23,
             "name": "InvalidAutoCloseNonce"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 23,
+            "index": 24,
             "name": "InvalidScheduleWindow"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 24,
+            "index": 25,
             "name": "InvalidSplitTransfer"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 25,
+            "index": 26,
             "name": "SelfTransferNotAllowed"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 26,
+            "index": 27,
             "name": "InvalidTriggerConfiguration"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 27,
+            "index": 28,
             "name": "MintNotAllowedForUserAaa"
           },
-          { "docs": [], "fields": [], "index": 28, "name": "NotGovernance" },
-          { "docs": [], "fields": [], "index": 29, "name": "NotOwner" },
-          { "docs": [], "fields": [], "index": 30, "name": "NotPaused" },
+          { "docs": [], "fields": [], "index": 29, "name": "NotGovernance" },
+          { "docs": [], "fields": [], "index": 30, "name": "NotOwner" },
+          { "docs": [], "fields": [], "index": 31, "name": "NotPaused" },
           {
             "docs": [],
             "fields": [],
-            "index": 31,
+            "index": 32,
             "name": "OwnerSlotCapacityExceeded"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 32,
+            "index": 33,
             "name": "OwnerSlotOccupied"
           },
-          { "docs": [], "fields": [], "index": 33, "name": "InvalidOwnerSlot" },
-          { "docs": [], "fields": [], "index": 34, "name": "AaaIdOccupied" },
+          { "docs": [], "fields": [], "index": 34, "name": "InvalidOwnerSlot" },
+          { "docs": [], "fields": [], "index": 35, "name": "AaaIdOccupied" },
           {
             "docs": [],
             "fields": [],
-            "index": 35,
+            "index": 36,
             "name": "SystemSovereignCapacityExceeded"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 36,
+            "index": 37,
             "name": "SystemSovereignUnknown"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 37,
+            "index": 38,
             "name": "SystemSovereignOccupied"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 38,
+            "index": 39,
             "name": "ExecutionPlanTooLong"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 39,
+            "index": 40,
             "name": "SnapshotUnavailable"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 40,
+            "index": 41,
             "name": "FundingAccumulatorOverflow"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 41,
+            "index": 42,
             "name": "SovereignAccountCollision"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 42,
+            "index": 43,
             "name": "ReservedSovereignAccount"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 43,
+            "index": 44,
             "name": "QueueTicketExhausted"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 44,
+            "index": 45,
             "name": "SchedulerIndexExhausted"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 45,
+            "index": 46,
             "name": "SystemSovereignInvariant"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 46,
+            "index": 47,
             "name": "AutoCloseNonceHorizonExceeded"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 47,
+            "index": 48,
             "name": "AutoCloseNonceOverflow"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 48,
+            "index": 49,
             "name": "AutoCloseNonceIncrementZero"
           },
           {
             "docs": [],
             "fields": [],
-            "index": 49,
-            "name": "QueueMutationRateLimited"
-          },
-          {
-            "docs": [],
-            "fields": [],
             "index": 50,
-            "name": "QueueCapacityUnavailable"
+            "name": "ControlMutationRateLimited"
           },
           {
             "docs": [],
             "fields": [],
             "index": 51,
-            "name": "RetryLaterNotAllowedForImmutableAaa"
+            "name": "QueueCapacityUnavailable"
           },
           {
             "docs": [],
             "fields": [],
             "index": 52,
-            "name": "ContinuationNotFound"
+            "name": "RetryLaterNotAllowedForImmutableAaa"
           },
           {
             "docs": [],
             "fields": [],
             "index": 53,
-            "name": "ContinuationInvariant"
+            "name": "ContinuationNotFound"
           },
           {
             "docs": [],
             "fields": [],
             "index": 54,
-            "name": "EmptyConditionSet"
+            "name": "ContinuationInvariant"
           },
           {
             "docs": [],
             "fields": [],
             "index": 55,
-            "name": "ManualSourceDisabled"
+            "name": "EmptyConditionSet"
           },
           {
             "docs": [],
             "fields": [],
             "index": 56,
-            "name": "InvalidTradeBound"
+            "name": "ManualSourceDisabled"
           },
           {
             "docs": [],
             "fields": [],
             "index": 57,
-            "name": "InvalidRetryAttemptLimit"
+            "name": "InvalidTradeBound"
           },
           {
             "docs": [],
             "fields": [],
             "index": 58,
-            "name": "RecipientDepositUnavailable"
+            "name": "InvalidRetryAttemptLimit"
           },
           {
             "docs": [],
             "fields": [],
             "index": 59,
-            "name": "InvalidObservationMaxAge"
+            "name": "RecipientDepositUnavailable"
           },
           {
             "docs": [],
             "fields": [],
             "index": 60,
-            "name": "ObservationSubscriptionCapacityExceeded"
+            "name": "InvalidObservationMaxAge"
           },
           {
             "docs": [],
             "fields": [],
             "index": 61,
-            "name": "ObservationSubscriptionInvariant"
+            "name": "ObservationSubscriptionCapacityExceeded"
           },
           {
             "docs": [],
             "fields": [],
             "index": 62,
-            "name": "InvalidObservationRevision"
+            "name": "ObservationSubscriptionInvariant"
           },
           {
             "docs": [],
             "fields": [],
             "index": 63,
-            "name": "DirtyObservationCapacityExceeded"
+            "name": "InvalidObservationRevision"
           },
           {
             "docs": [],
             "fields": [],
             "index": 64,
-            "name": "DirtyObservationInvariant"
+            "name": "DirtyObservationCapacityExceeded"
           },
           {
             "docs": [],
             "fields": [],
             "index": 65,
-            "name": "InvalidTriggerAmountCompatibility"
+            "name": "DirtyObservationInvariant"
           },
           {
             "docs": [],
