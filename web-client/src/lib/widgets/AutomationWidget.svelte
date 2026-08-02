@@ -63,7 +63,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- AAA.ActorIdentities + AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account',
+    'automationWidget <- AAA.ActorIdentities + AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account + AaaEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -107,6 +107,42 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     return `Cadenced/${trigger.everyBlocks} · ${trigger.mode.sources
       .map(triggerSourceSummary)
       .join(' + ')}`;
+  }
+
+  function eligibilityLabel(actor: AutomationActorSnapshot): string {
+    const eligibility = actor.eligibility;
+    if (eligibility == null) {
+      return 'Unavailable';
+    }
+    if (eligibility.ready) {
+      return 'Ready now';
+    }
+    switch (eligibility.phase) {
+      case 'WaitingTemporal':
+        return `Gated · block ${eligibility.nextEligibleBlock ?? '?'}`;
+      case 'WaitingRetry':
+        return `Retry · block ${eligibility.nextEligibleBlock ?? '?'}`;
+      case 'WaitingSignal':
+        return 'Awaiting signal';
+      case 'NotRegistered':
+        return 'Not registered';
+      case 'Dormant':
+        return 'Dormant';
+      case 'Paused':
+        return 'Paused';
+      case 'GlobalCircuitBreaker':
+        return 'Global breaker';
+      case 'WindowExpired':
+        return 'Window expired';
+      case 'CycleNonceExhausted':
+        return 'Nonce exhausted';
+      case 'ConsecutiveFailureLimit':
+        return 'Failure limit';
+      case 'AutoCloseDue':
+        return 'Auto-close due';
+      default:
+        return eligibility.phase;
+    }
   }
 
   function issuesForStep(index: number): AaaAuthoringIssue[] {
@@ -378,6 +414,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     valueClass="tabnum text-(--mono-text)"
                   />
                   <DetailRow
+                    label="Eligibility"
+                    value={eligibilityLabel(actor)}
+                    valueClass="text-(--mono-text)"
+                  />
+                  <DetailRow
                     label="Balance"
                     value={`${fmt(toFloat(actor.nativeBalance))} ${systemStore.snapshot?.nativeAsset.symbol ?? 'NTVE'}`}
                     valueClass="tabnum text-(--mono-text)"
@@ -420,6 +461,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                     label="Logical run"
                     value={`#${actor.cycleNonce}`}
                     valueClass="tabnum text-(--mono-text)"
+                  />
+                  <DetailRow
+                    label="Eligibility"
+                    value={eligibilityLabel(actor)}
+                    valueClass="text-(--mono-text)"
                   />
                   <DetailRow
                     label="Continuation"

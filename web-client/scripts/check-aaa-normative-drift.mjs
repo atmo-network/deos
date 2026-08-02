@@ -1,7 +1,7 @@
 /*
 Domain: AAA normative surface drift gate
-Owns: Comparison of the named public contract in specification Sections 11-12
-with the metadata-derived ABI manifest (calls, events, errors, variants,
+Owns: Comparison of the named public contract in specification Sections 3 and
+7-10 with the metadata-derived ABI manifest (calls, events, errors, variants,
 constants). Detects missing/extra variants, field-name drift, stale task
 shapes, stale bounds, and stale host-contract declarations.
 Excludes: Numeric index pinning (metadata-owned before launch), semantic
@@ -24,9 +24,14 @@ const manifestPath = path.join(
   scriptDir,
   '../src/lib/automation/aaa-abi-manifest.json',
 );
+const rulesPath = path.join(
+  repoRoot,
+  '.agents/skills/alignment/rules/aaa-drift-rules.json',
+);
 
 const spec = await readFile(specPath, 'utf8');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+const ruleInventory = JSON.parse(await readFile(rulesPath, 'utf8'));
 function specSection(startMarker, endMarker) {
   const start = spec.indexOf(startMarker);
   assert.ok(start >= 0, `spec marker not found: ${startMarker}`);
@@ -47,7 +52,10 @@ function rustVariantNames(block) {
 }
 
 function specEvents() {
-  const block = specSection('### 11.1 Events', '### 11.2');
+  const block = specSection(
+    '## 8. Events and Ordering',
+    '## 9. ABI, Errors, Storage, and Upgrades',
+  );
   return block
     .split('\n')
     .map((line) => line.match(/^([A-Z][A-Za-z0-9_]*)\s*\{([^}]*)\}$/))
@@ -63,54 +71,59 @@ function specEvents() {
 }
 
 function specErrors() {
-  const block = specSection('### 12.2 Errors', '## 13');
+  const block = specSection('### 9.2 Errors', '### 9.3 Storage Contract');
   return rustVariantNames(block);
 }
 
+function splitTopLevel(value) {
+  const parts = [];
+  let start = 0;
+  const closing = { '<': '>', '(': ')', '{': '}', '[': ']' };
+  const stack = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (closing[character]) stack.push(closing[character]);
+    else if (character === stack.at(-1)) stack.pop();
+    else if (character === ',' && stack.length === 0) {
+      parts.push(value.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  parts.push(value.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
 function specTypeBlock(name) {
-  // Exact enum boundary: match the enum name followed by optional generics and {
-  // but not a longer identifier such as ConditionSet when searching Condition.
+  // Match the exact enum name, not a longer identifier such as ConditionSet
+  // when searching for Condition, then extract its balanced body.
   const marker = new RegExp(`enum ${name}(?:<[^>]*>)?\\s*\\{`);
   const match = spec.match(marker);
   assert.ok(match, `spec enum not found: ${name}`);
-  const start = match.index;
-  const from = start + match[0].length;
-  const lines = spec.slice(from).split('\n');
-  // The enum's own opening brace was consumed by the header match; variants are
-  // single-line or multi-line and may contain nested braces in generics.
+  const from = match.index + match[0].length;
   let depth = 1;
-  const blockLines = [];
-  for (const line of lines) {
-    depth += (line.match(/{/g) ?? []).length - (line.match(/}/g) ?? []).length;
-    blockLines.push(line);
-    if (depth === 0 && blockLines.length > 1) break;
+  for (let index = from; index < spec.length; index += 1) {
+    if (spec[index] === '{') depth += 1;
+    if (spec[index] === '}') depth -= 1;
+    if (depth === 0) return spec.slice(from, index);
   }
-  return blockLines.join('\n');
+  assert.fail(`spec enum is not closed: ${name}`);
 }
 
 function specTypeSurface(name) {
-  const surface = specTypeBlock(name)
-    .split('\n')
-    .map((line) =>
-      line.match(
-        /^\s*([A-Z][A-Za-z0-9_]*)(?:\s*\{([^}]*)\}|\s*\(([^)]*)\))?\s*,?$/,
-      ),
-    )
-    .filter(Boolean)
-    .map((match) => ({
+  const surface = splitTopLevel(specTypeBlock(name)).map((variant) => {
+    const match = variant.match(
+      /^([A-Z][A-Za-z0-9_]*)(?:\s*\{([\s\S]*)\}|\s*\(([\s\S]*)\))?$/,
+    );
+    assert.ok(match, `invalid ${name} variant declaration: ${variant}`);
+    return {
       name: match[1],
       fields: match[2]
-        ? [...match[2].matchAll(/(?:^|,)\s*([a-z][A-Za-z0-9_]*)\s*:/g)].map(
-            (field) => field[1],
-          )
+        ? splitTopLevel(match[2]).map((field) => field.split(':')[0].trim())
         : match[3]
-          ? match[3]
-              .split(',')
-              .map((field) => field.trim())
-              .filter(Boolean)
-              .map(() => '<unnamed>')
+          ? splitTopLevel(match[3]).map(() => '<unnamed>')
           : [],
-    }));
+    };
+  });
   assert.ok(surface.length > 0, `enum ${name} must declare variants`);
   return surface;
 }
@@ -119,12 +132,61 @@ function specTypeVariants(name) {
   return specTypeSurface(name).map((variant) => variant.name);
 }
 
+function specStructFields(name) {
+  const marker = new RegExp(`struct ${name}(?:<[^>]*>)?\\s*\\{`);
+  const match = spec.match(marker);
+  assert.ok(match, `spec struct not found: ${name}`);
+  const from = match.index + match[0].length;
+  let depth = 1;
+  for (let index = from; index < spec.length; index += 1) {
+    if (spec[index] === '{') depth += 1;
+    if (spec[index] === '}') depth -= 1;
+    if (depth === 0) {
+      return splitTopLevel(spec.slice(from, index)).map((field) =>
+        field.split(':')[0].trim(),
+      );
+    }
+  }
+  assert.fail(`spec struct is not closed: ${name}`);
+}
+
+function specCalls() {
+  const block = specSection('### 7.1 Calls', '### 7.2 Simulation');
+  const contract = block.match(/```text\n([\s\S]*?)```/);
+  assert.ok(contract, 'calls contract block not found');
+  return [...contract[1].matchAll(/\b[a-z][a-z0-9_]+\b/g)].map(
+    (match) => match[0],
+  );
+}
+
 const failures = [];
 
 function duplicates(names) {
   return [
     ...new Set(names.filter((name, index) => names.indexOf(name) !== index)),
   ];
+}
+
+function unorderedDiff(label, expected, actual) {
+  const expectedDuplicates = duplicates(expected);
+  const actualDuplicates = duplicates(actual);
+  if (expectedDuplicates.length > 0) {
+    failures.push(
+      `${label}: duplicate specification entries: ${expectedDuplicates.join(', ')}`,
+    );
+  }
+  if (actualDuplicates.length > 0) {
+    failures.push(
+      `${label}: duplicate metadata entries: ${actualDuplicates.join(', ')}`,
+    );
+  }
+  const expectedSet = new Set(expected);
+  const actualSet = new Set(actual);
+  const missing = expected.filter((name) => !actualSet.has(name));
+  const extra = actual.filter((name) => !expectedSet.has(name));
+  if (missing.length > 0)
+    failures.push(`${label}: missing: ${missing.join(', ')}`);
+  if (extra.length > 0) failures.push(`${label}: extra: ${extra.join(', ')}`);
 }
 
 function orderedDiff(label, expected, actual) {
@@ -149,6 +211,71 @@ function orderedDiff(label, expected, actual) {
     }
   }
 }
+
+const headingNumbers = new Set(
+  [...spec.matchAll(/^#{2,3} ([0-9]+(?:\.[0-9]+)?)\b/gm)].map(
+    (match) => match[1],
+  ),
+);
+for (const match of spec.matchAll(/\bSections? ([0-9]+(?:\.[0-9]+)?)/g)) {
+  if (!headingNumbers.has(match[1])) {
+    failures.push(`section reference: missing Section ${match[1]}`);
+  }
+}
+const publicTermRule = ruleInventory.rules.find(
+  (rule) => rule.id === 'aaa-public-stale-terms',
+);
+assert.ok(publicTermRule, 'AAA public stale-term rule is missing');
+assert.equal(publicTermRule.kind, 'regex-any');
+for (const pattern of publicTermRule.patterns) {
+  const staleTerm = new RegExp(pattern);
+  if (staleTerm.test(spec)) {
+    failures.push(`terminology: stale term ${pattern}`);
+  }
+}
+
+for (const [label, names] of [
+  ['calls', specCalls()],
+  ['events', specEvents().map((event) => event.name)],
+  ['errors', specErrors()],
+]) {
+  const repeated = duplicates(names);
+  if (repeated.length > 0) {
+    failures.push(
+      `${label}: duplicate specification entries: ${repeated.join(', ')}`,
+    );
+  }
+}
+for (const typeName of [
+  'ProgramInput',
+  'Task',
+  'Condition',
+  'AmountResolution',
+  'ConditionSet',
+]) {
+  const repeated = duplicates(specTypeVariants(typeName));
+  if (repeated.length > 0) {
+    failures.push(
+      `${typeName}: duplicate specification variants: ${repeated.join(', ')}`,
+    );
+  }
+}
+
+if (process.argv.includes('--spec-only')) {
+  if (failures.length > 0) {
+    console.error('AAA specification audit failed:');
+    for (const failure of failures) console.error(`- ${failure}`);
+    process.exit(1);
+  }
+  console.log('AAA specification audit passed');
+  process.exit(0);
+}
+
+unorderedDiff(
+  'calls',
+  specCalls(),
+  manifest.pallet.calls.map((entry) => entry.name),
+);
 
 const expectedEvents = specEvents();
 const actualEvents = manifest.pallet.events;
@@ -176,7 +303,31 @@ orderedDiff(
   manifest.pallet.errors.map((entry) => entry.name),
 );
 
-for (const enumName of ['Task', 'Condition', 'AmountResolution']) {
+for (const structName of ['Schedule', 'ActiveProgramInput']) {
+  const matches = manifest.types.filter(
+    (entry) => entry.path?.join('::') === `pallet_aaa::types::${structName}`,
+  );
+  if (matches.length !== 1) {
+    failures.push(
+      `${structName} metadata path must resolve exactly once, found ${matches.length}`,
+    );
+    continue;
+  }
+  const actual =
+    matches[0].def?.tag === 'composite' ? matches[0].def.value : [];
+  orderedDiff(
+    `${structName} fields`,
+    specStructFields(structName),
+    actual.map((field) => field.name ?? '<unnamed>'),
+  );
+}
+
+for (const enumName of [
+  'ProgramInput',
+  'Task',
+  'Condition',
+  'AmountResolution',
+]) {
   const expected = specTypeSurface(enumName);
   const matches = manifest.types.filter(
     (entry) => entry.path?.join('::') === `pallet_aaa::types::${enumName}`,
@@ -205,6 +356,16 @@ for (const enumName of ['Task', 'Condition', 'AmountResolution']) {
       (actual[index].fields ?? []).map((field) => field.name ?? '<unnamed>'),
     );
   }
+}
+
+const forbiddenTypeNames = new Set(['ResolutionSurface']);
+const staleTypePaths = manifest.types
+  .filter((entry) => entry.path?.some((part) => forbiddenTypeNames.has(part)))
+  .map((entry) => entry.path.join('::'));
+if (staleTypePaths.length > 0) {
+  failures.push(
+    `stale compatibility types remain: ${staleTypePaths.join(', ')}`,
+  );
 }
 
 // ConditionSet variants live in a spec enum and appear as an ABI variant type.
@@ -238,11 +399,12 @@ const expectedConstants = new Set([
   'MaxWakeupsPerBlock',
   'MaxObservationFanoutPagesPerBlock',
   'MaxTriggerSources',
-  'MaxContinuationSnapshotEntries',
+  'MaxOpeningSnapshotEntries',
   'MinUserBalance',
   'MinWindowLength',
   'MaxExecutionDelayBlocks',
-  'NativeAssetId',
+  'TargetBlockTime',
+  'FeeNativeAssetId',
 ]);
 const missingConstants = [...expectedConstants].filter(
   (name) => !constantNames.has(name),
@@ -250,6 +412,15 @@ const missingConstants = [...expectedConstants].filter(
 if (missingConstants.length > 0) {
   failures.push(
     `runtime constants: missing from metadata: ${missingConstants.join(', ')}`,
+  );
+}
+const forbiddenConstants = ['MaxContinuationSnapshotEntries'];
+const staleConstants = forbiddenConstants.filter((name) =>
+  constantNames.has(name),
+);
+if (staleConstants.length > 0) {
+  failures.push(
+    `runtime constants: stale compatibility names remain: ${staleConstants.join(', ')}`,
   );
 }
 

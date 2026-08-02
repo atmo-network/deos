@@ -93,6 +93,8 @@ Every DEOS System swap also applies a local reference-deviation guard. A nonzero
 
 Finalized reactive inspection follows the selected dirty feed's exact active-list position and occupied subscriber-page links. Numerical delivery estimates appear only when runtime code, V16 metadata, constants, production weights, descriptors, and topology share one finalized evidence identity. `EvidenceMismatch` withholds those estimates while preserving factual Oracle, AAA, queue, wakeup, and snapshot state.
 
+The read-only `AaaEligibilityApi::aaa_eligibility` projection reports current readiness, the scheduler-owned phase, and the next eligible block at one finalized block, reusing the same pure cadence/cooldown/window/backoff/breaker/latch owners as admission. Clients never reimplement that arithmetic; the projection never promises service, because queue position and available Weight decide actual admission.
+
 Off-chain feedback analysis separates observation-caused recurrence from shared account, pool, reserve, or TMC resources. Only evidence-addressable reactive edges can form reactive-cycle findings; resource coupling remains a separate unscored advisory signal with unknown causal and economic significance. This analysis cannot reject plans, alter scheduling, or claim execution.
 
 ## Embedding Boundary

@@ -1,5 +1,5 @@
 use super::pallet::*;
-use super::{AssetOps, FundingAuthority, weights::WeightInfo};
+use super::{AddressEvent, AssetOps, FundingAuthority, IngressFailure, weights::WeightInfo};
 use alloc::vec::Vec;
 use frame::prelude::*;
 use polkadot_sdk::frame_support::storage::transactional::with_transaction_opaque_err;
@@ -21,7 +21,7 @@ struct QueueTopology {
 enum AdmissionDecision {
   Admit(Weight),
   Close { reason: CloseReason, weight: Weight },
-  Defer(DeferReason),
+  Defer,
   Skip,
 }
 
@@ -46,6 +46,7 @@ const MAX_RETRY_BACKOFF_BLOCKS: u32 = 8;
 #[cfg(test)]
 std::thread_local! {
   static CORRUPT_QUEUE_BEFORE_CLOSE_CONSUME: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
+  static FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY: core::cell::Cell<bool> = const { core::cell::Cell::new(false) };
 }
 
 /// Why the actor pass stopped at a queue boundary. Only a weight block over live FIFO work with
@@ -72,7 +73,8 @@ enum FifoStepResult {
 enum HeadDiscovery {
   Empty,
   Head(QueueTicket, QueueEntry),
-  Blocked(BlockKind),
+  BlockedByWeight,
+  BlockedOther,
 }
 
 impl<T: Config> Pallet<T> {
@@ -97,10 +99,11 @@ impl<T: Config> Pallet<T> {
       let head = Self::live_queue_head(cutoff, &mut cycle_meter, &mut scanned, max_scanned);
       match head {
         HeadDiscovery::Empty => break,
-        HeadDiscovery::Blocked(kind) => {
-          starved = matches!(kind, BlockKind::Weight) && executed == 0;
+        HeadDiscovery::BlockedByWeight => {
+          starved = executed == 0;
           break;
         }
+        HeadDiscovery::BlockedOther => break,
         HeadDiscovery::Head(position, entry) => {
           match Self::service_live_queue_entry((position, entry), now, &mut cycle_meter) {
             FifoStepResult::Progress {
@@ -123,14 +126,14 @@ impl<T: Config> Pallet<T> {
 
   fn classify_current_queue(cutoff: QueueTicket) -> HeadDiscovery {
     if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-      return HeadDiscovery::Blocked(BlockKind::NonWeight);
+      return HeadDiscovery::BlockedOther;
     }
     if QueueHead::<T>::get() >= QueueTail::<T>::get() {
       return HeadDiscovery::Empty;
     }
     match Self::paged_head_entry() {
       Some((_, entry)) if entry.ticket >= cutoff => HeadDiscovery::Empty,
-      _ => HeadDiscovery::Blocked(BlockKind::NonWeight),
+      _ => HeadDiscovery::BlockedOther,
     }
   }
 
@@ -159,11 +162,11 @@ impl<T: Config> Pallet<T> {
     let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
     while *scanned < max_scanned {
       if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-        return HeadDiscovery::Blocked(BlockKind::NonWeight);
+        return HeadDiscovery::BlockedOther;
       }
       if !cycle_meter.can_consume(scan_weight) {
         return if Self::head_blocked_by_weight(cutoff) {
-          HeadDiscovery::Blocked(BlockKind::Weight)
+          HeadDiscovery::BlockedByWeight
         } else {
           HeadDiscovery::Empty
         };
@@ -172,7 +175,7 @@ impl<T: Config> Pallet<T> {
       let before = QueueHead::<T>::get();
       let stats = match Self::paged_drain_tombstones(cutoff, 1) {
         Ok(stats) => stats,
-        Err(_) => return HeadDiscovery::Blocked(BlockKind::NonWeight),
+        Err(_) => return HeadDiscovery::BlockedOther,
       };
       if stats.entries_scanned == 0 {
         return Self::classify_current_queue(cutoff);
@@ -187,7 +190,7 @@ impl<T: Config> Pallet<T> {
         None => Self::classify_current_queue(cutoff),
       };
     }
-    HeadDiscovery::Blocked(BlockKind::NonWeight)
+    HeadDiscovery::BlockedOther
   }
 
   #[cfg(test)]
@@ -203,7 +206,8 @@ impl<T: Config> Pallet<T> {
     match discovery {
       HeadDiscovery::Empty => (0, None, scanned),
       HeadDiscovery::Head(_, entry) => (1, Some(entry), scanned),
-      HeadDiscovery::Blocked(_) => (2, None, scanned),
+      HeadDiscovery::BlockedByWeight => (2, None, scanned),
+      HeadDiscovery::BlockedOther => (3, None, scanned),
     }
   }
 
@@ -231,7 +235,7 @@ impl<T: Config> Pallet<T> {
     if hot.queue_ticket != Some(entry.ticket) {
       return FifoStepResult::NoWork;
     }
-    if hot.run_state == RunState::Suspended {
+    if hot.cycle_state == CycleState::Suspended {
       if ContinuationStateStore::<T>::get(entry.aaa_id)
         .is_some_and(|continuation| continuation.last_attempt_block == now)
       {
@@ -241,7 +245,20 @@ impl<T: Config> Pallet<T> {
       return FifoStepResult::Blocked(BlockKind::NonWeight);
     }
     if hot.lifecycle.is_paused() && hot.terminal_at.is_none_or(|terminal_at| terminal_at > now) {
-      if Self::paged_consume_head_at(position).is_err() {
+      let outcome: DispatchResult = polkadot_sdk::frame_support::storage::with_transaction(|| {
+        if Self::paged_consume_head_at(position).is_err() {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+            polkadot_sdk::sp_runtime::DispatchError::Other("paused queue consume failed"),
+          ));
+        }
+        ActorHot::<T>::mutate(entry.aaa_id, |maybe| {
+          if let Some(current) = maybe {
+            current.queue_ticket = None;
+          }
+        });
+        polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
+      });
+      if outcome.is_err() {
         return FifoStepResult::Blocked(BlockKind::NonWeight);
       }
       cycle_meter.consume(consume_weight);
@@ -260,12 +277,10 @@ impl<T: Config> Pallet<T> {
     };
     cycle_meter.consume(program_probe_weight);
     let aaa_id = entry.aaa_id;
-    let instance = Self::compose_active_actor(identity, hot, program);
+    let instance = Self::derive_active_actor_view(identity, hot, program);
     match Self::apply_admission(aaa_id, &instance, cycle_meter) {
       AdmissionDecision::Admit(weight) => {
         if !cycle_meter.can_consume(consume_weight.saturating_add(weight)) {
-          let reason = Self::deferred_dimension(cycle_meter, consume_weight.saturating_add(weight));
-          Self::try_emit_cycle_deferred(aaa_id, &instance, reason, cycle_meter);
           return FifoStepResult::Blocked(BlockKind::Weight);
         }
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -275,8 +290,8 @@ impl<T: Config> Pallet<T> {
             ));
           }
           let _actual = Self::execute_single_cycle(aaa_id, instance, now);
-          if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
-            if Self::schedule_next_work(aaa_id, &updated, now).is_err() {
+          if let Some(updated) = Self::active_actor_view(aaa_id) {
+            if Self::schedule_next_work(aaa_id, &updated, now, true).is_err() {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 polkadot_sdk::sp_runtime::DispatchError::Other("post-attempt placement failed"),
               ));
@@ -313,10 +328,7 @@ impl<T: Config> Pallet<T> {
           Err(_) => FifoStepResult::Blocked(BlockKind::NonWeight),
         }
       }
-      AdmissionDecision::Defer(reason) => {
-        Self::try_emit_cycle_deferred(aaa_id, &instance, reason, cycle_meter);
-        FifoStepResult::Blocked(BlockKind::Weight)
-      }
+      AdmissionDecision::Defer => FifoStepResult::Blocked(BlockKind::Weight),
       AdmissionDecision::Skip => {
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
           if Self::paged_consume_head_at(position).is_err() {
@@ -324,8 +336,8 @@ impl<T: Config> Pallet<T> {
               polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue topology changed"),
             ));
           }
-          if let Some(updated) = Self::active_actor_snapshot(aaa_id) {
-            if Self::schedule_next_work(aaa_id, &updated, now).is_err() {
+          if let Some(updated) = Self::active_actor_view(aaa_id) {
+            if Self::schedule_next_work(aaa_id, &updated, now, true).is_err() {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
                 polkadot_sdk::sp_runtime::DispatchError::Other("post-skip placement failed"),
               ));
@@ -536,6 +548,16 @@ impl<T: Config> Pallet<T> {
       Ok(()) => unreachable!("placement error cannot map to Ok"),
       Err(error) => error,
     }
+  }
+
+  fn wakeup_page_physical_live(page: &WakeupPageOf<T>) -> usize {
+    let mut live = 0usize;
+    for entry in page.entries.as_slice() {
+      if entry.is_some() {
+        live = live.saturating_add(1);
+      }
+    }
+    live
   }
 
   pub fn paged_invalidate(aaa_id: AaaId) -> Option<QueueTicket> {
@@ -776,11 +798,7 @@ impl<T: Config> Pallet<T> {
     if !slot.is_some_and(|entry| entry.aaa_id == aaa_id) {
       return Err(EnqueueOutcome::CorruptedTopology);
     }
-    let physical_live = page
-      .entries
-      .iter() // deos-bypass: bounded-iter — WakeupPageSize-bounded reciprocity check
-      .filter(|entry| entry.is_some())
-      .count();
+    let physical_live = Self::wakeup_page_physical_live(&page);
     if physical_live != page.live_entries as usize {
       return Err(EnqueueOutcome::CorruptedTopology);
     }
@@ -931,24 +949,20 @@ impl<T: Config> Pallet<T> {
         return Err(EnqueueOutcome::CorruptedTopology);
       };
       if tail_page.next_page.is_some()
-        || tail_page
-          .entries
-          .iter() // deos-bypass: bounded-iter — WakeupPageSize-bounded reciprocity check
-          .filter(|entry| entry.is_some())
-          .count()
-          != tail_page.live_entries as usize
+        || Self::wakeup_page_physical_live(&tail_page) != tail_page.live_entries as usize
       {
         return Err(EnqueueOutcome::CorruptedTopology);
       }
       let Some(next_bucket_live) = bucket.live_entries.checked_add(1) else {
         return Err(EnqueueOutcome::WakeupIndexExhausted);
       };
-      let reusable_slot = tail_page
-        .entries
-        .iter() // deos-bypass: bounded-iter — WakeupPageSize-bounded tail-page slot reuse
-        .enumerate()
-        .skip(tail_page.scan_slot as usize)
-        .find_map(|(slot, entry)| entry.is_none().then_some(slot));
+      let mut reusable_slot = None;
+      for slot in tail_page.scan_slot as usize..tail_page.entries.len() {
+        if tail_page.entries[slot].is_none() {
+          reusable_slot = Some(slot);
+          break;
+        }
+      }
       let slot = if let Some(slot) = reusable_slot {
         tail_page.entries[slot] = Some(WakeupEntry { aaa_id });
         slot
@@ -1095,13 +1109,7 @@ impl<T: Config> Pallet<T> {
       let Some(mut page) = WakeupPages::<T>::get(key) else {
         return None;
       };
-      if page
-        .entries
-        .iter() // deos-bypass: bounded-iter — WakeupPageSize-bounded reciprocity check
-        .filter(|entry| entry.is_some())
-        .count()
-        != page.live_entries as usize
-      {
+      if Self::wakeup_page_physical_live(&page) != page.live_entries as usize {
         return None;
       }
       stats.pages_touched = stats.pages_touched.saturating_add(1);
@@ -1466,17 +1474,17 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn prime_actor_schedule(aaa_id: AaaId) -> Result<(), EnqueueOutcome> {
-    let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
+    let Some(instance) = Self::active_actor_view(aaa_id) else {
       return Ok(());
     };
     let now = frame_system::Pallet::<T>::block_number();
     if instance.lifecycle.is_paused() {
       return Self::schedule_window_expiry(aaa_id, &instance);
     }
-    Self::schedule_next_work(aaa_id, &instance, now)
+    Self::schedule_next_work(aaa_id, &instance, now, false)
   }
 
-  fn window_expiry_wakeup(instance: &AaaInstanceOf<T>) -> Option<BlockNumberFor<T>> {
+  fn window_expiry_wakeup(instance: &ActiveActorViewOf<T>) -> Option<BlockNumberFor<T>> {
     instance
       .schedule_window
       .map(|window| Self::window_terminal_at(&window))
@@ -1484,7 +1492,7 @@ impl<T: Config> Pallet<T> {
 
   fn schedule_window_expiry(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
   ) -> Result<(), EnqueueOutcome> {
     if let Some(expiry) = Self::window_expiry_wakeup(instance) {
       Self::defer_wakeup(aaa_id, expiry)
@@ -1493,8 +1501,17 @@ impl<T: Config> Pallet<T> {
     }
   }
 
+  #[cfg(test)]
+  pub(crate) fn test_fail_wakeup_placement_with_capacity() {
+    FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.set(true));
+  }
+
   fn defer_wakeup(aaa_id: AaaId, wakeup_block: BlockNumberFor<T>) -> Result<(), EnqueueOutcome> {
-    let target = Self::active_actor_snapshot(aaa_id)
+    #[cfg(test)]
+    if FAIL_WAKEUP_PLACEMENT_WITH_CAPACITY.with(|flag| flag.replace(false)) {
+      return Err(EnqueueOutcome::WakeupCapacityExhausted);
+    }
+    let target = Self::active_actor_view(aaa_id)
       .and_then(|instance| Self::window_expiry_wakeup(&instance))
       .map(|expiry| wakeup_block.min(expiry))
       .unwrap_or(wakeup_block);
@@ -1549,13 +1566,6 @@ impl<T: Config> Pallet<T> {
       .saturating_add(Self::scheduler_actor_program_probe_weight_upper())
   }
 
-  /// Generated envelope for the complete `CycleDeferred` candidate calculation
-  /// and event write after the actor program probe has already been charged.
-  pub fn deferred_event_weight_upper() -> Weight {
-    T::WeightInfo::scheduler_cycle_deferral_dimension()
-      .saturating_sub(T::WeightInfo::scheduler_actor_program_probe())
-  }
-
   #[cfg(feature = "runtime-benchmarks")]
   pub(crate) fn benchmark_scheduler_actor_hot_probe(aaa_id: AaaId) {
     let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor hot state must exist");
@@ -1567,60 +1577,7 @@ impl<T: Config> Pallet<T> {
   pub(crate) fn benchmark_scheduler_actor_program_probe(aaa_id: AaaId, hot: ActorHotStateOf<T>) {
     let identity = ActorIdentities::<T>::get(aaa_id).expect("benchmark actor identity must exist");
     let program = ActorProgram::<T>::get(aaa_id).expect("benchmark actor program state must exist");
-    let instance = Self::compose_active_actor(identity, hot, program);
-    let meter = WeightMeter::with_limit(Weight::zero());
-    let AdmissionDecision::Defer(reason) = Self::apply_admission(aaa_id, &instance, &meter) else {
-      panic!("benchmark actor must defer on an exhausted cycle budget");
-    };
-    Self::benchmark_cycle_deferral(aaa_id, &instance, reason);
-  }
-
-  #[cfg(feature = "runtime-benchmarks")]
-  pub(crate) fn benchmark_scheduler_cycle_deferral_dimension(
-    aaa_id: AaaId,
-    hot: ActorHotStateOf<T>,
-    dimension: DeferReason,
-  ) {
-    let identity = ActorIdentities::<T>::get(aaa_id).expect("benchmark actor identity must exist");
-    let program = ActorProgram::<T>::get(aaa_id).expect("benchmark actor program state must exist");
-    let instance = Self::compose_active_actor(identity, hot, program);
-    let cycle_weight_upper = Self::cycle_admission_weight_upper(&instance, 0, None);
-    // Force exactly one dimension exhausted: limit RefTime only, ProofSize only,
-    // or both, so each DeferReason branch is measured.
-    let limit = match dimension {
-      DeferReason::RefTime => Weight::from_parts(
-        cycle_weight_upper.ref_time().saturating_sub(1),
-        Weight::MAX.proof_size(),
-      ),
-      DeferReason::ProofSize => Weight::from_parts(
-        Weight::MAX.ref_time(),
-        cycle_weight_upper.proof_size().saturating_sub(1),
-      ),
-      DeferReason::Both => Weight::from_parts(
-        cycle_weight_upper.ref_time().saturating_sub(1),
-        cycle_weight_upper.proof_size().saturating_sub(1),
-      ),
-    };
-    let meter = WeightMeter::with_limit(limit);
-    let AdmissionDecision::Defer(reason) = Self::apply_admission(aaa_id, &instance, &meter) else {
-      panic!("benchmark actor must defer on an exhausted cycle budget");
-    };
-    debug_assert_eq!(reason, dimension);
-    Self::benchmark_cycle_deferral(aaa_id, &instance, reason);
-  }
-
-  #[cfg(feature = "runtime-benchmarks")]
-  fn benchmark_cycle_deferral(aaa_id: AaaId, instance: &AaaInstanceOf<T>, reason: DeferReason) {
-    let (candidate_cycle_nonce, candidate_attempt, cursor) =
-      Self::deferral_candidate(aaa_id, instance)
-        .expect("benchmark candidate identity must remain within configured bounds");
-    Self::deposit_event(Event::CycleDeferred {
-      aaa_id,
-      candidate_cycle_nonce,
-      candidate_attempt,
-      cursor,
-      reason,
-    });
+    core::hint::black_box(Self::derive_active_actor_view(identity, hot, program));
   }
 
   pub fn wakeup_cursor_drain_unit_weight_upper(removes_bucket: bool) -> Weight {
@@ -1714,7 +1671,7 @@ impl<T: Config> Pallet<T> {
     total
   }
 
-  fn timer_jitter_blocks(aaa_id: AaaId, every_blocks: u32) -> BlockNumberFor<T> {
+  pub(crate) fn cadence_phase_blocks(aaa_id: AaaId, every_blocks: u32) -> BlockNumberFor<T> {
     let window = every_blocks
       .saturating_div(4)
       .min(T::MaxTimerJitterBlocks::get());
@@ -1741,78 +1698,72 @@ impl<T: Config> Pallet<T> {
       .unwrap_or(now)
   }
 
+  pub(crate) fn cadence_at_or_after(
+    aaa_id: AaaId,
+    schedule_anchor: BlockNumberFor<T>,
+    every_blocks: u32,
+    lower: BlockNumberFor<T>,
+  ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
+    let origin = schedule_anchor
+      .checked_add(&Self::cadence_phase_blocks(aaa_id, every_blocks))
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    if lower <= origin {
+      return Ok(origin);
+    }
+    let delta: u64 = lower.saturating_sub(origin).saturated_into();
+    let period = u64::from(every_blocks);
+    let periods = delta.div_ceil(period);
+    let offset = periods
+      .checked_mul(period)
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
+    let offset_block: BlockNumberFor<T> = offset.saturated_into();
+    if offset_block.saturated_into::<u64>() != offset {
+      return Err(EnqueueOutcome::SchedulerIndexExhausted);
+    }
+    origin
+      .checked_add(&offset_block)
+      .ok_or(EnqueueOutcome::SchedulerIndexExhausted)
+  }
+
   fn next_eligible_at(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
     include_timer: bool,
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
-    // Lifetime-first exemption exists only when `cycle_nonce == 0` and the Active
-    // epoch has no recorded `last_cycle_block` (spec 4.3.1).
     let cooldown_anchor = instance
       .last_cycle_block
       .unwrap_or(instance.schedule_anchor);
-    if instance.cycle_nonce == 0 && instance.last_cycle_block.is_none() {
-      if include_timer {
-        let first = instance.schedule_anchor;
-        if now <= first {
-          return Ok(first);
-        }
-        if let TriggerPolicy::Cadenced { every_blocks, .. } = instance.schedule.trigger {
-          let jitter: u32 = Self::timer_jitter_blocks(aaa_id, every_blocks).saturated_into();
-          let cadence_span = every_blocks
-            .checked_add(jitter)
-            .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-          let elapsed: u64 = now.saturating_sub(first).saturated_into();
-          let span = u64::from(cadence_span.max(1));
-          let periods = elapsed.div_ceil(span);
-          let offset = periods
-            .checked_mul(span)
-            .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-          let offset_block: BlockNumberFor<T> = offset.saturated_into();
-          let exact_offset: u64 = offset_block.saturated_into();
-          if exact_offset != offset {
-            return Err(EnqueueOutcome::SchedulerIndexExhausted);
-          }
-          return first
-            .checked_add(&offset_block)
-            .ok_or(EnqueueOutcome::SchedulerIndexExhausted);
-        }
-      }
-      return Ok(
-        instance
-          .schedule_window
-          .map(|window| now.max(window.start))
-          .unwrap_or(now),
+    let cooldown_eligible_at = if instance.cycle_nonce == 0 && instance.last_cycle_block.is_none() {
+      instance.schedule_anchor
+    } else {
+      cooldown_anchor
+        .checked_add(&instance.schedule.cooldown_blocks.into())
+        .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?
+    };
+    let window_floor = instance
+      .schedule_window
+      .map(|window| window.start)
+      .unwrap_or_else(Zero::zero);
+    let mut lower = now.max(cooldown_eligible_at).max(window_floor);
+    if !include_timer {
+      return Ok(lower);
+    }
+    let TriggerPolicy::Cadenced { every_blocks, .. } = instance.schedule.trigger else {
+      return Ok(lower);
+    };
+    if let Some(last_cycle_block) = instance.last_cycle_block {
+      lower = lower.max(
+        last_cycle_block
+          .checked_add(&One::one())
+          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?,
       );
     }
-    let mut eligible_at = now;
-    if let Some(window) = instance.schedule_window {
-      eligible_at = eligible_at.max(window.start);
-    }
-    if instance.cycle_nonce < u64::MAX {
-      let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
-      let cooldown_target = cooldown_anchor
-        .checked_add(&cooldown)
-        .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-      eligible_at = eligible_at.max(cooldown_target);
-    }
-    if include_timer && instance.cycle_nonce < u64::MAX {
-      if let TriggerPolicy::Cadenced { every_blocks, .. } = instance.schedule.trigger {
-        let cadence: BlockNumberFor<T> = every_blocks.into();
-        let jitter = Self::timer_jitter_blocks(aaa_id, every_blocks);
-        let cadence_target = cooldown_anchor
-          .checked_add(&cadence)
-          .and_then(|target| target.checked_add(&jitter))
-          .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-        eligible_at = eligible_at.max(cadence_target);
-      }
-    }
-    Ok(eligible_at)
+    Self::cadence_at_or_after(aaa_id, instance.schedule_anchor, every_blocks, lower)
   }
 
-  fn retry_backoff_blocks(attempt: u32) -> u32 {
-    match attempt {
+  fn retry_backoff_blocks(cursor_local_attempt: u32) -> u32 {
+    match cursor_local_attempt {
       0 => 1,
       1 => 2,
       2 => 4,
@@ -1822,12 +1773,15 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn retry_eligible_at(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
   ) -> Result<BlockNumberFor<T>, EnqueueOutcome> {
     let continuation =
       ContinuationStateStore::<T>::get(aaa_id).ok_or(EnqueueOutcome::CorruptedTopology)?;
     let cooldown: BlockNumberFor<T> = instance.schedule.cooldown_blocks.into();
-    let backoff: BlockNumberFor<T> = Self::retry_backoff_blocks(continuation.attempt).into();
+    let cursor_local_attempt = continuation
+      .unsuccessful_attempts_at_cursor
+      .saturating_sub(1);
+    let backoff: BlockNumberFor<T> = Self::retry_backoff_blocks(cursor_local_attempt).into();
     let retry_delay = cooldown.max(backoff);
     let mut eligible_at = continuation
       .last_attempt_block
@@ -1841,14 +1795,15 @@ impl<T: Config> Pallet<T> {
 
   fn schedule_next_work_local(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
+    cutoff_snapshotted: bool,
     requeues: &mut Vec<AaaId>,
   ) -> Result<(), EnqueueOutcome> {
     if instance.lifecycle.is_paused() {
       return Self::schedule_window_expiry(aaa_id, instance);
     }
-    let eligible_at = if instance.run_state == RunState::Suspended {
+    let eligible_at = if instance.cycle_state == CycleState::Suspended {
       Self::retry_eligible_at(aaa_id, instance)?
     } else if instance.pending_signal {
       Self::next_eligible_at(
@@ -1871,7 +1826,7 @@ impl<T: Config> Pallet<T> {
     let exact_next_block = now
       .checked_add(&One::one())
       .ok_or(EnqueueOutcome::SchedulerIndexExhausted)?;
-    if wakeup_at <= exact_next_block {
+    if wakeup_at < exact_next_block || wakeup_at == exact_next_block && cutoff_snapshotted {
       requeues.push(aaa_id);
       Ok(())
     } else {
@@ -1881,18 +1836,19 @@ impl<T: Config> Pallet<T> {
 
   fn schedule_next_work(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
+    cutoff_snapshotted: bool,
   ) -> Result<(), EnqueueOutcome> {
     let mut requeues = Vec::new();
-    Self::schedule_next_work_local(aaa_id, instance, now, &mut requeues)?;
+    Self::schedule_next_work_local(aaa_id, instance, now, cutoff_snapshotted, &mut requeues)?;
     for aaa_id in requeues {
       Self::enqueue(aaa_id)?;
     }
     Ok(())
   }
 
-  pub(crate) fn is_window_expired(instance: &AaaInstanceOf<T>) -> bool {
+  pub(crate) fn is_window_expired(instance: &ActiveActorViewOf<T>) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
     instance
       .schedule_window
@@ -1900,12 +1856,12 @@ impl<T: Config> Pallet<T> {
       .unwrap_or(false)
   }
 
-  pub(crate) fn user_native_balance(instance: &AaaInstanceOf<T>) -> T::Balance {
-    let native = T::NativeAssetId::get();
+  pub(crate) fn user_native_balance(instance: &ActiveActorViewOf<T>) -> T::Balance {
+    let native = T::FeeNativeAssetId::get();
     T::AssetOps::balance(&instance.sovereign_account, native)
   }
 
-  pub(crate) fn liveness_close_reason(instance: &AaaInstanceOf<T>) -> Option<CloseReason> {
+  pub(crate) fn liveness_close_reason(instance: &ActiveActorViewOf<T>) -> Option<CloseReason> {
     if Self::is_window_expired(instance) {
       return Some(CloseReason::WindowExpired);
     }
@@ -1918,7 +1874,7 @@ impl<T: Config> Pallet<T> {
   // Deterministic pre-cycle User precedence is BalanceExhausted, then
   // FeeBudgetExhausted. WindowExpired is handled by the caller first.
   fn user_resource_close_reason(
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     include_fee_budget: bool,
   ) -> Option<CloseReason> {
     if instance.actor_class.aaa_type() != AaaType::User {
@@ -1942,22 +1898,22 @@ impl<T: Config> Pallet<T> {
   }
 
   fn close_admission_decision(
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     reason: CloseReason,
     meter: &WeightMeter,
   ) -> AdmissionDecision {
     let weight = Self::close_cycle_weight_upper_bound(instance);
     if !meter.can_consume(weight) {
-      return AdmissionDecision::Defer(Self::deferred_dimension(meter, weight));
+      return AdmissionDecision::Defer;
     }
     AdmissionDecision::Close { reason, weight }
   }
 
-  fn pending_post_cycle_close_reason(instance: &AaaInstanceOf<T>) -> Option<CloseReason> {
+  fn pending_post_cycle_close_reason(instance: &ActiveActorViewOf<T>) -> Option<CloseReason> {
     if Self::failure_limit_reached(instance.consecutive_failures) {
       return Some(CloseReason::ConsecutiveFailures);
     }
-    if instance.run_state == RunState::Suspended {
+    if instance.cycle_state == CycleState::Suspended {
       return None;
     }
     instance
@@ -1967,31 +1923,32 @@ impl<T: Config> Pallet<T> {
   }
 
   fn cycle_may_close_on_failure(
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     start_cursor: usize,
     prior_unsuccessful_attempts_at_cursor: Option<u32>,
   ) -> bool {
-    Self::failure_limit_reached(instance.consecutive_failures.saturating_add(1))
-      || instance
-        .execution_plan
-        .iter() // deos-bypass: bounded-iter — plan length is bounded by runtime execution-plan constants
-        .enumerate()
-        .skip(start_cursor)
-        .any(|(index, step)| {
-          step.on_error.retry_max_attempts().is_some_and(|limit| {
-            let next_attempt = if index == start_cursor {
-              prior_unsuccessful_attempts_at_cursor
-                .unwrap_or_default()
-                .saturating_add(1)
-            } else {
-              1
-            };
-            next_attempt >= limit
-          })
-        })
+    if Self::failure_limit_reached(instance.consecutive_failures.saturating_add(1)) {
+      return true;
+    }
+    for index in start_cursor..instance.execution_plan.len() {
+      let step = &instance.execution_plan[index];
+      if step.on_error.retry_max_attempts().is_some_and(|limit| {
+        let next_attempt = if index == start_cursor {
+          prior_unsuccessful_attempts_at_cursor
+            .unwrap_or_default()
+            .saturating_add(1)
+        } else {
+          1
+        };
+        next_attempt >= limit
+      }) {
+        return true;
+      }
+    }
+    false
   }
 
-  fn cycle_may_auto_close_on_success(instance: &AaaInstanceOf<T>) -> bool {
+  fn cycle_may_auto_close_on_success(instance: &ActiveActorViewOf<T>) -> bool {
     instance
       .auto_close_at_cycle_nonce
       .map(|target| instance.cycle_nonce.saturating_add(1) >= target)
@@ -1999,7 +1956,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn cycle_requires_terminal_cleanup_budget(
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     start_cursor: usize,
     prior_unsuccessful_attempts_at_cursor: Option<u32>,
   ) -> bool {
@@ -2011,7 +1968,7 @@ impl<T: Config> Pallet<T> {
   }
 
   fn cycle_admission_weight_upper(
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     start_cursor: usize,
     prior_unsuccessful_attempts_at_cursor: Option<u32>,
   ) -> Weight {
@@ -2026,63 +1983,17 @@ impl<T: Config> Pallet<T> {
     weight
   }
 
-  fn deferred_dimension(meter: &WeightMeter, required: Weight) -> DeferReason {
-    let after = meter.consumed().saturating_add(required);
-    let limit = meter.limit();
-    match (
-      after.ref_time() > limit.ref_time(),
-      after.proof_size() > limit.proof_size(),
-    ) {
-      (true, true) => DeferReason::Both,
-      (true, false) => DeferReason::RefTime,
-      (false, true) => DeferReason::ProofSize,
-      (false, false) => DeferReason::RefTime,
-    }
-  }
-
-  fn try_emit_cycle_deferred(
-    aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
-    reason: DeferReason,
-    meter: &mut WeightMeter,
-  ) -> bool {
-    let event_weight = Self::deferred_event_weight_upper();
-    if !meter.can_consume(event_weight) {
-      return false;
-    }
-    let Some((candidate_cycle_nonce, candidate_attempt, cursor)) =
-      Self::deferral_candidate(aaa_id, instance)
-    else {
-      return false;
-    };
-    Self::deposit_event(Event::CycleDeferred {
-      aaa_id,
-      candidate_cycle_nonce,
-      candidate_attempt,
-      cursor,
-      reason,
-    });
-    meter.consume(event_weight);
-    true
-  }
-
-  fn deferral_candidate(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> Option<(u64, u32, u32)> {
-    if instance.run_state == RunState::Suspended {
-      let continuation = ContinuationStateStore::<T>::get(aaa_id)?;
-      return Some((
-        instance.cycle_nonce,
-        continuation.attempt.checked_add(1)?,
-        continuation.cursor,
-      ));
-    }
-    Some((instance.cycle_nonce.checked_add(1)?, 0, 0))
-  }
-
   fn apply_admission(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     meter: &WeightMeter,
   ) -> AdmissionDecision {
+    // A stale cache stamp must never admit, reserve, charge, or report (spec 2.1, 6.4);
+    // the on_idle gate already blocks service while revalidation is active, so this is a
+    // defensive per-actor rejection for any stamp drift.
+    if instance.cache_epoch != CurrentCacheEpoch::<T>::get() {
+      return AdmissionDecision::Skip;
+    }
     if GlobalCircuitBreaker::<T>::get() {
       return AdmissionDecision::Skip;
     }
@@ -2092,7 +2003,7 @@ impl<T: Config> Pallet<T> {
     if instance.lifecycle.is_paused() {
       return AdmissionDecision::Skip;
     }
-    if instance.run_state == RunState::Idle && instance.cycle_nonce == u64::MAX {
+    if instance.cycle_state == CycleState::Idle && instance.cycle_nonce == u64::MAX {
       return Self::close_admission_decision(instance, CloseReason::CycleNonceExhausted, meter);
     }
     if let Some(reason) = Self::pending_post_cycle_close_reason(instance) {
@@ -2104,7 +2015,7 @@ impl<T: Config> Pallet<T> {
     if let Some(reason) = Self::user_resource_close_reason(instance, false) {
       return Self::close_admission_decision(instance, reason, meter);
     }
-    let continuation = if instance.run_state == RunState::Suspended {
+    let continuation = if instance.cycle_state == CycleState::Suspended {
       let Some(continuation) = ContinuationStateStore::<T>::get(aaa_id) else {
         return AdmissionDecision::Skip;
       };
@@ -2120,7 +2031,7 @@ impl<T: Config> Pallet<T> {
       // attempt must not be admitted when charging the complete (suffix) envelope can
       // cross MinUserBalance, even if the raw balance covers the envelope (spec 5.2.1).
       let native_balance =
-        T::AssetOps::balance(&instance.sovereign_account, T::NativeAssetId::get());
+        T::AssetOps::balance(&instance.sovereign_account, T::FeeNativeAssetId::get());
       let available_fee_budget = native_balance
         .checked_sub(&T::MinUserBalance::get())
         .unwrap_or_default();
@@ -2136,16 +2047,38 @@ impl<T: Config> Pallet<T> {
         .map(|state| state.unsuccessful_attempts_at_cursor),
     );
     if !meter.can_consume(cycle_weight_upper) {
-      return AdmissionDecision::Defer(Self::deferred_dimension(meter, cycle_weight_upper));
+      return AdmissionDecision::Defer;
     }
     AdmissionDecision::Admit(cycle_weight_upper)
   }
 
   pub(crate) fn ensure_simulation_ready(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     mode: SimulationMode,
   ) -> Result<(), SimulationError> {
+    // Exact error precedence (spec 7.2): the mode marker, Continuation invariant, and
+    // cache-revalidation gate are evaluated before the public breaker, window, pause,
+    // nonce, failure, readiness, and funding predicates.
+    match mode {
+      SimulationMode::FreshCurrentPlan if instance.cycle_state != CycleState::Idle => {
+        return Err(SimulationError::ModeCycleStateMismatch);
+      }
+      SimulationMode::CurrentContinuation if instance.cycle_state != CycleState::Suspended => {
+        return Err(SimulationError::ModeCycleStateMismatch);
+      }
+      _ => {}
+    }
+    let start_cursor = if mode == SimulationMode::CurrentContinuation {
+      ContinuationStateStore::<T>::get(aaa_id)
+        .ok_or(SimulationError::ContinuationInvariant)?
+        .cursor as usize
+    } else {
+      0
+    };
+    if Self::revalidation_is_active() {
+      return Err(SimulationError::CacheRevalidationActive);
+    }
     if GlobalCircuitBreaker::<T>::get() {
       return Err(SimulationError::GlobalCircuitBreaker);
     }
@@ -2155,33 +2088,17 @@ impl<T: Config> Pallet<T> {
     if instance.lifecycle.is_paused() {
       return Err(SimulationError::Paused);
     }
-    if Self::failure_limit_reached(instance.consecutive_failures) {
-      return Err(SimulationError::ConsecutiveFailures);
-    }
-    match mode {
-      SimulationMode::FreshCurrentPlan if instance.run_state != RunState::Idle => {
-        return Err(SimulationError::ModeRunStateMismatch);
-      }
-      SimulationMode::CurrentContinuation if instance.run_state != RunState::Suspended => {
-        return Err(SimulationError::ModeRunStateMismatch);
-      }
-      _ => {}
-    }
     if mode == SimulationMode::FreshCurrentPlan && instance.cycle_nonce == u64::MAX {
       return Err(SimulationError::CycleNonceExhausted);
     }
-    let start_cursor = if mode == SimulationMode::CurrentContinuation {
-      ContinuationStateStore::<T>::get(aaa_id)
-        .ok_or(SimulationError::ContinuationInvariant)?
-        .cursor as usize
-    } else {
-      0
-    };
+    if Self::failure_limit_reached(instance.consecutive_failures) {
+      return Err(SimulationError::ConsecutiveFailures);
+    }
     if !Self::is_ready_for_execution(aaa_id, instance) {
       return Err(SimulationError::NotReady);
     }
     if instance.actor_class.aaa_type() == AaaType::User {
-      let balance = T::AssetOps::balance(&instance.sovereign_account, T::NativeAssetId::get());
+      let balance = T::AssetOps::balance(&instance.sovereign_account, T::FeeNativeAssetId::get());
       if balance < T::MinUserBalance::get() {
         return Err(SimulationError::BalanceUnavailable);
       }
@@ -2195,7 +2112,7 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
-  fn is_ready_for_execution(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
+  fn is_ready_for_execution(aaa_id: AaaId, instance: &ActiveActorViewOf<T>) -> bool {
     if instance.lifecycle.is_paused() {
       return false;
     }
@@ -2203,7 +2120,7 @@ impl<T: Config> Pallet<T> {
       return false;
     }
     let now = frame_system::Pallet::<T>::block_number();
-    if instance.run_state == RunState::Suspended {
+    if instance.cycle_state == CycleState::Suspended {
       return Self::retry_eligible_at(aaa_id, instance).is_ok_and(|eligible_at| eligible_at <= now);
     }
     let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
@@ -2215,7 +2132,7 @@ impl<T: Config> Pallet<T> {
     Self::evaluate_trigger(aaa_id, instance)
   }
 
-  fn evaluate_trigger(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
+  fn evaluate_trigger(aaa_id: AaaId, instance: &ActiveActorViewOf<T>) -> bool {
     match instance.schedule.trigger {
       TriggerPolicy::Immediate { .. }
       | TriggerPolicy::Cadenced {
@@ -2229,9 +2146,128 @@ impl<T: Config> Pallet<T> {
     }
   }
 
-  fn evaluate_timer(aaa_id: AaaId, instance: &AaaInstanceOf<T>) -> bool {
+  fn evaluate_timer(aaa_id: AaaId, instance: &ActiveActorViewOf<T>) -> bool {
     let now = frame_system::Pallet::<T>::block_number();
     Self::next_eligible_at(aaa_id, instance, now, true).is_ok_and(|eligible_at| eligible_at <= now)
+  }
+
+  /// One read-only eligibility projection (spec 7.3).
+  ///
+  /// Mirrors the admission gate order in `apply_admission` and reuses the same
+  /// pure arithmetic owners (`next_eligible_at`, `retry_eligible_at`, window
+  /// expiry, failure limit, breaker, latch) so clients never reimplement cadence
+  /// phase, cooldown, window floor, retry backoff, breaker, or signal logic.
+  /// `ready` is the scheduler verdict at the read block; `next_eligible_block`
+  /// is the next temporal gate (`now` when `ready`) or `None` when no future
+  /// gate is computable.
+  pub fn aaa_eligibility(
+    aaa_id: AaaId,
+  ) -> Result<AaaEligibilityProjection<BlockNumberFor<T>>, AaaEligibilityError> {
+    let Some(instance) = Self::active_actor_view(aaa_id) else {
+      let phase = if ActorIdentities::<T>::contains_key(aaa_id) {
+        AaaEligibilityPhase::Dormant
+      } else {
+        AaaEligibilityPhase::NotRegistered
+      };
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase,
+        next_eligible_block: None,
+      });
+    };
+    let now = frame_system::Pallet::<T>::block_number();
+    if GlobalCircuitBreaker::<T>::get() {
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase: AaaEligibilityPhase::GlobalCircuitBreaker,
+        next_eligible_block: None,
+      });
+    }
+    if Self::is_window_expired(&instance) {
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase: AaaEligibilityPhase::WindowExpired,
+        next_eligible_block: None,
+      });
+    }
+    if instance.lifecycle.is_paused() {
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase: AaaEligibilityPhase::Paused,
+        next_eligible_block: None,
+      });
+    }
+    if instance.cycle_state == CycleState::Idle && instance.cycle_nonce == u64::MAX {
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase: AaaEligibilityPhase::CycleNonceExhausted,
+        next_eligible_block: None,
+      });
+    }
+    if Self::failure_limit_reached(instance.consecutive_failures) {
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase: AaaEligibilityPhase::ConsecutiveFailureLimit,
+        next_eligible_block: None,
+      });
+    }
+    if instance
+      .auto_close_at_cycle_nonce
+      .is_some_and(|target| instance.cycle_nonce >= target)
+      && instance.cycle_state != CycleState::Suspended
+    {
+      return Ok(AaaEligibilityProjection {
+        ready: false,
+        phase: AaaEligibilityPhase::AutoCloseDue,
+        next_eligible_block: None,
+      });
+    }
+    if instance.cycle_state == CycleState::Suspended {
+      let eligible_at =
+        Self::retry_eligible_at(aaa_id, &instance).map_err(|outcome| match outcome {
+          EnqueueOutcome::SchedulerIndexExhausted => AaaEligibilityError::ComputationOverflow,
+          _ => AaaEligibilityError::ContinuationInvariant,
+        })?;
+      let ready = eligible_at <= now;
+      return Ok(AaaEligibilityProjection {
+        ready,
+        phase: if ready {
+          AaaEligibilityPhase::Ready
+        } else {
+          AaaEligibilityPhase::WaitingRetry
+        },
+        next_eligible_block: Some(if ready { now } else { eligible_at }),
+      });
+    }
+    let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
+    let temporal = Self::next_eligible_at(aaa_id, &instance, now, include_timer)
+      .map_err(|_| AaaEligibilityError::ComputationOverflow)?;
+    let signal_driven = matches!(
+      instance.schedule.trigger,
+      TriggerPolicy::Immediate { .. }
+        | TriggerPolicy::Cadenced {
+          mode: CadenceMode::WhenSignalled(_),
+          ..
+        }
+    );
+    let temporal_open = temporal <= now;
+    let ready = if signal_driven {
+      temporal_open && instance.pending_signal
+    } else {
+      temporal_open
+    };
+    let phase = if ready {
+      AaaEligibilityPhase::Ready
+    } else if !temporal_open {
+      AaaEligibilityPhase::WaitingTemporal
+    } else {
+      AaaEligibilityPhase::WaitingSignal
+    };
+    Ok(AaaEligibilityProjection {
+      ready,
+      phase,
+      next_eligible_block: Some(temporal.max(now)),
+    })
   }
 
   fn source_matches_filter(
@@ -2243,9 +2279,7 @@ impl<T: Config> Pallet<T> {
       (SourceFilter::Any, _) => true,
       (SourceFilter::OwnerOnly, Some(who)) => who == owner,
       (SourceFilter::OwnerOnly, None) => false,
-      (SourceFilter::Whitelist(list), Some(who)) => list
-        .iter() // deos-bypass: bounded-iter — MaxWhitelistSize source filter
-        .any(|a| a == who),
+      (SourceFilter::Whitelist(list), Some(who)) => list.contains(who),
       (SourceFilter::Whitelist(_), None) => false,
     }
   }
@@ -2253,9 +2287,7 @@ impl<T: Config> Pallet<T> {
   fn asset_matches_filter(filter: &AssetFilterOf<T>, asset: T::AssetId) -> bool {
     match filter {
       AssetFilter::Any => true,
-      AssetFilter::Whitelist(list) => list
-        .iter() // deos-bypass: bounded-iter — MaxWhitelistSize asset filter
-        .any(|id| *id == asset),
+      AssetFilter::Whitelist(list) => list.contains(&asset),
     }
   }
 
@@ -2299,7 +2331,7 @@ impl<T: Config> Pallet<T> {
 
   fn funding_event_authorized(
     aaa_id: AaaId,
-    instance: &AaaInstanceOf<T>,
+    instance: &ActiveActorViewOf<T>,
     funding: &ActorFundingStateOf<T>,
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
@@ -2326,7 +2358,7 @@ impl<T: Config> Pallet<T> {
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> DispatchResult {
-    let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
+    let Some(instance) = Self::active_actor_view(aaa_id) else {
       return Ok(());
     };
     if Self::is_window_expired(&instance) || amount.is_zero() {
@@ -2347,6 +2379,60 @@ impl<T: Config> Pallet<T> {
     Ok(())
   }
 
+  /// Typed certified-ingress preflight (spec 5.3, 6.2). Read-only and covers
+  /// lifecycle, funding, trigger, and required placement. An absent or Dormant
+  /// destination, a zero amount, and an expired window are balance-only.
+  pub fn preflight_ingress(
+    event: &AddressEvent<T::AccountId, T::AssetId, T::Balance>,
+  ) -> Result<(), IngressFailure> {
+    let Some(aaa_id) = Self::sovereign_index(&event.destination) else {
+      return Ok(());
+    };
+    Self::preflight_funding_event(
+      aaa_id,
+      event.asset,
+      event.amount,
+      event.source.as_ref(),
+      event.provenance.as_ref(),
+    )
+    .map_err(IngressFailure::permanent)
+  }
+
+  /// Typed certified-ingress notify (spec 5.3, 6.2). Executes exactly once after
+  /// the value movement and preserves the placement classification: recoverable
+  /// queue/wakeup capacity or placement unavailability is Temporary; monotonic
+  /// ticket/index exhaustion, topology corruption, and invariant failure are
+  /// Permanent.
+  pub fn notify_ingress(
+    event: &AddressEvent<T::AccountId, T::AssetId, T::Balance>,
+  ) -> Result<(), IngressFailure> {
+    let Some(aaa_id) = Self::sovereign_index(&event.destination) else {
+      return Ok(());
+    };
+    Self::notify_address_event_with_context(
+      aaa_id,
+      event.asset,
+      event.amount,
+      event.source.as_ref(),
+      event.provenance.as_ref(),
+    )
+    .map_err(Self::classify_ingress_error)
+  }
+
+  /// Maps one certified-ingress error to its closed retry class.
+  ///
+  /// Recoverable queue/wakeup capacity or placement unavailability surfaces as
+  /// `QueueCapacityUnavailable` (queue saturation and failed wakeup placement)
+  /// and is Temporary. Monotonic ticket/index exhaustion, topology corruption,
+  /// and invariant failure are Permanent.
+  fn classify_ingress_error(error: DispatchError) -> IngressFailure {
+    if error == Error::<T>::QueueCapacityUnavailable.into() {
+      IngressFailure::temporary(error)
+    } else {
+      IngressFailure::permanent(error)
+    }
+  }
+
   fn notify_address_event_with_context(
     aaa_id: AaaId,
     asset: T::AssetId,
@@ -2354,17 +2440,14 @@ impl<T: Config> Pallet<T> {
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> DispatchResult {
+    // Zero or self/no-op movement creates no AAA ingress (spec 5.3).
+    if amount.is_zero() {
+      return Ok(());
+    }
     Self::preflight_funding_event(aaa_id, asset, amount, source, provenance)?;
-    polkadot_sdk::frame_support::storage::with_transaction(
-      || match Self::apply_address_event_parts(
-        aaa_id, asset, amount, source, provenance, true, true,
-      ) {
-        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
-        Err(error) => {
-          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-        }
-      },
-    )
+    Self::with_reused_transaction(|| {
+      Self::apply_address_event_parts(aaa_id, asset, amount, source, provenance, true, true)
+    })
   }
 
   fn apply_address_event_parts(
@@ -2376,7 +2459,7 @@ impl<T: Config> Pallet<T> {
     apply_trigger: bool,
     apply_funding: bool,
   ) -> DispatchResult {
-    let instance = match Self::active_actor_snapshot(aaa_id) {
+    let instance = match Self::active_actor_view(aaa_id) {
       Some(inst) => inst,
       None => return Ok(()),
     };
@@ -2386,7 +2469,6 @@ impl<T: Config> Pallet<T> {
     let mut signal_matched = false;
     if apply_trigger && let Some(sources) = instance.schedule.trigger.sources() {
       for trigger_source in sources {
-        // deos-bypass: bounded-iter — MaxTriggerSources bounds full source observation.
         if let TriggerSource::OnAddressEvent {
           source_filter,
           asset_filter,
@@ -2441,7 +2523,7 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn evaluate_actor_liveness(aaa_id: AaaId) -> DispatchResult {
-    let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+    let instance = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
     if let Some(reason) = Self::liveness_close_reason(&instance) {
       return Self::close_actor(aaa_id, &instance, reason);
     }

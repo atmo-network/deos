@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-governance"
-version = "0.7.10"
+version = "0.7.11"
 description = "Bounded governance reward-memory kernel"
 authors.workspace = true
 license = "MIT-0"

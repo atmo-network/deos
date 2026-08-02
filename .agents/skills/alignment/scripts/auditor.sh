@@ -281,7 +281,7 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     hydrate_local_tool_paths
     require_directory "$PROJECT_ROOT/.git" "Git repository"
-    require_commands git grep awk sort paste date
+    require_commands git grep awk sort paste date node
     mkdir -p "$LEDGER_DIR"
     touch "$HALLUCINATIONS_FILE"
     collect_audit_targets
@@ -309,12 +309,25 @@ plan() {
     fi
 }
 
+inventory_patterns() {
+    local rule_id="$1"
+    node -e '
+const fs = require("node:fs");
+const inventory = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const rule = inventory.rules.find((candidate) => candidate.id === process.argv[2]);
+if (!rule || !Array.isArray(rule.patterns)) process.exit(1);
+process.stdout.write(rule.patterns.join("|"));
+' "$PROJECT_ROOT/.agents/skills/alignment/rules/aaa-drift-rules.json" "$rule_id"
+}
+
 run_audit() {
     if [[ "$SKIP_AUDIT" == "1" ]]; then
         return 0
     fi
     phase_banner "Step 2: Architecture rules"
-    check_rule "\\.iter\\(\\)|for .* in .*::iter\\(\\)" "Potential unbounded state iteration detected. DEOS prefers bounded/O(1) mechanics." "tests.rs|benchmarking.rs|mock.rs|deos-bypass: bounded-iter|legs\\.iter\\(|normalized_transfers\\.iter\\(|tracked\\.iter\\(" "O(N) Iteration Anti-Pattern" "template/pallets/staking/docs/architecture.en.md" "FATAL" "hallucination" "The violation is a concrete false move against the O(1) contract"
+    local bounded_iteration_allowlist
+    bounded_iteration_allowlist="$(inventory_patterns aaa-bounded-iteration-allowlist)"
+    check_rule "\\.iter\\(\\)|for .* in .*::iter\\(\\)" "Potential unbounded state iteration detected. DEOS prefers bounded/O(1) mechanics." "tests.rs|benchmarking.rs|mock.rs|deos-bypass: bounded-iter|legs\\.iter\\(|normalized_transfers\\.iter\\(|tracked\\.iter\\(|${bounded_iteration_allowlist}" "O(N) Iteration Anti-Pattern" "template/pallets/staking/docs/architecture.en.md" "FATAL" "hallucination" "The violation is a concrete false move against the O(1) contract"
     check_rule "StorageValue<.*, Vec<|StorageMap<.*, Vec<" "Unbounded Vec found in storage. Use BoundedVec for consensus state." "tests.rs|mock.rs|deos-bypass: vec" "Unbounded Vector Anti-Pattern" "docs/read-model.contract.en.md" "WARNING" "hallucination" "Consensus-state unboundedness is a direct architecture falsehood"
     check_rule "sudo_|ensure_root" "Admin/root policy detected. DEOS prefers mechanism over policy for core flows." "tests.rs|mock.rs|pallet-governance|deos-bypass: admin" "Sudo Root Policy Anti-Pattern" "docs/manifesto.en.md" "FATAL" "boundary-drift" "This usually signals a mechanism-to-policy drift across a constitutional boundary"
     check_rule "pub fn claim.*\\(origin" "Traditional claim extrinsic detected. Prefer token-driven balance ingress where possible." "tests.rs|mock.rs|staking|deos-bypass: claim" "Empty Extrinsic Anti-Pattern" "docs/core.architecture.en.md" "WARNING" "boundary-drift" "This usually means token-driven ingress is drifting back into user-pulled extrinsic control"

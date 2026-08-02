@@ -77,9 +77,9 @@ const conditionNames = [
 const amountNames = [
   'Fixed',
   'PercentageOfCurrent',
-  'PercentageOfTrigger',
+  'PercentageAtOpening',
   'PercentageOfLastFunding',
-  'AllBalance',
+  'AllAvailable',
 ];
 const errorPolicies = ['AbortCycle', 'ContinueNextStep', 'RetryLater'];
 
@@ -292,7 +292,7 @@ test('analysis is deterministic, exactly bound, and produces every cursor envelo
       step({ task: 'SwapIn' }),
       step({
         task: 'Transfer',
-        amount: { type: 'AllBalance', value: undefined },
+        amount: { type: 'AllAvailable', value: undefined },
         conditions: [condition('BalanceAbove')],
         onError: 'RetryLater',
       }),
@@ -772,7 +772,7 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
     const amount =
       name === 'Fixed'
         ? fixed()
-        : name === 'AllBalance'
+        : name === 'AllAvailable'
           ? { type: name, value: undefined }
           : { type: name, value: 500_000_000 };
     const artifact = artifactFor({ steps: [step({ amount })] });
@@ -789,7 +789,7 @@ test('every current AmountResolution reports frozen or live retry semantics', ()
           ({
             ArtifactValue: 'artifact-value',
             CurrentBalanceOrShares: 'current-balance-or-shares',
-            TriggerSnapshot: 'trigger-snapshot',
+            OpeningSnapshot: 'opening-snapshot',
             LastFundingSnapshot: 'last-funding-snapshot',
             TaskPolicyCapacity: 'task-policy-capacity',
           })[dependency],
@@ -935,7 +935,7 @@ test('trigger analysis separates readiness sources from admission and runtime pr
   });
   triggerAmountProgram.value.execution_plan = [
     step({
-      amount: { type: 'PercentageOfTrigger', value: 500_000_000 },
+      amount: { type: 'PercentageAtOpening', value: 500_000_000 },
     }),
   ];
   const triggerAmountAnalysis = analyze(

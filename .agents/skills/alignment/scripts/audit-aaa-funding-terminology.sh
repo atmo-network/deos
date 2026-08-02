@@ -30,7 +30,19 @@ parse_args() {
     done
 }
 
-legacy_pattern='first_eligible_at|FundingBatch|funding-batch|pending_amount|armed[ /-]+pending (funding )?(batches|generations)|tracked[ /-]+pending funding (counts|counters)|pending funding (counts|counters)|promotes? pending funding|funding promotion|keeps? new funding pending|User[ /-]+System FIFO lanes|class service guarantees?|reopen(ed|ing)? lineage|lineage reopen(ed|ing)?'
+legacy_pattern=''
+
+load_rule_inventory() {
+    local inventory="$PROJECT_ROOT/.agents/skills/alignment/rules/aaa-drift-rules.json"
+    legacy_pattern="$(node -e '
+const fs = require("node:fs");
+const inventory = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const rule = inventory.rules.find((candidate) => candidate.id === "aaa-funding-lineage-terms");
+if (!rule || rule.kind !== "regex-any-case-insensitive" || !Array.isArray(rule.patterns)) process.exit(1);
+process.stdout.write(rule.patterns.join("|"));
+' "$inventory")"
+    [[ -n "$legacy_pattern" ]] || { log_error "AAA funding terminology rule is empty"; return 1; }
+}
 
 check_paths() {
     local -a paths=("$@")
@@ -83,7 +95,8 @@ run_audit() {
 main() {
     parse_args "$@"
     phase_banner "Step 1: Prerequisites"
-    require_commands rg
+    require_commands node rg
+    load_rule_inventory
     if [[ "$SELF_TEST" == "1" ]]; then
         run_self_tests
     else

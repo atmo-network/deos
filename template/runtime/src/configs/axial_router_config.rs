@@ -676,15 +676,15 @@ impl pallet_axial_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerIm
   fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> sp_runtime::DispatchResult {
     let burning_manager_account = BurningManagerAccount::get();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
-      if let Err(error) =
-        <RuntimeAddressEventIngress as AddressEventIngress>::preflight_internal_inbound(
-          &burning_manager_account,
-          asset,
-          amount,
-          who,
-        )
-      {
-        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+      if let Err(failure) = RuntimeAddressEventIngress::preflight_internal_inbound(
+        &burning_manager_account,
+        asset,
+        amount,
+        who,
+      ) {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          failure.error,
+        ));
       }
       let result = (|| -> sp_runtime::DispatchResult {
         match asset {
@@ -709,12 +709,13 @@ impl pallet_axial_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerIm
             .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
           }
         }
-        <RuntimeAddressEventIngress as AddressEventIngress>::on_internal_inbound(
+        RuntimeAddressEventIngress::on_internal_inbound(
           &burning_manager_account,
           asset,
           amount,
           who,
-        )?;
+        )
+        .map_err(|failure| failure.error)?;
         Ok(())
       })();
       match result {

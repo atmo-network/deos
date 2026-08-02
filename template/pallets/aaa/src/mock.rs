@@ -3,7 +3,7 @@ use frame::prelude::*;
 use polkadot_sdk::{
   frame_support::{
     PalletId, construct_runtime,
-    traits::{ConstU8, ConstU32, ConstU128, Get},
+    traits::{ConstU8, ConstU32, ConstU64, ConstU128, Get},
   },
   frame_system::EnsureRoot,
   sp_runtime::{
@@ -138,6 +138,8 @@ thread_local! {
   static STAKED: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset), Balance>> =
     RefCell::new(alloc::collections::BTreeMap::new());
 
+  static STAKING_SHARE_BALANCE_READS: RefCell<u32> = const { RefCell::new(0) };
+
   static UNSTAKED: RefCell<alloc::collections::BTreeMap<(AccountId, TestAsset), Balance>> =
     RefCell::new(alloc::collections::BTreeMap::new());
 
@@ -161,6 +163,9 @@ thread_local! {
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
   static LAST_DEX_AAA_TYPE: RefCell<Option<AaaType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
+  static CACHE_REVALIDATION_DISPOSITION: RefCell<
+    Option<crate::types::RevalidationDisposition>,
+  > = RefCell::new(None);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
@@ -224,6 +229,7 @@ pub fn reset_mock_adapters() {
   MINTED.with(|b| b.borrow_mut().clear());
   POOL_RESERVES.with(|b| b.borrow_mut().clear());
   STAKED.with(|b| b.borrow_mut().clear());
+  STAKING_SHARE_BALANCE_READS.with(|reads| *reads.borrow_mut() = 0);
   UNSTAKED.with(|b| b.borrow_mut().clear());
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
@@ -240,6 +246,7 @@ pub fn reset_mock_adapters() {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
   LAST_DEX_AAA_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
+  CACHE_REVALIDATION_DISPOSITION.with(|v| *v.borrow_mut() = None);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
@@ -250,6 +257,10 @@ pub fn reset_mock_adapters() {
     BENCHMARK_INGRESS.with(|event| *event.borrow_mut() = None);
     BENCHMARK_ASSET_OPS_INGRESS.with(|enabled| *enabled.borrow_mut() = false);
   }
+}
+
+pub fn staking_share_balance_reads() -> u32 {
+  STAKING_SHARE_BALANCE_READS.with(|reads| *reads.borrow())
 }
 
 pub struct MockObservationProvider;
@@ -645,6 +656,10 @@ impl StakingOps<AccountId, TestAsset, Balance> for MockStakingOps {
   }
 
   fn share_balance(who: &AccountId, asset: TestAsset) -> Balance {
+    STAKING_SHARE_BALANCE_READS.with(|reads| {
+      let next = reads.borrow().saturating_add(1);
+      *reads.borrow_mut() = next;
+    });
     MockAssetOps::balance(who, asset)
   }
 
@@ -978,19 +993,19 @@ impl Get<u32> for TestMaxIdleStarvationBlocks {
 pub struct TestObservationFanoutWeightLimit;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestObservationFanoutWeightLimit {
   fn get() -> polkadot_sdk::sp_weights::Weight {
-    polkadot_sdk::sp_weights::Weight::MAX
+    polkadot_sdk::sp_weights::Weight::from_parts(1_000_000_000_000, 100_000_000)
   }
 }
 
 pub struct TestWakeupWeightLimit;
 impl Get<polkadot_sdk::sp_weights::Weight> for TestWakeupWeightLimit {
   fn get() -> polkadot_sdk::sp_weights::Weight {
-    polkadot_sdk::sp_weights::Weight::MAX
+    polkadot_sdk::sp_weights::Weight::from_parts(1_000_000_000_000, 100_000_000)
   }
 }
 
-pub struct TestGuaranteedOnIdleWeight;
-impl Get<polkadot_sdk::sp_weights::Weight> for TestGuaranteedOnIdleWeight {
+pub struct TestAaaOnIdleReserve;
+impl Get<polkadot_sdk::sp_weights::Weight> for TestAaaOnIdleReserve {
   fn get() -> polkadot_sdk::sp_weights::Weight {
     GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow())
   }
@@ -1021,11 +1036,24 @@ impl Get<Balance> for TestMinUserBalance {
   }
 }
 
-pub struct TestMaxSweepPerBlock;
-impl Get<u32> for TestMaxSweepPerBlock {
+pub struct TestMaxSweepBatch;
+impl Get<u32> for TestMaxSweepBatch {
   fn get() -> u32 {
     3
   }
+}
+
+pub struct TestCacheRevalidationDisposition;
+impl Get<Option<crate::types::RevalidationDisposition>> for TestCacheRevalidationDisposition {
+  fn get() -> Option<crate::types::RevalidationDisposition> {
+    CACHE_REVALIDATION_DISPOSITION.with(|disposition| disposition.borrow().clone())
+  }
+}
+
+pub fn set_cache_revalidation_disposition(
+  disposition: Option<crate::types::RevalidationDisposition>,
+) {
+  CACHE_REVALIDATION_DISPOSITION.with(|slot| *slot.borrow_mut() = disposition);
 }
 
 pub struct MockFundingAuthority;
@@ -1052,7 +1080,7 @@ impl crate::adapters::SovereignAccountPolicy<AccountId> for MockSovereignAccount
 impl pallet_aaa::Config for Test {
   type AssetId = TestAsset;
   type Balance = Balance;
-  type NativeAssetId = NativeAsset;
+  type FeeNativeAssetId = NativeAsset;
   type AssetOps = MockAssetOps;
   type ObservationFeedId = u32;
   type ObservationProvider = MockObservationProvider;
@@ -1067,26 +1095,30 @@ impl pallet_aaa::Config for Test {
   type GlobalBreakerOrigin = EnsureRoot<AccountId>;
   type MaxExecutionPlanSteps = ConstU32<8>;
   type MaxFundingTrackedAssets = ConstU32<10>;
-  type MaxContinuationSnapshotEntries = ConstU32<16>;
+  type MaxOpeningSnapshotEntries = ConstU32<16>;
   type MaxConditionsPerStep = ConstU32<4>;
   type MaxOwnerSlots = ConstU8<255>;
   type MaxExecutionsPerBlock = ConstU32<3>;
   type MaxQueueLength = ConstU32<1024>;
   type QueuePageSize = ConstU32<32>;
   type WakeupPageSize = ConstU32<32>;
+  type ObservationPageSize = ConstU32<16>;
   type MaxQueueEntriesScannedPerBlock = ConstU32<1024>;
   type MaxObservationFanoutPagesPerBlock = ConstU32<64>;
   type ObservationFanoutWeightLimit = TestObservationFanoutWeightLimit;
   type WakeupWeightLimit = TestWakeupWeightLimit;
   type MaxWakeupsPerBlock = ConstU32<64>;
-  type MaxSweepPerBlock = TestMaxSweepPerBlock;
+  type MaxSweepBatch = TestMaxSweepBatch;
   type MaxWhitelistSize = ConstU32<16>;
   type MaxTriggerSources = ConstU32<4>;
   type MaxSplitTransferLegs = ConstU32<8>;
+  type TargetBlockTime = ConstU64<63_116>;
   type MaxExecutionDelayBlocks = TestMaxExecutionDelayBlocks;
   type MaxTimerJitterBlocks = ConstU32<64>;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
-  type GuaranteedOnIdleWeight = TestGuaranteedOnIdleWeight;
+  type AaaOnIdleReserve = TestAaaOnIdleReserve;
+  type MaxCacheRevalidationUnitsPerBlock = ConstU32<8>;
+  type CacheRevalidationNoAdmitDisposition = TestCacheRevalidationDisposition;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
   type MaxActiveActors = ConstU32<10_000>;
   type MaxActorIdentities = ConstU32<10_000>;
@@ -1095,13 +1127,12 @@ impl pallet_aaa::Config for Test {
   type ConditionReadFee = TestConditionReadFee;
   type AaaCreationFee = TestAaaCreationFee;
   type WeightToFee = TestWeightToFee;
-  type TaskWeightInfo = ();
   type FeeSink = TestFeeSink;
   type FeeCollector = MockFeeCollector;
   type MaxConsecutiveFailures = TestMaxConsecutiveFailures;
   type MaxRetryAttempts = ConstU32<10>;
   type MinUserBalance = TestMinUserBalance;
-  type WeightInfo = ();
+  type WeightInfo = crate::weights::TestWeightInfo;
   type GenesisSystemAaas = ();
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = MockBenchmarkHelper;
@@ -1155,7 +1186,7 @@ pub fn set_fail_fee_sink_transfer(value: bool) {
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = value);
 }
 
-pub(crate) fn create_atomicity_checkpoint(_aaa_id: u64) -> DispatchResult {
+pub(crate) fn control_atomicity_checkpoint(_aaa_id: u64) -> DispatchResult {
   let should_fail = FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow());
   if should_fail {
     return Err(DispatchError::Other("AtomicityCreateCheckpointFailed"));

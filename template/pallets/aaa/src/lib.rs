@@ -21,13 +21,17 @@ pub use scheduler::EnqueueOutcome;
 
 pub mod adapters;
 pub use adapters::{
-  AssetOps, DexOps, ExecutionContext, FundingAuthority, LiquidityOps, ObservationProvider,
-  RetryClass, ScalarObservationState, StakingOps, TaskFailure,
+  AddressEventIngress, AssetOps, DexOps, ExecutionContext, FundingAuthority, IngressFailure,
+  LiquidityOps, ObservationChangeIngress, ObservationProvider, RetryClass, ScalarObservationState,
+  StakingOps, TaskFailure,
 };
-pub use types::{InputLimit, Task, WakeupBucketState, WakeupCursorIndex};
+pub use types::{
+  AddressEvent, CacheRevalidationState, InputLimit, RevalidationDisposition, Task,
+  WakeupBucketState, WakeupCursorIndex,
+};
 
 pub mod weights;
-pub use weights::{TaskWeightInfo, WeightInfo};
+pub use weights::WeightInfo;
 
 #[cfg(test)]
 mod mock;
@@ -144,10 +148,8 @@ where
   }
   let mut steps = BoundedVec::default();
   let mut total = Balance::zero();
-  for input in inputs
-    .iter() // deos-bypass: bounded-iter — MaxExecutionPlanSteps bounds fee-envelope composition.
-    .skip(start_cursor)
-  {
+  for index in start_cursor..inputs.len() {
+    let input = &inputs[index];
     let evaluation = if aaa_type == types::AaaType::User {
       input.evaluation
     } else {
@@ -183,7 +185,7 @@ pub fn fee_native_protected_minimum<Balance: Ord>(
   min_user_balance: Balance,
 ) -> Balance {
   if aaa_type == types::AaaType::User && is_fee_native {
-    core::cmp::max(asset_minimum, min_user_balance)
+    min_user_balance
   } else {
     asset_minimum
   }
@@ -228,9 +230,10 @@ pub(crate) const fn execution_plan_steps_bound_is_valid(bound: u32) -> bool {
 }
 
 sp_api::decl_runtime_apis! {
-  pub trait AaaSimulationApi<Program>
+  pub trait AaaSimulationApi<Program, Simulation>
   where
     Program: codec::Codec,
+    Simulation: codec::Codec,
   {
     fn simulate_current_program(
       aaa_id: types::AaaId,
@@ -238,7 +241,22 @@ sp_api::decl_runtime_apis! {
       expected_mutability: types::Mutability,
       expected_program: Program,
       mode: types::SimulationMode,
-    ) -> Result<types::SimulationResult, types::SimulationError>;
+    ) -> Result<Simulation, types::SimulationError>;
+  }
+
+  /// Read-only eligibility projection for one actor (spec 7.3).
+  ///
+  /// Returns the scheduler's current readiness verdict and the next block at
+  /// which temporal eligibility opens, reusing the same pure owners as
+  /// admission so clients do not reimplement cadence phase, cooldown, window
+  /// floor, retry backoff, breaker, or latch arithmetic.
+  pub trait AaaEligibilityApi<BlockNumber>
+  where
+    BlockNumber: codec::Codec,
+  {
+    fn aaa_eligibility(
+      aaa_id: types::AaaId,
+    ) -> Result<types::AaaEligibilityProjection<BlockNumber>, types::AaaEligibilityError>;
   }
 }
 
@@ -246,8 +264,8 @@ sp_api::decl_runtime_apis! {
 pub mod pallet {
   use super::{
     AssetOps, AttemptFeeEnvelope, DexOps, FeeCollector, FeeEnvelopeError, FeeEnvelopeInput,
-    FundingAuthority, LiquidityOps, ObservationProvider, TaskWeightInfo, WeightInfo,
-    compose_attempt_fee_envelope, execution_plan_steps_bound_is_valid,
+    FundingAuthority, LiquidityOps, ObservationProvider, WeightInfo, compose_attempt_fee_envelope,
+    execution_plan_steps_bound_is_valid,
   };
   use crate::adapters::{RetryClass, SovereignAccountPolicy, StakingOps as _};
   use frame::prelude::*;
@@ -273,7 +291,7 @@ pub mod pallet {
       + MaxEncodedLen;
 
     #[pallet::constant]
-    type NativeAssetId: Get<Self::AssetId>;
+    type FeeNativeAssetId: Get<Self::AssetId>;
 
     type AssetOps: AssetOps<Self::AccountId, Self::AssetId, Self::Balance>;
     type ObservationFeedId: Parameter + Member + Copy + MaxEncodedLen + Ord;
@@ -297,7 +315,7 @@ pub mod pallet {
     #[pallet::constant]
     type MaxFundingTrackedAssets: Get<u32>;
     #[pallet::constant]
-    type MaxContinuationSnapshotEntries: Get<u32>;
+    type MaxOpeningSnapshotEntries: Get<u32>;
     #[pallet::constant]
     type MaxConditionsPerStep: Get<u32>;
     #[pallet::constant]
@@ -312,6 +330,9 @@ pub mod pallet {
     /// Physical I/O granularity for the paged temporal wakeup index.
     #[pallet::constant]
     type WakeupPageSize: Get<u32>;
+    /// Physical I/O granularity for observation subscriber pages.
+    #[pallet::constant]
+    type ObservationPageSize: Get<u32>;
     /// Independent ceiling for physical queue-entry inspection per scheduler pass.
     #[pallet::constant]
     type MaxQueueEntriesScannedPerBlock: Get<u32>;
@@ -327,13 +348,16 @@ pub mod pallet {
     #[pallet::constant]
     type MaxWakeupsPerBlock: Get<u32>;
     #[pallet::constant]
-    type MaxSweepPerBlock: Get<u32>;
+    type MaxSweepBatch: Get<u32>;
     #[pallet::constant]
     type MaxWhitelistSize: Get<u32>;
     #[pallet::constant]
     type MaxTriggerSources: Get<u32>;
     #[pallet::constant]
     type MaxSplitTransferLegs: Get<u32>;
+    /// Target block duration in whole seconds.
+    #[pallet::constant]
+    type TargetBlockTime: Get<u64>;
     #[pallet::constant]
     type MaxExecutionDelayBlocks: Get<BlockNumberFor<Self>>;
     #[pallet::constant]
@@ -342,7 +366,14 @@ pub mod pallet {
     type MaxIdleStarvationBlocks: Get<u32>;
     /// Gross two-dimensional `on_idle` weight guaranteed by the embedding runtime.
     #[pallet::constant]
-    type GuaranteedOnIdleWeight: Get<Weight>;
+    type AaaOnIdleReserve: Get<Weight>;
+    /// Count ceiling for one bounded cache-revalidation worker pass (spec 5.4, 10.3).
+    #[pallet::constant]
+    type MaxCacheRevalidationUnitsPerBlock: Get<u32>;
+    /// Migration-specific disposition for an Active actor whose plan no longer admits during
+    /// cache revalidation (spec 6.4). `None` rejects activation of a cache-affecting runtime
+    /// change; a concrete migration names its disposition here.
+    type CacheRevalidationNoAdmitDisposition: Get<Option<crate::types::RevalidationDisposition>>;
     #[pallet::constant]
     type MaxAutoCloseNonceHorizon: Get<u64>;
     /// Maximum number of active AAA instances. Bounds the BTreeSet storage.
@@ -367,8 +398,6 @@ pub mod pallet {
     /// Converts weight to fee for execution cost calculation
     type WeightToFee: polkadot_sdk::sp_weights::WeightToFee<Balance = Self::Balance>;
     /// Runtime-bound upper weights for every AAA task variant
-    type TaskWeightInfo: TaskWeightInfo;
-
     type FeeSink: Get<Self::AccountId>;
     type FeeCollector: FeeCollector<Self::AccountId, Self::AssetId, Self::Balance>;
 
@@ -404,8 +433,12 @@ pub mod pallet {
 
   pub type ActorObservationFeedsOf<T> =
     BoundedVec<<T as Config>::ObservationFeedId, <T as Config>::MaxTriggerSources>;
-  pub type ObservationSubscriberPageOf<T> = ObservationSubscriberPage<<T as Config>::QueuePageSize>;
-  pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::QueuePageSize>;
+  pub type SimulationResultOf<T> = SimulationResult<<T as Config>::MaxExecutionPlanSteps>;
+  pub type AaaEligibilityProjectionOf<T> =
+    AaaEligibilityProjection<frame::prelude::BlockNumberFor<T>>;
+  pub type ObservationSubscriberPageOf<T> =
+    ObservationSubscriberPage<<T as Config>::ObservationPageSize>;
+  pub type ObservationFreeSlotPageOf<T> = BoundedVec<u32, <T as Config>::ObservationPageSize>;
 
   pub type TriggerSourceOf<T> = TriggerSource<
     <T as frame_system::Config>::AccountId,
@@ -499,16 +532,16 @@ pub mod pallet {
   pub type FundingSnapshotOf<T> = FundingAccumulatedOf<T>;
 
   pub type ContinuationSnapshotOf<T> = BoundedBTreeMap<
-    ResolutionSurface<<T as Config>::AssetId>,
+    OpeningSurface<<T as Config>::AssetId>,
     <T as Config>::Balance,
-    <T as Config>::MaxContinuationSnapshotEntries,
+    <T as Config>::MaxOpeningSnapshotEntries,
   >;
 
   pub type ContinuationStateOf<T> = ContinuationState<
     <T as Config>::AssetId,
     <T as Config>::Balance,
     BlockNumberFor<T>,
-    <T as Config>::MaxContinuationSnapshotEntries,
+    <T as Config>::MaxOpeningSnapshotEntries,
     <T as Config>::MaxFundingTrackedAssets,
   >;
 
@@ -517,13 +550,15 @@ pub mod pallet {
   pub type WakeupPageOf<T> = WakeupPage<WakeupPageEntriesOf<T>>;
   pub type WakeupCursorPageOf<T> = BoundedVec<BlockNumberFor<T>, <T as Config>::WakeupPageSize>;
 
-  pub type AaaInstanceOf<T> = AaaInstance<
+  pub type ActiveActorViewOf<T> = ActiveActorView<
     <T as frame_system::Config>::AccountId,
     BlockNumberFor<T>,
     ScheduleOf<T>,
     ExecutionPlanOf<T>,
     BalanceOf<T>,
   >;
+
+  pub type CacheRevalidationStateOf = crate::types::CacheRevalidationState<Option<AaaId>>;
 
   pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>, BalanceOf<T>>;
 
@@ -567,18 +602,18 @@ pub mod pallet {
     StorageMap<_, Blake2_128Concat, AaaId, ContinuationStateOf<T>, OptionQuery>;
 
   impl<T: Config> Pallet<T> {
-    pub(crate) fn compose_active_actor(
+    pub(crate) fn derive_active_actor_view(
       identity: ActorIdentityOf<T>,
       hot: ActorHotStateOf<T>,
       program: ActorProgramStateOf<T>,
-    ) -> AaaInstanceOf<T> {
-      AaaInstance {
+    ) -> ActiveActorViewOf<T> {
+      ActiveActorView {
         sovereign_account: identity.sovereign_account,
         owner: identity.owner,
         actor_class: identity.actor_class,
         mutability: identity.mutability,
         lifecycle: hot.lifecycle,
-        run_state: hot.run_state,
+        cycle_state: hot.cycle_state,
         schedule: program.schedule,
         schedule_window: program.schedule_window,
         execution_plan: program.execution_plan,
@@ -594,11 +629,12 @@ pub mod pallet {
         funding_tracked_count: hot.funding_tracked_count,
         schedule_anchor: hot.schedule_anchor,
         last_cycle_block: hot.last_cycle_block,
+        cache_epoch: hot.cache_epoch,
       }
     }
 
-    pub(crate) fn active_actor_snapshot(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
-      Some(Self::compose_active_actor(
+    pub fn active_actor_view(aaa_id: AaaId) -> Option<ActiveActorViewOf<T>> {
+      Some(Self::derive_active_actor_view(
         ActorIdentities::<T>::get(aaa_id)?,
         ActorHot::<T>::get(aaa_id)?,
         ActorProgram::<T>::get(aaa_id)?,
@@ -615,50 +651,12 @@ pub mod pallet {
         && ActorProgram::<T>::contains_key(aaa_id)
     }
 
-    fn split_active_actor(
-      instance: AaaInstanceOf<T>,
-    ) -> (
-      ActorIdentityOf<T>,
-      ActorHotStateOf<T>,
-      ActorProgramStateOf<T>,
-    ) {
-      (
-        ActorIdentity {
-          sovereign_account: instance.sovereign_account,
-          owner: instance.owner,
-          actor_class: instance.actor_class,
-          mutability: instance.mutability,
-          cycle_nonce: instance.cycle_nonce,
-        },
-        ActorHotState {
-          lifecycle: instance.lifecycle,
-          run_state: instance.run_state,
-          auto_close_at_cycle_nonce: instance.auto_close_at_cycle_nonce,
-          consecutive_failures: instance.consecutive_failures,
-          pending_signal: instance.pending_signal,
-          queue_ticket: instance.queue_ticket,
-          wakeup_pointer: None,
-          terminal_at: instance
-            .schedule_window
-            .map(|window| Self::window_terminal_at(&window)),
-          last_control_queue_mutation_block: instance.last_control_queue_mutation_block,
-          cycle_weight_upper: instance.cycle_weight_upper,
-          cycle_fee_upper: instance.cycle_fee_upper,
-          funding_tracked_count: instance.funding_tracked_count,
-          schedule_anchor: instance.schedule_anchor,
-          last_cycle_block: instance.last_cycle_block,
-        },
-        ActorProgramState {
-          schedule: instance.schedule,
-          schedule_window: instance.schedule_window,
-          execution_plan: instance.execution_plan,
-          completion_policy: instance.completion_policy,
-        },
-      )
-    }
-
-    pub(crate) fn insert_active_actor(aaa_id: AaaId, instance: AaaInstanceOf<T>) -> DispatchResult {
-      let (identity, hot, program) = Self::split_active_actor(instance);
+    pub(crate) fn insert_active_actor(
+      aaa_id: AaaId,
+      identity: ActorIdentityOf<T>,
+      hot: ActorHotStateOf<T>,
+      program: ActorProgramStateOf<T>,
+    ) -> DispatchResult {
       Self::replace_observation_subscriptions(aaa_id, &program.schedule)?;
       ActorIdentities::<T>::insert(aaa_id, identity);
       ActorHot::<T>::insert(aaa_id, hot);
@@ -859,6 +857,16 @@ pub mod pallet {
   pub type IdleStarvationState<T: Config> =
     StorageValue<_, IdleStarvationPhase<BlockNumberFor<T>>, ValueQuery>;
 
+  /// Global cache epoch. Every executable Active actor carries this stamp (spec 2.1, 5.4).
+  #[pallet::storage]
+  #[pallet::getter(fn current_cache_epoch)]
+  pub type CurrentCacheEpoch<T> = StorageValue<_, CacheEpoch, ValueQuery>;
+
+  /// Durable global cache-revalidation progress; absent means no revalidation gate is active.
+  #[pallet::storage]
+  #[pallet::getter(fn cache_revalidation)]
+  pub type CacheRevalidation<T: Config> = StorageValue<_, CacheRevalidationStateOf, OptionQuery>;
+
   /// Provides runtime-specific System AAA instances to initialize at genesis.
   ///
   /// Implement this on the runtime to return System AAA specs with explicit `aaa_id` values.
@@ -917,6 +925,8 @@ pub mod pallet {
         "MaxExecutionPlanSteps must be in 1..=255"
       );
       STORAGE_VERSION.put::<Pallet<T>>();
+      // Fresh canonical baseline: one defined current epoch, no revalidation work (spec 9.3).
+      CurrentCacheEpoch::<T>::put(0);
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
       }
@@ -953,8 +963,8 @@ pub mod pallet {
           .expect("genesis execution plan must have valid task and condition shapes");
         Pallet::<T>::validate_recipient_configuration(&execution_plan, &sovereign_account)
           .expect("genesis execution plan cannot transfer to its own sovereign account");
-        Pallet::<T>::validate_trigger_amount_compatibility(&schedule, &execution_plan)
-          .expect("genesis trigger sources must support PercentageOfTrigger semantics");
+        Pallet::<T>::validate_opening_snapshot_surfaces(&execution_plan)
+          .expect("genesis opening snapshot surfaces must be valid");
         Pallet::<T>::ensure_retry_later_allowed(mutability, &execution_plan)
           .expect("genesis System Immutable AAA cannot use RetryLater");
         Pallet::<T>::ensure_execution_plan_fits_idle_budget(AaaType::System, &execution_plan)
@@ -966,30 +976,37 @@ pub mod pallet {
         let (cycle_weight_upper, cycle_fee_upper) =
           Pallet::<T>::compute_cycle_bounds(AaaType::System, &execution_plan);
         let schedule_anchor = Pallet::<T>::schedule_anchor_at(schedule_window, Zero::zero());
-        let instance = AaaInstance {
+        let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
           actor_class: ActorClass::System {
             sovereign_id: aaa_id,
           },
           mutability,
-          lifecycle: ActiveLifecycle::Active,
-          run_state: RunState::Idle,
-          schedule,
-          schedule_window,
-          execution_plan,
-          completion_policy,
           cycle_nonce: 0,
+        };
+        let hot = ActorHotState {
+          lifecycle: ActiveLifecycle::Active,
+          cycle_state: CycleState::Idle,
+          auto_close_at_cycle_nonce: None,
           consecutive_failures: 0,
           pending_signal: false,
           queue_ticket: None,
+          wakeup_pointer: None,
+          terminal_at: schedule_window.map(|window| Pallet::<T>::window_terminal_at(&window)),
           last_control_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
           funding_tracked_count: funding_tracked_assets.len() as u32,
-          auto_close_at_cycle_nonce: None,
           schedule_anchor,
           last_cycle_block: None,
+          cache_epoch: CurrentCacheEpoch::<T>::get(),
+        };
+        let program = ActorProgramState {
+          schedule,
+          schedule_window,
+          execution_plan,
+          completion_policy,
         };
         let active_count = Pallet::<T>::active_instance_count();
         assert!(
@@ -1008,7 +1025,7 @@ pub mod pallet {
         SystemSovereignCount::<T>::mutate(|count| *count += 1);
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         frame_system::Pallet::<T>::inc_providers(&sovereign_account);
-        Pallet::<T>::insert_active_actor(aaa_id, instance)
+        Pallet::<T>::insert_active_actor(aaa_id, identity, hot, program)
           .unwrap_or_else(|error| panic!("genesis observation subscription failed: {error:?}"));
         ActorFunding::<T>::insert(
           aaa_id,
@@ -1131,10 +1148,24 @@ pub mod pallet {
           .is_some(),
         "plan and retry bounds must compose without u32 overflow"
       );
+      let target_block_time = T::TargetBlockTime::get();
+      assert!(target_block_time > 0, "TargetBlockTime must be non-zero");
+      let expected_horizon = 315_576_000u64.div_ceil(target_block_time);
+      let configured_horizon: u64 = T::MaxExecutionDelayBlocks::get().saturated_into();
+      assert_eq!(
+        configured_horizon, expected_horizon,
+        "MaxExecutionDelayBlocks must cover exactly ten Julian years"
+      );
+      assert_eq!(
+        T::MaxOpeningSnapshotEntries::get(),
+        T::MaxExecutionPlanSteps::get()
+          .checked_mul(2)
+          .expect("validated plan bound fits u32"),
+        "MaxOpeningSnapshotEntries must equal twice MaxExecutionPlanSteps"
+      );
       assert!(
-        T::MaxContinuationSnapshotEntries::get()
-          <= T::MaxExecutionPlanSteps::get().saturating_mul(2),
-        "MaxContinuationSnapshotEntries must not exceed twice MaxExecutionPlanSteps"
+        T::MinUserBalance::get() >= T::AssetOps::minimum_balance(T::FeeNativeAssetId::get()),
+        "MinUserBalance must cover the fee-native asset minimum"
       );
       assert!(
         T::QueuePageSize::get() > 0,
@@ -1143,6 +1174,10 @@ pub mod pallet {
       assert!(
         T::QueuePageSize::get() < T::MaxQueueLength::get(),
         "QueuePageSize must remain an intermediate I/O granularity"
+      );
+      assert!(
+        T::ObservationPageSize::get() > 0,
+        "ObservationPageSize must be non-zero"
       );
       assert!(
         T::MaxQueueEntriesScannedPerBlock::get() > 0
@@ -1163,6 +1198,20 @@ pub mod pallet {
         wakeup_limit.ref_time() > 0 && wakeup_limit.proof_size() > 0,
         "wakeup worker Weight limit must be non-zero in both dimensions"
       );
+      let actor_service = Self::guaranteed_actor_service_weight()
+        .expect("configured housekeeping Weight must fit AaaOnIdleReserve");
+      assert!(
+        Self::close_cleanup_weight_upper().all_lte(actor_service),
+        "one maximum automatic cleanup must fit GuaranteedActorServiceWeight"
+      );
+      assert!(
+        T::MaxCacheRevalidationUnitsPerBlock::get() > 0,
+        "MaxCacheRevalidationUnitsPerBlock must be non-zero"
+      );
+      assert!(
+        Self::cache_revalidation_unit_weight_upper().all_lte(actor_service),
+        "one maximum cache-revalidation unit must fit ActorServiceReserve after maximum fixed workers"
+      );
     }
 
     #[cfg(feature = "try-runtime")]
@@ -1170,21 +1219,47 @@ pub mod pallet {
       Self::do_try_state()
     }
 
-    fn on_initialize(_now: BlockNumberFor<T>) -> Weight {
-      let _ = GlobalCircuitBreaker::<T>::get();
-      T::DbWeight::get().reads(1)
+    fn on_runtime_upgrade() -> Weight {
+      use polkadot_sdk::frame_support::traits::GetStorageVersion;
+      let on_chain = <Pallet<T> as GetStorageVersion>::on_chain_storage_version();
+      if on_chain < STORAGE_VERSION {
+        // A storage-version increase is a cache-affecting runtime change: it may alter
+        // Weight/adapter/envelope bindings, so the bounded revalidation protocol must run
+        // before ordinary attempts resume (spec 5.4, 6.4). Fail closed when the
+        // migration-specific no-admit disposition is absent or the epoch cannot increment.
+        match Self::begin_cache_revalidation() {
+          Ok(()) => T::WeightInfo::cache_revalidation_units(1),
+          Err(_) => {
+            panic!(
+              "cache-affecting upgrade requires a revalidation disposition and a representable cache epoch"
+            )
+          }
+        }
+      } else {
+        Weight::zero()
+      }
     }
 
     fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
+      let reserved = T::AaaOnIdleReserve::get();
+      let available = Weight::from_parts(
+        remaining_weight.ref_time().min(reserved.ref_time()),
+        remaining_weight.proof_size().min(reserved.proof_size()),
+      );
       let base_weight = T::WeightInfo::scheduler_on_idle_base();
-      if !base_weight.all_lte(remaining_weight) {
+      if !base_weight.all_lte(available) {
         return Weight::zero();
       }
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      let after_base = remaining_weight.saturating_sub(base_weight);
+      // The cache-revalidation gate globally stops FIFO attempts and automatic cleanup
+      // without engaging the public breaker (spec 5.4); the saturated tombstone drain is
+      // scheduler-owned automatic cleanup and stays gated with it.
+      let revalidation_active = Self::revalidation_is_active();
+      let after_base = available.saturating_sub(base_weight);
       let cleanup_units = u32::from(QueueHead::<T>::get() < QueueTail::<T>::get());
       let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units);
-      let saturated_cleanup_weight = if cleanup_units > 0
+      let saturated_cleanup_weight = if !revalidation_active
+        && cleanup_units > 0
         && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get())
         && queue_cleanup_weight.all_lte(after_base)
       {
@@ -1222,15 +1297,30 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_housekeeping = remaining_after_wakeups.saturating_sub(fanout_weight);
+      // Phase 3.5: the bounded cache-revalidation worker, when active, runs before the cutoff
+      // snapshot and admits each unit against the actual on_idle budget (spec 5.4).
+      let revalidation_weight = if revalidation_active {
+        Self::run_cache_revalidation_worker(remaining_after_housekeeping)
+      } else {
+        Weight::zero()
+      };
+      let remaining_after_revalidation =
+        remaining_after_housekeeping.saturating_sub(revalidation_weight);
       let housekeeping_weight = base_weight
         .saturating_add(saturated_cleanup_weight)
         .saturating_add(wakeup_weight)
-        .saturating_add(fanout_weight);
+        .saturating_add(fanout_weight)
+        .saturating_add(revalidation_weight);
       if breaker_active {
         Self::update_idle_starvation_state(now, false);
         return housekeeping_weight;
       }
-      let pass = Self::execute_cycle(remaining_after_housekeeping);
+      if revalidation_active {
+        // FIFO discovery is not entered and starvation state is frozen (spec 5.4);
+        // ordinary service resumes in the next block after the gate clears.
+        return housekeeping_weight;
+      }
+      let pass = Self::execute_cycle(remaining_after_revalidation);
       Self::update_idle_starvation_state(now, pass.starved);
       housekeeping_weight.saturating_add(pass.consumed)
     }
@@ -1263,13 +1353,6 @@ pub mod pallet {
     AaaClosed {
       aaa_id: AaaId,
       reason: CloseReason,
-    },
-    CycleDeferred {
-      aaa_id: AaaId,
-      candidate_cycle_nonce: u64,
-      candidate_attempt: u32,
-      cursor: u32,
-      reason: DeferReason,
     },
     CycleStarted {
       aaa_id: AaaId,
@@ -1480,6 +1563,7 @@ pub mod pallet {
     ExecutionPlanExceedsOnIdleBudget,
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
+    CacheRevalidationActive,
     ImmutableAaa,
     InsufficientBalance,
     InsufficientFee,
@@ -1512,7 +1596,7 @@ pub mod pallet {
     AutoCloseNonceHorizonExceeded,
     AutoCloseNonceOverflow,
     AutoCloseNonceIncrementZero,
-    QueueMutationRateLimited,
+    ControlMutationRateLimited,
     QueueCapacityUnavailable,
     RetryLaterNotAllowedForImmutableAaa,
     ContinuationNotFound,
@@ -1528,7 +1612,6 @@ pub mod pallet {
     InvalidObservationRevision,
     DirtyObservationCapacityExceeded,
     DirtyObservationInvariant,
-    InvalidTriggerAmountCompatibility,
     AdmissionBoundOverflow,
   }
 
@@ -1597,7 +1680,7 @@ pub mod pallet {
     #[pallet::call_index(4)]
     #[pallet::weight(T::WeightInfo::pause_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn pause_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1605,30 +1688,31 @@ pub mod pallet {
       }
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
-      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(
-          snapshot.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
-        );
-        ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
-        inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
-        inst.queue_ticket = None;
-        inst.last_control_queue_mutation_block = Some(now);
-        Self::deposit_event(Event::AaaPaused {
-          aaa_id,
-          reason: PauseReason::Manual,
-        });
-        Ok(())
-      })?;
-      Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      Ok(())
+      Self::with_control_transaction(|| {
+        ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+          let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+          ensure!(
+            snapshot.mutability == Mutability::Mutable,
+            Error::<T>::ImmutableAaa
+          );
+          ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
+          inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+          inst.queue_ticket = None;
+          inst.last_control_queue_mutation_block = Some(now);
+          Self::deposit_event(Event::AaaPaused {
+            aaa_id,
+            reason: PauseReason::Manual,
+          });
+          Ok(())
+        })?;
+        Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
+      })
     }
 
     #[pallet::call_index(5)]
     #[pallet::weight(T::WeightInfo::resume_aaa().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn resume_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1636,26 +1720,27 @@ pub mod pallet {
       }
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
-      ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-        let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-        ensure!(
-          snapshot.mutability == Mutability::Mutable,
-          Error::<T>::ImmutableAaa
-        );
-        ensure!(inst.lifecycle.is_paused(), Error::<T>::NotPaused);
-        inst.lifecycle = ActiveLifecycle::Active;
-        inst.last_control_queue_mutation_block = Some(now);
-        Self::deposit_event(Event::AaaResumed { aaa_id });
-        Ok(())
-      })?;
-      Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      Ok(())
+      Self::with_control_transaction(|| {
+        ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+          let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+          ensure!(
+            snapshot.mutability == Mutability::Mutable,
+            Error::<T>::ImmutableAaa
+          );
+          ensure!(inst.lifecycle.is_paused(), Error::<T>::NotPaused);
+          inst.lifecycle = ActiveLifecycle::Active;
+          inst.last_control_queue_mutation_block = Some(now);
+          Self::deposit_event(Event::AaaResumed { aaa_id });
+          Ok(())
+        })?;
+        Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
+      })
     }
 
     #[pallet::call_index(6)]
     #[pallet::weight(T::WeightInfo::manual_trigger().saturating_add(Pallet::<T>::close_dispatch_weight_upper()))]
     pub fn manual_trigger(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       if Self::is_window_expired(&snapshot) {
@@ -1666,16 +1751,17 @@ pub mod pallet {
         snapshot.schedule.trigger.manual_source_enabled(),
         Error::<T>::ManualSourceDisabled
       );
-      if !snapshot.pending_signal {
-        ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
-          let hot = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
-          hot.pending_signal = true;
-          Ok(())
-        })?;
-        Self::deposit_event(Event::ManualTriggerSet { aaa_id });
-      }
-      Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      Ok(())
+      Self::with_control_transaction(|| {
+        if !snapshot.pending_signal {
+          ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
+            let hot = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
+            hot.pending_signal = true;
+            Ok(())
+          })?;
+          Self::deposit_event(Event::ManualTriggerSet { aaa_id });
+        }
+        Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
+      })
     }
 
     #[pallet::call_index(7)]
@@ -1688,7 +1774,7 @@ pub mod pallet {
       aaa_id: AaaId,
       policy: FundingSourcePolicyOf<T>,
     ) -> DispatchResult {
-      let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let instance = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
       Self::ensure_not_system_immutable(&instance)?;
       if Self::is_window_expired(&instance) {
@@ -1704,36 +1790,36 @@ pub mod pallet {
       }
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_queue_mutation_allowed(&instance, now)?;
-      let continuation_cancelled =
-        Self::cancel_continuation_internal(aaa_id, CancellationReason::FundingPolicyChanged, None)?;
-      ActorFunding::<T>::mutate(aaa_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("active actor funding existence was prevalidated")
-          .funding_source_policy = policy;
-      });
-      ActorHot::<T>::mutate(aaa_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("active actor hot-state existence was prevalidated")
-          .last_control_queue_mutation_block = Some(now);
-      });
-      Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
-      if continuation_cancelled {
-        Self::prime_actor_schedule(aaa_id).map_err(|outcome| match Self::enqueue_outcome_error(
-          Err(outcome),
-        ) {
-          Ok(()) => unreachable!("placement error cannot map to Ok"),
-          Err(error) => error,
-        })?;
-      }
-      Ok(())
+      Self::with_control_transaction(|| {
+        let continuation_cancelled = Self::cancel_continuation_internal(
+          aaa_id,
+          CancellationReason::FundingPolicyChanged,
+          None,
+        )?;
+        ActorFunding::<T>::mutate(aaa_id, |maybe| {
+          maybe
+            .as_mut()
+            .expect("active actor funding existence was prevalidated")
+            .funding_source_policy = policy;
+        });
+        ActorHot::<T>::mutate(aaa_id, |maybe| {
+          maybe
+            .as_mut()
+            .expect("active actor hot-state existence was prevalidated")
+            .last_control_queue_mutation_block = Some(now);
+        });
+        Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
+        if continuation_cancelled {
+          Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
+        }
+        Ok(())
+      })
     }
 
     #[pallet::call_index(8)]
     #[pallet::weight(Pallet::<T>::close_dispatch_weight_upper())]
     pub fn close_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      if let Some(instance) = Self::active_actor_snapshot(aaa_id) {
+      if let Some(instance) = Self::active_actor_view(aaa_id) {
         Self::ensure_control_origin(origin, &instance)?;
         Self::ensure_not_system_immutable(&instance)?;
         return Self::close_actor(aaa_id, &instance, CloseReason::OwnerInitiated);
@@ -1755,11 +1841,11 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      Self::validate_future_schedule_targets(&schedule, schedule_window)?;
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      Self::validate_future_schedule_targets(aaa_id, &schedule, schedule_window)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      Self::validate_trigger_amount_compatibility(&schedule, &snapshot.execution_plan)?;
+      Self::validate_opening_snapshot_surfaces(&snapshot.execution_plan)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
@@ -1776,30 +1862,26 @@ pub mod pallet {
       // (spec 4.3); the exact no-op path above already returned without mutation.
       let schedule_anchor = Self::schedule_anchor_at(schedule_window, now);
       Self::preflight_observation_subscription_replace(aaa_id, &schedule)?;
-      Self::cancel_continuation_internal(aaa_id, CancellationReason::ScheduleChanged, None)?;
-      Self::replace_observation_subscriptions(aaa_id, &schedule)?;
-      ActorProgram::<T>::mutate(aaa_id, |maybe| {
-        let program = maybe
-          .as_mut()
-          .expect("active actor program existence was prevalidated");
-        program.schedule = schedule;
-        program.schedule_window = schedule_window;
-      });
-      ActorHot::<T>::mutate(aaa_id, |maybe| {
-        if let Some(hot) = maybe.as_mut() {
-          hot.schedule_anchor = schedule_anchor;
-          hot.terminal_at = schedule_window.map(|window| Self::window_terminal_at(&window));
-          hot.last_control_queue_mutation_block = Some(now);
-        }
-      });
-      Self::deposit_event(Event::ScheduleUpdated { aaa_id });
-      Self::prime_actor_schedule(aaa_id).map_err(|outcome| {
-        match Self::enqueue_outcome_error(Err(outcome)) {
-          Ok(()) => unreachable!("placement error cannot map to Ok"),
-          Err(error) => error,
-        }
-      })?;
-      Ok(())
+      Self::with_control_transaction(|| {
+        Self::cancel_continuation_internal(aaa_id, CancellationReason::ScheduleChanged, None)?;
+        Self::replace_observation_subscriptions(aaa_id, &schedule)?;
+        ActorProgram::<T>::mutate(aaa_id, |maybe| {
+          let program = maybe
+            .as_mut()
+            .expect("active actor program existence was prevalidated");
+          program.schedule = schedule;
+          program.schedule_window = schedule_window;
+        });
+        ActorHot::<T>::mutate(aaa_id, |maybe| {
+          if let Some(hot) = maybe.as_mut() {
+            hot.schedule_anchor = schedule_anchor;
+            hot.terminal_at = schedule_window.map(|window| Self::window_terminal_at(&window));
+            hot.last_control_queue_mutation_block = Some(now);
+          }
+        });
+        Self::deposit_event(Event::ScheduleUpdated { aaa_id });
+        Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
+      })
     }
 
     #[pallet::call_index(10)]
@@ -1828,7 +1910,7 @@ pub mod pallet {
       completion_policy: CompletionPolicy,
     ) -> DispatchResult {
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_retry_later_allowed(snapshot.mutability, &execution_plan)?;
       Self::ensure_not_system_immutable(&snapshot)?;
@@ -1844,11 +1926,15 @@ pub mod pallet {
       if !execution_plan_changed && !completion_policy_changed {
         return Ok(());
       }
+      ensure!(
+        !Self::revalidation_is_active(),
+        Error::<T>::CacheRevalidationActive
+      );
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
       Self::validate_execution_plan_shape(snapshot.actor_class.aaa_type(), &execution_plan)?;
       Self::validate_recipient_configuration(&execution_plan, &snapshot.sovereign_account)?;
-      Self::validate_trigger_amount_compatibility(&snapshot.schedule, &execution_plan)?;
+      Self::validate_opening_snapshot_surfaces(&execution_plan)?;
       Self::ensure_execution_plan_fits_idle_budget(
         snapshot.actor_class.aaa_type(),
         &execution_plan,
@@ -1877,34 +1963,37 @@ pub mod pallet {
       } else {
         CancellationReason::CompletionPolicyChanged
       };
-      let continuation_cancelled =
-        Self::cancel_continuation_internal(aaa_id, cancellation_reason, None)?;
-      ActorProgram::<T>::mutate(aaa_id, |maybe| {
-        let program = maybe
-          .as_mut()
-          .expect("active actor program existence was prevalidated");
-        program.execution_plan = execution_plan;
-        program.completion_policy = completion_policy;
-      });
-      ActorHot::<T>::mutate(aaa_id, |maybe| {
-        let hot = maybe
-          .as_mut()
-          .expect("active actor hot-state existence was prevalidated");
-        hot.cycle_weight_upper = cycle_weight_upper;
-        hot.cycle_fee_upper = cycle_fee_upper;
-        hot.funding_tracked_count = funding_tracked_count;
-        hot.consecutive_failures = 0;
-        hot.last_control_queue_mutation_block = Some(now);
-      });
-      ActorFunding::<T>::insert(aaa_id, funding);
-      Self::deposit_event(Event::ExecutionPlanUpdated {
-        aaa_id,
-        completion_policy,
-      });
-      if continuation_cancelled {
-        Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      }
-      Ok(())
+      Self::with_control_transaction(|| {
+        let continuation_cancelled =
+          Self::cancel_continuation_internal(aaa_id, cancellation_reason, None)?;
+        ActorProgram::<T>::mutate(aaa_id, |maybe| {
+          let program = maybe
+            .as_mut()
+            .expect("active actor program existence was prevalidated");
+          program.execution_plan = execution_plan;
+          program.completion_policy = completion_policy;
+        });
+        ActorHot::<T>::mutate(aaa_id, |maybe| {
+          let hot = maybe
+            .as_mut()
+            .expect("active actor hot-state existence was prevalidated");
+          hot.cycle_weight_upper = cycle_weight_upper;
+          hot.cycle_fee_upper = cycle_fee_upper;
+          hot.funding_tracked_count = funding_tracked_count;
+          hot.consecutive_failures = 0;
+          hot.cache_epoch = CurrentCacheEpoch::<T>::get();
+          hot.last_control_queue_mutation_block = Some(now);
+        });
+        ActorFunding::<T>::insert(aaa_id, funding);
+        Self::deposit_event(Event::ExecutionPlanUpdated {
+          aaa_id,
+          completion_policy,
+        });
+        if continuation_cancelled {
+          Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
+        }
+        Ok(())
+      })
     }
 
     #[pallet::call_index(13)]
@@ -1944,34 +2033,34 @@ pub mod pallet {
     )]
     pub fn permissionless_sweep_many(
       origin: OriginFor<T>,
-      aaa_ids: BoundedVec<AaaId, T::MaxSweepPerBlock>,
+      aaa_ids: BoundedVec<AaaId, T::MaxSweepBatch>,
     ) -> DispatchResult {
       let _who = ensure_signed(origin)?;
-      let mut closed = 0u32;
-      let mut alive = 0u32;
-      let mut missing = 0u32;
-      for aaa_id in aaa_ids
-        .iter(/* deos-bypass: bounded-iter — MaxSweepPerBlock input */)
-        .copied()
-      {
-        let Some(instance) = Self::active_actor_snapshot(aaa_id) else {
-          missing = missing.saturating_add(1);
-          continue;
-        };
-        if let Some(reason) = Self::liveness_close_reason(&instance) {
-          Self::close_actor(aaa_id, &instance, reason)?;
-          closed = closed.saturating_add(1);
-        } else {
-          alive = alive.saturating_add(1);
+      Self::with_control_transaction(|| {
+        let mut closed = 0u32;
+        let mut alive = 0u32;
+        let mut missing = 0u32;
+        let requested = aaa_ids.len() as u32;
+        for aaa_id in aaa_ids {
+          let Some(instance) = Self::active_actor_view(aaa_id) else {
+            missing = missing.saturating_add(1);
+            continue;
+          };
+          if let Some(reason) = Self::liveness_close_reason(&instance) {
+            Self::close_actor(aaa_id, &instance, reason)?;
+            closed = closed.saturating_add(1);
+          } else {
+            alive = alive.saturating_add(1);
+          }
         }
-      }
-      Self::deposit_event(Event::SweepBatchProcessed {
-        requested: aaa_ids.len() as u32,
-        closed,
-        alive,
-        missing,
-      });
-      Ok(())
+        Self::deposit_event(Event::SweepBatchProcessed {
+          requested,
+          closed,
+          alive,
+          missing,
+        });
+        Ok(())
+      })
     }
 
     #[pallet::call_index(15)]
@@ -1981,7 +2070,7 @@ pub mod pallet {
       aaa_id: AaaId,
       target: Option<u64>,
     ) -> DispatchResult {
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
@@ -2014,7 +2103,7 @@ pub mod pallet {
       by: u64,
     ) -> DispatchResult {
       ensure!(by > 0, Error::<T>::AutoCloseNonceIncrementZero);
-      let snapshot = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       if Self::is_window_expired(&snapshot) {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
@@ -2044,7 +2133,7 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(21)]
+    #[pallet::call_index(17)]
     #[pallet::weight(T::WeightInfo::activate_aaa())]
     pub fn activate_aaa(
       origin: OriginFor<T>,
@@ -2062,10 +2151,10 @@ pub mod pallet {
       Self::do_activate_aaa(aaa_id, identity, program)
     }
 
-    #[pallet::call_index(22)]
+    #[pallet::call_index(18)]
     #[pallet::weight(T::WeightInfo::deactivate_aaa())]
     pub fn deactivate_aaa(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let instance = Self::active_actor_snapshot(aaa_id).ok_or_else(|| {
+      let instance = Self::active_actor_view(aaa_id).ok_or_else(|| {
         if ActorIdentities::<T>::contains_key(aaa_id) {
           Error::<T>::AaaDormant
         } else {
@@ -2084,10 +2173,10 @@ pub mod pallet {
       Self::do_deactivate_aaa(aaa_id, instance)
     }
 
-    #[pallet::call_index(23)]
+    #[pallet::call_index(19)]
     #[pallet::weight(T::WeightInfo::continuation_cancel())]
     pub fn cancel_continuation(origin: OriginFor<T>, aaa_id: AaaId) -> DispatchResult {
-      let instance = Self::active_actor_snapshot(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
+      let instance = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
       ensure!(
         instance.mutability == Mutability::Mutable,
@@ -2097,46 +2186,45 @@ pub mod pallet {
         return Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
       }
       ensure!(
-        instance.run_state == RunState::Suspended,
+        instance.cycle_state == CycleState::Suspended,
         Error::<T>::ContinuationNotFound
       );
       let now = frame_system::Pallet::<T>::block_number();
       Self::ensure_control_queue_mutation_allowed(&instance, now)?;
-      ensure!(
-        Self::cancel_continuation_internal(aaa_id, CancellationReason::Explicit, None)?,
-        Error::<T>::ContinuationNotFound
-      );
-      ActorHot::<T>::mutate(aaa_id, |maybe| {
-        maybe
-          .as_mut()
-          .expect("cancelled actor remains active")
-          .last_control_queue_mutation_block = Some(now);
-      });
-      Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      Ok(())
+      Self::with_control_transaction(|| {
+        ensure!(
+          Self::cancel_continuation_internal(aaa_id, CancellationReason::Explicit, None)?,
+          Error::<T>::ContinuationNotFound
+        );
+        ActorHot::<T>::mutate(aaa_id, |maybe| {
+          maybe
+            .as_mut()
+            .expect("cancelled actor remains active")
+            .last_control_queue_mutation_block = Some(now);
+        });
+        Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
+      })
     }
   }
 
   impl<T: Config> Pallet<T> {
-    pub fn aaa_instances(aaa_id: AaaId) -> Option<AaaInstanceOf<T>> {
-      Self::active_actor_snapshot(aaa_id)
-    }
-
     pub fn weight_upper_bound(task: &TaskOf<T>) -> Weight {
       // Runtime owns upper-bound pricing via coarse task classes to reduce calibration churn
       match task {
-        AaaTask::Transfer { .. } => T::TaskWeightInfo::transfer(),
-        AaaTask::Burn { .. } => T::TaskWeightInfo::burn(),
-        AaaTask::Mint { .. } => T::TaskWeightInfo::mint(),
-        AaaTask::SplitTransfer { legs, .. } => T::TaskWeightInfo::split_transfer(legs.len() as u32),
-        AaaTask::SwapIn { .. } => T::TaskWeightInfo::dex_exact_in(),
-        AaaTask::SwapOut { .. } => T::TaskWeightInfo::dex_exact_out(),
-        AaaTask::AddLiquidity { .. } => T::TaskWeightInfo::add_liquidity(),
-        AaaTask::RemoveLiquidity { .. } => T::TaskWeightInfo::remove_liquidity(),
-        AaaTask::Stake { .. } => T::TaskWeightInfo::stake(),
-        AaaTask::DonateLiquidity { .. } => T::TaskWeightInfo::donate_liquidity(),
-        AaaTask::Unstake { .. } => T::TaskWeightInfo::unstake(),
-        AaaTask::StopCycle => T::TaskWeightInfo::stop_cycle(),
+        AaaTask::Transfer { .. } => T::WeightInfo::task_transfer(),
+        AaaTask::Burn { .. } => T::WeightInfo::task_burn(),
+        AaaTask::Mint { .. } => T::WeightInfo::task_mint(),
+        AaaTask::SplitTransfer { legs, .. } => {
+          T::WeightInfo::task_split_transfer(legs.len() as u32)
+        }
+        AaaTask::SwapIn { .. } => T::WeightInfo::task_dex_exact_in(),
+        AaaTask::SwapOut { .. } => T::WeightInfo::task_dex_exact_out(),
+        AaaTask::AddLiquidity { .. } => T::WeightInfo::task_add_liquidity(),
+        AaaTask::RemoveLiquidity { .. } => T::WeightInfo::task_remove_liquidity(),
+        AaaTask::Stake { .. } => T::WeightInfo::task_stake(),
+        AaaTask::DonateLiquidity { .. } => T::WeightInfo::task_donate_liquidity(),
+        AaaTask::Unstake { .. } => T::WeightInfo::task_unstake(),
+        AaaTask::StopCycle => T::WeightInfo::task_stop_cycle(),
       }
     }
 
@@ -2150,14 +2238,11 @@ pub mod pallet {
       execution_plan: &ExecutionPlanOf<T>,
       start_cursor: usize,
     ) -> Weight {
-      let mut upper =
-        Weight::from_parts(5_000_000, 1000).saturating_add(T::DbWeight::get().reads_writes(2, 2));
+      let mut upper = T::WeightInfo::step_orchestration(execution_plan.len() as u32);
       for step_index in start_cursor..execution_plan.len() {
         let step = &execution_plan[step_index];
-        let step_overhead = Weight::from_parts(1_000_000, 128);
         let condition_evaluation = T::WeightInfo::condition_set_evaluation(step.conditions.len());
         upper = upper
-          .saturating_add(step_overhead)
           .saturating_add(condition_evaluation)
           .saturating_add(Self::weight_upper_bound(&step.task));
         if aaa_type == AaaType::User {
@@ -2170,7 +2255,7 @@ pub mod pallet {
           .retry_max_attempts()
           .is_some()
       }) {
-        let snapshot_entries = Self::trigger_surfaces(execution_plan, start_cursor).len() as u32;
+        let snapshot_entries = Self::opening_surfaces(execution_plan, start_cursor).len() as u32;
         upper = upper.saturating_add(
           T::WeightInfo::continuation_suspend(snapshot_entries)
             .max(T::WeightInfo::continuation_complete())
@@ -2246,12 +2331,12 @@ pub mod pallet {
       )
     }
 
-    pub(crate) fn cycle_weight_upper_bound(instance: &AaaInstanceOf<T>) -> Weight {
+    pub(crate) fn cycle_weight_upper_bound(instance: &ActiveActorViewOf<T>) -> Weight {
       instance.cycle_weight_upper
     }
 
     pub(crate) fn attempt_weight_upper_bound(
-      instance: &AaaInstanceOf<T>,
+      instance: &ActiveActorViewOf<T>,
       start_cursor: usize,
     ) -> Weight {
       let mut upper = if start_cursor == 0 {
@@ -2263,7 +2348,7 @@ pub mod pallet {
           start_cursor,
         )
       };
-      if instance.run_state == RunState::Suspended {
+      if instance.cycle_state == CycleState::Suspended {
         let suffix_steps = instance.execution_plan.len().saturating_sub(start_cursor) as u32;
         // Retry and terminal transition touch the same bounded Continuation value. The transition
         // envelope already carries its maximum proof, so only incremental RefTime composes here.
@@ -2276,12 +2361,12 @@ pub mod pallet {
       upper
     }
 
-    pub(crate) fn cycle_fee_upper_bound(instance: &AaaInstanceOf<T>) -> BalanceOf<T> {
+    pub(crate) fn cycle_fee_upper_bound(instance: &ActiveActorViewOf<T>) -> BalanceOf<T> {
       instance.cycle_fee_upper
     }
 
     pub(crate) fn attempt_fee_upper_bound(
-      instance: &AaaInstanceOf<T>,
+      instance: &ActiveActorViewOf<T>,
       start_cursor: usize,
     ) -> BalanceOf<T> {
       let envelope = Self::attempt_fee_envelope(
@@ -2296,8 +2381,233 @@ pub mod pallet {
       envelope.total
     }
 
-    pub(crate) fn close_cycle_weight_upper_bound(_instance: &AaaInstanceOf<T>) -> Weight {
+    pub(crate) fn close_cycle_weight_upper_bound(_instance: &ActiveActorViewOf<T>) -> Weight {
       Self::close_cleanup_weight_upper()
+    }
+
+    // --- Cache Revalidation (spec 5.4, 6.4) ---
+
+    /// True while the global cache-revalidation gate is active.
+    pub(crate) fn revalidation_is_active() -> bool {
+      CacheRevalidation::<T>::exists()
+    }
+
+    pub(crate) fn revalidation_target_epoch() -> CacheEpoch {
+      CacheRevalidation::<T>::get()
+        .map(|state| state.target_epoch)
+        .unwrap_or_default()
+    }
+
+    /// Removes a still-pending workset member when close/deactivation deletes its Active
+    /// state. Already-stamped actors are outside the remaining workset (spec 5.4); a missing
+    /// state or underflow is defensive corruption and fails closed.
+    pub(crate) fn remove_pending_from_revalidation_workset(
+      instance: &ActiveActorViewOf<T>,
+    ) -> DispatchResult {
+      if !Self::revalidation_is_active()
+        || instance.cache_epoch == Self::revalidation_target_epoch()
+      {
+        return Ok(());
+      }
+      CacheRevalidation::<T>::try_mutate(|maybe| -> DispatchResult {
+        let state = maybe.as_mut().ok_or_else(|| {
+          polkadot_sdk::sp_runtime::DispatchError::Other(
+            "cache-revalidation state vanished during workset removal",
+          )
+        })?;
+        state.remaining = state.remaining.checked_sub(1).ok_or_else(|| {
+          polkadot_sdk::sp_runtime::DispatchError::Other(
+            "cache-revalidation workset underflow during removal",
+          )
+        })?;
+        Ok(())
+      })
+    }
+
+    /// One maximum bounded revalidation worker pass (fixed orchestration plus one worst-case
+    /// actor unit). Admission and integrity tests compare this against `ActorServiceReserve`.
+    pub(crate) fn cache_revalidation_unit_weight_upper() -> Weight {
+      T::WeightInfo::cache_revalidation_units(1)
+    }
+
+    /// Starts a cache-affecting upgrade: checked-increments the current epoch, snapshots the
+    /// exact Active workset through a bounded cursor, and fails closed when no migration-specific
+    /// no-admit disposition is configured (spec 5.4, 6.4). A concrete post-launch migration calls
+    /// this entry point; the reference runtime ships no migration and therefore cannot activate a
+    /// cache-affecting change.
+    pub fn begin_cache_revalidation() -> Result<(), DispatchError> {
+      ensure!(
+        !Self::revalidation_is_active(),
+        Error::<T>::CacheRevalidationActive
+      );
+      ensure!(
+        T::CacheRevalidationNoAdmitDisposition::get().is_some(),
+        polkadot_sdk::sp_runtime::DispatchError::Other(
+          "cache-affecting change activated without a revalidation disposition"
+        )
+      );
+      let target_epoch = CurrentCacheEpoch::<T>::get()
+        .checked_add(1)
+        .ok_or_else(|| {
+          polkadot_sdk::sp_runtime::DispatchError::Other(
+            "current cache epoch overflow rejects a cache-affecting upgrade",
+          )
+        })?;
+      CurrentCacheEpoch::<T>::put(target_epoch);
+      CacheRevalidation::<T>::put(CacheRevalidationState {
+        target_epoch,
+        cursor: None,
+        remaining: Self::active_instance_count(),
+      });
+      Ok(())
+    }
+
+    /// One bounded worker pass over the durable revalidation state. Returns consumed Weight;
+    /// each admitted unit recomputes both caches, reruns plan admission, and either stamps a
+    /// survivor with the target epoch or applies the migration-specific disposition (spec 5.4).
+    pub(crate) fn run_cache_revalidation_worker(remaining_weight: Weight) -> Weight {
+      let Some(state) = CacheRevalidation::<T>::get() else {
+        return Weight::zero();
+      };
+      if state.remaining == 0 {
+        CacheRevalidation::<T>::kill();
+        return Weight::zero();
+      }
+      let mut meter = WeightMeter::with_limit(remaining_weight);
+      let max_units = T::MaxCacheRevalidationUnitsPerBlock::get();
+      let mut units = 0u32;
+      while units < max_units && CacheRevalidation::<T>::get().is_some_and(|s| s.remaining > 0) {
+        // Admission admits the complete first unit (fixed orchestration plus one worst-case
+        // actor unit) and the measured per-unit delta afterwards, so a pass never starts
+        // without its full base and never overspends the actual on_idle budget.
+        let next_weight = T::WeightInfo::cache_revalidation_units(units.saturating_add(1));
+        let delta = if units == 0 {
+          next_weight
+        } else {
+          next_weight.saturating_sub(T::WeightInfo::cache_revalidation_units(units))
+        };
+        if !meter.can_consume(delta) {
+          break;
+        }
+        let completed = polkadot_sdk::frame_support::storage::with_transaction(|| {
+          match Self::revalidate_next_workset_slot() {
+            Ok(completed) => {
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(completed))
+            }
+            Err(error) => {
+              // Fail closed: the slot could not revalidate atomically; the gate stays and
+              // ordinary service remains blocked until the durable progress is repaired.
+              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+            }
+          }
+        });
+        let completed = completed.unwrap_or(false);
+        meter.consume(delta);
+        units = units.saturating_add(1);
+        if completed {
+          CacheRevalidation::<T>::kill();
+          break;
+        }
+      }
+      if units == 0 {
+        Weight::zero()
+      } else {
+        T::WeightInfo::cache_revalidation_units(units)
+      }
+    }
+
+    /// Revalidates the next workset slot atomically. Returns true when the workset is complete.
+    fn revalidate_next_workset_slot() -> Result<bool, DispatchError> {
+      let start = CacheRevalidation::<T>::get().ok_or_else(|| {
+        polkadot_sdk::sp_runtime::DispatchError::Other(
+          "cache-revalidation gate vanished during a worker unit",
+        )
+      })?;
+      let target_epoch = start.target_epoch;
+      let mut iter = match start.cursor {
+        None => ActorHot::<T>::iter_keys(),
+        Some(cursor) => ActorHot::<T>::iter_keys_from_key(&cursor),
+      };
+      let key = match iter.next() {
+        Some(key) if Some(key) == start.cursor => match iter.next() {
+          Some(next) => next,
+          None => {
+            ensure!(
+              start.remaining == 0,
+              polkadot_sdk::sp_runtime::DispatchError::Other(
+                "cache-revalidation workset lost members",
+              )
+            );
+            return Ok(true);
+          }
+        },
+        Some(key) => key,
+        None => {
+          ensure!(
+            start.remaining == 0,
+            polkadot_sdk::sp_runtime::DispatchError::Other(
+              "cache-revalidation workset lost members",
+            )
+          );
+          return Ok(true);
+        }
+      };
+      let Some(instance) = Self::active_actor_view(key) else {
+        // Missing/closed actor: its removal already accounted the workset slot (spec 5.4).
+        let mut updated = CacheRevalidation::<T>::get().ok_or_else(|| {
+          polkadot_sdk::sp_runtime::DispatchError::Other(
+            "cache-revalidation gate vanished during a worker unit",
+          )
+        })?;
+        updated.cursor = Some(key);
+        CacheRevalidation::<T>::put(&updated);
+        return Ok(updated.remaining == 0);
+      };
+      let aaa_type = instance.actor_class.aaa_type();
+      let (cycle_weight_upper, cycle_fee_upper) =
+        Self::compute_cycle_bounds(aaa_type, &instance.execution_plan);
+      let admits = Self::execution_plan_admission_weight_upper(aaa_type, &instance.execution_plan)
+        .all_lte(Self::guaranteed_actor_service_weight().unwrap_or_else(Weight::zero));
+      if !admits {
+        let disposition = T::CacheRevalidationNoAdmitDisposition::get().ok_or_else(|| {
+          polkadot_sdk::sp_runtime::DispatchError::Other(
+            "cache-affecting change activated without a revalidation disposition",
+          )
+        })?;
+        match disposition {
+          RevalidationDisposition::Deactivate => Self::do_deactivate_aaa(key, instance)?,
+          RevalidationDisposition::Close(reason) => Self::close_actor(key, &instance, reason)?,
+        }
+        // The disposition removal already decremented the pending workset count.
+        let mut updated = CacheRevalidation::<T>::get().ok_or_else(|| {
+          polkadot_sdk::sp_runtime::DispatchError::Other(
+            "cache-revalidation gate vanished during a worker unit",
+          )
+        })?;
+        updated.cursor = Some(key);
+        CacheRevalidation::<T>::put(&updated);
+        return Ok(updated.remaining == 0);
+      }
+      ActorHot::<T>::mutate(key, |maybe| {
+        if let Some(hot) = maybe.as_mut() {
+          hot.cache_epoch = target_epoch;
+          hot.cycle_weight_upper = cycle_weight_upper;
+          hot.cycle_fee_upper = cycle_fee_upper;
+        }
+      });
+      let mut updated = CacheRevalidation::<T>::get().ok_or_else(|| {
+        polkadot_sdk::sp_runtime::DispatchError::Other(
+          "cache-revalidation gate vanished during a worker unit",
+        )
+      })?;
+      updated.cursor = Some(key);
+      updated.remaining = updated.remaining.checked_sub(1).ok_or_else(|| {
+        polkadot_sdk::sp_runtime::DispatchError::Other(
+          "cache-revalidation workset underflow during a worker unit",
+        )
+      })?;
+      CacheRevalidation::<T>::put(&updated);
+      Ok(updated.remaining == 0)
     }
 
     /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
@@ -2333,13 +2643,25 @@ pub mod pallet {
         .saturating_add(Self::close_cleanup_weight_upper())
     }
 
+    pub fn guaranteed_actor_service_weight() -> Option<Weight> {
+      T::AaaOnIdleReserve::get()
+        .checked_sub(&T::WeightInfo::scheduler_on_idle_base())
+        .and_then(|remaining| {
+          remaining.checked_sub(&T::WeightInfo::scheduler_paged_tombstone_drain(1))
+        })
+        .and_then(|remaining| remaining.checked_sub(&T::WakeupWeightLimit::get()))
+        .and_then(|remaining| remaining.checked_sub(&T::ObservationFanoutWeightLimit::get()))
+    }
+
     fn ensure_execution_plan_fits_idle_budget(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
     ) -> DispatchResult {
+      let actor_service = Self::guaranteed_actor_service_weight()
+        .ok_or(Error::<T>::ExecutionPlanExceedsOnIdleBudget)?;
       ensure!(
         Self::execution_plan_admission_weight_upper(aaa_type, execution_plan)
-          .all_lte(T::GuaranteedOnIdleWeight::get()),
+          .all_lte(actor_service),
         Error::<T>::ExecutionPlanExceedsOnIdleBudget
       );
       Ok(())
@@ -2352,18 +2674,20 @@ pub mod pallet {
       }
       let full_bytes = max_slots / 8;
       let remaining_bits = max_slots % 8;
-      bitmap
-        .iter() // deos-bypass: bounded-iter — fixed 32-byte OwnerSlotBitmap validity check.
-        .enumerate()
-        .all(|(index, byte)| {
-          if index < full_bytes {
-            return true;
-          }
-          if index == full_bytes && remaining_bits > 0 {
-            return *byte & !((1u8 << remaining_bits) - 1) == 0;
-          }
-          *byte == 0
-        })
+      for index in 0..bitmap.len() {
+        let byte = bitmap[index];
+        let valid = if index < full_bytes {
+          true
+        } else if index == full_bytes && remaining_bits > 0 {
+          byte & !((1u8 << remaining_bits) - 1) == 0
+        } else {
+          byte == 0
+        };
+        if !valid {
+          return false;
+        }
+      }
+      true
     }
 
     fn owner_slot_is_set(bitmap: &OwnerSlotBitmap, owner_slot: u8) -> bool {
@@ -2385,9 +2709,12 @@ pub mod pallet {
     }
 
     fn owner_slot_bitmap_is_empty(bitmap: &OwnerSlotBitmap) -> bool {
-      bitmap
-        .iter() // deos-bypass: bounded-iter — fixed 32-byte OwnerSlotBitmap emptiness check.
-        .all(|byte| *byte == 0)
+      for byte in bitmap.as_slice() {
+        if *byte != 0 {
+          return false;
+        }
+      }
+      true
     }
 
     fn charge_creation_fee(owner: &T::AccountId) -> DispatchResult {
@@ -2395,14 +2722,39 @@ pub mod pallet {
       if creation_fee.is_zero() {
         return Ok(());
       }
-      let native = T::NativeAssetId::get();
+      let native = T::FeeNativeAssetId::get();
       let fee_sink = T::FeeSink::get();
       T::FeeCollector::collect_fee(owner, &fee_sink, native, creation_fee)
         .map_err(|_| Error::<T>::InsufficientFee.into())
     }
 
+    /// User Active creation/activation prefunding requirement (spec 7.1): the prospective/current
+    /// sovereign fee-native balance must cover `MinUserBalance + attempt_fee_envelope(plan, 0, User).total`
+    /// so the first opening can charge the whole cycle fee while preserving `MinUserBalance`.
+    fn user_active_prefunding_requirement(
+      execution_plan: &ExecutionPlanOf<T>,
+    ) -> Result<BalanceOf<T>, Error<T>> {
+      let envelope_total = Self::attempt_fee_envelope(AaaType::User, execution_plan, 0)?.total;
+      T::MinUserBalance::get()
+        .checked_add(&envelope_total)
+        .ok_or(Error::<T>::AdmissionBoundOverflow)
+    }
+
+    fn ensure_user_active_prefunding(
+      sovereign_account: &T::AccountId,
+      execution_plan: &ExecutionPlanOf<T>,
+    ) -> DispatchResult {
+      let required = Self::user_active_prefunding_requirement(execution_plan)?;
+      ensure!(
+        T::AssetOps::balance(sovereign_account, T::FeeNativeAssetId::get()) >= required,
+        Error::<T>::InsufficientBalance
+      );
+      Ok(())
+    }
+
     pub fn sovereign_account_id(owner: &T::AccountId, owner_slot: u8) -> T::AccountId {
-      let seed = frame::hashing::blake2_256(&(T::PalletId::get(), owner, owner_slot).encode());
+      let seed =
+        frame::hashing::blake2_256(&(T::PalletId::get(), b"user", owner, owner_slot).encode());
       T::AccountId::decode(&mut polkadot_sdk::sp_runtime::traits::TrailingZeroInput::new(&seed))
         .expect("hashed seed always decodes into AccountId")
     }
@@ -2413,7 +2765,7 @@ pub mod pallet {
         .expect("hashed seed always decodes into AccountId")
     }
 
-    fn available_owner_slot(
+    pub(crate) fn available_owner_slot(
       owner: &T::AccountId,
       preferred_slot: Option<u8>,
     ) -> Result<u8, Error<T>> {
@@ -2434,10 +2786,8 @@ pub mod pallet {
           Ok(slot)
         }
         None => {
-          for (byte_index, byte) in bitmap
-            .iter() // deos-bypass: bounded-iter — fixed 32-byte lowest-free-slot scan.
-            .enumerate()
-          {
+          for byte_index in 0..bitmap.len() {
+            let byte = bitmap[byte_index];
             let first_slot = byte_index * 8;
             if first_slot >= max_slots as usize {
               break;
@@ -2448,7 +2798,7 @@ pub mod pallet {
             } else {
               (1u8 << remaining) - 1
             };
-            let free_bits = !*byte & valid_bits;
+            let free_bits = !byte & valid_bits;
             if free_bits != 0 {
               return Ok((first_slot + free_bits.trailing_zeros() as usize) as u8);
             }
@@ -2538,7 +2888,6 @@ pub mod pallet {
           }
         }
       }
-      let mut created_identity: Option<ActorIdentityOf<T>> = None;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         if aaa_type == AaaType::User {
           if let Err(error) = Self::charge_creation_fee(&owner) {
@@ -2600,19 +2949,16 @@ pub mod pallet {
         if aaa_type == AaaType::User || requested_system_sovereign_id.is_none() {
           frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         }
-        created_identity = Some(identity);
+        Self::deposit_event(Event::AaaCreated {
+          aaa_id,
+          owner,
+          actor_class: identity.actor_class,
+          mutability: Mutability::Mutable,
+          sovereign_account: identity.sovereign_account,
+          initial_lifecycle: InitialLifecycle::Dormant,
+        });
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
-      let identity = created_identity.expect("atomic dormant create always sets identity");
-      Self::deposit_event(Event::AaaCreated {
-        aaa_id,
-        owner,
-        actor_class: identity.actor_class,
-        mutability: Mutability::Mutable,
-        sovereign_account: identity.sovereign_account,
-        initial_lifecycle: InitialLifecycle::Dormant,
-      });
-      Ok(())
+      })
     }
 
     fn do_create_user_aaa(
@@ -2700,6 +3046,10 @@ pub mod pallet {
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
+      ensure!(
+        !Self::revalidation_is_active(),
+        Error::<T>::CacheRevalidationActive
+      );
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
       ensure!(
         (execution_plan.len() as u32) <= T::MaxExecutionPlanSteps::get(),
@@ -2715,9 +3065,9 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      Self::validate_future_schedule_targets(&schedule, schedule_window)?;
+      Self::validate_future_schedule_targets(NextAaaId::<T>::get(), &schedule, schedule_window)?;
       Self::validate_execution_plan_shape(aaa_type, &execution_plan)?;
-      Self::validate_trigger_amount_compatibility(&schedule, &execution_plan)?;
+      Self::validate_opening_snapshot_surfaces(&execution_plan)?;
       Self::ensure_retry_later_allowed(mutability, &execution_plan)?;
       if let Some(target_nonce) = auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(0, target_nonce)?;
@@ -2778,14 +3128,7 @@ pub mod pallet {
       Self::validate_recipient_configuration(&execution_plan, &prospective_sovereign_account)?;
       let next_id = aaa_id.checked_add(1).ok_or(Error::<T>::AaaIdOverflow)?;
       let now = frame_system::Pallet::<T>::block_number();
-      let mut created_owner_slot: Option<u8> = None;
-      let mut created_sovereign_account: Option<T::AccountId> = None;
       polkadot_sdk::frame_support::storage::with_transaction(|| {
-        if aaa_type == AaaType::User {
-          if let Err(error) = Self::charge_creation_fee(&owner) {
-            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-          }
-        }
         let (owner_slot, sovereign_account) = match aaa_type {
           AaaType::User => match Self::allocate_owner_slot(&owner, preferred_user_slot) {
             Ok((slot, account)) => (Some(slot), account),
@@ -2804,43 +3147,62 @@ pub mod pallet {
             }
           },
         };
+        if aaa_type == AaaType::User {
+          // Spec 7.1: the allocated sovereign fee-native balance must cover
+          // `MinUserBalance + attempt_fee_envelope(plan, 0, User).total` before the opening
+          // fee or Active state commits; Dormant creation remains unfunded.
+          if let Err(error) =
+            Self::ensure_user_active_prefunding(&sovereign_account, &execution_plan)
+          {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+          if let Err(error) = Self::charge_creation_fee(&owner) {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+          }
+        }
         let (cycle_weight_upper, cycle_fee_upper) =
           Self::compute_cycle_bounds(aaa_type, &execution_plan);
         let schedule_anchor = Self::schedule_anchor_at(schedule_window, now);
-        let instance = AaaInstance {
+        let actor_class = match aaa_type {
+          AaaType::User => ActorClass::User {
+            owner_slot: owner_slot.expect("User allocation always returns a slot"),
+          },
+          AaaType::System => ActorClass::System {
+            sovereign_id: system_sovereign_id,
+          },
+        };
+        let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
           owner: owner.clone(),
-          actor_class: match aaa_type {
-            AaaType::User => ActorClass::User {
-              owner_slot: owner_slot.expect("User allocation always returns a slot"),
-            },
-            AaaType::System => ActorClass::System {
-              sovereign_id: system_sovereign_id,
-            },
-          },
+          actor_class,
           mutability,
-          lifecycle: ActiveLifecycle::Active,
-          run_state: RunState::Idle,
-          schedule,
-          schedule_window,
-          execution_plan,
-          completion_policy,
           cycle_nonce: 0,
+        };
+        let hot = ActorHotState {
+          lifecycle: ActiveLifecycle::Active,
+          cycle_state: CycleState::Idle,
+          auto_close_at_cycle_nonce,
           consecutive_failures: 0,
           pending_signal: false,
           queue_ticket: None,
+          wakeup_pointer: None,
+          terminal_at: schedule_window.map(|window| Self::window_terminal_at(&window)),
           last_control_queue_mutation_block: None,
           cycle_weight_upper,
           cycle_fee_upper,
           funding_tracked_count: funding_tracked_assets.len() as u32,
-          auto_close_at_cycle_nonce,
           schedule_anchor,
           last_cycle_block: None,
+          cache_epoch: CurrentCacheEpoch::<T>::get(),
         };
-        created_owner_slot = owner_slot;
-        created_sovereign_account = Some(sovereign_account.clone());
+        let program = ActorProgramState {
+          schedule,
+          schedule_window,
+          execution_plan,
+          completion_policy,
+        };
         SovereignIndex::<T>::insert(sovereign_account.clone(), aaa_id);
-        if let Err(error) = Self::insert_active_actor(aaa_id, instance) {
+        if let Err(error) = Self::insert_active_actor(aaa_id, identity, hot, program) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::insert(
@@ -2880,31 +3242,30 @@ pub mod pallet {
         if aaa_type == AaaType::System && requested_system_sovereign_id.is_none() {
           frame_system::Pallet::<T>::inc_providers(&sovereign_account);
         }
+        Self::deposit_event(Event::AaaCreated {
+          aaa_id,
+          owner,
+          actor_class: match aaa_type {
+            AaaType::User => ActorClass::User {
+              owner_slot: owner_slot.expect("User allocation always returns a slot"),
+            },
+            AaaType::System => ActorClass::System {
+              sovereign_id: system_sovereign_id,
+            },
+          },
+          mutability,
+          sovereign_account,
+          initial_lifecycle: InitialLifecycle::Active,
+        });
         #[cfg(test)]
-        if let Err(error) = crate::mock::create_atomicity_checkpoint(aaa_id) {
+        if let Err(error) = crate::mock::control_atomicity_checkpoint(aaa_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if let Err(error) = Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
-      let sovereign_account =
-        created_sovereign_account.expect("atomic create always sets sovereign_account");
-      Self::deposit_event(Event::AaaCreated {
-        aaa_id,
-        owner,
-        actor_class: match aaa_type {
-          AaaType::User => ActorClass::User {
-            owner_slot: created_owner_slot.expect("User allocation always returns a slot"),
-          },
-          AaaType::System => ActorClass::System {
-            sovereign_id: system_sovereign_id,
-          },
-        },
-        mutability,
-        sovereign_account,
-        initial_lifecycle: InitialLifecycle::Active,
-      });
-      Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      Ok(())
+      })
     }
 
     fn do_activate_aaa(
@@ -2928,6 +3289,10 @@ pub mod pallet {
         Error::<T>::GlobalCircuitBreakerActive
       );
       ensure!(
+        !Self::revalidation_is_active(),
+        Error::<T>::CacheRevalidationActive
+      );
+      ensure!(
         identity.mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
@@ -2947,10 +3312,10 @@ pub mod pallet {
       if let Some(ref window) = schedule_window {
         Self::validate_schedule_window(window)?;
       }
-      Self::validate_future_schedule_targets(&schedule, schedule_window)?;
+      Self::validate_future_schedule_targets(aaa_id, &schedule, schedule_window)?;
       Self::validate_execution_plan_shape(aaa_type, &execution_plan)?;
       Self::validate_recipient_configuration(&execution_plan, &identity.sovereign_account)?;
-      Self::validate_trigger_amount_compatibility(&schedule, &execution_plan)?;
+      Self::validate_opening_snapshot_surfaces(&execution_plan)?;
       Self::ensure_retry_later_allowed(identity.mutability, &execution_plan)?;
       if let Some(target_nonce) = auto_close_at_cycle_nonce {
         Self::ensure_auto_close_target(identity.cycle_nonce, target_nonce)?;
@@ -2961,6 +3326,9 @@ pub mod pallet {
         Self::active_instance_count() < Self::effective_active_actor_limit(),
         Error::<T>::ActiveAaaCapacityExceeded
       );
+      if aaa_type == AaaType::User {
+        Self::ensure_user_active_prefunding(&identity.sovereign_account, &execution_plan)?;
+      }
       let (cycle_weight_upper, cycle_fee_upper) =
         Self::compute_cycle_bounds(aaa_type, &execution_plan);
       let now = frame_system::Pallet::<T>::block_number();
@@ -2968,28 +3336,28 @@ pub mod pallet {
       // state has no last_cycle_block, so cooldown/cadence use this conservative anchor
       // rather than block zero (spec 4.3.3).
       let schedule_anchor = Self::schedule_anchor_at(schedule_window, now);
-      let instance = AaaInstance {
-        sovereign_account: identity.sovereign_account,
-        owner: identity.owner,
-        actor_class: identity.actor_class,
-        mutability: identity.mutability,
+      let hot = ActorHotState {
         lifecycle: ActiveLifecycle::Active,
-        run_state: RunState::Idle,
-        schedule,
-        schedule_window,
-        execution_plan,
-        completion_policy,
-        cycle_nonce: identity.cycle_nonce,
+        cycle_state: CycleState::Idle,
+        auto_close_at_cycle_nonce,
         consecutive_failures: 0,
         pending_signal: false,
         queue_ticket: None,
+        wakeup_pointer: None,
+        terminal_at: schedule_window.map(|window| Self::window_terminal_at(&window)),
         last_control_queue_mutation_block: Some(now),
         cycle_weight_upper,
         cycle_fee_upper,
         funding_tracked_count: funding_tracked_assets.len() as u32,
-        auto_close_at_cycle_nonce,
         schedule_anchor,
         last_cycle_block: None,
+        cache_epoch: CurrentCacheEpoch::<T>::get(),
+      };
+      let program = ActorProgramState {
+        schedule,
+        schedule_window,
+        execution_plan,
+        completion_policy,
       };
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         if !ActorIdentities::<T>::contains_key(aaa_id) || Self::active_actor_exists(aaa_id) {
@@ -2997,7 +3365,7 @@ pub mod pallet {
             Error::<T>::AaaAlreadyActive.into(),
           ));
         }
-        if let Err(error) = Self::insert_active_actor(aaa_id, instance) {
+        if let Err(error) = Self::insert_active_actor(aaa_id, identity, hot, program) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::insert(
@@ -3016,14 +3384,19 @@ pub mod pallet {
         }) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        Self::deposit_event(Event::AaaActivated { aaa_id });
+        #[cfg(test)]
+        if let Err(error) = crate::mock::control_atomicity_checkpoint(aaa_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
+        if let Err(error) = Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
-      Self::deposit_event(Event::AaaActivated { aaa_id });
-      Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
-      Ok(())
+      })
     }
 
-    fn do_deactivate_aaa(aaa_id: AaaId, _instance: AaaInstanceOf<T>) -> DispatchResult {
+    fn do_deactivate_aaa(aaa_id: AaaId, instance: ActiveActorViewOf<T>) -> DispatchResult {
       polkadot_sdk::frame_support::storage::with_transaction(|| {
         if let Err(error) =
           Self::cancel_continuation_internal(aaa_id, CancellationReason::Deactivated, None)
@@ -3041,6 +3414,9 @@ pub mod pallet {
         if let Err(error) = Self::remove_active_actor(aaa_id) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        if let Err(error) = Self::remove_pending_from_revalidation_workset(&instance) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         ActorFunding::<T>::remove(aaa_id);
         if let Err(error) = ActiveAaaCount::<T>::try_mutate(|count| -> DispatchResult {
           *count = count
@@ -3050,16 +3426,22 @@ pub mod pallet {
         }) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
+        Self::deposit_event(Event::AaaDeactivated { aaa_id });
+        #[cfg(test)]
+        if let Err(error) = crate::mock::control_atomicity_checkpoint(aaa_id) {
+          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
+        }
         polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
-      })?;
-      Self::deposit_event(Event::AaaDeactivated { aaa_id });
-      Ok(())
+      })
     }
 
     fn execution_plan_contains_mint(execution_plan: &ExecutionPlanOf<T>) -> bool {
-      execution_plan
-        .iter() // deos-bypass: bounded-iter — MaxExecutionPlanSteps plan
-        .any(|step| matches!(step.task, AaaTask::Mint { .. }))
+      for step in execution_plan.as_slice() {
+        if matches!(step.task, AaaTask::Mint { .. }) {
+          return true;
+        }
+      }
+      false
     }
 
     fn validate_schedule(schedule: &ScheduleOf<T>) -> DispatchResult {
@@ -3107,6 +3489,7 @@ pub mod pallet {
     }
 
     fn validate_future_schedule_targets(
+      aaa_id: AaaId,
       schedule: &ScheduleOf<T>,
       schedule_window: Option<ScheduleWindow<BlockNumberFor<T>>>,
     ) -> DispatchResult {
@@ -3123,18 +3506,29 @@ pub mod pallet {
         schedule_anchor.checked_add(&cooldown).is_some(),
         Error::<T>::SchedulerIndexExhausted
       );
-      if let TriggerPolicy::Cadenced { every_blocks, .. } = schedule.trigger {
-        let cadence: BlockNumberFor<T> = every_blocks.into();
-        let jitter_window = every_blocks
-          .saturating_div(4)
-          .min(T::MaxTimerJitterBlocks::get());
-        let worst_case_jitter: BlockNumberFor<T> = jitter_window.saturating_sub(1).into();
-        ensure!(
+      let first_temporal_eligible =
+        if let TriggerPolicy::Cadenced { every_blocks, .. } = schedule.trigger {
+          let cadence: BlockNumberFor<T> = every_blocks.into();
+          let phase_window = every_blocks
+            .saturating_div(4)
+            .min(T::MaxTimerJitterBlocks::get());
+          let worst_case_phase: BlockNumberFor<T> = phase_window.saturating_sub(1).into();
+          ensure!(
+            schedule_anchor
+              .checked_add(&cadence)
+              .and_then(|target| target.checked_add(&worst_case_phase))
+              .is_some(),
+            Error::<T>::SchedulerIndexExhausted
+          );
+          Self::cadence_at_or_after(aaa_id, schedule_anchor, every_blocks, schedule_anchor)
+            .map_err(|_| Error::<T>::SchedulerIndexExhausted)?
+        } else {
           schedule_anchor
-            .checked_add(&cadence)
-            .and_then(|target| target.checked_add(&worst_case_jitter))
-            .is_some(),
-          Error::<T>::SchedulerIndexExhausted
+        };
+      if let Some(window) = schedule_window {
+        ensure!(
+          first_temporal_eligible <= window.end,
+          Error::<T>::InvalidScheduleWindow
         );
       }
       Ok(())
@@ -3201,12 +3595,10 @@ pub mod pallet {
         Error::<T>::ExecutionPlanTooLong
       );
       Self::attempt_fee_envelope(aaa_type, execution_plan, 0)?;
-      for step in execution_plan
-        .iter(/* deos-bypass: bounded-iter — MaxExecutionPlanSteps plan */)
-      {
+      for step in execution_plan.as_slice() {
         if let Some(max_attempts) = step.on_error.retry_max_attempts() {
           ensure!(
-            max_attempts > 0 && max_attempts <= T::MaxRetryAttempts::get(),
+            max_attempts >= 2 && max_attempts <= T::MaxRetryAttempts::get(),
             Error::<T>::InvalidRetryAttemptLimit
           );
         }
@@ -3329,7 +3721,7 @@ pub mod pallet {
           && !matches!(
             amount,
             AmountResolution::PercentageOfCurrent(value)
-              | AmountResolution::PercentageOfTrigger(value)
+              | AmountResolution::PercentageAtOpening(value)
               | AmountResolution::PercentageOfLastFunding(value)
               if value.is_zero()
           ),
@@ -3338,48 +3730,14 @@ pub mod pallet {
       Ok(())
     }
 
-    fn validate_trigger_amount_compatibility(
-      schedule: &ScheduleOf<T>,
-      execution_plan: &ExecutionPlanOf<T>,
-    ) -> DispatchResult {
-      let surfaces = Self::trigger_surfaces(execution_plan, 0);
-      if surfaces.is_empty() {
-        return Ok(());
-      }
-      let mut ingress_assets = alloc::vec::Vec::new();
-      for surface in surfaces {
-        let asset = match surface {
-          ResolutionSurface::Asset(asset) => asset,
-          ResolutionSurface::StakingShares(position_asset) => {
-            T::StakingOps::share_asset(position_asset)
-              .ok_or(Error::<T>::InvalidTriggerAmountCompatibility)?
-          }
-        };
-        if !ingress_assets.contains(&asset) {
-          ingress_assets.push(asset);
+    fn validate_opening_snapshot_surfaces(execution_plan: &ExecutionPlanOf<T>) -> DispatchResult {
+      for surface in Self::opening_surfaces(execution_plan, 0) {
+        if let OpeningSurface::StakingShares(position_asset) = surface {
+          ensure!(
+            T::StakingOps::share_asset(position_asset).is_some(),
+            Error::<T>::InvalidAmountResolution
+          );
         }
-      }
-      let sources = schedule
-        .trigger
-        .sources()
-        .ok_or(Error::<T>::InvalidTriggerAmountCompatibility)?;
-      ensure!(
-        !sources.is_empty(),
-        Error::<T>::InvalidTriggerAmountCompatibility
-      );
-      for source in sources {
-        let TriggerSource::OnAddressEvent { asset_filter, .. } = source else {
-          return Err(Error::<T>::InvalidTriggerAmountCompatibility.into());
-        };
-        ensure!(
-          ingress_assets
-            .iter() // deos-bypass: bounded-iter — execution-plan trigger surfaces are bounded by MaxContinuationSnapshotEntries.
-            .all(|asset| match asset_filter {
-              AssetFilter::Any => true,
-              AssetFilter::Whitelist(assets) => assets.contains(asset),
-            }),
-          Error::<T>::InvalidTriggerAmountCompatibility
-        );
       }
       Ok(())
     }
@@ -3395,9 +3753,7 @@ pub mod pallet {
         }
       };
 
-      for step in execution_plan
-        .iter(/* deos-bypass: bounded-iter — MaxExecutionPlanSteps plan */)
-      {
+      for step in execution_plan.as_slice() {
         match &step.task {
           AaaTask::Transfer { asset, amount, .. }
           | AaaTask::SplitTransfer { asset, amount, .. }
@@ -3482,7 +3838,7 @@ pub mod pallet {
       Ok(())
     }
 
-    fn ensure_not_system_immutable(instance: &AaaInstanceOf<T>) -> DispatchResult {
+    fn ensure_not_system_immutable(instance: &ActiveActorViewOf<T>) -> DispatchResult {
       ensure!(
         !(instance.actor_class.aaa_type() == AaaType::System
           && instance.mutability == Mutability::Immutable),
@@ -3507,18 +3863,39 @@ pub mod pallet {
       Ok(())
     }
 
+    pub(crate) fn with_reused_transaction(
+      operation: impl FnOnce() -> DispatchResult,
+    ) -> DispatchResult {
+      if polkadot_sdk::frame_support::storage::transactional::is_transactional() {
+        return operation();
+      }
+      polkadot_sdk::frame_support::storage::with_transaction(|| match operation() {
+        Ok(()) => polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(())),
+        Err(error) => {
+          polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
+        }
+      })
+    }
+
+    fn with_control_transaction(operation: impl FnOnce() -> DispatchResult) -> DispatchResult {
+      Self::with_reused_transaction(operation)
+    }
+
     fn ensure_control_queue_mutation_allowed(
-      instance: &AaaInstanceOf<T>,
+      instance: &ActiveActorViewOf<T>,
       now: BlockNumberFor<T>,
     ) -> DispatchResult {
       ensure!(
         instance.last_control_queue_mutation_block != Some(now),
-        Error::<T>::QueueMutationRateLimited
+        Error::<T>::ControlMutationRateLimited
       );
       Ok(())
     }
 
-    fn ensure_control_origin(origin: OriginFor<T>, instance: &AaaInstanceOf<T>) -> DispatchResult {
+    pub(crate) fn ensure_control_origin(
+      origin: OriginFor<T>,
+      instance: &ActiveActorViewOf<T>,
+    ) -> DispatchResult {
       if let Ok(who) = ensure_signed(origin.clone()) {
         ensure!(who == instance.owner, Error::<T>::NotOwner);
         return Ok(());
@@ -3549,11 +3926,11 @@ pub mod pallet {
     /// System Immutable actors after terminal execution outcomes.
     pub(crate) fn close_actor(
       aaa_id: AaaId,
-      instance: &AaaInstanceOf<T>,
+      instance: &ActiveActorViewOf<T>,
       reason: CloseReason,
     ) -> DispatchResult {
       ensure!(
-        Self::active_actor_snapshot(aaa_id).as_ref() == Some(instance),
+        Self::active_actor_view(aaa_id).as_ref() == Some(instance),
         Error::<T>::AaaNotFound
       );
       ensure!(
@@ -3597,6 +3974,7 @@ pub mod pallet {
           // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as
           // soon as hot state disappears. Terminal cleanup performs no shared-container scan.
           Self::remove_active_actor(aaa_id)?;
+          Self::remove_pending_from_revalidation_workset(instance)?;
           ActorIdentities::<T>::remove(aaa_id);
           ActorFunding::<T>::remove(aaa_id);
           ActiveAaaCount::<T>::mutate(|count| *count -= 1);
@@ -3648,19 +4026,23 @@ pub mod pallet {
         );
       }
 
-      ActorIdentities::<T>::remove(aaa_id);
-      ActorIdentityCount::<T>::mutate(|count| *count -= 1);
-      match identity.actor_class {
-        ActorClass::User { owner_slot } => {
-          Self::remove_owner_slot_binding(&identity.owner, owner_slot, &identity.sovereign_account)
+      Self::with_control_transaction(|| {
+        ActorIdentities::<T>::remove(aaa_id);
+        ActorIdentityCount::<T>::mutate(|count| *count -= 1);
+        match identity.actor_class {
+          ActorClass::User { owner_slot } => Self::remove_owner_slot_binding(
+            &identity.owner,
+            owner_slot,
+            &identity.sovereign_account,
+          ),
+          ActorClass::System { sovereign_id } => {
+            SovereignIndex::<T>::remove(&identity.sovereign_account);
+            SystemSovereigns::<T>::insert(sovereign_id, SystemSovereignState::Vacant);
+          }
         }
-        ActorClass::System { sovereign_id } => {
-          SovereignIndex::<T>::remove(&identity.sovereign_account);
-          SystemSovereigns::<T>::insert(sovereign_id, SystemSovereignState::Vacant);
-        }
-      }
-      Self::deposit_event(Event::AaaClosed { aaa_id, reason });
-      Ok(())
+        Self::deposit_event(Event::AaaClosed { aaa_id, reason });
+        Ok(())
+      })
     }
 
     pub(crate) fn update_idle_starvation_state(now: BlockNumberFor<T>, starved: bool) {
@@ -3785,8 +4167,9 @@ pub mod pallet {
         }
       }
       let mut max_id: Option<AaaId> = None;
-      let active_actors = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only invariant audit
-      for (aaa_id, hot) in active_actors {
+      for aaa_id in ActorHot::<T>::iter_keys() {
+        let hot = ActorHot::<T>::get(aaa_id)
+          .ok_or(TryRuntimeError::Other("active hot key has no value"))?;
         let identity = ActorIdentities::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
           "ActorHot entry has no matching ActorIdentity entry",
         ))?;
@@ -3794,12 +4177,49 @@ pub mod pallet {
           "ActorHot entry has no matching ActorProgram entry",
         ))?;
         let has_continuation = ContinuationStateStore::<T>::contains_key(aaa_id);
-        if (hot.run_state == RunState::Suspended) != has_continuation {
+        if (hot.cycle_state == CycleState::Suspended) != has_continuation {
           return Err(TryRuntimeError::Other(
-            "ActorHot run_state disagrees with ContinuationState",
+            "ActorHot cycle_state disagrees with ContinuationState",
           ));
         }
-        let instance = Self::compose_active_actor(identity, hot, program);
+        // Terminal membership is derived from the schedule window: `terminal_at` is the sole
+        // terminal-membership authority and must equal the window's exact terminal block, or be
+        // absent without a window (spec 5.1).
+        let program_window = program.schedule_window;
+        let expected_terminal_at = program_window.map(|window| Self::window_terminal_at(&window));
+        if hot.terminal_at != expected_terminal_at {
+          return Err(TryRuntimeError::Other(
+            "ActorHot terminal_at disagrees with schedule window terminal membership",
+          ));
+        }
+        let instance = Self::derive_active_actor_view(identity, hot, program);
+        let (expected_cycle_weight, expected_cycle_fee) =
+          Self::compute_cycle_bounds(instance.actor_class.aaa_type(), &instance.execution_plan);
+        // A stamped actor is executable, so its caches must equal the current derivation
+        // (spec 6.4). A pending workset member under an active gate may still hold the old
+        // epoch caches until the worker revalidates it.
+        let current_epoch = CurrentCacheEpoch::<T>::get();
+        if instance.cache_epoch == current_epoch
+          && (instance.cycle_weight_upper != expected_cycle_weight
+            || instance.cycle_fee_upper != expected_cycle_fee)
+        {
+          return Err(TryRuntimeError::Other(
+            "ActorHot cycle caches disagree with current derivation",
+          ));
+        }
+        if !Self::execution_plan_admission_weight_upper(
+          instance.actor_class.aaa_type(),
+          &instance.execution_plan,
+        )
+        .all_lte(
+          Self::guaranteed_actor_service_weight().ok_or(TryRuntimeError::Other(
+            "configured housekeeping Weight exceeds AaaOnIdleReserve",
+          ))?,
+        ) {
+          return Err(TryRuntimeError::Other(
+            "active actor plan exceeds current actor-service envelope",
+          ));
+        }
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         let Some(funding) = ActorFunding::<T>::get(aaa_id) else {
           return Err(TryRuntimeError::Other(
@@ -3811,16 +4231,12 @@ pub mod pallet {
             "ActorHot funding indications disagree with ActorFunding",
           ));
         }
-        if funding
-          .funding_accumulated
-          .iter() // deos-bypass: bounded-iter — try-state-only MaxFundingTrackedAssets audit
-          .any(|(asset, amount)| {
-            !funding.funding_tracked_assets.contains(asset) || amount.is_zero()
-          })
-        {
-          return Err(TryRuntimeError::Other(
-            "ActorFunding accumulator contains an untracked asset or zero amount",
-          ));
+        for (asset, amount) in &funding.funding_accumulated {
+          if !funding.funding_tracked_assets.contains(asset) || amount.is_zero() {
+            return Err(TryRuntimeError::Other(
+              "ActorFunding accumulator contains an untracked asset or zero amount",
+            ));
+          }
         }
         match SovereignIndex::<T>::get(&instance.sovereign_account) {
           Some(mapped_id) if mapped_id == aaa_id => {}
@@ -3853,8 +4269,9 @@ pub mod pallet {
           ));
         }
       }
-      let continuations = ContinuationStateStore::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor invariant audit
-      for (aaa_id, continuation) in continuations {
+      for aaa_id in ContinuationStateStore::<T>::iter_keys() {
+        let continuation = ContinuationStateStore::<T>::get(aaa_id)
+          .ok_or(TryRuntimeError::Other("Continuation key has no value"))?;
         let hot = ActorHot::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
           "ContinuationState entry has no matching ActorHot entry",
         ))?;
@@ -3864,7 +4281,7 @@ pub mod pallet {
         let program = ActorProgram::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
           "ContinuationState entry has no matching ActorProgram entry",
         ))?;
-        if hot.run_state != RunState::Suspended
+        if hot.cycle_state != CycleState::Suspended
           || identity.mutability != Mutability::Mutable
           || identity.cycle_nonce == 0
           || continuation.cursor >= program.execution_plan.len() as u32
@@ -3887,19 +4304,23 @@ pub mod pallet {
           ));
         }
         let expected_surfaces =
-          Self::trigger_surfaces(&program.execution_plan, continuation.cursor as usize);
-        if expected_surfaces.len() != continuation.trigger_snapshot.len()
-          || expected_surfaces
-            .iter() // deos-bypass: bounded-iter — suffix surfaces are bounded by MaxContinuationSnapshotEntries
-            .any(|surface| !continuation.trigger_snapshot.contains_key(surface))
-        {
+          Self::opening_surfaces(&program.execution_plan, continuation.cursor as usize);
+        let mut surfaces_match = expected_surfaces.len() == continuation.opening_snapshot.len();
+        for surface in &expected_surfaces {
+          if !continuation.opening_snapshot.contains_key(surface) {
+            surfaces_match = false;
+            break;
+          }
+        }
+        if !surfaces_match {
           return Err(TryRuntimeError::Other(
-            "ContinuationState trigger snapshot disagrees with unresolved suffix",
+            "ContinuationState opening snapshot disagrees with unresolved suffix",
           ));
         }
       }
-      let identities = ActorIdentities::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxActorIdentities audit
-      for (aaa_id, identity) in identities {
+      for aaa_id in ActorIdentities::<T>::iter_keys() {
+        let identity = ActorIdentities::<T>::get(aaa_id)
+          .ok_or(TryRuntimeError::Other("actor identity key has no value"))?;
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         if Self::active_actor_exists(aaa_id) {
           continue;
@@ -3941,8 +4362,8 @@ pub mod pallet {
           ActorClass::System { .. } => {}
         }
       }
-      let owner_slot_bitmaps = OwnerSlotBitmaps::<T>::iter(); // deos-bypass: bounded-iter — try-state-only owner map audit bounded by MaxActorIdentities.
-      for (owner, bitmap) in owner_slot_bitmaps {
+      for owner in OwnerSlotBitmaps::<T>::iter_keys() {
+        let bitmap = OwnerSlotBitmaps::<T>::get(&owner);
         if !Self::owner_slot_bitmap_is_valid(&bitmap) || Self::owner_slot_bitmap_is_empty(&bitmap) {
           return Err(TryRuntimeError::Other(
             "OwnerSlotBitmaps contains an invalid or empty bitmap",
@@ -3999,8 +4420,9 @@ pub mod pallet {
       }
       let mut physical_tickets = alloc::collections::BTreeMap::new();
       let mut physical_occupancy = 0u32;
-      let pages = QueuePages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only canonical queue audit
-      for (page_id, page) in pages {
+      for page_id in QueuePages::<T>::iter_keys() {
+        let page = QueuePages::<T>::get(page_id)
+          .ok_or(TryRuntimeError::Other("queue page key has no value"))?;
         if page.is_empty() || page.len() > T::QueuePageSize::get() as usize {
           return Err(TryRuntimeError::Other(
             "canonical queue page has invalid length",
@@ -4048,8 +4470,9 @@ pub mod pallet {
         ));
       }
       let mut live_queue_tickets = alloc::collections::BTreeSet::new();
-      let hot_states = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only live-ticket invariant audit
-      for (aaa_id, hot) in hot_states {
+      for aaa_id in ActorHot::<T>::iter_keys() {
+        let hot = ActorHot::<T>::get(aaa_id)
+          .ok_or(TryRuntimeError::Other("live-ticket hot key has no value"))?;
         let Some(ticket) = hot.queue_ticket else {
           continue;
         };
@@ -4073,10 +4496,10 @@ pub mod pallet {
         return Err(TryRuntimeError::Other("WakeupPageSize must be non-zero"));
       }
       let mut wakeup_live_by_block = alloc::collections::BTreeMap::new();
-      let mut wakeup_page_count = 0u32;
-      let wakeup_pages = WakeupPages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only paged-wakeup invariant audit
-      for ((block, page_id), page) in wakeup_pages {
-        wakeup_page_count = wakeup_page_count.saturating_add(1);
+      let mut live_wakeup_memberships = 0u32;
+      for (block, page_id) in WakeupPages::<T>::iter_keys() {
+        let page = WakeupPages::<T>::get((block, page_id))
+          .ok_or(TryRuntimeError::Other("wakeup page key has no value"))?;
         if page.entries.is_empty() || page.entries.len() > T::WakeupPageSize::get() as usize {
           return Err(TryRuntimeError::Other(
             "WakeupPages entry has invalid length",
@@ -4087,11 +4510,12 @@ pub mod pallet {
             "WakeupPage scan cursor exceeds page length",
           ));
         }
-        let live_entries = page
-          .entries
-          .iter() // deos-bypass: bounded-iter — try-state-only WakeupPageSize slot audit
-          .filter(|entry| entry.is_some())
-          .count() as u32;
+        let mut live_entries = 0u32;
+        for entry in page.entries.as_slice() {
+          if entry.is_some() {
+            live_entries = live_entries.saturating_add(1);
+          }
+        }
         if live_entries == 0 || page.live_entries != live_entries {
           return Err(TryRuntimeError::Other(
             "WakeupPage live-entry count disagrees with slots",
@@ -4130,12 +4554,13 @@ pub mod pallet {
         }
         let block_live = wakeup_live_by_block.entry(block).or_insert(0u32);
         *block_live = block_live.saturating_add(live_entries);
-        for (slot, entry) in page
-          .entries
-          .iter() // deos-bypass: bounded-iter — try-state-only WakeupPageSize pointer audit
-          .enumerate()
-        {
-          let Some(entry) = entry else {
+        // `wakeup_pointer` is the sole ordinary temporal-membership authority (spec 5.1): a
+        // physical page slot is a live member only when the actor's pointer addresses exactly
+        // this slot. A slot whose actor owns a different pointer is corruption; a slot whose
+        // actor owns no pointer (or no hot state after a lazy terminal cleanup) is a stale
+        // physical entry with no authority until the bounded drain converges.
+        for slot in 0..page.entries.len() {
+          let Some(entry) = &page.entries[slot] else {
             continue;
           };
           let expected = WakeupPointer {
@@ -4143,21 +4568,30 @@ pub mod pallet {
             page_id,
             slot: slot as WakeupSlot,
           };
-          if ActorHot::<T>::get(entry.aaa_id).and_then(|hot| hot.wakeup_pointer) != Some(expected) {
-            return Err(TryRuntimeError::Other(
-              "WakeupPage live slot has no matching ActorHot pointer",
-            ));
+          match ActorHot::<T>::get(entry.aaa_id).and_then(|hot| hot.wakeup_pointer) {
+            Some(pointer) if pointer == expected => {
+              live_wakeup_memberships = live_wakeup_memberships.saturating_add(1);
+            }
+            Some(_) => {
+              return Err(TryRuntimeError::Other(
+                "WakeupPage slot addresses an actor with a different wakeup pointer",
+              ));
+            }
+            None => {}
           }
         }
       }
-      if wakeup_page_count > active_count {
+      // Live wakeup memberships are one-per-active-actor and never exceed the active set;
+      // stale physical pages and cursor blocks may legitimately outlive their actors.
+      if live_wakeup_memberships > active_count {
         return Err(TryRuntimeError::Other(
-          "WakeupPages count exceeds active actor count",
+          "live wakeup memberships exceed active actor count",
         ));
       }
       let cursor_len = WakeupCursorLen::<T>::get();
-      let wakeup_buckets = WakeupBuckets::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor-bounded bucket audit
-      for (block, bucket) in wakeup_buckets {
+      for block in WakeupBuckets::<T>::iter_keys() {
+        let bucket = WakeupBuckets::<T>::get(block)
+          .ok_or(TryRuntimeError::Other("wakeup bucket key has no value"))?;
         if wakeup_live_by_block.get(&block).copied() != Some(bucket.live_entries) {
           return Err(TryRuntimeError::Other(
             "WakeupBucket live-entry count disagrees with pages",
@@ -4178,14 +4612,14 @@ pub mod pallet {
           ));
         }
       }
-      if cursor_len > T::MaxActiveActors::get() || cursor_len > active_count {
+      if cursor_len > T::MaxActiveActors::get() {
         return Err(TryRuntimeError::Other(
-          "WakeupCursorLen exceeds active actor capacity",
+          "WakeupCursorLen exceeds configured active actor capacity",
         ));
       }
       let cursor_page_size = T::WakeupPageSize::get();
       let expected_cursor_pages = cursor_len.div_ceil(cursor_page_size);
-      let actual_cursor_pages = WakeupCursorPages::<T>::iter().count() as u32; // deos-bypass: bounded-iter — try-state-only MaxActiveActors cursor-page audit
+      let actual_cursor_pages = WakeupCursorPages::<T>::iter_keys().count() as u32;
       if actual_cursor_pages != expected_cursor_pages {
         return Err(TryRuntimeError::Other(
           "WakeupCursorPages count disagrees with cursor length",
@@ -4232,8 +4666,10 @@ pub mod pallet {
         }
       }
       let mut live_wakeup_pointers = alloc::collections::BTreeSet::new();
-      let hot_wakeup_states = ActorHot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxActiveActors pointer audit
-      for (aaa_id, hot) in hot_wakeup_states {
+      for aaa_id in ActorHot::<T>::iter_keys() {
+        let hot = ActorHot::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
+          "wakeup-pointer hot key has no value",
+        ))?;
         let Some(pointer) = hot.wakeup_pointer else {
           continue;
         };
@@ -4247,6 +4683,17 @@ pub mod pallet {
             "ActorHot wakeup pointer does not resolve to its actor",
           ));
         }
+        // The earlier due requirement determines the next temporal service point (spec 5.1):
+        // every placement path clamps the wakeup target to the terminal block, so an ordinary
+        // or terminal wakeup must never be scheduled beyond `terminal_at`.
+        if hot
+          .terminal_at
+          .is_some_and(|terminal_at| pointer.block > terminal_at)
+        {
+          return Err(TryRuntimeError::Other(
+            "ActorHot wakeup pointer exceeds its terminal membership",
+          ));
+        }
       }
       let next_id = NextAaaId::<T>::get();
       if let Some(max_aaa_id) = max_id {
@@ -4256,14 +4703,15 @@ pub mod pallet {
           ));
         }
       }
-      let system_sovereigns = SystemSovereigns::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxSystemSovereigns audit
       let mut system_sovereign_count = 0u32;
-      for (sovereign_id, state) in system_sovereigns {
+      for sovereign_id in SystemSovereigns::<T>::iter_keys() {
+        let state = SystemSovereigns::<T>::get(sovereign_id)
+          .ok_or(TryRuntimeError::Other("System sovereign key has no value"))?;
         system_sovereign_count = system_sovereign_count
           .checked_add(1)
           .ok_or(TryRuntimeError::Other("System sovereign count overflow"))?;
         if let SystemSovereignState::Occupied(aaa_id) = state {
-          let class = Self::active_actor_snapshot(aaa_id)
+          let class = Self::active_actor_view(aaa_id)
             .map(|actor| actor.actor_class)
             .or_else(|| ActorIdentities::<T>::get(aaa_id).map(|identity| identity.actor_class));
           if class != Some(ActorClass::System { sovereign_id }) {
@@ -4282,6 +4730,41 @@ pub mod pallet {
       }
       Self::do_try_state_observation_subscriptions()?;
       Self::do_try_state_dirty_observations()?;
+      // Global cache epoch and revalidation progress (spec 5.4, 6.4, 9.3). While the gate
+      // exists, `remaining` must equal the count of live pending workset members; without the
+      // gate every executable actor must carry the current stamp so no stale cache admits.
+      let current_epoch = CurrentCacheEpoch::<T>::get();
+      if let Some(state) = CacheRevalidation::<T>::get() {
+        if state.target_epoch != current_epoch {
+          return Err(TryRuntimeError::Other(
+            "CacheRevalidation target epoch disagrees with CurrentCacheEpoch",
+          ));
+        }
+        let mut pending_live = 0u32;
+        for aaa_id in ActorHot::<T>::iter_keys() {
+          let hot = ActorHot::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
+            "cache-revalidation hot key has no value",
+          ))?;
+          if hot.cache_epoch != state.target_epoch {
+            pending_live = pending_live.saturating_add(1);
+          }
+        }
+        if state.remaining != pending_live {
+          return Err(TryRuntimeError::Other(
+            "CacheRevalidation remaining disagrees with pending workset cardinality",
+          ));
+        }
+      } else {
+        for aaa_id in ActorHot::<T>::iter_keys() {
+          let hot = ActorHot::<T>::get(aaa_id)
+            .ok_or(TryRuntimeError::Other("cache-epoch hot key has no value"))?;
+          if hot.cache_epoch != current_epoch {
+            return Err(TryRuntimeError::Other(
+              "executable actor carries a stale cache epoch without revalidation progress",
+            ));
+          }
+        }
+      }
       Ok(())
     }
   }

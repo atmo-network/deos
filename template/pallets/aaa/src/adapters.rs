@@ -1,7 +1,14 @@
 //! Runtime adapter traits for AAA task execution.
 
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::Perbill;
+use polkadot_sdk::sp_runtime::{DispatchResult, Perbill};
+
+use crate::types::AddressEvent;
+
+/// Certified bounded ingress for one externally owned observation revision.
+pub trait ObservationChangeIngress<FeedId> {
+  fn note_observation_changed(feed: FeedId, revision: u64) -> DispatchResult;
+}
 
 /// Minimal authoritative actor context for adapter operations whose policy depends on AAA type.
 pub struct ExecutionContext<'a, AccountId> {
@@ -50,6 +57,72 @@ impl TaskFailure {
 impl From<DispatchError> for TaskFailure {
   fn from(error: DispatchError) -> Self {
     Self::permanent(error)
+  }
+}
+
+/// Typed rejection of one certified AddressEvent ingress movement (spec 6.2).
+///
+/// `retry` carries the same closed classification as `TaskFailure`: recoverable
+/// queue/wakeup capacity or placement unavailability is Temporary, while monotonic
+/// ticket/index exhaustion, topology corruption, invalid provenance, and invariant
+/// failure are Permanent. A non-AAA producer maps the same failure to its outer
+/// dispatch error, which rejects and rolls back the certified movement.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IngressFailure {
+  pub error: DispatchError,
+  pub retry: RetryClass,
+}
+
+impl IngressFailure {
+  pub fn permanent(error: impl Into<DispatchError>) -> Self {
+    Self {
+      error: error.into(),
+      retry: RetryClass::Permanent,
+    }
+  }
+
+  pub fn temporary(error: impl Into<DispatchError>) -> Self {
+    Self {
+      error: error.into(),
+      retry: RetryClass::Temporary,
+    }
+  }
+}
+
+impl From<IngressFailure> for DispatchError {
+  fn from(failure: IngressFailure) -> Self {
+    failure.error
+  }
+}
+
+impl From<IngressFailure> for TaskFailure {
+  fn from(failure: IngressFailure) -> Self {
+    Self {
+      error: failure.error,
+      retry: failure.retry,
+    }
+  }
+}
+
+/// Certified typed ingress boundary for AAA AddressEvent semantics (spec 5.3, 6.2).
+///
+/// `preflight` is read-only and covers lifecycle, funding, trigger, and required
+/// placement. `notify` executes exactly once after the value movement. Host
+/// producers route every movement that claims AAA ingress through this boundary;
+/// movement outside the certified-producer inventory is balance-only.
+pub trait AddressEventIngress<AccountId, AssetId, Balance> {
+  fn preflight(event: &AddressEvent<AccountId, AssetId, Balance>) -> Result<(), IngressFailure>;
+  fn notify(event: &AddressEvent<AccountId, AssetId, Balance>) -> Result<(), IngressFailure>;
+}
+
+/// No-op fallback for runtimes without AAA ingress: every movement is balance-only.
+impl<AccountId, AssetId, Balance> AddressEventIngress<AccountId, AssetId, Balance> for () {
+  fn preflight(_: &AddressEvent<AccountId, AssetId, Balance>) -> Result<(), IngressFailure> {
+    Ok(())
+  }
+
+  fn notify(_: &AddressEvent<AccountId, AssetId, Balance>) -> Result<(), IngressFailure> {
+    Ok(())
   }
 }
 

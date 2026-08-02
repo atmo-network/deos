@@ -1,4 +1,5 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
+use pallet_aaa::ObservationChangeIngress;
 use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional, weights::Weight},
@@ -14,6 +15,9 @@ use super::axial_router_config::{AxialRouterEmaHalfLife, AxialRouterPalletId};
 
 pub const AXIAL_ROUTER_ORACLE_SCALE: u8 = 12;
 pub const AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
+
+/// Closed runtime inventory of publishers certified to create AAA observation ingress.
+pub const AAA_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
 
 pub const fn axial_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   OracleFeedId::directional_local_pool_price(
@@ -87,12 +91,18 @@ fn ensure_axial_router_feed(feed: OracleFeedId) -> DispatchResult {
 
 pub struct AaaObservationChangeIngress;
 
+impl AaaObservationChangeIngress {
+  pub const fn certified_publisher_inventory() -> &'static [&'static str] {
+    AAA_OBSERVATION_PUBLISHER_INVENTORY
+  }
+}
+
 impl pallet_oracle::OnObservationChanged<OracleFeedId> for AaaObservationChangeIngress {
   fn on_observation_changed(
     feed: OracleFeedId,
     revision: pallet_oracle::Revision,
   ) -> DispatchResult {
-    crate::AAA::note_observation_changed(feed, revision)
+    <crate::AAA as ObservationChangeIngress<OracleFeedId>>::note_observation_changed(feed, revision)
   }
 
   fn weight() -> Weight {

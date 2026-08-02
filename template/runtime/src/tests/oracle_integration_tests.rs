@@ -162,6 +162,14 @@ fn oracle_publish_declares_the_subscriber_independent_aaa_hook_weight() {
 }
 
 #[test]
+fn aaa_observation_publisher_inventory_is_closed_and_oracle_owned() {
+  assert_eq!(
+    crate::configs::oracle_config::AaaObservationChangeIngress::certified_publisher_inventory(),
+    &["DEOS Oracle::OnObservationChanged"],
+  );
+}
+
+#[test]
 fn oracle_publication_rejects_aaa_unavailability_and_recovers_after_cleanup() {
   new_test_ext().execute_with(|| {
     let producer = axial_router_account();

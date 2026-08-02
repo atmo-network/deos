@@ -279,6 +279,12 @@ test('reactive delivery projection counts page visits, revision restart, and cle
   assert.deepEqual(clean.estimateAssumptions, []);
 });
 
+test('generated observation evidence binds the closed certified publisher inventory', () => {
+  assert.deepEqual(DEOS_OBSERVATION_RUNTIME_EVIDENCE.certifiedPublishers, [
+    'DEOS Oracle::OnObservationChanged',
+  ]);
+});
+
 test('finalized runtime evidence verifies exact generated identity and classifies drift', () => {
   const expected = DEOS_OBSERVATION_RUNTIME_EVIDENCE;
   const identity = {

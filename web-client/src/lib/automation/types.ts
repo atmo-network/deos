@@ -4,6 +4,7 @@ Owns: System AAA actor snapshots plus portable plan-authoring policy shapes.
 Excludes: Runtime actor scheduling, adapter transport, transaction composition, and widget rendering.
 Zone: Automation public contract; safe for adapters, stores, and widgets to import.
 */
+import type { AaaEligibilityProjection } from './eligibility.ts';
 import type { AaaPlanHex, AaaPlanRuntimeIdentity } from './plan-artifact.ts';
 
 export const AUTOMATION_STEP_ERROR_POLICIES = [
@@ -63,4 +64,22 @@ export type AutomationActorSnapshot = {
   fundingAccumulated: ReadonlyArray<[string, bigint]>;
   /** Funding source policy as a typed variant label. */
   fundingSourcePolicy: string | null;
+  /**
+   * Global cache-epoch stamp carried by the Active actor (spec 5.4). An actor is executable
+   * only while this equals the current epoch and no revalidation gate exists.
+   */
+  cacheEpoch: number;
+  /**
+   * Scheduler-owned eligibility projection from the read-only runtime API
+   * (`ready`, `phase`, and `nextEligibleBlock`), or null when the runtime API
+   * is unavailable. Clients never reimplement cadence, cooldown, window, retry
+   * backoff, breaker, or latch arithmetic.
+   */
+  eligibility: AaaEligibilityProjection | null;
+};
+
+export type CacheRevalidationProgress = {
+  targetEpoch: number;
+  cursor: bigint | null;
+  remaining: number;
 };

@@ -1,5 +1,5 @@
 use crate::types::{AmountResolution, Condition, ConditionSet, Mutability, StepErrorPolicy, Task};
-use crate::{RetryClass, TaskWeightInfo};
+use crate::{RetryClass, WeightInfo};
 use alloc::vec::Vec;
 use frame::prelude::*;
 
@@ -44,20 +44,20 @@ pub enum TaskWeightOwner {
 }
 
 impl TaskWeightOwner {
-  pub fn weight<W: TaskWeightInfo>(self, split_legs: u32) -> polkadot_sdk::sp_weights::Weight {
+  pub fn weight<W: WeightInfo>(self, split_legs: u32) -> polkadot_sdk::sp_weights::Weight {
     match self {
-      Self::Transfer => W::transfer(),
-      Self::SplitTransfer => W::split_transfer(split_legs),
-      Self::Burn => W::burn(),
-      Self::Mint => W::mint(),
-      Self::DexSwapIn => W::dex_exact_in(),
-      Self::DexSwapOut => W::dex_exact_out(),
-      Self::AddLiquidity => W::add_liquidity(),
-      Self::RemoveLiquidity => W::remove_liquidity(),
-      Self::Stake => W::stake(),
-      Self::DonateLiquidity => W::donate_liquidity(),
-      Self::Unstake => W::unstake(),
-      Self::StopCycle => W::stop_cycle(),
+      Self::Transfer => W::task_transfer(),
+      Self::SplitTransfer => W::task_split_transfer(split_legs),
+      Self::Burn => W::task_burn(),
+      Self::Mint => W::task_mint(),
+      Self::DexSwapIn => W::task_dex_exact_in(),
+      Self::DexSwapOut => W::task_dex_exact_out(),
+      Self::AddLiquidity => W::task_add_liquidity(),
+      Self::RemoveLiquidity => W::task_remove_liquidity(),
+      Self::Stake => W::task_stake(),
+      Self::DonateLiquidity => W::task_donate_liquidity(),
+      Self::Unstake => W::task_unstake(),
+      Self::StopCycle => W::task_stop_cycle(),
     }
   }
 }
@@ -519,7 +519,7 @@ pub fn describe_condition<AssetId: Clone, Balance, BlockNumber, ObservationFeedI
 pub enum AmountDataDependency {
   ArtifactValue,
   CurrentBalanceOrShares,
-  TriggerSnapshot,
+  OpeningSnapshot,
   LastFundingSnapshot,
   TaskPolicyCapacity,
 }
@@ -554,13 +554,13 @@ pub fn describe_amount_resolution<Balance>(
       ObservationWindow::ArtifactTime,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
-    AmountResolution::PercentageOfCurrent(_) | AmountResolution::AllBalance => (
+    AmountResolution::PercentageOfCurrent(_) | AmountResolution::AllAvailable => (
       AmountDataDependency::CurrentBalanceOrShares,
       ObservationWindow::StepAttemptTime,
       RetryObservation::ReobserveLiveValue,
     ),
-    AmountResolution::PercentageOfTrigger(_) => (
-      AmountDataDependency::TriggerSnapshot,
+    AmountResolution::PercentageAtOpening(_) => (
+      AmountDataDependency::OpeningSnapshot,
       ObservationWindow::LogicalRunStart,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
@@ -891,9 +891,9 @@ mod tests {
     let cases = [
       AmountResolution::Fixed(1u128),
       AmountResolution::PercentageOfCurrent(Perbill::one()),
-      AmountResolution::PercentageOfTrigger(Perbill::one()),
+      AmountResolution::PercentageAtOpening(Perbill::one()),
       AmountResolution::PercentageOfLastFunding(Perbill::one()),
-      AmountResolution::AllBalance,
+      AmountResolution::AllAvailable,
     ];
     for amount in cases {
       let contract = describe_amount_resolution(&amount);

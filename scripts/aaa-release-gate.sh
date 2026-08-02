@@ -103,9 +103,11 @@ run_gate() {
     run_shell_step "AAA gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-aaa --example semantic_manifest -- --check ../web-client/src/lib/automation/aaa-semantic-manifest.json"
     run_shell_step "AAA gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-aaa --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/aaa-fee-envelope-vectors.json"
     run_shell_step "AAA gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:aaa-abi"
-    run_shell_step "AAA gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:aaa-normative-drift"
+    run_shell_step "AAA gate: accepted specification hash" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:aaa-spec-acceptance"
+run_shell_step "AAA gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:aaa-normative-drift"
     run_shell_step "AAA gate: funding terminology drift" "" "\"$PROJECT_ROOT/.agents/skills/alignment/scripts/audit-aaa-funding-terminology.sh\""
     run_shell_step "AAA gate: observation runtime evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:observation-evidence"
+    run_shell_step "AAA gate: certified ingress evidence drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:ingress-evidence"
     run_shell_step "AAA gate: cross-language semantic contract" "" "cd \"$PROJECT_ROOT/web-client\" && npm run test:automation"
     run_shell_step "AAA gate: reactive operations corpus contract" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\""
 

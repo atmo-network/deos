@@ -1,8 +1,8 @@
 [workspace.package]
 license = "MIT-0"
-authors = ["Parity Technologies <admin@parity.io>"]
-homepage = "https://paritytech.github.io/polkadot-sdk/"
-repository = "https://github.com/paritytech/polkadot-sdk-parachain-template.git"
+authors = ["DEOS Contributors"]
+homepage = "https://github.com/atmo-network/deos"
+repository = "https://github.com/atmo-network/deos"
 edition = "2024"
 
 [workspace]

@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-tmc"
-version = "0.7.10"
+version = "0.7.11"
 description = "Token Minting Curve pallet implementing linear price ceiling with unidirectional minting for the TMCTOL standard on DEOS"
 authors.workspace = true
 homepage.workspace = true

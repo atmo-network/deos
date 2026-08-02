@@ -79,9 +79,9 @@ export type AaaDonationSurface = {
   surface: string;
   resolution:
     | 'Fixed'
-    | 'AllBalance'
+    | 'AllAvailable'
     | 'PercentageOfCurrent'
-    | 'PercentageOfTrigger'
+    | 'PercentageAtOpening'
     | 'PercentageOfLastFunding';
   observation: 'ActorBalance' | 'ActorFunding' | 'AdapterState';
 };
@@ -92,7 +92,7 @@ export type AaaDonationSensitivity = {
   sensitivity:
     | 'InsensitiveFixedAmount'
     | 'BeforeStepResolution'
-    | 'BeforeTriggerSnapshot'
+    | 'BeforeOpeningSnapshot'
     | 'BeforeFundingSnapshot'
     | 'BeforeAdapterObservation';
   reason: string;
@@ -396,13 +396,13 @@ export function classifyAaaDonationSensitivity(
           'External state can change before the adapter observes or quotes this surface.',
       };
     }
-    if (surface.resolution === 'PercentageOfTrigger') {
+    if (surface.resolution === 'PercentageAtOpening') {
       return {
         stepIndex: surface.stepIndex,
         surface: surface.surface,
-        sensitivity: 'BeforeTriggerSnapshot',
+        sensitivity: 'BeforeOpeningSnapshot',
         reason:
-          'Actor balance changes can affect the captured trigger snapshot, but not its persisted value.',
+          'Actor balance changes can affect the captured opening snapshot, but not its persisted value.',
       };
     }
     if (surface.resolution === 'PercentageOfLastFunding') {

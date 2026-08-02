@@ -5,7 +5,7 @@ use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult};
 
 impl<T: Config> Pallet<T> {
   fn observation_page_size() -> Result<u32, DispatchError> {
-    let size = T::QueuePageSize::get();
+    let size = T::ObservationPageSize::get();
     ensure!(size > 0, Error::<T>::ObservationSubscriptionInvariant);
     Ok(size)
   }
@@ -65,11 +65,12 @@ impl<T: Config> Pallet<T> {
     if old_feeds == new_feeds {
       return Ok(());
     }
-    let removed_feeds = old_feeds
-      .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds dirty-feed cleanup preflight.
-      .filter(|feed| !new_feeds.contains(feed))
-      .copied()
-      .collect::<alloc::vec::Vec<_>>();
+    let mut removed_feeds = alloc::vec::Vec::new();
+    for feed in old_feeds.as_slice() {
+      if !new_feeds.contains(feed) {
+        removed_feeds.push(*feed);
+      }
+    }
     Self::preflight_clear_dirty_observation_feeds(&removed_feeds)?;
     let page_size = Self::observation_page_size()?;
     let existing_slot = ObservationSubscriptionSlot::<T>::get(aaa_id);
@@ -85,10 +86,10 @@ impl<T: Config> Pallet<T> {
     if let Some(slot) = candidate_slot {
       let page_id = slot / page_size;
       let offset = (slot % page_size) as usize;
-      for feed in new_feeds
-        .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds actor feed preflight.
-        .filter(|feed| !old_feeds.contains(feed))
-      {
+      for feed in new_feeds.as_slice() {
+        if old_feeds.contains(feed) {
+          continue;
+        }
         let page = ObservationSubscriberPages::<T>::get(feed, page_id).unwrap_or_default();
         ensure!(
           page.entries.get(offset).is_none_or(Option::is_none),
@@ -413,17 +414,15 @@ impl<T: Config> Pallet<T> {
       (None, false) => Self::allocate_observation_subscription_slot(aaa_id)?,
       (None, true) => return Ok(()),
     };
-    for feed in old_feeds
-      .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds exact removals.
-      .filter(|feed| !new_feeds.contains(feed))
-    {
-      Self::remove_observation_subscriber(aaa_id, slot, *feed)?;
+    for feed in old_feeds.as_slice() {
+      if !new_feeds.contains(feed) {
+        Self::remove_observation_subscriber(aaa_id, slot, *feed)?;
+      }
     }
-    for feed in new_feeds
-      .iter() // deos-bypass: bounded-iter — MaxTriggerSources bounds exact additions.
-      .filter(|feed| !old_feeds.contains(feed))
-    {
-      Self::add_observation_subscriber(aaa_id, slot, *feed)?;
+    for feed in new_feeds.as_slice() {
+      if !old_feeds.contains(feed) {
+        Self::add_observation_subscriber(aaa_id, slot, *feed)?;
+      }
     }
     if new_feeds.is_empty() {
       ActorObservationFeeds::<T>::remove(aaa_id);
@@ -512,8 +511,9 @@ impl<T: Config> Pallet<T> {
     let mut expected_by_feed = BTreeMap::<T::ObservationFeedId, u32>::new();
     let mut owned_slots = BTreeSet::<u32>::new();
     let mut total = 0u32;
-    let actor_feeds = ActorObservationFeeds::<T>::iter(); // deos-bypass: bounded-iter — try-state-only active-actor subscription audit.
-    for (aaa_id, feeds) in actor_feeds {
+    for aaa_id in ActorObservationFeeds::<T>::iter_keys() {
+      let feeds = ActorObservationFeeds::<T>::get(aaa_id)
+        .ok_or(TryRuntimeError::Other("observation feed key has no value"))?;
       if feeds.is_empty() || !Self::active_actor_exists(aaa_id) {
         return Err(TryRuntimeError::Other(
           "observation feed ownership has no active actor",
@@ -557,8 +557,9 @@ impl<T: Config> Pallet<T> {
         ))?;
       }
     }
-    let actor_slots = ObservationSubscriptionSlot::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxActiveActors slot audit.
-    for (aaa_id, slot) in actor_slots {
+    for aaa_id in ObservationSubscriptionSlot::<T>::iter_keys() {
+      let slot = ObservationSubscriptionSlot::<T>::get(aaa_id)
+        .ok_or(TryRuntimeError::Other("observation slot key has no value"))?;
       if !ActorObservationFeeds::<T>::contains_key(aaa_id)
         || ObservationSubscriptionSlotOwner::<T>::get(slot) != Some(aaa_id)
       {
@@ -567,8 +568,10 @@ impl<T: Config> Pallet<T> {
         ));
       }
     }
-    let slot_owners = ObservationSubscriptionSlotOwner::<T>::iter(); // deos-bypass: bounded-iter — try-state-only MaxActiveActors reverse-slot audit.
-    for (slot, aaa_id) in slot_owners {
+    for slot in ObservationSubscriptionSlotOwner::<T>::iter_keys() {
+      let aaa_id = ObservationSubscriptionSlotOwner::<T>::get(slot).ok_or(
+        TryRuntimeError::Other("observation slot owner key has no value"),
+      )?;
       if ObservationSubscriptionSlot::<T>::get(aaa_id) != Some(slot) {
         return Err(TryRuntimeError::Other(
           "observation subscription slot reverse owner disagrees",
@@ -602,8 +605,9 @@ impl<T: Config> Pallet<T> {
     }
     let mut actual_by_feed = BTreeMap::<T::ObservationFeedId, u32>::new();
     let mut actual_pages_by_feed = BTreeMap::<T::ObservationFeedId, BTreeSet<u32>>::new();
-    let subscriber_pages = ObservationSubscriberPages::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded subscription-page audit.
-    for (feed, page_id, page) in subscriber_pages {
+    for (feed, page_id) in ObservationSubscriberPages::<T>::iter_keys() {
+      let page = ObservationSubscriberPages::<T>::get(feed, page_id)
+        .ok_or(TryRuntimeError::Other("observation page key has no value"))?;
       let list = ObservationSubscriberPageLists::<T>::get(feed).ok_or(TryRuntimeError::Other(
         "observation subscriber page has no occupied-page list",
       ))?;
@@ -649,9 +653,11 @@ impl<T: Config> Pallet<T> {
           .ok_or(TryRuntimeError::Other("observation page count overflow"))?;
       }
     }
-    let page_lists = ObservationSubscriberPageLists::<T>::iter(); // deos-bypass: bounded-iter — try-state-only bounded occupied-page audit.
     let mut page_list_count = 0usize;
-    for (feed, list) in page_lists {
+    for feed in ObservationSubscriberPageLists::<T>::iter_keys() {
+      let list = ObservationSubscriberPageLists::<T>::get(feed).ok_or(TryRuntimeError::Other(
+        "observation page-list key has no value",
+      ))?;
       let Some(pages) = actual_pages_by_feed.get(&feed) else {
         return Err(TryRuntimeError::Other(
           "observation occupied-page list has no pages",

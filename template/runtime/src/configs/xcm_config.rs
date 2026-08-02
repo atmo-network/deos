@@ -1,6 +1,4 @@
-use super::{
-  AddressEventIngress, PriceForParentDelivery, RuntimeAddressEventIngress, RuntimeFeeCollector,
-};
+use super::{PriceForParentDelivery, RuntimeAddressEventIngress, RuntimeFeeCollector};
 use crate::{
   AccountId, AllPalletsWithSystem, AssetRegistry, Assets, Balance, Balances, ParachainInfo,
   ParachainSystem, PolkadotXcm, Runtime, RuntimeCall, RuntimeEvent, RuntimeOrigin, WeightToFee,
@@ -173,10 +171,8 @@ impl AaaAwareAssetTransactor {
     else {
       return Ok(());
     };
-    <RuntimeAddressEventIngress as AddressEventIngress>::preflight_xcm_inbound(
-      &recipient, asset, amount, &source,
-    )
-    .map_err(|_| XcmError::FailedToTransactAsset("AAA funding accumulator preflight failed"))
+    RuntimeAddressEventIngress::preflight_xcm_inbound(&recipient, asset, amount, &source)
+      .map_err(|_| XcmError::FailedToTransactAsset("AAA funding accumulator preflight failed"))
   }
 
   fn notify_ingress(
@@ -198,15 +194,11 @@ impl AaaAwareAssetTransactor {
         <LocationToAccountId as ConvertLocation<AccountId>>::convert_location(origin)
       });
     if let Some(source) = source {
-      return <RuntimeAddressEventIngress as AddressEventIngress>::on_xcm_inbound(
-        &recipient, asset, amount, &source,
-      )
-      .map_err(|_| XcmError::FailedToTransactAsset("AAA funding notification failed"));
+      return RuntimeAddressEventIngress::on_xcm_inbound(&recipient, asset, amount, &source)
+        .map_err(|_| XcmError::FailedToTransactAsset("AAA funding notification failed"));
     }
-    <RuntimeAddressEventIngress as AddressEventIngress>::on_inbound_without_source(
-      &recipient, asset, amount,
-    )
-    .map_err(|_| XcmError::FailedToTransactAsset("AAA ingress notification failed"))
+    RuntimeAddressEventIngress::on_inbound_without_source(&recipient, asset, amount)
+      .map_err(|_| XcmError::FailedToTransactAsset("AAA ingress notification failed"))
   }
 }
 

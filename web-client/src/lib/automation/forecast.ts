@@ -15,11 +15,11 @@ export const PERBILL_DENOMINATOR = 1_000_000_000n;
 
 export type AaaAmountResolution =
   | { type: 'Fixed'; value: bigint }
-  | { type: 'AllBalance' }
+  | { type: 'AllAvailable' }
   | {
       type:
         | 'PercentageOfCurrent'
-        | 'PercentageOfTrigger'
+        | 'PercentageAtOpening'
         | 'PercentageOfLastFunding';
       parts: number;
     };
@@ -151,7 +151,7 @@ export function resolveAaaAmount(
       validateBalance(input.resolution.value, 'fixed amount');
       amount = input.resolution.value;
       break;
-    case 'AllBalance':
+    case 'AllAvailable':
       basis = isShares ? input.current : spendLimit;
       amount = basis;
       break;
@@ -162,7 +162,7 @@ export function resolveAaaAmount(
         return { status: 'Skipped', amount: null, basis, spendLimit };
       }
       break;
-    case 'PercentageOfTrigger':
+    case 'PercentageAtOpening':
       if (input.trigger == null) {
         return {
           status: 'SnapshotUnavailable',

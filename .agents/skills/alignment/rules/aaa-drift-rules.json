@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "owner": "alignment/AAA drift gates",
+  "rules": [
+    {
+      "id": "aaa-public-stale-terms",
+      "scope": "canonical specification",
+      "kind": "regex-any",
+      "patterns": ["\\bAaaInstance\\b", "\\bMaxSweepPerBlock\\b", "\\bNativeAssetId\\b", "\\bschedule_policy\\b", "\\btrigger_policy\\b"],
+      "rationale": "Reject superseded public names after the pre-launch ABI epoch.",
+      "expiry": "Remove only when the canonical specification and metadata no longer expose an AAA compatibility-drift gate."
+    },
+    {
+      "id": "aaa-bounded-iteration-allowlist",
+      "scope": "alignment auditor O(N) iteration rule",
+      "kind": "path-regex-any",
+      "patterns": ["template/pallets/aaa/examples/fee_envelope_vectors\\.rs"],
+      "rationale": "The off-chain fee-vector example renders fixed protocol-bounded inputs and owns no consensus iteration.",
+      "expiry": "Remove if the example accepts unbounded input or moves into consensus execution."
+    },
+    {
+      "id": "aaa-funding-lineage-terms",
+      "scope": "active AAA package and integration documentation",
+      "kind": "regex-any-case-insensitive",
+      "patterns": [
+        "first_eligible_at",
+        "FundingBatch",
+        "funding-batch",
+        "pending_amount",
+        "armed[ /-]+pending (funding )?(batches|generations)",
+        "tracked[ /-]+pending funding (counts|counters)",
+        "pending funding (counts|counters)",
+        "promotes? pending funding",
+        "funding promotion",
+        "keeps? new funding pending",
+        "User[ /-]+System FIFO lanes",
+        "class service guarantees?",
+        "reopen(ed|ing)? lineage",
+        "lineage reopen(ed|ing)?"
+      ],
+      "rationale": "Prevent retired funding-generation, class-lane, and lineage models from regaining normative authority.",
+      "expiry": "Never while funding_accumulated, one shared FIFO, and fresh-cycle identity remain canonical."
+    }
+  ]
+}

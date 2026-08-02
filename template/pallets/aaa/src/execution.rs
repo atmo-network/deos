@@ -2,8 +2,8 @@ use super::pallet::*;
 use super::types::{InputLimit, Task as AaaTask};
 use super::{
   AssetOps, DexOps, FeeChargeKind, FeeCollector, LiquidityOps, ObservationProvider as _,
-  RetryClass, ScalarObservationState, StakingOps, TaskFailure, fee_native_protected_minimum,
-  settle_attempt_fee_step,
+  RetryClass, ScalarObservationState, StakingOps, TaskFailure, WeightInfo as _,
+  fee_native_protected_minimum, settle_attempt_fee_step,
 };
 use frame::prelude::*;
 use polkadot_sdk::sp_runtime::{
@@ -166,32 +166,21 @@ where
   Ok(if require_all { all_pass } else { any_pass })
 }
 
-fn resolve_step_control(
-  mutability: Mutability,
-  result: StepResult,
-  error_policy: StepErrorPolicy,
-) -> StepControl {
-  match (result, error_policy, mutability) {
-    (StepResult::Completed, _, _) => StepControl::Advance,
-    (StepResult::Stopped, _, _) => StepControl::CompleteCycle,
-    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater { .. }, Mutability::Mutable) => {
+fn resolve_step_control(result: StepResult, error_policy: StepErrorPolicy) -> StepControl {
+  match (result, error_policy) {
+    (StepResult::Completed, _) => StepControl::Advance,
+    (StepResult::Stopped, _) => StepControl::CompleteCycle,
+    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater { .. }) => {
       StepControl::SuspendCurrent
     }
-    (StepResult::FundingUnavailable, StepErrorPolicy::RetryLater { .. }, Mutability::Immutable) => {
+    (StepResult::FundingUnavailable, _) => StepControl::Advance,
+    (StepResult::Failed(_), StepErrorPolicy::ContinueNextStep) => StepControl::Advance,
+    (StepResult::Failed(RetryClass::Temporary), StepErrorPolicy::RetryLater { .. }) => {
+      StepControl::SuspendCurrent
+    }
+    (StepResult::Failed(_), StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater { .. }) => {
       StepControl::Terminate
     }
-    (StepResult::FundingUnavailable, _, _) => StepControl::Advance,
-    (StepResult::Failed(_), StepErrorPolicy::ContinueNextStep, _) => StepControl::Advance,
-    (
-      StepResult::Failed(RetryClass::Temporary),
-      StepErrorPolicy::RetryLater { .. },
-      Mutability::Mutable,
-    ) => StepControl::SuspendCurrent,
-    (
-      StepResult::Failed(_),
-      StepErrorPolicy::AbortCycle | StepErrorPolicy::RetryLater { .. },
-      _,
-    ) => StepControl::Terminate,
   }
 }
 
@@ -207,14 +196,14 @@ impl<T: Config> Pallet<T> {
     let hot = ActorHot::<T>::get(aaa_id).ok_or(Error::<T>::ContinuationInvariant)?;
     let identity = ActorIdentities::<T>::get(aaa_id).ok_or(Error::<T>::ContinuationInvariant)?;
     ensure!(
-      hot.run_state == RunState::Suspended && identity.cycle_nonce > 0,
+      hot.cycle_state == CycleState::Suspended && identity.cycle_nonce > 0,
       Error::<T>::ContinuationInvariant
     );
     ActorHot::<T>::mutate(aaa_id, |maybe| {
       let hot = maybe
         .as_mut()
         .expect("Continuation prevalidation requires active hot state");
-      hot.run_state = RunState::Idle;
+      hot.cycle_state = CycleState::Idle;
       hot.queue_ticket = None;
       hot.wakeup_pointer = None;
     });
@@ -267,10 +256,10 @@ impl<T: Config> Pallet<T> {
         maybe
           .as_mut()
           .expect("active actor existence was prevalidated")
-          .run_state = if state.is_some() {
-          RunState::Suspended
+          .cycle_state = if state.is_some() {
+          CycleState::Suspended
         } else {
-          RunState::Idle
+          CycleState::Idle
         };
       });
       if let Some(continuation) = state {
@@ -311,13 +300,13 @@ impl<T: Config> Pallet<T> {
     ContinuationStateStore::<T>::mutate(aaa_id, |maybe| {
       let continuation = maybe
         .as_mut()
-        .expect("Suspended run_state requires ContinuationState");
+        .expect("Suspended cycle_state requires ContinuationState");
       continuation.attempt = checked_semantic_increment(continuation.attempt)
         .expect("attempt bound (MaxRetryAttempts) is precluded by admission");
       continuation.last_attempt_block = now;
     });
     let continuation = ContinuationStateStore::<T>::get(aaa_id)
-      .expect("Suspended run_state requires ContinuationState");
+      .expect("Suspended cycle_state requires ContinuationState");
     Self::deposit_event(Event::CycleContinued {
       aaa_id,
       cycle_nonce,
@@ -350,7 +339,7 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn execute_single_cycle(
     aaa_id: AaaId,
-    instance: AaaInstanceOf<T>,
+    instance: ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
   ) -> Weight {
     Self::execute_single_cycle_traced(aaa_id, instance, now, None).0
@@ -358,13 +347,25 @@ impl<T: Config> Pallet<T> {
 
   pub(crate) fn execute_single_cycle_traced(
     aaa_id: AaaId,
-    instance: AaaInstanceOf<T>,
+    instance: ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
     mut trace: Option<&mut alloc::vec::Vec<SimulationStepRecord>>,
   ) -> (Weight, bool, Option<CloseReason>) {
-    let base_weight = T::DbWeight::get().writes(1);
-    let is_continuation = instance.run_state == RunState::Suspended;
-    let mut persisted_trigger_snapshot = None;
+    let base_weight = T::WeightInfo::cycle_orchestration();
+    let is_continuation = instance.cycle_state == CycleState::Suspended;
+    let actor = instance.sovereign_account.clone();
+    let execution_plan = &instance.execution_plan;
+    let fee_envelope = Self::attempt_fee_envelope(
+      instance.actor_class.aaa_type(),
+      execution_plan,
+      if is_continuation {
+        Self::continuation_state(aaa_id).map_or(0, |state| state.cursor as usize)
+      } else {
+        0
+      },
+    )
+    .expect("admitted execution plans have a checked fee envelope");
+    let mut reserved_fee_remaining = fee_envelope.total;
     let (
       cycle_nonce,
       start_cursor,
@@ -372,9 +373,9 @@ impl<T: Config> Pallet<T> {
       prior_unsuccessful_attempts_at_cursor,
       cumulative_outcomes,
       funding_snapshot,
+      opening_snapshot,
     ) = if is_continuation {
       let continuation = Self::begin_continuation_attempt(aaa_id, instance.cycle_nonce, now);
-      persisted_trigger_snapshot = Some(continuation.trigger_snapshot);
       (
         instance.cycle_nonce,
         continuation.cursor,
@@ -382,6 +383,7 @@ impl<T: Config> Pallet<T> {
         continuation.unsuccessful_attempts_at_cursor,
         continuation.cumulative_outcomes,
         continuation.funding_snapshot,
+        continuation.opening_snapshot,
       )
     } else {
       if instance.cycle_nonce == u64::MAX {
@@ -389,6 +391,19 @@ impl<T: Config> Pallet<T> {
           .expect("fresh execution snapshot satisfies terminal preconditions");
         return (base_weight, true, Some(CloseReason::CycleNonceExhausted));
       }
+      let funding_snapshot = if instance.funding_tracked_count == 0 {
+        FundingSnapshotOf::<T>::default()
+      } else {
+        ActorFunding::<T>::get(aaa_id)
+          .map(|funding| funding.funding_accumulated)
+          .unwrap_or_default()
+      };
+      let opening_snapshot = Self::capture_opening_snapshot(
+        instance.actor_class.aaa_type(),
+        &actor,
+        execution_plan,
+        reserved_fee_remaining,
+      );
       let Some(cycle_nonce) = ActorIdentities::<T>::mutate(aaa_id, |maybe| {
         let identity = maybe.as_mut()?;
         identity.cycle_nonce = identity
@@ -405,20 +420,13 @@ impl<T: Config> Pallet<T> {
           hot.last_cycle_block = Some(now);
         }
       });
-      let funding_snapshot = if instance.funding_tracked_count == 0 {
-        FundingSnapshotOf::<T>::default()
-      } else {
+      if instance.funding_tracked_count != 0 {
         ActorFunding::<T>::mutate(aaa_id, |maybe| {
-          maybe
-            .as_mut()
-            .map(|funding| core::mem::take(&mut funding.funding_accumulated))
-            .unwrap_or_default()
-        })
-      };
-      Self::deposit_event(Event::CycleStarted {
-        aaa_id,
-        cycle_nonce,
-      });
+          if let Some(funding) = maybe.as_mut() {
+            funding.funding_accumulated.clear();
+          }
+        });
+      }
       (
         cycle_nonce,
         0,
@@ -426,11 +434,10 @@ impl<T: Config> Pallet<T> {
         0,
         OutcomeTotals::default(),
         funding_snapshot,
+        opening_snapshot,
       )
     };
-    let actor = instance.sovereign_account.clone();
     let is_user = instance.actor_class.aaa_type() == AaaType::User;
-    let execution_plan = &instance.execution_plan;
     let funding_snapshots = &funding_snapshot;
     let mut executed_steps = cumulative_outcomes.executed_steps;
     let mut committed_effectful_tasks = cumulative_outcomes.committed_effectful_tasks;
@@ -442,16 +449,12 @@ impl<T: Config> Pallet<T> {
     let mut execution_plan_failed = false;
     let mut failure_close_reason = None;
     let mut suspended_at: Option<(u32, SuspensionReason)> = None;
-    let fee_envelope = Self::attempt_fee_envelope(
-      instance.actor_class.aaa_type(),
-      execution_plan,
-      start_cursor as usize,
-    )
-    .expect("admitted execution plans have a checked fee envelope");
-    let mut reserved_fee_remaining = fee_envelope.total;
-    let trigger_snapshot = persisted_trigger_snapshot.unwrap_or_else(|| {
-      Self::capture_trigger_snapshot(&actor, execution_plan, reserved_fee_remaining)
-    });
+    if !is_continuation {
+      Self::deposit_event(Event::CycleStarted {
+        aaa_id,
+        cycle_nonce,
+      });
+    }
     for step_idx in start_cursor as usize..execution_plan.len() {
       let step = &execution_plan[step_idx];
       let step_num = step_idx as u32;
@@ -543,7 +546,7 @@ impl<T: Config> Pallet<T> {
         &actor,
         instance.actor_class.aaa_type(),
         reserved_fee_remaining,
-        &trigger_snapshot,
+        &opening_snapshot,
         funding_snapshots,
       ) {
         Ok(PreparedTaskOutcome::Executable(task)) => task,
@@ -622,11 +625,7 @@ impl<T: Config> Pallet<T> {
               continue;
             }
           }
-          match resolve_step_control(
-            instance.mutability,
-            StepResult::FundingUnavailable,
-            step.on_error,
-          ) {
+          match resolve_step_control(StepResult::FundingUnavailable, step.on_error) {
             StepControl::Advance => {}
             StepControl::CompleteCycle => {
               unreachable!("FundingUnavailable cannot complete a cycle")
@@ -735,11 +734,7 @@ impl<T: Config> Pallet<T> {
         failed_steps = checked_semantic_increment(failed_steps)
           .expect("semantic counter bound is precluded by admission");
         let retry = failure.retry;
-        let control = resolve_step_control(
-          instance.mutability,
-          StepResult::Failed(retry),
-          step.on_error,
-        );
+        let control = resolve_step_control(StepResult::Failed(retry), step.on_error);
         Self::record_simulation_step(&mut trace, step_num, SimulationStepOutcome::Failed(retry));
         Self::deposit_event(Event::StepFailed {
           aaa_id,
@@ -768,8 +763,7 @@ impl<T: Config> Pallet<T> {
       } else {
         StepResult::Completed
       };
-      let successful_control =
-        resolve_step_control(instance.mutability, successful_result, step.on_error);
+      let successful_control = resolve_step_control(successful_result, step.on_error);
       let simulation_outcome = if successful_control == StepControl::CompleteCycle {
         Self::record_stop_cycle_event(aaa_id, cycle_nonce, step_num);
         SimulationStepOutcome::Stopped
@@ -790,10 +784,11 @@ impl<T: Config> Pallet<T> {
         break;
       }
     }
-    let attempt_weight = base_weight.saturating_add(Weight::from_parts(
-      5_000_000u64.saturating_mul(attempt_executed_steps as u64 + 1),
-      1000u64.saturating_mul(attempt_executed_steps as u64 + 1),
-    ));
+    let attempt_weight = if attempt_executed_steps == 0 {
+      base_weight
+    } else {
+      T::WeightInfo::step_orchestration(attempt_executed_steps)
+    };
     let mut failure_already_recorded = false;
     if let Some((cursor, suspension_reason)) = suspended_at {
       let consecutive_failures = ActorHot::<T>::mutate(aaa_id, |maybe| {
@@ -837,10 +832,10 @@ impl<T: Config> Pallet<T> {
             attempt,
             unsuccessful_attempts_at_cursor,
             last_attempt_block: now,
-            trigger_snapshot: Self::trim_trigger_snapshot(
+            opening_snapshot: Self::trim_opening_snapshot(
               execution_plan,
               cursor as usize,
-              &trigger_snapshot,
+              &opening_snapshot,
             ),
             funding_snapshot: funding_snapshot.clone(),
             cumulative_outcomes,
@@ -891,7 +886,7 @@ impl<T: Config> Pallet<T> {
     });
     let mut terminal_close_reason = None;
     if execution_plan_failed {
-      if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
+      if let Some(inst) = Self::active_actor_view(aaa_id) {
         let close_reason = failure_close_reason.or_else(|| {
           Self::failure_limit_reached(inst.consecutive_failures)
             .then_some(CloseReason::ConsecutiveFailures)
@@ -904,7 +899,7 @@ impl<T: Config> Pallet<T> {
           }
         }
       }
-    } else if let Some(inst) = Self::active_actor_snapshot(aaa_id) {
+    } else if let Some(inst) = Self::active_actor_view(aaa_id) {
       if inst.completion_policy == CompletionPolicy::CloseAfterProductiveRun
         && committed_effectful_tasks > 0
       {
@@ -928,8 +923,8 @@ impl<T: Config> Pallet<T> {
     expected_mutability: Mutability,
     expected_program: ProgramInputOf<T>,
     mode: SimulationMode,
-  ) -> Result<SimulationResult, SimulationError> {
-    let instance = Self::active_actor_snapshot(aaa_id).ok_or(SimulationError::ActorNotFound)?;
+  ) -> Result<SimulationResultOf<T>, SimulationError> {
+    let instance = Self::active_actor_view(aaa_id).ok_or(SimulationError::ActorNotFound)?;
     if instance.actor_class.aaa_type() != expected_type {
       return Err(SimulationError::TypeMismatch);
     }
@@ -1038,6 +1033,11 @@ impl<T: Config> Pallet<T> {
         debug_assert_eq!(state.cumulative_outcomes, cumulative_outcomes);
       }
       debug_assert!(trace.len() <= T::MaxExecutionPlanSteps::get() as usize);
+      let Ok(steps) = BoundedVec::try_from(trace) else {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          SimulationError::ContinuationInvariant,
+        ));
+      };
       polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Ok(SimulationResult {
         status,
         cycle_nonce,
@@ -1047,7 +1047,7 @@ impl<T: Config> Pallet<T> {
         unsuccessful_attempts_at_cursor,
         finalized_through,
         cumulative_outcomes,
-        steps: trace,
+        steps,
       }))
     })
   }
@@ -1087,11 +1087,10 @@ impl<T: Config> Pallet<T> {
     if fee.is_zero() {
       return Ok(());
     }
-    let native = T::NativeAssetId::get();
-    ensure!(
-      T::AssetOps::balance(actor, native) >= fee,
-      Error::<T>::InsufficientFee
-    );
+    let native = T::FeeNativeAssetId::get();
+    if T::AssetOps::balance(actor, native) < fee {
+      return Err(DispatchError::Other("StepFeeBalanceInvariant"));
+    }
     T::FeeCollector::collect_fee(actor, &T::FeeSink::get(), native, fee)
       .map_err(|_| DispatchError::Other("StepFeeTransferFailed"))
   }
@@ -1103,49 +1102,60 @@ impl<T: Config> Pallet<T> {
     policy: StepErrorPolicy,
     _failure: DispatchError,
   ) -> bool {
-    resolve_step_control(
-      Mutability::Immutable,
-      StepResult::Failed(RetryClass::Permanent),
-      policy,
-    ) == StepControl::Terminate
+    resolve_step_control(StepResult::Failed(RetryClass::Permanent), policy)
+      == StepControl::Terminate
   }
 
   fn push_trigger_surface(
     amount: &AmountResolution<T::Balance>,
-    surface: ResolutionSurface<T::AssetId>,
-    surfaces: &mut alloc::vec::Vec<ResolutionSurface<T::AssetId>>,
+    surface: OpeningSurface<T::AssetId>,
+    surfaces: &mut alloc::vec::Vec<OpeningSurface<T::AssetId>>,
   ) {
-    if matches!(amount, AmountResolution::PercentageOfTrigger(_)) && !surfaces.contains(&surface) {
+    if matches!(amount, AmountResolution::PercentageAtOpening(_)) && !surfaces.contains(&surface) {
       surfaces.push(surface);
     }
   }
 
-  fn collect_percentage_trigger_surfaces(
+  fn collect_percentage_opening_surfaces(
     task: &TaskOf<T>,
-    surfaces: &mut alloc::vec::Vec<ResolutionSurface<T::AssetId>>,
+    surfaces: &mut alloc::vec::Vec<OpeningSurface<T::AssetId>>,
   ) {
     match task {
       AaaTask::Transfer { asset, amount, .. }
       | AaaTask::SplitTransfer { asset, amount, .. }
-      | AaaTask::Burn { asset, amount }
-      | AaaTask::Mint { asset, amount } => {
-        Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces)
+      | AaaTask::Burn { asset, amount } => {
+        Self::push_trigger_surface(amount, OpeningSurface::PreservableAsset(*asset), surfaces)
+      }
+      AaaTask::Mint { asset, amount } => {
+        Self::push_trigger_surface(amount, OpeningSurface::TargetAsset(*asset), surfaces)
       }
       AaaTask::RemoveLiquidity {
         lp_asset: asset,
         lp_amount,
         ..
-      } => Self::push_trigger_surface(lp_amount, ResolutionSurface::Asset(*asset), surfaces),
+      } => Self::push_trigger_surface(
+        lp_amount,
+        OpeningSurface::PreservableAsset(*asset),
+        surfaces,
+      ),
       AaaTask::SwapIn {
         asset_in,
         amount_in,
         ..
-      } => Self::push_trigger_surface(amount_in, ResolutionSurface::Asset(*asset_in), surfaces),
+      } => Self::push_trigger_surface(
+        amount_in,
+        OpeningSurface::PreservableAsset(*asset_in),
+        surfaces,
+      ),
       AaaTask::SwapOut {
         asset_out,
         amount_out,
         ..
-      } => Self::push_trigger_surface(amount_out, ResolutionSurface::Asset(*asset_out), surfaces),
+      } => Self::push_trigger_surface(
+        amount_out,
+        OpeningSurface::TargetAsset(*asset_out),
+        surfaces,
+      ),
       AaaTask::AddLiquidity {
         asset_a,
         asset_b,
@@ -1153,76 +1163,92 @@ impl<T: Config> Pallet<T> {
         amount_b,
         ..
       } => {
-        Self::push_trigger_surface(amount_a, ResolutionSurface::Asset(*asset_a), surfaces);
-        Self::push_trigger_surface(amount_b, ResolutionSurface::Asset(*asset_b), surfaces);
+        Self::push_trigger_surface(
+          amount_a,
+          OpeningSurface::PreservableAsset(*asset_a),
+          surfaces,
+        );
+        Self::push_trigger_surface(
+          amount_b,
+          OpeningSurface::PreservableAsset(*asset_b),
+          surfaces,
+        );
       }
       AaaTask::Stake { asset, amount } => {
-        Self::push_trigger_surface(amount, ResolutionSurface::Asset(*asset), surfaces);
+        Self::push_trigger_surface(amount, OpeningSurface::PreservableAsset(*asset), surfaces);
       }
       AaaTask::DonateLiquidity {
         asset_a,
         max_amount_a,
         ..
       } => {
-        Self::push_trigger_surface(max_amount_a, ResolutionSurface::Asset(*asset_a), surfaces);
+        Self::push_trigger_surface(
+          max_amount_a,
+          OpeningSurface::PreservableAsset(*asset_a),
+          surfaces,
+        );
       }
       AaaTask::Unstake { asset, shares } => {
-        Self::push_trigger_surface(shares, ResolutionSurface::StakingShares(*asset), surfaces)
+        Self::push_trigger_surface(shares, OpeningSurface::StakingShares(*asset), surfaces)
       }
       AaaTask::StopCycle => {}
     }
   }
 
-  pub(crate) fn trigger_surfaces(
+  pub(crate) fn opening_surfaces(
     execution_plan: &ExecutionPlanOf<T>,
     start_cursor: usize,
-  ) -> alloc::vec::Vec<ResolutionSurface<T::AssetId>> {
+  ) -> alloc::vec::Vec<OpeningSurface<T::AssetId>> {
     let mut surfaces = alloc::vec::Vec::new();
     for step_index in start_cursor..execution_plan.len() {
-      Self::collect_percentage_trigger_surfaces(&execution_plan[step_index].task, &mut surfaces);
+      Self::collect_percentage_opening_surfaces(&execution_plan[step_index].task, &mut surfaces);
     }
     surfaces
   }
 
-  fn capture_trigger_snapshot(
+  fn capture_opening_snapshot(
+    aaa_type: AaaType,
     actor: &T::AccountId,
     execution_plan: &ExecutionPlanOf<T>,
     reserved: T::Balance,
   ) -> ContinuationSnapshotOf<T> {
     let mut snapshot = ContinuationSnapshotOf::<T>::default();
-    for surface in Self::trigger_surfaces(execution_plan, 0) {
+    for surface in Self::opening_surfaces(execution_plan, 0) {
       let balance = match surface {
-        ResolutionSurface::Asset(asset) => Self::spendable_balance(actor, asset, reserved),
-        ResolutionSurface::StakingShares(asset) => T::StakingOps::share_balance(actor, asset),
+        OpeningSurface::PreservableAsset(asset) => {
+          Self::preservable_balance(aaa_type, actor, asset, reserved)
+        }
+        OpeningSurface::TargetAsset(asset) => Self::spendable_balance(actor, asset, reserved),
+        OpeningSurface::StakingShares(asset) => T::StakingOps::share_balance(actor, asset),
       };
       snapshot
         .try_insert(surface, balance)
-        .unwrap_or_else(|_| panic!("trigger surfaces fit MaxContinuationSnapshotEntries"));
+        .unwrap_or_else(|_| panic!("trigger surfaces fit MaxOpeningSnapshotEntries"));
     }
     snapshot
   }
 
-  fn trim_trigger_snapshot(
+  fn trim_opening_snapshot(
     execution_plan: &ExecutionPlanOf<T>,
     start_cursor: usize,
     source: &ContinuationSnapshotOf<T>,
   ) -> ContinuationSnapshotOf<T> {
     let mut snapshot = ContinuationSnapshotOf::<T>::default();
-    for surface in Self::trigger_surfaces(execution_plan, start_cursor) {
+    for surface in Self::opening_surfaces(execution_plan, start_cursor) {
       if let Some(balance) = source.get(&surface) {
         snapshot
           .try_insert(surface, *balance)
-          .unwrap_or_else(|_| panic!("suffix surfaces fit MaxContinuationSnapshotEntries"));
+          .unwrap_or_else(|_| panic!("suffix surfaces fit MaxOpeningSnapshotEntries"));
       }
     }
     snapshot
   }
 
-  fn trigger_balance(
-    trigger_snapshot: &ContinuationSnapshotOf<T>,
-    surface: ResolutionSurface<T::AssetId>,
+  fn opening_balance(
+    opening_snapshot: &ContinuationSnapshotOf<T>,
+    surface: OpeningSurface<T::AssetId>,
   ) -> Result<T::Balance, DispatchError> {
-    trigger_snapshot
+    opening_snapshot
       .get(&surface)
       .copied()
       .ok_or(Error::<T>::SnapshotUnavailable.into())
@@ -1282,9 +1308,16 @@ impl<T: Config> Pallet<T> {
             return Ok(PreparedTaskOutcome::FundingUnavailable);
           }
         };
-        if resolved.is_zero() {
-          // An all-zero SplitTransfer total is an explicit resolution skip, not a silent
-          // zero-leg transfer: no balance read, preflight, or event mutation occurs.
+        let mut has_effective_leg = false;
+        for leg in legs.as_slice() {
+          if !leg.share.mul_floor(resolved).is_zero() {
+            has_effective_leg = true;
+            break;
+          }
+        }
+        if resolved.is_zero() || !has_effective_leg {
+          // A zero total or a positive total rounded to zero across every leg is an explicit
+          // resolution skip: no preflight, balance mutation, or execution event occurs.
           return Ok(PreparedTaskOutcome::Skipped);
         }
         Ok(PreparedTaskOutcome::Executable(
@@ -1658,6 +1691,11 @@ impl<T: Config> Pallet<T> {
               amount_in,
               slippage_tolerance,
             )?;
+            if amount_out.is_zero() {
+              return Err(TaskFailure::permanent(DispatchError::Other(
+                "ZeroSwapOutput",
+              )));
+            }
             Self::deposit_event(Event::SwapExecuted {
               aaa_id,
               cycle_nonce,
@@ -1683,6 +1721,11 @@ impl<T: Config> Pallet<T> {
               max_amount_in,
               slippage_tolerance,
             )?;
+            if amount_in.is_zero() || amount_in > max_amount_in {
+              return Err(TaskFailure::permanent(DispatchError::Other(
+                "InvalidSwapInput",
+              )));
+            }
             Self::deposit_event(Event::SwapExecuted {
               aaa_id,
               cycle_nonce,
@@ -1927,7 +1970,7 @@ impl<T: Config> Pallet<T> {
   /// Balance visible to AAA resolution — adapter-visible balance minus AAA-local reserved fees
   fn spendable_balance(who: &T::AccountId, asset: T::AssetId, reserved: T::Balance) -> T::Balance {
     let raw = T::AssetOps::balance(who, asset);
-    if asset == T::NativeAssetId::get() {
+    if asset == T::FeeNativeAssetId::get() {
       raw.saturating_sub(reserved)
     } else {
       raw
@@ -1937,7 +1980,7 @@ impl<T: Config> Pallet<T> {
   fn protected_minimum(aaa_type: AaaType, asset: T::AssetId) -> T::Balance {
     fee_native_protected_minimum(
       aaa_type,
-      asset == T::NativeAssetId::get(),
+      asset == T::FeeNativeAssetId::get(),
       T::AssetOps::minimum_balance(asset),
       T::MinUserBalance::get(),
     )
@@ -1963,11 +2006,11 @@ impl<T: Config> Pallet<T> {
     let current_shares = T::StakingOps::share_balance(who, position_asset);
     let resolved = match spec {
       AmountResolution::Fixed(shares) => *shares,
-      AmountResolution::AllBalance => current_shares,
+      AmountResolution::AllAvailable => current_shares,
       AmountResolution::PercentageOfCurrent(pct) => pct.mul_floor(current_shares),
-      AmountResolution::PercentageOfTrigger(pct) => pct.mul_floor(Self::trigger_balance(
+      AmountResolution::PercentageAtOpening(pct) => pct.mul_floor(Self::opening_balance(
         trigger_share_balances,
-        ResolutionSurface::StakingShares(position_asset),
+        OpeningSurface::StakingShares(position_asset),
       )?),
       AmountResolution::PercentageOfLastFunding(pct) => {
         let share_asset =
@@ -2008,7 +2051,7 @@ impl<T: Config> Pallet<T> {
     };
     let resolved = match spec {
       AmountResolution::Fixed(amount) => *amount,
-      AmountResolution::AllBalance => policy_spend_limit,
+      AmountResolution::AllAvailable => policy_spend_limit,
       AmountResolution::PercentageOfCurrent(pct) => {
         let value = pct.mul_floor(policy_spend_limit);
         if !pct.is_zero() && !policy_spend_limit.is_zero() && value.is_zero() {
@@ -2016,11 +2059,15 @@ impl<T: Config> Pallet<T> {
         }
         value
       }
-      AmountResolution::PercentageOfTrigger(pct) => {
-        let trigger_balance =
-          Self::trigger_balance(trigger_balances, ResolutionSurface::Asset(asset))?;
-        let value = pct.mul_floor(trigger_balance);
-        if !pct.is_zero() && !trigger_balance.is_zero() && value.is_zero() {
+      AmountResolution::PercentageAtOpening(pct) => {
+        let surface = if policy == AmountResolutionPolicy::PreserveSpend {
+          OpeningSurface::PreservableAsset(asset)
+        } else {
+          OpeningSurface::TargetAsset(asset)
+        };
+        let opening_balance = Self::opening_balance(trigger_balances, surface)?;
+        let value = pct.mul_floor(opening_balance);
+        if !pct.is_zero() && !opening_balance.is_zero() && value.is_zero() {
           return Ok(AmountResolutionOutcome::Skipped);
         }
         value
@@ -2106,41 +2153,29 @@ mod step_control_tests {
         StepControl::Terminate,
       ),
     ];
-    for mutability in [Mutability::Mutable, Mutability::Immutable] {
-      for (result, policy, expected) in fixed_cases {
-        assert_eq!(resolve_step_control(mutability, result, policy), expected);
-      }
-      assert_eq!(
-        resolve_step_control(mutability, StepResult::Failed(RetryClass::Temporary), RETRY,),
-        if mutability == Mutability::Mutable {
-          StepControl::SuspendCurrent
-        } else {
-          StepControl::Terminate
-        },
-      );
+    for (result, policy, expected) in fixed_cases {
+      assert_eq!(resolve_step_control(result, policy), expected);
     }
+    assert_eq!(
+      resolve_step_control(StepResult::Failed(RetryClass::Temporary), RETRY),
+      StepControl::SuspendCurrent,
+    );
   }
 
   #[test]
   fn funding_unavailable_uses_the_same_control_owner() {
-    for mutability in [Mutability::Mutable, Mutability::Immutable] {
-      for policy in [
-        StepErrorPolicy::ContinueNextStep,
-        StepErrorPolicy::AbortCycle,
-      ] {
-        assert_eq!(
-          resolve_step_control(mutability, StepResult::FundingUnavailable, policy),
-          StepControl::Advance,
-        );
-      }
+    for policy in [
+      StepErrorPolicy::ContinueNextStep,
+      StepErrorPolicy::AbortCycle,
+    ] {
+      assert_eq!(
+        resolve_step_control(StepResult::FundingUnavailable, policy),
+        StepControl::Advance,
+      );
     }
     assert_eq!(
-      resolve_step_control(Mutability::Mutable, StepResult::FundingUnavailable, RETRY,),
+      resolve_step_control(StepResult::FundingUnavailable, RETRY),
       StepControl::SuspendCurrent,
-    );
-    assert_eq!(
-      resolve_step_control(Mutability::Immutable, StepResult::FundingUnavailable, RETRY,),
-      StepControl::Terminate,
     );
   }
 
@@ -2198,7 +2233,7 @@ mod step_control_tests {
         before_conditions,
       );
 
-      let trigger_snapshot = ContinuationSnapshotOf::<Test>::default();
+      let opening_snapshot = ContinuationSnapshotOf::<Test>::default();
       let funding_snapshots = FundingSnapshotOf::<Test>::default();
       let before_resolution = polkadot_sdk::sp_io::storage::root(StateVersion::V1);
       assert_eq!(
@@ -2208,7 +2243,7 @@ mod step_control_tests {
           &ALICE,
           AaaType::System,
           0,
-          &trigger_snapshot,
+          &opening_snapshot,
           &funding_snapshots,
           AmountResolutionPolicy::PreserveSpend,
         ),

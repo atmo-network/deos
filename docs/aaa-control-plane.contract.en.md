@@ -97,7 +97,7 @@ Version history is materialized truth. An indexer may correlate artifacts with a
 
 Every forecast records the canonical `planId`, block hash or state snapshot, metadata hash, and runtime API or local model version used. Results are advisory and become stale when any dependency changes.
 
-Weight forecasts must preserve RefTime and ProofSize separately. Fee forecasts identify evaluation, execution upper bound, fee conversion, and lifecycle overhead rather than returning one unexplained number. Amount resolution identifies live balances, trigger snapshots, minimum-balance constraints, fee reservation, and adapter quotes used by each step.
+Weight forecasts must preserve RefTime and ProofSize separately. Fee forecasts identify evaluation, execution upper bound, fee conversion, and lifecycle overhead rather than returning one unexplained number. Amount resolution identifies live balances, opening snapshots, minimum-balance constraints, fee reservation, and adapter quotes used by each step.
 
 Local simulation cannot claim runtime truth unless it executes the matching runtime Wasm against the identified state snapshot. Heuristic or adapter-local projections must carry a narrower provenance label and may not authorize submission automatically.
 
@@ -159,7 +159,7 @@ The falsification corpus covers price → swap → price, fee funding → downst
 
 The first runtime provider simulates one attempt of an existing active actor whose stored `ProgramInput::Active`, `AaaType`, and `Mutability` exactly match the validated artifact. It supports an idle actor's next fresh cycle and a suspended actor's next Continuation attempt. It does not simulate creation, dormant activation, a proposed replacement program, scheduler throughput, queue position, or future block timing.
 
-The request carries `aaa_id`, exact decoded program, actor type, mutability, and mode `FreshCurrentPlan | CurrentContinuation`. `FreshCurrentPlan` requires idle run state and starts at cursor `0` with the next cycle nonce. `CurrentContinuation` requires suspended run state and reuses the stored nonce, unresolved cursor, trigger snapshot, and cumulative outcomes while incrementing the attempt exactly once.
+The request carries `aaa_id`, exact decoded program, actor type, mutability, and mode `FreshCurrentPlan | CurrentContinuation`. `FreshCurrentPlan` requires idle run state and starts at cursor `0` with the next cycle nonce. `CurrentContinuation` requires suspended run state and reuses the stored nonce, unresolved cursor, opening snapshot, and cumulative outcomes while incrementing the attempt exactly once.
 
 The runtime API runs only after normal liveness, lifecycle, window, nonce, fee-budget, and Continuation invariants pass. A mismatch or unavailable prerequisite returns a bounded typed error and performs no task. The API remains bounded by the actor's admitted plan, configured maximum steps, existing task weights, and the same adapter calls as production execution; it must not inspect an unbounded event or storage history.
 

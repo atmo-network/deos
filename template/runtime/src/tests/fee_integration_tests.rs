@@ -69,7 +69,7 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
     assert_eq!(Balances::free_balance(&fee_sink), anchor);
     assert_eq!(Balances::free_balance(&staking_pool), anchor + 3);
     assert_eq!(Balances::free_balance(&lp_farmer), anchor + 3);
-    let actor = AAA::aaa_instances(primitives::ecosystem::aaa_ids::FEE_SINK_AAA_ID)
+    let actor = AAA::active_actor_view(primitives::ecosystem::aaa_ids::FEE_SINK_AAA_ID)
       .expect("Fee Sink actor remains active");
     assert_eq!(actor.cycle_nonce, 3);
     assert_eq!(actor.consecutive_failures, 0);
