@@ -113,7 +113,6 @@ const suspendedRuntimeValue = {
     start_cursor: 0,
     continuation_cursor: 1,
     unsuccessful_attempts_at_cursor: 2,
-    finalized_through: 0,
     cumulative_outcomes: {
       executed_steps: 3,
       committed_effectful_tasks: 3,
@@ -145,7 +144,6 @@ const suspendedOutcome = {
   startCursor: 0,
   continuationCursor: 1,
   unsuccessfulAttemptsAtCursor: 2,
-  finalizedThrough: 0,
   cumulativeOutcomes: {
     executedSteps: 3,
     committedEffectfulTasks: 3,
@@ -185,8 +183,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       attempt: 0,
       start_cursor: 0,
       continuation_cursor: undefined,
-      finalized_through: 1,
-      cumulative_outcomes: {
+        cumulative_outcomes: {
         executed_steps: 1,
         committed_effectful_tasks: 0,
         skipped_conditions: 0,
@@ -215,7 +212,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
       ...suspendedRuntimeValue.value,
       status: {
         type: 'Closed',
-        value: { type: 'ProductiveRunCompleted', value: undefined },
+        value: { type: 'ProductiveCycleCompleted', value: undefined },
       },
       continuation_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
@@ -225,7 +222,7 @@ test('runtime API result codec discovers metadata and preserves bounded evidence
   assert.equal(closed.success, true);
   if (closed.success) {
     assert.equal(closed.outcome.status, 'Closed');
-    assert.equal(closed.outcome.closeReason, 'ProductiveRunCompleted');
+    assert.equal(closed.outcome.closeReason, 'ProductiveCycleCompleted');
     assert.equal(closed.outcome.continuationCursor, null);
     assert.equal(closed.outcome.unsuccessfulAttemptsAtCursor, null);
   }

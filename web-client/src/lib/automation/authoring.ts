@@ -209,7 +209,7 @@ export type AaaAuthoringTrigger =
 
 export type AaaAuthoringCompletionPolicy =
   | 'Persistent'
-  | 'CloseAfterProductiveRun';
+  | 'CloseAfterProductiveCycle';
 
 export type AaaAuthoringProgram = {
   aaaType: AaaPlanType;
@@ -867,12 +867,12 @@ export function validateAaaAuthoringProgram(
   const maxSteps = limits.maxExecutionPlanSteps;
   if (
     program.completionPolicy !== 'Persistent' &&
-    program.completionPolicy !== 'CloseAfterProductiveRun'
+    program.completionPolicy !== 'CloseAfterProductiveCycle'
   ) {
     issues.push({
       path: 'completionPolicy',
       message:
-        'Completion policy must be Persistent or CloseAfterProductiveRun',
+        'Completion policy must be Persistent or CloseAfterProductiveCycle',
     });
   }
   if (
@@ -882,7 +882,7 @@ export function validateAaaAuthoringProgram(
   ) {
     issues.push({
       path: 'autoCloseAtCycleNonce',
-      message: 'Auto-close target must be a nonzero u64 logical-run nonce',
+      message: 'Auto-close target must be a nonzero u64 logical-cycle nonce',
     });
   }
   if (program.steps.length === 0 || program.steps.length > maxSteps) {

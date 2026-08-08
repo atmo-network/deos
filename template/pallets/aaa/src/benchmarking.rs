@@ -87,7 +87,7 @@ mod benches {
     })
   }
 
-  fn cycle_fee_upper<T: Config>(execution_plan: &ExecutionPlanOf<T>) -> T::Balance {
+  fn full_attempt_fee<T: Config>(execution_plan: &ExecutionPlanOf<T>) -> T::Balance {
     Pallet::<T>::attempt_fee_envelope(AaaType::User, execution_plan, 0)
       .expect("benchmark execution plan has a checked fee envelope")
       .total
@@ -156,7 +156,7 @@ mod benches {
     let Some(instance) = Pallet::<T>::active_actor_view(aaa_id) else {
       return;
     };
-    let reserve = cycle_fee_upper::<T>(&instance.execution_plan)
+    let reserve = full_attempt_fee::<T>(&instance.execution_plan)
       .saturating_add(T::MinUserBalance::get())
       .saturating_add(One::one());
     let _ = T::AssetOps::mint(
@@ -386,8 +386,10 @@ mod benches {
   fn resume_aaa() {
     let caller: T::AccountId = whitelisted_caller();
     let aaa_id = bench_create_user::<T>(caller.clone());
+    frame_system::Pallet::<T>::set_block_number(1u32.into());
     Pallet::<T>::pause_aaa(RawOrigin::Signed(caller.clone()).into(), aaa_id)
       .expect("pause_aaa must succeed in setup");
+    frame_system::Pallet::<T>::set_block_number(2u32.into());
     #[extrinsic_call]
     resume_aaa(RawOrigin::Signed(caller), aaa_id);
     let inst = Pallet::<T>::active_actor_view(aaa_id).expect("AAA must exist after resume_aaa");
@@ -1306,11 +1308,12 @@ mod benches {
     let now: BlockNumberFor<T> = threshold.into();
     frame_system::Pallet::<T>::set_block_number(now);
     GlobalCircuitBreaker::<T>::put(false);
-    IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { since: 1u32.into() });
+    IdleStarvationState::<T>::put(IdleStarvationPhase::Starving {
+      consecutive_blocks: 1,
+    });
     #[block]
     {
       let _breaker_active = GlobalCircuitBreaker::<T>::get();
-      let _revalidation_active = crate::CacheRevalidation::<T>::exists();
       core::hint::black_box(QueueHead::<T>::get());
       core::hint::black_box(QueueTail::<T>::get());
       core::hint::black_box(QueueOccupancy::<T>::get());
@@ -1344,7 +1347,7 @@ mod benches {
       maybe_hot
         .as_mut()
         .expect("benchmark actor hot state must exist")
-        .lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+        .lifecycle = ActiveLifecycle::Paused;
     });
     #[block]
     {
@@ -1372,54 +1375,6 @@ mod benches {
       Pallet::<T>::benchmark_scheduler_actor_program_probe(aaa_id, hot);
     }
   }
-
-  #[benchmark]
-  fn cache_revalidation_units(n: Linear<1, 8>) {
-    let max_units = T::MaxCacheRevalidationUnitsPerBlock::get();
-    let bounded = n.min(max_units);
-    let mut aaa_ids = alloc::vec::Vec::new();
-    for index in 0..bounded {
-      let aaa_id = bench_create_system_manual::<T>(40_000u32.saturating_add(index));
-      ActorHot::<T>::mutate(aaa_id, |maybe_hot| {
-        maybe_hot
-          .as_mut()
-          .expect("benchmark actor hot state must exist")
-          .cache_epoch = 0;
-      });
-      aaa_ids.push(aaa_id);
-    }
-    // Isolate the workset: the worker iterates every `ActorHot` key, so a host that seeds
-    // genesis System AAA would otherwise consume worker units outside `remaining` and clear
-    // the gate before this benchmark's actors are stamped (framework-forkable measurement).
-    let foreign: alloc::vec::Vec<AaaId> = ActorHot::<T>::iter_keys()
-      .filter(|candidate| !aaa_ids.contains(candidate))
-      .collect();
-    for foreign_id in foreign {
-      ActorHot::<T>::remove(foreign_id);
-    }
-    CurrentCacheEpoch::<T>::put(1);
-    CacheRevalidation::<T>::put(CacheRevalidationState {
-      target_epoch: 1,
-      cursor: None,
-      remaining: bounded,
-    });
-    #[block]
-    {
-      core::hint::black_box(Pallet::<T>::run_cache_revalidation_worker(Weight::MAX));
-    }
-    for aaa_id in aaa_ids {
-      let hot = ActorHot::<T>::get(aaa_id).expect("benchmark actor must survive revalidation");
-      assert_eq!(
-        hot.cache_epoch, 1,
-        "benchmark revalidation must stamp every survivor"
-      );
-    }
-    assert!(
-      !CacheRevalidation::<T>::exists(),
-      "benchmark revalidation must clear its gate"
-    );
-  }
-
   /// One complete minimal cycle execution over one inert StopCycle step (fixed cycle
   /// orchestration plus finalization), measured on the execution path only; queue probes and
   /// head consumption are separate scheduler classes.
@@ -2074,39 +2029,23 @@ mod benches {
       ActorProgram::<T>::take(system_template_id).expect("System program template");
     let funding_template =
       ActorFunding::<T>::take(system_template_id).expect("System funding template");
-    let mut user_identity = system_identity.clone();
-    user_identity.actor_class = ActorClass::User { owner_slot: 0 };
-    let user_fee_envelope =
-      Pallet::<T>::attempt_fee_envelope(AaaType::User, &program_template.execution_plan, 0)
-        .expect("benchmark User program has a checked fee envelope");
-    let user_reserve = user_fee_envelope
-      .total
-      .saturating_add(T::MinUserBalance::get())
-      .saturating_add(One::one());
-    for _ in 0..bounded.div_ceil(2) {
-      let _ = T::AssetOps::mint(
-        &user_identity.sovereign_account,
-        T::FeeNativeAssetId::get(),
-        user_reserve,
-      );
-    }
-
     let first_id = 43_000_000u64;
     for offset in 0..bounded {
       let aaa_id = first_id.saturating_add(u64::from(offset));
       let is_user = offset % 2 != 0;
       let mut identity = if is_user {
-        user_identity.clone()
+        let owner: T::AccountId = account("mixed_user_owner", offset, 0);
+        let template_id = bench_create_user::<T>(owner);
+        let identity = ActorIdentities::<T>::take(template_id).expect("User identity template");
+        ActorHot::<T>::remove(template_id);
+        ActorProgram::<T>::remove(template_id);
+        ActorFunding::<T>::remove(template_id);
+        identity
       } else {
         system_identity.clone()
       };
       identity.cycle_nonce = 0;
       let mut hot = system_hot.clone();
-      hot.cycle_fee_upper = if is_user {
-        user_fee_envelope.total
-      } else {
-        Zero::zero()
-      };
       hot.last_cycle_block = None;
       hot.pending_signal = true;
       hot.queue_ticket = None;
@@ -2128,14 +2067,21 @@ mod benches {
         ActorIdentities::<T>::get(aaa_id).is_some_and(|identity| identity.cycle_nonce == 1)
       })
       .count() as u32;
+    // User fee collection may materialize one Fee Sink service obligation. At the
+    // configured attempt ceiling that obligation consumes one pass slot while the
+    // post-cutoff ticket remains ordered behind the measured cohort.
+    let expected = bounded.min(T::MaxExecutionsPerBlock::get().saturating_sub(1));
     assert_eq!(
-      executed, bounded,
-      "mixed canonical-FIFO benchmark must complete"
+      executed, expected,
+      "mixed canonical-FIFO benchmark must complete its bounded cohort"
     );
-    assert!((0..bounded).all(|offset| {
-      let aaa_id = first_id.saturating_add(u64::from(offset));
-      ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.queue_ticket.is_none())
-    }));
+    let consumed = (0..bounded)
+      .filter(|offset| {
+        let aaa_id = first_id.saturating_add(u64::from(*offset));
+        ActorHot::<T>::get(aaa_id).is_some_and(|hot| hot.queue_ticket.is_none())
+      })
+      .count() as u32;
+    assert_eq!(consumed, expected);
   }
 
   #[benchmark(pov_mode = Measured)]

@@ -51,8 +51,7 @@ const taskNames = [
 const weightModel = {
   identity: 'deos-test-weights',
   version: '1',
-  stepBaseFee: 2n,
-  conditionReadFee: 1n,
+  evaluationFeeUpper: (conditionCount) => 2n + BigInt(conditionCount),
   evaluationWeight: (conditionCount) => ({
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),

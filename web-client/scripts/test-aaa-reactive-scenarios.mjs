@@ -38,8 +38,7 @@ const priceFeed = (assetIn, assetOut) => ({
 const weightModel = {
   identity: 'reactive-scenario-corpus-weights',
   version: '1',
-  stepBaseFee: 2n,
-  conditionReadFee: 1n,
+  evaluationFeeUpper: (conditionCount) => 2n + BigInt(conditionCount),
   evaluationWeight: (conditionCount) => ({
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),
@@ -127,7 +126,7 @@ function priceBucket({ direction, threshold }) {
         slippageParts: 10_000_000,
       },
       onError: { type: 'RetryLater', maxAttempts: 3 },
-      completionPolicy: 'CloseAfterProductiveRun',
+      completionPolicy: 'CloseAfterProductiveCycle',
     }),
   };
 }
@@ -235,7 +234,7 @@ const nonPriceScalar = {
       amount: { type: 'Fixed', value: '100' },
     },
     onError: { type: 'AbortCycle' },
-    completionPolicy: 'CloseAfterProductiveRun',
+    completionPolicy: 'CloseAfterProductiveCycle',
   }),
 };
 
@@ -282,7 +281,7 @@ test('descending buys and ascending sells lower as independent bounded one-shot 
     );
     assert.equal(
       inspection.projection.value.completion_policy.type,
-      'CloseAfterProductiveRun',
+      'CloseAfterProductiveCycle',
       scenario.name,
     );
     assert.equal(

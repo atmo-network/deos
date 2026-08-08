@@ -147,8 +147,6 @@ test('cost forecast keeps RefTime, ProofSize, fee classes, and provenance separa
     model: 'deos-runtime-weights',
     modelVersion: '0.7.3',
     actorType: 'User',
-    stepBaseFee: 2n,
-    conditionReadFee: 3n,
     steps: [
       {
         stepIndex: 0,
@@ -156,6 +154,7 @@ test('cost forecast keeps RefTime, ProofSize, fee classes, and provenance separa
         conditionOutcome: 'Pass',
         executionDisposition: 'Execute',
         evaluationWeight: { refTime: 10n, proofSize: 2n },
+        evaluationFeeUpper: 8n,
         executionWeightUpper: { refTime: 100n, proofSize: 5n },
         executionFeeUpper: 7n,
       },
@@ -165,6 +164,7 @@ test('cost forecast keeps RefTime, ProofSize, fee classes, and provenance separa
         conditionOutcome: 'Fail',
         executionDisposition: 'Skip',
         evaluationWeight: { refTime: 20n, proofSize: 3n },
+        evaluationFeeUpper: 2n,
         executionWeightUpper: { refTime: 200n, proofSize: 6n },
         executionFeeUpper: 8n,
       },
@@ -174,6 +174,7 @@ test('cost forecast keeps RefTime, ProofSize, fee classes, and provenance separa
         conditionOutcome: 'Unknown',
         executionDisposition: 'Unknown',
         evaluationWeight: { refTime: 30n, proofSize: 4n },
+        evaluationFeeUpper: 2n,
         executionWeightUpper: { refTime: 300n, proofSize: 7n },
         executionFeeUpper: 9n,
       },

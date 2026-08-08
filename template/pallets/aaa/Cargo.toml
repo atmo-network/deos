@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-aaa"
-version = "0.7.11"
+version = "0.7.12"
 description = "Deterministic Account Abstraction Actors and bounded runtime automation for FRAME"
 authors = ["DEOS Contributors"]
 license = "MIT-0"

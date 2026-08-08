@@ -6,9 +6,9 @@ use super::{
   fee_native_protected_minimum, settle_attempt_fee_step,
 };
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::{
-  Perbill,
-  traits::{CheckedAdd, CheckedMul, SaturatedConversion, Zero},
+use polkadot_sdk::{
+  sp_runtime::{Perbill, traits::{SaturatedConversion, Zero}},
+  sp_weights::WeightToFee as _,
 };
 
 /// Checked increment for protocol-semantic counters. The admitted bound
@@ -218,12 +218,7 @@ impl<T: Config> Pallet<T> {
       aaa_id,
       cycle_nonce: identity.cycle_nonce,
       result: CycleResult::Cancelled,
-      executed_steps: totals.executed_steps,
-      committed_effectful_tasks: totals.committed_effectful_tasks,
-      skipped_conditions: totals.skipped_conditions,
-      skipped_resolution: totals.skipped_resolution,
-      skipped_funding_unavailable: totals.skipped_funding_unavailable,
-      failed_steps: totals.failed_steps,
+      outcomes: totals,
     });
     Ok(true)
   }
@@ -341,8 +336,9 @@ impl<T: Config> Pallet<T> {
     aaa_id: AaaId,
     instance: ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
-  ) -> Weight {
-    Self::execute_single_cycle_traced(aaa_id, instance, now, None).0
+  ) -> (Weight, bool) {
+    let result = Self::execute_single_cycle_traced(aaa_id, instance, now, None);
+    (result.0, result.3)
   }
 
   pub(crate) fn execute_single_cycle_traced(
@@ -350,7 +346,7 @@ impl<T: Config> Pallet<T> {
     instance: ActiveActorViewOf<T>,
     now: BlockNumberFor<T>,
     mut trace: Option<&mut alloc::vec::Vec<SimulationStepRecord>>,
-  ) -> (Weight, bool, Option<CloseReason>) {
+  ) -> (Weight, bool, Option<CloseReason>, bool) {
     let base_weight = T::WeightInfo::cycle_orchestration();
     let is_continuation = instance.cycle_state == CycleState::Suspended;
     let actor = instance.sovereign_account.clone();
@@ -366,6 +362,16 @@ impl<T: Config> Pallet<T> {
     )
     .expect("admitted execution plans have a checked fee envelope");
     let mut reserved_fee_remaining = fee_envelope.total;
+    let mut fee_collection_failed = false;
+    macro_rules! collect_step_fee {
+      ($fee:expr) => {{
+        let result = Self::collect_user_step_fee(&actor, $fee);
+        if result.is_err() {
+          fee_collection_failed = true;
+        }
+        result
+      }};
+    }
     let (
       cycle_nonce,
       start_cursor,
@@ -389,15 +395,16 @@ impl<T: Config> Pallet<T> {
       if instance.cycle_nonce == u64::MAX {
         Self::close_actor(aaa_id, &instance, CloseReason::CycleNonceExhausted)
           .expect("fresh execution snapshot satisfies terminal preconditions");
-        return (base_weight, true, Some(CloseReason::CycleNonceExhausted));
+        return (
+          base_weight,
+          true,
+          Some(CloseReason::CycleNonceExhausted),
+          false,
+        );
       }
-      let funding_snapshot = if instance.funding_tracked_count == 0 {
-        FundingSnapshotOf::<T>::default()
-      } else {
-        ActorFunding::<T>::get(aaa_id)
-          .map(|funding| funding.funding_accumulated)
-          .unwrap_or_default()
-      };
+      let funding_snapshot = ActorFunding::<T>::get(aaa_id)
+        .map(|funding| funding.funding_accumulated)
+        .unwrap_or_default();
       let opening_snapshot = Self::capture_opening_snapshot(
         instance.actor_class.aaa_type(),
         &actor,
@@ -412,7 +419,7 @@ impl<T: Config> Pallet<T> {
           .expect("nonce-exhausted actors close before run opening");
         Some(identity.cycle_nonce)
       }) else {
-        return (base_weight, true, None);
+        return (base_weight, true, None, false);
       };
       ActorHot::<T>::mutate(aaa_id, |maybe| {
         if let Some(hot) = maybe.as_mut() {
@@ -420,13 +427,11 @@ impl<T: Config> Pallet<T> {
           hot.last_cycle_block = Some(now);
         }
       });
-      if instance.funding_tracked_count != 0 {
-        ActorFunding::<T>::mutate(aaa_id, |maybe| {
-          if let Some(funding) = maybe.as_mut() {
-            funding.funding_accumulated.clear();
-          }
-        });
-      }
+      ActorFunding::<T>::mutate(aaa_id, |maybe| {
+        if let Some(funding) = maybe.as_mut() {
+          funding.funding_accumulated.clear();
+        }
+      });
       (
         cycle_nonce,
         0,
@@ -468,7 +473,7 @@ impl<T: Config> Pallet<T> {
               step_fee,
               FeeChargeKind::EvaluationOnly,
             );
-            if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+            if let Err(error) = collect_step_fee!(charged_fee) {
               failed_steps = checked_semantic_increment(failed_steps)
                 .expect("semantic counter bound is precluded by admission");
               Self::record_simulation_step(
@@ -513,9 +518,7 @@ impl<T: Config> Pallet<T> {
               step_fee,
               FeeChargeKind::EvaluationOnly,
             );
-            Self::collect_user_step_fee(&actor, charged_fee)
-              .err()
-              .unwrap_or(error)
+            collect_step_fee!(charged_fee).err().unwrap_or(error)
           } else {
             error
           };
@@ -557,7 +560,7 @@ impl<T: Config> Pallet<T> {
               step_fee,
               FeeChargeKind::EvaluationOnly,
             );
-            if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+            if let Err(error) = collect_step_fee!(charged_fee) {
               failed_steps = checked_semantic_increment(failed_steps)
                 .expect("semantic counter bound is precluded by admission");
               Self::record_simulation_step(
@@ -602,7 +605,7 @@ impl<T: Config> Pallet<T> {
               step_fee,
               FeeChargeKind::EvaluationOnly,
             );
-            if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+            if let Err(error) = collect_step_fee!(charged_fee) {
               failed_steps = checked_semantic_increment(failed_steps)
                 .expect("semantic counter bound is precluded by admission");
               Self::record_simulation_step(
@@ -666,9 +669,7 @@ impl<T: Config> Pallet<T> {
               step_fee,
               FeeChargeKind::EvaluationOnly,
             );
-            Self::collect_user_step_fee(&actor, charged_fee)
-              .err()
-              .unwrap_or(error)
+            collect_step_fee!(charged_fee).err().unwrap_or(error)
           } else {
             error
           };
@@ -700,7 +701,7 @@ impl<T: Config> Pallet<T> {
           step_fee,
           FeeChargeKind::Attempted,
         );
-        if let Err(error) = Self::collect_user_step_fee(&actor, charged_fee) {
+        if let Err(error) = collect_step_fee!(charged_fee) {
           failed_steps = checked_semantic_increment(failed_steps)
             .expect("semantic counter bound is precluded by admission");
           Self::record_simulation_step(
@@ -843,7 +844,7 @@ impl<T: Config> Pallet<T> {
           suspension_reason,
         )
         .expect("admitted mutable RetryLater plan has a valid unresolved cursor");
-        return (attempt_weight, false, None);
+        return (attempt_weight, false, None, fee_collection_failed);
       }
       failure_close_reason = Some(if local_limit_reached {
         CloseReason::RetryAttemptsExhausted
@@ -877,12 +878,14 @@ impl<T: Config> Pallet<T> {
       } else {
         CycleResult::Completed
       },
-      executed_steps,
-      committed_effectful_tasks,
-      skipped_conditions,
-      skipped_resolution,
-      skipped_funding_unavailable,
-      failed_steps,
+      outcomes: OutcomeTotals {
+        executed_steps,
+        committed_effectful_tasks,
+        skipped_conditions,
+        skipped_resolution,
+        skipped_funding_unavailable,
+        failed_steps,
+      },
     });
     let mut terminal_close_reason = None;
     if execution_plan_failed {
@@ -900,12 +903,12 @@ impl<T: Config> Pallet<T> {
         }
       }
     } else if let Some(inst) = Self::active_actor_view(aaa_id) {
-      if inst.completion_policy == CompletionPolicy::CloseAfterProductiveRun
+      if inst.completion_policy == CompletionPolicy::CloseAfterProductiveCycle
         && committed_effectful_tasks > 0
       {
-        Self::close_actor(aaa_id, &inst, CloseReason::ProductiveRunCompleted)
+        Self::close_actor(aaa_id, &inst, CloseReason::ProductiveCycleCompleted)
           .expect("fresh productive execution snapshot satisfies terminal preconditions");
-        terminal_close_reason = Some(CloseReason::ProductiveRunCompleted);
+        terminal_close_reason = Some(CloseReason::ProductiveCycleCompleted);
       } else if let Some(target_nonce) = inst.auto_close_at_cycle_nonce {
         if cycle_nonce >= target_nonce {
           Self::close_actor(aaa_id, &inst, CloseReason::AutoCloseNonceReached)
@@ -914,7 +917,12 @@ impl<T: Config> Pallet<T> {
         }
       }
     }
-    (attempt_weight, execution_plan_failed, terminal_close_reason)
+    (
+      attempt_weight,
+      execution_plan_failed,
+      terminal_close_reason,
+      fee_collection_failed,
+    )
   }
 
   pub fn simulate_current_program(
@@ -924,7 +932,25 @@ impl<T: Config> Pallet<T> {
     expected_program: ProgramInputOf<T>,
     mode: SimulationMode,
   ) -> Result<SimulationResultOf<T>, SimulationError> {
-    let instance = Self::active_actor_view(aaa_id).ok_or(SimulationError::ActorNotFound)?;
+    let instance = Self::active_actor_for_classification(aaa_id)
+      .map_err(|error| match error {
+        ActorClassificationError::ActorInvariant => SimulationError::ActorInvariant,
+        ActorClassificationError::ContinuationInvariant => SimulationError::ContinuationInvariant,
+        ActorClassificationError::ComputationOverflow => SimulationError::ComputationOverflow,
+      })?
+      .ok_or(SimulationError::ActorNotFound)?;
+    let stored_funding =
+      ActorFunding::<T>::get(aaa_id).ok_or(SimulationError::ActorInvariant)?;
+    let continuation = ContinuationStateStore::<T>::get(aaa_id);
+    if (instance.cycle_state == CycleState::Suspended) != continuation.is_some() {
+      return Err(SimulationError::ContinuationInvariant);
+    }
+    if continuation
+      .as_ref()
+      .is_some_and(|state| state.attempt.checked_add(1).is_none())
+    {
+      return Err(SimulationError::ComputationOverflow);
+    }
     if instance.actor_class.aaa_type() != expected_type {
       return Err(SimulationError::TypeMismatch);
     }
@@ -942,19 +968,24 @@ impl<T: Config> Pallet<T> {
     else {
       return Err(SimulationError::ProgramMismatch);
     };
-    let stored_program = ActorProgram::<T>::get(aaa_id).ok_or(SimulationError::ActorNotFound)?;
-    let stored_funding = ActorFunding::<T>::get(aaa_id).ok_or(SimulationError::ActorNotFound)?;
-    if stored_program.schedule != schedule
-      || stored_program.schedule_window != schedule_window
-      || stored_program.execution_plan != execution_plan
-      || stored_program.completion_policy != completion_policy
+    if instance.schedule != schedule
+      || instance.schedule_window != schedule_window
+      || instance.execution_plan != execution_plan
+      || instance.completion_policy != completion_policy
       || stored_funding.funding_source_policy != funding_source_policy
       || instance.auto_close_at_cycle_nonce != auto_close_at_cycle_nonce
     {
       return Err(SimulationError::ProgramMismatch);
     }
-    Self::ensure_simulation_ready(aaa_id, &instance, mode)?;
-
+    match mode {
+      SimulationMode::FreshCurrentPlan if instance.cycle_state != CycleState::Idle => {
+        return Err(SimulationError::ModeCycleStateMismatch);
+      }
+      SimulationMode::CurrentContinuation if instance.cycle_state != CycleState::Suspended => {
+        return Err(SimulationError::ModeCycleStateMismatch);
+      }
+      _ => {}
+    }
     let (cycle_nonce, attempt, start_cursor, initial_outcomes) = match mode {
       SimulationMode::FreshCurrentPlan => (
         instance.cycle_nonce.saturating_add(1),
@@ -963,28 +994,65 @@ impl<T: Config> Pallet<T> {
         OutcomeTotals::default(),
       ),
       SimulationMode::CurrentContinuation => {
-        let continuation =
-          ContinuationStateStore::<T>::get(aaa_id).ok_or(SimulationError::ContinuationInvariant)?;
+        let continuation = continuation
+          .as_ref()
+          .ok_or(SimulationError::ContinuationInvariant)?;
         (
           instance.cycle_nonce,
-          continuation.attempt.saturating_add(1),
+          continuation
+            .attempt
+            .checked_add(1)
+            .ok_or(SimulationError::ComputationOverflow)?,
           continuation.cursor,
           continuation.cumulative_outcomes,
         )
       }
     };
+    let classification = Self::classify_actor(aaa_id, &instance).map_err(|error| match error {
+      ActorClassificationError::ActorInvariant => SimulationError::ActorInvariant,
+      ActorClassificationError::ContinuationInvariant => SimulationError::ContinuationInvariant,
+      ActorClassificationError::ComputationOverflow => SimulationError::ComputationOverflow,
+    })?;
+    if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
+      return Err(SimulationError::GlobalCircuitBreaker);
+    }
+    if let Some(reason) = classification.terminal_reason {
+      return Ok(SimulationResult {
+        status: SimulationStatus::Closed(reason),
+        cycle_nonce: instance.cycle_nonce,
+        attempt: attempt.saturating_sub(u32::from(mode == SimulationMode::CurrentContinuation)),
+        start_cursor,
+        continuation_cursor: None,
+        unsuccessful_attempts_at_cursor: None,
+        cumulative_outcomes: initial_outcomes,
+        steps: BoundedVec::default(),
+      });
+    }
+    match classification.execution_phase {
+      ActorExecutionPhase::Paused => return Err(SimulationError::Paused),
+      ActorExecutionPhase::Ready => {}
+      ActorExecutionPhase::WaitingRetry(_)
+      | ActorExecutionPhase::WaitingTemporal(_)
+      | ActorExecutionPhase::WaitingSignal => return Err(SimulationError::NotReady),
+      ActorExecutionPhase::GlobalCircuitBreaker => unreachable!("handled above"),
+    }
     let now = frame_system::Pallet::<T>::block_number();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       let mut trace = alloc::vec::Vec::new();
-      let (_, failed, close_reason) =
+      let (_, failed, close_reason, fee_collection_failed) =
         Self::execute_single_cycle_traced(aaa_id, instance, now, Some(&mut trace));
+      if fee_collection_failed {
+        return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+          SimulationError::FeeCollectionFailed,
+        ));
+      }
       let continuation = ContinuationStateStore::<T>::get(aaa_id);
       let status = if continuation.is_some() {
         SimulationStatus::Suspended
       } else if let Some(reason) = close_reason {
         SimulationStatus::Closed(reason)
       } else if failed {
-        SimulationStatus::Aborted
+        SimulationStatus::Failed
       } else {
         SimulationStatus::Completed
       };
@@ -992,10 +1060,6 @@ impl<T: Config> Pallet<T> {
       let unsuccessful_attempts_at_cursor = continuation
         .as_ref()
         .map(|state| state.unsuccessful_attempts_at_cursor);
-      let finalized_through = continuation_cursor
-        .map(|cursor| cursor.checked_sub(1))
-        .unwrap_or_else(|| trace.last().map(|record| record.step_index))
-        .or_else(|| start_cursor.checked_sub(1));
       let mut cumulative_outcomes = initial_outcomes;
       for record in &trace {
         match record.outcome {
@@ -1045,7 +1109,6 @@ impl<T: Config> Pallet<T> {
         start_cursor,
         continuation_cursor,
         unsuccessful_attempts_at_cursor,
-        finalized_through,
         cumulative_outcomes,
         steps,
       }))
@@ -1058,12 +1121,9 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn compute_eval_fee_checked(num_conditions: u32) -> Result<BalanceOf<T>, Error<T>> {
-    let condition_fee = T::ConditionReadFee::get()
-      .checked_mul(&num_conditions.saturated_into())
-      .ok_or(Error::<T>::AdmissionBoundOverflow)?;
-    T::StepBaseFee::get()
-      .checked_add(&condition_fee)
-      .ok_or(Error::<T>::AdmissionBoundOverflow)
+    let evaluation_weight = T::WeightInfo::condition_set_evaluation(num_conditions)
+      .saturating_add(T::WeightInfo::fee_collection());
+    Ok(T::WeightToFee::weight_to_fee(&evaluation_weight))
   }
 
   #[cfg(test)]

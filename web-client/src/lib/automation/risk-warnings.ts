@@ -26,7 +26,7 @@ export type AaaCompositionWarningInput = {
   artifact: AaaPlanArtifact;
   analysis: ProgramStaticAnalysis;
   strictFifoHeadOfLine?: boolean;
-  simulatorStatus?: 'Completed' | 'Aborted' | 'Suspended' | 'Closed';
+  simulatorStatus?: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   successfulTaskCount?: number;
   totalTaskCount?: number;
 };

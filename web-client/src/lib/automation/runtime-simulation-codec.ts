@@ -27,14 +27,13 @@ export type AaaRuntimeStepOutcome =
   | { type: 'Suspended'; reason: string };
 
 export type AaaDecodedRuntimeSimulationOutcome = {
-  status: 'Completed' | 'Aborted' | 'Suspended' | 'Closed';
+  status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   closeReason: string | null;
   cycleNonce: bigint;
   attempt: number;
   startCursor: number;
   continuationCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
-  finalizedThrough: number | null;
   cumulativeOutcomes: {
     executedSteps: number;
     committedEffectfulTasks: number;
@@ -169,7 +168,7 @@ function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
   const outcome = asRecord(value, 'simulation outcome');
   const parsedStatus = asVariant(outcome.status, 'simulation status');
   const status = parsedStatus.type;
-  if (!['Completed', 'Aborted', 'Suspended', 'Closed'].includes(status)) {
+  if (!['Completed', 'Failed', 'Suspended', 'Closed'].includes(status)) {
     throw new Error(`Unsupported runtime simulation status ${status}`);
   }
   const closeReason =
@@ -196,10 +195,6 @@ function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
     unsuccessfulAttemptsAtCursor: asOptionalIndex(
       outcome.unsuccessful_attempts_at_cursor,
       'unsuccessful_attempts_at_cursor',
-    ),
-    finalizedThrough: asOptionalIndex(
-      outcome.finalized_through,
-      'finalized_through',
     ),
     cumulativeOutcomes: {
       executedSteps: asIndex(totals.executed_steps, 'executed_steps'),

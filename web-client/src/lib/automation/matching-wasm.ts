@@ -214,7 +214,7 @@ function validateOutcome(
   maxSteps: number,
 ) {
   if (
-    !['Completed', 'Aborted', 'Suspended', 'Closed'].includes(outcome.status)
+    !['Completed', 'Failed', 'Suspended', 'Closed'].includes(outcome.status)
   ) {
     throw new Error('Unsupported runtime simulation status');
   }
@@ -227,9 +227,6 @@ function validateOutcome(
     throw new Error(
       'outcome.resultScale must be canonical lowercase SCALE hex',
     );
-  }
-  if (outcome.finalizedThrough != null) {
-    validateIndex(outcome.finalizedThrough, 'outcome.finalizedThrough');
   }
   if (outcome.steps.length > maxSteps) {
     throw new Error(
@@ -266,12 +263,6 @@ function validateOutcome(
       throw new Error(
         'Continuation cursor cannot precede the attempted suffix',
       );
-    }
-    if (
-      outcome.finalizedThrough != null &&
-      outcome.finalizedThrough >= outcome.continuationCursor
-    ) {
-      throw new Error('Suspended cursor must remain the unresolved step');
     }
   } else if (outcome.continuationCursor != null) {
     throw new Error(

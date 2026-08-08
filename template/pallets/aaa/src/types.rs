@@ -9,33 +9,6 @@ pub type WakeupSlot = u32;
 pub type WakeupCursorIndex = u32;
 pub type ObservationRevision = u64;
 
-/// Global cache epoch stamp shared by every executable Active actor (spec 2.1, 5.4).
-pub type CacheEpoch = u32;
-
-/// Durable global cache-revalidation progress (spec 5.4). The workset is the exact set of
-/// Active actors at upgrade start; `cursor` marks the last processed workset key, and
-/// `remaining` counts members not yet confirmed, shrinking on close/deactivation removal and
-/// on each stamped or skipped worker visit. The state clears atomically at `remaining == 0`.
-#[derive(
-  Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
-pub struct CacheRevalidationState<Cursor> {
-  pub target_epoch: CacheEpoch,
-  pub cursor: Cursor,
-  pub remaining: u32,
-}
-
-/// Disposition applied by the bounded revalidation worker to an Active actor whose plan no
-/// longer admits under current bindings (spec 6.4). The migration-specific contract MUST name
-/// one; without it a cache-affecting runtime change MUST NOT activate.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RevalidationDisposition {
-  /// Remove the Active epoch while preserving identity, locator, nonce, and balances.
-  Deactivate,
-  /// Delete actor semantics while preserving sovereign balances.
-  Close(CloseReason),
-}
-
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
@@ -133,14 +106,14 @@ impl<FeedId> Default for DirtyObservationList<FeedId> {
   TypeInfo,
   MaxEncodedLen,
 )]
-pub enum IdleStarvationPhase<BlockNumber> {
+pub enum IdleStarvationPhase {
   #[default]
   Healthy,
   Starving {
-    since: BlockNumber,
+    consecutive_blocks: u32,
   },
   Alerted {
-    since: BlockNumber,
+    consecutive_blocks: u32,
   },
 }
 
@@ -788,21 +761,14 @@ pub enum Mutability {
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub enum PauseReason {
-  Manual,
-}
-
-#[derive(
-  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
-)]
 pub enum ActiveLifecycle {
   Active,
-  Paused(PauseReason),
+  Paused,
 }
 
 impl ActiveLifecycle {
   pub fn is_paused(self) -> bool {
-    matches!(self, Self::Paused(_))
+    matches!(self, Self::Paused)
   }
 }
 
@@ -818,7 +784,7 @@ pub enum CloseReason {
   FeeBudgetExhausted,
   AutoCloseNonceReached,
   RetryAttemptsExhausted,
-  ProductiveRunCompleted,
+  ProductiveCycleCompleted,
 }
 
 #[derive(
@@ -837,7 +803,7 @@ pub enum CloseReason {
 pub enum CompletionPolicy {
   #[default]
   Persistent,
-  CloseAfterProductiveRun,
+  CloseAfterProductiveCycle,
 }
 
 #[derive(
@@ -911,7 +877,7 @@ pub enum SimulationMode {
 )]
 pub enum SimulationStatus {
   Completed,
-  Aborted,
+  Failed,
   Suspended,
   Closed(CloseReason),
 }
@@ -939,22 +905,19 @@ pub struct SimulationStepRecord {
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub enum SimulationError {
+  TransactionDepthExceeded,
   ActorNotFound,
-  ProgramMismatch,
+  ActorInvariant,
+  ContinuationInvariant,
+  ComputationOverflow,
   TypeMismatch,
   MutabilityMismatch,
+  ProgramMismatch,
   ModeCycleStateMismatch,
-  CacheRevalidationActive,
   GlobalCircuitBreaker,
-  WindowExpired,
   Paused,
-  CycleNonceExhausted,
-  ConsecutiveFailures,
   NotReady,
-  BalanceUnavailable,
-  FeeBudgetUnavailable,
-  ContinuationInvariant,
-  TransactionDepthExceeded,
+  FeeCollectionFailed,
 }
 
 impl From<polkadot_sdk::sp_runtime::DispatchError> for SimulationError {
@@ -981,9 +944,39 @@ pub struct SimulationResult<MaxExecutionPlanSteps: Get<u32>> {
   pub start_cursor: u32,
   pub continuation_cursor: Option<u32>,
   pub unsuccessful_attempts_at_cursor: Option<u32>,
-  pub finalized_through: Option<u32>,
   pub cumulative_outcomes: OutcomeTotals,
   pub steps: BoundedVec<SimulationStepRecord, MaxExecutionPlanSteps>,
+}
+
+/// Internal execution-phase output of the canonical actor classifier.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActorExecutionPhase<BlockNumber> {
+  GlobalCircuitBreaker,
+  Paused,
+  WaitingRetry(BlockNumber),
+  WaitingTemporal(BlockNumber),
+  WaitingSignal,
+  Ready,
+}
+
+/// Internal canonical actor classification shared by runtime projections.
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub struct ActorClassification<BlockNumber> {
+  pub terminal_reason: Option<CloseReason>,
+  pub execution_phase: ActorExecutionPhase<BlockNumber>,
+}
+
+#[derive(
+  Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
+)]
+pub enum ActorClassificationError {
+  ActorInvariant,
+  ContinuationInvariant,
+  ComputationOverflow,
 }
 
 /// Read-only scheduler-owned readiness phase for the eligibility projection
@@ -1003,14 +996,8 @@ pub enum AaaEligibilityPhase {
   Paused,
   /// The global circuit breaker blocks all execution.
   GlobalCircuitBreaker,
-  /// The schedule window ended; window-expiry closure is due.
-  WindowExpired,
-  /// Cycle nonce exhausted; closure is due.
-  CycleNonceExhausted,
-  /// The consecutive-failure limit is reached; closure is due.
-  ConsecutiveFailureLimit,
-  /// The configured auto-close nonce is reached; closure precedes the next cycle.
-  AutoCloseDue,
+  /// Classification found terminal liveness or configured closure due.
+  CloseDue(CloseReason),
   /// The temporal gate is open but the pending-signal latch is absent.
   WaitingSignal,
   /// A suspended run waits for retry backoff or cooldown before the next attempt.
@@ -1019,15 +1006,13 @@ pub enum AaaEligibilityPhase {
   WaitingTemporal,
 }
 
-/// One read-only eligibility projection (spec 7.3). `ready` is the scheduler
-/// verdict at the read block; `phase` explains it; `next_eligible_block` is the
-/// next block at which temporal eligibility opens (`now` when `ready`), or
-/// `None` when no future temporal gate is computable.
+/// One read-only eligibility projection (spec 7.3). `phase` owns the scheduler
+/// verdict; `next_eligible_block` is the next block at which temporal eligibility
+/// opens (`now` when ready), or `None` when no future temporal gate is computable.
 #[derive(
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub struct AaaEligibilityProjection<BlockNumber> {
-  pub ready: bool,
   pub phase: AaaEligibilityPhase,
   pub next_eligible_block: Option<BlockNumber>,
 }
@@ -1037,10 +1022,12 @@ pub struct AaaEligibilityProjection<BlockNumber> {
   Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
 pub enum AaaEligibilityError {
-  /// Next-eligible arithmetic overflowed the block-number domain.
-  ComputationOverflow,
+  /// An existing Active actor has malformed required partitions.
+  ActorInvariant,
   /// A suspended actor lacks its mandatory Continuation state.
   ContinuationInvariant,
+  /// Classification arithmetic overflowed the block-number domain.
+  ComputationOverflow,
 }
 
 #[derive(Decode, DecodeWithMemTracking, Encode, TypeInfo, MaxEncodedLen)]
@@ -2067,18 +2054,19 @@ pub struct ContinuationState<
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorIdentity<AccountId> {
+pub struct ActorIdentity<AccountId, BlockNumber> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
   pub mutability: Mutability,
   pub cycle_nonce: u64,
+  pub last_control_mutation_block: BlockNumber,
 }
 
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActorHotState<BlockNumber, Balance> {
+pub struct ActorHotState<BlockNumber> {
   pub lifecycle: ActiveLifecycle,
   pub cycle_state: CycleState,
   pub auto_close_at_cycle_nonce: Option<u64>,
@@ -2087,15 +2075,8 @@ pub struct ActorHotState<BlockNumber, Balance> {
   pub queue_ticket: Option<u64>,
   pub wakeup_pointer: Option<WakeupPointer<BlockNumber>>,
   pub terminal_at: Option<BlockNumber>,
-  pub last_control_queue_mutation_block: Option<BlockNumber>,
-  pub cycle_weight_upper: Weight,
-  pub cycle_fee_upper: Balance,
-  pub funding_tracked_count: u32,
   pub schedule_anchor: BlockNumber,
   pub last_cycle_block: Option<BlockNumber>,
-  /// Current global cache epoch stamp; an Active actor is executable only while this
-  /// equals `CurrentCacheEpoch` and no `CacheRevalidationState` exists (spec 2.1).
-  pub cache_epoch: CacheEpoch,
 }
 
 #[derive(
@@ -2111,7 +2092,7 @@ pub struct ActorProgramState<Schedule, BlockNumber, ExecutionPlan> {
 #[derive(
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo, MaxEncodedLen,
 )]
-pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan, Balance> {
+pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan> {
   pub sovereign_account: AccountId,
   pub owner: AccountId,
   pub actor_class: ActorClass,
@@ -2127,14 +2108,9 @@ pub struct ActiveActorView<AccountId, BlockNumber, Schedule, ExecutionPlan, Bala
   pub consecutive_failures: u32,
   pub pending_signal: bool,
   pub queue_ticket: Option<u64>,
-  pub last_control_queue_mutation_block: Option<BlockNumber>,
-  pub cycle_weight_upper: Weight,
-  pub cycle_fee_upper: Balance,
-  pub funding_tracked_count: u32,
+  pub last_control_mutation_block: BlockNumber,
   pub schedule_anchor: BlockNumber,
   pub last_cycle_block: Option<BlockNumber>,
-  /// Read-only cache stamp mirroring `ActorHotState.cache_epoch` (spec 2.1).
-  pub cache_epoch: CacheEpoch,
 }
 
 #[derive(

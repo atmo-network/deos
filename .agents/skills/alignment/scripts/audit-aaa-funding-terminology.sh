@@ -31,6 +31,7 @@ parse_args() {
 }
 
 legacy_pattern=''
+removed_surface_pattern=''
 
 load_rule_inventory() {
     local inventory="$PROJECT_ROOT/.agents/skills/alignment/rules/aaa-drift-rules.json"
@@ -41,18 +42,32 @@ const rule = inventory.rules.find((candidate) => candidate.id === "aaa-funding-l
 if (!rule || rule.kind !== "regex-any-case-insensitive" || !Array.isArray(rule.patterns)) process.exit(1);
 process.stdout.write(rule.patterns.join("|"));
 ' "$inventory")"
+    removed_surface_pattern="$(node -e '
+const fs = require("node:fs");
+const inventory = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+const rule = inventory.rules.find((candidate) => candidate.id === "aaa-removed-surface-terms");
+if (!rule || rule.kind !== "regex-any-case-insensitive" || !Array.isArray(rule.patterns)) process.exit(1);
+process.stdout.write(rule.patterns.join("|"));
+' "$inventory")"
     [[ -n "$legacy_pattern" ]] || { log_error "AAA funding terminology rule is empty"; return 1; }
+    [[ -n "$removed_surface_pattern" ]] || { log_error "AAA removed-surface rule is empty"; return 1; }
 }
 
-check_paths() {
+check_paths_with_pattern() {
+    local pattern="$1"
+    shift
     local -a paths=("$@")
     local matches
-    matches="$(rg -n -i "$legacy_pattern" "${paths[@]}" 2>/dev/null || true)"
+    matches="$(rg -n -i "$pattern" "${paths[@]}" 2>/dev/null || true)"
     if [[ -n "$matches" ]]; then
-        log_error "Legacy AAA funding-generation terminology remains"
+        log_error "Retired AAA terminology or surface remains"
         printf '%s\n' "$matches"
         return 1
     fi
+}
+
+check_paths() {
+    check_paths_with_pattern "$legacy_pattern" "$@"
 }
 
 run_self_tests() {
@@ -80,7 +95,21 @@ run_self_tests() {
             return 1
         fi
     done
-    log_success "Funding terminology fixtures passed"
+    printf '%s\n' 'Evaluation fees derive from generated WeightInfo through WeightToFee.' > "$fixture_dir/accepted.md"
+    check_paths_with_pattern "$removed_surface_pattern" "$fixture_dir/accepted.md"
+    for legacy in \
+        'PercentageOfCurrentBalance' \
+        'ProductiveRun' \
+        'CurrentCacheEpoch' \
+        'stepBaseFee' \
+        'finalized_through'; do
+        printf '%s\n' "$legacy" > "$fixture_dir/rejected.md"
+        if check_paths_with_pattern "$removed_surface_pattern" "$fixture_dir/rejected.md" >/dev/null 2>&1; then
+            log_error "Removed AAA surface fixture passed unexpectedly: $legacy"
+            return 1
+        fi
+    done
+    log_success "AAA terminology fixtures passed"
 }
 
 run_audit() {
@@ -89,7 +118,20 @@ run_audit() {
         "$TEMPLATE_DIR/pallets/aaa/docs" \
         "$PROJECT_ROOT/docs/aaa.integration.en.md" \
         "$PROJECT_ROOT/docs/core.architecture.en.md"
-    log_success "AAA funding terminology audit passed"
+    check_paths_with_pattern "$removed_surface_pattern" \
+        "$TEMPLATE_DIR/pallets/aaa/src" \
+        "$TEMPLATE_DIR/pallets/aaa/README.md" \
+        "$TEMPLATE_DIR/pallets/aaa/docs/architecture.en.md" \
+        "$TEMPLATE_DIR/pallets/aaa/docs/embedding.md" \
+        "$PROJECT_ROOT/docs/aaa.integration.en.md" \
+        "$PROJECT_ROOT/docs/aaa-control-plane.contract.en.md" \
+        "$PROJECT_ROOT/docs/core.architecture.en.md" \
+        "$PROJECT_ROOT/docs/read-model.contract.en.md" \
+        "$PROJECT_ROOT/web-client/src" \
+        "$PROJECT_ROOT/web-client/scripts" \
+        "$PROJECT_ROOT/web-client/docs" \
+        "$PROJECT_ROOT/wiki"
+    log_success "AAA terminology and removed-surface audit passed"
 }
 
 main() {

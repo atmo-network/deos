@@ -31,7 +31,7 @@ Actors execute declarative plans against runtime adapters under explicit queue, 
 
 `PercentageAtOpening` reads a typed balance/share snapshot captured when a fresh cycle opens. Its values remain independent of trigger kind, signal payload, and AddressEvent amount.
 
-Active programs choose `Persistent` or `CloseAfterProductiveRun`. Productive closure requires successful logical-run completion with at least one committed effectful task; false conditions, skips, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
+Active programs choose `Persistent` or `CloseAfterProductiveCycle`. Productive closure requires successful logical-cycle completion with at least one committed effectful task; false conditions, skips, rollback, suspension, abort, retry exhaustion, and bare `StopCycle` do not qualify.
 
 `StopCycle` provides one fieldless successful terminal control. It emits `CycleStopped`, completes through normal summary, funding, and auto-close handling, and cannot select a cursor or mutate actor lifecycle.
 
@@ -73,7 +73,6 @@ Minimal checklist:
 - Treat example execution plans as reusable task-language patterns; treat the DEOS/TMCTOL System AAA catalog as one runtime's topology, not as the pallet's required deployment shape.
 - Classify adapter mutation failures explicitly as Permanent or Temporary; unknown and unsupported failures stay Permanent.
 - Bind `MaxOpeningSnapshotEntries`, fixed `MaxRetryAttempts`, and generated suspension, retry, completion, cancellation, and suffix-admission weights when Mutable plans expose `RetryLater { max_attempts: 2..=MaxRetryAttempts }`.
-- Bind `MaxCacheRevalidationUnitsPerBlock` and name a `CacheRevalidationNoAdmitDisposition` only when a concrete cache-affecting migration ships; the reference runtime leaves the disposition `None` and fails closed (spec 6.4).
 - Validate adapter failure atomicity and Mutable User/System Continuation with runtime-local tests when adapters perform multi-step mutations.
 
 ## Non-goals of the current slice

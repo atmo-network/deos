@@ -61,14 +61,13 @@ export type AaaLocalSimulationJournalEntry = {
 
 export type AaaLocalSimulationResult<State> = {
   provenance: AaaLocalSimulationProvenance;
-  status: 'Completed' | 'Aborted' | 'Suspended' | 'Closed';
-  closeReason: 'RetryAttemptsExhausted' | 'ProductiveRunCompleted' | null;
+  status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
+  closeReason: 'RetryAttemptsExhausted' | 'ProductiveCycleCompleted' | null;
   cycleNonce: bigint;
   attempt: number;
   startCursor: number;
   continuationCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
-  finalizedThrough: number | null;
   state: State;
   cumulative: AaaLocalSimulationCounts;
   journal: AaaLocalSimulationJournalEntry[];
@@ -130,7 +129,7 @@ export function simulateAaaLocally<State, Condition>(input: {
   cycleNonce: bigint;
   attempt: number;
   startCursor: number;
-  completionPolicy?: 'Persistent' | 'CloseAfterProductiveRun';
+  completionPolicy?: 'Persistent' | 'CloseAfterProductiveCycle';
   unsuccessfulAttemptsAtCursor?: number;
   initialState: State;
   initialCounts?: AaaLocalSimulationCounts;
@@ -206,7 +205,6 @@ export function simulateAaaLocally<State, Condition>(input: {
     validateIndex(cumulative[key], `initialCounts.${key}`);
   }
   const journal: AaaLocalSimulationJournalEntry[] = [];
-  let finalizedThrough = input.startCursor === 0 ? null : input.startCursor - 1;
 
   for (let index = input.startCursor; index < input.steps.length; index += 1) {
     const step = input.steps[index];
@@ -273,18 +271,17 @@ export function simulateAaaLocally<State, Condition>(input: {
 
     if (outcome.kind === 'Stopped') {
       const productiveClose =
-        input.completionPolicy === 'CloseAfterProductiveRun' &&
+        input.completionPolicy === 'CloseAfterProductiveCycle' &&
         cumulative.committedEffectfulTasks > 0;
       return {
         provenance: provenance(input),
         status: productiveClose ? 'Closed' : 'Completed',
-        closeReason: productiveClose ? 'ProductiveRunCompleted' : null,
+        closeReason: productiveClose ? 'ProductiveCycleCompleted' : null,
         cycleNonce: input.cycleNonce,
         attempt: input.attempt,
         startCursor: input.startCursor,
         continuationCursor: null,
         unsuccessfulAttemptsAtCursor: null,
-        finalizedThrough: index,
         state,
         cumulative,
         journal,
@@ -311,7 +308,6 @@ export function simulateAaaLocally<State, Condition>(input: {
         unsuccessfulAttemptsAtCursor: exhausted
           ? null
           : nextUnsuccessfulAttempts,
-        finalizedThrough: index === 0 ? null : index - 1,
         state,
         cumulative,
         journal,
@@ -320,35 +316,32 @@ export function simulateAaaLocally<State, Condition>(input: {
     if (outcome.kind === 'Failed' && step.onError.type !== 'ContinueNextStep') {
       return {
         provenance: provenance(input),
-        status: 'Aborted',
+        status: 'Failed',
         closeReason: null,
         cycleNonce: input.cycleNonce,
         attempt: input.attempt,
         startCursor: input.startCursor,
         continuationCursor: null,
         unsuccessfulAttemptsAtCursor: null,
-        finalizedThrough: index,
         state,
         cumulative,
         journal,
       };
     }
-    finalizedThrough = index;
   }
 
   const productiveClose =
-    input.completionPolicy === 'CloseAfterProductiveRun' &&
+    input.completionPolicy === 'CloseAfterProductiveCycle' &&
     cumulative.committedEffectfulTasks > 0;
   return {
     provenance: provenance(input),
     status: productiveClose ? 'Closed' : 'Completed',
-    closeReason: productiveClose ? 'ProductiveRunCompleted' : null,
+    closeReason: productiveClose ? 'ProductiveCycleCompleted' : null,
     cycleNonce: input.cycleNonce,
     attempt: input.attempt,
     startCursor: input.startCursor,
     continuationCursor: null,
     unsuccessfulAttemptsAtCursor: null,
-    finalizedThrough,
     state,
     cumulative,
     journal,
