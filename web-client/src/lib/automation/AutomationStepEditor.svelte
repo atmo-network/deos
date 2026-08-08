@@ -241,7 +241,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
         ? 'Temporary task failure or unavailable funding retries this row up to the declared unsuccessful-attempt limit.'
         : step.errorPolicy.type === 'ContinueNextStep'
           ? 'Task failure rolls back and advances to the next row.'
-          : 'Task failure rolls back and terminates this logical run; unavailable funding still skips forward.'}
+          : 'Task failure rolls back and terminates this logical cycle; unavailable funding still skips forward.'}
       value={step.errorPolicy.type}
       onchange={selectErrorPolicy}
       selectClass="h-9 py-1.5 text-xs"

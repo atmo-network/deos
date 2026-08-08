@@ -10,7 +10,6 @@ import type {
   AutomationAuthoringContext,
   AutomationContinuationSnapshot,
   AutomationRunState,
-  CacheRevalidationProgress,
 } from '$lib/automation/types';
 import { PRECISION } from '$lib/economics';
 import type { LogEntry, TransactionProgress } from '$lib/log/types';
@@ -439,35 +438,6 @@ export class BlockchainAdapter implements Adapter {
     return await getDeosAaaFinalizedAuthoringContext(await this.ensurePapi());
   }
 
-  /**
-   * Public cache-revalidation progress (spec 5.4): the current global epoch and the durable
-   * revalidation gate when one is active. While a gate exists no FIFO attempt runs.
-   */
-  async getAutomationRevalidation(): Promise<{
-    currentEpoch: number;
-    progress: CacheRevalidationProgress | null;
-  }> {
-    const snapshot = await (await this.ensurePapi()).snapshot();
-    const [currentEpoch, progress] = await Promise.all([
-      snapshot.typedApi.query.AAA.CurrentCacheEpoch.getValue({
-        at: snapshot.at,
-      }),
-      snapshot.typedApi.query.AAA.CacheRevalidation.getValue({
-        at: snapshot.at,
-      }),
-    ]);
-    return {
-      currentEpoch: currentEpoch ?? 0,
-      progress: progress
-        ? {
-            targetEpoch: progress.target_epoch,
-            cursor: progress.cursor ?? null,
-            remaining: progress.remaining,
-          }
-        : null,
-    };
-  }
-
   async getObservationFeeds() {
     const snapshot = await (await this.ensurePapi()).snapshot();
     return await this.observationReader.feeds(snapshot);
@@ -570,7 +540,6 @@ export class BlockchainAdapter implements Adapter {
             queueTicket: automationQueueTicket(hot),
             fundingAccumulated: automationFundingAccumulated(funding),
             fundingSourcePolicy: automationFundingSourcePolicy(funding),
-            cacheEpoch: hot?.cache_epoch ?? 0,
             eligibility: eligibility.projection,
           } satisfies AutomationActorSnapshot;
         }),

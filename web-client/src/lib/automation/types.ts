@@ -55,7 +55,7 @@ export type AutomationActorSnapshot = {
   cycleNonce: bigint;
   continuation: AutomationContinuationSnapshot | null;
   lastCycleBlock: number | null;
-  completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null;
+  completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null;
   triggerLabel: string;
   nativeBalance: bigint;
   /** One-FIFO membership: the live queue ticket, or null when the actor is not queued. */
@@ -65,21 +65,10 @@ export type AutomationActorSnapshot = {
   /** Funding source policy as a typed variant label. */
   fundingSourcePolicy: string | null;
   /**
-   * Global cache-epoch stamp carried by the Active actor (spec 5.4). An actor is executable
-   * only while this equals the current epoch and no revalidation gate exists.
-   */
-  cacheEpoch: number;
-  /**
    * Scheduler-owned eligibility projection from the read-only runtime API
-   * (`ready`, `phase`, and `nextEligibleBlock`), or null when the runtime API
+   * (`phase`, optional close reason, and `nextEligibleBlock`), or null when the runtime API
    * is unavailable. Clients never reimplement cadence, cooldown, window, retry
    * backoff, breaker, or latch arithmetic.
    */
   eligibility: AaaEligibilityProjection | null;
-};
-
-export type CacheRevalidationProgress = {
-  targetEpoch: number;
-  cursor: bigint | null;
-  remaining: number;
 };

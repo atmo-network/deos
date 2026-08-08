@@ -404,7 +404,7 @@ pub enum ConditionReadSurface<AssetId, ObservationFeedId = ()> {
 #[derive(Clone, Copy, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub enum ObservationWindow {
   ArtifactTime,
-  LogicalRunStart,
+  LogicalCycleStart,
   StepAttemptTime,
 }
 
@@ -561,12 +561,12 @@ pub fn describe_amount_resolution<Balance>(
     ),
     AmountResolution::PercentageAtOpening(_) => (
       AmountDataDependency::OpeningSnapshot,
-      ObservationWindow::LogicalRunStart,
+      ObservationWindow::LogicalCycleStart,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
     AmountResolution::PercentageOfLastFunding(_) => (
       AmountDataDependency::LastFundingSnapshot,
-      ObservationWindow::LogicalRunStart,
+      ObservationWindow::LogicalCycleStart,
       RetryObservation::ReuseFrozenValueWithLiveCapacity,
     ),
   };

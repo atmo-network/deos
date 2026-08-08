@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-oracle"
-version = "0.7.11"
+version = "0.7.12"
 description = "Bounded typed scalar observation oracle"
 authors.workspace = true
 license = "MIT-0"

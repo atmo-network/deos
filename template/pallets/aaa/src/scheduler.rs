@@ -23,6 +23,7 @@ enum AdmissionDecision {
   Close { reason: CloseReason, weight: Weight },
   Defer,
   Skip,
+  Invariant,
 }
 
 /// Closed outcome of one canonical FIFO placement attempt. Queue capacity
@@ -54,7 +55,20 @@ std::thread_local! {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BlockKind {
   Weight,
+  FeeCollection,
   NonWeight,
+}
+
+#[derive(Clone, Copy)]
+enum AttemptTransactionError {
+  FeeCollection,
+  Invariant,
+}
+
+impl From<polkadot_sdk::sp_runtime::DispatchError> for AttemptTransactionError {
+  fn from(_: polkadot_sdk::sp_runtime::DispatchError) -> Self {
+    Self::Invariant
+  }
 }
 
 /// One bounded actor-service pass over the canonical FIFO: consumed weight plus the starve signal
@@ -73,8 +87,9 @@ enum FifoStepResult {
 enum HeadDiscovery {
   Empty,
   Head(QueueTicket, QueueEntry),
-  BlockedByWeight,
-  BlockedOther,
+  WeightStall,
+  PassExhausted,
+  InvariantStall,
 }
 
 impl<T: Config> Pallet<T> {
@@ -99,19 +114,19 @@ impl<T: Config> Pallet<T> {
       let head = Self::live_queue_head(cutoff, &mut cycle_meter, &mut scanned, max_scanned);
       match head {
         HeadDiscovery::Empty => break,
-        HeadDiscovery::BlockedByWeight => {
+        HeadDiscovery::WeightStall | HeadDiscovery::InvariantStall => {
           starved = executed == 0;
           break;
         }
-        HeadDiscovery::BlockedOther => break,
+        HeadDiscovery::PassExhausted => break,
         HeadDiscovery::Head(position, entry) => {
           match Self::service_live_queue_entry((position, entry), now, &mut cycle_meter) {
             FifoStepResult::Progress {
               executed: did_execute,
             } => executed = executed.saturating_add(u32::from(did_execute)),
             FifoStepResult::NoWork => continue,
-            FifoStepResult::Blocked(kind) => {
-              starved = matches!(kind, BlockKind::Weight) && executed == 0;
+            FifoStepResult::Blocked(_kind) => {
+              starved = executed == 0;
               break;
             }
           }
@@ -126,14 +141,14 @@ impl<T: Config> Pallet<T> {
 
   fn classify_current_queue(cutoff: QueueTicket) -> HeadDiscovery {
     if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-      return HeadDiscovery::BlockedOther;
+      return HeadDiscovery::InvariantStall;
     }
     if QueueHead::<T>::get() >= QueueTail::<T>::get() {
       return HeadDiscovery::Empty;
     }
     match Self::paged_head_entry() {
       Some((_, entry)) if entry.ticket >= cutoff => HeadDiscovery::Empty,
-      _ => HeadDiscovery::BlockedOther,
+      _ => HeadDiscovery::InvariantStall,
     }
   }
 
@@ -162,11 +177,11 @@ impl<T: Config> Pallet<T> {
     let scan_weight = T::WeightInfo::scheduler_paged_tombstone_drain(1);
     while *scanned < max_scanned {
       if Self::queue_topology_preflight(QueueMutation::Head).is_err() {
-        return HeadDiscovery::BlockedOther;
+        return HeadDiscovery::InvariantStall;
       }
       if !cycle_meter.can_consume(scan_weight) {
         return if Self::head_blocked_by_weight(cutoff) {
-          HeadDiscovery::BlockedByWeight
+          HeadDiscovery::WeightStall
         } else {
           HeadDiscovery::Empty
         };
@@ -175,7 +190,7 @@ impl<T: Config> Pallet<T> {
       let before = QueueHead::<T>::get();
       let stats = match Self::paged_drain_tombstones(cutoff, 1) {
         Ok(stats) => stats,
-        Err(_) => return HeadDiscovery::BlockedOther,
+        Err(_) => return HeadDiscovery::InvariantStall,
       };
       if stats.entries_scanned == 0 {
         return Self::classify_current_queue(cutoff);
@@ -190,7 +205,7 @@ impl<T: Config> Pallet<T> {
         None => Self::classify_current_queue(cutoff),
       };
     }
-    HeadDiscovery::BlockedOther
+    HeadDiscovery::PassExhausted
   }
 
   #[cfg(test)]
@@ -206,8 +221,9 @@ impl<T: Config> Pallet<T> {
     match discovery {
       HeadDiscovery::Empty => (0, None, scanned),
       HeadDiscovery::Head(_, entry) => (1, Some(entry), scanned),
-      HeadDiscovery::BlockedByWeight => (2, None, scanned),
-      HeadDiscovery::BlockedOther => (3, None, scanned),
+      HeadDiscovery::WeightStall => (2, None, scanned),
+      HeadDiscovery::InvariantStall => (3, None, scanned),
+      HeadDiscovery::PassExhausted => (4, None, scanned),
     }
   }
 
@@ -286,14 +302,19 @@ impl<T: Config> Pallet<T> {
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
           if Self::paged_consume_head_at(position).is_err() {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-              polkadot_sdk::sp_runtime::DispatchError::Other("scheduler queue topology changed"),
+              AttemptTransactionError::Invariant,
             ));
           }
-          let _actual = Self::execute_single_cycle(aaa_id, instance, now);
+          let (_actual, fee_collection_failed) = Self::execute_single_cycle(aaa_id, instance, now);
+          if fee_collection_failed {
+            return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
+              AttemptTransactionError::FeeCollection,
+            ));
+          }
           if let Some(updated) = Self::active_actor_view(aaa_id) {
             if Self::schedule_next_work(aaa_id, &updated, now, true).is_err() {
               return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-                polkadot_sdk::sp_runtime::DispatchError::Other("post-attempt placement failed"),
+                AttemptTransactionError::Invariant,
               ));
             }
           }
@@ -302,7 +323,10 @@ impl<T: Config> Pallet<T> {
         cycle_meter.consume(consume_weight.saturating_add(weight));
         match outcome {
           Ok(()) => FifoStepResult::Progress { executed: true },
-          Err(_) => FifoStepResult::Blocked(BlockKind::NonWeight),
+          Err(AttemptTransactionError::FeeCollection) => {
+            FifoStepResult::Blocked(BlockKind::FeeCollection)
+          }
+          Err(AttemptTransactionError::Invariant) => FifoStepResult::Blocked(BlockKind::NonWeight),
         }
       }
       AdmissionDecision::Close { reason, weight } => {
@@ -329,6 +353,7 @@ impl<T: Config> Pallet<T> {
         }
       }
       AdmissionDecision::Defer => FifoStepResult::Blocked(BlockKind::Weight),
+      AdmissionDecision::Invariant => FifoStepResult::Blocked(BlockKind::NonWeight),
       AdmissionDecision::Skip => {
         let outcome = polkadot_sdk::frame_support::storage::with_transaction(|| {
           if Self::paged_consume_head_at(position).is_err() {
@@ -1861,21 +1886,35 @@ impl<T: Config> Pallet<T> {
     T::AssetOps::balance(&instance.sovereign_account, native)
   }
 
-  pub(crate) fn liveness_close_reason(instance: &ActiveActorViewOf<T>) -> Option<CloseReason> {
-    if Self::is_window_expired(instance) {
-      return Some(CloseReason::WindowExpired);
+  pub(crate) fn classification_dispatch_error(error: ActorClassificationError) -> Error<T> {
+    match error {
+      ActorClassificationError::ActorInvariant => Error::<T>::ActorInvariant,
+      ActorClassificationError::ContinuationInvariant => Error::<T>::ContinuationInvariant,
+      ActorClassificationError::ComputationOverflow => Error::<T>::ComputationOverflow,
     }
-    if instance.lifecycle.is_paused() {
-      return None;
-    }
-    Self::user_resource_close_reason(instance, false)
   }
 
-  // Deterministic pre-cycle User precedence is BalanceExhausted, then
-  // FeeBudgetExhausted. WindowExpired is handled by the caller first.
-  fn user_resource_close_reason(
+  pub(crate) fn expiry_substitution_due(
+    aaa_id: AaaId,
     instance: &ActiveActorViewOf<T>,
-    include_fee_budget: bool,
+  ) -> Result<bool, Error<T>> {
+    Self::classify_actor(aaa_id, instance)
+      .map(|classification| classification.terminal_reason == Some(CloseReason::WindowExpired))
+      .map_err(Self::classification_dispatch_error)
+  }
+
+  pub(crate) fn sweep_close_reason(
+    aaa_id: AaaId,
+    instance: &ActiveActorViewOf<T>,
+  ) -> Result<Option<CloseReason>, ActorClassificationError> {
+    Self::classify_actor(aaa_id, instance).map(|classification| classification.terminal_reason)
+  }
+
+  // Deterministic User viability precedence is BalanceExhausted, then
+  // FeeBudgetExhausted. The caller supplies the current program cursor.
+  pub(crate) fn user_viability_close_reason(
+    instance: &ActiveActorViewOf<T>,
+    start_cursor: usize,
   ) -> Option<CloseReason> {
     if instance.actor_class.aaa_type() != AaaType::User {
       return None;
@@ -1884,17 +1923,130 @@ impl<T: Config> Pallet<T> {
     if native_balance < T::MinUserBalance::get() {
       return Some(CloseReason::BalanceExhausted);
     }
-    if include_fee_budget {
-      // The complete envelope must fit above MinUserBalance: charging it must not
-      // cross the protected floor (spec 5.2.1).
-      let available_fee_budget = native_balance
-        .checked_sub(&T::MinUserBalance::get())
-        .unwrap_or_default();
-      if available_fee_budget < Self::cycle_fee_upper_bound(instance) {
-        return Some(CloseReason::FeeBudgetExhausted);
-      }
+    // The complete suffix envelope must fit above MinUserBalance: charging it
+    // must not cross the protected floor (spec 5.2.1).
+    let available_fee_budget = native_balance
+      .checked_sub(&T::MinUserBalance::get())
+      .unwrap_or_default();
+    if available_fee_budget < Self::attempt_fee_upper_bound(instance, start_cursor) {
+      return Some(CloseReason::FeeBudgetExhausted);
     }
     None
+  }
+
+  pub(crate) fn active_actor_for_classification(
+    aaa_id: AaaId,
+  ) -> Result<Option<ActiveActorViewOf<T>>, ActorClassificationError> {
+    let Some(identity) = ActorIdentities::<T>::get(aaa_id) else {
+      return Ok(None);
+    };
+    match (
+      ActorHot::<T>::get(aaa_id),
+      ActorProgram::<T>::get(aaa_id),
+      ActorFunding::<T>::contains_key(aaa_id),
+    ) {
+      (None, None, false) => Ok(None),
+      (Some(hot), Some(program), true) => {
+        Ok(Some(Self::derive_active_actor_view(identity, hot, program)))
+      }
+      _ => Err(ActorClassificationError::ActorInvariant),
+    }
+  }
+
+  pub(crate) fn classify_actor(
+    aaa_id: AaaId,
+    instance: &ActiveActorViewOf<T>,
+  ) -> Result<ActorClassification<BlockNumberFor<T>>, ActorClassificationError> {
+    let continuation = ContinuationStateStore::<T>::get(aaa_id);
+    if (instance.cycle_state == CycleState::Suspended) != continuation.is_some() {
+      return Err(ActorClassificationError::ContinuationInvariant);
+    }
+    let cursor = continuation
+      .as_ref()
+      .map_or(0, |state| state.cursor as usize);
+    if let Some(state) = continuation.as_ref() {
+      if cursor >= instance.execution_plan.len()
+        || state.unsuccessful_attempts_at_cursor == 0
+        || instance.execution_plan[cursor]
+          .on_error
+          .retry_max_attempts()
+          .is_none()
+      {
+        return Err(ActorClassificationError::ContinuationInvariant);
+      }
+      if state.attempt.checked_add(1).is_none() {
+        return Err(ActorClassificationError::ComputationOverflow);
+      }
+    }
+
+    let terminal_reason = if Self::is_window_expired(instance) {
+      Some(CloseReason::WindowExpired)
+    } else if let Some(reason) = Self::user_viability_close_reason(instance, cursor) {
+      Some(reason)
+    } else if instance.cycle_state == CycleState::Idle && instance.cycle_nonce == u64::MAX {
+      Some(CloseReason::CycleNonceExhausted)
+    } else if continuation.as_ref().is_some_and(|state| {
+      instance.execution_plan[state.cursor as usize]
+        .on_error
+        .retry_max_attempts()
+        .is_some_and(|max_attempts| state.unsuccessful_attempts_at_cursor >= max_attempts)
+    }) {
+      Some(CloseReason::RetryAttemptsExhausted)
+    } else if Self::failure_limit_reached(instance.consecutive_failures) {
+      Some(CloseReason::ConsecutiveFailures)
+    } else if instance.cycle_state == CycleState::Idle
+      && instance
+        .auto_close_at_cycle_nonce
+        .is_some_and(|target| instance.cycle_nonce >= target)
+    {
+      Some(CloseReason::AutoCloseNonceReached)
+    } else {
+      None
+    };
+
+    let execution_phase = if GlobalCircuitBreaker::<T>::get() {
+      ActorExecutionPhase::GlobalCircuitBreaker
+    } else if instance.lifecycle.is_paused() {
+      ActorExecutionPhase::Paused
+    } else if terminal_reason.is_some() {
+      ActorExecutionPhase::Ready
+    } else if instance.cycle_state == CycleState::Suspended {
+      let eligible_at =
+        Self::retry_eligible_at(aaa_id, instance).map_err(|outcome| match outcome {
+          EnqueueOutcome::SchedulerIndexExhausted => ActorClassificationError::ComputationOverflow,
+          _ => ActorClassificationError::ContinuationInvariant,
+        })?;
+      let now = frame_system::Pallet::<T>::block_number();
+      if eligible_at > now {
+        ActorExecutionPhase::WaitingRetry(eligible_at)
+      } else {
+        ActorExecutionPhase::Ready
+      }
+    } else {
+      let now = frame_system::Pallet::<T>::block_number();
+      let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
+      let eligible_at = Self::next_eligible_at(aaa_id, instance, now, include_timer)
+        .map_err(|_| ActorClassificationError::ComputationOverflow)?;
+      if eligible_at > now {
+        ActorExecutionPhase::WaitingTemporal(eligible_at)
+      } else if matches!(
+        instance.schedule.trigger,
+        TriggerPolicy::Immediate { .. }
+          | TriggerPolicy::Cadenced {
+            mode: CadenceMode::WhenSignalled(_),
+            ..
+          }
+      ) && !instance.pending_signal
+      {
+        ActorExecutionPhase::WaitingSignal
+      } else {
+        ActorExecutionPhase::Ready
+      }
+    };
+    Ok(ActorClassification {
+      terminal_reason,
+      execution_phase,
+    })
   }
 
   fn close_admission_decision(
@@ -1907,19 +2059,6 @@ impl<T: Config> Pallet<T> {
       return AdmissionDecision::Defer;
     }
     AdmissionDecision::Close { reason, weight }
-  }
-
-  fn pending_post_cycle_close_reason(instance: &ActiveActorViewOf<T>) -> Option<CloseReason> {
-    if Self::failure_limit_reached(instance.consecutive_failures) {
-      return Some(CloseReason::ConsecutiveFailures);
-    }
-    if instance.cycle_state == CycleState::Suspended {
-      return None;
-    }
-    instance
-      .auto_close_at_cycle_nonce
-      .filter(|target| instance.cycle_nonce >= *target)
-      .map(|_| CloseReason::AutoCloseNonceReached)
   }
 
   fn cycle_may_close_on_failure(
@@ -1988,32 +2127,17 @@ impl<T: Config> Pallet<T> {
     instance: &ActiveActorViewOf<T>,
     meter: &WeightMeter,
   ) -> AdmissionDecision {
-    // A stale cache stamp must never admit, reserve, charge, or report (spec 2.1, 6.4);
-    // the on_idle gate already blocks service while revalidation is active, so this is a
-    // defensive per-actor rejection for any stamp drift.
-    if instance.cache_epoch != CurrentCacheEpoch::<T>::get() {
+    let Ok(classification) = Self::classify_actor(aaa_id, instance) else {
+      return AdmissionDecision::Invariant;
+    };
+    if classification.execution_phase == ActorExecutionPhase::GlobalCircuitBreaker {
       return AdmissionDecision::Skip;
     }
-    if GlobalCircuitBreaker::<T>::get() {
-      return AdmissionDecision::Skip;
-    }
-    if Self::is_window_expired(instance) {
-      return Self::close_admission_decision(instance, CloseReason::WindowExpired, meter);
-    }
-    if instance.lifecycle.is_paused() {
-      return AdmissionDecision::Skip;
-    }
-    if instance.cycle_state == CycleState::Idle && instance.cycle_nonce == u64::MAX {
-      return Self::close_admission_decision(instance, CloseReason::CycleNonceExhausted, meter);
-    }
-    if let Some(reason) = Self::pending_post_cycle_close_reason(instance) {
+    if let Some(reason) = classification.terminal_reason {
       return Self::close_admission_decision(instance, reason, meter);
     }
-    if !Self::is_ready_for_execution(aaa_id, instance) {
+    if classification.execution_phase != ActorExecutionPhase::Ready {
       return AdmissionDecision::Skip;
-    }
-    if let Some(reason) = Self::user_resource_close_reason(instance, false) {
-      return Self::close_admission_decision(instance, reason, meter);
     }
     let continuation = if instance.cycle_state == CycleState::Suspended {
       let Some(continuation) = ContinuationStateStore::<T>::get(aaa_id) else {
@@ -2026,19 +2150,6 @@ impl<T: Config> Pallet<T> {
     let start_cursor = continuation
       .as_ref()
       .map_or(0, |state| state.cursor as usize);
-    if instance.actor_class.aaa_type() == AaaType::User {
-      // Normative available budget: `fee_native_balance - MinUserBalance`; a User
-      // attempt must not be admitted when charging the complete (suffix) envelope can
-      // cross MinUserBalance, even if the raw balance covers the envelope (spec 5.2.1).
-      let native_balance =
-        T::AssetOps::balance(&instance.sovereign_account, T::FeeNativeAssetId::get());
-      let available_fee_budget = native_balance
-        .checked_sub(&T::MinUserBalance::get())
-        .unwrap_or_default();
-      if available_fee_budget < Self::attempt_fee_upper_bound(instance, start_cursor) {
-        return Self::close_admission_decision(instance, CloseReason::FeeBudgetExhausted, meter);
-      }
-    }
     let cycle_weight_upper = Self::cycle_admission_weight_upper(
       instance,
       start_cursor,
@@ -2052,221 +2163,68 @@ impl<T: Config> Pallet<T> {
     AdmissionDecision::Admit(cycle_weight_upper)
   }
 
-  pub(crate) fn ensure_simulation_ready(
-    aaa_id: AaaId,
-    instance: &ActiveActorViewOf<T>,
-    mode: SimulationMode,
-  ) -> Result<(), SimulationError> {
-    // Exact error precedence (spec 7.2): the mode marker, Continuation invariant, and
-    // cache-revalidation gate are evaluated before the public breaker, window, pause,
-    // nonce, failure, readiness, and funding predicates.
-    match mode {
-      SimulationMode::FreshCurrentPlan if instance.cycle_state != CycleState::Idle => {
-        return Err(SimulationError::ModeCycleStateMismatch);
-      }
-      SimulationMode::CurrentContinuation if instance.cycle_state != CycleState::Suspended => {
-        return Err(SimulationError::ModeCycleStateMismatch);
-      }
-      _ => {}
-    }
-    let start_cursor = if mode == SimulationMode::CurrentContinuation {
-      ContinuationStateStore::<T>::get(aaa_id)
-        .ok_or(SimulationError::ContinuationInvariant)?
-        .cursor as usize
-    } else {
-      0
-    };
-    if Self::revalidation_is_active() {
-      return Err(SimulationError::CacheRevalidationActive);
-    }
-    if GlobalCircuitBreaker::<T>::get() {
-      return Err(SimulationError::GlobalCircuitBreaker);
-    }
-    if Self::is_window_expired(instance) {
-      return Err(SimulationError::WindowExpired);
-    }
-    if instance.lifecycle.is_paused() {
-      return Err(SimulationError::Paused);
-    }
-    if mode == SimulationMode::FreshCurrentPlan && instance.cycle_nonce == u64::MAX {
-      return Err(SimulationError::CycleNonceExhausted);
-    }
-    if Self::failure_limit_reached(instance.consecutive_failures) {
-      return Err(SimulationError::ConsecutiveFailures);
-    }
-    if !Self::is_ready_for_execution(aaa_id, instance) {
-      return Err(SimulationError::NotReady);
-    }
-    if instance.actor_class.aaa_type() == AaaType::User {
-      let balance = T::AssetOps::balance(&instance.sovereign_account, T::FeeNativeAssetId::get());
-      if balance < T::MinUserBalance::get() {
-        return Err(SimulationError::BalanceUnavailable);
-      }
-      let available_fee_budget = balance
-        .checked_sub(&T::MinUserBalance::get())
-        .unwrap_or_default();
-      if available_fee_budget < Self::attempt_fee_upper_bound(instance, start_cursor) {
-        return Err(SimulationError::FeeBudgetUnavailable);
-      }
-    }
-    Ok(())
-  }
-
-  fn is_ready_for_execution(aaa_id: AaaId, instance: &ActiveActorViewOf<T>) -> bool {
-    if instance.lifecycle.is_paused() {
-      return false;
-    }
-    if GlobalCircuitBreaker::<T>::get() {
-      return false;
-    }
-    let now = frame_system::Pallet::<T>::block_number();
-    if instance.cycle_state == CycleState::Suspended {
-      return Self::retry_eligible_at(aaa_id, instance).is_ok_and(|eligible_at| eligible_at <= now);
-    }
-    let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
-    if !Self::next_eligible_at(aaa_id, instance, now, include_timer)
-      .is_ok_and(|eligible_at| eligible_at <= now)
-    {
-      return false;
-    }
-    Self::evaluate_trigger(aaa_id, instance)
-  }
-
-  fn evaluate_trigger(aaa_id: AaaId, instance: &ActiveActorViewOf<T>) -> bool {
-    match instance.schedule.trigger {
-      TriggerPolicy::Immediate { .. }
-      | TriggerPolicy::Cadenced {
-        mode: CadenceMode::WhenSignalled(_),
-        ..
-      } => instance.pending_signal,
-      TriggerPolicy::Cadenced {
-        mode: CadenceMode::Always,
-        ..
-      } => Self::evaluate_timer(aaa_id, instance),
-    }
-  }
-
-  fn evaluate_timer(aaa_id: AaaId, instance: &ActiveActorViewOf<T>) -> bool {
-    let now = frame_system::Pallet::<T>::block_number();
-    Self::next_eligible_at(aaa_id, instance, now, true).is_ok_and(|eligible_at| eligible_at <= now)
-  }
-
   /// One read-only eligibility projection (spec 7.3).
   ///
-  /// Mirrors the admission gate order in `apply_admission` and reuses the same
-  /// pure arithmetic owners (`next_eligible_at`, `retry_eligible_at`, window
-  /// expiry, failure limit, breaker, latch) so clients never reimplement cadence
-  /// phase, cooldown, window floor, retry backoff, breaker, or signal logic.
-  /// `ready` is the scheduler verdict at the read block; `next_eligible_block`
-  /// is the next temporal gate (`now` when `ready`) or `None` when no future
-  /// gate is computable.
+  /// Projects the canonical actor classifier so clients never reimplement
+  /// terminal precedence, cadence, cooldown, window, retry, breaker, pause, or
+  /// signal logic. `next_eligible_block` is `now` for `Ready`, the next temporal
+  /// gate for a waiting phase, or `None` when no future gate is computable.
   pub fn aaa_eligibility(
     aaa_id: AaaId,
   ) -> Result<AaaEligibilityProjection<BlockNumberFor<T>>, AaaEligibilityError> {
-    let Some(instance) = Self::active_actor_view(aaa_id) else {
-      let phase = if ActorIdentities::<T>::contains_key(aaa_id) {
-        AaaEligibilityPhase::Dormant
-      } else {
-        AaaEligibilityPhase::NotRegistered
-      };
+    let Some(identity) = ActorIdentities::<T>::get(aaa_id) else {
       return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase,
+        phase: AaaEligibilityPhase::NotRegistered,
         next_eligible_block: None,
       });
     };
-    let now = frame_system::Pallet::<T>::block_number();
-    if GlobalCircuitBreaker::<T>::get() {
-      return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase: AaaEligibilityPhase::GlobalCircuitBreaker,
-        next_eligible_block: None,
-      });
-    }
-    if Self::is_window_expired(&instance) {
-      return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase: AaaEligibilityPhase::WindowExpired,
-        next_eligible_block: None,
-      });
-    }
-    if instance.lifecycle.is_paused() {
-      return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase: AaaEligibilityPhase::Paused,
-        next_eligible_block: None,
-      });
-    }
-    if instance.cycle_state == CycleState::Idle && instance.cycle_nonce == u64::MAX {
-      return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase: AaaEligibilityPhase::CycleNonceExhausted,
-        next_eligible_block: None,
-      });
-    }
-    if Self::failure_limit_reached(instance.consecutive_failures) {
-      return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase: AaaEligibilityPhase::ConsecutiveFailureLimit,
-        next_eligible_block: None,
-      });
-    }
-    if instance
-      .auto_close_at_cycle_nonce
-      .is_some_and(|target| instance.cycle_nonce >= target)
-      && instance.cycle_state != CycleState::Suspended
-    {
-      return Ok(AaaEligibilityProjection {
-        ready: false,
-        phase: AaaEligibilityPhase::AutoCloseDue,
-        next_eligible_block: None,
-      });
-    }
-    if instance.cycle_state == CycleState::Suspended {
-      let eligible_at =
-        Self::retry_eligible_at(aaa_id, &instance).map_err(|outcome| match outcome {
-          EnqueueOutcome::SchedulerIndexExhausted => AaaEligibilityError::ComputationOverflow,
-          _ => AaaEligibilityError::ContinuationInvariant,
-        })?;
-      let ready = eligible_at <= now;
-      return Ok(AaaEligibilityProjection {
-        ready,
-        phase: if ready {
-          AaaEligibilityPhase::Ready
-        } else {
-          AaaEligibilityPhase::WaitingRetry
-        },
-        next_eligible_block: Some(if ready { now } else { eligible_at }),
-      });
-    }
-    let include_timer = instance.schedule.trigger.cadence_blocks().is_some();
-    let temporal = Self::next_eligible_at(aaa_id, &instance, now, include_timer)
-      .map_err(|_| AaaEligibilityError::ComputationOverflow)?;
-    let signal_driven = matches!(
-      instance.schedule.trigger,
-      TriggerPolicy::Immediate { .. }
-        | TriggerPolicy::Cadenced {
-          mode: CadenceMode::WhenSignalled(_),
-          ..
-        }
-    );
-    let temporal_open = temporal <= now;
-    let ready = if signal_driven {
-      temporal_open && instance.pending_signal
-    } else {
-      temporal_open
+    let hot = ActorHot::<T>::get(aaa_id);
+    let program = ActorProgram::<T>::get(aaa_id);
+    let funding = ActorFunding::<T>::contains_key(aaa_id);
+    let instance = match (hot, program, funding) {
+      (None, None, false) => {
+        return Ok(AaaEligibilityProjection {
+          phase: AaaEligibilityPhase::Dormant,
+          next_eligible_block: None,
+        });
+      }
+      (Some(hot), Some(program), true) => Self::derive_active_actor_view(identity, hot, program),
+      _ => return Err(AaaEligibilityError::ActorInvariant),
     };
-    let phase = if ready {
-      AaaEligibilityPhase::Ready
-    } else if !temporal_open {
-      AaaEligibilityPhase::WaitingTemporal
-    } else {
-      AaaEligibilityPhase::WaitingSignal
+    let classification = Self::classify_actor(aaa_id, &instance).map_err(|error| match error {
+      ActorClassificationError::ActorInvariant => AaaEligibilityError::ActorInvariant,
+      ActorClassificationError::ContinuationInvariant => AaaEligibilityError::ContinuationInvariant,
+      ActorClassificationError::ComputationOverflow => AaaEligibilityError::ComputationOverflow,
+    })?;
+    let (phase, next_eligible_block) = match classification.execution_phase {
+      ActorExecutionPhase::GlobalCircuitBreaker => {
+        (AaaEligibilityPhase::GlobalCircuitBreaker, None)
+      }
+      _ if classification.terminal_reason.is_some() => (
+        AaaEligibilityPhase::CloseDue(
+          classification
+            .terminal_reason
+            .expect("terminal branch has a close reason"),
+        ),
+        None,
+      ),
+      ActorExecutionPhase::Paused => (AaaEligibilityPhase::Paused, None),
+      ActorExecutionPhase::WaitingRetry(block) => (AaaEligibilityPhase::WaitingRetry, Some(block)),
+      ActorExecutionPhase::WaitingTemporal(block) => {
+        (AaaEligibilityPhase::WaitingTemporal, Some(block))
+      }
+      ActorExecutionPhase::WaitingSignal => (
+        AaaEligibilityPhase::WaitingSignal,
+        Some(frame_system::Pallet::<T>::block_number()),
+      ),
+      ActorExecutionPhase::Ready => (
+        AaaEligibilityPhase::Ready,
+        Some(frame_system::Pallet::<T>::block_number()),
+      ),
     };
     Ok(AaaEligibilityProjection {
-      ready,
       phase,
-      next_eligible_block: Some(temporal.max(now)),
+      next_eligible_block,
     })
   }
 
@@ -2358,10 +2316,14 @@ impl<T: Config> Pallet<T> {
     source: Option<&T::AccountId>,
     provenance: Option<&FundingProvenance>,
   ) -> DispatchResult {
-    let Some(instance) = Self::active_actor_view(aaa_id) else {
+    let Some(instance) =
+      Self::active_actor_for_classification(aaa_id).map_err(Self::classification_dispatch_error)?
+    else {
       return Ok(());
     };
-    if Self::is_window_expired(&instance) || amount.is_zero() {
+    let classification =
+      Self::classify_actor(aaa_id, &instance).map_err(Self::classification_dispatch_error)?;
+    if classification.terminal_reason == Some(CloseReason::WindowExpired) || amount.is_zero() {
       return Ok(());
     }
     let funding = ActorFunding::<T>::get(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
@@ -2459,12 +2421,15 @@ impl<T: Config> Pallet<T> {
     apply_trigger: bool,
     apply_funding: bool,
   ) -> DispatchResult {
-    let instance = match Self::active_actor_view(aaa_id) {
-      Some(inst) => inst,
-      None => return Ok(()),
-    };
-    if Self::is_window_expired(&instance) {
+    let Some(instance) =
+      Self::active_actor_for_classification(aaa_id).map_err(Self::classification_dispatch_error)?
+    else {
       return Ok(());
+    };
+    let classification =
+      Self::classify_actor(aaa_id, &instance).map_err(Self::classification_dispatch_error)?;
+    if classification.terminal_reason == Some(CloseReason::WindowExpired) {
+      return Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
     }
     let mut signal_matched = false;
     if apply_trigger && let Some(sources) = instance.schedule.trigger.sources() {
@@ -2523,8 +2488,12 @@ impl<T: Config> Pallet<T> {
   }
 
   pub(crate) fn evaluate_actor_liveness(aaa_id: AaaId) -> DispatchResult {
-    let instance = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
-    if let Some(reason) = Self::liveness_close_reason(&instance) {
+    let instance = Self::active_actor_for_classification(aaa_id)
+      .map_err(Self::classification_dispatch_error)?
+      .ok_or(Error::<T>::AaaNotFound)?;
+    if let Some(reason) =
+      Self::sweep_close_reason(aaa_id, &instance).map_err(Self::classification_dispatch_error)?
+    {
       return Self::close_actor(aaa_id, &instance, reason);
     }
     Ok(())

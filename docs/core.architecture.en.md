@@ -109,7 +109,7 @@ Token onboarding composes explicit asset registration, pool or curve creation, a
 
 - `Fail-fast over silent drift`: AAA step errors use explicit `ContinueNextStep`, `AbortCycle`, or Mutable-only `RetryLater`; only adapter-classified Temporary failure may suspend. No silent retry heuristic exists.
 - `Static operations`: Tasks own no mutable workflow memory. Sparse scheduler-owned Continuation records only bounded unresolved-suffix progress while a Mutable run remains suspended.
-- `Observable automation`: One `CycleStarted` and terminal `CycleSummary` bound each logical run; continuation events correlate attempts. Sparse starvation transitions expose scheduler-budget phase changes.
+- `Observable automation`: One `CycleStarted` and terminal `CycleSummary` bound each logical cycle; continuation events correlate attempts. Sparse starvation transitions expose scheduler-budget phase changes.
 - `Bounded execution`: AAA admits opening plans or unresolved retry suffixes plus terminal cleanup under both Weight dimensions. No unbounded loops exist.
 
 ## 4. Deterministic Execution via AAA Scheduler
@@ -142,8 +142,8 @@ Block N:
 
 - `Budget-capped`: Every housekeeping, queue, cycle, and close unit starts only after two-dimensional admission against the remaining `on_idle` budget.
 - `Deterministic FIFO fairness`: Monotonic tickets preserve bounded FIFO carry-over without class-weight knobs or queue reconstruction; measured stress profiles, rather than a System/User alternation claim, own the current fairness SLO.
-- `Starvation observability`: After the fixed hook base is admitted, exhaustion of either post-housekeeping Weight dimension transitions sparse `IdleStarvationState`; detection and recovery remain observability-only and never dispatch emergency work in `on_initialize`.
-- `Deferred requeue`: Actors that cannot execute because of insufficient weight retain a bounded path to future eligibility; User fee insufficiency remains terminal (`FeeBudgetExhausted`).
+- `Starvation observability`: After the fixed hook base is admitted, a live FIFO head stalled by Weight, fee collection, or an invariant advances sparse `IdleStarvationState`; detection and recovery remain observability-only and never dispatch emergency work in `on_initialize`.
+- `Deferred service`: Weight blockage and rolled-back fee-infrastructure failure retain the same FIFO head for later service; User fee-budget insufficiency remains terminal (`FeeBudgetExhausted`).
 
 ### 4.2 Resilience: Backpressure via Cooldown
 

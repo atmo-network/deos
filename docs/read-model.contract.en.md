@@ -158,14 +158,13 @@ A rejected publication is transaction feedback, not canonical feed or delivery s
 - Finalized point-in-time asset minimum and recipient-balance evidence when fetched directly at one bound block hash; downstream static findings must retain that evidence identity and block hash
 - Selected-feed reactive delivery from one finalized hash: exact `DirtyObservationFeeds`, global dirty-list head/tail/count/cursor, selected position through bounded predecessor links, occupied subscriber-page topology, and identified-budget page/block estimates
 - Optional selected-actor delivery from exact `ActorHot(aaa_id)`: existence, pending signal, type-derived lane, queue ticket or wakeup pointer, the current `cache_epoch` stamp, and factual admission status without execution timing
-- Public cache-revalidation progress: `CurrentCacheEpoch` and the optional durable `CacheRevalidation { target_epoch, cursor, remaining }`; while a gate exists no FIFO attempt runs
 - Current sparse `IdleStarvationState` and bounded detection/recovery events when scheduler observability changes phase
-- Current sparse Continuation for a suspended actor, including cursor, logical-run attempt, unsuccessful-attempt count at that cursor, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
+- Current sparse Continuation for a suspended actor, including cursor, logical-cycle attempt, unsuccessful-attempt count at that cursor, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
 
 #### Indexed / Materialized View
 
 - Long-lived execution history per actor
-- Per-step and per-attempt timeline replay across many logical runs, correlated from `(aaa_id, cycle_nonce, attempt)` event boundaries
+- Per-step and per-attempt timeline replay across many logical cycles, correlated from `(aaa_id, cycle_nonce, attempt)` event boundaries
 - Fleet dashboards, rankings, and operator analytics
 - Archived run logs beyond bounded on-chain observability
 - Historical starvation intervals, duration trends, and alert/recovery timelines reconstructed from runtime events

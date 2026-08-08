@@ -44,7 +44,7 @@ export type AaaRequiredAdapter =
 
 export type AaaStaticObservationWindow =
   | 'artifact-time'
-  | 'logical-run-start'
+  | 'logical-cycle-start'
   | 'step-attempt-time'
   | 'retry-time';
 
@@ -69,9 +69,8 @@ export type AaaTemporaryFailureReachability = 'yes' | 'no' | 'unknown';
 export type AaaStaticWeightModel = {
   identity: string;
   version: string;
-  stepBaseFee: bigint;
-  conditionReadFee: bigint;
   evaluationWeight: (conditionCount: number) => AaaWeight;
+  evaluationFeeUpper: (conditionCount: number) => bigint;
   taskUpper: (input: {
     task: AaaTaskName;
     parameters: AaaPlanProjection;
@@ -336,7 +335,7 @@ export type ProgramStaticAnalysis = {
   program: 'Dormant' | 'Active';
   actorType: AaaPlanArtifact['aaaType'];
   mutability: AaaPlanArtifact['mutability'];
-  completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null;
+  completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null;
   cooldownBlocks: number | null;
   trigger: AaaStaticTriggerAnalysis | null;
   steps: AaaStaticStepAnalysis[];
@@ -519,8 +518,6 @@ function staticCost(weight: AaaWeight, feeUpper: bigint): AaaStaticCost {
 
 function validateModel(model: AaaStaticWeightModel) {
   for (const [field, value] of [
-    ['stepBaseFee', model.stepBaseFee],
-    ['conditionReadFee', model.conditionReadFee],
     ['lifecycle fee', model.lifecycleOverhead.fee],
     ['funding fee', model.fundingPromotionOverhead.fee],
   ] as const) {
@@ -628,8 +625,8 @@ function taskAmounts(
         switch (amount.valueObservationWindow) {
           case 'ArtifactTime':
             return 'artifact-time' as const;
-          case 'LogicalRunStart':
-            return 'logical-run-start' as const;
+          case 'LogicalCycleStart':
+            return 'logical-cycle-start' as const;
           case 'StepAttemptTime':
             return 'step-attempt-time' as const;
         }
@@ -814,8 +811,6 @@ function stepCost(
     model: model.identity,
     modelVersion: model.version,
     actorType: artifact.aaaType,
-    stepBaseFee: model.stepBaseFee,
-    conditionReadFee: model.conditionReadFee,
     steps: [
       {
         stepIndex: 0,
@@ -823,6 +818,7 @@ function stepCost(
         conditionOutcome: 'Unknown',
         executionDisposition: 'Unknown',
         evaluationWeight,
+        evaluationFeeUpper: model.evaluationFeeUpper(conditionCount),
         executionWeightUpper: upper.weight,
         executionFeeUpper: upper.executionFeeUpper,
       },
@@ -836,6 +832,7 @@ function stepCost(
       conditionOutcome: 'Unknown' as const,
       executionDisposition: 'Unknown' as const,
       evaluationWeight,
+      evaluationFeeUpper: model.evaluationFeeUpper(conditionCount),
       executionWeightUpper: upper.weight,
       executionFeeUpper: upper.executionFeeUpper,
     },
@@ -1032,8 +1029,6 @@ function suffixEnvelopes(
       model: model.identity,
       modelVersion: model.version,
       actorType: artifact.aaaType,
-      stepBaseFee: model.stepBaseFee,
-      conditionReadFee: model.conditionReadFee,
       steps: suffixInputs,
       lifecycle,
     });
@@ -1464,7 +1459,7 @@ export function analyzeAaaProgram(input: {
   }
   const program = variant(inspection.projection, 'ProgramInput');
   let trigger: AaaStaticTriggerAnalysis | null = null;
-  let completionPolicy: 'Persistent' | 'CloseAfterProductiveRun' | null = null;
+  let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null = null;
   let cooldownBlocks: number | null = null;
   let steps: AaaStaticStepAnalysis[] = [];
   let forecastInputs: AaaStepCostInput[] = [];
@@ -1481,7 +1476,7 @@ export function analyzeAaaProgram(input: {
     );
     if (
       projectedPolicy.type !== 'Persistent' &&
-      projectedPolicy.type !== 'CloseAfterProductiveRun'
+      projectedPolicy.type !== 'CloseAfterProductiveCycle'
     ) {
       throw new Error(`Unsupported completion policy: ${projectedPolicy.type}`);
     }

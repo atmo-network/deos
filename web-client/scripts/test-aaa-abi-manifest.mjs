@@ -133,6 +133,10 @@ test('CycleResult projection keeps terminal flow separate from factual counters'
   assert(summary, 'CycleSummary must remain a public AAA event');
   const fields = new Map(summary.fields.map((field) => [field.name, field]));
   assert.equal(fields.get('result')?.type, cycleResult.id);
+  const outcomes = graphNode('pallet_aaa::types::OutcomeTotals');
+  assert(outcomes, 'OutcomeTotals must remain reachable from CycleSummary');
+  assert.equal(fields.get('outcomes')?.type, outcomes.id);
+  const outcomeFields = new Set(outcomes.def.value.map((field) => field.name));
   for (const counter of [
     'executed_steps',
     'committed_effectful_tasks',
@@ -141,6 +145,6 @@ test('CycleResult projection keeps terminal flow separate from factual counters'
     'skipped_funding_unavailable',
     'failed_steps',
   ]) {
-    assert(fields.has(counter), `${counter} must remain factual summary data`);
+    assert(outcomeFields.has(counter), `${counter} must remain factual summary data`);
   }
 });

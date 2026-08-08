@@ -66,7 +66,6 @@ pub trait WeightInfo {
   fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
   fn scheduler_actor_hot_probe() -> Weight;
   fn scheduler_actor_program_probe() -> Weight;
-  fn cache_revalidation_units(units: u32) -> Weight;
   fn transaction_extension_ingress_base() -> Weight;
   fn transaction_extension_ingress_notify() -> Weight;
   fn funding_snapshot_open(assets: u32) -> Weight;
@@ -372,16 +371,6 @@ impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for Subst
       .saturating_add(T::DbWeight::get().reads(2))
   }
 
-  fn cache_revalidation_units(units: u32) -> Weight {
-    let bounded = u64::from(units.min(T::MaxCacheRevalidationUnitsPerBlock::get()));
-    // Fixed per-pass orchestration plus one worst-case actor unit each (spec 5.4).
-    Weight::from_parts(25_000_000, 2_500)
-      .saturating_add(Weight::from_parts(340_000_000, 48_000).saturating_mul(bounded))
-      .saturating_add(T::DbWeight::get().reads(2))
-      .saturating_add(T::DbWeight::get().writes(1))
-      .saturating_add(T::DbWeight::get().reads_writes(8, 4).saturating_mul(bounded))
-  }
-
   fn transaction_extension_ingress_base() -> Weight {
     Weight::from_parts(15_226_000, 6_052).saturating_add(T::DbWeight::get().reads(2))
   }
@@ -550,10 +539,6 @@ impl WeightInfo for TestWeightInfo {
   }
   fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
   fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
-  fn cache_revalidation_units(units: u32) -> Weight {
-    Weight::from_parts(25_000_000, 2_500)
-      .saturating_add(Weight::from_parts(340_000_000, 48_000).saturating_mul(units.into()))
-  }
   fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
   fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
   fn funding_snapshot_open(assets: u32) -> Weight {

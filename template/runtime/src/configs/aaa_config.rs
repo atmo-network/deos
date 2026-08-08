@@ -71,9 +71,6 @@ pub const AaaMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
   pub AaaWakeupWeightLimit: Weight = Perbill::from_percent(20) * MAXIMUM_BLOCK_WEIGHT;
   pub AaaOnIdleReserve: Weight =
     MIN_ON_IDLE_RESERVE_RATIO * MAXIMUM_BLOCK_WEIGHT;
-  /// Count ceiling for one bounded cache-revalidation worker pass (spec 10.3).
-  pub const AaaMaxCacheRevalidationUnitsPerBlock: u32 = 16;
-
   // --- Lifecycle and sweep controls ---
 
   pub const AaaMaxConsecutiveFailures: u32 = 10;
@@ -95,10 +92,6 @@ pub const AaaMaxExecutionDelayBlocks: BlockNumber = 52_596_000;
   pub const AaaMaxSystemReferenceAgeBlocks: u32 =
     ecosystem::params::MAX_SYSTEM_REFERENCE_AGE_BLOCKS;
 
-  /// Per-step flat evaluation fee
-  pub const AaaStepBaseFee: u128 = 2_000_000_000;
-  /// Per-condition evaluation fee
-  pub const AaaConditionReadFee: u128 = 500_000_000;
   /// Non-refundable opening fee routed to `FeeSink`
   pub const AaaCreationFee: Balance = ExistentialDeposit::get();
 }
@@ -108,18 +101,6 @@ pub struct AaaMinUserBalanceGuard;
 impl Get<Balance> for AaaMinUserBalanceGuard {
   fn get() -> Balance {
     AaaMinUserBalance::get().max(ExistentialDeposit::get())
-  }
-}
-
-/// No migration ships in this release, so the migration-specific no-admit disposition is
-/// absent and a cache-affecting runtime change cannot activate (spec 6.4); a concrete
-/// downstream migration names its disposition here.
-pub struct AaaCacheRevalidationNoAdmitDisposition;
-impl Get<Option<pallet_aaa::types::RevalidationDisposition>>
-  for AaaCacheRevalidationNoAdmitDisposition
-{
-  fn get() -> Option<pallet_aaa::types::RevalidationDisposition> {
-    None
   }
 }
 
@@ -1621,7 +1602,6 @@ impl pallet_aaa::Config for Runtime {
   type StakingOps = TmctolStakingOps;
   type LiquidityOps = TmctolLiquidityOps;
   type AaaCreationFee = AaaCreationFee;
-  type ConditionReadFee = AaaConditionReadFee;
   type FeeSink = AaaFeeRecipient;
   type FeeCollector = TmctolFeeCollector;
   type GenesisSystemAaas = TmctolGenesisSystemAaas;
@@ -1650,8 +1630,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxOpeningSnapshotEntries = AaaMaxOpeningSnapshotEntries;
   type MaxIdleStarvationBlocks = AaaMaxIdleStarvationBlocks;
   type AaaOnIdleReserve = AaaOnIdleReserve;
-  type MaxCacheRevalidationUnitsPerBlock = AaaMaxCacheRevalidationUnitsPerBlock;
-  type CacheRevalidationNoAdmitDisposition = AaaCacheRevalidationNoAdmitDisposition;
   type MaxOwnerSlots = AaaMaxOwnerSlots;
   type MaxExecutionPlanSteps = AaaMaxExecutionPlanSteps;
   type MaxSplitTransferLegs = AaaMaxSplitTransferLegs;
@@ -1660,7 +1638,6 @@ impl pallet_aaa::Config for Runtime {
   type MaxTriggerSources = AaaMaxTriggerSources;
   type MinUserBalance = AaaMinUserBalanceGuard;
   type MinWindowLength = AaaMinWindowLength;
-  type StepBaseFee = AaaStepBaseFee;
   type WeightInfo = crate::weights::pallet_aaa::SubstrateWeight<Runtime>;
   type WeightToFee = crate::WeightToFee;
   // Runtime binds task upper bounds so fee admission stays chain-specific and auditable

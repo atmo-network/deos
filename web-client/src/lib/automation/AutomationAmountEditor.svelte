@@ -39,9 +39,9 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
       case 'AllAvailable':
         return 'Re-observed at each step attempt';
       case 'PercentageAtOpening':
-        return 'Frozen at logical-run start';
+        return 'Frozen at logical-cycle start';
       case 'PercentageOfLastFunding':
-        return 'Frozen from the promoted funding batch';
+        return 'Frozen from the latest accepted funding';
     }
   });
 </script>

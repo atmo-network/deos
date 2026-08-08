@@ -72,7 +72,11 @@ function specEvents() {
 
 function specErrors() {
   const block = specSection('### 9.2 Errors', '### 9.3 Storage Contract');
-  return rustVariantNames(block);
+  const body = block.match(/enum Error\s*\{([\s\S]*?)\}/)?.[1];
+  assert.ok(body, 'spec Error enum body is missing');
+  return splitTopLevel(body)
+    .map((variant) => variant.match(/^([A-Z][A-Za-z0-9_]*)/)?.[1])
+    .filter(Boolean);
 }
 
 function splitTopLevel(value) {

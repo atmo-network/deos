@@ -15,23 +15,21 @@ export type AaaEligibilityPhase =
   | 'Ready'
   | 'Paused'
   | 'GlobalCircuitBreaker'
-  | 'WindowExpired'
-  | 'CycleNonceExhausted'
-  | 'ConsecutiveFailureLimit'
-  | 'AutoCloseDue'
+  | 'CloseDue'
   | 'WaitingSignal'
   | 'WaitingRetry'
   | 'WaitingTemporal';
 
 export type AaaEligibilityFailure =
-  | 'ComputationOverflow'
-  | 'ContinuationInvariant';
+  | 'ActorInvariant'
+  | 'ContinuationInvariant'
+  | 'ComputationOverflow';
 
 export type AaaEligibilityProjection = {
-  /** Scheduler readiness verdict at the read block; admission capacity is not guaranteed. */
-  ready: boolean;
-  /** Scheduler-owned reason for the verdict. */
+  /** Scheduler-owned readiness or blocking phase. */
   phase: AaaEligibilityPhase;
+  /** Terminal reason when phase is CloseDue. */
+  closeReason: string | null;
   /** Next block at which temporal eligibility opens, or null when none is computable. */
   nextEligibleBlock: number | null;
 };
@@ -42,18 +40,16 @@ const ELIGIBILITY_PHASES: ReadonlySet<string> = new Set([
   'Ready',
   'Paused',
   'GlobalCircuitBreaker',
-  'WindowExpired',
-  'CycleNonceExhausted',
-  'ConsecutiveFailureLimit',
-  'AutoCloseDue',
+  'CloseDue',
   'WaitingSignal',
   'WaitingRetry',
   'WaitingTemporal',
 ]);
 
 const ELIGIBILITY_FAILURES: ReadonlySet<string> = new Set([
-  'ComputationOverflow',
+  'ActorInvariant',
   'ContinuationInvariant',
+  'ComputationOverflow',
 ]);
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
@@ -98,16 +94,17 @@ export function projectAaaEligibility(
     throw new Error('Runtime eligibility output must be a SCALE Result');
   }
   const projection = asRecord(result.value, 'eligibility projection');
-  if (typeof projection.ready !== 'boolean') {
-    throw new Error('ready must be a runtime boolean');
-  }
+  const phaseVariant = asRecord(projection.phase, 'eligibility phase');
   const phase = asVariant(projection.phase, 'eligibility phase');
   if (!ELIGIBILITY_PHASES.has(phase)) {
     throw new Error(`Unsupported runtime eligibility phase ${phase}`);
   }
   return {
-    ready: projection.ready,
     phase: phase as AaaEligibilityPhase,
+    closeReason:
+      phase === 'CloseDue'
+        ? asVariant(phaseVariant.value, 'eligibility close reason')
+        : null,
     nextEligibleBlock: asOptionalBlock(
       projection.next_eligible_block,
       'next_eligible_block',

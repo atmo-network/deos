@@ -51,9 +51,9 @@ Current owner-slot representation is fixed-width and runtime-shaped:
 
 The package stores each actor identity once and each active actor across three active-epoch values:
 
-- `ActorIdentities`: durable owner, `ActorClass`, mutability, sovereign account, and logical-run nonce shared by Active and Dormant lifecycle states
-- `ActorHot`: typed Active lifecycle/run state, auto-close target, failure counter, `pending_signal`, queue/wakeup membership, terminal and control-mutation blocks, cached cycle weight/fee bounds, `funding_tracked_count`, `schedule_anchor`, optional `last_cycle_block`, and the global `cache_epoch` stamp
-- `ActorProgram`: trigger/cooldown schedule, optional execution window, run plan, and `Persistent | CloseAfterProductiveRun` completion policy
+- `ActorIdentities`: durable owner, `ActorClass`, mutability, sovereign account, logical-cycle nonce, and non-optional persistent control-mutation block shared by Active and Dormant lifecycle states
+- `ActorHot`: typed Active lifecycle/run state, auto-close target, failure counter, `pending_signal`, queue/wakeup membership, terminal block, `schedule_anchor`, and optional `last_cycle_block`
+- `ActorProgram`: trigger/cooldown schedule, optional execution window, cycle plan, and `Persistent | CloseAfterProductiveCycle` completion policy
 - `ActorFunding`: canonical funding-source policy, bounded tracked assets, and bounded `funding_accumulated[asset]` checked deltas
 
 `AaaCreated` carries `aaa_id`, owner, `actor_class`, mutability, sovereign account, and `initial_lifecycle`; User slot or System custody locator lives inside `ActorClass`. `aaa_id` exists only as each storage-map key. Dormant identity carries no timestamp. Activation or a pre-first-cycle schedule update derives eligibility from `schedule_anchor`, window start, cadence, and actor-stable jitter. The typed lifecycle forbids contradictory pause state.
@@ -72,7 +72,7 @@ Each actor stores a bounded `ExecutionPlan` of ordered `Step`s. One configurable
 
 `ConditionSet` is one non-nested `Always`, `All`, or `Any` aggregate per step. `Always` owns zero atoms; validated `All` and `Any` own one through `MaxConditionsPerStep`. The executor evaluates every atom without short-circuiting, aggregates once, and either prepares the one task or skips one cursor. Empty groups fail as `EmptyConditionSet`; `Any` never duplicates task execution or introduces successor data.
 
-Evaluation fee and cycle/suffix Weight accounting use `ConditionSet::len()`, so mode, order, and truth position cannot change the configured atomic-count bound. Package helpers map empty vectors to `Always` and non-empty conjunctions to `All`; no parallel storage or scheduler surface exists.
+Evaluation fees derive from the current generated `condition_set_evaluation` and `fee_collection` weights through the host `WeightToFee`; cycle/suffix Weight accounting uses the same `ConditionSet::len()`. Mode, order, and truth position cannot change the configured atomic-count bound. Package helpers map empty vectors to `Always` and non-empty conjunctions to `All`; no parallel pricing, storage, or scheduler surface exists.
 
 `ObservationProvider<FeedId, BlockNumber>` is the generic current-scalar boundary. The host receives `feed`, `now`, and `max_age_blocks`; `Fresh` returns both `value` and `observed_at`. AAA accepts Fresh only when `observed_at <= now` and checked age stays within the authored maximum. Future or over-age Fresh fails condition evaluation Permanently, while explicit Unavailable, Uninitialized, and Stale states produce ordinary `ConditionsNotMet`.
 
@@ -101,7 +101,7 @@ Liquidity tasks also carry fixed non-zero outputs. `AddLiquidity.min_lp_out` rea
 
 `RemoveLiquidity.min_amount_a` and `min_amount_b` pass directly into Asset Conversion. Its two exact withdrawal-minimum errors classify as Temporary; malformed pair identity, missing indexed topology, and unknown downstream failures remain Permanent. The outer adapter transaction retains post-call balance-delta checks as defense in depth, so no success event or partial liquidity mutation survives either enforcement layer.
 
-`StopCycle` executes only after its conditions and ordinary User fee collection succeed. It records `SimulationStepOutcome::Stopped`, emits `CycleStopped { aaa_id, cycle_nonce, step_index }`, and ends the logical run successfully at that cursor.
+`StopCycle` executes only after its conditions and ordinary User fee collection succeed. It records `SimulationStepOutcome::Stopped`, emits `CycleStopped { aaa_id, cycle_nonce, step_index }`, and ends the logical cycle successfully at that cursor.
 
 The shared completion path emits the cumulative summary, leaves later funding accumulation untouched, evaluates completion policy and auto-close, clears a resumed Continuation, and leaves the suffix unreachable.
 
@@ -135,7 +135,7 @@ Resolution outcomes are deterministic:
 
 `attempt_fee_envelope` owns User per-step evaluation/execution/total fees and checked suffix totals. `settle_attempt_fee_step` releases each selected upper reservation before selecting evaluation-only or attempted-step charge; System settlement stays zero.
 
-Admission caches the complete-plan total in `ActorHot.cycle_fee_upper`; execution, retry admission, simulation, and benchmarks derive the selected suffix through that same owner. Overflow fails before mutation. The package-owned `fee_envelope_vectors` example emits deterministic User/System suffix, release, rollback-pricing, and protected-floor vectors consumed by browser forecasting tests.
+Admission, execution, retry admission, simulation, and benchmarks derive the selected full-plan or Continuation-suffix fee envelope from the current bounded program. Overflow fails before mutation. The package-owned `fee_envelope_vectors` example emits deterministic User/System suffix, release, rollback-pricing, and protected-floor vectors consumed by browser forecasting tests.
 
 Resolution and charging follow these rules:
 
@@ -183,9 +183,9 @@ A cycle is admitted only when all checks pass:
 3. a two-dimensional `WeightMeter` can consume the complete attempt plus measured pure-cleanup weight without exceeding RefTime or ProofSize
 4. for User AAA: fee preflight covers the opening plan or unresolved retry suffix plus `MinUserBalance`
 
-`cycle_weight_upper` and `cycle_fee_upper` are stored per actor in `ActorHot` and refreshed on create/update execution plan. They bound ordinary opening attempts without rescanning cost classes. A suspended run scans only the bounded `cursor..plan.len()` suffix and composes generated retry/suffix-admission classes.
+Attempt Weight and User fees are derived from the current bounded program at every use. Fresh attempts scan the full plan, while suspended attempts scan only the bounded `cursor..plan.len()` suffix and compose generated retry/suffix-admission classes.
 
-Weight or scan deferral remains silent and state-preserving: no candidate identity, event, nonce, attempt, cursor, funding snapshot, or task effect changes. Persistent live-head Weight blockage becomes observable only through sparse starvation transition events.
+Weight or scan deferral remains silent and state-preserving: no candidate identity, event, nonce, attempt, cursor, funding snapshot, or task effect changes. Persistent live-head Weight blockage, fee-collection failure, or invariant stall becomes observable only through sparse starvation transition events.
 
 Deferral/terminal paths:
 
@@ -202,9 +202,9 @@ Deferral/terminal paths:
 - Paused actors remain hot-only before terminal time and load `ActorProgram` only when closure is due
 - With `GlobalCircuitBreaker` active, normal cycles and scheduler-owned terminal cleanup defer; bounded housekeeping plus explicit lifecycle/sweep cleanup remain available
 
-`ActorProgram.completion_policy` defaults to `Persistent`. `CloseAfterProductiveRun` checks cumulative `committed_effectful_tasks` only after successful logical-run completion, including a resumed Continuation. False/latest-state-rejected conditions, skips, rolled-back failures, bare `StopCycle`, suspension, abort, cancellation, and retry exhaustion cannot select `ProductiveRunCompleted`. The pure close path remains valid for Immutable System actors and preserves their sovereign balances.
+`ActorProgram.completion_policy` defaults to `Persistent`. `CloseAfterProductiveCycle` checks cumulative `committed_effectful_tasks` only after successful logical-cycle completion, including a resumed Continuation. False/latest-state-rejected conditions, skips, rolled-back failures, bare `StopCycle`, suspension, abort, cancellation, and retry exhaustion cannot select `ProductiveCycleCompleted`. The pure close path remains valid for Immutable System actors and preserves their sovereign balances.
 
-Code anchor: `src/execution.rs::execute_single_cycle_traced` increments the cumulative count after task commit and applies productive close after `CycleSummary`. Pallet tests prefixed `close_after_productive_run_` falsify false-state, latest-state race, bare stop, retry, exhaustion, balance, and Immutable closure claims.
+Code anchor: `src/execution.rs::execute_single_cycle_traced` increments the cumulative count after task commit and applies productive close after `CycleSummary`. Pallet tests prefixed `close_after_productive_cycle_` falsify false-state, latest-state race, bare stop, retry, exhaustion, balance, and Immutable closure claims.
 
 Lifecycle lease-by-cycles is supported via `auto_close_at_cycle_nonce`: after a successful cycle reaches the configured target, actor closes with `AutoCloseNonceReached`. `set_auto_close_at_cycle_nonce` may set, shorten, extend, or clear the target, but every non-empty target must remain strictly ahead of current `cycle_nonce` and within `MaxAutoCloseNonceHorizon`; incrementing starts from the existing target or current nonce when unset, rejects zero/overflow, and revalidates the resulting current-relative horizon.
 
@@ -216,17 +216,17 @@ Fee collection is exact-once: one charge performs one read-only ingress prefligh
 
 - Conditions and task preparation run read-only before collection determines the step outcome.
 - Every attempted User step invokes `FeeCollector` at most once: condition/resolution/funding non-execution charges evaluation-only, while an executable step charges evaluation plus generated execution fee together.
-- Collection failure emits deterministic `StepFailed` without task dispatch or partial debit. Adapter failure after successful collection rolls back task-local effects but retains the one combined charge.
-- `ContinueNextStep` and `AbortCycle` do not alter the selected charge or trigger another collection.
+- Collection failure rolls back the complete scheduler attempt before step policy, task dispatch, queue consumption, or any persistent fee, event, counter, nonce, cursor, or snapshot mutation. Simulation reports interface-local `FeeCollectionFailed`.
+- After successful collection, adapter failure rolls back task-local effects but retains the one combined charge; `ContinueNextStep` and `AbortCycle` never alter that charge or trigger another collection.
 - `fee_native_protected_minimum` applies `max(MinUserBalance, asset minimum)` to User fee-native direct preserve-spend capacity and `SwapOut` input capacity after the selected reservation; other assets retain their adapter minimum.
 
 Pallet regressions cover each outcome, collection failure, one-call cardinality, task rollback, release-to-zero, direct User-floor preservation, and exact-output input-cap failure. User fee admission derives each step and complete-plan reserve from host-bound generated weights plus configured step fees; package tests reject execution immediately below that exact reserve.
 
 ### Progress-Preserving Continuation
 
-`ActorHot.cycle_state` is the sole discovery marker. `Idle` reads no Continuation value; `Suspended` requires exactly one `ContinuationState[aaa_id]`. The sparse value stores scalar `cursor`, logical-run-wide `attempt`, `unsuccessful_attempts_at_cursor`, `last_attempt_block`, frozen typed suffix snapshots, and cumulative outcomes. Try-state enforces marker/store equivalence, cursor bounds, Mutable-only bounded retry policy, a live cursor-local count below its nonzero limit, and snapshot-surface validity.
+`ActorHot.cycle_state` is the sole discovery marker. `Idle` reads no Continuation value; `Suspended` requires exactly one `ContinuationState[aaa_id]`. The sparse value stores scalar `cursor`, logical-cycle-wide `attempt`, `unsuccessful_attempts_at_cursor`, `last_attempt_block`, frozen typed suffix snapshots, and cumulative outcomes. Try-state enforces marker/store equivalence, cursor bounds, Mutable-only bounded retry policy, a live cursor-local count below its nonzero limit, and snapshot-surface validity.
 
-Attempt `0` opens one logical run and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater { max_attempts }` increments both global failure state and the cursor-local count. The first suspension stores `1`; same-cursor suspension increments saturatingly, while a later cursor resets to `1`.
+Attempt `0` opens one logical cycle and increments `cycle_nonce` once. A Temporary `TaskFailure` or `FundingUnavailable` under `RetryLater { max_attempts }` increments both global failure state and the cursor-local count. The first suspension stores `1`; same-cursor suspension increments saturatingly, while a later cursor resets to `1`.
 
 Post-attempt counters use checked addition. Inclusive local exhaustion closes with `RetryAttemptsExhausted`; when both cutoffs land together this reason wins, while an earlier global cutoff closes with `ConsecutiveFailures`. Exhaustion clears Continuation, emits `CycleSummary(Failed)` without `CycleCancelled`, then closes. An already-reached global cutoff closes before another `CycleStarted` or `CycleContinued`. Persisted retry reuses the nonce, omits external cadence, and executes only the suffix.
 
@@ -254,13 +254,15 @@ Cancellation emits `CycleCancelled` before one cumulative terminal `CycleSummary
 
 `aaa_eligibility` is the read-only `AaaEligibilityApi` projection. It mirrors `apply_admission` and reuses the exact cadence, retry, window, failure-limit, breaker, and latch owners, so clients do not reproduce scheduler arithmetic.
 
-The projection reports `ready` and one phase: `NotRegistered`, `Dormant`, `Ready`, `Paused`, `GlobalCircuitBreaker`, `WindowExpired`, `CycleNonceExhausted`, `ConsecutiveFailureLimit`, `AutoCloseDue`, `WaitingSignal`, `WaitingRetry`, or `WaitingTemporal`. `next_eligible_block` is `now` when ready, the next known temporal gate while waiting, or `None` when no future gate is computable.
+The projection reports one phase: `NotRegistered`, `Dormant`, `Ready`, `GlobalCircuitBreaker`, `CloseDue(CloseReason)`, `Paused`, `WaitingSignal`, `WaitingRetry`, or `WaitingTemporal`. `next_eligible_block` is `now` when ready, the next known temporal gate while waiting, or `None` when no future gate is computable.
 
 The projection persists no state, emits no event, and promises no service. Queue position and available Weight still decide actual admission. Arithmetic overflow and malformed Continuation state return typed projection errors rather than an inferred phase.
 
 Code anchor: `src/scheduler.rs::aaa_eligibility`; package tests prefixed `eligibility_projection_` falsify every phase and the `next_eligible_block` contract.
 
 ### Queue Execution Model (Monotonic Paged FIFO)
+
+`classify_actor` owns terminal precedence, breaker and pause phase, retry/temporal timing, signal readiness, and cursor-sensitive User viability. Scheduler admission, sweep, simulation, eligibility, and certified ingress project that read-only result; malformed Active partitions and Continuation state map through typed classification errors.
 
 Scheduler execution is queue-first and deterministic:
 
@@ -270,7 +272,7 @@ It uses two scheduler layers: a monotonic paged FIFO for work that can execute n
 2. **Ingress admission**: each matched producer call applies funding independently and sets the unified boolean signal latch; actor-local queue/wakeup membership remains bounded and may join the active run queue in the same `on_idle` pass
 3. **Block-start cutoff**: after already-due wakeups materialize, the scheduler snapshots global `NextQueueTicket`; every later append receives a ticket at or beyond that cutoff and cannot execute in the current block
 4. **Canonical head**: tri-state discovery returns `Empty`, `Head`, or `Blocked` only for the one global FIFO. It stops on an incomplete probe rather than treating the head as absent.
-5. **Strict ticket order**: the scheduler may lazily consume tombstones before the cutoff, but it cannot bypass a live or blocked head. One O(1) preflight owns every FIFO mutation: checked `tail - head == QueueOccupancy`, configured capacity, and canonical current head/tail page-slot layout. Enqueue, live-head consume, and tombstone drain run as closed storage transactions after that preflight. Corruption rolls back exactly and returns a non-Weight block rather than `Empty` or progress. The next live ticket receives the only execution offer.
+5. **Strict ticket order**: the scheduler may lazily consume tombstones before the cutoff, but it cannot bypass a live or blocked head. One O(1) preflight owns every FIFO mutation: checked `tail - head == QueueOccupancy`, configured capacity, and canonical current head/tail page-slot layout. Enqueue, live-head consume, and tombstone drain run as closed storage transactions after that preflight. Corruption rolls back exactly and returns an invariant live-head stall rather than `Empty` or progress. The next live ticket receives the only execution offer.
 6. **Execution ceiling**: `last_cycle_block`, the shared scan/execution ceilings, and the common cutoff prevent a second scheduler invocation or circular/self-enqueue graph from executing one actor twice in the same block. Untouched suffix entries remain physically in place without reconstruction.
 
 `ActorHot.queue_ticket` is the sole live-membership marker for the canonical FIFO. Replacement, close, pause, and cancellation use actor-local invalidation; stale page entries drain lazily. Scheduler admission reserves the generated hot probe before reading `ActorHot`; paused or negative readiness consumes no `ActorProgram` or `ContinuationState` proof. Only a hot-positive actor reserves the separate program/admission probe.
@@ -315,40 +317,12 @@ Starvation handling then follows these rules:
 - The base reads paged occupancy.
 - A physically saturated queue reserves and attempts one generated tombstone-drain unit before breaker return.
 - A stale head makes bounded progress even while the breaker remains active; a live head stays in place.
-- The actor pass reports its terminal outcome: live work admitted, queue empty, or blocked by weight versus blocked for a non-Weight reason (scan ceiling, same-block guard, structural). With the breaker inactive, `Healthy -> Starving { since }` occurs only when live FIFO work exists, no attempt was admitted, and the actor pass returns `BlockedByWeight`; duration derives from `since`.
-- No live work, an admitted attempt, a non-Weight block result, or breaker activation clears state once; alerted recovery emits once, and Healthy blocks perform no telemetry write. An empty or tombstone-only queue with an exhausted budget is not starvation.
+- The actor pass distinguishes empty work, a known head, weight stall, pass exhaustion, and invariant stall. With the breaker inactive, weight or invariant stalls over a live head and no admitted attempt saturating-increment `Starving { consecutive_blocks }`; scan/count exhaustion and same-block boundaries remain silent pass deferrals.
+- No live work, an admitted attempt, pass exhaustion, or breaker activation clears state once; alerted recovery emits once, and Healthy blocks perform no telemetry write. Weight-blocked, fee-collection-stalled, and invariant-stalled live heads all advance starvation; an empty or tombstone-only queue with exhausted budget does not.
 
 Package coverage retains actor-local readiness through ProofSize-only exhaustion, verifies telemetry without beginning an inadmissible drain unit, and proves that an empty queue with an exhausted budget never enters `Starving` while a weight-blocked live head does.
 
 Recovery is governance-operated (circuit breaker or parameter adjustment); no emergency cycle execution occurs in `on_initialize`.
-
-### Cache Revalidation
-
-`CurrentCacheEpoch` and the optional durable `CacheRevalidation { target_epoch, cursor, remaining }` own the global cache identity and progress. Every executable Active actor carries `ActorHot.cache_epoch`; Active creation, activation, and semantic execution-plan replacement stamp the current epoch, while schedule/funding replacement and pause/resume preserve it. Genesis writes epoch `0`, stamps every configured Active actor, and leaves the gate absent.
-
-A cache-affecting runtime upgrade calls `begin_cache_revalidation`: it checked-increments the epoch, snapshots the exact Active workset through a bounded key cursor over `ActorHot`, and fails closed when the migration-specific no-admit disposition is absent or the epoch cannot increment. The reference runtime ships no migration and therefore cannot activate such a change.
-
-While the gate exists, `on_idle` runs the bounded worker between observation fanout and the cutoff snapshot. Each unit fits the actual budget and `MaxCacheRevalidationUnitsPerBlock`. FIFO discovery never begins, attempts and automatic cleanup stop, and starvation accounting remains frozen.
-
-Active creation, activation, and plan replacement return `CacheRevalidationActive`. Close and deactivation remove the pending actor and decrement `remaining`. Each worker unit recomputes both caches, reruns admission against `ActorServiceReserve`, and stamps the survivor or applies the configured disposition.
-
-The gate clears atomically at `remaining == 0`. Ordinary FIFO service resumes in the next block without reticketing, preserving prior order.
-
-`cache_revalidation_units(units)` is the sole generated revalidation Weight class. It measures `20,303,784 + 20,776,516 × n` RefTime and `3,591 + 8,677 × n` ProofSize with `2 + 3n` reads and `1 + n` writes. `cache_revalidation_unit_weight_upper` proves one maximum unit fits `ActorServiceReserve` after maximum fixed workers. Try-state reconciles epoch stamps, pending cardinality, and cache equality.
-
-`cycle_orchestration` measures `44,699,000 / 9,667` with 3 reads and 2 writes. `step_orchestration(steps)` measures `44,555,323 + 215,321 × n` RefTime with 3 reads and 2 writes. Admission composes the plan-length class with per-step condition/task classes; scheduler probes and head consumption retain separate generated classes.
-
-## Trigger Subsystem
-
-Implemented trigger policy grammar:
-
-- `TriggerSource::Manual`
-- `TriggerSource::OnAddressEvent { source_filter, asset_filter }`
-- `TriggerSource::OnObservationChange { feed }`
-- `TriggerPolicy::Immediate { sources }`
-- `TriggerPolicy::Cadenced { every_blocks, mode: Always | WhenSignalled(sources) }`
-
-`MaxTriggerSources = 4` bounds non-empty OR-only source sets. Admission rejects duplicate, empty, or non-canonical source/filter sets; canonical order follows SCALE bytes. `Cadenced::Always` owns no source set. Package helpers construct common single-source, dual-source, and cadence policies without adding nested trigger groups.
 
 ### Cadence
 
@@ -415,9 +389,9 @@ Host-decided `RuntimePolicy` receives both optional fields unchanged. Every acce
 Primary storage follows explicit owners. Section 13's stable behavioral stores constrain compatibility, while bounded scheduler and ingress machinery remains replaceable implementation state. No synchronized readiness mirror remains.
 
 - `NextAaaId`: monotonic AAA id allocator
-- `ActorIdentities`: one durable identity map for Active and Dormant actors, retaining owner, class/custody locator, mutability, sovereign account, and `cycle_nonce`
-- `ActorHot`: active/paused lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, direct `terminal_at`, class-independent external control queue-mutation block guard, compact admission bounds, and measured `funding_tracked_count`
-- `ActorProgram`: active schedule/window plus the bounded run plan; the metadata maximum is 7,144 bytes
+- `ActorIdentities`: one durable identity map for Active and Dormant actors, retaining owner, class/custody locator, mutability, sovereign account, `cycle_nonce`, and non-optional `last_control_mutation_block`
+- `ActorHot`: active/paused lifecycle, counters, pending readiness, eligibility anchors, live queue ticket, exact paged wakeup pointer, and direct `terminal_at`
+- `ActorProgram`: active schedule/window plus the bounded cycle plan; the metadata maximum is 7,144 bytes
 - `ActorFunding`: active-only canonical funding-source policy, bounded tracked-asset set, and `funding_accumulated[asset] = amount`; authorized ingress adds checked deltas, fresh cycle opening atomically takes the map as its frozen snapshot, and later ingress remains accumulated for the next cycle
 - `ActorIdentityCount`: transactionally maintained O(1) `ActorIdentities` cardinality bounded by `MaxActorIdentities`
 - `ActiveAaaCount`: transactionally maintained O(1) active/paused cardinality used by activation and operational-cap checks; try-runtime reconciles it against `ActorHot`, `ActorProgram`, and `ActorFunding`
@@ -433,7 +407,7 @@ Primary storage follows explicit owners. Section 13's stable behavioral stores c
 - `SystemSovereigns`: bounded lifetime registry from `SystemSovereignId` to `Vacant | Occupied(aaa_id)`; close changes only occupancy, while reattachment creates a fresh actor id against the retained locator
 - `SystemSovereignCount`: exact O(1) registry cardinality bounded by `MaxSystemSovereigns`; vacant locators remain capacity-consuming so their deterministic custody accounts stay recoverable
 - `GlobalCircuitBreaker`: global scheduler halt flag
-- `IdleStarvationState`: sparse `Healthy | Starving { since } | Alerted { since }` starvation transition state
+- `IdleStarvationState`: sparse `Healthy | Starving { consecutive_blocks } | Alerted { consecutive_blocks }` starvation transition state
 
 ### Pre-fork storage baseline
 
@@ -451,7 +425,7 @@ Created Dormant ⇄ Active → Ready → Admitted → Running ⇄ Suspended → 
 
 Lifecycle calls preserve the split-store boundary:
 
-- `activate_aaa` accepts typed `ProgramInput::Active(ActiveProgramInput)` and validates schedule/window, run plan, funding policy, optional auto-close target, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorProgram`, and `ActorFunding` entries for a Mutable identity; `ProgramInput::Dormant` is rejected.
+- `activate_aaa` accepts typed `ProgramInput::Active(ActiveProgramInput)` and validates schedule/window, cycle plan, funding policy, optional auto-close target, tracked assets, cached bounds, class restrictions, active capacity, and the host-configured idle envelope. It then creates matching `ActorHot`, `ActorProgram`, and `ActorFunding` entries for a Mutable identity; `ProgramInput::Dormant` is rejected.
 - `deactivate_aaa` clears queues, wakeups, pending signal, funding, cycle, and fee state while preserving identity, owner slot, sovereign address, and balances.
 
 Active and dormant creation normalize into one typed internal boundary. Every creation path consumes `ProgramInput`; no lineage/reopen call or explicit actor-id creation path remains.
@@ -464,10 +438,10 @@ Package lifecycle interpretation:
 
 Creation and mutability rules are explicit:
 
-- Lowest-free-slot and exact-slot User creation accept complete typed `ProgramInput`: Active programs carry one `ActiveProgramInput` with schedule/window, run plan, completion/funding policy, and optional auto-close target; Dormant identities carry no program.
+- Lowest-free-slot and exact-slot User creation accept complete typed `ProgramInput`: Active programs carry one `ActiveProgramInput` with schedule/window, cycle plan, completion/funding policy, and optional auto-close target; Dormant identities carry no program.
 - Fresh System creation allocates matching actor and custody-locator ids. `create_system_aaa_at_sovereign_id` requires an allocated vacant locator, creates a fresh actor id with nonce zero, and accepts complete Active or Dormant input without inheriting lineage state.
-- Mutable actors may replace the run plan through `update_execution_plan`; Immutable actors fix it for actor lifetime.
-- User actors cannot admit `Mint` in the run plan.
+- Mutable actors may replace the cycle plan through `update_execution_plan`; Immutable actors fix it for actor lifetime.
+- User actors cannot admit `Mint` in the cycle plan.
 - Immutable System actors reject Manual sources at admission; no runtime extrinsic, including governance/root, can mutate, pause, manually trigger, or close one. Reattachment after terminal close creates a distinct identity and does not mutate the former actor.
 
 Mandatory runtime-owned terminal transitions remain distinct from the control guard. Immutable System actors may use an execution window or another internal terminal condition; an actor with none may remain Active indefinitely under the current dispatch contract. Failure threshold and window expiry use pure cleanup. Only a runtime upgrade can replace this immutability contract.
@@ -491,7 +465,7 @@ This subsystem follows the project-wide [`read-model.contract.en.md`](../../../.
 The current pallet already provides chain-native bounded reads for live actor and scheduler truth through:
 
 - `actor_hot(aaa_id)` for lifecycle, identity/control, queue membership, cycle state, and cached bounds
-- `actor_program(aaa_id)` for schedule/window and bounded run plan
+- `actor_program(aaa_id)` for schedule/window and bounded cycle plan
 - `actor_funding(aaa_id)` for funding policy, tracked assets, and the bounded accumulated-delta map
 - `owner_slot_bitmap(owner)` plus deterministic `sovereign_account_id(owner, owner_slot)` recovery and `sovereign_index(sovereign)` lookup for bounded per-owner discovery/recovery
 - Deterministic `sovereign_account_id_system(aaa_id)` for System AAA addressing against the known runtime catalog
@@ -544,7 +518,7 @@ AAA discovery is intentionally split by use case:
 | `16` | `increment_auto_close_nonce` | extend cycle lease, checked and bounded |
 | `17` | removed | retired pre-launch close-plan mutation |
 | `18..=20` | reserved | retired transitional dormant creation calls; canonical User/System creation accepts `ProgramInput::Dormant` |
-| `21` | `activate_aaa` | typed Active program with schedule, run plan, funding policy, and admission validation |
+| `21` | `activate_aaa` | typed Active program with schedule, cycle plan, funding policy, and admission validation |
 | `22` | `deactivate_aaa` | remove program/scheduler state while preserving identity and balances |
 
 Calls `4`, `5`, `6`, `7`, `8`, `9`, `12`, `15`, `16`, `21`, and `22` use the class-specific control authority: signed owner for User actors, signed owner or governance for System actors. Active-only calls reject dormant identities; `close_aaa` handles either lifecycle.

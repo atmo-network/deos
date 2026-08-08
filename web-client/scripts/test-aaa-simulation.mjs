@@ -74,7 +74,6 @@ test('local projection commits successful tasks and rolls back one failed task',
   assert.equal(result.status, 'Completed');
   assert.equal(result.state.balance, 95n);
   assert.equal(result.continuationCursor, null);
-  assert.equal(result.finalizedThrough, 2);
   assert.deepEqual(
     result.journal.map(({ outcome, stateCommitted }) => [
       outcome.kind,
@@ -91,7 +90,7 @@ test('local projection commits successful tasks and rolls back one failed task',
 test('productive completion closes only after one committed effectful task', () => {
   const falseCycle = simulateAaaLocally({
     ...provenance,
-    completionPolicy: 'CloseAfterProductiveRun',
+    completionPolicy: 'CloseAfterProductiveCycle',
     initialState: { balance: 100n },
     steps: [
       localStep(0, 'AbortCycle', {
@@ -111,7 +110,7 @@ test('productive completion closes only after one committed effectful task', () 
 
   const productive = simulateAaaLocally({
     ...provenance,
-    completionPolicy: 'CloseAfterProductiveRun',
+    completionPolicy: 'CloseAfterProductiveCycle',
     initialState: { balance: 100n },
     steps: [localStep(0)],
     runTask(_step, state) {
@@ -120,7 +119,7 @@ test('productive completion closes only after one committed effectful task', () 
     },
   });
   assert.equal(productive.status, 'Closed');
-  assert.equal(productive.closeReason, 'ProductiveRunCompleted');
+  assert.equal(productive.closeReason, 'ProductiveCycleCompleted');
   assert.equal(productive.state.balance, 90n);
   assert.equal(productive.cumulative.committedEffectfulTasks, 1);
 });
@@ -144,7 +143,6 @@ test('temporary RetryLater preserves the prefix and resumes from one scalar curs
   assert.equal(suspended.state.balance, 90n);
   assert.equal(suspended.continuationCursor, 1);
   assert.equal(suspended.unsuccessfulAttemptsAtCursor, 1);
-  assert.equal(suspended.finalizedThrough, 0);
 
   const resumed = simulateAaaLocally({
     ...provenance,
@@ -256,7 +254,7 @@ test('permanent RetryLater aborts, and Immutable plans reject retry policy', () 
       return { kind: 'Failed', retry: 'Permanent', error: 'invalid' };
     },
   });
-  assert.equal(aborted.status, 'Aborted');
+  assert.equal(aborted.status, 'Failed');
   assert.equal(aborted.continuationCursor, null);
   assert.equal(aborted.state.balance, 1n);
 
@@ -345,7 +343,6 @@ test('StopCycle completes after its committed prefix and leaves the suffix unrea
     },
   });
   assert.equal(result.status, 'Completed');
-  assert.equal(result.finalizedThrough, 1);
   assert.equal(result.state.balance, 11n);
   assert.deepEqual(executed, [0]);
   assert.deepEqual(

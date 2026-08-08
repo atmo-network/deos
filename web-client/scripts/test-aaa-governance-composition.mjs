@@ -116,7 +116,7 @@ test('System AAA composition exposes exact Root call but denies current governan
         },
       ],
       completion_policy: {
-        type: 'CloseAfterProductiveRun',
+        type: 'CloseAfterProductiveCycle',
         value: undefined,
       },
       funding_source_policy: { type: 'OwnerOnly', value: undefined },

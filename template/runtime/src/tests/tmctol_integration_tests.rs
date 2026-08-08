@@ -14,7 +14,7 @@ use super::common::{
 use crate::{AAA, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_aaa::{
   AaaType, AmountResolution, AssetOps, CompletionPolicy, DexOps, Event, ExecutionContext,
-  ExecutionPlanOf, FundingSourcePolicy, ProgramInput, StepErrorPolicy, Task,
+  ExecutionPlanOf, FundingSourcePolicy, OutcomeTotals, ProgramInput, StepErrorPolicy, Task,
 };
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
@@ -311,6 +311,7 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
         },
         mutability: pallet_aaa::Mutability::Mutable,
         cycle_nonce: 0,
+        last_control_mutation_block: 0,
       },
     );
 
@@ -831,9 +832,9 @@ fn swap_without_pool_fails_execution_plan() {
         Event::CycleSummary {
           aaa_id,
           cycle_nonce: 1,
-          failed_steps,
+          outcomes,
           ..
-        } if *aaa_id == bm_id && *failed_steps >= 1
+        } if *aaa_id == bm_id && outcomes.failed_steps >= 1
       )
     }));
   });
@@ -1080,7 +1081,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
         event,
         Event::CycleSummary {
           aaa_id: id,
-          failed_steps: 0,
+          outcomes: OutcomeTotals { failed_steps: 0, .. },
           ..
         } if *id == liquidity_actor_id
       )
@@ -1305,7 +1306,7 @@ fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
     );
     assert!(has_aaa_event(|event| matches!(
       event,
-      Event::CycleSummary { aaa_id, failed_steps: 0, .. }
+      Event::CycleSummary { aaa_id, outcomes: OutcomeTotals { failed_steps: 0, .. }, .. }
         if *aaa_id == bucket_id || *aaa_id == treasury_id
     )));
   });

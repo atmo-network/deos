@@ -140,7 +140,7 @@ export type AaaSemanticAmountResolution = {
   feeReserveDependency: 'None' | 'TaskPolicy';
   valueObservationWindow:
     | 'ArtifactTime'
-    | 'LogicalRunStart'
+    | 'LogicalCycleStart'
     | 'StepAttemptTime';
   retryObservation: 'ReobserveLiveValue' | 'ReuseFrozenValueWithLiveCapacity';
 };

@@ -36,7 +36,7 @@ const feed = {
 const canonicalProgram = {
   aaaType: 'User',
   mutability: 'Mutable',
-  completionPolicy: 'CloseAfterProductiveRun',
+  completionPolicy: 'CloseAfterProductiveCycle',
   trigger: {
     type: 'Immediate',
     sources: [{ type: 'OnObservationChange', feed }],
@@ -82,8 +82,7 @@ const artifact = createAaaArtifactFromAuthoring({
 const weightModel = {
   identity: 'reactive-authoring-fixture-weights',
   version: '1',
-  stepBaseFee: 2n,
-  conditionReadFee: 1n,
+  evaluationFeeUpper: (conditionCount) => 2n + BigInt(conditionCount),
   evaluationWeight: (conditionCount) => ({
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),
@@ -114,13 +113,12 @@ function localStep() {
 function matchingOutcome(resultScale) {
   return {
     status: 'Closed',
-    closeReason: 'ProductiveRunCompleted',
+    closeReason: 'ProductiveCycleCompleted',
     cycleNonce: 1n,
     attempt: 1,
     startCursor: 0,
     continuationCursor: null,
     unsuccessfulAttemptsAtCursor: null,
-    finalizedThrough: 0,
     cumulativeOutcomes: {
       executedSteps: 1,
       committedEffectfulTasks: 1,
@@ -166,7 +164,7 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   );
   assert.equal(
     inspection.projection.value.completion_policy.type,
-    'CloseAfterProductiveRun',
+    'CloseAfterProductiveCycle',
   );
 
   const analysis = analyzeAaaProgram({
@@ -182,7 +180,7 @@ test('canonical reactive one-shot strategy round-trips and projects exact semant
   assert.equal(analysis.steps[0].task, 'SwapIn');
   assert.equal(analysis.steps[0].errorPolicy, 'RetryLater');
   assert.equal(analysis.steps[0].retryMaxAttempts, 3);
-  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveRun');
+  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveCycle');
 });
 
 test('reactive strategy preserves topology under persistent lifecycle policy', () => {
@@ -237,7 +235,7 @@ test('local projection preserves one-shot readiness, retry, and productive closu
     cycleNonce: 1n,
     attempt: 0,
     startCursor: 0,
-    completionPolicy: 'CloseAfterProductiveRun',
+    completionPolicy: 'CloseAfterProductiveCycle',
     initialState: { nativeBalance: 100n, quoteBalance: 0n },
     steps: [localStep()],
   };
@@ -290,7 +288,7 @@ test('local projection preserves one-shot readiness, retry, and productive closu
     },
   });
   assert.equal(closed.status, 'Closed');
-  assert.equal(closed.closeReason, 'ProductiveRunCompleted');
+  assert.equal(closed.closeReason, 'ProductiveCycleCompleted');
   assert.equal(closed.cumulative.committedEffectfulTasks, 1);
   assert.deepEqual(closed.state, { nativeBalance: 0n, quoteBalance: 90n });
 });
@@ -301,14 +299,13 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
     value: {
       status: {
         type: 'Closed',
-        value: { type: 'ProductiveRunCompleted', value: undefined },
+        value: { type: 'ProductiveCycleCompleted', value: undefined },
       },
       cycle_nonce: 1n,
       attempt: 1,
       start_cursor: 0,
       continuation_cursor: undefined,
       unsuccessful_attempts_at_cursor: undefined,
-      finalized_through: 0,
       cumulative_outcomes: {
         executed_steps: 1,
         committed_effectful_tasks: 1,
@@ -354,7 +351,7 @@ test('matching-Wasm contract accepts canonical productive closure for the fixtur
   });
   assert.equal(requestedPlanId, artifact.planId);
   assert.equal(response.outcome.status, 'Closed');
-  assert.equal(response.outcome.closeReason, 'ProductiveRunCompleted');
+  assert.equal(response.outcome.closeReason, 'ProductiveCycleCompleted');
 });
 
 test('reactive authoring UI exposes every canonical fixture control', async () => {
@@ -373,7 +370,7 @@ test('reactive authoring UI exposes every canonical fixture control', async () =
     'OnObservationChange',
     'SwapIn',
     'RetryLater',
-    'Close after productive run',
+    'Close after productive cycle',
     'Persistent',
   ]) {
     assert(source.includes(control), `${control} control is missing`);

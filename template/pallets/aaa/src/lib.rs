@@ -25,10 +25,7 @@ pub use adapters::{
   LiquidityOps, ObservationChangeIngress, ObservationProvider, RetryClass, ScalarObservationState,
   StakingOps, TaskFailure,
 };
-pub use types::{
-  AddressEvent, CacheRevalidationState, InputLimit, RevalidationDisposition, Task,
-  WakeupBucketState, WakeupCursorIndex,
-};
+pub use types::{AddressEvent, InputLimit, Task, WakeupBucketState, WakeupCursorIndex};
 
 pub mod weights;
 pub use weights::WeightInfo;
@@ -367,13 +364,6 @@ pub mod pallet {
     /// Gross two-dimensional `on_idle` weight guaranteed by the embedding runtime.
     #[pallet::constant]
     type AaaOnIdleReserve: Get<Weight>;
-    /// Count ceiling for one bounded cache-revalidation worker pass (spec 5.4, 10.3).
-    #[pallet::constant]
-    type MaxCacheRevalidationUnitsPerBlock: Get<u32>;
-    /// Migration-specific disposition for an Active actor whose plan no longer admits during
-    /// cache revalidation (spec 6.4). `None` rejects activation of a cache-affecting runtime
-    /// change; a concrete migration names its disposition here.
-    type CacheRevalidationNoAdmitDisposition: Get<Option<crate::types::RevalidationDisposition>>;
     #[pallet::constant]
     type MaxAutoCloseNonceHorizon: Get<u64>;
     /// Maximum number of active AAA instances. Bounds the BTreeSet storage.
@@ -387,12 +377,6 @@ pub mod pallet {
     #[pallet::constant]
     type MaxSystemSovereigns: Get<u32>;
 
-    /// Per-step flat evaluation cost
-    #[pallet::constant]
-    type StepBaseFee: Get<Self::Balance>;
-    /// Per-condition balance read cost
-    #[pallet::constant]
-    type ConditionReadFee: Get<Self::Balance>;
     #[pallet::constant]
     type AaaCreationFee: Get<Self::Balance>;
     /// Converts weight to fee for execution cost calculation
@@ -555,12 +539,9 @@ pub mod pallet {
     BlockNumberFor<T>,
     ScheduleOf<T>,
     ExecutionPlanOf<T>,
-    BalanceOf<T>,
   >;
 
-  pub type CacheRevalidationStateOf = crate::types::CacheRevalidationState<Option<AaaId>>;
-
-  pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>, BalanceOf<T>>;
+  pub type ActorHotStateOf<T> = ActorHotState<BlockNumberFor<T>>;
 
   pub type ActorProgramStateOf<T> =
     ActorProgramState<ScheduleOf<T>, BlockNumberFor<T>, ExecutionPlanOf<T>>;
@@ -568,7 +549,8 @@ pub mod pallet {
   pub type ActorFundingStateOf<T> =
     ActorFundingState<FundingSourcePolicyOf<T>, FundingAccumulatedOf<T>, FundingTrackedAssetsOf<T>>;
 
-  pub type ActorIdentityOf<T> = ActorIdentity<<T as frame_system::Config>::AccountId>;
+  pub type ActorIdentityOf<T> =
+    ActorIdentity<<T as frame_system::Config>::AccountId, BlockNumberFor<T>>;
 
   #[pallet::pallet]
   #[pallet::storage_version(STORAGE_VERSION)]
@@ -623,13 +605,9 @@ pub mod pallet {
         consecutive_failures: hot.consecutive_failures,
         pending_signal: hot.pending_signal,
         queue_ticket: hot.queue_ticket,
-        last_control_queue_mutation_block: hot.last_control_queue_mutation_block,
-        cycle_weight_upper: hot.cycle_weight_upper,
-        cycle_fee_upper: hot.cycle_fee_upper,
-        funding_tracked_count: hot.funding_tracked_count,
+        last_control_mutation_block: identity.last_control_mutation_block,
         schedule_anchor: hot.schedule_anchor,
         last_cycle_block: hot.last_cycle_block,
-        cache_epoch: hot.cache_epoch,
       }
     }
 
@@ -854,18 +832,7 @@ pub mod pallet {
 
   #[pallet::storage]
   #[pallet::getter(fn idle_starvation_state)]
-  pub type IdleStarvationState<T: Config> =
-    StorageValue<_, IdleStarvationPhase<BlockNumberFor<T>>, ValueQuery>;
-
-  /// Global cache epoch. Every executable Active actor carries this stamp (spec 2.1, 5.4).
-  #[pallet::storage]
-  #[pallet::getter(fn current_cache_epoch)]
-  pub type CurrentCacheEpoch<T> = StorageValue<_, CacheEpoch, ValueQuery>;
-
-  /// Durable global cache-revalidation progress; absent means no revalidation gate is active.
-  #[pallet::storage]
-  #[pallet::getter(fn cache_revalidation)]
-  pub type CacheRevalidation<T: Config> = StorageValue<_, CacheRevalidationStateOf, OptionQuery>;
+  pub type IdleStarvationState<T: Config> = StorageValue<_, IdleStarvationPhase, ValueQuery>;
 
   /// Provides runtime-specific System AAA instances to initialize at genesis.
   ///
@@ -925,8 +892,6 @@ pub mod pallet {
         "MaxExecutionPlanSteps must be in 1..=255"
       );
       STORAGE_VERSION.put::<Pallet<T>>();
-      // Fresh canonical baseline: one defined current epoch, no revalidation work (spec 9.3).
-      CurrentCacheEpoch::<T>::put(0);
       if ActiveActorLimit::<T>::get() == 0 {
         ActiveActorLimit::<T>::put(Pallet::<T>::max_configurable_active_actor_limit());
       }
@@ -973,8 +938,6 @@ pub mod pallet {
           });
         let funding_tracked_assets = Pallet::<T>::derive_funding_tracked_assets(&execution_plan)
           .expect("genesis execution_plan must have valid funding-tracked assets");
-        let (cycle_weight_upper, cycle_fee_upper) =
-          Pallet::<T>::compute_cycle_bounds(AaaType::System, &execution_plan);
         let schedule_anchor = Pallet::<T>::schedule_anchor_at(schedule_window, Zero::zero());
         let identity = ActorIdentity {
           sovereign_account: sovereign_account.clone(),
@@ -984,6 +947,7 @@ pub mod pallet {
           },
           mutability,
           cycle_nonce: 0,
+          last_control_mutation_block: Zero::zero(),
         };
         let hot = ActorHotState {
           lifecycle: ActiveLifecycle::Active,
@@ -994,13 +958,8 @@ pub mod pallet {
           queue_ticket: None,
           wakeup_pointer: None,
           terminal_at: schedule_window.map(|window| Pallet::<T>::window_terminal_at(&window)),
-          last_control_queue_mutation_block: None,
-          cycle_weight_upper,
-          cycle_fee_upper,
-          funding_tracked_count: funding_tracked_assets.len() as u32,
           schedule_anchor,
           last_cycle_block: None,
-          cache_epoch: CurrentCacheEpoch::<T>::get(),
         };
         let program = ActorProgramState {
           schedule,
@@ -1076,6 +1035,7 @@ pub mod pallet {
           },
           mutability: Mutability::Mutable,
           cycle_nonce: 0,
+          last_control_mutation_block: Zero::zero(),
         };
         let identity_count = ActorIdentityCount::<T>::get();
         assert!(
@@ -1204,40 +1164,11 @@ pub mod pallet {
         Self::close_cleanup_weight_upper().all_lte(actor_service),
         "one maximum automatic cleanup must fit GuaranteedActorServiceWeight"
       );
-      assert!(
-        T::MaxCacheRevalidationUnitsPerBlock::get() > 0,
-        "MaxCacheRevalidationUnitsPerBlock must be non-zero"
-      );
-      assert!(
-        Self::cache_revalidation_unit_weight_upper().all_lte(actor_service),
-        "one maximum cache-revalidation unit must fit ActorServiceReserve after maximum fixed workers"
-      );
     }
 
     #[cfg(feature = "try-runtime")]
     fn try_state(_n: BlockNumberFor<T>) -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
       Self::do_try_state()
-    }
-
-    fn on_runtime_upgrade() -> Weight {
-      use polkadot_sdk::frame_support::traits::GetStorageVersion;
-      let on_chain = <Pallet<T> as GetStorageVersion>::on_chain_storage_version();
-      if on_chain < STORAGE_VERSION {
-        // A storage-version increase is a cache-affecting runtime change: it may alter
-        // Weight/adapter/envelope bindings, so the bounded revalidation protocol must run
-        // before ordinary attempts resume (spec 5.4, 6.4). Fail closed when the
-        // migration-specific no-admit disposition is absent or the epoch cannot increment.
-        match Self::begin_cache_revalidation() {
-          Ok(()) => T::WeightInfo::cache_revalidation_units(1),
-          Err(_) => {
-            panic!(
-              "cache-affecting upgrade requires a revalidation disposition and a representable cache epoch"
-            )
-          }
-        }
-      } else {
-        Weight::zero()
-      }
     }
 
     fn on_idle(now: BlockNumberFor<T>, remaining_weight: Weight) -> Weight {
@@ -1251,15 +1182,10 @@ pub mod pallet {
         return Weight::zero();
       }
       let breaker_active = GlobalCircuitBreaker::<T>::get();
-      // The cache-revalidation gate globally stops FIFO attempts and automatic cleanup
-      // without engaging the public breaker (spec 5.4); the saturated tombstone drain is
-      // scheduler-owned automatic cleanup and stays gated with it.
-      let revalidation_active = Self::revalidation_is_active();
       let after_base = available.saturating_sub(base_weight);
       let cleanup_units = u32::from(QueueHead::<T>::get() < QueueTail::<T>::get());
       let queue_cleanup_weight = T::WeightInfo::scheduler_paged_tombstone_drain(cleanup_units);
-      let saturated_cleanup_weight = if !revalidation_active
-        && cleanup_units > 0
+      let saturated_cleanup_weight = if cleanup_units > 0
         && Self::combined_queue_occupancy() >= u64::from(T::MaxQueueLength::get())
         && queue_cleanup_weight.all_lte(after_base)
       {
@@ -1297,30 +1223,14 @@ pub mod pallet {
         Weight::zero()
       };
       let remaining_after_housekeeping = remaining_after_wakeups.saturating_sub(fanout_weight);
-      // Phase 3.5: the bounded cache-revalidation worker, when active, runs before the cutoff
-      // snapshot and admits each unit against the actual on_idle budget (spec 5.4).
-      let revalidation_weight = if revalidation_active {
-        Self::run_cache_revalidation_worker(remaining_after_housekeeping)
-      } else {
-        Weight::zero()
-      };
-      let remaining_after_revalidation =
-        remaining_after_housekeeping.saturating_sub(revalidation_weight);
       let housekeeping_weight = base_weight
         .saturating_add(saturated_cleanup_weight)
         .saturating_add(wakeup_weight)
-        .saturating_add(fanout_weight)
-        .saturating_add(revalidation_weight);
+        .saturating_add(fanout_weight);
       if breaker_active {
-        Self::update_idle_starvation_state(now, false);
         return housekeeping_weight;
       }
-      if revalidation_active {
-        // FIFO discovery is not entered and starvation state is frozen (spec 5.4);
-        // ordinary service resumes in the next block after the gate clears.
-        return housekeeping_weight;
-      }
-      let pass = Self::execute_cycle(remaining_after_revalidation);
+      let pass = Self::execute_cycle(remaining_after_housekeeping);
       Self::update_idle_starvation_state(now, pass.starved);
       housekeeping_weight.saturating_add(pass.consumed)
     }
@@ -1345,7 +1255,6 @@ pub mod pallet {
     },
     AaaPaused {
       aaa_id: AaaId,
-      reason: PauseReason,
     },
     AaaResumed {
       aaa_id: AaaId,
@@ -1362,12 +1271,31 @@ pub mod pallet {
       aaa_id: AaaId,
       cycle_nonce: u64,
       result: CycleResult,
-      executed_steps: u32,
-      committed_effectful_tasks: u32,
-      skipped_conditions: u32,
-      skipped_resolution: u32,
-      skipped_funding_unavailable: u32,
-      failed_steps: u32,
+      outcomes: OutcomeTotals,
+    },
+    CycleSuspended {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      attempt: u32,
+      cursor: u32,
+      reason: SuspensionReason,
+      cumulative_outcomes: OutcomeTotals,
+    },
+    CycleContinued {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      attempt: u32,
+      cursor: u32,
+    },
+    CycleCancelled {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      reason: CancellationReason,
+    },
+    CycleStopped {
+      aaa_id: AaaId,
+      cycle_nonce: u64,
+      step_index: u32,
     },
     StepSkipped {
       aaa_id: AaaId,
@@ -1477,6 +1405,9 @@ pub mod pallet {
       aaa_id: AaaId,
       completion_policy: CompletionPolicy,
     },
+    FundingSourcePolicyUpdated {
+      aaa_id: AaaId,
+    },
     AutoCloseNonceSet {
       aaa_id: AaaId,
       target: Option<u64>,
@@ -1497,6 +1428,12 @@ pub mod pallet {
     ManualTriggerSet {
       aaa_id: AaaId,
     },
+    FundingAccumulated {
+      aaa_id: AaaId,
+      asset: T::AssetId,
+      added: BalanceOf<T>,
+      accumulated: BalanceOf<T>,
+    },
     SweepBatchProcessed {
       requested: u32,
       closed: u32,
@@ -1509,39 +1446,6 @@ pub mod pallet {
     IdleStarvationRecovered {
       consecutive_blocks: u32,
     },
-    FundingSourcePolicyUpdated {
-      aaa_id: AaaId,
-    },
-    FundingAccumulated {
-      aaa_id: AaaId,
-      asset: T::AssetId,
-      added: BalanceOf<T>,
-      accumulated: BalanceOf<T>,
-    },
-    CycleSuspended {
-      aaa_id: AaaId,
-      cycle_nonce: u64,
-      attempt: u32,
-      cursor: u32,
-      reason: SuspensionReason,
-      cumulative_outcomes: OutcomeTotals,
-    },
-    CycleContinued {
-      aaa_id: AaaId,
-      cycle_nonce: u64,
-      attempt: u32,
-      cursor: u32,
-    },
-    CycleCancelled {
-      aaa_id: AaaId,
-      cycle_nonce: u64,
-      reason: CancellationReason,
-    },
-    CycleStopped {
-      aaa_id: AaaId,
-      cycle_nonce: u64,
-      step_index: u32,
-    },
   }
 
   #[pallet::error]
@@ -1552,6 +1456,7 @@ pub mod pallet {
     ActiveAaaCountInvariant,
     ActorIdentityCapacityExceeded,
     ActorIdentityCountInvariant,
+    ActorInvariant,
     AaaAlreadyActive,
     AaaDormant,
     ActiveAaaLimitExceedsQueueCapacity,
@@ -1563,7 +1468,6 @@ pub mod pallet {
     ExecutionPlanExceedsOnIdleBudget,
     ExecutionDelayTooLong,
     GlobalCircuitBreakerActive,
-    CacheRevalidationActive,
     ImmutableAaa,
     InsufficientBalance,
     InsufficientFee,
@@ -1572,12 +1476,14 @@ pub mod pallet {
     InvalidAutoCloseNonce,
     InvalidScheduleWindow,
     InvalidSplitTransfer,
-    SelfTransferNotAllowed,
     InvalidTriggerConfiguration,
+    InvalidTradeBound,
+    InvalidRetryAttemptLimit,
+    InvalidObservationMaxAge,
+    SelfTransferNotAllowed,
     MintNotAllowedForUserAaa,
     NotGovernance,
     NotOwner,
-    NotPaused,
     OwnerSlotCapacityExceeded,
     OwnerSlotOccupied,
     InvalidOwnerSlot,
@@ -1585,14 +1491,14 @@ pub mod pallet {
     SystemSovereignCapacityExceeded,
     SystemSovereignUnknown,
     SystemSovereignOccupied,
+    SystemSovereignInvariant,
+    SovereignAccountCollision,
+    ReservedSovereignAccount,
     ExecutionPlanTooLong,
     SnapshotUnavailable,
     FundingAccumulatorOverflow,
-    SovereignAccountCollision,
-    ReservedSovereignAccount,
     QueueTicketExhausted,
     SchedulerIndexExhausted,
-    SystemSovereignInvariant,
     AutoCloseNonceHorizonExceeded,
     AutoCloseNonceOverflow,
     AutoCloseNonceIncrementZero,
@@ -1601,12 +1507,10 @@ pub mod pallet {
     RetryLaterNotAllowedForImmutableAaa,
     ContinuationNotFound,
     ContinuationInvariant,
+    ComputationOverflow,
     EmptyConditionSet,
     ManualSourceDisabled,
-    InvalidTradeBound,
-    InvalidRetryAttemptLimit,
     RecipientDepositUnavailable,
-    InvalidObservationMaxAge,
     ObservationSubscriptionCapacityExceeded,
     ObservationSubscriptionInvariant,
     InvalidObservationRevision,
@@ -1683,11 +1587,14 @@ pub mod pallet {
       let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      if snapshot.lifecycle.is_paused() {
+        return Ok(());
+      }
       let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
+      Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::with_control_transaction(|| {
         ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
           let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
@@ -1695,14 +1602,10 @@ pub mod pallet {
             snapshot.mutability == Mutability::Mutable,
             Error::<T>::ImmutableAaa
           );
-          ensure!(!inst.lifecycle.is_paused(), Error::<T>::AaaPaused);
-          inst.lifecycle = ActiveLifecycle::Paused(PauseReason::Manual);
+          inst.lifecycle = ActiveLifecycle::Paused;
           inst.queue_ticket = None;
-          inst.last_control_queue_mutation_block = Some(now);
-          Self::deposit_event(Event::AaaPaused {
-            aaa_id,
-            reason: PauseReason::Manual,
-          });
+          Self::record_control_mutation(aaa_id, now);
+          Self::deposit_event(Event::AaaPaused { aaa_id });
           Ok(())
         })?;
         Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
@@ -1715,11 +1618,14 @@ pub mod pallet {
       let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
+      if !snapshot.lifecycle.is_paused() {
+        return Ok(());
+      }
       let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
+      Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::with_control_transaction(|| {
         ActorHot::<T>::try_mutate(aaa_id, |maybe| -> DispatchResult {
           let inst = maybe.as_mut().ok_or(Error::<T>::AaaNotFound)?;
@@ -1727,9 +1633,8 @@ pub mod pallet {
             snapshot.mutability == Mutability::Mutable,
             Error::<T>::ImmutableAaa
           );
-          ensure!(inst.lifecycle.is_paused(), Error::<T>::NotPaused);
           inst.lifecycle = ActiveLifecycle::Active;
-          inst.last_control_queue_mutation_block = Some(now);
+          Self::record_control_mutation(aaa_id, now);
           Self::deposit_event(Event::AaaResumed { aaa_id });
           Ok(())
         })?;
@@ -1743,7 +1648,7 @@ pub mod pallet {
       let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(!snapshot.lifecycle.is_paused(), Error::<T>::AaaPaused);
@@ -1777,7 +1682,7 @@ pub mod pallet {
       let instance = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin, &instance)?;
       Self::ensure_not_system_immutable(&instance)?;
-      if Self::is_window_expired(&instance) {
+      if Self::expiry_substitution_due(aaa_id, &instance)? {
         return Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
       }
       ensure!(
@@ -1789,7 +1694,7 @@ pub mod pallet {
         return Ok(());
       }
       let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_queue_mutation_allowed(&instance, now)?;
+      Self::ensure_control_mutation_allowed(&instance, now)?;
       Self::with_control_transaction(|| {
         let continuation_cancelled = Self::cancel_continuation_internal(
           aaa_id,
@@ -1802,12 +1707,7 @@ pub mod pallet {
             .expect("active actor funding existence was prevalidated")
             .funding_source_policy = policy;
         });
-        ActorHot::<T>::mutate(aaa_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("active actor hot-state existence was prevalidated")
-            .last_control_queue_mutation_block = Some(now);
-        });
+        Self::record_control_mutation(aaa_id, now);
         Self::deposit_event(Event::FundingSourcePolicyUpdated { aaa_id });
         if continuation_cancelled {
           Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)?;
@@ -1846,7 +1746,7 @@ pub mod pallet {
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_not_system_immutable(&snapshot)?;
       Self::validate_opening_snapshot_surfaces(&snapshot.execution_plan)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(
@@ -1857,7 +1757,7 @@ pub mod pallet {
         return Ok(());
       }
       let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
+      Self::ensure_control_mutation_allowed(&snapshot, now)?;
       // Semantic schedule replacement resets the Active-epoch anchor unconditionally
       // (spec 4.3); the exact no-op path above already returned without mutation.
       let schedule_anchor = Self::schedule_anchor_at(schedule_window, now);
@@ -1876,7 +1776,7 @@ pub mod pallet {
           if let Some(hot) = maybe.as_mut() {
             hot.schedule_anchor = schedule_anchor;
             hot.terminal_at = schedule_window.map(|window| Self::window_terminal_at(&window));
-            hot.last_control_queue_mutation_block = Some(now);
+            Self::record_control_mutation(aaa_id, now);
           }
         });
         Self::deposit_event(Event::ScheduleUpdated { aaa_id });
@@ -1914,7 +1814,7 @@ pub mod pallet {
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
       Self::ensure_retry_later_allowed(snapshot.mutability, &execution_plan)?;
       Self::ensure_not_system_immutable(&snapshot)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(
@@ -1926,12 +1826,8 @@ pub mod pallet {
       if !execution_plan_changed && !completion_policy_changed {
         return Ok(());
       }
-      ensure!(
-        !Self::revalidation_is_active(),
-        Error::<T>::CacheRevalidationActive
-      );
       let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_queue_mutation_allowed(&snapshot, now)?;
+      Self::ensure_control_mutation_allowed(&snapshot, now)?;
       Self::validate_execution_plan_shape(snapshot.actor_class.aaa_type(), &execution_plan)?;
       Self::validate_recipient_configuration(&execution_plan, &snapshot.sovereign_account)?;
       Self::validate_opening_snapshot_surfaces(&execution_plan)?;
@@ -1955,9 +1851,6 @@ pub mod pallet {
       funding
         .funding_accumulated
         .retain(|asset, _| new_tracked.contains(asset));
-      let funding_tracked_count = new_tracked.len() as u32;
-      let (cycle_weight_upper, cycle_fee_upper) =
-        Self::compute_cycle_bounds(snapshot.actor_class.aaa_type(), &execution_plan);
       let cancellation_reason = if execution_plan_changed {
         CancellationReason::ExecutionPlanChanged
       } else {
@@ -1977,12 +1870,8 @@ pub mod pallet {
           let hot = maybe
             .as_mut()
             .expect("active actor hot-state existence was prevalidated");
-          hot.cycle_weight_upper = cycle_weight_upper;
-          hot.cycle_fee_upper = cycle_fee_upper;
-          hot.funding_tracked_count = funding_tracked_count;
           hot.consecutive_failures = 0;
-          hot.cache_epoch = CurrentCacheEpoch::<T>::get();
-          hot.last_control_queue_mutation_block = Some(now);
+          Self::record_control_mutation(aaa_id, now);
         });
         ActorFunding::<T>::insert(aaa_id, funding);
         Self::deposit_event(Event::ExecutionPlanUpdated {
@@ -2042,11 +1931,15 @@ pub mod pallet {
         let mut missing = 0u32;
         let requested = aaa_ids.len() as u32;
         for aaa_id in aaa_ids {
-          let Some(instance) = Self::active_actor_view(aaa_id) else {
+          let Some(instance) = Self::active_actor_for_classification(aaa_id)
+            .map_err(Self::classification_dispatch_error)?
+          else {
             missing = missing.saturating_add(1);
             continue;
           };
-          if let Some(reason) = Self::liveness_close_reason(&instance) {
+          if let Some(reason) = Self::sweep_close_reason(aaa_id, &instance)
+            .map_err(Self::classification_dispatch_error)?
+          {
             Self::close_actor(aaa_id, &instance, reason)?;
             closed = closed.saturating_add(1);
           } else {
@@ -2072,7 +1965,7 @@ pub mod pallet {
     ) -> DispatchResult {
       let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(
@@ -2105,7 +1998,7 @@ pub mod pallet {
       ensure!(by > 0, Error::<T>::AutoCloseNonceIncrementZero);
       let snapshot = Self::active_actor_view(aaa_id).ok_or(Error::<T>::AaaNotFound)?;
       Self::ensure_control_origin(origin.clone(), &snapshot)?;
-      if Self::is_window_expired(&snapshot) {
+      if Self::expiry_substitution_due(aaa_id, &snapshot)? {
         return Self::close_actor(aaa_id, &snapshot, CloseReason::WindowExpired);
       }
       ensure!(
@@ -2166,10 +2059,7 @@ pub mod pallet {
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      Self::ensure_control_queue_mutation_allowed(
-        &instance,
-        frame_system::Pallet::<T>::block_number(),
-      )?;
+      Self::ensure_control_mutation_allowed(&instance, frame_system::Pallet::<T>::block_number())?;
       Self::do_deactivate_aaa(aaa_id, instance)
     }
 
@@ -2182,7 +2072,7 @@ pub mod pallet {
         instance.mutability == Mutability::Mutable,
         Error::<T>::ImmutableAaa
       );
-      if Self::is_window_expired(&instance) {
+      if Self::expiry_substitution_due(aaa_id, &instance)? {
         return Self::close_actor(aaa_id, &instance, CloseReason::WindowExpired);
       }
       ensure!(
@@ -2190,18 +2080,13 @@ pub mod pallet {
         Error::<T>::ContinuationNotFound
       );
       let now = frame_system::Pallet::<T>::block_number();
-      Self::ensure_control_queue_mutation_allowed(&instance, now)?;
+      Self::ensure_control_mutation_allowed(&instance, now)?;
       Self::with_control_transaction(|| {
         ensure!(
           Self::cancel_continuation_internal(aaa_id, CancellationReason::Explicit, None)?,
           Error::<T>::ContinuationNotFound
         );
-        ActorHot::<T>::mutate(aaa_id, |maybe| {
-          maybe
-            .as_mut()
-            .expect("cancelled actor remains active")
-            .last_control_queue_mutation_block = Some(now);
-        });
+        Self::record_control_mutation(aaa_id, now);
         Self::prime_actor_schedule(aaa_id).map_err(Self::placement_error)
       })
     }
@@ -2265,7 +2150,7 @@ pub mod pallet {
       upper
     }
 
-    pub(crate) fn compute_cycle_weight_upper(
+    pub fn compute_cycle_weight_upper(
       aaa_type: AaaType,
       execution_plan: &ExecutionPlanOf<T>,
     ) -> Weight {
@@ -2304,50 +2189,15 @@ pub mod pallet {
       })
     }
 
-    pub(crate) fn compute_cycle_fee_upper_from(
-      aaa_type: AaaType,
-      execution_plan: &ExecutionPlanOf<T>,
-      start_cursor: usize,
-    ) -> BalanceOf<T> {
-      Self::attempt_fee_envelope(aaa_type, execution_plan, start_cursor)
-        .expect("admitted execution plans have a checked fee envelope")
-        .total
-    }
-
-    pub(crate) fn compute_cycle_fee_upper(
-      aaa_type: AaaType,
-      execution_plan: &ExecutionPlanOf<T>,
-    ) -> BalanceOf<T> {
-      Self::compute_cycle_fee_upper_from(aaa_type, execution_plan, 0)
-    }
-
-    pub(crate) fn compute_cycle_bounds(
-      aaa_type: AaaType,
-      execution_plan: &ExecutionPlanOf<T>,
-    ) -> (Weight, BalanceOf<T>) {
-      (
-        Self::compute_cycle_weight_upper(aaa_type, execution_plan),
-        Self::compute_cycle_fee_upper(aaa_type, execution_plan),
-      )
-    }
-
-    pub(crate) fn cycle_weight_upper_bound(instance: &ActiveActorViewOf<T>) -> Weight {
-      instance.cycle_weight_upper
-    }
-
     pub(crate) fn attempt_weight_upper_bound(
       instance: &ActiveActorViewOf<T>,
       start_cursor: usize,
     ) -> Weight {
-      let mut upper = if start_cursor == 0 {
-        Self::cycle_weight_upper_bound(instance)
-      } else {
-        Self::compute_cycle_weight_upper_from(
-          instance.actor_class.aaa_type(),
-          &instance.execution_plan,
-          start_cursor,
-        )
-      };
+      let mut upper = Self::compute_cycle_weight_upper_from(
+        instance.actor_class.aaa_type(),
+        &instance.execution_plan,
+        start_cursor,
+      );
       if instance.cycle_state == CycleState::Suspended {
         let suffix_steps = instance.execution_plan.len().saturating_sub(start_cursor) as u32;
         // Retry and terminal transition touch the same bounded Continuation value. The transition
@@ -2361,253 +2211,21 @@ pub mod pallet {
       upper
     }
 
-    pub(crate) fn cycle_fee_upper_bound(instance: &ActiveActorViewOf<T>) -> BalanceOf<T> {
-      instance.cycle_fee_upper
-    }
-
     pub(crate) fn attempt_fee_upper_bound(
       instance: &ActiveActorViewOf<T>,
       start_cursor: usize,
     ) -> BalanceOf<T> {
-      let envelope = Self::attempt_fee_envelope(
+      Self::attempt_fee_envelope(
         instance.actor_class.aaa_type(),
         &instance.execution_plan,
         start_cursor,
       )
-      .expect("admitted execution plans have a checked fee envelope");
-      if start_cursor == 0 {
-        debug_assert_eq!(instance.cycle_fee_upper, envelope.total);
-      }
-      envelope.total
+      .expect("admitted execution plans have a checked fee envelope")
+      .total
     }
 
     pub(crate) fn close_cycle_weight_upper_bound(_instance: &ActiveActorViewOf<T>) -> Weight {
       Self::close_cleanup_weight_upper()
-    }
-
-    // --- Cache Revalidation (spec 5.4, 6.4) ---
-
-    /// True while the global cache-revalidation gate is active.
-    pub(crate) fn revalidation_is_active() -> bool {
-      CacheRevalidation::<T>::exists()
-    }
-
-    pub(crate) fn revalidation_target_epoch() -> CacheEpoch {
-      CacheRevalidation::<T>::get()
-        .map(|state| state.target_epoch)
-        .unwrap_or_default()
-    }
-
-    /// Removes a still-pending workset member when close/deactivation deletes its Active
-    /// state. Already-stamped actors are outside the remaining workset (spec 5.4); a missing
-    /// state or underflow is defensive corruption and fails closed.
-    pub(crate) fn remove_pending_from_revalidation_workset(
-      instance: &ActiveActorViewOf<T>,
-    ) -> DispatchResult {
-      if !Self::revalidation_is_active()
-        || instance.cache_epoch == Self::revalidation_target_epoch()
-      {
-        return Ok(());
-      }
-      CacheRevalidation::<T>::try_mutate(|maybe| -> DispatchResult {
-        let state = maybe.as_mut().ok_or_else(|| {
-          polkadot_sdk::sp_runtime::DispatchError::Other(
-            "cache-revalidation state vanished during workset removal",
-          )
-        })?;
-        state.remaining = state.remaining.checked_sub(1).ok_or_else(|| {
-          polkadot_sdk::sp_runtime::DispatchError::Other(
-            "cache-revalidation workset underflow during removal",
-          )
-        })?;
-        Ok(())
-      })
-    }
-
-    /// One maximum bounded revalidation worker pass (fixed orchestration plus one worst-case
-    /// actor unit). Admission and integrity tests compare this against `ActorServiceReserve`.
-    pub(crate) fn cache_revalidation_unit_weight_upper() -> Weight {
-      T::WeightInfo::cache_revalidation_units(1)
-    }
-
-    /// Starts a cache-affecting upgrade: checked-increments the current epoch, snapshots the
-    /// exact Active workset through a bounded cursor, and fails closed when no migration-specific
-    /// no-admit disposition is configured (spec 5.4, 6.4). A concrete post-launch migration calls
-    /// this entry point; the reference runtime ships no migration and therefore cannot activate a
-    /// cache-affecting change.
-    pub fn begin_cache_revalidation() -> Result<(), DispatchError> {
-      ensure!(
-        !Self::revalidation_is_active(),
-        Error::<T>::CacheRevalidationActive
-      );
-      ensure!(
-        T::CacheRevalidationNoAdmitDisposition::get().is_some(),
-        polkadot_sdk::sp_runtime::DispatchError::Other(
-          "cache-affecting change activated without a revalidation disposition"
-        )
-      );
-      let target_epoch = CurrentCacheEpoch::<T>::get()
-        .checked_add(1)
-        .ok_or_else(|| {
-          polkadot_sdk::sp_runtime::DispatchError::Other(
-            "current cache epoch overflow rejects a cache-affecting upgrade",
-          )
-        })?;
-      CurrentCacheEpoch::<T>::put(target_epoch);
-      CacheRevalidation::<T>::put(CacheRevalidationState {
-        target_epoch,
-        cursor: None,
-        remaining: Self::active_instance_count(),
-      });
-      Ok(())
-    }
-
-    /// One bounded worker pass over the durable revalidation state. Returns consumed Weight;
-    /// each admitted unit recomputes both caches, reruns plan admission, and either stamps a
-    /// survivor with the target epoch or applies the migration-specific disposition (spec 5.4).
-    pub(crate) fn run_cache_revalidation_worker(remaining_weight: Weight) -> Weight {
-      let Some(state) = CacheRevalidation::<T>::get() else {
-        return Weight::zero();
-      };
-      if state.remaining == 0 {
-        CacheRevalidation::<T>::kill();
-        return Weight::zero();
-      }
-      let mut meter = WeightMeter::with_limit(remaining_weight);
-      let max_units = T::MaxCacheRevalidationUnitsPerBlock::get();
-      let mut units = 0u32;
-      while units < max_units && CacheRevalidation::<T>::get().is_some_and(|s| s.remaining > 0) {
-        // Admission admits the complete first unit (fixed orchestration plus one worst-case
-        // actor unit) and the measured per-unit delta afterwards, so a pass never starts
-        // without its full base and never overspends the actual on_idle budget.
-        let next_weight = T::WeightInfo::cache_revalidation_units(units.saturating_add(1));
-        let delta = if units == 0 {
-          next_weight
-        } else {
-          next_weight.saturating_sub(T::WeightInfo::cache_revalidation_units(units))
-        };
-        if !meter.can_consume(delta) {
-          break;
-        }
-        let completed = polkadot_sdk::frame_support::storage::with_transaction(|| {
-          match Self::revalidate_next_workset_slot() {
-            Ok(completed) => {
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(completed))
-            }
-            Err(error) => {
-              // Fail closed: the slot could not revalidate atomically; the gate stays and
-              // ordinary service remains blocked until the durable progress is repaired.
-              polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error))
-            }
-          }
-        });
-        let completed = completed.unwrap_or(false);
-        meter.consume(delta);
-        units = units.saturating_add(1);
-        if completed {
-          CacheRevalidation::<T>::kill();
-          break;
-        }
-      }
-      if units == 0 {
-        Weight::zero()
-      } else {
-        T::WeightInfo::cache_revalidation_units(units)
-      }
-    }
-
-    /// Revalidates the next workset slot atomically. Returns true when the workset is complete.
-    fn revalidate_next_workset_slot() -> Result<bool, DispatchError> {
-      let start = CacheRevalidation::<T>::get().ok_or_else(|| {
-        polkadot_sdk::sp_runtime::DispatchError::Other(
-          "cache-revalidation gate vanished during a worker unit",
-        )
-      })?;
-      let target_epoch = start.target_epoch;
-      let mut iter = match start.cursor {
-        None => ActorHot::<T>::iter_keys(),
-        Some(cursor) => ActorHot::<T>::iter_keys_from_key(&cursor),
-      };
-      let key = match iter.next() {
-        Some(key) if Some(key) == start.cursor => match iter.next() {
-          Some(next) => next,
-          None => {
-            ensure!(
-              start.remaining == 0,
-              polkadot_sdk::sp_runtime::DispatchError::Other(
-                "cache-revalidation workset lost members",
-              )
-            );
-            return Ok(true);
-          }
-        },
-        Some(key) => key,
-        None => {
-          ensure!(
-            start.remaining == 0,
-            polkadot_sdk::sp_runtime::DispatchError::Other(
-              "cache-revalidation workset lost members",
-            )
-          );
-          return Ok(true);
-        }
-      };
-      let Some(instance) = Self::active_actor_view(key) else {
-        // Missing/closed actor: its removal already accounted the workset slot (spec 5.4).
-        let mut updated = CacheRevalidation::<T>::get().ok_or_else(|| {
-          polkadot_sdk::sp_runtime::DispatchError::Other(
-            "cache-revalidation gate vanished during a worker unit",
-          )
-        })?;
-        updated.cursor = Some(key);
-        CacheRevalidation::<T>::put(&updated);
-        return Ok(updated.remaining == 0);
-      };
-      let aaa_type = instance.actor_class.aaa_type();
-      let (cycle_weight_upper, cycle_fee_upper) =
-        Self::compute_cycle_bounds(aaa_type, &instance.execution_plan);
-      let admits = Self::execution_plan_admission_weight_upper(aaa_type, &instance.execution_plan)
-        .all_lte(Self::guaranteed_actor_service_weight().unwrap_or_else(Weight::zero));
-      if !admits {
-        let disposition = T::CacheRevalidationNoAdmitDisposition::get().ok_or_else(|| {
-          polkadot_sdk::sp_runtime::DispatchError::Other(
-            "cache-affecting change activated without a revalidation disposition",
-          )
-        })?;
-        match disposition {
-          RevalidationDisposition::Deactivate => Self::do_deactivate_aaa(key, instance)?,
-          RevalidationDisposition::Close(reason) => Self::close_actor(key, &instance, reason)?,
-        }
-        // The disposition removal already decremented the pending workset count.
-        let mut updated = CacheRevalidation::<T>::get().ok_or_else(|| {
-          polkadot_sdk::sp_runtime::DispatchError::Other(
-            "cache-revalidation gate vanished during a worker unit",
-          )
-        })?;
-        updated.cursor = Some(key);
-        CacheRevalidation::<T>::put(&updated);
-        return Ok(updated.remaining == 0);
-      }
-      ActorHot::<T>::mutate(key, |maybe| {
-        if let Some(hot) = maybe.as_mut() {
-          hot.cache_epoch = target_epoch;
-          hot.cycle_weight_upper = cycle_weight_upper;
-          hot.cycle_fee_upper = cycle_fee_upper;
-        }
-      });
-      let mut updated = CacheRevalidation::<T>::get().ok_or_else(|| {
-        polkadot_sdk::sp_runtime::DispatchError::Other(
-          "cache-revalidation gate vanished during a worker unit",
-        )
-      })?;
-      updated.cursor = Some(key);
-      updated.remaining = updated.remaining.checked_sub(1).ok_or_else(|| {
-        polkadot_sdk::sp_runtime::DispatchError::Other(
-          "cache-revalidation workset underflow during a worker unit",
-        )
-      })?;
-      CacheRevalidation::<T>::put(&updated);
-      Ok(updated.remaining == 0)
     }
 
     /// Upper-bounds one prospective run plus pure terminal cleanup after the baseline scheduler
@@ -2925,6 +2543,7 @@ pub mod pallet {
           },
           mutability: Mutability::Mutable,
           cycle_nonce: 0,
+          last_control_mutation_block: frame_system::Pallet::<T>::block_number(),
         };
         SovereignIndex::<T>::insert(&sovereign_account, aaa_id);
         ActorIdentities::<T>::insert(aaa_id, &identity);
@@ -3046,10 +2665,6 @@ pub mod pallet {
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
       );
-      ensure!(
-        !Self::revalidation_is_active(),
-        Error::<T>::CacheRevalidationActive
-      );
       ensure!(!execution_plan.is_empty(), Error::<T>::EmptyExecutionPlan);
       ensure!(
         (execution_plan.len() as u32) <= T::MaxExecutionPlanSteps::get(),
@@ -3160,8 +2775,6 @@ pub mod pallet {
             return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
           }
         }
-        let (cycle_weight_upper, cycle_fee_upper) =
-          Self::compute_cycle_bounds(aaa_type, &execution_plan);
         let schedule_anchor = Self::schedule_anchor_at(schedule_window, now);
         let actor_class = match aaa_type {
           AaaType::User => ActorClass::User {
@@ -3177,6 +2790,7 @@ pub mod pallet {
           actor_class,
           mutability,
           cycle_nonce: 0,
+          last_control_mutation_block: now,
         };
         let hot = ActorHotState {
           lifecycle: ActiveLifecycle::Active,
@@ -3187,13 +2801,8 @@ pub mod pallet {
           queue_ticket: None,
           wakeup_pointer: None,
           terminal_at: schedule_window.map(|window| Self::window_terminal_at(&window)),
-          last_control_queue_mutation_block: None,
-          cycle_weight_upper,
-          cycle_fee_upper,
-          funding_tracked_count: funding_tracked_assets.len() as u32,
           schedule_anchor,
           last_cycle_block: None,
-          cache_epoch: CurrentCacheEpoch::<T>::get(),
         };
         let program = ActorProgramState {
           schedule,
@@ -3270,7 +2879,7 @@ pub mod pallet {
 
     fn do_activate_aaa(
       aaa_id: AaaId,
-      identity: ActorIdentityOf<T>,
+      mut identity: ActorIdentityOf<T>,
       program: ProgramInputOf<T>,
     ) -> DispatchResult {
       let ProgramInput::Active(ActiveProgramInput {
@@ -3287,10 +2896,6 @@ pub mod pallet {
       ensure!(
         !GlobalCircuitBreaker::<T>::get(),
         Error::<T>::GlobalCircuitBreakerActive
-      );
-      ensure!(
-        !Self::revalidation_is_active(),
-        Error::<T>::CacheRevalidationActive
       );
       ensure!(
         identity.mutability == Mutability::Mutable,
@@ -3329,9 +2934,12 @@ pub mod pallet {
       if aaa_type == AaaType::User {
         Self::ensure_user_active_prefunding(&identity.sovereign_account, &execution_plan)?;
       }
-      let (cycle_weight_upper, cycle_fee_upper) =
-        Self::compute_cycle_bounds(aaa_type, &execution_plan);
       let now = frame_system::Pallet::<T>::block_number();
+      ensure!(
+        identity.last_control_mutation_block != now,
+        Error::<T>::ControlMutationRateLimited
+      );
+      identity.last_control_mutation_block = now;
       // Reactivation anchors the fresh Active epoch at the current block; the fresh hot
       // state has no last_cycle_block, so cooldown/cadence use this conservative anchor
       // rather than block zero (spec 4.3.3).
@@ -3345,13 +2953,8 @@ pub mod pallet {
         queue_ticket: None,
         wakeup_pointer: None,
         terminal_at: schedule_window.map(|window| Self::window_terminal_at(&window)),
-        last_control_queue_mutation_block: Some(now),
-        cycle_weight_upper,
-        cycle_fee_upper,
-        funding_tracked_count: funding_tracked_assets.len() as u32,
         schedule_anchor,
         last_cycle_block: None,
-        cache_epoch: CurrentCacheEpoch::<T>::get(),
       };
       let program = ActorProgramState {
         schedule,
@@ -3396,8 +2999,10 @@ pub mod pallet {
       })
     }
 
-    fn do_deactivate_aaa(aaa_id: AaaId, instance: ActiveActorViewOf<T>) -> DispatchResult {
+    fn do_deactivate_aaa(aaa_id: AaaId, _instance: ActiveActorViewOf<T>) -> DispatchResult {
+      let now = frame_system::Pallet::<T>::block_number();
       polkadot_sdk::frame_support::storage::with_transaction(|| {
+        Self::record_control_mutation(aaa_id, now);
         if let Err(error) =
           Self::cancel_continuation_internal(aaa_id, CancellationReason::Deactivated, None)
         {
@@ -3412,9 +3017,6 @@ pub mod pallet {
           ));
         }
         if let Err(error) = Self::remove_active_actor(aaa_id) {
-          return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
-        }
-        if let Err(error) = Self::remove_pending_from_revalidation_workset(&instance) {
           return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(error));
         }
         ActorFunding::<T>::remove(aaa_id);
@@ -3881,12 +3483,21 @@ pub mod pallet {
       Self::with_reused_transaction(operation)
     }
 
-    fn ensure_control_queue_mutation_allowed(
+    fn record_control_mutation(aaa_id: AaaId, now: BlockNumberFor<T>) {
+      ActorIdentities::<T>::mutate(aaa_id, |maybe| {
+        maybe
+          .as_mut()
+          .expect("active actor identity existence was prevalidated")
+          .last_control_mutation_block = now;
+      });
+    }
+
+    fn ensure_control_mutation_allowed(
       instance: &ActiveActorViewOf<T>,
       now: BlockNumberFor<T>,
     ) -> DispatchResult {
       ensure!(
-        instance.last_control_queue_mutation_block != Some(now),
+        instance.last_control_mutation_block != now,
         Error::<T>::ControlMutationRateLimited
       );
       Ok(())
@@ -3974,7 +3585,6 @@ pub mod pallet {
           // Actor-local ticket/pointer ownership makes shared queue and wakeup entries stale as
           // soon as hot state disappears. Terminal cleanup performs no shared-container scan.
           Self::remove_active_actor(aaa_id)?;
-          Self::remove_pending_from_revalidation_workset(instance)?;
           ActorIdentities::<T>::remove(aaa_id);
           ActorFunding::<T>::remove(aaa_id);
           ActiveAaaCount::<T>::mutate(|count| *count -= 1);
@@ -4045,48 +3655,33 @@ pub mod pallet {
       })
     }
 
-    pub(crate) fn update_idle_starvation_state(now: BlockNumberFor<T>, starved: bool) {
+    pub(crate) fn update_idle_starvation_state(_now: BlockNumberFor<T>, starved: bool) {
       let state = IdleStarvationState::<T>::get();
       if !starved {
-        if let IdleStarvationPhase::Alerted { since } = state {
-          Self::deposit_event(Event::IdleStarvationRecovered {
-            consecutive_blocks: now.saturating_sub(since).saturated_into(),
-          });
+        if let IdleStarvationPhase::Alerted { consecutive_blocks } = state {
+          Self::deposit_event(Event::IdleStarvationRecovered { consecutive_blocks });
         }
         if !matches!(state, IdleStarvationPhase::Healthy) {
           IdleStarvationState::<T>::kill();
         }
         return;
       }
-      match state {
-        IdleStarvationPhase::Healthy => {
-          if T::MaxIdleStarvationBlocks::get() <= 1 {
-            IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { since: now });
-            Self::deposit_event(Event::IdleStarvationDetected {
-              consecutive_blocks: 1,
-            });
-          } else {
-            IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { since: now });
-          }
+      let consecutive_blocks = match state {
+        IdleStarvationPhase::Healthy => 1,
+        IdleStarvationPhase::Starving { consecutive_blocks }
+        | IdleStarvationPhase::Alerted { consecutive_blocks } => {
+          consecutive_blocks.saturating_add(1)
         }
-        IdleStarvationPhase::Starving { since } => {
-          let duration = Self::starvation_duration(now, since);
-          if duration >= T::MaxIdleStarvationBlocks::get() {
-            IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { since });
-            Self::deposit_event(Event::IdleStarvationDetected {
-              consecutive_blocks: duration,
-            });
-          }
+      };
+      if consecutive_blocks >= T::MaxIdleStarvationBlocks::get() {
+        let first_alert = !matches!(state, IdleStarvationPhase::Alerted { .. });
+        IdleStarvationState::<T>::put(IdleStarvationPhase::Alerted { consecutive_blocks });
+        if first_alert {
+          Self::deposit_event(Event::IdleStarvationDetected { consecutive_blocks });
         }
-        IdleStarvationPhase::Alerted { .. } => {}
+      } else {
+        IdleStarvationState::<T>::put(IdleStarvationPhase::Starving { consecutive_blocks });
       }
-    }
-
-    fn starvation_duration(now: BlockNumberFor<T>, since: BlockNumberFor<T>) -> u32 {
-      now
-        .saturating_sub(since)
-        .saturating_add(One::one())
-        .saturated_into()
     }
 
     // --- Active Actors Set Operations ---
@@ -4193,20 +3788,6 @@ pub mod pallet {
           ));
         }
         let instance = Self::derive_active_actor_view(identity, hot, program);
-        let (expected_cycle_weight, expected_cycle_fee) =
-          Self::compute_cycle_bounds(instance.actor_class.aaa_type(), &instance.execution_plan);
-        // A stamped actor is executable, so its caches must equal the current derivation
-        // (spec 6.4). A pending workset member under an active gate may still hold the old
-        // epoch caches until the worker revalidates it.
-        let current_epoch = CurrentCacheEpoch::<T>::get();
-        if instance.cache_epoch == current_epoch
-          && (instance.cycle_weight_upper != expected_cycle_weight
-            || instance.cycle_fee_upper != expected_cycle_fee)
-        {
-          return Err(TryRuntimeError::Other(
-            "ActorHot cycle caches disagree with current derivation",
-          ));
-        }
         if !Self::execution_plan_admission_weight_upper(
           instance.actor_class.aaa_type(),
           &instance.execution_plan,
@@ -4226,11 +3807,6 @@ pub mod pallet {
             "ActorHot entry has no matching ActorFunding entry",
           ));
         };
-        if instance.funding_tracked_count != funding.funding_tracked_assets.len() as u32 {
-          return Err(TryRuntimeError::Other(
-            "ActorHot funding indications disagree with ActorFunding",
-          ));
-        }
         for (asset, amount) in &funding.funding_accumulated {
           if !funding.funding_tracked_assets.contains(asset) || amount.is_zero() {
             return Err(TryRuntimeError::Other(
@@ -4321,6 +3897,11 @@ pub mod pallet {
       for aaa_id in ActorIdentities::<T>::iter_keys() {
         let identity = ActorIdentities::<T>::get(aaa_id)
           .ok_or(TryRuntimeError::Other("actor identity key has no value"))?;
+        if identity.last_control_mutation_block > frame_system::Pallet::<T>::block_number() {
+          return Err(TryRuntimeError::Other(
+            "actor control mutation block is in the future",
+          ));
+        }
         max_id = Some(max_id.map_or(aaa_id, |prev| prev.max(aaa_id)));
         if Self::active_actor_exists(aaa_id) {
           continue;
@@ -4730,41 +4311,6 @@ pub mod pallet {
       }
       Self::do_try_state_observation_subscriptions()?;
       Self::do_try_state_dirty_observations()?;
-      // Global cache epoch and revalidation progress (spec 5.4, 6.4, 9.3). While the gate
-      // exists, `remaining` must equal the count of live pending workset members; without the
-      // gate every executable actor must carry the current stamp so no stale cache admits.
-      let current_epoch = CurrentCacheEpoch::<T>::get();
-      if let Some(state) = CacheRevalidation::<T>::get() {
-        if state.target_epoch != current_epoch {
-          return Err(TryRuntimeError::Other(
-            "CacheRevalidation target epoch disagrees with CurrentCacheEpoch",
-          ));
-        }
-        let mut pending_live = 0u32;
-        for aaa_id in ActorHot::<T>::iter_keys() {
-          let hot = ActorHot::<T>::get(aaa_id).ok_or(TryRuntimeError::Other(
-            "cache-revalidation hot key has no value",
-          ))?;
-          if hot.cache_epoch != state.target_epoch {
-            pending_live = pending_live.saturating_add(1);
-          }
-        }
-        if state.remaining != pending_live {
-          return Err(TryRuntimeError::Other(
-            "CacheRevalidation remaining disagrees with pending workset cardinality",
-          ));
-        }
-      } else {
-        for aaa_id in ActorHot::<T>::iter_keys() {
-          let hot = ActorHot::<T>::get(aaa_id)
-            .ok_or(TryRuntimeError::Other("cache-epoch hot key has no value"))?;
-          if hot.cache_epoch != current_epoch {
-            return Err(TryRuntimeError::Other(
-              "executable actor carries a stale cache epoch without revalidation progress",
-            ));
-          }
-        }
-      }
       Ok(())
     }
   }

@@ -70,6 +70,7 @@ export type AaaStepCostInput = {
   conditionOutcome: 'Pass' | 'Fail' | 'Unknown';
   executionDisposition: 'Execute' | 'Skip' | 'Unknown';
   evaluationWeight: AaaWeight;
+  evaluationFeeUpper: bigint;
   executionWeightUpper: AaaWeight;
   executionFeeUpper: bigint;
 };
@@ -240,16 +241,12 @@ export function forecastAaaCosts(input: {
   model: string;
   modelVersion: string;
   actorType: 'User' | 'System';
-  stepBaseFee: bigint;
-  conditionReadFee: bigint;
   steps: AaaStepCostInput[];
   lifecycle: AaaCostSegment;
 }): AaaCostForecast {
   if (!Number.isSafeInteger(input.blockNumber) || input.blockNumber < 0) {
     throw new Error('blockNumber must be a non-negative safe integer');
   }
-  validateBalance(input.stepBaseFee, 'stepBaseFee');
-  validateBalance(input.conditionReadFee, 'conditionReadFee');
   validateWeight(input.lifecycle.weight, 'lifecycle.weight');
   validateBalance(input.lifecycle.fee, 'lifecycle.fee');
 
@@ -263,6 +260,7 @@ export function forecastAaaCosts(input: {
       throw new Error('conditionCount must be a non-negative safe integer');
     }
     validateWeight(step.evaluationWeight, `steps[${index}].evaluationWeight`);
+    validateBalance(step.evaluationFeeUpper, `steps[${index}].evaluationFeeUpper`);
     validateWeight(
       step.executionWeightUpper,
       `steps[${index}].executionWeightUpper`,
@@ -271,17 +269,15 @@ export function forecastAaaCosts(input: {
       step.executionFeeUpper,
       `steps[${index}].executionFeeUpper`,
     );
-    const rawEvaluationFee =
-      input.stepBaseFee + input.conditionReadFee * BigInt(step.conditionCount);
     const evaluationFee = aaaFeeStepCharge(
       input.actorType,
-      rawEvaluationFee,
+      step.evaluationFeeUpper,
       step.executionFeeUpper,
       'EvaluationOnly',
     );
     const attemptedStepFee = aaaFeeStepCharge(
       input.actorType,
-      rawEvaluationFee,
+      step.evaluationFeeUpper,
       step.executionFeeUpper,
       'Attempted',
     );
