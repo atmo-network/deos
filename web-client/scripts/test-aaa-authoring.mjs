@@ -89,8 +89,7 @@ const observationTrigger = {
 const weightModel = {
   identity: 'authoring-test-weights',
   version: '1',
-  stepBaseFee: 2n,
-  conditionReadFee: 1n,
+  evaluationFeeUpper: (conditionCount) => 2n + BigInt(conditionCount),
   evaluationWeight: (conditionCount) => ({
     refTime: 10n + BigInt(conditionCount),
     proofSize: 2n + BigInt(conditionCount),
@@ -190,10 +189,10 @@ test('completion policy lowers exactly and rejects unknown lifecycle values', ()
     value: undefined,
   });
   const oneShot = lowerAaaAuthoringProgram(
-    program(undefined, { completionPolicy: 'CloseAfterProductiveRun' }),
+    program(undefined, { completionPolicy: 'CloseAfterProductiveCycle' }),
   );
   assert.deepEqual(oneShot.value.completion_policy, {
-    type: 'CloseAfterProductiveRun',
+    type: 'CloseAfterProductiveCycle',
     value: undefined,
   });
   assert.equal(
@@ -202,7 +201,7 @@ test('completion policy lowers exactly and rejects unknown lifecycle values', ()
     ).valid,
     false,
   );
-  assert.match(automationWidgetSource, /Close after productive run/);
+  assert.match(automationWidgetSource, /Close after productive cycle/);
   assert.match(automationWidgetSource, /committed effectful task/);
 });
 
@@ -211,8 +210,8 @@ test('optional auto-close target lowers exactly and rejects invalid u64 values',
     program(undefined, { autoCloseAtCycleNonce: 7n }),
   );
   assert.equal(target.value.auto_close_at_cycle_nonce, 7n);
-  assert.match(automationWidgetSource, /Auto-close run \(optional\)/);
-  assert.match(automationWidgetSource, /logical-run nonce completes/);
+  assert.match(automationWidgetSource, /Auto-close cycle \(optional\)/);
+  assert.match(automationWidgetSource, /logical-cycle nonce completes/);
   for (const autoCloseAtCycleNonce of [0n, -1n, 1n << 64n]) {
     const result = validateAaaAuthoringProgram(
       program(undefined, { autoCloseAtCycleNonce }),
@@ -349,7 +348,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
         errorPolicy: { type: 'RetryLater', maxAttempts: 3 },
       }),
     ],
-    { completionPolicy: 'CloseAfterProductiveRun' },
+    { completionPolicy: 'CloseAfterProductiveCycle' },
   );
   const first = artifact(draft);
   const second = artifact(structuredClone(draft));
@@ -360,7 +359,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
     assert.equal(inspection.projection.value.execution_plan.length, 2);
     assert.equal(
       inspection.projection.value.completion_policy.type,
-      'CloseAfterProductiveRun',
+      'CloseAfterProductiveCycle',
     );
     assert.deepEqual(
       inspection.projection.value.execution_plan[0].task.value.input_limit,
@@ -386,7 +385,7 @@ test('typed authoring lowers to one deterministic exact canonical artifact', () 
     weightModel,
   });
   assert.equal(analysis.identity.planId, first.planId);
-  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveRun');
+  assert.equal(analysis.completionPolicy, 'CloseAfterProductiveCycle');
   assert.deepEqual(analysis.steps[0].parameters.input_limit, {
     type: 'Absolute',
     value: { $runtimeType: 'bigint', $integer: '100' },

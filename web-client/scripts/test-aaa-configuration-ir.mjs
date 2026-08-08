@@ -47,7 +47,7 @@ const feed = {
 const program = {
   aaaType: 'System',
   mutability: 'Mutable',
-  completionPolicy: 'CloseAfterProductiveRun',
+  completionPolicy: 'CloseAfterProductiveCycle',
   trigger: {
     type: 'Immediate',
     sources: [{ type: 'OnObservationChange', feed }],

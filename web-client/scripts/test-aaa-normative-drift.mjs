@@ -229,8 +229,8 @@ test('drift gate passes on the aligned surface and fails closed on drift', async
     await writeFile(
       sandboxSpecPath,
       specSource.replace(
-        '    AaaIdOverflow,\n',
-        '    AaaIdOverflow,\n    AaaIdOverflow,\n',
+        '  AaaIdOverflow,',
+        '  AaaIdOverflow, AaaIdOverflow,',
       ),
     );
     const duplicateSpec = await run(

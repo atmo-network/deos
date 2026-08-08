@@ -429,7 +429,7 @@ fn context_dependency(value: ContextDependency) -> &'static str {
 fn observation_window(value: ObservationWindow) -> &'static str {
   match value {
     ObservationWindow::ArtifactTime => "ArtifactTime",
-    ObservationWindow::LogicalRunStart => "LogicalRunStart",
+    ObservationWindow::LogicalCycleStart => "LogicalCycleStart",
     ObservationWindow::StepAttemptTime => "StepAttemptTime",
   }
 }

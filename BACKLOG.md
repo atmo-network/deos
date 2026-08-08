@@ -1,64 +1,78 @@
 # DEOS Backlog
 
-> Open framework work only; durable protocol lives in `AGENTS.md`, completed delivery history in `CHANGELOG.md`, and unreleased release gates here until their annotated tag exists.
-> Release order: **specification -> implementation -> architecture projection -> evidence -> tag**.
+> This file contains unfinished implementation work only.
+>
+> Normative runtime meaning belongs to pallet specifications. Release procedure, review order, churn budgets, evidence identity, merge/tag rules, and acceptance choreography belong to `docs/release-protocol.en.md`. Completed work belongs to `CHANGELOG.md`.
 
-## DEOS 0.7.12 — Router Route Truth Closure
+## DEOS 0.7.13 — Router Route Truth Closure
 
-> 0.7.12 starts only after the 0.7.11 candidate passes its complete release gate and the AAA adapter/Weight/evidence boundary is frozen. Router work follows the same order: Router specification -> implementation -> architecture document -> production evidence.
+> Normative Router meaning must move into `template/pallets/router/docs/specification.en.md`. This backlog lists unfinished implementation surfaces and must not become the Router specification.
 
-### Router Normative Specification
+### Router Specification
 
-- [ ] `DEOS Router / Canonical Specification`: Create or promote one normative Router specification before implementation. It must own route families, intents, fee semantics, route selection, protection, Oracle publication, transaction boundaries, structured outcome, failure classes, Weight classes, AAA adapter input/output, storage invariants, and conformance.
-  - [ ] Preserve only direct XYK, exact-input direct TMC mint, and Native-anchored two-leg XYK.
-  - [ ] Treat external quotes as projections; execution prepares fresh current-state truth inside the transaction.
-  - [ ] Define one bounded `PreparedRoute` ontology shared by both intents.
-  - [ ] Freeze the accepted public route/outcome/error/Weight-class shape before code changes.
-- [ ] `DEOS Router / Specification Gate`: Prove the accepted Router specification contains no competing quote/execution truth, synthetic-leg semantics, unbounded route representation, insertion-order tie-break, or stale-plan execution path.
+- [ ] `Router / Canonical Specification`: Write and accept a dry Router runtime specification covering public types, supported route families, intents, fee semantics, selection, protection, Oracle publication, transaction boundaries, outcomes, errors, Weight classes, adapters, storage, and conformance.
+- [ ] `Router / Backlog Contraction`: After specification acceptance, replace every semantic description below with section references and retain only implementation deltas.
 
-### Canonical Prepared Route and Execution Truth
+### Canonical Route Representation
 
-- [ ] `DEOS Router / Canonical Route Contract`: Define and implement one internal bounded `PreparedRoute` ontology used by exact-input and exact-output quote projection, route validation, per-leg protection, Oracle publication, execution, structured outcome, events, AAA integration, and Weight classification.
-  - [ ] `DEOS Router / Bounded Representation`: Model intent, gross input, router fee, route input, recipient output, mechanism, bounded path, explicit bounded legs, protection, and finite Weight class in one prepared value. Replace runtime route geometry based on unbounded `Vec` with bounded path/leg types and represent direct XYK, Native-anchored XYK, and direct TMC mint legs explicitly.
-  - [ ] `DEOS Router / Planning Semantics`: Permit intent-specific quote algorithms but require both intents to converge to the same route ontology. Keep direct TMC mint exact-input only until TMC exposes a genuine inverse execution contract. Execution must prepare a fresh route against current state inside the transaction and must not accept arbitrary stale caller-supplied plans.
-  - [ ] `DEOS Router / Deterministic Comparator`: Replace insertion-order selection with an explicit total comparator. Exact input orders by maximum recipient output, then minimum route cost/leg count, canonical mechanism order, and canonical encoded path; exact output orders by minimum total required input, then the same tie-break dimensions. Add candidate-order permutation tests.
-  - [ ] `DEOS Router / Protection Ontology`: Make exact-input protection one minimum recipient-output bound and exact-output protection one maximum total-input bound. Evaluate reference deviation only on actual XYK legs, using each leg's directional observation and the same per-leg ontology for both intents; remove synthetic direct-pair reads for multi-hop and synthetic XYK guards for TMC mint.
-  - [ ] `DEOS Router / Protection Claims`: Keep slippage, per-leg reference deviation, and System-authored policy visibly separate and document that local reference deviation proves neither external fair price, ordering protection, manipulation resistance, nor MEV protection.
-  - [ ] `DEOS Router / Actual-Leg Oracle Publication`: Publish pre-execution observations in canonical leg order for exactly the executed XYK legs: direct `A -> B` publishes `A -> B`, `A -> Native -> B` publishes both directional legs in path order, and direct TMC mint publishes none.
-  - [ ] `DEOS Router / Atomic Operation`: Keep fee routing, every applicable Oracle publication, AAA dirty ingress, liquidity execution, balance deltas, and Router events in one transaction; prove any fee, per-leg publication, AAA ingress, or liquidity failure restores Oracle, AAA, Router, balances, pools, and events to pre-state.
-  - [ ] `DEOS Router / Canonical Outcome`: Return a structured bounded outcome with intent kind, gross input, router fee, actual route input spent, recipient output, mechanism, bounded path, and Weight class. Exact output exposes actual total input spent; exact input exposes actual recipient balance delta. Quote, outcome, and event fields retain identical economic meanings.
-  - [ ] `DEOS Router / AAA Adapter Boundary`: Remove quote, route/path validation, Router reference protection, and re-planning logic duplicated by `TmctolDexOps`. AAA supplies only System-authored protection/freshness and retry policy; Router owns discovery, fee math, preparation, validation, execution, and canonical outcome through one safe transaction API.
-  - [ ] `DEOS Router / Failure Taxonomy`: Expose stable Router error classes suitable for exhaustive AAA Temporary/Permanent classification, preserve unknown failures as Permanent, and test each accepted error variant. Remove unused errors or add a falsifying ownership path.
-  - [ ] `DEOS Router / Weight Classes`: Define `ExactInputDirectXyk`, `ExactInputDirectTmc`, `ExactInputMultiHopNative`, `ExactOutputDirectXyk`, and `ExactOutputMultiHopNative`; bind each prepared route and outcome to exactly one class and make AAA admission cover the maximum class permitted by its swap task.
-  - [ ] `DEOS Router / Hot-Path Cleanup`: Eliminate duplicate quotes, pool lookups, route preparation, path allocation, synthetic direct-pair reads, and repeated work where one prepared value safely carries the verified fact; measure before retaining additional indirection.
-  - [ ] `DEOS Router / API and Storage Invariants`: Make low-level `quote_price` private or rename it as an explicitly one-pool XYK primitive. Strengthen try-state for bounded fee policy, canonical LP-pair ordering, reverse-index consistency, and LP-token collision freedom.
-  - [ ] `DEOS Router / Compatibility Identity Decision`: Explicitly retain `pallet_axial_router` as documented stable compatibility identity or perform one deliberate complete rename across crate, runtime, metadata, tests, weights, client, docs, and audits.
+- [ ] `Router / PreparedRoute`: Implement one bounded internal route value shared by quote projection, transactional preparation, validation, protection, execution, events, outcomes, Oracle publication, AAA integration, and Weight classification.
+- [ ] `Router / Bounded Geometry`: Replace unbounded route/path representation and transient path allocation with bounded route and leg types.
+- [ ] `Router / Fresh Execution Truth`: Treat external quotes as projections only; prepare executable truth from current state inside the execution transaction.
+- [ ] `Router / Deterministic Selection`: Replace insertion-order behavior with the total comparator defined by the accepted specification and add candidate-order permutation tests.
 
-### Adversarial Route Corpus and Invariants
+### Protection, Publication, and Atomicity
 
-- [ ] `DEOS Router / Contract Validation`: Add package and runtime matrices for every route family and intent, protection boundary, tie, actual-leg publication set/order, outcome/event equality, AAA adapter use, rollback point, maximum bounded path, and absence of any new route family. Exit invariant: `quote projection = prepared route = protected route = executed route = event route = Weight class`.
-  - [ ] `DEOS Router / Adversarial Route Scenarios`: Cover Router-triggered Oracle publication followed by swap failure; first- and later-leg publication rejection; fee and AAA-ingress rejection; direct XYK, TMC, and Native-anchored liquidity failure; stale external quote followed by fresh transactional preparation; candidate-order permutations; exact-input recipient-delta and exact-output total-spend checks; and maximum route bounds.
-  - [ ] `DEOS Router / Atomicity Invariants`: Assert Oracle publications equal the exact ordered executed XYK legs; multi-hop never publishes a synthetic direct pair; TMC mint publishes no XYK observation; any failure restores all participating domains; every outcome names one measured route class.
+- [ ] `Router / Intent Protection`: Implement the accepted exact-input output floor and exact-output total-input ceiling without synthetic route semantics.
+- [ ] `Router / Per-Leg Reference Checks`: Apply reference checks only to actual executed XYK legs and keep Router protection separate from AAA System policy.
+- [ ] `Router / Actual-Leg Oracle Publication`: Publish exactly the executed XYK legs in canonical execution order; direct TMC mint publishes no XYK observation.
+- [ ] `Router / Atomic Execution`: Keep fee routing, Oracle publication, AAA ingress, liquidity mutation, balance deltas, and Router events inside one rollback boundary.
+- [ ] `Router / Rollback Matrix`: Cover every fee, publication, ingress, pool, TMC, balance, and event failure point.
 
-### Production Evidence, Architecture Projection, and Release Acceptance
+### Outcomes, Errors, and AAA Boundary
 
-- [ ] `DEOS 0.7.12 / Production Benchmarks`: Benchmark all five route classes under production Wasm, regenerate Router and affected AAA/Oracle weights, return actual post-dispatch Weight where dispatch permits it, and prove AAA admission covers its maximum permitted route class.
-- [ ] `DEOS 0.7.12 / Canonical Evidence`: Bind accepted Router specification, route-class weights, affected AAA/Oracle weights, runtime metadata/Wasm/client evidence, benchmark parameters, and candidate commit to one evidence owner.
-- [ ] `DEOS 0.7.12 / Architecture Document`: Only after implementation passes the normative matrices, rewrite Router architecture and integration documents as projections of the accepted specification and measured implementation.
-- [ ] `DEOS 0.7.12 / Documentation Sync`: Synchronize Router README/runtime APIs, AAA and Oracle integration, client route projections, benchmark evidence, compatibility identity, wiki projections where owners changed, `CHANGELOG.md`, and canonical release evidence.
-- [ ] `DEOS 0.7.12 / Validation`: Pass Router package/runtime matrices, adversarial corpus, AAA adapter/admission tests, Oracle publication/rollback tests, production benchmark freshness, generated weights, try-runtime/try-state, package/workspace tests, Clippy with `-D warnings`, client tests, documentation checks, completion gate, and release-line audit.
-- [ ] `DEOS 0.7.12 / Definition of Done`: Close only when one accepted specification owns route meaning; `quote projection = prepared route = protected route = executed route = event route = Weight class`; Oracle publication matches actual XYK legs; AAA duplicates no Router logic; failures roll back atomically; tie-breaking ignores insertion order; every route class has production evidence; architecture follows implementation; and no new route family ships.
+- [ ] `Router / Canonical Outcome`: Return one bounded structured outcome whose economic fields retain identical meaning across quote projection, execution, events, and clients.
+- [ ] `Router / Failure Taxonomy`: Expose stable exhaustive Router failure classes usable by AAA Temporary/Permanent mapping; unknown remains Permanent.
+- [ ] `Router / AAA Adapter Contraction`: Remove quote ownership, path validation, Router protection, and replanning duplicated in `TmctolDexOps`; AAA supplies only its authored policy inputs and consumes the canonical Router outcome.
+- [ ] `Router / Route Weight Classes`: Bind every supported prepared route and outcome to one measured route class; make AAA admission cover the maximum class permitted by its swap task.
+- [ ] `Router / Compatibility Identity`: Decide and apply either explicit retention of `pallet_axial_router` identity or one complete pre-launch rename; add no partial alias layer.
 
-### DEOS 0.7.12 Non-Goals
+### Hot-Path and Storage Contraction
 
-- No arbitrary graph routing, unrestricted path lengths, external DEX aggregation, generalized intent marketplace, CoW/frequent-batch settlement inside Router, solver competition, or new market family.
-- No new AAA task, condition, authority, scheduler, retry, or history surface beyond adapter/admission synchronization required by canonical Router outcomes.
+- [ ] `Router / Duplicate Work Removal`: Delete repeated quotes, pool lookups, route preparation, path allocation, synthetic direct-pair reads, and parallel validation where `PreparedRoute` already owns the fact.
+- [ ] `Router / Primitive API Boundary`: Make low-level pool quote helpers private or name them explicitly as single-pool primitives.
+- [ ] `Router / Storage Invariants`: Strengthen `try_state` for fee policy, canonical LP-pair ordering, reverse-index consistency, and LP-token collision freedom.
+
+### Executable Conformance
+
+- [ ] `Router / Route Vectors`: Generate conformance vectors for every supported route family, intent, protection boundary, tie, publication set/order, outcome, error class, and Weight class.
+- [ ] `Router / Adversarial Corpus`: Cover stale quote projection, candidate permutations, first/later publication failure, AAA ingress rejection, fee failure, direct XYK failure, TMC failure, Native-anchored leg failure, exact-input recipient delta, and exact-output total spend.
+- [ ] `Router / Cross-Domain Invariant`: Prove `projected route = prepared route = protected route = executed route = event route = outcome route = Weight class`.
+
+### Generated Surfaces and Documentation
+
+- [ ] `Router / Production Weights`: Benchmark every accepted route class and regenerate Router plus affected AAA/Oracle weights.
+- [ ] `Router / Metadata and Clients`: Regenerate runtime metadata, descriptors, client projections, and route evidence from the accepted ABI.
+- [ ] `Router / Public Projection Sync`: Align Router package docs, runtime APIs, AAA/Oracle integration, web-client docs, and wiki projections with the Router specification.
+
+### 0.7.13 Exit State
+
+- [ ] Router runtime and generated artifacts conform to the accepted Router specification.
+- [ ] One bounded `PreparedRoute` owns route truth from preparation through outcome.
+- [ ] Oracle publication equals the exact ordered executed XYK legs.
+- [ ] AAA duplicates no Router discovery, quote, route, or protection logic.
+- [ ] Every supported route has one measured Weight class and complete rollback coverage.
+- [ ] No new route family ships beyond the accepted specification.
+
+### 0.7.13 Non-Goals
+
+- No arbitrary graph routing, unrestricted paths, external DEX aggregation, intent marketplace, solver competition, CoW/frequent-batch settlement, or new market family.
+- No new AAA task, condition, authority, scheduler, retry, or history surface except adapter synchronization required by the accepted Router contract.
 
 ## Deferred AAA Possibilities
 
 - [~] `Batch Settlement`: Consider intent or frequent-batch settlement with one clearing rule only as a DEX-level later design after the `0.7.6` service and loss envelopes close; scheduler priority alone does not remove order-based extraction.
 - [~] `Probabilistic Trigger Extension`: Consider probability only as a future append-only progressive trigger extension after a concrete deterministic and financially secure entropy capability exists, has an owned runtime ingress/security model, and carries production ProofSize/Weight evidence; `0.7.2` contract contraction does not permanently reject the capability.
-- [~] `Immutable Continuation`: Consider `RetryLater` for Immutable actors only after a concrete constitutional need defines non-intervention, cancellation, permanent adapter failure, terminal handling, and upgrade semantics beyond the validated Mutable-only baseline.
+- [~] `Immutable Continuation`: Consider `RetryLater` for Immutable actors only after a concrete constitutional need defines non-intervention, cancellation, permanent adapter failure, terminal handling, and upgrade semantics beyond the validated baseline.
 - [~] `AAA 1.0 Declaration Gate`: Consider the append-only `1.0` line only after maintainers explicitly choose a stability declaration using the completed `0.7.3` independent-runtime evidence; any newly discovered breaking correction must revise the pre-`1.0` candidate and repeat the gate.
 
 ## Product / Client Work
@@ -76,20 +90,22 @@
 ## Runtime Framework Evolution
 
 > These slices keep DEOS current with useful Polkadot SDK runtime patterns while preserving the framework boundary: adopt configuration discipline, reusable primitives, and economic mechanisms; do not import unrelated product layers such as Revive contracts by default.
-> Source context for agents beyond their training cutoff: Polkadot SDK `stable2606` release notes — <https://github.com/paritytech/polkadot-sdk/releases/tag/polkadot-stable2606>.
+>
+> Source context for agents beyond their training cutoff: Polkadot SDK `stable2606` release notes.
 
-- [ ] `Runtime Cadence Profile`: Define a cadence profile contract that derives time-sensitive runtime constants from a configurable block-duration target instead of hardcoding one block speed. Exit criteria: audit voting periods, AAA cooldowns/retry windows, staking epochs, cleanup windows, and docs for assumptions that would break when moving between conventional ~6s blocks and faster sub-second/~500ms profiles; add a validation guard for new block-count assumptions where practical.
-- [ ] `V3 Scheduling / Block-Bundling Readiness`: Document and encode a non-enabled readiness profile for future V3 scheduling/block-bundling adoption. Exit criteria: list runtime/operator prerequisites, benchmark and block-weight margin checks, `on_idle`/hook pressure review, message-queue/XCM budget considerations, and a clear condition for moving from legacy scheduling to V3-ready or V3-enabled.
-- [ ] `DEOS Staking Reward Source Abstraction`: Evolve staking reward ingress so distribution logic is separated from reward origin, allowing externally funded or treasury-budgeted pots alongside existing same-asset reward inflow. Exit criteria: specify and prototype a minimal runtime/pallet interface for `ExternallyFundedPot`-style reward sources, epoch snapshot timing, pot denominator fixing, and compatibility with current auto-compound claim flows.
-- [ ] `Budget Recipient Primitives`: Introduce typed budget-recipient primitives or runtime helpers for framework-owned economic destinations such as staking reward pots, governance treasuries, liquidity reserves, and System AAA actors. Exit criteria: replace any new raw-account economic routing in touched surfaces with typed recipient derivation and decide whether a future mutable registry pallet is justified or overkill.
-- [ ] `Unclaimed Reward Policy`: Make staking/native reward leftovers explicit runtime policy instead of implicit residue. Exit criteria: define rollover/return-to-Fee-Sink/burn/treasury-routing options, choose the current reference policy, and cover expiry or settlement behavior with tests.
+- [ ] `Runtime Cadence Profile`: Define a cadence profile contract that derives time-sensitive runtime constants from a configurable block-duration target instead of hardcoding one block speed. Audit voting periods, AAA cooldowns/retry windows, staking epochs, cleanup windows, and docs for assumptions that break between conventional ~6s blocks and faster sub-second profiles.
+- [ ] `V3 Scheduling / Block-Bundling Readiness`: Document and encode a non-enabled readiness profile for future V3 scheduling/block-bundling adoption, including runtime/operator prerequisites, benchmark margins, `on_idle`/hook pressure, message-queue/XCM budgets, and activation conditions.
+- [ ] `DEOS Staking Reward Source Abstraction`: Separate staking distribution from reward origin, allowing externally funded or treasury-budgeted pots alongside existing same-asset reward inflow.
+- [ ] `Budget Recipient Primitives`: Introduce typed budget-recipient primitives or runtime helpers for framework-owned economic destinations such as staking reward pots, governance treasuries, liquidity reserves, and System AAA actors.
+- [ ] `Unclaimed Reward Policy`: Make staking/native reward leftovers explicit runtime policy: rollover, Fee Sink return, burn, or treasury routing.
 
 ## Collator Economics & Fee Routing
 
-> Phase 1 uses trusted, permissioned collators, collects 100% of transaction, AAA, governance-opening, and XCM-execution fees in the Fee Sink, and distributes available native balance 50/50 into staking ingress and liquidity provisioning.
-> A future permissionless phase may introduce equal security/staking/liquidity thirds only after bounded security-reward settlement ships; indivisible remainder stays in Fee Sink for a later cycle.
+> Phase 1 uses trusted permissioned collators, collects 100% of transaction, AAA, governance-opening, and XCM-execution fees in the Fee Sink, and distributes available native balance 50/50 into staking ingress and liquidity provisioning.
+>
+> A future permissionless phase may introduce equal security/staking/liquidity thirds only after bounded security-reward settlement ships; indivisible remainder stays in Fee Sink.
 
-- [ ] `Permissionless Collator Reward Contract`: Before assigning the future equal-third security branch, define bounded active-set eligibility, contribution attribution, settlement cadence, custody, payout recipients, unclaimed leftovers, failure behavior, and read-model surfaces; do not assume that a `CollatorRewardPot` account or pallet is the final topology.
+- [ ] `Permissionless Collator Reward Contract`: Before assigning the future security branch, define bounded active-set eligibility, contribution attribution, settlement cadence, custody, payout recipients, unclaimed leftovers, failure behavior, and read-model surfaces.
 - [~] `Phase 2 Reward Routing Preparation`: Keep Phase 2 as a runtime-upgrade boundary, not a launch-time parameter.
   - [~] `Claimable LP Nomination Flow`: Activate explicit LP-nomination reward-weight provider only when permissionless collators ship.
   - [ ] `LP Nomination Activation`: Expose LP-point nomination to specific collators only when permissionless collator selection is enabled.
@@ -100,8 +116,8 @@
 
 > Only actionable when a concrete domain-owned control surface, payload family, or failure-state slice is selected beyond the current baseline.
 
-- [ ] `L2 Parameter Expansion`: Only after a genuinely delegated/domain-owned parameter surface exists, add the next `L2ParameterChange` path beyond the DEOS Router pair.
-- [ ] `Execution Observability Expansion`: Only when a new payload family or failure-state slice ships, broaden per-kind observability beyond the current bounded detail/events.
+- [ ] `L2 Parameter Expansion`: Only after a genuinely delegated/domain-owned parameter surface exists, add the next `L2ParameterChange` path beyond the Router pair.
+- [ ] `Execution Observability Expansion`: Only when a new payload family or failure-state slice ships, broaden per-kind observability beyond current bounded detail/events.
 - [ ] `Browser Composition Expansion`: Only when runtime-signed submission authority expands beyond advisory plus tactical treasury invoices, add the next composition surface.
 - [ ] `Governance Archive Integration`: Only when a materialized/indexed governance backend is selected, connect the reserved archive boundary to live archive search and ballot timelines.
 

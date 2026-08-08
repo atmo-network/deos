@@ -19,6 +19,7 @@ Before contributing code or designing features, establish the project boundary a
 - [Framework / Instance Contract](./framework-instance.contract.en.md) — separates reusable DEOS mechanisms from downstream product and economic policy.
 - [Core Architecture](./core.architecture.en.md) — maps the token-driven runtime, actor topology, shared primitives, and integration model.
 - [Read-Model Contract](./read-model.contract.en.md) — separates bounded canonical chain projections from indexed and materialized views.
+- [Release Protocol](./release-protocol.en.md) — owns candidate review order, contraction accounting, evidence identity, validation escalation, and guarded handoff.
 
 For runtime changes, also read the [Template Workspace README](../template/README.md) and the specification plus architecture document owned by the affected subsystem. Current Polkadot SDK conventions belong to the runtime workspace, code, tests, and project protocol rather than to a detached release-specific reading guide.
 
@@ -106,7 +107,7 @@ Implementation-specific documents describing how the current runtime realizes th
 - [Governance Architecture](../template/pallets/governance/docs/architecture.en.md)
   Code-anchored implementation map of `pallet-governance`: bounded winning-vote memory, resolution-once dedup, active proposal lifecycle, weighted vote policy wiring, auto-finalization buckets, recent finalized-outcome retention, and the current policy/watchpoint surface.
 
-### 5. Roadmap
+### 5. Delivery
 
 - [Roadmap / BACKLOG](../BACKLOG.md)
   Canonical open backlog for infrastructure hardening, testing expansion, and upcoming framework evolution tasks.

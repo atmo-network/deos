@@ -43,8 +43,6 @@ function forecast(aaaType) {
     model: 'fixture',
     modelVersion: '1',
     actorType: aaaType,
-    stepBaseFee: 2n,
-    conditionReadFee: 3n,
     steps: [
       {
         stepIndex: 0,
@@ -52,6 +50,7 @@ function forecast(aaaType) {
         conditionOutcome: 'Pass',
         executionDisposition: 'Execute',
         evaluationWeight: { refTime: 1n, proofSize: 1n },
+        evaluationFeeUpper: 8n,
         executionWeightUpper: { refTime: 2n, proofSize: 2n },
         executionFeeUpper: 7n,
       },

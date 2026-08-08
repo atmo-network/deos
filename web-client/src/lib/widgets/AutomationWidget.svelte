@@ -114,7 +114,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     if (eligibility == null) {
       return 'Unavailable';
     }
-    if (eligibility.ready) {
+    if (eligibility.phase === 'Ready') {
       return 'Ready now';
     }
     switch (eligibility.phase) {
@@ -132,14 +132,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         return 'Paused';
       case 'GlobalCircuitBreaker':
         return 'Global breaker';
-      case 'WindowExpired':
-        return 'Window expired';
-      case 'CycleNonceExhausted':
-        return 'Nonce exhausted';
-      case 'ConsecutiveFailureLimit':
-        return 'Failure limit';
-      case 'AutoCloseDue':
-        return 'Auto-close due';
+      case 'CloseDue':
+        return `Close due · ${eligibility.closeReason ?? 'unknown reason'}`;
       default:
         return eligibility.phase;
     }
@@ -452,13 +446,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   />
                   <DetailRow
                     label="Completion"
-                    value={actor.completionPolicy === 'CloseAfterProductiveRun'
+                    value={actor.completionPolicy === 'CloseAfterProductiveCycle'
                       ? 'Close after committed effect'
                       : (actor.completionPolicy ?? 'Unavailable')}
                     valueClass="text-(--mono-text)"
                   />
                   <DetailRow
-                    label="Logical run"
+                    label="Logical cycle"
                     value={`#${actor.cycleNonce}`}
                     valueClass="tabnum text-(--mono-text)"
                   />
@@ -556,12 +550,12 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               selectClass="h-9 py-1.5 text-xs"
             >
               <option value="Persistent">Persistent</option>
-              <option value="CloseAfterProductiveRun"
-                >Close after productive run</option
+              <option value="CloseAfterProductiveCycle"
+                >Close after productive cycle</option
               >
             </SelectField>
             <label class="grid gap-1 text-xs text-(--mono-muted)">
-              Auto-close run (optional)
+              Auto-close cycle (optional)
               <input
                 type="text"
                 inputmode="numeric"
@@ -573,7 +567,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                 aria-describedby="auto-close-help"
               />
               <span id="auto-close-help" class="text-[10px] text-(--mono-muted)"
-                >Close when this logical-run nonce completes.</span
+                >Close when this logical-cycle nonce completes.</span
               >
             </label>
             <NumberInput

@@ -153,6 +153,8 @@ User actors default to `OwnerOnly`; accepted verified owner or allowlist transfe
 
 Every producer path that can credit an AAA sovereign account uses one paired preflight/notify transaction through `RuntimeAddressEventIngress`. The inventory below names each path, its credited surface, source/provenance semantics, preflight owner, notification owner, rollback witness, and Weight owner; all movement is reverted on preflight or notification failure in the same transaction.
 
+`SourceFilter::Any` accepts every certified source that passes the authored asset filter. Any such source may set the actor's pending latch, and a resulting User attempt spends that actor's Weight-derived fee budget even when the sender acts only to force evaluation. DEOS adds no hidden sender trust list, reimbursement, or anti-grief pricing policy; authors who cannot accept that exposure use `OwnerOnly` or an explicit bounded whitelist.
+
 **Ingress producers (credit another actor's sovereign):**
 
 | Producer path | Credited surface | Source / provenance | Preflight owner | Notify owner | Rollback witness | Weight owner |
@@ -207,12 +209,8 @@ Pure lifecycle cleanup charges no execution fee and runs no plan. User fee admis
 | `MaxRetryAttempts` | 10 cursor-local unsuccessful attempts |
 | `MaxConsecutiveFailures` | 10 |
 | `MaxAutoCloseNonceHorizon` | 10,000 |
-| `MaxCacheRevalidationUnitsPerBlock` | 16 count ceiling for one bounded worker pass |
-| `CacheRevalidationNoAdmitDisposition` | `None` until a concrete migration names its disposition |
 
 Runtime block policy assigns 50% to dispatch and 50% guaranteed `on_idle` headroom. No dedicated Operational reserve exists while no concrete critical Operational call consumes one. `AaaOnIdleReserve` binds directly to `1,000,000,000,000 / 2,500,000`.
-
-Cache revalidation is a global execution gate independent of the public breaker: the reference runtime starts at fresh epoch `0` with every genesis actor stamped and no gate, and no cache-affecting change can activate because no migration-specific no-admit disposition is configured (spec 6.4). `cache_revalidation_units` is the sole generated revalidation Weight class: fixed pass orchestration plus one worst-case actor unit each, measured at `20,303,784 + 20,776,516 × n` RefTime and `3,591 + 8,677 × n` ProofSize with `2 + 3n` reads and `1 + n` writes. One maximum unit fits `ActorServiceReserve` after the maximum fixed workers in both Weight dimensions; the runtime test `one_maximum_cache_revalidation_unit_fits_actor_service_reserve` and the package try-state assertion prove the admission bound against the measured classes.
 
 System and User actors share one paged FIFO with a single global ticket order; no actor class reserves an execution share, weight slice, or service right (spec 8.1.8). Housekeeping, observation fanout, wakeup work, cleanup, and admission bookkeeping remain outside the actor-service pass; within that pass, strict head-of-line order and the shared cutoff alone bound service.
 
@@ -242,27 +240,41 @@ Tombstone drain is `7,057,781 + 2,132,168 × n` RefTime and `2,982 + 2,492 × n`
 
 ## Generated Evidence and Artifacts
 
-Current DEOS 0.7.11 candidate artifact identities:
+Current DEOS 0.7.12 candidate artifact identities:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| AAA runtime weights | `e46596b91c5d55112e6bb88360ac87078f6ae327680d48d972b54aa4a2b170cc` |
+| AAA runtime weights | `b237c442cd04bbe8ee2f66fdf7317d86d673cf42bbca3c1f9545d344dfb0bdb8` |
 | DEOS Oracle runtime weights | `ffd422bd67a6b75c8bc4e76f7ace4aad5b40a352cf2b10a70547a241e261259e` |
-| Compact compressed runtime Wasm | `71b5bf391632f599a059a0df3552fb308cdf729d93bd1f30c9cd9fc2608a0a7f` |
-| SCALE-encoded V16 metadata | `bd38d1bd19b731ab9516faa374e315e53f006459b129a0fba1be8ccf56044d77` |
-| AAA semantic manifest | `466a5b549b0f56a73dbffe2fcb76b02d040f9c623fa961da11f6b87aca066ba0` |
-| AAA fee-envelope vectors | `6566d8d396ccbb00f074861c60fc90627fdb7f5550b64de7c3729cb07750eb32` |
-| AAA ABI manifest | `eb5793f590c7ce10039856624d0f3fba49bf92f795dcce99a62e07dfcff37b7f` |
+| Compact compressed runtime Wasm | `503b3d2dcd00c8d4584fa10e434c603a9256896de43dc328c00cc94a3a58a3c8` |
+| SCALE-encoded V16 metadata | `bcdea5ab21683e669ab9cec2a4eabaa37d781b05995e48407f9c08da964b9400` |
+| AAA semantic manifest | `16e17ff38a7ddb1952a8d3f8c4dbc9de899127f5125fc93b847a2ef88a9fd5b7` |
+| AAA fee-envelope vectors | `1587692dcb4a05e51ff23750ca4e4d0d1f11691bc4ab5e1c56bc77d65d8f1574` |
+| AAA ABI manifest | `b2a71397cbb330387dcf71167afc0352165c335cd57db51c2286c9d6665f5203` |
 
 The metadata identity hashes the exact bytes at `web-client/.papi/metadata/deos.scale`. Fee-envelope `metadataSha256` and `weightSha256` equal the metadata and AAA-weight rows above. Observation evidence binds the same metadata SHA-256 and AAA-weight identity plus the rebuilt compact-Wasm runtime-code hash. No alternate compact-Wasm claim remains active.
 
 `template/runtime/src/weights/pallet_aaa.rs` owns complete generated methods and storage annotations. Architecture records only load-bearing admission values and accepted identities; benchmark-host timing never becomes a chain-throughput claim.
 
+### Generated Event Trace Corpus
+
+These non-normative traces project the package event-order fixtures; Section 8 of the AAA specification and runtime metadata remain authoritative for semantics and fields.
+
+| Scenario | Ordered event trace | Falsification anchor |
+| --- | --- | --- |
+| Fresh transfer cycle | `CycleStarted -> TransferExecuted -> CycleSummary(Completed)` | Fresh simulation and package cycle-order tests |
+| Temporary retry attempt | `CycleContinued -> StepFailed(Temporary) -> CycleSuspended(Temporary)` | `continuation_*` and retry-bound package tests |
+| Cancel on semantic update | `CycleCancelled -> CycleSummary(Cancelled) -> ExecutionPlanUpdated` | Semantic replacement cancellation tests |
+| Close with Continuation | `CycleCancelled(Closing) -> CycleSummary(Cancelled) -> AaaClosed` | Continuation close-order tests |
+| Expiry during suspension | `CycleCancelled(Closing(WindowExpired)) -> CycleSummary(Cancelled) -> AaaClosed(WindowExpired)` | Window-expiry Continuation tests |
+
+The corpus intentionally omits block numbers, balances, and exhaustive step fields. It illustrates ordering only and creates no history or indexer promise.
+
 ## Control Plane and Read Surfaces
 
 Canonical active projection joins `ActorIdentities`, `ActorHot`, and `ActorProgram` at one finalized block; funding details require the separately bounded `ActorFunding` value. Dormant identity, queue/wakeup membership, active-dirty topology, and bounded simulation results remain canonical-chain truth.
 
-The read-only `AaaEligibilityApi::aaa_eligibility` projection reports current readiness (`ready`), the scheduler-owned phase explaining it, and `next_eligible_block` at one finalized block, reusing the exact scheduler arithmetic so the browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
+The read-only `AaaEligibilityApi::aaa_eligibility` projection reports the scheduler-owned readiness phase, a typed `CloseDue(CloseReason)` terminal projection, and `next_eligible_block` at one finalized block, reusing the exact scheduler arithmetic so the browser never reimplements cadence phase, cooldown, schedule window, retry backoff, breaker, or latch logic. It is canonical-chain truth at the queried block and never promises service, because queue position and available Weight decide actual admission.
 
 The browser's authoring, artifact, matching-Wasm, simulation, observation, and governance-composition surfaces live under `web-client/src/lib/automation/` and `web-client/src/lib/observation/`. They bind metadata and runtime identity rather than recreating pallet semantics.
 
@@ -297,10 +309,6 @@ Operational observation uses canonical queue head/tail, exact queue occupancy, a
 The reference runtime binds `MaxActiveActors = MaxActorIdentities = MaxQueueLength = 10,000`, `MaxOwnerSlots = 255`, `MaxSweepBatch = 5`, and `AaaCreationFee = EXISTENTIAL_DEPOSIT = 0.001` fee-native units. Filling the identity cap with User actors therefore requires at least 10 fee-native units in nonrefundable creation fees and at least 40 distinct owner accounts. Active User liveness may additionally require balances above the protected minimum, but that balance remains actor custody and is not an anti-spam fee.
 
 The same 10,000 ceiling bounds simultaneous active actors and physical scheduler occupancy. One maximum permissionless sweep call examines five explicit identities, so 2,000 full batches cover the complete identity cap. A hypothetical one-batch-per-block sequence spans 12,000 seconds, or 3 hours 20 minutes, at the six-second target; this is a latency illustration, not guaranteed throughput, because dispatch Weight, competing block demand, eligibility, and submitted transaction count control realized progress.
-
-The handwritten AAA production core (`adapters.rs`, `contract.rs`, `execution.rs`, `lib.rs`, `reactions.rs`, `scheduler.rs`, `subscriptions.rs`, and `types.rs`) measures 13,440 lines against the 13,438-line accepted pre-cooling baseline: a net increase of two lines. Benchmarks, generated weights, tests, fixtures, and client artifacts are excluded from that source metric and require separate evidence identities.
-
-Cooling metrics after the cache-revalidation rebenchmark pass: compact compressed production Wasm is 1,404,835 bytes (down from 1,405,148 before the pass, -313 bytes) with SHA-256 `71b5bf391632f599a059a0df3552fb308cdf729d93bd1f30c9cd9fc2608a0a7f`; compact Wasm is 8,621,381 bytes (down from 8,621,416) and the uncompressed Wasm is 9,135,448 bytes (down from 9,135,455). Generated storage dimensions moved from the provisional derivation to measured values: `scheduler_on_idle_base` reads 7 and writes 1 with 1,543 ProofSize (was 6 reads, 1 write, 1,543 ProofSize); `cache_revalidation_units` reads `2 + 3n` and writes `1 + n` with `3,591 + 8,677 × n` ProofSize (was `8 + 8n` reads/writes with `1,543 + 9,667 × n` estimated ProofSize). The measured revalidation unit is `20,303,784 + 20,776,516 × n` RefTime, replacing the derived `19,556,000 + 121,875,000 × n` provisional model; one maximum unit fits `ActorServiceReserve` after the maximum fixed workers.
 
 The guaranteed saturated service model assumes only the one maximum actor attempt-or-cleanup admitted by `ActorServiceReserve`, not the configured count ceiling. With 10,000 eligible FIFO actors ahead of no bypass and one maximum attempt per block, a tail actor reaches an attempt within 10,000 conforming six-second blocks: 60,000 seconds, or 16 hours 40 minutes. One full FIFO traversal has the same conservative bound. Lighter measured plans may admit more work, but `MaxExecutionsPerBlock = 1,000` is only a count ceiling and creates no throughput promise. Cadence denotes temporal eligibility; queue position and available Weight determine actual service.
 

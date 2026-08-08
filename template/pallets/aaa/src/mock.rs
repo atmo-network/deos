@@ -149,7 +149,6 @@ thread_local! {
   static GUARANTEED_ON_IDLE_WEIGHT: RefCell<polkadot_sdk::sp_weights::Weight> =
     RefCell::new(polkadot_sdk::sp_weights::Weight::MAX);
   static FEE_COLLECTIONS: RefCell<alloc::vec::Vec<Balance>> = RefCell::new(alloc::vec::Vec::new());
-  static STEP_BASE_FEE: RefCell<Balance> = RefCell::new(1);
   static FAIL_CREATE_CHECKPOINT: RefCell<bool> = RefCell::new(false);
   static FAIL_FEE_SINK_TRANSFER: RefCell<bool> = RefCell::new(false);
   static FAIL_TRANSFER_TO: RefCell<Option<AccountId>> = RefCell::new(None);
@@ -163,9 +162,6 @@ thread_local! {
   static TEMPORARY_ADD_LIQUIDITY_FAILURE: RefCell<bool> = RefCell::new(false);
   static LAST_DEX_AAA_TYPE: RefCell<Option<AaaType>> = RefCell::new(None);
   static MAX_CONSECUTIVE_FAILURES: RefCell<u32> = RefCell::new(3);
-  static CACHE_REVALIDATION_DISPOSITION: RefCell<
-    Option<crate::types::RevalidationDisposition>,
-  > = RefCell::new(None);
   static FAIL_STAKING_OPS: RefCell<bool> = RefCell::new(false);
   static FAIL_STAKING_AFTER_BURN: RefCell<bool> = RefCell::new(false);
   static STAKING_SHARE_ASSET_AVAILABLE: RefCell<bool> = RefCell::new(true);
@@ -234,7 +230,6 @@ pub fn reset_mock_adapters() {
   DONATED_LIQUIDITY.with(|b| b.borrow_mut().clear());
   GUARANTEED_ON_IDLE_WEIGHT.with(|v| *v.borrow_mut() = polkadot_sdk::sp_weights::Weight::MAX);
   FEE_COLLECTIONS.with(|v| v.borrow_mut().clear());
-  STEP_BASE_FEE.with(|v| *v.borrow_mut() = 1);
   FAIL_CREATE_CHECKPOINT.with(|v| *v.borrow_mut() = false);
   FAIL_FEE_SINK_TRANSFER.with(|v| *v.borrow_mut() = false);
   FAIL_TRANSFER_TO.with(|v| *v.borrow_mut() = None);
@@ -246,7 +241,6 @@ pub fn reset_mock_adapters() {
   TEMPORARY_ADD_LIQUIDITY_FAILURE.with(|v| *v.borrow_mut() = false);
   LAST_DEX_AAA_TYPE.with(|value| *value.borrow_mut() = None);
   MAX_CONSECUTIVE_FAILURES.with(|v| *v.borrow_mut() = 3);
-  CACHE_REVALIDATION_DISPOSITION.with(|v| *v.borrow_mut() = None);
   FAIL_STAKING_OPS.with(|v| *v.borrow_mut() = false);
   FAIL_STAKING_AFTER_BURN.with(|v| *v.borrow_mut() = false);
   STAKING_SHARE_ASSET_AVAILABLE.with(|v| *v.borrow_mut() = true);
@@ -936,24 +930,6 @@ fn integer_sqrt(n: u128) -> u128 {
   x
 }
 
-pub fn set_step_base_fee(value: Balance) {
-  STEP_BASE_FEE.with(|fee| *fee.borrow_mut() = value);
-}
-
-pub struct TestStepBaseFee;
-impl Get<Balance> for TestStepBaseFee {
-  fn get() -> Balance {
-    STEP_BASE_FEE.with(|fee| *fee.borrow())
-  }
-}
-
-pub struct TestConditionReadFee;
-impl Get<Balance> for TestConditionReadFee {
-  fn get() -> Balance {
-    1
-  }
-}
-
 pub struct TestWeightToFee;
 impl polkadot_sdk::sp_weights::WeightToFee for TestWeightToFee {
   type Balance = Balance;
@@ -1043,19 +1019,6 @@ impl Get<u32> for TestMaxSweepBatch {
   }
 }
 
-pub struct TestCacheRevalidationDisposition;
-impl Get<Option<crate::types::RevalidationDisposition>> for TestCacheRevalidationDisposition {
-  fn get() -> Option<crate::types::RevalidationDisposition> {
-    CACHE_REVALIDATION_DISPOSITION.with(|disposition| disposition.borrow().clone())
-  }
-}
-
-pub fn set_cache_revalidation_disposition(
-  disposition: Option<crate::types::RevalidationDisposition>,
-) {
-  CACHE_REVALIDATION_DISPOSITION.with(|slot| *slot.borrow_mut() = disposition);
-}
-
 pub struct MockFundingAuthority;
 
 impl crate::adapters::FundingAuthority<AccountId> for MockFundingAuthority {
@@ -1117,14 +1080,10 @@ impl pallet_aaa::Config for Test {
   type MaxTimerJitterBlocks = ConstU32<64>;
   type MaxIdleStarvationBlocks = TestMaxIdleStarvationBlocks;
   type AaaOnIdleReserve = TestAaaOnIdleReserve;
-  type MaxCacheRevalidationUnitsPerBlock = ConstU32<8>;
-  type CacheRevalidationNoAdmitDisposition = TestCacheRevalidationDisposition;
   type MaxAutoCloseNonceHorizon = TestMaxAutoCloseNonceHorizon;
   type MaxActiveActors = ConstU32<10_000>;
   type MaxActorIdentities = ConstU32<10_000>;
   type MaxSystemSovereigns = ConstU32<10_000>;
-  type StepBaseFee = TestStepBaseFee;
-  type ConditionReadFee = TestConditionReadFee;
   type AaaCreationFee = TestAaaCreationFee;
   type WeightToFee = TestWeightToFee;
   type FeeSink = TestFeeSink;

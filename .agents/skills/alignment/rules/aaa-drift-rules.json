@@ -11,6 +11,30 @@
       "expiry": "Remove only when the canonical specification and metadata no longer expose an AAA compatibility-drift gate."
     },
     {
+      "id": "aaa-removed-surface-terms",
+      "scope": "active AAA code, clients, and non-normative documentation",
+      "kind": "regex-any-case-insensitive",
+      "patterns": [
+        "PercentageOfCurrentBalance",
+        "PercentageAtCycleStart",
+        "funding[_ -]?batch",
+        "User[ /-]+System FIFO lanes",
+        "split FIFO lanes",
+        "lineage reopen(ed|ing)?",
+        "CacheRevalidation",
+        "CurrentCacheEpoch",
+        "StepBaseFee",
+        "ConditionReadFee",
+        "ProductiveRun",
+        "finalized_through",
+        "funding_tracked_count",
+        "PauseReason",
+        "NotPaused"
+      ],
+      "rationale": "Reject retired AAA ABI, cache, fee, funding, scheduler, lifecycle, and terminology surfaces outside the normative specification's explicit prohibition clauses.",
+      "expiry": "Never before a separately accepted compatibility contract reintroduces one of these names."
+    },
+    {
       "id": "aaa-bounded-iteration-allowlist",
       "scope": "alignment auditor O(N) iteration rule",
       "kind": "path-regex-any",

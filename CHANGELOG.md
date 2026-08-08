@@ -4,6 +4,13 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## 0.7.12: AAA Semantic Contraction and Contract Realization
+
+- `AAA / Canonical Contract`: Realized the accepted specification through one actor classifier, exact terminal and breaker precedence, contracted lifecycle, simulation, eligibility, event, error, and state surfaces, and no pre-launch compatibility shadows.
+- `AAA / Economic and Execution Safety`: Unified cursor-sensitive User viability and economic apoptosis, made fee-infrastructure failure roll back the complete attempt, preserved Immutable actor boundaries, and classified persistent live-head stalls without bypassing FIFO order.
+- `AAA / Generated Evidence`: Regenerated metadata, descriptors, manifests, vectors, production weights, runtime Wasm, and client projections; added deterministic event traces and drift gates for retired cache, fee, funding, lifecycle, and terminology surfaces.
+- `AAA / Validation and Portability`: Passed package, independent-runtime, runtime-integration, client automation, benchmark, production-Wasm, 10,000-actor occupancy, and full AAA release gates while reducing the authored implementation and test surface against the `0.7.11` baseline.
+
 ## 0.7.11: AAA Kernel Cooling and Transactional Closure
 
 - `AAA / Transactional Kernel`: Unified control, execution, fees, scheduling, reactive delivery, and cleanup under explicit transactional ownership. This prevents rejected or interrupted operations from leaving partial protocol state while preserving valid committed execution prefixes.

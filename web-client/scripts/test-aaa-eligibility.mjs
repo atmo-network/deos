@@ -72,14 +72,13 @@ test('projectAaaEligibility projects a ready result with next block', () => {
   const decoded = encodeProjection({
     success: true,
     value: {
-      ready: true,
       phase: { type: 'Ready' },
       next_eligible_block: 42,
     },
   });
   assert.deepEqual(projectAaaEligibility(decoded), {
-    ready: true,
     phase: 'Ready',
+    closeReason: null,
     nextEligibleBlock: 42,
   });
 });
@@ -88,13 +87,12 @@ test('projectAaaEligibility projects an absent next block as null', () => {
   const decoded = encodeProjection({
     success: true,
     value: {
-      ready: false,
       phase: { type: 'WaitingTemporal' },
     },
   });
   assert.deepEqual(projectAaaEligibility(decoded), {
-    ready: false,
     phase: 'WaitingTemporal',
+    closeReason: null,
     nextEligibleBlock: null,
   });
 });
@@ -106,10 +104,6 @@ test('projectAaaEligibility maps every phase variant through metadata', () => {
     'Ready',
     'Paused',
     'GlobalCircuitBreaker',
-    'WindowExpired',
-    'CycleNonceExhausted',
-    'ConsecutiveFailureLimit',
-    'AutoCloseDue',
     'WaitingSignal',
     'WaitingRetry',
     'WaitingTemporal',
@@ -117,11 +111,25 @@ test('projectAaaEligibility maps every phase variant through metadata', () => {
   for (const phase of phases) {
     const decoded = encodeProjection({
       success: true,
-      value: { ready: false, phase: { type: phase } },
+      value: { phase: { type: phase } },
     });
     const projected = projectAaaEligibility(decoded);
     assert.equal(projected.phase, phase);
   }
+  const closeDue = encodeProjection({
+    success: true,
+    value: {
+      phase: {
+        type: 'CloseDue',
+        value: { type: 'WindowExpired', value: undefined },
+      },
+    },
+  });
+  assert.deepEqual(projectAaaEligibility(closeDue), {
+    phase: 'CloseDue',
+    closeReason: 'WindowExpired',
+    nextEligibleBlock: null,
+  });
 });
 
 test('projectAaaEligibility rejects a typed runtime failure honestly', () => {
@@ -137,17 +145,9 @@ test('projectAaaEligibility rejects unknown phases and malformed results', () =>
     () =>
       projectAaaEligibility({
         success: true,
-        value: { ready: true, phase: { type: 'Mystery' } },
+        value: { phase: { type: 'Mystery' } },
       }),
     /Unsupported runtime eligibility phase Mystery/,
-  );
-  assert.throws(
-    () =>
-      projectAaaEligibility({
-        success: true,
-        value: { ready: 'yes', phase: { type: 'Ready' } },
-      }),
-    /ready must be a runtime boolean/,
   );
   assert.throws(
     () => projectAaaEligibility({ success: 'maybe' }),

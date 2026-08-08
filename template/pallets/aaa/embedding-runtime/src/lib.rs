@@ -458,15 +458,6 @@ impl Get<AccountId> for FeeSink {
   }
 }
 
-/// No cache-affecting migration ships in the fixture, so no no-admit disposition is named and
-/// a cache-affecting runtime change cannot activate (spec 6.4).
-pub struct NoAdmitDisposition;
-impl Get<Option<pallet_aaa::types::RevalidationDisposition>> for NoAdmitDisposition {
-  fn get() -> Option<pallet_aaa::types::RevalidationDisposition> {
-    None
-  }
-}
-
 #[cfg(feature = "runtime-benchmarks")]
 pub struct FixtureBenchmarkHelper;
 
@@ -587,14 +578,10 @@ impl pallet_aaa::Config for Runtime {
   type MaxTimerJitterBlocks = ConstU32<0>;
   type MaxIdleStarvationBlocks = ConstU32<3>;
   type AaaOnIdleReserve = AaaOnIdleReserve;
-  type MaxCacheRevalidationUnitsPerBlock = ConstU32<4>;
-  type CacheRevalidationNoAdmitDisposition = NoAdmitDisposition;
   type MaxAutoCloseNonceHorizon = ConstU64<1_000>;
   type MaxActiveActors = ConstU32<64>;
   type MaxActorIdentities = ConstU32<96>;
   type MaxSystemSovereigns = ConstU32<96>;
-  type StepBaseFee = ConstU128<10>;
-  type ConditionReadFee = ConstU128<1>;
   type AaaCreationFee = ConstU128<100>;
   type WeightToFee = LinearWeightToFee;
   type FeeSink = FeeSink;
@@ -917,6 +904,7 @@ mod tests {
         &identity.sovereign_account,
         user_prefunding_requirement(&activate_plan),
       );
+      System::set_block_number(2);
       assert_ok!(AAA::activate_aaa(
         RuntimeOrigin::signed(ALICE),
         aaa_id,
@@ -928,7 +916,7 @@ mod tests {
         1_000,
         ExistenceRequirement::AllowDeath,
       ));
-      System::set_block_number(2);
+      System::set_block_number(3);
       assert_ok!(AAA::deactivate_aaa(RuntimeOrigin::signed(ALICE), aaa_id));
       assert!(AAA::active_actor_view(aaa_id).is_none());
       let expected = user_prefunding_requirement(&activate_plan).saturating_add(1_000);
@@ -1176,12 +1164,9 @@ mod tests {
         pallet_aaa::Mutability::Mutable,
         admitted_program,
       ));
-      let aaa_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
-      let cached = AAA::active_actor_view(aaa_id)
-        .expect("admitted actor exists")
-        .cycle_weight_upper;
-      assert_ne!(cached, Weight::zero());
-      assert!(cached.all_lte(admission));
+      assert!(
+        AAA::active_actor_view(pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1)).is_some()
+      );
     });
   }
 
@@ -1317,6 +1302,7 @@ mod tests {
         pallet_aaa::ProgramInput::Dormant,
       ));
       let dormant_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      System::set_block_number(2);
       assert_noop!(
         AAA::activate_aaa(
           RuntimeOrigin::signed(ALICE),
@@ -1333,6 +1319,7 @@ mod tests {
         plan,
       ));
       let active_id = pallet_aaa::NextAaaId::<Runtime>::get().saturating_sub(1);
+      System::set_block_number(3);
       assert_noop!(
         AAA::update_execution_plan(
           RuntimeOrigin::signed(ALICE),
@@ -1534,6 +1521,7 @@ mod tests {
       let repeated_hot = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).expect("hot state remains");
       assert_eq!(repeated_hot.queue_ticket, after_hot.queue_ticket);
       assert_eq!(repeated_hot.wakeup_pointer, after_hot.wakeup_pointer);
+      System::set_block_number(2);
       assert_ok!(AAA::cancel_continuation(
         RuntimeOrigin::signed(ALICE),
         aaa_id,
@@ -1583,6 +1571,7 @@ mod tests {
       let _ = AAA::on_idle(1, Weight::MAX);
       assert!(AAA::continuation_state(aaa_id).is_some());
       let balance_before = Balances::free_balance(sovereign);
+      System::set_block_number(2);
       assert_ok!(AAA::cancel_continuation(
         RuntimeOrigin::signed(ALICE),
         aaa_id,

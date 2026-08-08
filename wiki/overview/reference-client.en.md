@@ -42,7 +42,7 @@ The ownership model is explicit: widgets express product actions, layout owns pa
 
 Current product surfaces include balances, route previews, governance views, automation status, staking state, session-bounded charting, and wiki reading.
 
-The automation surface reads known System actors directly from bounded `ActorHot`, `ActorProgram`, and sparse `ContinuationState`. It shows the current logical-run nonce, suspended attempt, unresolved step, and last-attempt block. This is live canonical state, not an attempt-history archive. The authoring contract permits `RetryLater` only for Mutable plans.
+The automation surface reads known System actors directly from bounded `ActorHot`, `ActorProgram`, and sparse `ContinuationState`. It shows the current logical-cycle nonce, suspended attempt, unresolved step, and last-attempt block. This is live canonical state, not an attempt-history archive. The authoring contract permits `RetryLater` only for Mutable plans.
 
 The client keeps economic functions separate from layout infrastructure:
 
