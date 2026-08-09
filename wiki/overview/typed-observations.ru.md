@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Типизированные наблюдения
-summary: Типизированные наблюдения предоставляют ограниченную текущую scalar truth, тогда как producers владеют samples, AAA — реакциями, DEOS Router — маршрутизацией, а indexed providers — историей.
+summary: Типизированные наблюдения предоставляют ограниченную текущую scalar truth, тогда как producers владеют samples, Actors — реакциями, DEOS Router — маршрутизацией, а indexed providers — историей.
 locale: ru
 canonical_page_id: typed-observations
 translation_of: typed-observations.en.md
@@ -21,7 +21,7 @@ tags:
   - observations
 related:
   - DEOS Router
-  - Система AAA
+  - Система Actors
   - Автоматизация через токены
   - Разделение read-model
 last_compiled: 2026-07-28
@@ -34,7 +34,7 @@ confidence: 0.95
 
 Типизированные наблюдения задают доменный контракт ограниченной текущей scalar truth. DEOS Oracle — её текущий ограниченный владелец. При регистрации governance фиксирует producer, смысл, scale, правило aggregation, zero policy, контракт freshness и provenance канала.
 
-Подсистема не владеет историей исходных samples, решениями маршрутизации, исполнением акторов или неограниченной аналитикой. Эти обязанности остаются у producers, DEOS Router, AAA и indexed providers.
+Подсистема не владеет историей исходных samples, решениями маршрутизации, исполнением акторов или неограниченной аналитикой. Эти обязанности остаются у producers, DEOS Router, Actors и indexed providers.
 
 ## Контракт текущей истины
 
@@ -55,9 +55,9 @@ confidence: 0.95
 
 Одно направление нельзя выводить из обратного. Канал записывает резервы до исполнения с provenance Router, но не обещает универсальную справедливую цену, иммунитет к манипуляциям или полную рыночную историю.
 
-## Граница реактивного AAA
+## Граница реактивного Actors
 
-Изменение revision вызывает независимый от подписчиков O(1) ingress hook AAA. Hook отмечает только последнюю dirty revision. Отложенный fanout затем обходит точные занятые страницы подписчиков и сходится к существующим pending latch, queue, wakeup и scheduler AAA.
+Изменение revision вызывает независимый от подписчиков O(1) ingress hook Actors. Hook отмечает только последнюю dirty revision. Отложенный fanout затем обходит точные занятые страницы подписчиков и сходится к существующим pending latch, queue, wakeup и scheduler Actors.
 
 Observation trigger запрашивает повторную проверку последнего состояния. Conditions владеют порогами и проверяют freshness при попытке исполнения актора. DEOS Oracle не исполняет подписчиков синхронно и не обещает отдельный запуск для каждой промежуточной revision.
 
@@ -70,6 +70,6 @@ Observation trigger запрашивает повторную проверку �
 ## Связанные страницы
 
 - [DEOS Router](router.ru.md)
-- [Система AAA](aaa-system.ru.md)
+- [Система Actors](actor-system.ru.md)
 - [Автоматизация через токены](../concepts/token-driven-automation.ru.md)
 - [Разделение read-model](../concepts/read-model-split.ru.md)

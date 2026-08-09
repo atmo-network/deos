@@ -1,5 +1,5 @@
 /*
-Domain: AAA runtime-simulation SCALE codec
+Domain: Actors runtime-simulation SCALE codec
 Owns: Metadata discovery, canonical runtime result bytes, typed rejection, and bounded outcome projection.
 Excludes: Chain transport, provider trust, Wasm execution, artifact identity, and local outcome synthesis.
 Zone: Automation domain capability; matching-runtime providers and trust gates may import it.
@@ -13,20 +13,20 @@ import {
   unifyMetadata,
 } from '@polkadot-api/substrate-bindings';
 
-import type { AaaPlanHex } from './plan-artifact.ts';
+import type { ActorPlanHex } from './plan-artifact.ts';
 
-export const AAA_SIMULATION_RUNTIME_API =
-  'AaaSimulationApi_simulate_current_program' as const;
-export const AAA_SIMULATION_RUNTIME_API_VERSION = 1 as const;
+export const ACTORS_SIMULATION_RUNTIME_API =
+  'ActorSimulationApi_simulate_current_program' as const;
+export const ACTORS_SIMULATION_RUNTIME_API_VERSION = 1 as const;
 
-export type AaaRuntimeStepOutcome =
+export type ActorRuntimeStepOutcome =
   | { type: 'Executed' }
   | { type: 'Stopped' }
   | { type: 'Skipped'; reason: string }
   | { type: 'Failed'; retryClass: string }
   | { type: 'Suspended'; reason: string };
 
-export type AaaDecodedRuntimeSimulationOutcome = {
+export type ActorDecodedRuntimeSimulationOutcome = {
   status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   closeReason: string | null;
   cycleNonce: bigint;
@@ -42,32 +42,32 @@ export type AaaDecodedRuntimeSimulationOutcome = {
     skippedFundingUnavailable: number;
     failedSteps: number;
   };
-  steps: Array<{ stepIndex: number; outcome: AaaRuntimeStepOutcome }>;
+  steps: Array<{ stepIndex: number; outcome: ActorRuntimeStepOutcome }>;
 };
 
-export type AaaDecodedRuntimeSimulationResult =
+export type ActorDecodedRuntimeSimulationResult =
   | {
       success: true;
-      outcome: AaaDecodedRuntimeSimulationOutcome;
-      resultScale: AaaPlanHex;
+      outcome: ActorDecodedRuntimeSimulationOutcome;
+      resultScale: ActorPlanHex;
     }
-  | { success: false; error: string; resultScale: AaaPlanHex };
+  | { success: false; error: string; resultScale: ActorPlanHex };
 
 const BYTES_PATTERN = /^0x(?:[0-9a-f]{2})*$/;
 const MAX_RESULT_BYTES = 64 * 1024;
 const INPUT_NAMES = [
-  'aaa_id',
+  'actor_id',
   'expected_type',
   'expected_mutability',
   'expected_program',
   'mode',
 ];
 
-function bytesToHex(bytes: Uint8Array): AaaPlanHex {
+function bytesToHex(bytes: Uint8Array): ActorPlanHex {
   return `0x${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-function hexToBytes(value: AaaPlanHex): Uint8Array {
+function hexToBytes(value: ActorPlanHex): Uint8Array {
   if (!BYTES_PATTERN.test(value)) {
     throw new Error(
       'Runtime simulation result must be canonical lowercase hex',
@@ -83,15 +83,15 @@ function hexToBytes(value: AaaPlanHex): Uint8Array {
 function metadataMethod(metadataBytes: Uint8Array) {
   const metadata = unifyMetadata(decAnyMetadata(metadataBytes));
   const apis = metadata.apis.filter(
-    (candidate) => candidate.name === 'AaaSimulationApi',
+    (candidate) => candidate.name === 'ActorSimulationApi',
   );
   if (
     apis.length !== 1 ||
     !('version' in apis[0]) ||
-    apis[0].version !== AAA_SIMULATION_RUNTIME_API_VERSION
+    apis[0].version !== ACTORS_SIMULATION_RUNTIME_API_VERSION
   ) {
     throw new Error(
-      'Metadata must expose AaaSimulationApi version 1 exactly once',
+      'Metadata must expose ActorSimulationApi version 1 exactly once',
     );
   }
   const methods = apis[0].methods.filter(
@@ -137,7 +137,7 @@ function asOptionalIndex(value: unknown, field: string): number | null {
   return value === undefined ? null : asIndex(value, field);
 }
 
-function projectStepOutcome(value: unknown): AaaRuntimeStepOutcome {
+function projectStepOutcome(value: unknown): ActorRuntimeStepOutcome {
   const variant = asVariant(value, 'step.outcome');
   switch (variant.type) {
     case 'Executed':
@@ -164,7 +164,7 @@ function projectStepOutcome(value: unknown): AaaRuntimeStepOutcome {
   }
 }
 
-function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
+function projectOutcome(value: unknown): ActorDecodedRuntimeSimulationOutcome {
   const outcome = asRecord(value, 'simulation outcome');
   const parsedStatus = asVariant(outcome.status, 'simulation status');
   const status = parsedStatus.type;
@@ -183,7 +183,7 @@ function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
     throw new Error('steps must be an ordered runtime array');
   }
   return {
-    status: status as AaaDecodedRuntimeSimulationOutcome['status'],
+    status: status as ActorDecodedRuntimeSimulationOutcome['status'],
     closeReason,
     cycleNonce: outcome.cycle_nonce,
     attempt: asIndex(outcome.attempt, 'attempt'),
@@ -226,10 +226,10 @@ function projectOutcome(value: unknown): AaaDecodedRuntimeSimulationOutcome {
   };
 }
 
-export function encodeAaaRuntimeSimulationResult(
+export function encodeActorRuntimeSimulationResult(
   metadataBytes: Uint8Array,
   runtimeValue: unknown,
-): AaaPlanHex {
+): ActorPlanHex {
   const { metadata, method } = metadataMethod(metadataBytes);
   const codec = getDynamicBuilder(getLookupFn(metadata)).buildDefinition(
     method.output,
@@ -237,10 +237,10 @@ export function encodeAaaRuntimeSimulationResult(
   return bytesToHex(codec.enc(runtimeValue));
 }
 
-export function decodeAaaRuntimeSimulationResult(
+export function decodeActorRuntimeSimulationResult(
   metadataBytes: Uint8Array,
-  resultScale: AaaPlanHex,
-): AaaDecodedRuntimeSimulationResult {
+  resultScale: ActorPlanHex,
+): ActorDecodedRuntimeSimulationResult {
   const { metadata, method } = metadataMethod(metadataBytes);
   const codec = getDynamicBuilder(getLookupFn(metadata)).buildDefinition(
     method.output,

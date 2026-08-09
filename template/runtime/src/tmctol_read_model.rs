@@ -7,7 +7,7 @@
 //! historical metrics, dashboards, trend analysis, or alerting; those belong in external indexers,
 //! operator tooling, or test-only analytical helpers that may consume this projection.
 
-use pallet_aaa::{AaaType, Task};
+use pallet_deos_actors::{ActorType, Task};
 use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
 use polkadot_sdk::pallet_asset_conversion::{self, PoolLocator};
 use polkadot_sdk::sp_runtime::traits::Zero;
@@ -23,10 +23,14 @@ pub struct TmctolReadModel;
 
 impl TmctolReadModel {
   pub fn tmctol_guarantee_state() -> TmctolGuaranteeState<AccountId, Balance> {
-    let tol_anchor =
-      Self::anchor_bucket_state(AnchorDomain::Tol, ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID);
-    let bldr_anchor =
-      Self::anchor_bucket_state(AnchorDomain::Bldr, ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID);
+    let tol_anchor = Self::anchor_bucket_state(
+      AnchorDomain::Tol,
+      ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
+    );
+    let bldr_anchor = Self::anchor_bucket_state(
+      AnchorDomain::Bldr,
+      ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID,
+    );
 
     let tol_counterparty =
       pallet_tmc::TokenCurves::<Runtime>::get(AssetKind::Native).map(|curve| curve.foreign_asset);
@@ -66,17 +70,24 @@ impl TmctolReadModel {
     }
   }
 
-  fn anchor_bucket_state(domain: AnchorDomain, aaa_id: u64) -> AnchorBucketState<AccountId> {
-    let sovereign_account = crate::AAA::sovereign_account_id_system(aaa_id);
+  fn anchor_bucket_state(domain: AnchorDomain, actor_id: u64) -> AnchorBucketState<AccountId> {
+    let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let is_custody_only = matches!(
-      (domain, aaa_id),
-      (AnchorDomain::Tol, ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID)
-        | (AnchorDomain::Bldr, ecosystem::aaa_ids::BLDR_BUCKET_A_AAA_ID)
+      (domain, actor_id),
+      (
+        AnchorDomain::Tol,
+        ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID
+      ) | (
+        AnchorDomain::Bldr,
+        ecosystem::actor_ids::BLDR_BUCKET_A_ACTORS_ID
+      )
     );
-    let actor_identity_exists = pallet_aaa::ActorIdentities::<Runtime>::contains_key(aaa_id);
-    let scheduler_state_exists = pallet_aaa::ActorHot::<Runtime>::get(aaa_id).is_some_and(|hot| {
-      hot.pending_signal || hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some()
-    });
+    let actor_identity_exists =
+      pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id);
+    let scheduler_state_exists = pallet_deos_actors::ActorHot::<Runtime>::get(actor_id)
+      .is_some_and(|hot| {
+        hot.pending_signal || hot.queue_ticket.is_some() || hot.wakeup_pointer.is_some()
+      });
     let status = if is_custody_only && !actor_identity_exists && !scheduler_state_exists {
       GuaranteeStatus::Satisfied
     } else {
@@ -85,7 +96,7 @@ impl TmctolReadModel {
 
     AnchorBucketState {
       domain,
-      aaa_id,
+      actor_id,
       status,
       sovereign_account,
       is_custody_only,
@@ -196,7 +207,7 @@ impl TmctolReadModel {
   }
 
   fn native_burn_liveness() -> BurnLivenessState<AccountId, Balance> {
-    let actor_id = ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID;
+    let actor_id = ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID;
     let target_asset = AssetKind::Native;
     Self::burn_liveness_state(
       BurnDomain::NativeBurningManager,
@@ -209,7 +220,7 @@ impl TmctolReadModel {
   }
 
   fn bldr_buyback_liveness() -> BurnLivenessState<AccountId, Balance> {
-    let actor_id = ecosystem::aaa_ids::TREASURY_B_AAA_ID;
+    let actor_id = ecosystem::actor_ids::TREASURY_B_ACTORS_ID;
     let target_asset = AssetKind::Local(ecosystem::protocol_tokens::BLDR_ASSET_ID);
     Self::burn_liveness_state(
       BurnDomain::BldrBuyback,
@@ -232,15 +243,15 @@ impl TmctolReadModel {
     actor_id: u64,
     target_asset: AssetKind,
     requires_swap: bool,
-    burn_match: impl Fn(&pallet_aaa::TaskOf<Runtime>) -> bool,
-    swap_match: impl Fn(&pallet_aaa::TaskOf<Runtime>) -> bool,
+    burn_match: impl Fn(&pallet_deos_actors::TaskOf<Runtime>) -> bool,
+    swap_match: impl Fn(&pallet_deos_actors::TaskOf<Runtime>) -> bool,
   ) -> BurnLivenessState<AccountId, Balance> {
-    let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
+    let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let target_balance = Self::asset_balance(target_asset, &sovereign_account);
     let dust_threshold = ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
-    let maybe_actor = pallet_aaa::ActorIdentities::<Runtime>::get(actor_id)
-      .zip(pallet_aaa::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_aaa::ActorProgram::<Runtime>::get(actor_id));
+    let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
+      .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
+      .zip(pallet_deos_actors::ActorProgram::<Runtime>::get(actor_id));
     let (
       actor_exists,
       is_system,
@@ -262,7 +273,7 @@ impl TmctolReadModel {
             .any(|step| swap_match(&step.task));
         (
           true,
-          identity.actor_class.aaa_type() == AaaType::System,
+          identity.actor_class.actor_type() == ActorType::System,
           hot.lifecycle.is_paused(),
           has_address_event_trigger,
           has_required_burn_step,
@@ -270,8 +281,8 @@ impl TmctolReadModel {
         )
       })
       .unwrap_or((false, false, false, false, false, !requires_swap));
-    let dormant = pallet_aaa::ActorIdentities::<Runtime>::contains_key(actor_id)
-      && !pallet_aaa::ActorHot::<Runtime>::contains_key(actor_id);
+    let dormant = pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id)
+      && !pallet_deos_actors::ActorHot::<Runtime>::contains_key(actor_id);
     let status = if domain == BurnDomain::BldrBuyback && dormant {
       GuaranteeStatus::NotInitialized
     } else if !actor_exists || !is_system || is_paused || !has_address_event_trigger {
@@ -307,13 +318,13 @@ impl TmctolReadModel {
   }
 
   fn zap_postconditions() -> ZapPostconditionState<AccountId> {
-    let actor_id = ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID;
-    let sovereign_account = crate::AAA::sovereign_account_id_system(actor_id);
-    let maybe_actor = pallet_aaa::ActorIdentities::<Runtime>::get(actor_id)
-      .zip(pallet_aaa::ActorHot::<Runtime>::get(actor_id))
-      .zip(pallet_aaa::ActorProgram::<Runtime>::get(actor_id));
+    let actor_id = ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID;
+    let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
+    let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
+      .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
+      .zip(pallet_deos_actors::ActorProgram::<Runtime>::get(actor_id));
     let Some(((identity, hot), program)) = maybe_actor else {
-      let status = if pallet_aaa::ActorIdentities::<Runtime>::contains_key(actor_id) {
+      let status = if pallet_deos_actors::ActorIdentities::<Runtime>::contains_key(actor_id) {
         GuaranteeStatus::NotInitialized
       } else {
         GuaranteeStatus::Violated
@@ -337,7 +348,7 @@ impl TmctolReadModel {
       };
     };
 
-    let is_system = identity.actor_class.aaa_type() == AaaType::System;
+    let is_system = identity.actor_class.actor_type() == ActorType::System;
     let has_address_event_trigger = program.schedule.trigger.address_event_source_enabled();
     let mut foreign_from_add: Option<AssetKind> = None;
     let mut foreign_from_swap: Option<AssetKind> = None;
@@ -376,34 +387,37 @@ impl TmctolReadModel {
           configured_lp_asset = Some(*asset);
           let bucket_targets = [
             (
-              ecosystem::aaa_ids::TOL_BUCKET_A_AAA_ID,
+              ecosystem::actor_ids::TOL_BUCKET_A_ACTORS_ID,
               ecosystem::params::TOL_BUCKET_A_ALLOCATION,
             ),
             (
-              ecosystem::aaa_ids::TOL_BUCKET_B_AAA_ID,
+              ecosystem::actor_ids::TOL_BUCKET_B_ACTORS_ID,
               ecosystem::params::TOL_BUCKET_B_ALLOCATION,
             ),
             (
-              ecosystem::aaa_ids::TOL_BUCKET_C_AAA_ID,
+              ecosystem::actor_ids::TOL_BUCKET_C_ACTORS_ID,
               ecosystem::params::TOL_BUCKET_C_ALLOCATION,
             ),
             (
-              ecosystem::aaa_ids::TOL_BUCKET_D_AAA_ID,
+              ecosystem::actor_ids::TOL_BUCKET_D_ACTORS_ID,
               ecosystem::params::TOL_BUCKET_D_ALLOCATION,
             ),
           ];
-          split_targets_all_buckets = bucket_targets.iter().all(|(aaa_id, _)| {
-            let target = crate::AAA::sovereign_account_id_system(*aaa_id);
+          split_targets_all_buckets = bucket_targets.into_iter().all(|(actor_id, _)| {
+            let target = crate::Actors::sovereign_account_id_system(actor_id);
             legs.iter().any(|leg| leg.to == target)
           });
-          split_shares_match_policy = bucket_targets.iter().all(|(aaa_id, expected_share)| {
-            let target = crate::AAA::sovereign_account_id_system(*aaa_id);
-            legs
-              .iter()
-              .find(|leg| leg.to == target)
-              .map(|leg| leg.share == *expected_share)
-              .unwrap_or(false)
-          });
+          split_shares_match_policy =
+            bucket_targets
+              .into_iter()
+              .all(|(actor_id, expected_share)| {
+                let target = crate::Actors::sovereign_account_id_system(actor_id);
+                legs
+                  .into_iter()
+                  .find(|leg| leg.to == target)
+                  .map(|leg| leg.share == expected_share)
+                  .unwrap_or(false)
+              });
           let share_sum: u32 = legs.iter().map(|leg| leg.share.deconstruct()).sum();
           split_shares_sum_to_one =
             share_sum == polkadot_sdk::sp_runtime::Perbill::one().deconstruct();

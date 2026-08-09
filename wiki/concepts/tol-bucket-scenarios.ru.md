@@ -11,8 +11,8 @@ available_locales:
   - ru
 sources:
   - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
-  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/specification.en.md
   - ../../AGENTS.md
 status: active
 audience: newcomer
@@ -21,12 +21,12 @@ tags:
   - tmctol
   - liquidity
   - buckets
-  - aaa
+  - actor
 related:
   - Стандарт TMCTOL
   - Сквозные сценарии
   - Architecture diagrams
-  - AAA system
+  - Actors system
   - Token-driven automation
 last_compiled: 2026-07-22
 confidence: 0.85
@@ -38,7 +38,7 @@ confidence: 0.85
 
 TMCTOL использует buckets ликвидности под контролем казны, чтобы разделять экономические назначения и сохранять происхождение резервов. Текущая эталонная топология отличает неизменяемое хранение в Bucket A от необязательных контуров разматывания и казны B/C/D.
 
-Состояние активации имеет значение: Bucket A служит неизменяемым счётом хранения вне общего AAA, а Bucket B, C, D и связанные с ними казначейские роли начинают как бездействующие системные идентичности без программ. Для последующего разматывания или казначейского действия нужна явная активация с ограниченным планом после подготовки пула и казны; порог баланса не включает эти контуры автоматически.
+Состояние активации имеет значение: Bucket A служит неизменяемым счётом хранения вне общего Actors, а Bucket B, C, D и связанные с ними казначейские роли начинают как бездействующие системные идентичности без программ. Для последующего разматывания или казначейского действия нужна явная активация с ограниченным планом после подготовки пула и казны; порог баланса не включает эти контуры автоматически.
 
 ## Bucket A: immediate liquidity
 
@@ -80,12 +80,12 @@ Bucket C -> Treasury C lane
 Bucket D -> Treasury D lane
 ```
 
-Производный форк может менять политику, но должен сохранять происхождение средств в buckets как часть экономического контракта, а не украшение учета. Эталонное разделение заменяет план одного актора из RemoveLiquidity и двух Transfer, который превышает 50-процентный лимит ProofSize. При активации или изменении казначейских контуров и планов акторов необходимо отдельно проверить математику TMCTOL и поведение исполнения AAA.
+Производный форк может менять политику, но должен сохранять происхождение средств в buckets как часть экономического контракта, а не украшение учета. Эталонное разделение заменяет план одного актора из RemoveLiquidity и двух Transfer, который превышает 50-процентный лимит ProofSize. При активации или изменении казначейских контуров и планов акторов необходимо отдельно проверить математику TMCTOL и поведение исполнения Actors.
 
 ## Связанные страницы
 
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Сквозные сценарии](end-to-end-flows.ru.md)
 - [Architecture diagrams](architecture-diagrams.ru.md)
-- [AAA system](../overview/aaa-system.ru.md)
+- [Actors system](../overview/actor-system.ru.md)
 - [Token-driven automation](token-driven-automation.ru.md)

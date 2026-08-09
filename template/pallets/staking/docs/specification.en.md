@@ -58,12 +58,12 @@ It would not participate in native collator nomination unless a future governanc
 
 The launch line is phase-aware:
 
-- Phase 1 uses trusted permissioned collators, wires LP-donation funding through AAA #14, and bridges staking-yield native-balance holdings into staking pool truth after donation execution
+- Phase 1 uses trusted permissioned collators, wires LP-donation funding through Actors #14, and bridges staking-yield native-balance holdings into staking pool truth after donation execution
 - Phase 2 may add permissionless collators, explicit LP nomination, and the claimable governance-conditioned nomination reward flow
 
 Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter. LP nomination and claimable nomination rewards MUST remain inactive while the runtime is in the trusted-collator Phase 1 line.
 
-Upstream collection sends 100% of transaction, AAA, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; DEOS Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the current release line divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
+Upstream collection sends 100% of transaction, Actors, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; DEOS Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the current release line divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
 
 ### 3.1 Staking yield
 
@@ -90,7 +90,7 @@ DEOS AMM pools have `0%` LP fee by default, so swap volume does not by itself ac
 LP farming for `NTVE/stNTVE` is therefore a protocol donation flow:
 
 ```text
-AAA funding -> router/zap -> balanced donation into NTVE/stNTVE reserves
+Actors funding -> router/zap -> balanced donation into NTVE/stNTVE reserves
 ```
 
 The intended result is:
@@ -245,14 +245,14 @@ LP farming donation MUST be realized as one of:
 
 It MUST NOT be modeled as `add_liquidity -> remove_liquidity`.
 
-### 6.2 AAA donation actor
+### 6.2 Actors donation actor
 
 The donation actor may start with `$NTVE` funding only.
 
 Baseline flow:
 
 ```text
-AAA has NTVE
+Actors has NTVE
 runtime computes the stake-vs-donate split from current reserves and staking exchange rate
 stake the required NTVE side into stNTVE
 donate balanced NTVE + stNTVE into AMM pool
@@ -260,7 +260,7 @@ donate balanced NTVE + stNTVE into AMM pool
 
 The donation MUST be skipped or deferred when:
 
-- The computed stake side exceeds available AAA `$NTVE` balance
+- The computed stake side exceeds available Actors `$NTVE` balance
 - Current reserves would require a split outside the configured ratio tolerance
 - The `NTVE/stNTVE` pool is not yet created or has zero reserves on either side
 
@@ -537,7 +537,7 @@ A conforming launch implementation SHOULD expose bounded capabilities for:
 
 - Governance-controlled initialization of `NTVE/stNTVE`
 - A bounded runtime or actor donation path that computes the stake-vs-donate split and donates without minting LP to the donor
-- A public quote surface MAY be added when direct user-facing donation becomes a product flow; AAA-only donation does not require a separate public quote call
+- A public quote surface MAY be added when direct user-facing donation becomes a product flow; Actors-only donation does not require a separate public quote call
 
 ### 14.3 Collator LP nomination
 
@@ -701,7 +701,7 @@ This launch specification does not require:
 This model is preferred because it aligns the economic roles of the native stack:
 
 - Staking yield strengthens `stNTVE`
-- AAA donation strengthens zero-fee `NTVE/stNTVE` liquidity
+- Actors donation strengthens zero-fee `NTVE/stNTVE` liquidity
 - Locked LP strengthens collator backing
 - Governance activity gates selective nomination rewards
 - Router usage and route fees reinforce the `$NTVE` burn/value loop

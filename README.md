@@ -15,7 +15,7 @@ DEOS is a Polkadot SDK framework for building protocol economies. It moves recur
 - **TMC — deterministic issuance.** A unidirectional curve defines how assets enter circulation without promising protocol redemption.
 - **TOL — owned liquidity.** Mint output can accumulate into protected and governed liquidity lanes under an explicit bucket policy.
 - **DEOS Router — max-output execution.** A bounded set of XYK, TMC, and Native-anchored routes compete by expected recipient output.
-- **AAA — autonomous operations.** Typed execution plans drive the Burn Actor, Liquidity Actor, splitters, buckets, and treasuries within storage and block-weight bounds.
+- **DEOS Actors — autonomous operations.** Typed execution plans drive the Burn Actor, Liquidity Actor, splitters, buckets, and treasuries within storage and block-weight bounds.
 - **Governance — constrained change.** Domain-scoped primary/protection tracks execute typed payloads instead of exposing unrestricted administration.
 
 DEOS makes deterministic execution claims, not deterministic market-outcome claims. Liquidity support, burn dynamics, oracle guards, and governance safety hold only under the preconditions defined in the specifications.
@@ -80,9 +80,9 @@ See [`scripts/README.md`](./scripts/README.md) for individual operator workflows
 ### Core contracts
 
 - [TMCTOL Specification](./docs/tmctol.specification.en.md)
-- [AAA Specification](./template/pallets/aaa/docs/specification.en.md)
-- [AAA External Runtime Embedding Guide](./template/pallets/aaa/docs/embedding.md)
-- [AAA Control-Plane Contract](./docs/aaa-control-plane.contract.en.md)
+- [DEOS Actors Specification](./template/pallets/actors/docs/specification.en.md)
+- [DEOS Actors External Runtime Embedding Guide](./template/pallets/actors/docs/embedding.md)
+- [DEOS Actors Control-Plane Contract](./docs/actors-control-plane.contract.en.md)
 - [Governance Specification](./template/pallets/governance/docs/specification.en.md)
 - [Read-Model Contract](./docs/read-model.contract.en.md)
 - [Core Architecture](./docs/core.architecture.en.md)

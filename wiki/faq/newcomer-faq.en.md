@@ -1,7 +1,7 @@
 ---
 page_type: faq
 title: Newcomer FAQ
-summary: A compact self-contained FAQ for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, staking, data surfaces, wiki domains, and the reference client.
+summary: A compact self-contained FAQ for recurring newcomer questions about DEOS, TMCTOL, Actors, governance, staking, data surfaces, wiki domains, and the reference client.
 locale: en
 canonical_page_id: newcomer-faq
 translation_status: source
@@ -12,7 +12,7 @@ sources:
   - ../../README.md
   - ../../docs/README.md
   - ../../docs/manifesto.en.md
-  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/actors/docs/specification.en.md
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/staking/docs/specification.en.md
   - ../../docs/read-model.contract.en.md
@@ -28,7 +28,7 @@ related:
   - DEOS Framework Overview
   - First Steps
   - Reading Paths
-  - AAA System
+  - Actors System
   - Physics-First vs Politics-First
   - Generated Wiki
   - Core Terms
@@ -40,7 +40,7 @@ confidence: 0.85
 
 ## Summary
 
-This page answers the questions that usually appear first: what DEOS is, how TMCTOL fits into it, what governance controls, how AAA and staking work at a high level, how the wiki is organized, and how honest the reference client must be.
+This page answers the questions that usually appear first: what DEOS is, how TMCTOL fits into it, what governance controls, how Actors and staking work at a high level, how the wiki is organized, and how honest the reference client must be.
 
 Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [Reading Paths](../getting-started/reading-paths.en.md) when you have a specific task.
 
@@ -60,7 +60,7 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 
 **What does deterministic mean?** Protocol-managed reactions are explicit and repeatable for the same chain state. It does not mean markets become predictable.
 
-**What is AAA versus an AA-Actor?** `AAA` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, execution plans, actor accounts, and task execution. An `AA-Actor` is one concrete runtime instance inside that system. See [AAA System](../overview/aaa-system.en.md) and [AA-Actor](../overview/aa-actor.en.md).
+**What is Actors versus an AA-Actor?** `Actors` is the whole Account Abstraction Actors system: scheduler, lifecycle rules, execution plans, actor accounts, and task execution. An `AA-Actor` is one concrete runtime instance inside that system. See [Actors System](../overview/actor-system.en.md) and [AA-Actor](../overview/actor.en.md).
 
 **How does staking work?** Staking is a multi-asset share-vault domain. [Staking](../overview/staking.en.md) explains native `stNTVE`, LP nomination, and reward snapshots.
 
@@ -80,7 +80,7 @@ Use [Domain Map](../concepts/domain-map.en.md) for the larger system shape and [
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [First Steps](../getting-started/first-steps.en.md)
 - [Reading Paths](../getting-started/reading-paths.en.md)
-- [AAA System](../overview/aaa-system.en.md)
+- [Actors System](../overview/actor-system.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
 - [Generated Wiki](../concepts/generated-wiki.en.md)
 - [Core Terms](../glossary/core-terms.en.md)

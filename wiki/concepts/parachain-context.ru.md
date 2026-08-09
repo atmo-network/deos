@@ -51,7 +51,7 @@ Omni Node
   runs the parachain without an in-repo custom node crate
 
 DEOS runtime
-  owns pallets, assets, routing, staking, governance, and AAA actors
+  owns pallets, assets, routing, staking, governance, and Actors
 
 Reference client / indexers
   read bounded chain state directly and materialized history externally

@@ -4,6 +4,13 @@
 >
 > This repository restarted its own release line at `0.0.0` after the move into the standalone DEOS monorepo. The changelog focuses on shipped outcomes and their impact, not intermediate refactor steps, package-version chores, or implementation diary entries.
 
+## Unreleased
+
+## 0.7.13: DEOS Actors Canonical Identity
+
+- `Actors / Canonical Identity`: Replaced the active AAA package, ABI, runtime, client, tooling, documentation, and wiki identity with DEOS Actors without compatibility shadows; moved the pallet seed to `deactors`, regenerated metadata and client evidence, and retained historical terminology only in this delivery ledger.
+- `Actors / Validation`: Passed package and embedding tests, workspace Clippy with warnings denied, runtime and client validation, wiki checks, production Wasm construction, the full Actors release gate, and the repository completion gate.
+
 ## 0.7.12: AAA Semantic Contraction and Contract Realization
 
 - `AAA / Canonical Contract`: Realized the accepted specification through one actor classifier, exact terminal and breaker precedence, contracted lifecycle, simulation, eligibility, event, error, and state surfaces, and no pre-launch compatibility shadows.

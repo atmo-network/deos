@@ -1,4 +1,4 @@
-pub mod aaa_config;
+pub mod actor_config;
 pub mod address_event_ingress;
 pub(crate) mod assets_config;
 pub mod axial_router_config;
@@ -65,7 +65,7 @@ pub use axial_router_config::{
 pub use tmc_config::TmcPalletId;
 
 #[allow(unused_imports)]
-pub use xcm_config::{AaaAwareAssetTransactor, RelayLocation, XcmOriginToTransactDispatchOrigin};
+pub use xcm_config::{ActorAwareAssetTransactor, RelayLocation, XcmOriginToTransactDispatchOrigin};
 
 parameter_types! {
   pub const Version: RuntimeVersion = VERSION;
@@ -187,7 +187,7 @@ parameter_types! {
 pub struct RuntimeFeeCollector;
 impl frame_support::traits::OnUnbalanced<Credit<AccountId, Balances>> for RuntimeFeeCollector {
   fn on_nonzero_unbalanced(amount: Credit<AccountId, Balances>) {
-    let fee_sink = aaa_config::AaaFeeRecipient::get();
+    let fee_sink = actor_config::ActorFeeRecipient::get();
     let _ = Balances::resolve(&fee_sink, amount);
   }
 }

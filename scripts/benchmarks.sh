@@ -10,7 +10,7 @@ HEAP_PAGES=4096
 CHAIN="dev"
 INCLUDE_EXTRA_BENCHMARKS=0
 PALLETS=(
-    "pallet_aaa"
+    "pallet_deos_actors"
     "pallet_axial_router"
     "pallet_tmc"
     "pallet_burning_manager"
@@ -42,7 +42,7 @@ Options:
   --all           Benchmark all custom pallets
   --list          List available pallets
   --check         Only verify benchmarks compile (no execution)
-  --extra         Include AAA circular-chain diagnostic benchmarks excluded from production weights
+  --extra         Include Actors circular-chain diagnostic benchmarks excluded from production weights
   --extrinsic NAME
                   Benchmark one extrinsic (requires one PALLET_NAME)
   --output FILE   Write generated weights to FILE (requires --extrinsic)
@@ -57,8 +57,8 @@ Examples:
   $(basename "$0") --all                      # Benchmark all pallets
   $(basename "$0") pallet_axial_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
-  $(basename "$0") --extra pallet_aaa         # Include AAA circular-chain diagnostics
-  $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_aaa
+  $(basename "$0") --extra pallet_deos_actors         # Include Actors circular-chain diagnostics
+  $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_deos_actors
   $(basename "$0") --steps 100 --repeat 50 --all  # Production-quality run
 
 Environment:
@@ -222,17 +222,17 @@ verify_weight_file_contract() {
         fi
         return 0
     fi
-    if [[ "$pallet_name" != "pallet_aaa" ]]; then
+    if [[ "$pallet_name" != "pallet_deos_actors" ]]; then
         return 0
     fi
 
-    local benchmark_file="$TEMPLATE_DIR/pallets/aaa/src/benchmarking.rs"
+    local benchmark_file="$TEMPLATE_DIR/pallets/actors/src/benchmarking.rs"
     local diagnostic_benchmarks=(
         "process_remove_liquidity_indexed"
         "scheduler_on_idle_healthy_empty"
         "scheduler_cooldown_ineligible_idle"
         "scheduler_wakeup_sparse_gap_recovery"
-        "close_aaa_system_pure"
+        "close_actor_system_pure"
         "condition_set_all_max"
         "condition_set_observation"
     )
@@ -241,8 +241,8 @@ verify_weight_file_contract() {
         if ! grep -q "fn ${benchmark}" "$benchmark_file"; then
             continue
         fi
-        if ! grep -q -- '--exclude-extrinsics' "$output_file" || ! grep -q "pallet_aaa::${benchmark}" "$output_file"; then
-            log_error "Weight file contract check failed for pallet_aaa: missing exclude marker for ${benchmark}"
+        if ! grep -q -- '--exclude-extrinsics' "$output_file" || ! grep -q "pallet_deos_actors::${benchmark}" "$output_file"; then
+            log_error "Weight file contract check failed for pallet_deos_actors: missing exclude marker for ${benchmark}"
             return 1
         fi
     done
@@ -272,24 +272,24 @@ verify_weight_file_contract() {
     )
     for benchmark in "${required_runtime_benchmarks[@]}"; do
         if ! grep -q "fn ${benchmark}" "$output_file"; then
-            log_error "Weight file contract check failed for pallet_aaa: missing generated ${benchmark}"
+            log_error "Weight file contract check failed for pallet_deos_actors: missing generated ${benchmark}"
             return 1
         fi
     done
 
     if grep -q 'fn compatibility_ingress' "$output_file"; then
-        log_error "Weight file contract check failed for pallet_aaa: retired compatibility ingress weight remains"
+        log_error "Weight file contract check failed for pallet_deos_actors: retired compatibility ingress weight remains"
         return 1
     fi
 
     if ! grep -q 'The range of component `n` is `\[1, 5\]`.' "$output_file"; then
-        log_error "Weight file contract check failed for pallet_aaa: permissionless_sweep_many must cover MaxSweepBatch=5"
+        log_error "Weight file contract check failed for pallet_deos_actors: permissionless_sweep_many must cover MaxSweepBatch=5"
         return 1
     fi
 
     if ! grep -q 'Storage: `AssetConversion::Pools` (r:1 w:1)' "$output_file" \
         || ! grep -q 'Storage: `AssetConversion::NextPoolAssetId` (r:1 w:1)' "$output_file"; then
-        log_error "Weight file contract check failed for pallet_aaa: task_add_liquidity must cover missing-pool creation"
+        log_error "Weight file contract check failed for pallet_deos_actors: task_add_liquidity must cover missing-pool creation"
         return 1
     fi
 }
@@ -299,13 +299,13 @@ run_pallet_benchmark() {
     local output_file="${OUTPUT_OVERRIDE:-$WEIGHTS_DIR/${pallet_name}.rs}"
     local exclude_args=()
 
-    if [[ "$pallet_name" == "pallet_aaa" ]]; then
+    if [[ "$pallet_name" == "pallet_deos_actors" ]]; then
         local diagnostic_benchmarks=(
             "process_remove_liquidity_indexed"
             "scheduler_on_idle_healthy_empty"
             "scheduler_cooldown_ineligible_idle"
             "scheduler_wakeup_sparse_gap_recovery"
-            "close_aaa_system_pure"
+            "close_actor_system_pure"
             "condition_set_all_max"
             "condition_set_observation"
             "observation_fanout_blocked_page"
@@ -313,7 +313,7 @@ run_pallet_benchmark() {
         local benchmark
         for benchmark in "${diagnostic_benchmarks[@]}"; do
             if [[ "$EXTRINSIC_PATTERN" != "$benchmark" ]]; then
-                exclude_args+=(--exclude-extrinsics "pallet_aaa::${benchmark}")
+                exclude_args+=(--exclude-extrinsics "pallet_deos_actors::${benchmark}")
             fi
         done
 
@@ -327,7 +327,7 @@ run_pallet_benchmark() {
             )
             for benchmark in "${stress_benchmarks[@]}"; do
                 if [[ "$EXTRINSIC_PATTERN" != "$benchmark" ]]; then
-                    exclude_args+=(--exclude-extrinsics "pallet_aaa::${benchmark}")
+                    exclude_args+=(--exclude-extrinsics "pallet_deos_actors::${benchmark}")
                 fi
             done
         fi

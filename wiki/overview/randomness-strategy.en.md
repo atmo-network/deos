@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Randomness Strategy
-summary: DEOS keeps randomness outside the current AAA contract. The local VRF line was retired, AAA timers now use deterministic cadence only, and any future probabilistic trigger requires a real financially secure entropy contract.
+summary: DEOS keeps randomness outside the current Actors contract. The local VRF line was retired, Actors timers now use deterministic cadence only, and any future probabilistic trigger requires a real financially secure entropy contract.
 locale: en
 canonical_page_id: randomness-strategy
 translation_status: source
@@ -32,7 +32,7 @@ confidence: 0.95
 
 Randomness is not a first-class product story in the current DEOS launch line. The docs treat it as a secondary infrastructure concern and deliberately simplify it.
 
-The old local `pallet-vrf` line was retired. AAA now exposes deterministic timer cadence only and performs no probability sampling or hash fallback. The preferred long-term randomness direction remains a real relay-provided beacon for consumers that can justify it.
+The old local `pallet-vrf` line was retired. Actors now exposes deterministic timer cadence only and performs no probability sampling or hash fallback. The preferred long-term randomness direction remains a real relay-provided beacon for consumers that can justify it.
 
 ## Current Position
 
@@ -42,7 +42,7 @@ The current runtime line assumes:
 - No Local Entropy-Provider Economy
 - No Permissionless-Collator Activation Yet
 - Trusted Invulnerable Collators On The Launch Line
-- Deterministic AAA Timers With No Entropy Dependency
+- Deterministic Actors Timers With No Entropy Dependency
 
 This is intentionally framed as an honest simplification rather than a hidden claim of strong permissionless fairness.
 
@@ -60,7 +60,7 @@ Until that exists, the project explicitly refuses to pretend that currently visi
 
 Randomness simplification narrows the launch contract:
 
-- AAA Has No Probability Gate In The Current Contract
+- Actors Has No Probability Gate In The Current Contract
 - Governance Does Not Need To Carry A Second Entropy Economy
 - Permissionless Collator Expansion Stays Gated Behind A Stronger Future Randomness Contract
 
@@ -68,5 +68,5 @@ Randomness simplification narrows the launch contract:
 
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
 - [Governance](governance.en.md)
-- [AA-Actor](aa-actor.en.md)
+- [AA-Actor](actor.en.md)
 - [Newcomer FAQ](../faq/newcomer-faq.en.md)

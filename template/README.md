@@ -30,7 +30,7 @@ It wires pallets together through `Runtime-as-Config` adapters and hosts:
 
 Custom DEOS runtime pallets in the current reference configuration:
 
-- [`aaa/`](./pallets/aaa/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
+- [`actor/`](./pallets/actors/) — deterministic actor runtime with bounded scheduling, triggers, lifecycle, static execution plans, and sparse progress-preserving Continuation
 - [`asset-registry/`](./pallets/asset-registry/) — XCM location to asset-id registry
 - [`router/`](./pallets/router/) — DEOS Router routing and fee/burn execution gateway
 - [`governance/`](./pallets/governance/) — bounded governance reward-memory and proposal lifecycle
@@ -40,9 +40,9 @@ Custom DEOS runtime pallets in the current reference configuration:
 
 See [`pallets/README.md`](./pallets/README.md) for the pallet index.
 
-### [`pallets/aaa/embedding-runtime/`](./pallets/aaa/embedding-runtime/README.md)
+### [`pallets/actors/embedding-runtime/`](./pallets/actors/embedding-runtime/README.md)
 
-External-consumer Cargo fixture owned by the `pallet-deos-aaa` package boundary. It proves the portable host contract in default, DEX, try-runtime, and no-std profiles while starting with zero System actors and using no DEOS helper or topology dependencies.
+External-consumer Cargo fixture owned by the `pallet-deos-actors` package boundary. It proves the portable host contract in default, DEX, try-runtime, and no-std profiles while starting with zero System actors and using no DEOS helper or topology dependencies.
 
 ### `primitives/`
 
@@ -62,7 +62,7 @@ These are not part of the production runtime contract.
 The most relevant implementation docs live in `../docs/`:
 
 - [`core.architecture.en.md`](../docs/core.architecture.en.md)
-- [`aaa/docs/architecture.en.md`](./pallets/aaa/docs/architecture.en.md)
+- [`actor/docs/architecture.en.md`](./pallets/actors/docs/architecture.en.md)
 - [`oracle/docs/specification.en.md`](./pallets/oracle/docs/specification.en.md)
 - [`oracle/docs/architecture.en.md`](./pallets/oracle/docs/architecture.en.md)
 - [`tmc/docs/architecture.en.md`](./pallets/tmc/docs/architecture.en.md)
@@ -90,7 +90,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 cargo test -p deos-runtime
-cargo test -p deos-runtime aaa_integration_tests
+cargo test -p deos-runtime actor_integration_tests
 cargo test -p deos-runtime staking_integration_tests
 cargo check -p deos-runtime --features runtime-benchmarks
 ```
@@ -98,7 +98,7 @@ cargo check -p deos-runtime --features runtime-benchmarks
 ### Targeted pallet checks
 
 ```bash
-cargo test -p pallet-deos-aaa
+cargo test -p pallet-deos-actors
 cargo test -p pallet-deos-governance
 cargo test -p pallet-deos-staking
 ```

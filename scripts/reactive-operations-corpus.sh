@@ -12,7 +12,7 @@ usage() {
     cat <<'EOF'
 Usage: reactive-operations-corpus.sh [OPTIONS]
 
-Validate the machine-readable AAA reactive-operations scenario contract,
+Validate the machine-readable DEOS Actors reactive-operations scenario contract,
 generated runtime identity, and runtime-test evidence anchors. This command
 does not execute the anchored Rust tests.
 
@@ -77,7 +77,7 @@ main() {
     [[ -z "$FAMILY" ]] || args+=(--family "$FAMILY")
     [[ "$LIST" -eq 0 ]] || args+=(--list)
     [[ "$EXECUTE" -eq 0 ]] || args+=(--anchors)
-    phase_banner "AAA reactive operations corpus"
+    phase_banner "Actors reactive operations corpus"
     local output
     output="$(node "$SCRIPT_DIR/validate-reactive-operations-corpus.mjs" "${args[@]}")"
     printf '%s\n' "$output"
@@ -87,7 +87,7 @@ main() {
         local profile_flag=""
         [[ "$CARGO_PROFILE" == "dev" ]] || profile_flag="--release"
         while IFS=$'\t' read -r package_name test_symbol; do
-            if [[ "$package_name" != "pallet-deos-aaa" && "$package_name" != "deos-runtime" ]]; then
+            if [[ "$package_name" != "pallet-deos-actors" && "$package_name" != "deos-runtime" ]]; then
                 continue
             fi
             run_shell_step \

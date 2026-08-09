@@ -41,13 +41,13 @@ This is an architectural rule, not just a frontend wording preference.
 
 Use this class when the data is part of the live protocol contract, needs to be consumed directly by clients, and can stay bounded in storage and servicing cost.
 
-Examples include active governance state, live balances, current pool reserves, and the current sparse AAA Continuation for a suspended actor. Its cursor, attempt, frozen suffix inputs, and cumulative outcomes remain bounded facts needed for live recovery. The read-only `AaaEligibilityApi::aaa_eligibility` projection belongs to the same class: current readiness, the scheduler-owned phase, and the next eligible block at one finalized block, so clients do not reimplement cadence, cooldown, window, backoff, breaker, or latch arithmetic.
+Examples include active governance state, live balances, current pool reserves, and the current sparse Actors Continuation for a suspended actor. Its cursor, attempt, frozen suffix inputs, and cumulative outcomes remain bounded facts needed for live recovery. The read-only `ActorEligibilityApi::actor_eligibility` projection belongs to the same class: current readiness, the scheduler-owned phase, and the next eligible block at one finalized block, so clients do not reimplement cadence, cooldown, window, backoff, breaker, or latch arithmetic.
 
 ### Indexed or Materialized View
 
 Use this class when the data is archival, historical, search-heavy, analytical, or otherwise unbounded.
 
-Examples include full proposal archives, long-range chart history, trading dashboards, wallet-performance analytics, and unbounded AAA attempt timelines reconstructed from `(aaa_id, cycle_nonce, attempt)` events.
+Examples include full proposal archives, long-range chart history, trading dashboards, wallet-performance analytics, and unbounded Actors attempt timelines reconstructed from `(actor_id, cycle_nonce, attempt)` events.
 
 ## Why the Split Exists
 

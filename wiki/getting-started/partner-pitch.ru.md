@@ -46,7 +46,7 @@ DEOS меняет исходную точку. Он переносит ядро 
 
 Партнерский fork не начинается с пустого chain template. Он начинается с reference framework, где уже есть:
 
-- Runtime pallets для asset identity, routing, staking, governance, TMC и AAA automation
+- Runtime pallets для asset identity, routing, staking, governance, TMC и Actors automation
 - TMCTOL как первый экономический стандарт: mint-only curve, treasury-owned liquidity, fee burn, bucketed policy и bounded governance
 - Reference client, который разделяет прямую on-chain truth и materialized views
 - Operator scripts и validation gates для локальных сетей, docs, wiki и runtime work

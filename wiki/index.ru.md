@@ -22,7 +22,7 @@ related:
   - Карта доменов
   - Обзор фреймворка DEOS
   - Первые шаги
-  - Система AAA
+  - Система Actors
   - Governance
   - Экономика $BLDR
   - Базовые термины
@@ -64,7 +64,7 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Сценарии TOL buckets](concepts/tol-bucket-scenarios.ru.md) — конкретные пробуждения корзин A/B/C/D и каналы treasury
 - [Экономика $BLDR](concepts/builder-economy.ru.md) — invoices полезной работы, тактическое финансирование и паттерн основателя как первого работника
 - [Токеновые поверхности](concepts/token-surfaces.ru.md) — роли Native, VETO, BLDR, расписок и LP
-- [Система AAA](overview/aaa-system.ru.md) — автономные protocol actors
+- [Система Actors](overview/actor-system.ru.md) — автономные protocol actors
 - [DEOS Router](overview/router.ru.md) — маршруты, комиссии и решения о протокольной ликвидности
 - [Типизированные наблюдения](overview/typed-observations.ru.md) — текущая scalar truth и реактивная доставка
 - [Governance](overview/governance.ru.md) — полномочия по доменам и защита
@@ -117,7 +117,7 @@ DEOS — это форкаемый runtime-фреймворк для прогр�
 - [Карта доменов](concepts/domain-map.ru.md)
 - [Обзор фреймворка DEOS](overview/deos-framework.ru.md)
 - [Первые шаги](getting-started/first-steps.ru.md)
-- [Система AAA](overview/aaa-system.ru.md)
+- [Система Actors](overview/actor-system.ru.md)
 - [Governance](overview/governance.ru.md)
 - [Экономика $BLDR](concepts/builder-economy.ru.md)
 - [Базовые термины](glossary/core-terms.ru.md)

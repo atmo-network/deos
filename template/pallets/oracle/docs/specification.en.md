@@ -4,9 +4,9 @@
 
 `pallet-oracle` owns bounded current scalar observation truth for deterministic runtime consumers. It admits typed feeds, authorizes typed producers, applies one immutable aggregation rule, stores the current published value and revision, and emits one transactional change notification.
 
-The pallet does not own sample generation, market interpretation, strategy execution, subscriber lists, fanout, historical series, archive search, external networks, off-chain workers, quorum consensus, fair-price claims, or MEV protection. Producers own sample generation. AAA owns subscriptions and reactions. Indexed providers own history.
+The pallet does not own sample generation, market interpretation, strategy execution, subscriber lists, fanout, historical series, archive search, external networks, off-chain workers, quorum consensus, fair-price claims, or MEV protection. Producers own sample generation. Actors owns subscriptions and reactions. Indexed providers own history.
 
-The package MUST remain independently reusable and MUST NOT depend on AAA, DEOS Router, DEOS asset topology, TMCTOL policy, an off-chain worker, or an external service.
+The package MUST remain independently reusable and MUST NOT depend on Actors, DEOS Router, DEOS asset topology, TMCTOL policy, an off-chain worker, or an external service.
 
 ## 2. Typed Public Model
 
@@ -133,7 +133,7 @@ The package exposes `OnObservationChanged(feed, revision) -> DispatchResult`. It
 
 Hook work MUST remain O(1), bounded, and independent of subscriber count. The hook reports its conservative Weight separately, and dispatch publication adds that bound to the measured oracle path. Hook failure rolls back observation state, revision, oracle event, and every mutation enclosed by the producer's outer transaction. Equal-output refreshes do not call the hook.
 
-AAA integration may use this hook only for bounded dirty-feed marking. It MUST NOT iterate subscribers or execute actors in producer context.
+Actors integration may use this hook only for bounded dirty-feed marking. It MUST NOT iterate subscribers or execute actors in producer context.
 
 ## 10. Lifecycle Transitions
 
@@ -168,7 +168,7 @@ After a downstream network launches, that network owns monotonic migrations and 
 Completion requires:
 
 - Default, no-std, runtime-benchmark, and try-runtime builds.
-- Independent external runtime fixture with no AAA, Router, or DEOS topology dependency.
+- Independent external runtime fixture with no Actors, Router, or DEOS topology dependency.
 - SCALE/metadata/storage contract pins.
 - Capacity, duplicate, producer-density, and try-state tests.
 - Authority, lifecycle, zero-policy, and invalid-configuration tests.
@@ -178,4 +178,4 @@ Completion requires:
 - Generated weights bound through the reference runtime with no `()` placeholder.
 - Router parity and enclosing failed-swap rollback before Router storage deletion.
 
-The full 0.7.9 gate additionally requires reactive AAA, control-plane, metadata, Wasm, wiki, context, and release evidence owned by their respective contracts.
+The full 0.7.9 gate additionally requires reactive Actors, control-plane, metadata, Wasm, wiki, context, and release evidence owned by their respective contracts.

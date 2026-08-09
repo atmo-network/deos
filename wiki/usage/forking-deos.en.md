@@ -12,7 +12,7 @@ sources:
   - ../../AGENTS.md
   - ../../README.md
   - ../../docs/README.md
-  - ../../template/pallets/aaa/docs/embedding.md
+  - ../../template/pallets/actors/docs/embedding.md
   - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md
@@ -57,11 +57,11 @@ These are product and ecosystem decisions. They should not silently leak back in
 
 ## Mechanism vs Policy
 
-DEOS-owned surfaces are reusable mechanisms and safety contracts: primitives, invariants, bounded execution, AAA task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates, and reference patterns.
+DEOS-owned surfaces are reusable mechanisms and safety contracts: primitives, invariants, bounded execution, Actors task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates, and reference patterns.
 
 Instance-owned surfaces are concrete policy: brand, dApps, launch economics, founder allocation or no-founder-allocation choices, contributor culture, invoice etiquette, bucket names/percentages, marketing, and demand strategy.
 
-Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection, and System AAA topologies are mechanisms. A fork may keep, rename, reparameterize, disable, or replace policy choices as long as it preserves the guarantees it claims.
+Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection, and System Actors topologies are mechanisms. A fork may keep, rename, reparameterize, disable, or replace policy choices as long as it preserves the guarantees it claims.
 
 ## What Should Stay Stable
 
@@ -69,7 +69,7 @@ A fork should preserve the core framework discipline unless it has strong eviden
 
 - Deterministic protocol-managed economic reactions;
 - Bounded runtime read surfaces versus materialized/indexed views;
-- Explicit AAA actor roles and execution-plan boundaries;
+- Explicit Actor roles and execution-plan boundaries;
 - TMCTOL math validation before runtime changes;
 - Governance domain/protection separation;
 - Staking share-vault and receipt accounting invariants;
@@ -103,9 +103,9 @@ If a row is undecided, the fork is still a prototype. If a row is decided but no
 1. Rename public identity without renaming TMCTOL-specific standard concepts blindly.
 2. Decide which assets and governance surfaces are ecosystem-specific.
 3. Set launch parameters and treat launch physics as immutable unless a stronger constitutional contract says otherwise.
-4. Review System AAA actor roles and remove assumptions that only fit the reference ecosystem.
+4. Review System Actor roles and remove assumptions that only fit the reference ecosystem.
 5. Treat builder invoices and bucket policies as opt-in mechanisms: decide what your instance enables, renames, funds, or disables.
-6. For AAA reuse, implement host-runtime adapters and keep business policy in adapters or genesis actor configuration, not in `pallet_aaa` core.
+6. For Actors reuse, implement host-runtime adapters and keep business policy in adapters or genesis actor configuration, not in `pallet_deos_actors` core.
 7. Classify every client datum as direct on-chain projection or materialized/indexed view.
 8. Update scripts, metadata export, endpoints, and operator documentation.
 9. Run the smallest meaningful validation first, then escalate when math/runtime/client boundaries cross.

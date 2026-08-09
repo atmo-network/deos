@@ -36,7 +36,7 @@ const paths = {
 // rejects any helper call site outside this set.
 const INGRESS_HELPER_FILES = new Set([
   'address_event_ingress.rs',
-  'aaa_config.rs',
+  'actor_config.rs',
   'axial_router_config.rs',
   'tmc_config.rs',
   'xcm_config.rs',
@@ -85,19 +85,19 @@ function sha256(bytes) {
 function certifiedProducers(source) {
   const body = requireMatch(
     source,
-    /AAA_ADDRESS_EVENT_PRODUCER_INVENTORY[^=]*=\s*&\[([\s\S]*?)\n\];/,
-    'AAA address-event producer inventory',
+    /ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY[^=]*=\s*&\[([\s\S]*?)\n\];/,
+    'Actors address-event producer inventory',
   );
   const entries = [
     ...body.matchAll(/AddressEventProducer\s*\{([\s\S]*?)\n\s*\},/g),
   ];
   if (entries.length === 0) {
-    fail('AAA address-event producer inventory must be nonempty');
+    fail('Actors address-event producer inventory must be nonempty');
   }
   const field = (entry, name) => {
     const match = entry[1].match(new RegExp(`${name}:\\s*"([^"]+)"`));
     if (match == null || match[1].length === 0) {
-      fail(`AAA producer entry missing nonempty ${name}`);
+      fail(`Actors producer entry missing nonempty ${name}`);
     }
     return match[1];
   };
@@ -112,7 +112,7 @@ function certifiedProducers(source) {
   }));
   const ids = producers.map((producer) => producer.id);
   if (new Set(ids).size !== ids.length) {
-    fail('AAA producer inventory ids must be unique');
+    fail('Actors producer inventory ids must be unique');
   }
   return producers;
 }
@@ -141,7 +141,9 @@ function verifyBoundary(ingressSource, runtimeConfigSources, producers) {
   // runtime adapter file; any other movement path would bypass the certified
   // inventory authority.
   const typedCalls = runtimeConfigSources.filter(({ source: candidate }) =>
-    /(?:crate::)?AAA::(?:preflight_ingress|notify_ingress)\(/.test(candidate),
+    /(?:crate::)?Actors::(?:preflight_ingress|notify_ingress)\(/.test(
+      candidate,
+    ),
   );
   const ownerFiles = new Set(
     typedCalls.map(({ path: candidatePath }) => path.basename(candidatePath)),
@@ -172,13 +174,13 @@ function verifyBoundary(ingressSource, runtimeConfigSources, producers) {
   // movement goes through the typed boundary.
   if (
     runtimeConfigSources.some(({ source: candidate }) =>
-      /(?:crate::)?AAA::notify_address_event\(/.test(candidate),
+      /(?:crate::)?Actors::notify_address_event\(/.test(candidate),
     )
   ) {
     fail('Runtime configuration bypasses the typed ingress boundary');
   }
   if (
-    !/impl\s+pallet_aaa::AddressEventIngress<[^>]+> for RuntimeAddressEventIngress/.test(
+    !/impl\s+pallet_deos_actors::AddressEventIngress<[^>]+>\s+for RuntimeAddressEventIngress/.test(
       ingressSource,
     )
   ) {
@@ -200,7 +202,7 @@ async function generatedSource() {
     inventorySha256: sha256(ingressAdapter),
     certifiedProducers: producers,
     boundary: {
-      typedTrait: 'pallet_aaa::AddressEventIngress',
+      typedTrait: 'pallet_deos_actors::AddressEventIngress',
       adapter: 'RuntimeAddressEventIngress',
       extension: 'AddressEventIngressExtension',
       helperFiles: [...INGRESS_HELPER_FILES].sort(),

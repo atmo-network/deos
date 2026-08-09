@@ -1,5 +1,5 @@
 <!--
-Domain: AAA trigger authoring
+Domain: Actors trigger authoring
 Owns: Bounded source-set and admission-gate controls for one typed authoring trigger.
 Excludes: Runtime admission, scheduler execution, conditions, graph control, and artifact encoding.
 Zone: Automation presentation helper; edits the canonical trigger draft without inventing another trigger model.
@@ -8,11 +8,11 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   import { Plus, Trash2 } from '@lucide/svelte';
 
   import {
-    type AaaAuthoringAsset,
-    type AaaAuthoringObservationFeed,
-    type AaaAuthoringTrigger,
-    type AaaAuthoringTriggerSource,
-    DEOS_AAA_AUTHORING_LIMITS,
+    type ActorAuthoringAsset,
+    type ActorAuthoringObservationFeed,
+    type ActorAuthoringTrigger,
+    type ActorAuthoringTriggerSource,
+    DEOS_ACTORS_AUTHORING_LIMITS,
   } from '$lib/automation/authoring';
   import {
     Badge,
@@ -26,12 +26,12 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   import AutomationAssetEditor from './AutomationAssetEditor.svelte';
 
   type Props = {
-    trigger: AaaAuthoringTrigger;
+    trigger: ActorAuthoringTrigger;
     compact?: boolean;
   };
 
   let { trigger = $bindable(), compact = false }: Props = $props();
-  let rememberedSources = $state<AaaAuthoringTriggerSource[]>(
+  let rememberedSources = $state<ActorAuthoringTriggerSource[]>(
     trigger.type === 'Immediate'
       ? trigger.sources
       : trigger.mode.type === 'WhenSignalled'
@@ -47,13 +47,13 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
         : [],
   );
   const canAddSource = $derived(
-    sources.length < DEOS_AAA_AUTHORING_LIMITS.maxTriggerSources,
+    sources.length < DEOS_ACTORS_AUTHORING_LIMITS.maxTriggerSources,
   );
   const hasManual = $derived(
     sources.some((source) => source.type === 'Manual'),
   );
 
-  function setSources(nextSources: AaaAuthoringTriggerSource[]) {
+  function setSources(nextSources: ActorAuthoringTriggerSource[]) {
     rememberedSources = nextSources;
     if (trigger.type === 'Immediate') {
       trigger = { ...trigger, sources: nextSources };
@@ -105,7 +105,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     };
   }
 
-  function defaultObservationFeed(): AaaAuthoringObservationFeed {
+  function defaultObservationFeed(): ActorAuthoringObservationFeed {
     return {
       assetIn: { type: 'Native' },
       assetOut: { type: 'Local', id: 0 },
@@ -119,7 +119,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     type: 'Manual' | 'OnAddressEvent' | 'OnObservationChange',
   ) {
     if (!canAddSource || (type === 'Manual' && hasManual)) return;
-    const source: AaaAuthoringTriggerSource =
+    const source: ActorAuthoringTriggerSource =
       type === 'Manual'
         ? { type }
         : type === 'OnAddressEvent'
@@ -148,7 +148,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     });
   }
 
-  function replaceSource(index: number, source: AaaAuthoringTriggerSource) {
+  function replaceSource(index: number, source: ActorAuthoringTriggerSource) {
     setSources(
       sources.map((candidate, candidateIndex) =>
         candidateIndex === index ? source : candidate,
@@ -210,7 +210,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
       source?.type !== 'OnAddressEvent' ||
       source.assetFilter.type !== 'Whitelist' ||
       source.assetFilter.assets.length >=
-        DEOS_AAA_AUTHORING_LIMITS.maxWhitelistSize
+        DEOS_ACTORS_AUTHORING_LIMITS.maxWhitelistSize
     )
       return;
     replaceSource(index, {
@@ -225,7 +225,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
   function replaceAsset(
     sourceIndex: number,
     assetIndex: number,
-    asset: AaaAuthoringAsset,
+    asset: ActorAuthoringAsset,
   ) {
     const source = sources[sourceIndex];
     if (
@@ -330,7 +330,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
     <div class="grid gap-2">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
-          Readiness sources · {sources.length}/{DEOS_AAA_AUTHORING_LIMITS.maxTriggerSources}
+          Readiness sources · {sources.length}/{DEOS_ACTORS_AUTHORING_LIMITS.maxTriggerSources}
         </div>
         <div class="flex flex-wrap gap-1">
           <Button
@@ -426,7 +426,7 @@ Zone: Automation presentation helper; edits the canonical trigger draft without 
                     size="sm"
                     variant="ghost"
                     disabled={source.assetFilter.assets.length >=
-                      DEOS_AAA_AUTHORING_LIMITS.maxWhitelistSize}
+                      DEOS_ACTORS_AUTHORING_LIMITS.maxWhitelistSize}
                     onclick={() => addAsset(sourceIndex)}
                   >
                     <Plus size={12} /> Asset

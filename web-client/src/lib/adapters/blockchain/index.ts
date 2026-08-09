@@ -30,8 +30,8 @@ import type {
 import type { SystemConfig, SystemSnapshot } from '$lib/system/types';
 import { DEFAULT_DEOS_DAPP_NAME } from '$lib/wallet/signer';
 
-import { readAaaEligibility } from './aaa-eligibility';
-import { getDeosAaaFinalizedAuthoringContext } from './aaa-simulation';
+import { readActorEligibility } from './actor-eligibility';
+import { getDeosActorFinalizedAuthoringContext } from './actor-simulation';
 import { BlockchainConnectionSession } from './connection';
 import type {
   DeosChainConnectionState,
@@ -52,7 +52,7 @@ import {
 } from './quotes';
 import {
   KNOWN_SYSTEM_ACTORS,
-  deriveSystemAaaSovereignAccount,
+  deriveSystemActorSovereignAccount,
 } from './runtime-accounts';
 import {
   NATIVE_ASSET,
@@ -435,7 +435,7 @@ export class BlockchainAdapter implements Adapter {
   }
 
   async getAutomationAuthoringContext(): Promise<AutomationAuthoringContext> {
-    return await getDeosAaaFinalizedAuthoringContext(await this.ensurePapi());
+    return await getDeosActorFinalizedAuthoringContext(await this.ensurePapi());
   }
 
   async getObservationFeeds() {
@@ -446,7 +446,7 @@ export class BlockchainAdapter implements Adapter {
   async getObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    aaaId?: number,
+    actorId?: number,
   ) {
     const connection = await this.ensurePapi();
     const snapshot = await connection.snapshot();
@@ -471,7 +471,7 @@ export class BlockchainAdapter implements Adapter {
       evidence,
       feed,
       maxAgeBlocks,
-      aaaId,
+      actorId,
     );
   }
 
@@ -482,44 +482,44 @@ export class BlockchainAdapter implements Adapter {
         KNOWN_SYSTEM_ACTORS.map(async (actor) => {
           const [identity, hot, program, continuation, funding] =
             await Promise.all([
-              snapshot.typedApi.query.AAA.ActorIdentities.getValue(
-                BigInt(actor.aaaId),
+              snapshot.typedApi.query.Actors.ActorIdentities.getValue(
+                BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
-              snapshot.typedApi.query.AAA.ActorHot.getValue(
-                BigInt(actor.aaaId),
+              snapshot.typedApi.query.Actors.ActorHot.getValue(
+                BigInt(actor.actorId),
                 {
                   at: snapshot.at,
                 },
               ),
-              snapshot.typedApi.query.AAA.ActorProgram.getValue(
-                BigInt(actor.aaaId),
+              snapshot.typedApi.query.Actors.ActorProgram.getValue(
+                BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
-              snapshot.typedApi.query.AAA.ContinuationState.getValue(
-                BigInt(actor.aaaId),
+              snapshot.typedApi.query.Actors.ContinuationState.getValue(
+                BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
-              snapshot.typedApi.query.AAA.ActorFunding.getValue(
-                BigInt(actor.aaaId),
+              snapshot.typedApi.query.Actors.ActorFunding.getValue(
+                BigInt(actor.actorId),
                 { at: snapshot.at },
               ),
             ]);
-          const eligibility = await readAaaEligibility(
+          const eligibility = await readActorEligibility(
             snapshot.typedApi,
             snapshot.at,
-            actor.aaaId,
+            actor.actorId,
           );
           const exists = identity != null && hot != null && program != null;
           const sovereignAccount =
             identity?.sovereign_account ??
-            deriveSystemAaaSovereignAccount(actor.aaaId);
+            deriveSystemActorSovereignAccount(actor.actorId);
           const account = await snapshot.typedApi.query.System.Account.getValue(
             sovereignAccount,
             { at: snapshot.at },
           );
           return {
-            aaaId: actor.aaaId,
+            actorId: actor.actorId,
             label: actor.label,
             role: actor.role,
             exists,

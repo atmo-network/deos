@@ -1,113 +1,113 @@
 /*
-Domain: AAA static program analysis
+Domain: Actors static program analysis
 Owns: Identity-bound structural composition, semantic surfaces, forward dependencies, failure controls, and per-cursor suffix envelopes.
 Excludes: Runtime state claims, adapter execution, SCALE implementation, independent weight calculation, signing, submission, and graph authoring.
 Zone: Automation domain capability; consumes canonical plan inspection and forecast contracts.
 */
-import { AAA_MAX_RETRY_ATTEMPTS } from './aaa-protocol-bounds.ts';
+import { ACTORS_MAX_RETRY_ATTEMPTS } from './actors-protocol-bounds.ts';
 import {
-  type AaaCostSegment,
-  type AaaStepCostInput,
-  type AaaWeight,
-  forecastAaaCosts,
+  type ActorCostSegment,
+  type ActorStepCostInput,
+  type ActorWeight,
+  forecastActorCosts,
 } from './forecast.ts';
 import {
-  type AaaPlanArtifact,
-  type AaaPlanHex,
-  type AaaPlanProjection,
-  type AaaPlanRuntimeIdentity,
-  inspectAaaPlanArtifact,
+  type ActorPlanArtifact,
+  type ActorPlanHex,
+  type ActorPlanProjection,
+  type ActorPlanRuntimeIdentity,
+  inspectActorPlanArtifact,
 } from './plan-artifact.ts';
 import {
-  type AaaAmountName,
-  type AaaConditionName,
-  type AaaSemanticTask,
-  type AaaTaskName,
-  aaaAmountSemantics,
-  aaaConditionSemantics,
-  aaaTaskSemantics,
+  type ActorAmountName,
+  type ActorConditionName,
+  type ActorSemanticTask,
+  type ActorTaskName,
+  actorAmountSemantics,
+  actorConditionSemantics,
+  actorTaskSemantics,
 } from './semantic-manifest.ts';
 
 export type {
-  AaaAmountName,
-  AaaConditionName,
-  AaaTaskName,
+  ActorAmountName,
+  ActorConditionName,
+  ActorTaskName,
 } from './semantic-manifest.ts';
 
-export const AAA_STATIC_ANALYZER_VERSION = '9' as const;
+export const ACTORS_STATIC_ANALYZER_VERSION = '9' as const;
 
-export type AaaRequiredAdapter =
+export type ActorRequiredAdapter =
   | 'AssetOps'
   | 'DexOps'
   | 'StakingOps'
   | 'LiquidityOps';
 
-export type AaaStaticObservationWindow =
+export type ActorStaticObservationWindow =
   | 'artifact-time'
   | 'logical-cycle-start'
   | 'step-attempt-time'
   | 'retry-time';
 
-export type AaaStaticStepControl =
+export type ActorStaticStepControl =
   | 'advance'
   | 'complete-cycle'
   | 'terminate'
   | 'stutter-current';
 
-export type AaaStaticSuccessfulControl = Extract<
-  AaaStaticStepControl,
+export type ActorStaticSuccessfulControl = Extract<
+  ActorStaticStepControl,
   'advance' | 'complete-cycle'
 >;
 
-export type AaaStaticFailureControl = Exclude<
-  AaaStaticStepControl,
+export type ActorStaticFailureControl = Exclude<
+  ActorStaticStepControl,
   'complete-cycle'
 >;
 
-export type AaaTemporaryFailureReachability = 'yes' | 'no' | 'unknown';
+export type ActorTemporaryFailureReachability = 'yes' | 'no' | 'unknown';
 
-export type AaaStaticWeightModel = {
+export type ActorStaticWeightModel = {
   identity: string;
   version: string;
-  evaluationWeight: (conditionCount: number) => AaaWeight;
+  evaluationWeight: (conditionCount: number) => ActorWeight;
   evaluationFeeUpper: (conditionCount: number) => bigint;
   taskUpper: (input: {
-    task: AaaTaskName;
-    parameters: AaaPlanProjection;
+    task: ActorTaskName;
+    parameters: ActorPlanProjection;
     splitLegs: number;
-  }) => { weight: AaaWeight; executionFeeUpper: bigint };
-  lifecycleOverhead: AaaCostSegment;
-  fundingPromotionOverhead: AaaCostSegment;
-  referenceBudget?: AaaWeight;
+  }) => { weight: ActorWeight; executionFeeUpper: bigint };
+  lifecycleOverhead: ActorCostSegment;
+  fundingPromotionOverhead: ActorCostSegment;
+  referenceBudget?: ActorWeight;
 };
 
-export type AaaMinimumBalanceEvidence = {
+export type ActorMinimumBalanceEvidence = {
   provenance: 'FinalizedStateProjection';
   identity: string;
-  blockHash: AaaPlanHex;
+  blockHash: ActorPlanHex;
   entries: Array<{
-    asset: AaaPlanProjection;
+    asset: ActorPlanProjection;
     minimumBalance: string;
     recipientBalances: Array<{
-      recipient: AaaPlanProjection;
+      recipient: ActorPlanProjection;
       balance: string;
     }>;
   }>;
 };
 
-export type AaaAdapterCapabilityProfile = {
+export type ActorAdapterCapabilityProfile = {
   identity: string;
   adapters?: Partial<
-    Record<AaaRequiredAdapter, 'supported' | 'unsupported' | 'unknown'>
+    Record<ActorRequiredAdapter, 'supported' | 'unsupported' | 'unknown'>
   >;
   temporaryFailures?: Partial<
-    Record<AaaTaskName, AaaTemporaryFailureReachability>
+    Record<ActorTaskName, ActorTemporaryFailureReachability>
   >;
 };
 
-export type AaaAmountSemantics = {
+export type ActorAmountSemantics = {
   path: string;
-  resolution: AaaAmountName;
+  resolution: ActorAmountName;
   dataDependencies: Array<
     | 'artifact-value'
     | 'current-balance-or-shares'
@@ -117,22 +117,22 @@ export type AaaAmountSemantics = {
   >;
   minimumBalanceDependency: 'task-policy';
   feeReserveDependency: 'task-policy';
-  valueObservation: AaaStaticObservationWindow;
+  valueObservation: ActorStaticObservationWindow;
   retryObservation: 'reobserve-live' | 'reuse-frozen-with-live-capacity';
 };
 
-export type AaaStaticCost = {
+export type ActorStaticCost = {
   refTime: string;
   proofSize: string;
   feeUpper: string;
 };
 
-export type AaaStaticRecipient =
+export type ActorStaticRecipient =
   | { kind: 'ActorSovereign' }
-  | { kind: 'Explicit'; value: AaaPlanProjection }
+  | { kind: 'Explicit'; value: ActorPlanProjection }
   | { kind: 'AdapterDerived' };
 
-export type AaaStaticStepAnalysis = {
+export type ActorStaticStepAnalysis = {
   index: number;
   conditionSet: {
     mode: 'Always' | 'All' | 'Any';
@@ -143,14 +143,14 @@ export type AaaStaticStepAnalysis = {
     atomicError: 'fail-whole-group';
   };
   conditions: Array<{
-    type: AaaConditionName;
-    value: AaaPlanProjection;
+    type: ActorConditionName;
+    value: ActorPlanProjection;
     observation: 'balance' | 'block-number' | 'scalar-observation';
     readSurface:
-      | AaaPlanProjection
+      | ActorPlanProjection
       | 'current-block'
       | {
-          feed: AaaPlanProjection;
+          feed: ActorPlanProjection;
           maxAgeBlocks: number;
           freshness: 'fresh-only';
           nonFreshResult: 'false';
@@ -159,83 +159,83 @@ export type AaaStaticStepAnalysis = {
     observationWindow: 'step-attempt-time';
     boundedReadCount: 1;
   }>;
-  task: AaaTaskName;
-  parameters: AaaPlanProjection;
-  amounts: AaaAmountSemantics[];
+  task: ActorTaskName;
+  parameters: ActorPlanProjection;
+  amounts: ActorAmountSemantics[];
   errorPolicy: 'AbortCycle' | 'ContinueNextStep' | 'RetryLater';
   retryMaxAttempts: number | null;
-  successfulControl: AaaStaticSuccessfulControl;
-  failureControls: AaaStaticFailureControl[];
+  successfulControl: ActorStaticSuccessfulControl;
+  failureControls: ActorStaticFailureControl[];
   availability: 'UserAndSystem' | 'SystemOnly';
   weightOwner: string;
   boundedInternalAlgorithm:
     | 'None'
     | 'PalletSplitFanout'
     | 'RuntimeAdapterContract';
-  requiredAdapters: AaaRequiredAdapter[];
+  requiredAdapters: ActorRequiredAdapter[];
   costs: {
-    evaluation: AaaStaticCost;
-    executionUpper: AaaStaticCost;
-    totalUpper: AaaStaticCost;
+    evaluation: ActorStaticCost;
+    executionUpper: ActorStaticCost;
+    totalUpper: ActorStaticCost;
   };
   economicSurface: {
-    assetsRead: AaaPlanProjection[];
-    assetsWritten: AaaPlanProjection[];
+    assetsRead: ActorPlanProjection[];
+    assetsWritten: ActorPlanProjection[];
     adapterDerivedAssetsRead: boolean;
     adapterDerivedAssetsWritten: boolean;
-    recipients: AaaStaticRecipient[];
+    recipients: ActorStaticRecipient[];
     transferExposure: boolean;
     mintExposure: boolean;
     burnExposure: boolean;
     liquidityMutation: boolean;
     stakingMutation: boolean;
-    possibleActorSignals: AaaStaticRecipient[];
+    possibleActorSignals: ActorStaticRecipient[];
     committedNonCompensatedEffects: boolean;
   };
   failureSurface: {
     possibleContinue: boolean;
     possibleAbort: boolean;
     possibleRetryCurrent: boolean;
-    temporaryFailureReachability: AaaTemporaryFailureReachability;
+    temporaryFailureReachability: ActorTemporaryFailureReachability;
     continuationEligible: boolean;
   };
 };
 
-export type AaaForwardDataDependency = {
+export type ActorForwardDataDependency = {
   fromStep: number;
   toStep: number;
-  asset: AaaPlanProjection;
+  asset: ActorPlanProjection;
   readBy: 'condition' | 'task-or-amount';
-  observationWindows: AaaStaticObservationWindow[];
+  observationWindows: ActorStaticObservationWindow[];
 };
 
-export type AaaStaticSuffixEnvelope = {
+export type ActorStaticSuffixEnvelope = {
   cursor: number;
   remainingSteps: number;
   maximumRefTime: string;
   maximumProofSize: string;
   evaluationFeeUpper: string;
   executionFeeUpper: string;
-  lifecycleOverhead: AaaStaticCost;
-  fundingPromotionOverhead: AaaStaticCost;
-  requiredAdapters: AaaRequiredAdapter[];
-  assetsRead: AaaPlanProjection[];
-  assetsWritten: AaaPlanProjection[];
+  lifecycleOverhead: ActorStaticCost;
+  fundingPromotionOverhead: ActorStaticCost;
+  requiredAdapters: ActorRequiredAdapter[];
+  assetsRead: ActorPlanProjection[];
+  assetsWritten: ActorPlanProjection[];
   committedEffectClasses: Array<
     'transfer' | 'mint' | 'burn' | 'liquidity' | 'staking'
   >;
   retryableSteps: number[];
 };
 
-export type AaaStaticTriggerAnalysis = {
+export type ActorStaticTriggerAnalysis = {
   admission: 'Immediate' | 'CadencedAlways' | 'CadencedWhenSignalled';
   everyBlocks: number | null;
   sourceCount: number;
   sourceKinds: Array<'Manual' | 'AddressEvent' | 'ObservationChange'>;
-  observationFeeds: AaaPlanProjection[];
+  observationFeeds: ActorPlanProjection[];
 };
 
-export type AaaStaticFinding =
+export type ActorStaticFinding =
   | {
       kind: 'ExternallySignalledAdmission';
       gate: 'Immediate' | 'Cadenced';
@@ -258,12 +258,12 @@ export type AaaStaticFinding =
       kind: 'PreExistingBalanceMixedWithCurrentRunOutput';
       writer: number;
       reader: number;
-      asset: AaaPlanProjection;
+      asset: ActorPlanProjection;
     }
   | {
       kind: 'AdapterCapability';
       step: number;
-      adapter: AaaRequiredAdapter;
+      adapter: ActorRequiredAdapter;
       status: 'unsupported' | 'unknown';
     }
   | { kind: 'UnknownTemporaryFailureClassification'; step: number }
@@ -285,12 +285,12 @@ export type AaaStaticFinding =
       kind: 'SplitTransferLegBelowKnownMinimum';
       step: number;
       leg: number;
-      asset: AaaPlanProjection;
-      recipient: AaaPlanProjection;
+      asset: ActorPlanProjection;
+      recipient: ActorPlanProjection;
       amount: string;
       minimumBalance: string;
       evidenceIdentity: string;
-      evidenceBlockHash: AaaPlanHex;
+      evidenceBlockHash: ActorPlanHex;
     }
   | {
       kind: 'StopCycleFailureMayFallThrough';
@@ -300,7 +300,7 @@ export type AaaStaticFinding =
   | {
       kind: 'PotentialCrossActorFeedbackEdge';
       step: number;
-      recipient: AaaStaticRecipient;
+      recipient: ActorStaticRecipient;
     }
   | { kind: 'ProofSizeDominantSuffix'; cursor: number }
   | {
@@ -320,63 +320,63 @@ export type AaaStaticFinding =
 export type ProgramStaticAnalysis = {
   provenance: 'StaticStructuralProjection';
   identity: {
-    planId: AaaPlanHex;
-    genesisHash: AaaPlanHex;
-    metadataHash: AaaPlanHex;
+    planId: ActorPlanHex;
+    genesisHash: ActorPlanHex;
+    metadataHash: ActorPlanHex;
     specVersion: number;
     transactionVersion: number;
     runtimeModelIdentity: string;
     weightModelIdentity: string;
     adapterCapabilityIdentity: string | null;
     minimumBalanceEvidenceIdentity: string | null;
-    minimumBalanceEvidenceBlockHash: AaaPlanHex | null;
-    analyzerVersion: typeof AAA_STATIC_ANALYZER_VERSION;
+    minimumBalanceEvidenceBlockHash: ActorPlanHex | null;
+    analyzerVersion: typeof ACTORS_STATIC_ANALYZER_VERSION;
   };
   program: 'Dormant' | 'Active';
-  actorType: AaaPlanArtifact['aaaType'];
-  mutability: AaaPlanArtifact['mutability'];
+  actorType: ActorPlanArtifact['actorType'];
+  mutability: ActorPlanArtifact['mutability'];
   completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null;
   cooldownBlocks: number | null;
-  trigger: AaaStaticTriggerAnalysis | null;
-  steps: AaaStaticStepAnalysis[];
-  economicSurface: AaaStaticStepAnalysis['economicSurface'];
-  dataDependencies: AaaForwardDataDependency[];
-  suffixEnvelopes: AaaStaticSuffixEnvelope[];
-  findings: AaaStaticFinding[];
+  trigger: ActorStaticTriggerAnalysis | null;
+  steps: ActorStaticStepAnalysis[];
+  economicSurface: ActorStaticStepAnalysis['economicSurface'];
+  dataDependencies: ActorForwardDataDependency[];
+  suffixEnvelopes: ActorStaticSuffixEnvelope[];
+  findings: ActorStaticFinding[];
 };
 
-type ParsedVariant = { type: string; value: AaaPlanProjection };
+type ParsedVariant = { type: string; value: ActorPlanProjection };
 
 type TaskSemantics = {
-  task: AaaTaskName;
-  adapter: AaaRequiredAdapter | null;
-  assetsRead: AaaPlanProjection[];
-  assetsWritten: AaaPlanProjection[];
+  task: ActorTaskName;
+  adapter: ActorRequiredAdapter | null;
+  assetsRead: ActorPlanProjection[];
+  assetsWritten: ActorPlanProjection[];
   adapterDerivedAssetsRead: boolean;
   adapterDerivedAssetsWritten: boolean;
-  recipients: AaaStaticRecipient[];
+  recipients: ActorStaticRecipient[];
   effects: Array<'transfer' | 'mint' | 'burn' | 'liquidity' | 'staking'>;
-  availability: AaaStaticStepAnalysis['availability'];
-  successfulControl: AaaStaticSuccessfulControl;
+  availability: ActorStaticStepAnalysis['availability'];
+  successfulControl: ActorStaticSuccessfulControl;
   weightOwner: string;
-  boundedInternalAlgorithm: AaaStaticStepAnalysis['boundedInternalAlgorithm'];
+  boundedInternalAlgorithm: ActorStaticStepAnalysis['boundedInternalAlgorithm'];
   committedNonCompensatedEffects: boolean;
-  amountSurfaces: AaaSemanticTask['amountSurfaces'];
+  amountSurfaces: ActorSemanticTask['amountSurfaces'];
 };
 
-function record(value: AaaPlanProjection, label: string) {
+function record(value: ActorPlanProjection, label: string) {
   if (value == null || Array.isArray(value) || typeof value !== 'object') {
     throw new Error(`${label} must be an object projection`);
   }
-  return value as Record<string, AaaPlanProjection>;
+  return value as Record<string, ActorPlanProjection>;
 }
 
-function array(value: AaaPlanProjection, label: string) {
+function array(value: ActorPlanProjection, label: string) {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
   return value;
 }
 
-function variant(value: AaaPlanProjection, label: string): ParsedVariant {
+function variant(value: ActorPlanProjection, label: string): ParsedVariant {
   const projected = record(value, label);
   if (typeof projected.type !== 'string' || !('value' in projected)) {
     throw new Error(`${label} must be a projected runtime variant`);
@@ -385,16 +385,16 @@ function variant(value: AaaPlanProjection, label: string): ParsedVariant {
 }
 
 function member(
-  value: AaaPlanProjection,
+  value: ActorPlanProjection,
   key: string,
   label: string,
-): AaaPlanProjection {
+): ActorPlanProjection {
   const projected = record(value, label);
   if (!(key in projected)) throw new Error(`${label}.${key} is required`);
   return projected[key];
 }
 
-function safeInteger(value: AaaPlanProjection, label: string): number {
+function safeInteger(value: ActorPlanProjection, label: string): number {
   const projected = record(value, label);
   const integer = projected.$integer;
   if (typeof integer !== 'string' || !/^[0-9]+$/.test(integer)) {
@@ -407,11 +407,11 @@ function safeInteger(value: AaaPlanProjection, label: string): number {
   return parsed;
 }
 
-function fingerprint(value: AaaPlanProjection) {
+function fingerprint(value: ActorPlanProjection) {
   return JSON.stringify(value);
 }
 
-function unsignedBigInt(value: AaaPlanProjection, label: string): bigint {
+function unsignedBigInt(value: ActorPlanProjection, label: string): bigint {
   const projected = record(value, label);
   const integer = projected.$integer;
   if (typeof integer !== 'string' || !/^[0-9]+$/.test(integer)) {
@@ -427,7 +427,7 @@ function evidenceBalance(value: string, label: string): bigint {
   return BigInt(value);
 }
 
-function validateMinimumBalanceEvidence(evidence: AaaMinimumBalanceEvidence) {
+function validateMinimumBalanceEvidence(evidence: ActorMinimumBalanceEvidence) {
   if (evidence.provenance !== 'FinalizedStateProjection') {
     throw new Error(
       'Minimum-balance evidence must be a finalized state projection',
@@ -467,7 +467,7 @@ function validateMinimumBalanceEvidence(evidence: AaaMinimumBalanceEvidence) {
   });
 }
 
-function uniqueProjection(values: AaaPlanProjection[]) {
+function uniqueProjection(values: ActorPlanProjection[]) {
   const seen = new Set<string>();
   return values.filter((value) => {
     const key = fingerprint(value);
@@ -477,7 +477,7 @@ function uniqueProjection(values: AaaPlanProjection[]) {
   });
 }
 
-function uniqueRecipients(values: AaaStaticRecipient[]) {
+function uniqueRecipients(values: ActorStaticRecipient[]) {
   const seen = new Set<string>();
   return values.filter((value) => {
     const key = JSON.stringify(value);
@@ -491,7 +491,7 @@ function unique<T>(values: T[]) {
   return [...new Set(values)];
 }
 
-function addWeight(left: AaaWeight, right: AaaWeight): AaaWeight {
+function addWeight(left: ActorWeight, right: ActorWeight): ActorWeight {
   return {
     refTime: left.refTime + right.refTime,
     proofSize: left.proofSize + right.proofSize,
@@ -499,16 +499,16 @@ function addWeight(left: AaaWeight, right: AaaWeight): AaaWeight {
 }
 
 function addSegment(
-  left: AaaCostSegment,
-  right: AaaCostSegment,
-): AaaCostSegment {
+  left: ActorCostSegment,
+  right: ActorCostSegment,
+): ActorCostSegment {
   return {
     weight: addWeight(left.weight, right.weight),
     fee: left.fee + right.fee,
   };
 }
 
-function staticCost(weight: AaaWeight, feeUpper: bigint): AaaStaticCost {
+function staticCost(weight: ActorWeight, feeUpper: bigint): ActorStaticCost {
   return {
     refTime: weight.refTime.toString(),
     proofSize: weight.proofSize.toString(),
@@ -516,7 +516,7 @@ function staticCost(weight: AaaWeight, feeUpper: bigint): AaaStaticCost {
   };
 }
 
-function validateModel(model: AaaStaticWeightModel) {
+function validateModel(model: ActorStaticWeightModel) {
   for (const [field, value] of [
     ['lifecycle fee', model.lifecycleOverhead.fee],
     ['funding fee', model.fundingPromotionOverhead.fee],
@@ -528,7 +528,7 @@ function validateModel(model: AaaStaticWeightModel) {
   }
 }
 
-function errorPolicy(value: AaaPlanProjection) {
+function errorPolicy(value: ActorPlanProjection) {
   const parsed = variant(value, 'StepErrorPolicy');
   switch (parsed.type) {
     case 'AbortCycle':
@@ -539,9 +539,9 @@ function errorPolicy(value: AaaPlanProjection) {
         member(parsed.value, 'max_attempts', 'StepErrorPolicy.RetryLater'),
         'StepErrorPolicy.RetryLater.max_attempts',
       );
-      if (maxAttempts === 0 || maxAttempts > AAA_MAX_RETRY_ATTEMPTS) {
+      if (maxAttempts === 0 || maxAttempts > ACTORS_MAX_RETRY_ATTEMPTS) {
         throw new Error(
-          `StepErrorPolicy.RetryLater.max_attempts must be within 1..${AAA_MAX_RETRY_ATTEMPTS}`,
+          `StepErrorPolicy.RetryLater.max_attempts must be within 1..${ACTORS_MAX_RETRY_ATTEMPTS}`,
         );
       }
       return { type: parsed.type, maxAttempts } as const;
@@ -552,10 +552,10 @@ function errorPolicy(value: AaaPlanProjection) {
 }
 
 function semanticPathValues(
-  value: AaaPlanProjection,
+  value: ActorPlanProjection,
   path: string,
   label: string,
-): AaaPlanProjection[] {
+): ActorPlanProjection[] {
   if (!path.startsWith('/')) throw new Error(`${label} path must be absolute`);
   let values = [value];
   for (const segment of path.slice(1).split('/')) {
@@ -579,10 +579,10 @@ function semanticPathValues(
 }
 
 function semanticValue(
-  value: AaaPlanProjection,
+  value: ActorPlanProjection,
   path: string,
   label: string,
-): AaaPlanProjection {
+): ActorPlanProjection {
   const values = semanticPathValues(value, path, label);
   if (values.length !== 1) throw new Error(`${label} must resolve once`);
   return values[0];
@@ -590,8 +590,8 @@ function semanticValue(
 
 function taskAmounts(
   semantics: TaskSemantics,
-  parameters: AaaPlanProjection,
-): AaaAmountSemantics[] {
+  parameters: ActorPlanProjection,
+): ActorAmountSemantics[] {
   return semantics.amountSurfaces.map((surface) => {
     const projected = variant(
       semanticValue(
@@ -601,7 +601,7 @@ function taskAmounts(
       ),
       `${semantics.task}.${surface.role}`,
     );
-    const amount = aaaAmountSemantics(projected.type);
+    const amount = actorAmountSemantics(projected.type);
     return {
       path: surface.path,
       resolution: amount.resolution,
@@ -641,9 +641,9 @@ function taskAmounts(
 
 function taskSemantics(
   task: string,
-  parameters: AaaPlanProjection,
+  parameters: ActorPlanProjection,
 ): TaskSemantics {
-  const contract = aaaTaskSemantics(task);
+  const contract = actorTaskSemantics(task);
   const effects = contract.effects.map((effect) => {
     switch (effect) {
       case 'Transfer':
@@ -659,7 +659,7 @@ function taskSemantics(
     }
   });
   const recipients = contract.recipients.flatMap(
-    (recipient): AaaStaticRecipient[] => {
+    (recipient): ActorStaticRecipient[] => {
       switch (recipient.kind) {
         case 'ActorSovereign':
           return [{ kind: 'ActorSovereign' }];
@@ -704,9 +704,9 @@ function taskSemantics(
   };
 }
 
-function conditionAnalysis(condition: AaaPlanProjection) {
+function conditionAnalysis(condition: ActorPlanProjection) {
   const parsed = variant(condition, 'Condition');
-  const semantics = aaaConditionSemantics(parsed.type);
+  const semantics = actorConditionSemantics(parsed.type);
   const label = `Condition.${semantics.condition}`;
   const readSurface = (() => {
     switch (semantics.readSurface.kind) {
@@ -761,9 +761,9 @@ function conditionAnalysis(condition: AaaPlanProjection) {
 }
 
 function failureControlsFor(
-  policy: AaaStaticStepAnalysis['errorPolicy'],
-  mutability: AaaPlanArtifact['mutability'],
-): AaaStaticFailureControl[] {
+  policy: ActorStaticStepAnalysis['errorPolicy'],
+  mutability: ActorPlanArtifact['mutability'],
+): ActorStaticFailureControl[] {
   switch (policy) {
     case 'ContinueNextStep':
       return ['advance'];
@@ -777,26 +777,26 @@ function failureControlsFor(
 }
 
 function capabilityStatus(
-  profile: AaaAdapterCapabilityProfile | undefined,
-  adapter: AaaRequiredAdapter,
+  profile: ActorAdapterCapabilityProfile | undefined,
+  adapter: ActorRequiredAdapter,
 ) {
   return profile?.adapters?.[adapter] ?? 'unknown';
 }
 
 function temporaryReachability(
-  profile: AaaAdapterCapabilityProfile | undefined,
-  task: AaaTaskName,
-): AaaTemporaryFailureReachability {
+  profile: ActorAdapterCapabilityProfile | undefined,
+  task: ActorTaskName,
+): ActorTemporaryFailureReachability {
   return profile?.temporaryFailures?.[task] ?? 'unknown';
 }
 
 function stepCost(
-  artifact: AaaPlanArtifact,
-  model: AaaStaticWeightModel,
+  artifact: ActorPlanArtifact,
+  model: ActorStaticWeightModel,
   index: number,
   conditionCount: number,
-  task: AaaTaskName,
-  parameters: AaaPlanProjection,
+  task: ActorTaskName,
+  parameters: ActorPlanProjection,
 ) {
   const splitLegs =
     task === 'SplitTransfer'
@@ -804,13 +804,13 @@ function stepCost(
       : 0;
   const evaluationWeight = model.evaluationWeight(conditionCount);
   const upper = model.taskUpper({ task, parameters, splitLegs });
-  const forecast = forecastAaaCosts({
+  const forecast = forecastActorCosts({
     artifact,
     blockHash: artifact.genesisHash,
     blockNumber: 0,
     model: model.identity,
     modelVersion: model.version,
-    actorType: artifact.aaaType,
+    actorType: artifact.actorType,
     steps: [
       {
         stepIndex: 0,
@@ -854,14 +854,14 @@ function stepCost(
 }
 
 function parseSteps(
-  artifact: AaaPlanArtifact,
-  executionPlan: AaaPlanProjection,
-  model: AaaStaticWeightModel,
-  capabilities?: AaaAdapterCapabilityProfile,
+  artifact: ActorPlanArtifact,
+  executionPlan: ActorPlanProjection,
+  model: ActorStaticWeightModel,
+  capabilities?: ActorAdapterCapabilityProfile,
 ) {
-  const forecastInputs: AaaStepCostInput[] = [];
+  const forecastInputs: ActorStepCostInput[] = [];
   const steps = array(executionPlan, 'ProgramInput.execution_plan').map(
-    (projectedStep, index): AaaStaticStepAnalysis => {
+    (projectedStep, index): ActorStaticStepAnalysis => {
       const parsedConditionSet = variant(
         member(projectedStep, 'conditions', `Step ${index}`),
         `Step ${index}.conditions`,
@@ -966,7 +966,7 @@ function parseSteps(
   return { steps, forecastInputs };
 }
 
-function dependencyWindows(step: AaaStaticStepAnalysis) {
+function dependencyWindows(step: ActorStaticStepAnalysis) {
   return unique([
     ...step.conditions.map(() => 'step-attempt-time' as const),
     ...step.amounts.flatMap((amount) => {
@@ -978,15 +978,15 @@ function dependencyWindows(step: AaaStaticStepAnalysis) {
   ]);
 }
 
-function forwardDependencies(steps: AaaStaticStepAnalysis[]) {
-  const dependencies: AaaForwardDataDependency[] = [];
+function forwardDependencies(steps: ActorStaticStepAnalysis[]) {
+  const dependencies: ActorForwardDataDependency[] = [];
   for (let from = 0; from < steps.length; from += 1) {
     for (let to = from + 1; to < steps.length; to += 1) {
       for (const written of steps[from].economicSurface.assetsWritten) {
         const conditionMatch = steps[to].conditions.some(
           (condition) =>
             condition.observation === 'balance' &&
-            fingerprint(condition.readSurface as AaaPlanProjection) ===
+            fingerprint(condition.readSurface as ActorPlanProjection) ===
               fingerprint(written),
         );
         const taskMatch = steps[to].economicSurface.assetsRead.some(
@@ -1007,28 +1007,28 @@ function forwardDependencies(steps: AaaStaticStepAnalysis[]) {
 }
 
 function suffixEnvelopes(
-  artifact: AaaPlanArtifact,
-  steps: AaaStaticStepAnalysis[],
-  forecastInputs: AaaStepCostInput[],
-  model: AaaStaticWeightModel,
+  artifact: ActorPlanArtifact,
+  steps: ActorStaticStepAnalysis[],
+  forecastInputs: ActorStepCostInput[],
+  model: ActorStaticWeightModel,
 ) {
   const lifecycle = addSegment(
     model.lifecycleOverhead,
     model.fundingPromotionOverhead,
   );
-  const envelopes: AaaStaticSuffixEnvelope[] = [];
+  const envelopes: ActorStaticSuffixEnvelope[] = [];
   for (let cursor = 0; cursor <= steps.length; cursor += 1) {
     const suffixInputs = forecastInputs.slice(cursor).map((input, index) => ({
       ...input,
       stepIndex: index,
     }));
-    const forecast = forecastAaaCosts({
+    const forecast = forecastActorCosts({
       artifact,
       blockHash: artifact.genesisHash,
       blockNumber: 0,
       model: model.identity,
       modelVersion: model.version,
-      actorType: artifact.aaaType,
+      actorType: artifact.actorType,
       steps: suffixInputs,
       lifecycle,
     });
@@ -1057,7 +1057,8 @@ function suffixEnvelopes(
       ),
       committedEffectClasses: unique(
         suffix.flatMap((step) => {
-          const effects: AaaStaticSuffixEnvelope['committedEffectClasses'] = [];
+          const effects: ActorStaticSuffixEnvelope['committedEffectClasses'] =
+            [];
           if (step.task === 'Transfer' || step.task === 'SplitTransfer') {
             effects.push('transfer');
           }
@@ -1076,7 +1077,7 @@ function suffixEnvelopes(
   return envelopes;
 }
 
-function aggregateEconomicSurface(steps: AaaStaticStepAnalysis[]) {
+function aggregateEconomicSurface(steps: ActorStaticStepAnalysis[]) {
   return {
     assetsRead: uniqueProjection(
       steps.flatMap((step) => step.economicSurface.assetsRead),
@@ -1111,15 +1112,15 @@ function aggregateEconomicSurface(steps: AaaStaticStepAnalysis[]) {
   };
 }
 
-function parseTrigger(value: AaaPlanProjection): AaaStaticTriggerAnalysis {
+function parseTrigger(value: ActorPlanProjection): ActorStaticTriggerAnalysis {
   const schedule = member(value, 'schedule', 'ProgramInput.Active');
   const trigger = variant(
     member(schedule, 'trigger', 'Schedule'),
     'Schedule.trigger',
   );
-  const parseSources = (projected: AaaPlanProjection, label: string) => {
-    const sourceKinds: AaaStaticTriggerAnalysis['sourceKinds'] = [];
-    const observationFeeds: AaaPlanProjection[] = [];
+  const parseSources = (projected: ActorPlanProjection, label: string) => {
+    const sourceKinds: ActorStaticTriggerAnalysis['sourceKinds'] = [];
+    const observationFeeds: ActorPlanProjection[] = [];
     array(projected, label).forEach((source, index) => {
       const parsed = variant(source, `${label}[${index}]`);
       if (parsed.type === 'Manual') {
@@ -1194,16 +1195,16 @@ function parseTrigger(value: AaaPlanProjection): AaaStaticTriggerAnalysis {
 }
 
 function findings(
-  trigger: AaaStaticTriggerAnalysis | null,
-  steps: AaaStaticStepAnalysis[],
-  dependencies: AaaForwardDataDependency[],
-  envelopes: AaaStaticSuffixEnvelope[],
-  model: AaaStaticWeightModel,
-  actorType: AaaPlanArtifact['aaaType'],
-  capabilities?: AaaAdapterCapabilityProfile,
-  minimumBalanceEvidence?: AaaMinimumBalanceEvidence,
-): AaaStaticFinding[] {
-  const results: AaaStaticFinding[] = [];
+  trigger: ActorStaticTriggerAnalysis | null,
+  steps: ActorStaticStepAnalysis[],
+  dependencies: ActorForwardDataDependency[],
+  envelopes: ActorStaticSuffixEnvelope[],
+  model: ActorStaticWeightModel,
+  actorType: ActorPlanArtifact['actorType'],
+  capabilities?: ActorAdapterCapabilityProfile,
+  minimumBalanceEvidence?: ActorMinimumBalanceEvidence,
+): ActorStaticFinding[] {
+  const results: ActorStaticFinding[] = [];
   const triggerAmountSteps = steps
     .filter((step) =>
       step.amounts.some(
@@ -1432,13 +1433,13 @@ function findings(
   return results;
 }
 
-export function analyzeAaaProgram(input: {
-  artifact: AaaPlanArtifact;
+export function analyzeActorProgram(input: {
+  artifact: ActorPlanArtifact;
   metadataBytes: Uint8Array;
-  runtime: AaaPlanRuntimeIdentity & { modelIdentity: string };
-  weightModel: AaaStaticWeightModel;
-  adapterCapabilities?: AaaAdapterCapabilityProfile;
-  minimumBalanceEvidence?: AaaMinimumBalanceEvidence;
+  runtime: ActorPlanRuntimeIdentity & { modelIdentity: string };
+  weightModel: ActorStaticWeightModel;
+  adapterCapabilities?: ActorAdapterCapabilityProfile;
+  minimumBalanceEvidence?: ActorMinimumBalanceEvidence;
 }): ProgramStaticAnalysis {
   validateModel(input.weightModel);
   if (input.minimumBalanceEvidence != null) {
@@ -1447,7 +1448,7 @@ export function analyzeAaaProgram(input: {
   if (input.runtime.modelIdentity.length === 0) {
     throw new Error('Runtime model identity is required');
   }
-  const inspection = inspectAaaPlanArtifact(
+  const inspection = inspectActorPlanArtifact(
     input.artifact,
     input.metadataBytes,
     input.runtime,
@@ -1458,11 +1459,12 @@ export function analyzeAaaProgram(input: {
     );
   }
   const program = variant(inspection.projection, 'ProgramInput');
-  let trigger: AaaStaticTriggerAnalysis | null = null;
-  let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null = null;
+  let trigger: ActorStaticTriggerAnalysis | null = null;
+  let completionPolicy: 'Persistent' | 'CloseAfterProductiveCycle' | null =
+    null;
   let cooldownBlocks: number | null = null;
-  let steps: AaaStaticStepAnalysis[] = [];
-  let forecastInputs: AaaStepCostInput[] = [];
+  let steps: ActorStaticStepAnalysis[] = [];
+  let forecastInputs: ActorStepCostInput[] = [];
   if (program.type === 'Active') {
     trigger = parseTrigger(program.value);
     const schedule = member(program.value, 'schedule', 'ProgramInput.Active');
@@ -1512,10 +1514,10 @@ export function analyzeAaaProgram(input: {
         input.minimumBalanceEvidence?.identity ?? null,
       minimumBalanceEvidenceBlockHash:
         input.minimumBalanceEvidence?.blockHash ?? null,
-      analyzerVersion: AAA_STATIC_ANALYZER_VERSION,
+      analyzerVersion: ACTORS_STATIC_ANALYZER_VERSION,
     },
     program: program.type,
-    actorType: input.artifact.aaaType,
+    actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
     completionPolicy,
     cooldownBlocks,
@@ -1530,7 +1532,7 @@ export function analyzeAaaProgram(input: {
       dependencies,
       envelopes,
       input.weightModel,
-      input.artifact.aaaType,
+      input.artifact.actorType,
       input.adapterCapabilities,
       input.minimumBalanceEvidence,
     ),

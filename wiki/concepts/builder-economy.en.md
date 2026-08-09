@@ -14,7 +14,7 @@ sources:
   - ../../docs/framework-instance.contract.en.md
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
   - ../../docs/core.architecture.en.md
   - ../../template/pallets/tmc/docs/architecture.en.md
 status: active
@@ -31,7 +31,7 @@ related:
   - Governance Domains
   - Physics-First vs Politics-First
   - TMCTOL Standard
-  - AAA System
+  - Actors System
   - TOL Bucket Scenarios
 last_compiled: 2026-07-20
 confidence: 0.9
@@ -96,12 +96,12 @@ A separate L1 Building lane can unwind its own LP into Treasury B, gradually buy
 
 ## A Federated Domain, Not an Isolated Economy
 
-The builder domain has its own token, treasury, governance, liquidity lane, and System AAA actors, but it does not stand alone:
+The builder domain has its own token, treasury, governance, liquidity lane, and System Actors, but it does not stand alone:
 
 - `$NTVE` is its TMC collateral and liquidity pair;
 - Native economic locks protect its governance domain;
 - L1 capital can support BLDR buyback and burn;
-- `$BLDR` governance cannot directly rewrite TMC launch physics, global AAA controls, staking administration, or asset registration.
+- `$BLDR` governance cannot directly rewrite TMC launch physics, global Actors controls, staking administration, or asset registration.
 
 This is the Fractal Federation pattern: a tactical domain remains autonomous inside its declared competence while sharing capital, protection, and infrastructure with the parent economy. It behaves like a bounded organ of DEOS rather than a sovereign replacement for it.
 
@@ -123,5 +123,5 @@ A production instance must still choose its launch allocation, create and fund t
 - [Governance Domains](governance-domains.en.md)
 - [Physics-First vs Politics-First](../comparisons/physics-vs-politics.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
-- [AAA System](../overview/aaa-system.en.md)
+- [Actors System](../overview/actor-system.en.md)
 - [TOL Bucket Scenarios](tol-bucket-scenarios.en.md)

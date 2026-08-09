@@ -80,7 +80,7 @@ graph TD
 - Mint total `ΔS` tokens inside one transactional flow
 - Transfer 1/3 to user (`UserAllocationRatio` = 1/3)
 - Mint the remaining 2/3 into the separately resolved protocol-liquidity account
-- Preflight AAA ingress for both protocol destinations before value movement, then notify collateral and minted-output recipients directly after distribution; dormant/custody destinations remain balance-only
+- Preflight Actors ingress for both protocol destinations before value movement, then notify collateral and minted-output recipients directly after distribution; dormant/custody destinations remain balance-only
 - If either mint leg or ingress notification fails, the collateral transfer and both mint legs roll back together
 - Emit `ZapAllocationDistributed` event only after the whole distribution and direct ingress notification succeed
 

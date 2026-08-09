@@ -78,7 +78,7 @@ export function canonicalObservationReadModel<T>(
 }
 
 export function projectObservationActorDeliveryInspection(input: {
-  aaaId: bigint;
+  actorId: bigint;
   hot: {
     actorClass: 'System' | 'User';
     pendingSignal: boolean;
@@ -90,12 +90,12 @@ export function projectObservationActorDeliveryInspection(input: {
     } | null;
   } | null;
 }): ObservationActorDeliveryInspection {
-  if (input.aaaId < 0n || input.aaaId > 0xffff_ffff_ffff_ffffn) {
-    throw new Error('AAA id must be an unsigned u64');
+  if (input.actorId < 0n || input.actorId > 0xffff_ffff_ffff_ffffn) {
+    throw new Error('Actors id must be an unsigned u64');
   }
   if (input.hot === null) {
     return {
-      aaaId: input.aaaId,
+      actorId: input.actorId,
       exists: false,
       pendingSignal: null,
       queueLane: null,
@@ -132,7 +132,7 @@ export function projectObservationActorDeliveryInspection(input: {
           ? 'PendingQueueAdmission'
           : 'NoPendingSignal';
   return {
-    aaaId: input.aaaId,
+    actorId: input.actorId,
     exists: true,
     pendingSignal: input.hot.pendingSignal,
     queueLane: input.hot.actorClass,
@@ -384,7 +384,7 @@ export function projectObservationDeliveryInspection(input: {
     input.oracleRevision !== dirty.latestRevision
   ) {
     throw new Error(
-      'Oracle and AAA latest revisions must match at one finalized state',
+      'Oracle and Actors latest revisions must match at one finalized state',
     );
   }
   requireBoundedInteger(

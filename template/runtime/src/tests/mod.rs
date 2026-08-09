@@ -1,7 +1,7 @@
 //! Runtime integration tests for the parachain.
 
 #[cfg(test)]
-pub mod aaa_integration_tests;
+pub mod actors_integration_tests;
 #[cfg(test)]
 pub mod asset_conversion_integration_tests;
 #[cfg(test)]

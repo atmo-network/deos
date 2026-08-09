@@ -1,10 +1,10 @@
-use super::common::{ALICE, BOB, aaa_fee_sink_account, new_test_ext};
+use super::common::{ALICE, BOB, actor_fee_sink_account, new_test_ext};
 use crate::configs::governance_config::{
   StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource, TacticalTreasuryInvoicePayload,
 };
 use crate::{
-  AAA, Assets, AxialRouter, Balances, Governance, Preimage, Runtime, RuntimeEvent, RuntimeOrigin,
-  System,
+  Actors, Assets, AxialRouter, Balances, Governance, Preimage, Runtime, RuntimeEvent,
+  RuntimeOrigin, System,
 };
 use codec::Encode;
 use polkadot_sdk::frame_support::assert_ok;
@@ -326,8 +326,9 @@ fn l2_signal_to_l1_finalizes_with_explicit_advisory_kind() {
 #[test]
 fn l2_treasury_spend_transfers_bldr_from_bldr_treasury_account() {
   new_test_ext().execute_with(|| {
-    let treasury_account =
-      AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID);
+    let treasury_account = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+    );
     if !<Assets as FungiblesInspect<_>>::asset_exists(TACTICAL_GOVERNANCE_DOMAIN) {
       assert_ok!(Assets::force_create(
         RuntimeOrigin::root(),
@@ -440,8 +441,9 @@ fn l2_treasury_spend_transfers_bldr_from_bldr_treasury_account() {
 #[test]
 fn l2_treasury_spend_transfers_non_bldr_asset_from_same_treasury_account() {
   new_test_ext().execute_with(|| {
-    let treasury_account =
-      AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID);
+    let treasury_account = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+    );
     let foreign_asset = 0x2000_0001u32;
     assert_ok!(Assets::force_create(
       RuntimeOrigin::root(),
@@ -530,8 +532,9 @@ fn l2_treasury_spend_transfers_non_bldr_asset_from_same_treasury_account() {
 #[test]
 fn l2_treasury_spend_fails_without_winning_primary_option_reason() {
   new_test_ext().execute_with(|| {
-    let treasury_account =
-      AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID);
+    let treasury_account = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
+    );
     if !<Assets as FungiblesInspect<_>>::asset_exists(TACTICAL_GOVERNANCE_DOMAIN) {
       assert_ok!(Assets::force_create(
         RuntimeOrigin::root(),
@@ -837,7 +840,7 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
 fn signed_intent_submission_collects_opening_fee_and_records_signer_as_proposer() {
   new_test_ext().execute_with(|| {
     let balance_before = Balances::free_balance(ALICE);
-    let fee_sink = aaa_fee_sink_account();
+    let fee_sink = actor_fee_sink_account();
     let fee_sink_before = Balances::free_balance(&fee_sink);
     submit_signed_intent_proposal(110, crate::Hash::repeat_byte(12));
     assert_eq!(

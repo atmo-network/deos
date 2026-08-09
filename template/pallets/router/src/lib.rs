@@ -226,7 +226,7 @@ pub mod pallet {
     #[pallet::constant]
     type BurningManagerAccount: Get<Self::AccountId>;
 
-    /// Liquidity Actor account (fee-exempt System AAA Actor)
+    /// Liquidity Actor account (fee-exempt System Actor)
     #[pallet::constant]
     type LiquidityActorAccount: Get<Self::AccountId>;
 

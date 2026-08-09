@@ -3,11 +3,11 @@ use super::common::{
   create_test_asset, mint_tokens, new_test_ext,
 };
 use crate::{
-  AAA, Assets, AxialRouter, Balances, Oracle, Runtime, RuntimeCall, RuntimeOrigin, System,
+  Actors, Assets, AxialRouter, Balances, Oracle, Runtime, RuntimeCall, RuntimeOrigin, System,
 };
 use alloc::boxed::Box;
 use codec::Encode;
-use pallet_aaa::{
+use pallet_deos_actors::{
   ConditionSet, FundingSourcePolicy, Mutability, ProgramInput, Schedule, StepErrorPolicy, Task,
   Trigger, TriggerSource,
 };
@@ -136,7 +136,7 @@ fn pool_registration_admits_both_directional_feeds_once() {
 }
 
 #[test]
-fn oracle_publish_declares_the_subscriber_independent_aaa_hook_weight() {
+fn oracle_publish_declares_the_subscriber_independent_actor_hook_weight() {
   let feed = directional_feed(AssetKind::Native, AssetKind::Local(7));
   let call = RuntimeCall::Oracle(pallet_oracle::Call::publish {
     feed,
@@ -146,7 +146,7 @@ fn oracle_publish_declares_the_subscriber_independent_aaa_hook_weight() {
     crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_changed()
       .max(crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_ema_refresh())
       .max(crate::weights::pallet_oracle::SubstrateWeight::<Runtime>::publish_last_value());
-  let hook = crate::AAA::observation_change_ingress_weight();
+  let hook = crate::Actors::observation_change_ingress_weight();
   assert!(hook.ref_time() > 0);
   assert!(hook.proof_size() > 0);
   assert_eq!(
@@ -155,22 +155,22 @@ fn oracle_publish_declares_the_subscriber_independent_aaa_hook_weight() {
   );
   assert_eq!(
     hook,
-    <crate::configs::oracle_config::AaaObservationChangeIngress as pallet_oracle::OnObservationChanged<
+    <crate::configs::oracle_config::ActorObservationChangeIngress as pallet_oracle::OnObservationChanged<
       OracleFeedId,
     >>::weight()
   );
 }
 
 #[test]
-fn aaa_observation_publisher_inventory_is_closed_and_oracle_owned() {
+fn actor_observation_publisher_inventory_is_closed_and_oracle_owned() {
   assert_eq!(
-    crate::configs::oracle_config::AaaObservationChangeIngress::certified_publisher_inventory(),
+    crate::configs::oracle_config::ActorObservationChangeIngress::certified_publisher_inventory(),
     &["DEOS Oracle::OnObservationChanged"],
   );
 }
 
 #[test]
-fn oracle_publication_rejects_aaa_unavailability_and_recovers_after_cleanup() {
+fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() {
   new_test_ext().execute_with(|| {
     let producer = axial_router_account();
     let first = directional_feed(AssetKind::Native, AssetKind::Local(7));
@@ -189,71 +189,73 @@ fn oracle_publication_rejects_aaa_unavailability_and_recovers_after_cleanup() {
         },
         cooldown_blocks: 0,
       };
-      let execution_plan = BoundedVec::try_from(vec![pallet_aaa::Step {
+      let execution_plan = BoundedVec::try_from(vec![pallet_deos_actors::Step {
         conditions: ConditionSet::Always,
         task: Task::StopCycle,
         on_error: StepErrorPolicy::AbortCycle,
       }])
       .expect("one inert step fits");
-      assert_ok!(AAA::create_system_aaa(
+      assert_ok!(Actors::create_system_actor(
         RuntimeOrigin::root(),
         ALICE,
         Mutability::Mutable,
-        ProgramInput::Active(pallet_aaa::ActiveProgramInput {
+        ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
           schedule,
           schedule_window: None,
           execution_plan,
-          completion_policy: pallet_aaa::CompletionPolicy::Persistent,
+          completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
           funding_source_policy: FundingSourcePolicy::RuntimePolicy,
           auto_close_at_cycle_nonce: None,
         }),
       ));
     }
 
-    let maximum = <Runtime as pallet_aaa::Config>::MaxActiveActors::get()
-      * <Runtime as pallet_aaa::Config>::MaxTriggerSources::get();
-    pallet_aaa::DirtyObservationListState::<Runtime>::put(pallet_aaa::DirtyObservationList {
-      count: maximum,
-      ..Default::default()
-    });
+    let maximum = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
+      * <Runtime as pallet_deos_actors::Config>::MaxTriggerSources::get();
+    pallet_deos_actors::DirtyObservationListState::<Runtime>::put(
+      pallet_deos_actors::DirtyObservationList {
+        count: maximum,
+        ..Default::default()
+      },
+    );
     let events_before_capacity = System::events();
     assert_noop!(
       Oracle::publish(RuntimeOrigin::signed(producer.clone()), first, 1_000),
-      pallet_aaa::Error::<Runtime>::DirtyObservationCapacityExceeded
+      pallet_deos_actors::Error::<Runtime>::DirtyObservationCapacityExceeded
     );
     assert!(Oracle::observations(first).is_none());
-    assert!(AAA::dirty_observation_feeds(first).is_none());
+    assert!(Actors::dirty_observation_feeds(first).is_none());
     assert_eq!(System::events(), events_before_capacity);
 
-    pallet_aaa::DirtyObservationListState::<Runtime>::kill();
+    pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
     assert_ok!(Oracle::publish(
       RuntimeOrigin::signed(producer.clone()),
       first,
       1_000,
     ));
-    let healthy_list = AAA::dirty_observation_list();
+    let healthy_list = Actors::dirty_observation_list();
     assert!(Oracle::observations(first).is_some());
-    assert!(AAA::dirty_observation_feeds(first).is_some());
+    assert!(Actors::dirty_observation_feeds(first).is_some());
 
-    pallet_aaa::DirtyObservationListState::<Runtime>::mutate(|list| list.tail = None);
+    pallet_deos_actors::DirtyObservationListState::<Runtime>::mutate(|list| list.tail = None);
     let events_before_invariant = System::events();
     assert_noop!(
       Oracle::publish(RuntimeOrigin::signed(producer.clone()), second, 2_000),
-      pallet_aaa::Error::<Runtime>::DirtyObservationInvariant
+      pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant
     );
     assert!(Oracle::observations(second).is_none());
-    assert!(AAA::dirty_observation_feeds(second).is_none());
+    assert!(Actors::dirty_observation_feeds(second).is_none());
     assert_eq!(System::events(), events_before_invariant);
 
-    pallet_aaa::DirtyObservationListState::<Runtime>::put(healthy_list);
+    pallet_deos_actors::DirtyObservationListState::<Runtime>::put(healthy_list);
     assert_ok!(Oracle::publish(
       RuntimeOrigin::signed(producer),
       second,
       2_000,
     ));
     assert!(Oracle::observations(second).is_some());
-    assert!(AAA::dirty_observation_feeds(second).is_some());
-    assert_eq!(AAA::dirty_observation_feed_count(), 2);
+    assert!(Actors::dirty_observation_feeds(second).is_some());
+    assert_eq!(Actors::dirty_observation_feed_count(), 2);
   });
 }
 
@@ -458,26 +460,26 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       },
       cooldown_blocks: 0,
     };
-    let execution_plan = BoundedVec::try_from(vec![pallet_aaa::Step {
+    let execution_plan = BoundedVec::try_from(vec![pallet_deos_actors::Step {
       conditions: ConditionSet::Always,
       task: Task::StopCycle,
       on_error: StepErrorPolicy::AbortCycle,
     }])
     .expect("one inert step fits");
-    assert_ok!(AAA::create_system_aaa(
+    assert_ok!(Actors::create_system_actor(
       RuntimeOrigin::root(),
       ALICE,
       Mutability::Mutable,
-      ProgramInput::Active(pallet_aaa::ActiveProgramInput {
+      ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
         schedule,
         schedule_window: None,
         execution_plan,
-        completion_policy: pallet_aaa::CompletionPolicy::Persistent,
+        completion_policy: pallet_deos_actors::CompletionPolicy::Persistent,
         funding_source_policy: FundingSourcePolicy::RuntimePolicy,
         auto_close_at_cycle_nonce: None,
       }),
     ));
-    assert_eq!(AAA::observation_subscriber_count(feed), 1);
+    assert_eq!(Actors::observation_subscriber_count(feed), 1);
     let pool_before =
       crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool reserves exist");
     let alice_before = <Balances as Currency<crate::AccountId>>::free_balance(&ALICE);
@@ -487,7 +489,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       <Assets as FungiblesInspect<crate::AccountId>>::balance(OUTPUT_ASSET, &BOB);
     let events_before = System::events();
 
-    pallet_aaa::DirtyObservationListState::<Runtime>::mutate(|list| {
+    pallet_deos_actors::DirtyObservationListState::<Runtime>::mutate(|list| {
       list.head = Some(feed);
     });
     assert_eq!(
@@ -495,8 +497,8 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       Err(pallet_axial_router::Error::<Runtime>::InvalidOracleData.into())
     );
     assert_eq!(Oracle::observations(feed), None);
-    assert!(AAA::dirty_observation_feeds(feed).is_none());
-    assert_eq!(AAA::dirty_observation_feed_count(), 0);
+    assert!(Actors::dirty_observation_feeds(feed).is_none());
+    assert_eq!(Actors::dirty_observation_feed_count(), 0);
     assert_eq!(
       <Balances as Currency<crate::AccountId>>::free_balance(&ALICE),
       alice_before
@@ -515,14 +517,14 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
     );
     assert_eq!(System::events(), events_before);
 
-    pallet_aaa::DirtyObservationListState::<Runtime>::kill();
+    pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
     assert!(
       AxialRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,)
         .is_err()
     );
     assert_eq!(Oracle::observations(feed), None);
-    assert!(AAA::dirty_observation_feeds(feed).is_none());
-    assert_eq!(AAA::dirty_observation_list(), Default::default());
+    assert!(Actors::dirty_observation_feeds(feed).is_none());
+    assert_eq!(Actors::dirty_observation_list(), Default::default());
     assert_eq!(
       <Balances as Currency<crate::AccountId>>::free_balance(&ALICE),
       alice_before

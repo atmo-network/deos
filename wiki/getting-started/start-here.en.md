@@ -136,7 +136,7 @@ Safe first-change map:
 | Change | Start | Then touch | Minimum validation |
 | --- | --- | --- | --- |
 | TMC price/slope | Simulator + formulas | Runtime config after math holds | Simulator, then TMC tests |
-| TOL split/reserves | TMCTOL spec + simulator | AAA topology, runtime config, docs | Simulator + runtime tests |
+| TOL split/reserves | TMCTOL spec + simulator | Actors topology, runtime config, docs | Simulator + runtime tests |
 | Router fee policy | DEOS Router | Router config, governance bounds | Router tests + claims |
 | Governance domains/payloads | Governance overview | Gov pallet/config, client | Governance + client checks |
 | UI copy/onboarding | `web-client/` + `wiki/` | Runtime only if data contract changes | Client validate + wiki trust |

@@ -56,11 +56,11 @@ impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
     match minted_asset {
       AssetKind::Local(id) if id == ecosystem::protocol_tokens::BLDR_ASSET_ID => {
         pallet_tmc::MintOutputAccounts {
-          collateral: pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
-            ecosystem::aaa_ids::BLDR_ZM_AAA_ID,
+          collateral: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::actor_ids::BLDR_ZM_ACTORS_ID,
           ),
-          minted: pallet_aaa::Pallet::<Runtime>::sovereign_account_id_system(
-            ecosystem::aaa_ids::BLDR_SPLITTER_AAA_ID,
+          minted: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+            ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
           ),
         }
       }

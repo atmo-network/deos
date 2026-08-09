@@ -1,7 +1,7 @@
 [package]
 name = "deos-runtime"
 description = "DEOS reference parachain runtime"
-version = "0.7.12"
+version = "0.7.13"
 license = "MIT-0"
 authors.workspace = true
 homepage.workspace = true
@@ -25,7 +25,7 @@ cumulus-pallet-parachain-system.workspace = true
 docify = { workspace = true }
 hex-literal = { optional = true, workspace = true, default-features = true }
 log = { workspace = true }
-pallet-aaa.workspace = true
+pallet-deos-actors.workspace = true
 pallet-asset-registry.workspace = true
 pallet-axial-router.workspace = true
 pallet-governance.workspace = true
@@ -78,7 +78,7 @@ std = [
   "codec/std",
   "cumulus-pallet-parachain-system/std",
   "log/std",
-  "pallet-aaa/std",
+  "pallet-deos-actors/std",
   "pallet-asset-registry/std",
   "pallet-axial-router/std",
   "pallet-governance/std",
@@ -96,7 +96,7 @@ std = [
 runtime-benchmarks = [
   "cumulus-pallet-parachain-system/runtime-benchmarks",
   "hex-literal",
-  "pallet-aaa/runtime-benchmarks",
+  "pallet-deos-actors/runtime-benchmarks",
   "pallet-asset-registry/runtime-benchmarks",
   "pallet-axial-router/runtime-benchmarks",
   "pallet-governance/runtime-benchmarks",
@@ -110,7 +110,7 @@ runtime-benchmarks = [
 
 try-runtime = [
   "cumulus-pallet-parachain-system/try-runtime",
-  "pallet-aaa/try-runtime",
+  "pallet-deos-actors/try-runtime",
   "pallet-asset-registry/try-runtime",
   "pallet-axial-router/try-runtime",
   "pallet-governance/try-runtime",

@@ -17,7 +17,7 @@ This skill owns benchmark methodology and agent judgment:
 - route accepted numbers to generated weights and architecture evidence;
 - reject claims stronger than the executed evidence.
 
-It does not own runtime semantics, pallet implementation, AAA scheduler stress policy, release publication, or command implementation. Shared execution remains in [`scripts/benchmarks.sh`](../../../scripts/benchmarks.sh), production Wasm construction remains in [`scripts/03-build-runtime.sh`](../../../scripts/03-build-runtime.sh), and each script's `--help` remains the sole flag/usage reference.
+It does not own runtime semantics, pallet implementation, Actors scheduler stress policy, release publication, or command implementation. Shared execution remains in [`scripts/benchmarks.sh`](../../../scripts/benchmarks.sh), production Wasm construction remains in [`scripts/03-build-runtime.sh`](../../../scripts/03-build-runtime.sh), and each script's `--help` remains the sole flag/usage reference.
 
 ## Single-Owner Map
 

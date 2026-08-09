@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Сквозные сценарии
-summary: Конкретные walkthroughs, которые связывают пользовательские действия, runtime routing, пробуждение AAA акторов, buckets, read-model surfaces и выбор validation внутри DEOS.
+summary: Конкретные walkthroughs, которые связывают пользовательские действия, runtime routing, пробуждение Actors акторов, buckets, read-model surfaces и выбор validation внутри DEOS.
 locale: ru
 canonical_page_id: end-to-end-flows
 translation_of: end-to-end-flows.en.md
@@ -11,7 +11,7 @@ available_locales:
   - ru
 sources:
   - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
   - ../../docs/tmctol.specification.en.md
   - ../../template/pallets/staking/docs/architecture.en.md
 status: active
@@ -20,12 +20,12 @@ tags:
   - concept
   - flows
   - routing
-  - aaa
+  - actor
   - onboarding
 related:
   - Карта доменов
   - Контур маршрутизации и минтинга
-  - Система AAA
+  - Система Actors
   - AA-Актор
   - Стандарт TMCTOL
   - Стейкинг
@@ -56,12 +56,12 @@ confidence: 0.85
 ## Цепочка пробуждения акторов
 
 1. Для System Actor наступает настроенное условие запуска: входящий баланс у всеядного актора или ограниченное расписание у актора, работающего по таймеру.
-2. Планировщик AAA допускает актор, только если это разрешают правила жизненного цикла, паузы, комиссии и ограниченного исполнения.
+2. Планировщик Actors допускает актор, только если это разрешают правила жизненного цикла, паузы, комиссии и ограниченного исполнения.
 3. Актор выполняет типизированный план: свап, сжигание, добавление или снятие ликвидности, разделенную передачу, стейкинг или анстейкинг.
 4. Его результат может поступить на счет другого актора, запускаемого входящим балансом, и пробудить его.
 5. Более крупное поведение протокола складывается из малых ограниченных шагов, но остается читаемым как граф акторов.
 
-Страницы-владельцы: [Система AAA](../overview/aaa-system.ru.md), [AA-Актор](../overview/aa-actor.ru.md), [Токен-управляемая автоматизация](token-driven-automation.ru.md).
+Страницы-владельцы: [Система Actors](../overview/actor-system.ru.md), [AA-Актор](../overview/actor.ru.md), [Токен-управляемая автоматизация](token-driven-automation.ru.md).
 
 ## Временная ошибка среднего шага
 
@@ -115,8 +115,8 @@ confidence: 0.85
 
 - [Карта доменов](domain-map.ru.md)
 - [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md)
-- [Система AAA](../overview/aaa-system.ru.md)
-- [AA-Актор](../overview/aa-actor.ru.md)
+- [Система Actors](../overview/actor-system.ru.md)
+- [AA-Актор](../overview/actor.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
 - [Стейкинг](../overview/staking.ru.md)
 - [Разделение read-model](read-model-split.ru.md)

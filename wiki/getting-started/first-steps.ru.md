@@ -68,7 +68,7 @@ confidence: 0.85
 
 ### Runtime и акторы
 
-Используйте [Систему AAA](../overview/aaa-system.ru.md), [AA-Актор](../overview/aa-actor.ru.md), [Паттерны runtime](../overview/runtime-patterns.ru.md) и [Идентичность активов](../overview/asset-identity.ru.md), когда затронуты поведение реализации, потоки планировщика, активы или интеграции.
+Используйте [Систему Actors](../overview/actor-system.ru.md), [AA-Актор](../overview/actor.ru.md), [Паттерны runtime](../overview/runtime-patterns.ru.md) и [Идентичность активов](../overview/asset-identity.ru.md), когда затронуты поведение реализации, потоки планировщика, активы или интеграции.
 
 ### Governance и защита
 

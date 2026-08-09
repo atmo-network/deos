@@ -15,7 +15,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     transactionVersion: 1,
   },
   inventorySha256:
-    'b48beec25066a76e85c3ae7e3f83b7ef3d18a626d7b29f0f07fd68ff2dfb80eb',
+    'e2782bc65dcb53f1d4d9b8404d9eb6535c33b1ec246792a7e042f5cdc261fff8',
   certifiedProducers: [
     {
       id: 'AddressEventIngressExtension::signed_transfer',
@@ -75,9 +75,9 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
       id: 'XCM asset deposit',
       creditedSurface: 'Recipient sovereign',
       sourceProvenance: 'XCM origin / Xcm',
-      preflightOwner: 'AaaAwareAssetTransactor::preflight_ingress',
-      notifyOwner: 'AaaAwareAssetTransactor::notify_ingress',
-      rollbackOwner: 'AaaAwareAssetTransactor deposit revert',
+      preflightOwner: 'ActorAwareAssetTransactor::preflight_ingress',
+      notifyOwner: 'ActorAwareAssetTransactor::notify_ingress',
+      rollbackOwner: 'ActorAwareAssetTransactor deposit revert',
       weightOwner: 'One-asset deposit generated weight',
     },
     {
@@ -85,8 +85,8 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
       creditedSurface: 'Recipient sovereign',
       sourceProvenance: 'Source-less / none',
       preflightOwner: 'Source-less preflight inside notify',
-      notifyOwner: 'AaaAwareAssetTransactor::on_inbound_without_source',
-      rollbackOwner: 'AaaAwareAssetTransactor deposit revert',
+      notifyOwner: 'ActorAwareAssetTransactor::on_inbound_without_source',
+      rollbackOwner: 'ActorAwareAssetTransactor deposit revert',
       weightOwner: 'One-asset deposit generated weight',
     },
     {
@@ -101,11 +101,11 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     },
   ],
   boundary: {
-    typedTrait: 'pallet_aaa::AddressEventIngress',
+    typedTrait: 'pallet_deos_actors::AddressEventIngress',
     adapter: 'RuntimeAddressEventIngress',
     extension: 'AddressEventIngressExtension',
     helperFiles: [
-      'aaa_config.rs',
+      'actor_config.rs',
       'address_event_ingress.rs',
       'axial_router_config.rs',
       'tmc_config.rs',

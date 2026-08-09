@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
-Domain: AAA reactive operations corpus validation
+Domain: DEOS Actors reactive operations corpus validation
 Owns: Machine-readable fixture contract, runtime identity binding, evidence anchors, and deterministic failure artifacts.
 Excludes: Runtime test execution, benchmark generation, release publication, and Router route semantics.
 Zone: Shared human/CI validator implementation; invoked through reactive-operations-corpus.sh.
@@ -13,14 +13,14 @@ import { fileURLToPath } from "node:url";
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const corpusPath = resolve(
   root,
-  "template/runtime/src/tests/fixtures/aaa-reactive-operations.v1.json",
+  "template/runtime/src/tests/fixtures/actors-reactive-operations.v1.json",
 );
 const args = process.argv.slice(2);
 
 function usage() {
   console.log(`Usage: validate-reactive-operations-corpus.mjs [OPTIONS]
 
-Validates the deterministic AAA reactive-operations scenario contract and its
+Validates the deterministic Actors reactive-operations scenario contract and its
 runtime-test evidence anchors. It does not execute runtime tests.
 
 Options:
@@ -85,7 +85,7 @@ function nonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-if (corpus.schemaVersion !== "deos.aaa-reactive-operations/1") {
+if (corpus.schemaVersion !== "deos.actors-reactive-operations/1") {
   fail("corpus", "unsupported schemaVersion");
 }
 const runtime = corpus.runtimeIdentity;
@@ -214,10 +214,10 @@ for (const scenario of corpus.scenarios ?? []) {
     !nonEmptyString(anchor.path) ||
     !nonEmptyString(anchor.symbol) ||
     !/^[a-z][a-z0-9_]*$/.test(anchor.symbol) ||
-    (!anchor.path.startsWith("template/pallets/aaa/") &&
+    (!anchor.path.startsWith("template/pallets/actors/") &&
       !anchor.path.startsWith("template/runtime/"))
   ) {
-    fail(scope, "executionAnchor must name an AAA pallet/runtime test");
+    fail(scope, "executionAnchor must name an Actors pallet/runtime test");
     continue;
   }
   try {
@@ -287,9 +287,9 @@ if (list) {
 if (anchors) {
   for (const scenario of selected) {
     const packageName = scenario.executionAnchor.path.startsWith(
-      "template/pallets/aaa/",
+      "template/pallets/actors/",
     )
-      ? "pallet-deos-aaa"
+      ? "pallet-deos-actors"
       : "deos-runtime";
     console.log(`${packageName}\t${scenario.executionAnchor.symbol}`);
   }

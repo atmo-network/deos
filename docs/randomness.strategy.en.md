@@ -77,11 +77,11 @@ This means the runtime still has an economic security path, but that path is now
 
 It is no longer also responsible for maintaining a separate local randomness market.
 
-## 4. AAA probability behavior after contract contraction
+## 4. Actors probability behavior after contract contraction
 
-AAA exposes deterministic `Timer { every_blocks }` cadence only. The runtime binds no AAA entropy provider, performs no probability sampling or hash fallback for AAA execution, and emits no probability-specific event or error.
+Actors exposes deterministic `Timer { every_blocks }` cadence only. The runtime binds no Actors entropy provider, performs no probability sampling or hash fallback for Actors execution, and emits no probability-specific event or error.
 
-A future probabilistic AAA trigger remains possible only as a separate append-only trigger variant after a concrete deterministic, financially secure entropy contract exists. Previous-block hashes, trusted-collator posture, or technically readable epoch-scale relay randomness do not satisfy that gate.
+A future probabilistic Actors trigger remains possible only as a separate append-only trigger variant after a concrete deterministic, financially secure entropy contract exists. Previous-block hashes, trusted-collator posture, or technically readable epoch-scale relay randomness do not satisfy that gate.
 
 ## 5. Staking after VRF removal
 
@@ -245,7 +245,7 @@ The current simplified line explicitly does **not** promise:
 
 Current repository anchors for the simplified posture:
 
-- `template/runtime/src/configs/aaa_config.rs`
+- `template/runtime/src/configs/actor_config.rs`
 - `template/runtime/src/configs/staking_config.rs`
 - `template/runtime/src/configs/mod.rs`
 - `template/pallets/staking/src/lib.rs`

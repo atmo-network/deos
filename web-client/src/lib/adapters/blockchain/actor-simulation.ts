@@ -1,0 +1,253 @@
+/*
+Domain: DEOS Actors finalized-state simulation transport
+Owns: Finalized block selection, state-pinned metadata/runtime code, typed runtime API invocation, and provider evidence assembly.
+Excludes: Local Wasm verification, state-proof verification, signing, submission, artifact authoring, and outcome synthesis.
+Zone: Blockchain adapter capability; imports automation contracts and the low-level DEOS connection only.
+*/
+import type { HexString } from 'polkadot-api';
+
+import type { DeosClient, DeosPapiConnection, DeosTypedApi } from './deos.ts';
+
+import {
+  type ActorMatchingWasmResponse,
+  runActorMatchingWasmSimulation,
+} from '../../automation/matching-wasm.ts';
+import {
+  type ActorPlanArtifact,
+  type ActorPlanHex,
+  type ActorPlanRuntimeIdentity,
+  inspectActorPlanArtifact,
+} from '../../automation/plan-artifact.ts';
+import {
+  ACTORS_SIMULATION_RUNTIME_API,
+  ACTORS_SIMULATION_RUNTIME_API_VERSION,
+  decodeActorRuntimeSimulationResult,
+  encodeActorRuntimeSimulationResult,
+} from '../../automation/runtime-simulation-codec.ts';
+import type { AutomationAuthoringContext } from '../../automation/types.ts';
+
+const RUNTIME_CODE_STORAGE_KEY = '0x3a636f6465' as HexString;
+const METADATA_VERSION = 16;
+const HEX_PATTERN = /^0x(?:[0-9a-fA-F]{2})+$/;
+const PLAN_HEX_PATTERN = /^0x(?:[0-9a-f]{2})+$/;
+
+export type ActorFinalizedSimulationMode =
+  | 'FreshCurrentPlan'
+  | 'CurrentContinuation';
+
+export type ActorFinalizedSimulationInput = {
+  artifact: ActorPlanArtifact;
+  actorId: bigint;
+  mode: ActorFinalizedSimulationMode;
+  finalizedBlock?: { hash: ActorPlanHex; number: number };
+};
+
+type DeosSimulationConnection = Pick<DeosPapiConnection, 'ensureConnected'>;
+type RuntimeVersion = Awaited<
+  ReturnType<DeosTypedApi['apis']['Core']['version']>
+>;
+type RuntimeSimulationProgram = Parameters<
+  DeosTypedApi['apis']['ActorSimulationApi']['simulate_current_program']
+>[3];
+
+function asPlanHex(value: string, field: string): ActorPlanHex {
+  if (!PLAN_HEX_PATTERN.test(value)) {
+    throw new Error(`${field} must contain canonical lowercase hex bytes`);
+  }
+  return value as ActorPlanHex;
+}
+
+function hexToBytes(value: string, field: string): Uint8Array {
+  if (!HEX_PATTERN.test(value)) {
+    throw new Error(`${field} must contain canonical hex bytes`);
+  }
+  const bytes = new Uint8Array((value.length - 2) / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number(`0x${value.slice(2 + index * 2, 4 + index * 2)}`);
+  }
+  return bytes;
+}
+
+function runtimeIdentity(
+  genesisHash: string,
+  version: RuntimeVersion,
+): ActorPlanRuntimeIdentity {
+  if (!Number.isSafeInteger(version.spec_version)) {
+    throw new Error('Finalized runtime spec_version is not a safe integer');
+  }
+  if (!Number.isSafeInteger(version.transaction_version)) {
+    throw new Error(
+      'Finalized runtime transaction_version is not a safe integer',
+    );
+  }
+  return {
+    genesisHash: asPlanHex(genesisHash, 'genesisHash'),
+    specVersion: version.spec_version,
+    transactionVersion: version.transaction_version,
+  };
+}
+
+async function finalizedPlanContext(
+  client: DeosClient,
+  typedApi: DeosTypedApi,
+  selectedBlock?: ActorFinalizedSimulationInput['finalizedBlock'],
+) {
+  const finalizedHead = await client.getFinalizedBlock();
+  const finalizedBlock = selectedBlock ?? finalizedHead;
+  if (
+    selectedBlock != null &&
+    selectedBlock.number !== 0 &&
+    (selectedBlock.number !== finalizedHead.number ||
+      selectedBlock.hash !== finalizedHead.hash)
+  ) {
+    throw new Error(
+      'Explicit simulation block must be genesis or the current finalized head',
+    );
+  }
+  const at = finalizedBlock.hash as HexString;
+  const [chainSpec, version, metadata] = await Promise.all([
+    client.getChainSpecData(),
+    typedApi.apis.Core.version({ at }),
+    typedApi.apis.Metadata.metadata_at_version(METADATA_VERSION, { at }),
+  ]);
+  if (
+    selectedBlock?.number === 0 &&
+    selectedBlock.hash !== chainSpec.genesisHash
+  ) {
+    throw new Error('Explicit genesis fixture hash does not match the chain');
+  }
+  if (!(metadata instanceof Uint8Array)) {
+    throw new Error('Finalized runtime does not expose V16 metadata');
+  }
+  return {
+    at,
+    blockNumber: finalizedBlock.number,
+    metadataBytes: metadata,
+    runtime: runtimeIdentity(chainSpec.genesisHash, version),
+  };
+}
+
+export async function getDeosActorFinalizedAuthoringContext(
+  connection: DeosSimulationConnection,
+): Promise<AutomationAuthoringContext> {
+  const { client, typedApi } = await connection.ensureConnected();
+  const context = await finalizedPlanContext(client, typedApi);
+  return {
+    metadataBytes: context.metadataBytes,
+    runtime: context.runtime,
+    finalizedBlock: {
+      hash: asPlanHex(context.at, 'finalized block hash'),
+      number: context.blockNumber,
+    },
+  };
+}
+
+async function finalizedRuntimeContext(
+  client: DeosClient,
+  typedApi: DeosTypedApi,
+  selectedBlock?: ActorFinalizedSimulationInput['finalizedBlock'],
+) {
+  const context = await finalizedPlanContext(client, typedApi, selectedBlock);
+  const [header, runtimeCodeHex] = await Promise.all([
+    client.getBlockHeader(context.at),
+    client._request<string | null>('state_getStorage', [
+      RUNTIME_CODE_STORAGE_KEY,
+      context.at,
+    ]),
+  ]);
+  if (runtimeCodeHex == null) {
+    throw new Error('Finalized state does not expose runtime :code');
+  }
+  return {
+    ...context,
+    stateRoot: header.stateRoot,
+    runtimeCodeBytes: hexToBytes(runtimeCodeHex, 'runtime :code'),
+  };
+}
+
+async function executeSimulation(
+  typedApi: DeosTypedApi,
+  at: HexString,
+  request: {
+    actorId: bigint;
+    actorType: ActorPlanArtifact['actorType'];
+    mutability: ActorPlanArtifact['mutability'];
+    runtimeProgram: RuntimeSimulationProgram;
+    mode: ActorFinalizedSimulationMode;
+  },
+) {
+  return typedApi.apis.ActorSimulationApi.simulate_current_program(
+    request.actorId,
+    { type: request.actorType, value: undefined },
+    { type: request.mutability, value: undefined },
+    request.runtimeProgram,
+    { type: request.mode, value: undefined },
+    { at },
+  );
+}
+
+export async function runDeosActorFinalizedSimulation(
+  connection: DeosSimulationConnection,
+  input: ActorFinalizedSimulationInput,
+): Promise<ActorMatchingWasmResponse> {
+  const { client, typedApi } = await connection.ensureConnected();
+  const context = await finalizedRuntimeContext(
+    client,
+    typedApi,
+    input.finalizedBlock,
+  );
+
+  return runActorMatchingWasmSimulation({
+    artifact: input.artifact,
+    actorId: input.actorId,
+    mode: input.mode,
+    metadataBytes: context.metadataBytes,
+    runtime: context.runtime,
+    runtimeCodeBytes: context.runtimeCodeBytes,
+    snapshot: {
+      blockHash: asPlanHex(context.at, 'finalized block hash'),
+      blockNumber: context.blockNumber,
+      stateRoot: asPlanHex(context.stateRoot, 'finalized state root'),
+      stateSource: 'FinalizedBlock',
+    },
+    runtimeApi: ACTORS_SIMULATION_RUNTIME_API,
+    runtimeApiVersion: ACTORS_SIMULATION_RUNTIME_API_VERSION,
+    provider: {
+      async simulate(request) {
+        const inspection = inspectActorPlanArtifact(
+          input.artifact,
+          context.metadataBytes,
+          context.runtime,
+        );
+        if (!inspection.valid) {
+          throw new Error(
+            `Invalid finalized Actors artifact: ${inspection.errors.join('; ')}`,
+          );
+        }
+        const runtimeResult = await executeSimulation(typedApi, context.at, {
+          actorId: request.actorId,
+          actorType: request.actorType,
+          mutability: request.mutability,
+          runtimeProgram: inspection.runtimeValue as RuntimeSimulationProgram,
+          mode: request.mode,
+        });
+        const resultScale = encodeActorRuntimeSimulationResult(
+          context.metadataBytes,
+          runtimeResult,
+        );
+        const decoded = decodeActorRuntimeSimulationResult(
+          context.metadataBytes,
+          resultScale,
+        );
+        if (!decoded.success) {
+          throw new Error(`Runtime simulation rejected: ${decoded.error}`);
+        }
+        return {
+          engine: 'RuntimeWasm',
+          pin: request.pin,
+          outcome: { ...decoded.outcome, resultScale },
+        };
+      },
+    },
+  });
+}

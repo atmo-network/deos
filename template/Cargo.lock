@@ -4097,7 +4097,7 @@ dependencies = [
 
 [[package]]
 name = "deos-primitives"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "parity-scale-codec",
  "scale-info",
@@ -4108,14 +4108,14 @@ dependencies = [
 
 [[package]]
 name = "deos-runtime"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "cumulus-pallet-parachain-system",
  "deos-primitives",
  "docify",
  "hex-literal",
  "log",
- "pallet-deos-aaa",
+ "pallet-deos-actors",
  "pallet-deos-asset-registry",
  "pallet-deos-governance",
  "pallet-deos-oracle",
@@ -8638,16 +8638,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pallet-aaa-embedding-fixture"
-version = "0.7.12"
-dependencies = [
- "pallet-deos-aaa",
- "parity-scale-codec",
- "polkadot-sdk",
- "scale-info",
-]
-
-[[package]]
 name = "pallet-accumulate-and-forward"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9411,8 +9401,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "pallet-deos-aaa"
-version = "0.7.12"
+name = "pallet-deos-actors"
+version = "0.7.13"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9425,8 +9415,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "pallet-deos-actors-embedding-fixture"
+version = "0.7.13"
+dependencies = [
+ "pallet-deos-actors",
+ "parity-scale-codec",
+ "polkadot-sdk",
+ "scale-info",
+]
+
+[[package]]
 name = "pallet-deos-asset-registry"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "deos-primitives",
  "parity-scale-codec",
@@ -9438,7 +9438,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-governance"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9448,7 +9448,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-oracle"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9458,7 +9458,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-router"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "deos-primitives",
  "pallet-deos-tmc",
@@ -9471,7 +9471,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-staking"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "parity-scale-codec",
  "polkadot-sdk",
@@ -9481,7 +9481,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-deos-tmc"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "deos-primitives",
  "parity-scale-codec",
@@ -10078,7 +10078,7 @@ dependencies = [
 
 [[package]]
 name = "pallet-oracle-embedding-fixture"
-version = "0.7.12"
+version = "0.7.13"
 dependencies = [
  "pallet-deos-oracle",
  "parity-scale-codec",

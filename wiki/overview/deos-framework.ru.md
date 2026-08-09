@@ -22,7 +22,7 @@ tags:
   - deos
 related:
   - Первые шаги
-  - Система AAA
+  - Система Actors
   - AA-Актор
   - DEOS Router
   - Token Minting Curve
@@ -85,7 +85,7 @@ DEOS использует токен-управляемую координаци
 
 - TMC как детерминированный mint-side механизм эмиссии
 - DEOS Router как механизм выбора маршрута и сбора/сжигания комиссий
-- AAA как детерминированную инфраструктуру исполнения
+- Actors как детерминированную инфраструктуру исполнения
 - Staking и governance как ограниченные поверхности социального контроля
 - Явное разделение между каноническими on-chain проекциями и materialized-представлениями
 
@@ -93,8 +93,8 @@ DEOS использует токен-управляемую координаци
 
 - [Первые шаги](../getting-started/first-steps.ru.md)
 - [Форк DEOS](../usage/forking-deos.ru.md)
-- [Система AAA](aaa-system.ru.md)
-- [AA-Актор](aa-actor.ru.md)
+- [Система Actors](actor-system.ru.md)
+- [AA-Актор](actor.ru.md)
 - [DEOS Router](router.ru.md)
 - [Token Minting Curve](token-minting-curve.ru.md)
 - [Governance](governance.ru.md)

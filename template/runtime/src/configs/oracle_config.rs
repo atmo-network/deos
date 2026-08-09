@@ -1,5 +1,5 @@
 use crate::{AccountId, Oracle, Runtime, RuntimeOrigin};
-use pallet_aaa::ObservationChangeIngress;
+use pallet_deos_actors::ObservationChangeIngress;
 use pallet_oracle::{Aggregation, FeedConfig, FeedLifecycle, ZeroPolicy};
 use polkadot_sdk::{
   frame_support::{ensure, parameter_types, transactional, weights::Weight},
@@ -16,8 +16,8 @@ use super::axial_router_config::{AxialRouterEmaHalfLife, AxialRouterPalletId};
 pub const AXIAL_ROUTER_ORACLE_SCALE: u8 = 12;
 pub const AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
 
-/// Closed runtime inventory of publishers certified to create AAA observation ingress.
-pub const AAA_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
+/// Closed runtime inventory of publishers certified to create Actors observation ingress.
+pub const ACTORS_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
 
 pub const fn axial_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   OracleFeedId::directional_local_pool_price(
@@ -89,24 +89,26 @@ fn ensure_axial_router_feed(feed: OracleFeedId) -> DispatchResult {
   )
 }
 
-pub struct AaaObservationChangeIngress;
+pub struct ActorObservationChangeIngress;
 
-impl AaaObservationChangeIngress {
+impl ActorObservationChangeIngress {
   pub const fn certified_publisher_inventory() -> &'static [&'static str] {
-    AAA_OBSERVATION_PUBLISHER_INVENTORY
+    ACTORS_OBSERVATION_PUBLISHER_INVENTORY
   }
 }
 
-impl pallet_oracle::OnObservationChanged<OracleFeedId> for AaaObservationChangeIngress {
+impl pallet_oracle::OnObservationChanged<OracleFeedId> for ActorObservationChangeIngress {
   fn on_observation_changed(
     feed: OracleFeedId,
     revision: pallet_oracle::Revision,
   ) -> DispatchResult {
-    <crate::AAA as ObservationChangeIngress<OracleFeedId>>::note_observation_changed(feed, revision)
+    <crate::Actors as ObservationChangeIngress<OracleFeedId>>::note_observation_changed(
+      feed, revision,
+    )
   }
 
   fn weight() -> Weight {
-    crate::AAA::observation_change_ingress_weight()
+    crate::Actors::observation_change_ingress_weight()
   }
 }
 
@@ -123,7 +125,7 @@ impl pallet_oracle::Config for Runtime {
   type Provenance = OracleProvenance;
   type RegisterOrigin = EnsureRoot<AccountId>;
   type PublishOrigin = EnsureSigned<AccountId>;
-  type OnObservationChanged = AaaObservationChangeIngress;
+  type OnObservationChanged = ActorObservationChangeIngress;
   type MaxFeeds = OracleMaxFeeds;
   type MaxFeedsPerProducer = OracleMaxFeedsPerProducer;
   type MaxScale = OracleMaxScale;

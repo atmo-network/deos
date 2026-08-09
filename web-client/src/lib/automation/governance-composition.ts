@@ -1,6 +1,6 @@
 /*
-Domain: AAA control-plane call composition
-Owns: Metadata-bound AAA RuntimeCall bytes, preimage identity, origin requirements, and governance-admission classification.
+Domain: Actors control-plane call composition
+Owns: Metadata-bound Actors RuntimeCall bytes, preimage identity, origin requirements, and governance-admission classification.
 Excludes: Proposal advocacy, signing, preimage noting, submission, voting, enactment, and runtime mutation.
 Zone: Automation domain capability; current governance support remains derived from shipped DEOS payload contracts.
 */
@@ -14,79 +14,79 @@ import {
 } from '@polkadot-api/substrate-bindings';
 import { blake2AsHex } from '@polkadot/util-crypto';
 
-import { AAA_MAX_OWNER_SLOTS } from './aaa-protocol-bounds.ts';
+import { ACTORS_MAX_OWNER_SLOTS } from './actors-protocol-bounds.ts';
 import {
-  type AaaPlanArtifact,
-  type AaaPlanHex,
-  type AaaPlanRuntimeIdentity,
-  inspectAaaPlanArtifact,
+  type ActorPlanArtifact,
+  type ActorPlanHex,
+  type ActorPlanRuntimeIdentity,
+  inspectActorPlanArtifact,
 } from './plan-artifact.ts';
 
-export type AaaCompositionTarget =
+export type ActorCompositionTarget =
   | { type: 'Create'; owner?: string; ownerSlot?: number }
-  | { type: 'Activate'; aaaId: bigint }
+  | { type: 'Activate'; actorId: bigint }
   | { type: 'ReattachSystem'; sovereignId: bigint; owner: string };
 
-export type AaaGovernanceComposition = {
-  planId: AaaPlanHex;
-  runtime: AaaPlanRuntimeIdentity & { metadataHash: AaaPlanHex };
+export type ActorGovernanceComposition = {
+  planId: ActorPlanHex;
+  runtime: ActorPlanRuntimeIdentity & { metadataHash: ActorPlanHex };
   call: {
     pallet: string;
     method:
-      | 'create_user_aaa'
-      | 'create_user_aaa_at_slot'
-      | 'create_system_aaa'
-      | 'activate_aaa'
-      | 'create_system_aaa_at_sovereign_id';
-    bytes: AaaPlanHex;
+      | 'create_user_actor'
+      | 'create_user_actor_at_slot'
+      | 'create_system_actor'
+      | 'activate_actor'
+      | 'create_system_actor_at_sovereign_id';
+    bytes: ActorPlanHex;
     byteLength: number;
-    hash: AaaPlanHex;
+    hash: ActorPlanHex;
   };
   authority: {
     requiredOrigin: 'OwnerSigned' | 'Root';
     governanceDomain: 'StrategicNative' | null;
   };
   preimage: {
-    bytes: AaaPlanHex;
-    hash: AaaPlanHex;
-    governanceAdmission: 'DirectCallOnly' | 'UnsupportedAaaRootCall';
+    bytes: ActorPlanHex;
+    hash: ActorPlanHex;
+    governanceAdmission: 'DirectCallOnly' | 'UnsupportedActorRootCall';
     reason: string;
   };
 };
 
-function bytesToHex(bytes: Uint8Array): AaaPlanHex {
+function bytesToHex(bytes: Uint8Array): ActorPlanHex {
   let value = '0x';
   for (const byte of bytes) value += byte.toString(16).padStart(2, '0');
-  return value as AaaPlanHex;
+  return value as ActorPlanHex;
 }
 
-function validateAaaId(value: bigint) {
+function validateActorId(value: bigint) {
   if (value < 0n || value > 0xffff_ffff_ffff_ffffn) {
-    throw new Error('aaaId must fit the runtime u64 contract');
+    throw new Error('actorId must fit the runtime u64 contract');
   }
 }
 
 function validateOwner(owner: string | undefined) {
   if (owner == null || owner.trim().length === 0) {
-    throw new Error('System AAA composition requires an owner account');
+    throw new Error('System Actors composition requires an owner account');
   }
   return owner.trim();
 }
 
-export function composeAaaRuntimeCall(input: {
-  artifact: AaaPlanArtifact;
+export function composeActorRuntimeCall(input: {
+  artifact: ActorPlanArtifact;
   metadataBytes: Uint8Array;
-  runtime: AaaPlanRuntimeIdentity;
-  target: AaaCompositionTarget;
-}): AaaGovernanceComposition {
-  const inspection = inspectAaaPlanArtifact(
+  runtime: ActorPlanRuntimeIdentity;
+  target: ActorCompositionTarget;
+}): ActorGovernanceComposition {
+  const inspection = inspectActorPlanArtifact(
     input.artifact,
     input.metadataBytes,
     input.runtime,
   );
   if (!inspection.valid) {
     throw new Error(
-      `Invalid AAA plan artifact: ${inspection.errors.join('; ')}`,
+      `Invalid Actors plan artifact: ${inspection.errors.join('; ')}`,
     );
   }
 
@@ -95,30 +95,30 @@ export function composeAaaRuntimeCall(input: {
     value: undefined,
   };
   const program = inspection.runtimeValue;
-  let method: AaaGovernanceComposition['call']['method'];
+  let method: ActorGovernanceComposition['call']['method'];
   let callValue: unknown;
-  let requiredOrigin: AaaGovernanceComposition['authority']['requiredOrigin'];
+  let requiredOrigin: ActorGovernanceComposition['authority']['requiredOrigin'];
 
   switch (input.target.type) {
     case 'Create':
-      if (input.artifact.aaaType === 'User') {
+      if (input.artifact.actorType === 'User') {
         if (input.target.owner != null) {
-          throw new Error('User AAA ownership derives from the signer');
+          throw new Error('User Actors ownership derives from the signer');
         }
         if (input.target.ownerSlot == null) {
-          method = 'create_user_aaa';
+          method = 'create_user_actor';
           callValue = { mutability, program };
         } else {
           if (
             !Number.isSafeInteger(input.target.ownerSlot) ||
             input.target.ownerSlot < 0 ||
-            input.target.ownerSlot >= AAA_MAX_OWNER_SLOTS
+            input.target.ownerSlot >= ACTORS_MAX_OWNER_SLOTS
           ) {
             throw new Error(
-              `ownerSlot must be within 0..${AAA_MAX_OWNER_SLOTS - 1} per runtime MaxOwnerSlots`,
+              `ownerSlot must be within 0..${ACTORS_MAX_OWNER_SLOTS - 1} per runtime MaxOwnerSlots`,
             );
           }
-          method = 'create_user_aaa_at_slot';
+          method = 'create_user_actor_at_slot';
           callValue = {
             owner_slot: input.target.ownerSlot,
             mutability,
@@ -128,9 +128,11 @@ export function composeAaaRuntimeCall(input: {
         requiredOrigin = 'OwnerSigned';
       } else {
         if (input.target.ownerSlot != null) {
-          throw new Error('System AAA creation does not accept an owner slot');
+          throw new Error(
+            'System Actors creation does not accept an owner slot',
+          );
         }
-        method = 'create_system_aaa';
+        method = 'create_system_actor';
         callValue = {
           owner: validateOwner(input.target.owner),
           mutability,
@@ -140,20 +142,20 @@ export function composeAaaRuntimeCall(input: {
       }
       break;
     case 'Activate':
-      validateAaaId(input.target.aaaId);
-      method = 'activate_aaa';
-      callValue = { aaa_id: input.target.aaaId, program };
+      validateActorId(input.target.actorId);
+      method = 'activate_actor';
+      callValue = { actor_id: input.target.actorId, program };
       requiredOrigin =
-        input.artifact.aaaType === 'User' ? 'OwnerSigned' : 'Root';
+        input.artifact.actorType === 'User' ? 'OwnerSigned' : 'Root';
       break;
     case 'ReattachSystem':
-      if (input.artifact.aaaType !== 'System') {
+      if (input.artifact.actorType !== 'System') {
         throw new Error(
-          'Only a System AAA artifact can attach to System custody',
+          'Only a System Actors artifact can attach to System custody',
         );
       }
-      validateAaaId(input.target.sovereignId);
-      method = 'create_system_aaa_at_sovereign_id';
+      validateActorId(input.target.sovereignId);
+      method = 'create_system_actor_at_sovereign_id';
       callValue = {
         sovereign_id: input.target.sovereignId,
         owner: validateOwner(input.target.owner),
@@ -165,26 +167,28 @@ export function composeAaaRuntimeCall(input: {
   }
 
   const metadata = unifyMetadata(decAnyMetadata(input.metadataBytes));
-  const aaaPallets = metadata.pallets.filter((pallet) => {
+  const actorPallets = metadata.pallets.filter((pallet) => {
     if (pallet.calls == null) return false;
     return (
       metadata.lookup[pallet.calls.type]?.path?.join('::') ===
-      'pallet_aaa::pallet::Call'
+      'pallet_deos_actors::pallet::Call'
     );
   });
-  if (aaaPallets.length !== 1) {
+  if (actorPallets.length !== 1) {
     throw new Error(
-      'Runtime metadata must expose exactly one pallet-aaa call surface',
+      'Runtime metadata must expose exactly one pallet-deos-actors call surface',
     );
   }
   if (!('outerEnums' in metadata)) {
-    throw new Error('AAA call composition requires V15+ outer-enum metadata');
+    throw new Error(
+      'Actors call composition requires V15+ outer-enum metadata',
+    );
   }
   const codec = getDynamicBuilder(getLookupFn(metadata)).buildDefinition(
     metadata.outerEnums.call,
   );
   const bytes = codec.enc({
-    type: aaaPallets[0].name,
+    type: actorPallets[0].name,
     value: { type: method, value: callValue },
   });
   const roundTrip = codec.enc(codec.dec(bytes));
@@ -194,7 +198,7 @@ export function composeAaaRuntimeCall(input: {
       'RuntimeCall must decode and re-encode to exact SCALE bytes',
     );
   }
-  const callHash = blake2AsHex(bytes, 256) as AaaPlanHex;
+  const callHash = blake2AsHex(bytes, 256) as ActorPlanHex;
   const directOwnerCall = requiredOrigin === 'OwnerSigned';
 
   return {
@@ -204,7 +208,7 @@ export function composeAaaRuntimeCall(input: {
       metadataHash: input.artifact.metadataHash,
     },
     call: {
-      pallet: aaaPallets[0].name,
+      pallet: actorPallets[0].name,
       method,
       bytes: callBytes,
       byteLength: bytes.length,
@@ -220,14 +224,14 @@ export function composeAaaRuntimeCall(input: {
           hash: callHash,
           governanceAdmission: 'DirectCallOnly',
           reason:
-            'Owner-controlled User AAA calls require a signer and do not enter governance.',
+            'Owner-controlled User Actors calls require a signer and do not enter governance.',
         }
       : {
           bytes: callBytes,
           hash: callHash,
-          governanceAdmission: 'UnsupportedAaaRootCall',
+          governanceAdmission: 'UnsupportedActorRootCall',
           reason:
-            'Current L1RootAction accepts only the dedicated runtime-upgrade payload, not arbitrary AAA RuntimeCall bytes.',
+            'Current L1RootAction accepts only the dedicated runtime-upgrade payload, not arbitrary Actors RuntimeCall bytes.',
         },
   };
 }

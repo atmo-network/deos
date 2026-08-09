@@ -1,0 +1,45 @@
+[package]
+name = "pallet-deos-actors-embedding-fixture"
+description = "External-consumer runtime fixture for the public pallet-deos-actors embedding contract"
+version = "0.7.13"
+authors.workspace = true
+license = "MIT-0"
+homepage.workspace = true
+repository.workspace = true
+edition.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+codec = { workspace = true }
+pallet-deos-actors.workspace = true
+scale-info.workspace = true
+polkadot-sdk = { workspace = true, features = [
+  "frame-executive",
+  "frame-support",
+  "frame-system",
+  "pallet-balances",
+  "sp-core",
+  "sp-io",
+  "sp-runtime",
+] }
+
+[features]
+default = ["std"]
+std = [
+  "codec/std",
+  "pallet-deos-actors/std",
+  "polkadot-sdk/std",
+  "scale-info/std",
+]
+dex-fixture = []
+runtime-benchmarks = [
+  "pallet-deos-actors/runtime-benchmarks",
+  "polkadot-sdk/runtime-benchmarks",
+]
+try-runtime = [
+  "pallet-deos-actors/try-runtime",
+  "polkadot-sdk/try-runtime",
+]

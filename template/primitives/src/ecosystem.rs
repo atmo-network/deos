@@ -9,25 +9,25 @@
 /// Balance type alias for consistency across ecosystem
 pub type Balance = u128;
 
-/// Fixed `aaa_id` values for well-known AAA addresses.
+/// Fixed `actor_id` values for well-known Actors addresses.
 ///
 /// The corresponding sovereign account is derived via:
-/// `Blake2_256( SCALE(AaaPalletId, b"system", aaa_id) )` → `AccountId32`
+/// `Blake2_256( SCALE(ActorPalletId, b"system", actor_id) )` → `AccountId32`
 ///
 /// IDs are sequential from `0` for all core system actors in the current launch line.
-pub mod aaa_ids {
-  /// Burn Actor System AAA — collects DEOS Router fees and burns native tokens
-  /// Created first at genesis (`aaa_id = 0`)
+pub mod actor_ids {
+  /// Burn Actor System Actors — collects DEOS Router fees and burns native tokens
+  /// Created first at genesis (`actor_id = 0`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xeba61f8494ba498cb84ce3b771bc3c193dbd82f9a999153a55c383349f6e512e`
   ///   SS58: `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv`
-  pub const BURNING_MANAGER_AAA_ID: u64 = 0;
+  pub const BURNING_MANAGER_ACTORS_ID: u64 = 0;
 
-  /// Fee Sink System AAA — unified fee collection and phase-aware redistribution
-  /// Created at genesis (`aaa_id = 1`)
+  /// Fee Sink System Actors — unified fee collection and phase-aware redistribution
+  /// Created at genesis (`actor_id = 1`)
   ///
-  /// Canonical role: unified collection address for 100% of transaction, AAA User-action,
+  /// Canonical role: unified collection address for 100% of transaction, Actors User-action,
   /// governance-opening, and XCM-execution fees, with no immediate author share. DEOS Router
   /// trading fees remain a separate deflationary flow to the Burn Actor. During the trusted,
   /// permissioned-collator phase, available native balance splits 50/50 between staking ingress
@@ -35,114 +35,111 @@ pub mod aaa_ids {
   /// collators plus a bounded security-reward settlement contract; indivisible remainder stays
   /// in Fee Sink for a later cycle.
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084`
   ///   SS58: `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh`
-  pub const FEE_SINK_AAA_ID: u64 = 1;
+  pub const FEE_SINK_ACTORS_ID: u64 = 1;
 
-  /// Liquidity Actor System AAA — transforms protocol capital into LP tokens
-  /// Created second active System AAA at genesis (`aaa_id = 2`)
+  /// Liquidity Actor System Actors — transforms protocol capital into LP tokens
+  /// Created second active System Actors at genesis (`actor_id = 2`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab`
   ///   SS58: `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C`
-  pub const LIQUIDITY_ACTOR_AAA_ID: u64 = 2;
-  /// Legacy alias for [`LIQUIDITY_ACTOR_AAA_ID`] (pre-AAA-abstraction Zap Manager name).
-  pub const ZAP_MANAGER_AAA_ID: u64 = LIQUIDITY_ACTOR_AAA_ID;
-
+  pub const LIQUIDITY_ACTOR_ACTORS_ID: u64 = 2;
   /// TOL Bucket A (Anchor) — immutable LP accumulator
-  /// Created at genesis (`aaa_id = 3`)
+  /// Created at genesis (`actor_id = 3`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0x6f9a5aa8cd9ba27b2e69f1bac1c521d2ffde543275ebd787da11dbd131c50d25`
   ///   SS58: `5Eb32Qkj9FpPMUXZMNreJzRESQRbYQWwiKXK4zf9VXifTEqX`
-  pub const TOL_BUCKET_A_AAA_ID: u64 = 3;
+  pub const TOL_BUCKET_A_ACTORS_ID: u64 = 3;
 
   /// TOL Bucket B (Building) — gradual LP unwind for BLDR buyback
-  /// Created at genesis (`aaa_id = 4`)
+  /// Created at genesis (`actor_id = 4`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0x03699bb4549d77d91390fc161867ccd3ef97d4f305f01757708905c84cb7d882`
   ///   SS58: `5C9BNb4AoxDngwC6nzu8SEtAEbtGHiKeBjzJwgUewA9qDNL3`
-  pub const TOL_BUCKET_B_AAA_ID: u64 = 4;
+  pub const TOL_BUCKET_B_ACTORS_ID: u64 = 4;
 
   /// TOL Bucket C (Capital) — gradual LP unwind for treasury operations
-  /// Created at genesis (`aaa_id = 5`)
+  /// Created at genesis (`actor_id = 5`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0x313e7fb07ed6681741b54c3d421f8c261027048e2a9b0668e1058654d369de29`
   ///   SS58: `5DBGmawvmUvHAg9e2A4bcwZm3NiGX5KE5sPCKepN36SMJvfX`
-  pub const TOL_BUCKET_C_AAA_ID: u64 = 5;
+  pub const TOL_BUCKET_C_ACTORS_ID: u64 = 5;
 
   /// TOL Bucket D (Dormant) — LP held until governance decides future policy
-  /// Created at genesis (`aaa_id = 6`)
+  /// Created at genesis (`actor_id = 6`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xd23baab9890a6990ff23e7ad7ab9d1ad34712d7add2344917d110e3cec5b9242`
   ///   SS58: `5GpMdwY6iMiA8LRUczsZH6p9WoxN4rX15U7FJWbeqTqTrPLX`
-  pub const TOL_BUCKET_D_AAA_ID: u64 = 6;
+  pub const TOL_BUCKET_D_ACTORS_ID: u64 = 6;
 
   /// Treasury B (Building Treasury) — paired custody lane for admitted Bucket B LP unwind
-  /// Created at genesis (`aaa_id = 7`), Noop by default
+  /// Created at genesis (`actor_id = 7`), Noop by default
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xa027809984f38031e61246efe8ad1f28ddacd9870f6bed081560089c15f9b966`
   ///   SS58: `5FghFeZDxtGWmvASpM4etxnYtreW9yamSx1Pwh1aGYkny2uv`
-  pub const TREASURY_B_AAA_ID: u64 = 7;
+  pub const TREASURY_B_ACTORS_ID: u64 = 7;
 
   /// Treasury C (Capital Treasury) — paired custody lane for admitted Bucket C LP unwind
-  /// Created at genesis (`aaa_id = 8`), Noop by default
+  /// Created at genesis (`actor_id = 8`), Noop by default
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xcae77c85e5665e0cbe994898429478d3facf4c29a9b7539902f95ad7b3b4bf9b`
   ///   SS58: `5GekJ6zNwu6ABqhpcagnxbPmP6UtJ1gUKdvJywZKugWkCLhe`
-  pub const TREASURY_C_AAA_ID: u64 = 8;
+  pub const TREASURY_C_ACTORS_ID: u64 = 8;
 
   /// Treasury D (Dormant Treasury) — paired custody lane for admitted Bucket D LP unwind
-  /// Created at genesis (`aaa_id = 9`), Noop by default
+  /// Created at genesis (`actor_id = 9`), Noop by default
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xc81b0eb40aea260eb09b950cfbe2c43f9be1dc73bf62cf081c376cff4bdae0ca`
   ///   SS58: `5Gb5UKWyYyyttHG3GCsyEhN2Qtb92auewWLZzPaQCvp1RHaj`
-  pub const TREASURY_D_AAA_ID: u64 = 9;
+  pub const TREASURY_D_ACTORS_ID: u64 = 9;
 
   // --- BLDR Domain (L2 Token Economy) ---
 
   /// BLDR Splitter — receives minted $BLDR and splits to BLDR ZM and BLDR Treasury
-  /// Created at genesis (`aaa_id = 10`)
+  /// Created at genesis (`actor_id = 10`)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0x8a420d09aa8842c9075deefab7791be5e9f9471bc68baa8c926128cfc29b6962`
   ///   SS58: `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N`
-  pub const BLDR_SPLITTER_AAA_ID: u64 = 10;
+  pub const BLDR_SPLITTER_ACTORS_ID: u64 = 10;
 
   /// BLDR Liquidity Actor — provisions NTVE-BLDR liquidity
-  /// Created at genesis (`aaa_id = 11`; legacy constant name)
+  /// Created at genesis (`actor_id = 11`; legacy constant name)
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221`
   ///   SS58: `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17`
-  pub const BLDR_ZM_AAA_ID: u64 = 11;
+  pub const BLDR_ZM_ACTORS_ID: u64 = 11;
 
   /// BLDR Bucket A (Anchor) — permanent LP accumulator for NTVE-BLDR pair
-  /// Created at genesis (`aaa_id = 12`), Noop by default
+  /// Created at genesis (`actor_id = 12`), Noop by default
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0xb31a379c50afe1ba1ad65f1afafaf51df1c40ed2b6c08e9faf1a1ac2caf026de`
   ///   SS58: `5G7YDX7r2L8q5Wn73dNyhp8cnbpP3sTGUcRW6Eos5Urrxax8`
-  pub const BLDR_BUCKET_A_AAA_ID: u64 = 12;
+  pub const BLDR_BUCKET_A_ACTORS_ID: u64 = 12;
 
   /// BLDR Treasury — receives 50% of minted $BLDR from Splitter
-  /// Created at genesis (`aaa_id = 13`), Noop by default
+  /// Created at genesis (`actor_id = 13`), Noop by default
   ///
-  /// Sovereign account (AaaPalletId = `*b"aaactor0"`, SS58 prefix 42):
+  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
   ///   hex:  `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45`
   ///   SS58: `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG`
-  pub const BLDR_TREASURY_AAA_ID: u64 = 13;
+  pub const BLDR_TREASURY_ACTORS_ID: u64 = 13;
 
   /// Native Staking LP Farmer — donates NTVE/stNTVE reserves without minting LP
-  /// Created at genesis (`aaa_id = 14`), Noop until the canonical pool is activated
-  pub const NATIVE_STAKING_LP_FARMER_AAA_ID: u64 = 14;
+  /// Created at genesis (`actor_id = 14`), Noop until the canonical pool is activated
+  pub const NATIVE_STAKING_LP_FARMER_ACTORS_ID: u64 = 14;
 }
 
 /// Protocol-native token asset IDs.
@@ -167,12 +164,12 @@ pub mod protocol_tokens {
 /// All addresses below are for SS58 prefix 42
 /// Convention: lowercase ASCII, exactly 8 bytes, no legacy `py/` prefix
 pub mod pallet_ids {
-  /// AAA (Account Abstraction Actors) pallet ID
+  /// Actors (Account Abstraction Actors) pallet ID
   ///
   /// Pallet account (SS58 prefix 42):
   ///   hex:  `0x6d6f646c61616163746f72300000000000000000000000000000000000000000`
   ///   SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
-  pub const AAA_PALLET_ID: &[u8; 8] = b"aaactor0";
+  pub const ACTORS_PALLET_ID: &[u8; 8] = b"deactors";
 
   /// DEOS Router pallet ID (multi-token routing engine)
   ///
@@ -233,10 +230,10 @@ pub mod params {
   /// not an external fair-price or transaction-ordering guarantee.
   pub const MAX_PRICE_DEVIATION: Perbill = Perbill::from_percent(20);
 
-  /// Stricter reference-price deviation guard for every System AAA swap.
+  /// Stricter reference-price deviation guard for every System Actors swap.
   pub const MAX_SYSTEM_PRICE_DEVIATION: Perbill = Perbill::from_percent(5);
 
-  /// Maximum age of an EMA used by the System AAA reference-deviation guard.
+  /// Maximum age of an EMA used by the System Actors reference-deviation guard.
   pub const MAX_SYSTEM_REFERENCE_AGE_BLOCKS: u32 = 100;
 
   /// Maximum hops in multi-asset routing paths (3).
@@ -298,37 +295,27 @@ pub mod params {
 
   /// Default cooldown for System actors (10 blocks ≈ 1 minute).
   ///
-  /// Applied to genesis System AAAs (Burn Actor, Liquidity Actor) to prevent
+  /// Applied to genesis System Actors (Burn Actor, Liquidity Actor) to prevent
   /// resource exhaustion on repeated cycle failures.
-  pub const SYSTEM_AAA_COOLDOWN_BLOCKS: u32 = 10;
+  pub const SYSTEM_ACTORS_COOLDOWN_BLOCKS: u32 = 10;
 
-  /// Maximum tolerated slippage for generic System AAA swap operations (5%).
-  /// Maximum swap slippage tolerance for generic System AAA execution plans.
+  /// Maximum tolerated slippage for generic System Actors swap operations (5%).
+  /// Maximum swap slippage tolerance for generic System Actors execution plans.
   /// Used directly as `SwapIn.slippage_tolerance` unless a runtime-specific
   /// builder chooses a stricter policy.
-  pub const SYSTEM_AAA_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(5);
+  pub const SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(5);
 
   /// Maximum tolerated slippage for Liquidity Actor swap steps (3%).
   /// Liquidity Actor execution plans derive their concrete `SwapIn.slippage_tolerance`
   /// from the current native reserve depth and clamp it to this upper bound.
   pub const LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE: Perbill = Perbill::from_percent(3);
-  /// Legacy alias for [`LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE`].
-  pub const ZAP_MANAGER_MAX_SWAP_SLIPPAGE: Perbill = LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE;
-
   /// Minimum tolerated slippage for Liquidity Actor swap steps (0.25%).
   /// Deep pools tighten toward this floor instead of keeping the shallow-pool cap.
   pub const LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE: Perbill = Perbill::from_parts(2_500_000);
-  /// Legacy alias for [`LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE`].
-  pub const ZAP_MANAGER_MIN_SWAP_SLIPPAGE: Perbill = LIQUIDITY_ACTOR_MIN_SWAP_SLIPPAGE;
-
   /// Native reserve depth reference for Liquidity Actor dynamic slippage.
   /// At this native reserve depth, the clamp still allows the configured max;
   /// deeper pools tighten inversely from there.
   pub const LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance = 1_000 * PRECISION;
-  /// Legacy alias for [`LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE`].
-  pub const ZAP_MANAGER_SLIPPAGE_REFERENCE_NATIVE_RESERVE: Balance =
-    LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE;
-
   /// Maximum accepted donation ratio error for native staking LP farming (1%).
   pub const NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR: Perbill = Perbill::from_percent(1);
 
@@ -359,7 +346,7 @@ mod tests {
 
   #[test]
   fn pallet_ids_are_correct_length() {
-    assert_eq!(pallet_ids::AAA_PALLET_ID.len(), 8);
+    assert_eq!(pallet_ids::ACTORS_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::AXIAL_ROUTER_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::TMC_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::ASSET_CONVERSION_PALLET_ID.len(), 8);
@@ -405,9 +392,5 @@ mod tests {
         <= params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE.deconstruct()
     );
     assert!(params::LIQUIDITY_ACTOR_SLIPPAGE_REFERENCE_NATIVE_RESERVE >= params::PRECISION);
-    assert_eq!(
-      params::ZAP_MANAGER_MAX_SWAP_SLIPPAGE,
-      params::LIQUIDITY_ACTOR_MAX_SWAP_SLIPPAGE
-    );
   }
 }

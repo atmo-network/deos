@@ -47,7 +47,7 @@ Named workflow scripts compose atomic steps into larger developer flows:
 
 - `bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
 - `validate-local.sh`: Run the selected local audit, build, and E2E validation plan
-- `aaa-release-gate.sh`: Run heavy stress tests for the AAA scheduler
+- `actors-release-gate.sh`: Run heavy stress tests for the Actors scheduler
 - `benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows
 
 ## Admin Utilities

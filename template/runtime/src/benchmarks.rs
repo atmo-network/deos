@@ -15,5 +15,5 @@ polkadot_sdk::frame_benchmarking::define_benchmarks!(
   [pallet_governance, Governance]
   [pallet_oracle, Oracle]
   [pallet_staking, Staking]
-  [pallet_aaa, AAA]
+  [pallet_deos_actors, Actors]
 );

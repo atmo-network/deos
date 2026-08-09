@@ -158,17 +158,19 @@ function metadataBytes(value: string) {
 
 function decodeFanoutConstants(bytes: Uint8Array) {
   const metadata = unifyMetadata(decAnyMetadata(bytes));
-  const aaaPallets = metadata.pallets.filter((pallet) => pallet.name === 'AAA');
-  if (aaaPallets.length !== 1) {
-    throw new Error('V16 metadata must expose exactly one AAA pallet');
+  const actorPallets = metadata.pallets.filter(
+    (pallet) => pallet.name === 'Actors',
+  );
+  if (actorPallets.length !== 1) {
+    throw new Error('V16 metadata must expose exactly one Actors pallet');
   }
   const builder = getDynamicBuilder(getLookupFn(metadata));
   const constant = (name: string) => {
-    const matches = aaaPallets[0].constants.filter(
+    const matches = actorPallets[0].constants.filter(
       (candidate) => candidate.name === name,
     );
     if (matches.length !== 1) {
-      throw new Error(`V16 metadata must expose exactly one AAA.${name}`);
+      throw new Error(`V16 metadata must expose exactly one Actors.${name}`);
     }
     return builder
       .buildDefinition(matches[0].type)
@@ -177,7 +179,7 @@ function decodeFanoutConstants(bytes: Uint8Array) {
   const numberConstant = (name: string) => {
     const value = constant(name);
     if (!Number.isSafeInteger(value) || (value as number) < 0) {
-      throw new Error(`AAA.${name} must decode as a bounded integer`);
+      throw new Error(`Actors.${name} must decode as a bounded integer`);
     }
     return value as number;
   };
@@ -188,7 +190,9 @@ function decodeFanoutConstants(bytes: Uint8Array) {
     typeof (weight as { ref_time?: unknown }).ref_time !== 'bigint' ||
     typeof (weight as { proof_size?: unknown }).proof_size !== 'bigint'
   ) {
-    throw new Error('AAA.ObservationFanoutWeightLimit must decode as Weight');
+    throw new Error(
+      'Actors.ObservationFanoutWeightLimit must decode as Weight',
+    );
   }
   return {
     configuredServiceUnitsPerBlock: numberConstant(

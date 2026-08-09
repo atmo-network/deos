@@ -240,7 +240,7 @@ fn test_concurrent_operations_robustness() {
 
     assert!(
       native_fee_buffer > 0,
-      "Native fees should be buffered on Burning Manager AAA sovereign"
+      "Native fees should be buffered on Burning Manager Actors sovereign"
     );
     assert!(
       foreign_fee_buffer_a > 0,
@@ -463,8 +463,8 @@ fn test_multi_user_concurrent_chaos() {
     // Snapshot global state before chaos
     let initial_total_native = Balances::total_issuance();
     let _initial_total_asset_a = Assets::total_issuance(ASSET_A);
-    let treasury_account = crate::AAA::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
+    let treasury_account = crate::Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
     );
     let initial_treasury_native = Balances::free_balance(&treasury_account);
 

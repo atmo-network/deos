@@ -1,15 +1,15 @@
 <!--
 Domain: Automation asset editor
-Owns: Typed AssetKind field presentation for AAA authoring rows.
+Owns: Typed AssetKind field presentation for Actors authoring rows.
 Excludes: Asset discovery, balances, runtime registry policy, and plan lowering.
 Zone: Automation presentation helper; binds one authoring asset through UI Kit fields.
 -->
 <script lang="ts">
-  import type { AaaAuthoringAsset } from '$lib/automation/authoring';
+  import type { ActorAuthoringAsset } from '$lib/automation/authoring';
   import { NumberInput, SelectField } from '$lib/ui';
 
   type Props = {
-    asset: AaaAuthoringAsset;
+    asset: ActorAuthoringAsset;
     label: string;
     compact?: boolean;
   };
@@ -18,7 +18,7 @@ Zone: Automation presentation helper; binds one authoring asset through UI Kit f
 
   function selectAssetType(event: Event) {
     const type = (event.currentTarget as HTMLSelectElement)
-      .value as AaaAuthoringAsset['type'];
+      .value as ActorAuthoringAsset['type'];
     asset = type === 'Native' ? { type } : { type, id: 0 };
   }
 </script>

@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Architecture Diagrams
-summary: Compact text diagrams for the main DEOS subsystem relationships, including the domain map, routing loop, AAA actor graph, read-model split, and governance/staking boundary.
+summary: Compact text diagrams for the main DEOS subsystem relationships, including the domain map, routing loop, Actor graph, read-model split, and governance/staking boundary.
 locale: en
 canonical_page_id: architecture-diagrams
 translation_status: source
@@ -10,7 +10,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
   - ../../template/pallets/router/docs/architecture.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
   - ../../template/pallets/staking/docs/architecture.en.md
@@ -25,7 +25,7 @@ related:
   - Domain Map
   - End-to-End Flows
   - Routing and Minting Loop
-  - AAA System
+  - Actors System
   - Read-Model Split
 last_compiled: 2026-07-20
 confidence: 0.85
@@ -68,19 +68,19 @@ Swap request
 
 The router coordinates market liquidity and protocol liquidity. TMC owns deterministic mint-side pricing. Long-range analytics stay outside consensus state.
 
-## AAA Actor Graph
+## Actor Graph
 
 ```text
 Configured trigger becomes due
   -> balance ingress for omnivorous actors
      or bounded schedule for timer-driven actors
-  -> AAA scheduler checks lifecycle / cooldown / limits
+  -> Actors scheduler checks lifecycle / cooldown / limits
   -> actor executes typed plan
   -> output asset lands elsewhere
   -> a downstream ingress actor may wake
 ```
 
-AAA is the reusable execution system. An AA-Actor is one bounded instance inside it. Larger protocol behavior can be assembled from small actor steps.
+Actors is the reusable execution system. An AA-Actor is one bounded instance inside it. Larger protocol behavior can be assembled from small actor steps.
 
 ## Governance and Staking Boundary
 
@@ -121,5 +121,5 @@ The first split is the protocol contract. The second explains how the browser cu
 - [Domain Map](domain-map.en.md)
 - [End-to-End Flows](end-to-end-flows.en.md)
 - [Routing and Minting Loop](routing-and-minting-loop.en.md)
-- [AAA System](../overview/aaa-system.en.md)
+- [Actors System](../overview/actor-system.en.md)
 - [Read-Model Split](read-model-split.en.md)

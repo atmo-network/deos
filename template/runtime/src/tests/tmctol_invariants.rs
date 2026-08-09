@@ -13,7 +13,7 @@ use crate::{
   Assets, AxialRouter, Balances, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System,
   TokenMintingCurve,
 };
-use pallet_aaa::AssetOps;
+use pallet_deos_actors::AssetOps;
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{Hooks, fungibles::Inspect as FungiblesInspect},
@@ -21,7 +21,7 @@ use polkadot_sdk::frame_support::{
 use polkadot_sdk::sp_runtime::Weight;
 use primitives::{
   AssetKind,
-  ecosystem::{aaa_ids, params::PRECISION, protocol_tokens},
+  ecosystem::{actor_ids, params::PRECISION, protocol_tokens},
 };
 
 // --- Helpers ---
@@ -29,13 +29,13 @@ use primitives::{
 /// Collect TOL bucket sovereign balances for a given LP asset.
 fn tol_bucket_lp_balances(lp_id: u32) -> [u128; 4] {
   let bucket_ids = [
-    aaa_ids::TOL_BUCKET_A_AAA_ID,
-    aaa_ids::TOL_BUCKET_B_AAA_ID,
-    aaa_ids::TOL_BUCKET_C_AAA_ID,
-    aaa_ids::TOL_BUCKET_D_AAA_ID,
+    actor_ids::TOL_BUCKET_A_ACTORS_ID,
+    actor_ids::TOL_BUCKET_B_ACTORS_ID,
+    actor_ids::TOL_BUCKET_C_ACTORS_ID,
+    actor_ids::TOL_BUCKET_D_ACTORS_ID,
   ];
   bucket_ids.map(|id| {
-    let sov = crate::AAA::sovereign_account_id_system(id);
+    let sov = crate::Actors::sovereign_account_id_system(id);
     Assets::balance(lp_id, &sov)
   })
 }
@@ -49,7 +49,8 @@ fn tmc_mint_conservation_exact() {
   seeded_test_ext().execute_with(|| {
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
-    let splitter_sov = crate::AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
+    let splitter_sov =
+      crate::Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
     let alice_bldr_before = Assets::balance(bldr_id, &ALICE);
     let splitter_bldr_before = Assets::balance(bldr_id, &splitter_sov);
     let mint_amount = 10 * PRECISION;
@@ -98,13 +99,13 @@ fn tol_balances_monotonic_under_user_operations() {
     // Seed TOL buckets with some LP so we can observe monotonicity
     let seed_lp = 1_000_000u128;
     let bucket_ids = [
-      aaa_ids::TOL_BUCKET_A_AAA_ID,
-      aaa_ids::TOL_BUCKET_B_AAA_ID,
-      aaa_ids::TOL_BUCKET_C_AAA_ID,
-      aaa_ids::TOL_BUCKET_D_AAA_ID,
+      actor_ids::TOL_BUCKET_A_ACTORS_ID,
+      actor_ids::TOL_BUCKET_B_ACTORS_ID,
+      actor_ids::TOL_BUCKET_C_ACTORS_ID,
+      actor_ids::TOL_BUCKET_D_ACTORS_ID,
     ];
     for &bucket_id in &bucket_ids {
-      let sov = crate::AAA::sovereign_account_id_system(bucket_id);
+      let sov = crate::Actors::sovereign_account_id_system(bucket_id);
       assert_ok!(
         <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(lp_id, &sov, seed_lp)
       );
@@ -163,7 +164,7 @@ fn floor_price_proxy_after_tol_accumulation() {
       .expect("BLDR pool must exist");
     let lp_id = pool_info.lp_token;
     // Seed Bucket A with LP (simulating prior ZM activity)
-    let bucket_a = crate::AAA::sovereign_account_id_system(aaa_ids::BLDR_BUCKET_A_AAA_ID);
+    let bucket_a = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
     assert_ok!(
       <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
         lp_id,
@@ -226,9 +227,9 @@ fn floor_price_proxy_after_tol_accumulation() {
 #[test]
 fn native_issuance_deflation_after_burn_cycle() {
   seeded_test_ext().execute_with(|| {
-    let bm = crate::AAA::sovereign_account_id_system(aaa_ids::BURNING_MANAGER_AAA_ID);
+    let bm = crate::Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
     let deposit = 50 * EXISTENTIAL_DEPOSIT;
-    assert_ok!(<crate::configs::aaa_config::TmctolAssetOps as AssetOps<
+    assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
       crate::AccountId,
       primitives::AssetKind,
       crate::Balance,
@@ -236,8 +237,8 @@ fn native_issuance_deflation_after_burn_cycle() {
     let issuance_before = Balances::total_issuance();
     // Trigger burn through the inbound-value signal.
     System::set_block_number(11);
-    crate::AAA::on_initialize(11);
-    crate::AAA::on_idle(11, Weight::from_parts(u64::MAX, u64::MAX));
+    crate::Actors::on_initialize(11);
+    crate::Actors::on_idle(11, Weight::from_parts(u64::MAX, u64::MAX));
     let issuance_after = Balances::total_issuance();
     assert!(
       issuance_after < issuance_before,
@@ -315,14 +316,14 @@ fn heavy_use_invariants_preserved() {
     // Snapshot initial systemic state
     let initial_issuance = Balances::total_issuance();
     let tol_bucket_ids = [
-      aaa_ids::TOL_BUCKET_A_AAA_ID,
-      aaa_ids::TOL_BUCKET_B_AAA_ID,
-      aaa_ids::TOL_BUCKET_C_AAA_ID,
-      aaa_ids::TOL_BUCKET_D_AAA_ID,
+      actor_ids::TOL_BUCKET_A_ACTORS_ID,
+      actor_ids::TOL_BUCKET_B_ACTORS_ID,
+      actor_ids::TOL_BUCKET_C_ACTORS_ID,
+      actor_ids::TOL_BUCKET_D_ACTORS_ID,
     ];
     let initial_tol_native: u128 = tol_bucket_ids
       .iter()
-      .map(|&id| Balances::free_balance(&crate::AAA::sovereign_account_id_system(id)))
+      .map(|&id| Balances::free_balance(&crate::Actors::sovereign_account_id_system(id)))
       .sum();
     // --- Chaos phase: 30 mixed operations ---
     let users = [ALICE, BOB, CHARLIE];
@@ -380,8 +381,8 @@ fn heavy_use_invariants_preserved() {
         }
         // Burn native via BM trigger (when possible)
         4 => {
-          crate::AAA::on_initialize(System::block_number());
-          crate::AAA::on_idle(
+          crate::Actors::on_initialize(System::block_number());
+          crate::Actors::on_idle(
             System::block_number(),
             Weight::from_parts(u64::MAX, u64::MAX),
           );
@@ -403,7 +404,7 @@ fn heavy_use_invariants_preserved() {
     // 2. TOL native balances must be non-decreasing (no user operation can drain TOL)
     let final_tol_native: u128 = tol_bucket_ids
       .iter()
-      .map(|&id| Balances::free_balance(&crate::AAA::sovereign_account_id_system(id)))
+      .map(|&id| Balances::free_balance(&crate::Actors::sovereign_account_id_system(id)))
       .sum();
     assert!(
       final_tol_native >= initial_tol_native,
@@ -412,10 +413,10 @@ fn heavy_use_invariants_preserved() {
       final_tol_native
     );
     // 3. BLDR mass conservation: total issuance equals sum of known holdings
-    let splitter = crate::AAA::sovereign_account_id_system(aaa_ids::BLDR_SPLITTER_AAA_ID);
-    let zm = crate::AAA::sovereign_account_id_system(aaa_ids::BLDR_ZM_AAA_ID);
-    let treasury = crate::AAA::sovereign_account_id_system(aaa_ids::BLDR_TREASURY_AAA_ID);
-    let bucket_a = crate::AAA::sovereign_account_id_system(aaa_ids::BLDR_BUCKET_A_AAA_ID);
+    let splitter = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
+    let zm = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_ZM_ACTORS_ID);
+    let treasury = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_TREASURY_ACTORS_ID);
+    let bucket_a = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
     let total_bldr_issued = Assets::total_issuance(bldr_id);
     let known_holders = [ALICE, BOB, CHARLIE, splitter, zm, treasury, bucket_a];
     let sum_known: u128 = known_holders

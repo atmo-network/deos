@@ -1,22 +1,22 @@
 /*
-Domain: AAA deterministic feedback analysis
+Domain: Actors deterministic feedback analysis
 Owns: Bounded structural graph projection across analyzed actors, typed observations, shared assets, signals, and declared parameter actuators.
 Excludes: Program decoding, runtime execution, economic stability, probability, causal strength, scoring, and consensus rules.
 Zone: Automation domain capability; consumes manifest-authoritative ProgramStaticAnalysis output.
 */
 import type {
-  AaaStaticStepAnalysis,
+  ActorStaticStepAnalysis,
   ProgramStaticAnalysis,
 } from './analysis.ts';
-import type { AaaPlanProjection } from './plan-artifact.ts';
+import type { ActorPlanProjection } from './plan-artifact.ts';
 
 import { DEOS_OBSERVATION_RUNTIME_EVIDENCE } from '../observation/runtime-evidence.generated.ts';
 
-export const AAA_FEEDBACK_ANALYZER_VERSION = '3' as const;
+export const ACTORS_FEEDBACK_ANALYZER_VERSION = '3' as const;
 
-export type AaaObservationProvenance = 'Endogenous' | 'Exogenous' | 'Unknown';
+export type ActorObservationProvenance = 'Endogenous' | 'Exogenous' | 'Unknown';
 
-export type AaaFeedbackEffectClass =
+export type ActorFeedbackEffectClass =
   | 'Transfer'
   | 'Swap'
   | 'Liquidity'
@@ -24,62 +24,62 @@ export type AaaFeedbackEffectClass =
   | 'Mint'
   | 'Staking';
 
-export type AaaFeedbackExactResource = {
+export type ActorFeedbackExactResource = {
   kind: 'Pool' | 'Reserve' | 'Tmc';
   identity: string;
   access: 'Read' | 'Write';
-  evidence: AaaFeedbackEvidenceReference;
+  evidence: ActorFeedbackEvidenceReference;
 };
 
-export type AaaFeedbackActor = {
+export type ActorFeedbackActor = {
   id: string;
   analysis: ProgramStaticAnalysis;
-  exactResources?: AaaFeedbackExactResource[];
+  exactResources?: ActorFeedbackExactResource[];
   sovereignAccount?: {
-    value: AaaPlanProjection;
-    evidence: AaaFeedbackEvidenceReference;
+    value: ActorPlanProjection;
+    evidence: ActorFeedbackEvidenceReference;
   };
 };
 
-export type AaaObservationEffectMatcher = {
+export type ActorObservationEffectMatcher = {
   actorId?: string;
-  effectClasses?: AaaFeedbackEffectClass[];
-  assetsWritten?: AaaPlanProjection[];
+  effectClasses?: ActorFeedbackEffectClass[];
+  assetsWritten?: ActorPlanProjection[];
 };
 
-export type AaaFeedbackEvidenceReference = {
-  provenance: AaaFeedbackEvidenceProvenance;
+export type ActorFeedbackEvidenceReference = {
+  provenance: ActorFeedbackEvidenceProvenance;
   identity: string | null;
 };
 
-export type AaaFeedbackObservation = {
+export type ActorFeedbackObservation = {
   id: string;
-  feed: AaaPlanProjection;
+  feed: ActorPlanProjection;
   producer: 'AxialRouterPreExecutionReserves' | 'DeclaredExternal' | 'Unknown';
   lifecycle: 'Active' | 'Paused' | 'Deactivated' | 'Unknown';
-  evidence: AaaFeedbackEvidenceReference;
+  evidence: ActorFeedbackEvidenceReference;
   effectMatchers: Array<
-    AaaObservationEffectMatcher & { evidenceIdentity: string }
+    ActorObservationEffectMatcher & { evidenceIdentity: string }
   >;
 };
 
-export type AaaFeedbackParameterActuator = {
+export type ActorFeedbackParameterActuator = {
   id: string;
   evidenceIdentity: string;
   controlledByActorId: string;
   affectsObservationIds: string[];
-  affectsAssets: AaaPlanProjection[];
+  affectsAssets: ActorPlanProjection[];
 };
 
-export type AaaFeedbackNode =
+export type ActorFeedbackNode =
   | { id: string; kind: 'Actor'; actorId: string }
   | {
       id: string;
       kind: 'Observation';
       observationId: string;
-      provenance: AaaObservationProvenance;
-      lifecycle: AaaFeedbackObservation['lifecycle'];
-      evidence: AaaFeedbackEvidenceReference;
+      provenance: ActorObservationProvenance;
+      lifecycle: ActorFeedbackObservation['lifecycle'];
+      evidence: ActorFeedbackEvidenceReference;
     }
   | {
       id: string;
@@ -92,29 +92,29 @@ export type AaaFeedbackNode =
         | 'Tmc'
         | 'Unknown';
       resourceIdentity: string;
-      asset?: AaaPlanProjection;
-      account?: AaaPlanProjection;
+      asset?: ActorPlanProjection;
+      account?: ActorPlanProjection;
       actorId?: string;
     }
   | { id: string; kind: 'ParameterActuator'; actuatorId: string };
 
-export type AaaFeedbackEdgeFamily =
+export type ActorFeedbackEdgeFamily =
   | 'ReactiveCausal'
   | 'ResourceCoupling'
   | 'Coordination'
   | 'DeclaredExternalCausality';
 
-export type AaaFeedbackEvidenceProvenance =
+export type ActorFeedbackEvidenceProvenance =
   | 'RuntimeDerived'
   | 'ArtifactDerived'
   | 'Declared'
   | 'Unknown';
 
-export type AaaFeedbackEdge = {
+export type ActorFeedbackEdge = {
   from: string;
   to: string;
-  family: AaaFeedbackEdgeFamily;
-  provenance: AaaFeedbackEvidenceProvenance;
+  family: ActorFeedbackEdgeFamily;
+  provenance: ActorFeedbackEvidenceProvenance;
   evidenceIdentities: string[];
   kind:
     | 'ObservationTrigger'
@@ -132,27 +132,27 @@ export type AaaFeedbackEdge = {
   step?: number;
 };
 
-export type AaaFeedbackPathEdge = Pick<
-  AaaFeedbackEdge,
+export type ActorFeedbackPathEdge = Pick<
+  ActorFeedbackEdge,
   'from' | 'to' | 'kind' | 'family' | 'provenance' | 'evidenceIdentities'
 >;
 
-export type AaaFeedbackComponent = {
+export type ActorFeedbackComponent = {
   kind: 'ReactiveSelfCycle' | 'ReactiveCrossActorCycle';
   actorIds: string[];
   observationIds: string[];
-  observationProvenance: AaaObservationProvenance[];
+  observationProvenance: ActorObservationProvenance[];
   resourceNodeIds: string[];
   actuatorIds: string[];
   canonicalPath: string[];
-  canonicalEdges: AaaFeedbackPathEdge[];
+  canonicalEdges: ActorFeedbackPathEdge[];
   interpretation: 'StructuralPossibility';
   stability: 'Unknown';
   probability: 'Unknown';
   causalStrength: 'Unknown';
 };
 
-export type AaaFeedbackRuntimeVerification = {
+export type ActorFeedbackRuntimeVerification = {
   observedIdentity: string;
   scheduler: {
     maxServiceUnitsPerBlock: number;
@@ -164,29 +164,29 @@ export type AaaFeedbackRuntimeVerification = {
   | { status: 'EvidenceMismatch'; reasons: string[] }
 );
 
-export type AaaFeedbackEvidenceSnapshot = {
+export type ActorFeedbackEvidenceSnapshot = {
   identity: string;
   runtimeIdentity: string;
-  runtimeVerification: AaaFeedbackRuntimeVerification;
+  runtimeVerification: ActorFeedbackRuntimeVerification;
   weightIdentity: string;
   cadenceIdentity: string;
   estimatedDeliveryBlocks: number;
-  estimatedDeliveryEvidence: AaaFeedbackEvidenceReference;
+  estimatedDeliveryEvidence: ActorFeedbackEvidenceReference;
   observationCadences: Array<{
     observationId: string;
     minimumUpdateIntervalBlocks: number;
-    evidence: AaaFeedbackEvidenceReference;
+    evidence: ActorFeedbackEvidenceReference;
   }>;
   actorPolicies: Array<{
     actorId: string;
     gain: 'High' | 'NotHigh' | 'Unknown';
-    gainEvidence: AaaFeedbackEvidenceReference;
+    gainEvidence: ActorFeedbackEvidenceReference;
     reactiveIngressPriority: 'Explicit' | 'Ordinary' | 'Unknown';
-    reactiveIngressPriorityEvidence: AaaFeedbackEvidenceReference;
+    reactiveIngressPriorityEvidence: ActorFeedbackEvidenceReference;
   }>;
 };
 
-export type AaaReactiveFinding =
+export type ActorReactiveFinding =
   | {
       kind: 'FreshnessWindowBelowEstimatedDeliveryEnvelope';
       actorId: string;
@@ -201,7 +201,7 @@ export type AaaReactiveFinding =
       actorIds: string[];
       observationIds: string[];
       canonicalPath: string[];
-      canonicalEdges: AaaFeedbackPathEdge[];
+      canonicalEdges: ActorFeedbackPathEdge[];
       interpretation: 'StructuralPossibility';
     }
   | {
@@ -209,7 +209,7 @@ export type AaaReactiveFinding =
       actorIds: string[];
       observationIds: string[];
       canonicalPath: string[];
-      canonicalEdges: AaaFeedbackPathEdge[];
+      canonicalEdges: ActorFeedbackPathEdge[];
       interpretation: 'StructuralPossibility';
     }
   | {
@@ -270,23 +270,23 @@ export type AaaReactiveFinding =
       evidenceIdentity: string;
     };
 
-export type AaaFeedbackModel = {
+export type ActorFeedbackModel = {
   provenance: 'DeterministicStaticProjection';
-  analyzerVersion: typeof AAA_FEEDBACK_ANALYZER_VERSION;
-  nodes: AaaFeedbackNode[];
-  edges: AaaFeedbackEdge[];
-  components: AaaFeedbackComponent[];
-  findings: AaaReactiveFinding[];
+  analyzerVersion: typeof ACTORS_FEEDBACK_ANALYZER_VERSION;
+  nodes: ActorFeedbackNode[];
+  edges: ActorFeedbackEdge[];
+  components: ActorFeedbackComponent[];
+  findings: ActorReactiveFinding[];
   evidenceIdentity: string | null;
   evidenceStatus: 'Absent' | 'Verified' | 'EvidenceMismatch';
-  evidenceSnapshot: AaaFeedbackEvidenceSnapshot | null;
+  evidenceSnapshot: ActorFeedbackEvidenceSnapshot | null;
   limits: {
     maxNodes: number;
     maxEdges: number;
   };
 };
 
-export type AaaFeedbackLimits = {
+export type ActorFeedbackLimits = {
   maxNodes?: number;
   maxEdges?: number;
 };
@@ -297,8 +297,8 @@ const EXPECTED_RUNTIME_EVIDENCE = DEOS_OBSERVATION_RUNTIME_EVIDENCE;
 const EXPECTED_OBSERVED_RUNTIME_IDENTITY = `${EXPECTED_RUNTIME_EVIDENCE.runtime.specName}@spec-${EXPECTED_RUNTIME_EVIDENCE.runtime.specVersion} · code:${EXPECTED_RUNTIME_EVIDENCE.runtimeCodeHash} · metadata:${EXPECTED_RUNTIME_EVIDENCE.metadataHash}`;
 
 function edgeEvidence(
-  kind: AaaFeedbackEdge['kind'],
-): Pick<AaaFeedbackEdge, 'family' | 'provenance'> {
+  kind: ActorFeedbackEdge['kind'],
+): Pick<ActorFeedbackEdge, 'family' | 'provenance'> {
   switch (kind) {
     case 'ObservationTrigger':
     case 'ObservationConditionRead':
@@ -326,8 +326,8 @@ function edgeEvidence(
 }
 
 function observationProvenance(
-  observation: AaaFeedbackObservation,
-): AaaObservationProvenance {
+  observation: ActorFeedbackObservation,
+): ActorObservationProvenance {
   switch (observation.producer) {
     case 'AxialRouterPreExecutionReserves':
       return 'Endogenous';
@@ -338,7 +338,7 @@ function observationProvenance(
   }
 }
 
-function fingerprint(value: AaaPlanProjection) {
+function fingerprint(value: ActorPlanProjection) {
   return JSON.stringify(value);
 }
 
@@ -347,7 +347,7 @@ function uniqueStrings(values: string[]) {
 }
 
 function requireEvidenceReference(
-  evidence: AaaFeedbackEvidenceReference,
+  evidence: ActorFeedbackEvidenceReference,
   label: string,
 ) {
   if (evidence.provenance === 'Unknown') {
@@ -362,8 +362,8 @@ function requireEvidenceReference(
 }
 
 function requireEvidenceProvenance(
-  evidence: AaaFeedbackEvidenceReference,
-  allowed: AaaFeedbackEvidenceProvenance[],
+  evidence: ActorFeedbackEvidenceReference,
+  allowed: ActorFeedbackEvidenceProvenance[],
   expectedIdentity: string | null,
   label: string,
 ) {
@@ -396,8 +396,10 @@ function requireUniqueIds(values: Array<{ id: string }>, label: string) {
   }
 }
 
-function effectClasses(step: AaaStaticStepAnalysis): AaaFeedbackEffectClass[] {
-  const effects: AaaFeedbackEffectClass[] = [];
+function effectClasses(
+  step: ActorStaticStepAnalysis,
+): ActorFeedbackEffectClass[] {
+  const effects: ActorFeedbackEffectClass[] = [];
   if (step.task === 'Transfer' || step.task === 'SplitTransfer') {
     effects.push('Transfer');
   }
@@ -410,9 +412,9 @@ function effectClasses(step: AaaStaticStepAnalysis): AaaFeedbackEffectClass[] {
 }
 
 function matchesEffect(
-  actor: AaaFeedbackActor,
-  step: AaaStaticStepAnalysis,
-  matcher: AaaObservationEffectMatcher,
+  actor: ActorFeedbackActor,
+  step: ActorStaticStepAnalysis,
+  matcher: ActorObservationEffectMatcher,
 ) {
   if (matcher.actorId != null && matcher.actorId !== actor.id) return false;
   if (
@@ -469,8 +471,8 @@ function canonicalCyclePath(
 
 function canonicalPathEdges(
   path: string[],
-  edges: AaaFeedbackEdge[],
-): AaaFeedbackPathEdge[] {
+  edges: ActorFeedbackEdge[],
+): ActorFeedbackPathEdge[] {
   return path.slice(0, -1).map((from, index) => {
     const to = path[index + 1];
     const matches = edges
@@ -526,13 +528,13 @@ function stronglyConnectedComponents(
   return components;
 }
 
-export function analyzeAaaFeedback(input: {
-  actors: AaaFeedbackActor[];
-  observations: AaaFeedbackObservation[];
-  parameterActuators?: AaaFeedbackParameterActuator[];
-  evidence?: AaaFeedbackEvidenceSnapshot;
-  limits?: AaaFeedbackLimits;
-}): AaaFeedbackModel {
+export function analyzeActorFeedback(input: {
+  actors: ActorFeedbackActor[];
+  observations: ActorFeedbackObservation[];
+  parameterActuators?: ActorFeedbackParameterActuator[];
+  evidence?: ActorFeedbackEvidenceSnapshot;
+  limits?: ActorFeedbackLimits;
+}): ActorFeedbackModel {
   const actuators = input.parameterActuators ?? [];
   const maxNodes = input.limits?.maxNodes ?? DEFAULT_MAX_NODES;
   const maxEdges = input.limits?.maxEdges ?? DEFAULT_MAX_EDGES;
@@ -799,13 +801,13 @@ export function analyzeAaaFeedback(input: {
   }
 
   type ResourceDescriptor =
-    Extract<AaaFeedbackNode, { kind: 'Resource' }> extends infer Resource
+    Extract<ActorFeedbackNode, { kind: 'Resource' }> extends infer Resource
       ? Omit<Resource, 'id' | 'kind'>
       : never;
   const resourceByKey = new Map<string, ResourceDescriptor>();
   const actorResourceKey = (
-    actor: AaaFeedbackActor,
-    asset: AaaPlanProjection,
+    actor: ActorFeedbackActor,
+    asset: ActorPlanProjection,
   ) => {
     const assetIdentity = fingerprint(asset);
     if (actor.sovereignAccount != null) {
@@ -853,7 +855,7 @@ export function analyzeAaaFeedback(input: {
   const actorNode = (id: string) => `actor:${id}`;
   const observationNode = (id: string) => `observation:${id}`;
   const actuatorNode = (id: string) => `actuator:${id}`;
-  const nodes: AaaFeedbackNode[] = [
+  const nodes: ActorFeedbackNode[] = [
     ...input.actors
       .map((actor) => ({
         id: actorNode(actor.id),
@@ -886,13 +888,16 @@ export function analyzeAaaFeedback(input: {
   ];
   if (nodes.length > maxNodes) throw new Error('Feedback node limit exceeded');
 
-  const edges: AaaFeedbackEdge[] = [];
+  const edges: ActorFeedbackEdge[] = [];
   const addEdge = (
-    edge: Omit<AaaFeedbackEdge, 'family' | 'provenance' | 'evidenceIdentities'>,
+    edge: Omit<
+      ActorFeedbackEdge,
+      'family' | 'provenance' | 'evidenceIdentities'
+    >,
     suppliedEvidenceIdentities: Array<string | null> = [],
-    provenanceOverride?: AaaFeedbackEvidenceProvenance,
+    provenanceOverride?: ActorFeedbackEvidenceProvenance,
   ) => {
-    const artifactKinds = new Set<AaaFeedbackEdge['kind']>([
+    const artifactKinds = new Set<ActorFeedbackEdge['kind']>([
       'ObservationTrigger',
       'ObservationConditionRead',
       'ActorEffectOnObservation',
@@ -961,7 +966,7 @@ export function analyzeAaaFeedback(input: {
     for (const step of actor.analysis.steps) {
       for (const condition of step.conditions) {
         if (condition.observation !== 'scalar-observation') continue;
-        const surface = condition.readSurface as { feed: AaaPlanProjection };
+        const surface = condition.readSurface as { feed: ActorPlanProjection };
         const observationId = feedToObservation.get(fingerprint(surface.feed));
         if (observationId != null) {
           addEdge(
@@ -1130,18 +1135,18 @@ export function analyzeAaaFeedback(input: {
         internalEdges.some((edge) => edge.family === 'ReactiveCausal')
       );
     })
-    .map((component): AaaFeedbackComponent => {
+    .map((component): ActorFeedbackComponent => {
       const members = component.map((id) => nodeById.get(id)!);
       const actorIds = uniqueStrings(
         members
           .filter(
-            (node): node is Extract<AaaFeedbackNode, { kind: 'Actor' }> =>
+            (node): node is Extract<ActorFeedbackNode, { kind: 'Actor' }> =>
               node.kind === 'Actor',
           )
           .map((node) => node.actorId),
       );
       const observations = members.filter(
-        (node): node is Extract<AaaFeedbackNode, { kind: 'Observation' }> =>
+        (node): node is Extract<ActorFeedbackNode, { kind: 'Observation' }> =>
           node.kind === 'Observation',
       );
       const canonicalPath = canonicalCyclePath(component, adjacency);
@@ -1156,7 +1161,7 @@ export function analyzeAaaFeedback(input: {
         ),
         observationProvenance: uniqueStrings(
           observations.map((node) => node.provenance),
-        ) as AaaObservationProvenance[],
+        ) as ActorObservationProvenance[],
         resourceNodeIds: uniqueStrings(
           members
             .filter((node) => node.kind === 'Resource')
@@ -1168,7 +1173,7 @@ export function analyzeAaaFeedback(input: {
               (
                 node,
               ): node is Extract<
-                AaaFeedbackNode,
+                ActorFeedbackNode,
                 { kind: 'ParameterActuator' }
               > => node.kind === 'ParameterActuator',
             )
@@ -1186,7 +1191,7 @@ export function analyzeAaaFeedback(input: {
       left.canonicalPath.join('|').localeCompare(right.canonicalPath.join('|')),
     );
 
-  const findings: AaaReactiveFinding[] = [];
+  const findings: ActorReactiveFinding[] = [];
   for (const component of components) {
     findings.push({
       kind: component.kind,
@@ -1212,7 +1217,9 @@ export function analyzeAaaFeedback(input: {
   }
 
   for (const node of nodes.filter(
-    (candidate): candidate is Extract<AaaFeedbackNode, { kind: 'Resource' }> =>
+    (
+      candidate,
+    ): candidate is Extract<ActorFeedbackNode, { kind: 'Resource' }> =>
       candidate.kind === 'Resource',
   )) {
     const writerActorIds = uniqueStrings(
@@ -1315,7 +1322,7 @@ export function analyzeAaaFeedback(input: {
         for (const condition of step.conditions) {
           if (condition.observation !== 'scalar-observation') continue;
           const surface = condition.readSurface as {
-            feed: AaaPlanProjection;
+            feed: ActorPlanProjection;
             maxAgeBlocks: number;
           };
           const observationId = feedToObservation.get(
@@ -1411,7 +1418,7 @@ export function analyzeAaaFeedback(input: {
 
   return {
     provenance: 'DeterministicStaticProjection',
-    analyzerVersion: AAA_FEEDBACK_ANALYZER_VERSION,
+    analyzerVersion: ACTORS_FEEDBACK_ANALYZER_VERSION,
     nodes,
     edges: deduplicatedEdges,
     components,

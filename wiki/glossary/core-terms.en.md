@@ -15,7 +15,7 @@ sources:
   - ../../CHANGELOG.md
   - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
-  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/actors/docs/specification.en.md
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
   - ../../docs/read-model.contract.en.md
@@ -66,13 +66,13 @@ This glossary is a lookup surface, not a second explanation layer. Each term sta
 
 `Treasury-Owned Liquidity`. Protocol-controlled liquidity segmented into bucket domains.
 
-### AAA
+### Actors
 
 `Account Abstraction Actors`. In DEOS, this names the full runtime system: the pallet, scheduler, lifecycle rules, and execution environment.
 
 ### AA-Actor
 
-One concrete bounded runtime instance inside the broader AAA system.
+One concrete bounded runtime instance inside the broader Actors system.
 
 ### DEOS Router
 

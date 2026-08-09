@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: Архитектурные схемы
-summary: Компактные текстовые схемы главных связей DEOS, включая карту доменов, routing loop, граф AAA actors, read-model split и границу governance/staking.
+summary: Компактные текстовые схемы главных связей DEOS, включая карту доменов, routing loop, граф Actors, read-model split и границу governance/staking.
 locale: ru
 canonical_page_id: architecture-diagrams
 translation_of: architecture-diagrams.en.md
@@ -11,7 +11,7 @@ available_locales:
   - ru
 sources:
   - ../../docs/core.architecture.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
   - ../../template/pallets/router/docs/architecture.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
   - ../../template/pallets/staking/docs/architecture.en.md
@@ -26,7 +26,7 @@ related:
   - Карта доменов
   - Сквозные сценарии
   - Контур маршрутизации и минтинга
-  - Система AAA
+  - Система Actors
   - Разделение read-model
 last_compiled: 2026-07-20
 confidence: 0.85
@@ -69,19 +69,19 @@ Swap request
 
 Router координирует market liquidity и protocol liquidity. TMC владеет deterministic mint-side pricing. Long-range analytics остаются вне consensus state.
 
-## Граф AAA actors
+## Граф Actors
 
 ```text
 Наступает настроенное условие запуска
   -> Поступление баланса для всеядных акторов
      или ограниченное расписание для акторов по таймеру
-  -> Планировщик AAA проверяет lifecycle / cooldown / limits
+  -> Планировщик Actors проверяет lifecycle / cooldown / limits
   -> Актор выполняет типизированный план
   -> Выходной актив поступает на другой счет
   -> Следующий актор по входящему балансу может пробудиться
 ```
 
-AAA — переиспользуемая система исполнения. AA-Актор — один ограниченный экземпляр внутри нее. Более крупное поведение протокола собирается из малых actor steps.
+Actors — переиспользуемая система исполнения. AA-Актор — один ограниченный экземпляр внутри нее. Более крупное поведение протокола собирается из малых actor steps.
 
 ## Граница governance и staking
 
@@ -122,5 +122,5 @@ Browser realization
 - [Карта доменов](domain-map.ru.md)
 - [Сквозные сценарии](end-to-end-flows.ru.md)
 - [Контур маршрутизации и минтинга](routing-and-minting-loop.ru.md)
-- [Система AAA](../overview/aaa-system.ru.md)
+- [Система Actors](../overview/actor-system.ru.md)
 - [Разделение read-model](read-model-split.ru.md)

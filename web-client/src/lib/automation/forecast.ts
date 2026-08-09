@@ -1,19 +1,19 @@
 /*
-Domain: AAA control-plane forecasting
+Domain: Actors control-plane forecasting
 Owns: State-pinned amount resolution, separated Weight/fee aggregation, and staleness provenance.
 Excludes: Chain queries, adapter quote execution, state mutation, simulation, signing, and history persistence.
 Zone: Automation domain capability; consumers must supply one coherent runtime/state snapshot.
 */
 import {
-  type AaaFeeEnvelopeActorType,
-  aaaFeeNativeProtectedMinimum,
-  aaaFeeStepCharge,
+  type ActorFeeEnvelopeActorType,
+  actorFeeNativeProtectedMinimum,
+  actorFeeStepCharge,
 } from './fee-envelope-vectors.ts';
-import type { AaaPlanArtifact, AaaPlanHex } from './plan-artifact';
+import type { ActorPlanArtifact, ActorPlanHex } from './plan-artifact';
 
 export const PERBILL_DENOMINATOR = 1_000_000_000n;
 
-export type AaaAmountResolution =
+export type ActorAmountResolution =
   | { type: 'Fixed'; value: bigint }
   | { type: 'AllAvailable' }
   | {
@@ -24,16 +24,16 @@ export type AaaAmountResolution =
       parts: number;
     };
 
-export type AaaAmountPolicy =
+export type ActorAmountPolicy =
   | 'PreserveSpend'
   | 'ExpendableSpend'
   | 'Mint'
   | 'UnstakeShares';
 
-export type AaaAmountObservation = {
-  resolution: AaaAmountResolution;
-  policy: AaaAmountPolicy;
-  actorType: AaaFeeEnvelopeActorType;
+export type ActorAmountObservation = {
+  resolution: ActorAmountResolution;
+  policy: ActorAmountPolicy;
+  actorType: ActorFeeEnvelopeActorType;
   current: bigint;
   minimumBalance: bigint;
   minUserBalance: bigint;
@@ -43,56 +43,56 @@ export type AaaAmountObservation = {
   lastFunding?: bigint;
 };
 
-export type AaaAmountForecast = {
+export type ActorAmountForecast = {
   status: 'Resolved' | 'Skipped' | 'FundingUnavailable' | 'SnapshotUnavailable';
   amount: bigint | null;
   basis: bigint | null;
   spendLimit: bigint;
 };
 
-export type AaaWeight = {
+export type ActorWeight = {
   refTime: bigint;
   proofSize: bigint;
 };
 
-export type AaaForecastPin = {
-  planId: AaaPlanHex;
-  blockHash: AaaPlanHex;
+export type ActorForecastPin = {
+  planId: ActorPlanHex;
+  blockHash: ActorPlanHex;
   blockNumber: number;
-  metadataHash: AaaPlanHex;
+  metadataHash: ActorPlanHex;
   model: string;
   modelVersion: string;
 };
 
-export type AaaStepCostInput = {
+export type ActorStepCostInput = {
   stepIndex: number;
   conditionCount: number;
   conditionOutcome: 'Pass' | 'Fail' | 'Unknown';
   executionDisposition: 'Execute' | 'Skip' | 'Unknown';
-  evaluationWeight: AaaWeight;
+  evaluationWeight: ActorWeight;
   evaluationFeeUpper: bigint;
-  executionWeightUpper: AaaWeight;
+  executionWeightUpper: ActorWeight;
   executionFeeUpper: bigint;
 };
 
-export type AaaCostSegment = {
-  weight: AaaWeight;
+export type ActorCostSegment = {
+  weight: ActorWeight;
   fee: bigint;
 };
 
-export type AaaCostForecast = {
+export type ActorCostForecast = {
   scope: 'StaticAllStepsReached';
-  pin: AaaForecastPin;
-  evaluation: AaaCostSegment;
-  executionMinimum: AaaCostSegment;
-  executionUpper: AaaCostSegment;
-  lifecycle: AaaCostSegment;
-  totalMinimum: AaaCostSegment;
-  totalUpper: AaaCostSegment;
+  pin: ActorForecastPin;
+  evaluation: ActorCostSegment;
+  executionMinimum: ActorCostSegment;
+  executionUpper: ActorCostSegment;
+  lifecycle: ActorCostSegment;
+  totalMinimum: ActorCostSegment;
+  totalUpper: ActorCostSegment;
   steps: Array<{
     stepIndex: number;
-    conditionOutcome: AaaStepCostInput['conditionOutcome'];
-    executionDisposition: AaaStepCostInput['executionDisposition'];
+    conditionOutcome: ActorStepCostInput['conditionOutcome'];
+    executionDisposition: ActorStepCostInput['executionDisposition'];
     evaluationFee: bigint;
     executionFeeMinimum: bigint;
     executionFeeUpper: bigint;
@@ -116,9 +116,9 @@ function percentage(parts: number, value: bigint) {
   return (BigInt(parts) * value) / PERBILL_DENOMINATOR;
 }
 
-export function resolveAaaAmount(
-  input: AaaAmountObservation,
-): AaaAmountForecast {
+export function resolveActorAmount(
+  input: ActorAmountObservation,
+): ActorAmountForecast {
   validateBalance(input.current, 'current');
   validateBalance(input.minimumBalance, 'minimumBalance');
   validateBalance(input.minUserBalance, 'minUserBalance');
@@ -134,7 +134,7 @@ export function resolveAaaAmount(
         input.current,
         input.isFeeNative ? input.reservedFee : 0n,
       );
-  const protectedMinimum = aaaFeeNativeProtectedMinimum(
+  const protectedMinimum = actorFeeNativeProtectedMinimum(
     input.actorType,
     input.isFeeNative,
     input.minimumBalance,
@@ -208,11 +208,11 @@ export function resolveAaaAmount(
   return { status: 'Resolved', amount, basis, spendLimit };
 }
 
-function zeroWeight(): AaaWeight {
+function zeroWeight(): ActorWeight {
   return { refTime: 0n, proofSize: 0n };
 }
 
-function addWeight(left: AaaWeight, right: AaaWeight): AaaWeight {
+function addWeight(left: ActorWeight, right: ActorWeight): ActorWeight {
   return {
     refTime: left.refTime + right.refTime,
     proofSize: left.proofSize + right.proofSize,
@@ -220,39 +220,39 @@ function addWeight(left: AaaWeight, right: AaaWeight): AaaWeight {
 }
 
 function addSegment(
-  left: AaaCostSegment,
-  right: AaaCostSegment,
-): AaaCostSegment {
+  left: ActorCostSegment,
+  right: ActorCostSegment,
+): ActorCostSegment {
   return {
     weight: addWeight(left.weight, right.weight),
     fee: left.fee + right.fee,
   };
 }
 
-function validateWeight(weight: AaaWeight, field: string) {
+function validateWeight(weight: ActorWeight, field: string) {
   validateBalance(weight.refTime, `${field}.refTime`);
   validateBalance(weight.proofSize, `${field}.proofSize`);
 }
 
-export function forecastAaaCosts(input: {
-  artifact: AaaPlanArtifact;
-  blockHash: AaaPlanHex;
+export function forecastActorCosts(input: {
+  artifact: ActorPlanArtifact;
+  blockHash: ActorPlanHex;
   blockNumber: number;
   model: string;
   modelVersion: string;
   actorType: 'User' | 'System';
-  steps: AaaStepCostInput[];
-  lifecycle: AaaCostSegment;
-}): AaaCostForecast {
+  steps: ActorStepCostInput[];
+  lifecycle: ActorCostSegment;
+}): ActorCostForecast {
   if (!Number.isSafeInteger(input.blockNumber) || input.blockNumber < 0) {
     throw new Error('blockNumber must be a non-negative safe integer');
   }
   validateWeight(input.lifecycle.weight, 'lifecycle.weight');
   validateBalance(input.lifecycle.fee, 'lifecycle.fee');
 
-  let evaluation: AaaCostSegment = { weight: zeroWeight(), fee: 0n };
-  let executionMinimum: AaaCostSegment = { weight: zeroWeight(), fee: 0n };
-  let executionUpper: AaaCostSegment = { weight: zeroWeight(), fee: 0n };
+  let evaluation: ActorCostSegment = { weight: zeroWeight(), fee: 0n };
+  let executionMinimum: ActorCostSegment = { weight: zeroWeight(), fee: 0n };
+  let executionUpper: ActorCostSegment = { weight: zeroWeight(), fee: 0n };
   const steps = input.steps.map((step, index) => {
     if (step.stepIndex !== index)
       throw new Error('steps must use contiguous ordered indices');
@@ -260,7 +260,10 @@ export function forecastAaaCosts(input: {
       throw new Error('conditionCount must be a non-negative safe integer');
     }
     validateWeight(step.evaluationWeight, `steps[${index}].evaluationWeight`);
-    validateBalance(step.evaluationFeeUpper, `steps[${index}].evaluationFeeUpper`);
+    validateBalance(
+      step.evaluationFeeUpper,
+      `steps[${index}].evaluationFeeUpper`,
+    );
     validateWeight(
       step.executionWeightUpper,
       `steps[${index}].executionWeightUpper`,
@@ -269,13 +272,13 @@ export function forecastAaaCosts(input: {
       step.executionFeeUpper,
       `steps[${index}].executionFeeUpper`,
     );
-    const evaluationFee = aaaFeeStepCharge(
+    const evaluationFee = actorFeeStepCharge(
       input.actorType,
       step.evaluationFeeUpper,
       step.executionFeeUpper,
       'EvaluationOnly',
     );
-    const attemptedStepFee = aaaFeeStepCharge(
+    const attemptedStepFee = actorFeeStepCharge(
       input.actorType,
       step.evaluationFeeUpper,
       step.executionFeeUpper,
@@ -316,7 +319,7 @@ export function forecastAaaCosts(input: {
     };
   });
 
-  const pin: AaaForecastPin = {
+  const pin: ActorForecastPin = {
     planId: input.artifact.planId,
     blockHash: input.blockHash,
     blockNumber: input.blockNumber,
@@ -343,11 +346,11 @@ export function forecastAaaCosts(input: {
   };
 }
 
-export function isAaaForecastStale(
-  forecast: AaaCostForecast,
+export function isActorForecastStale(
+  forecast: ActorCostForecast,
   current: {
-    blockHash: AaaPlanHex;
-    metadataHash: AaaPlanHex;
+    blockHash: ActorPlanHex;
+    metadataHash: ActorPlanHex;
     model: string;
     modelVersion: string;
   },

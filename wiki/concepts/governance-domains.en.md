@@ -80,7 +80,7 @@ Protection is also domain-shaped. A domain decides which protection surface is e
 
 Execution authority is constrained by the domain. `L1RootAction` is strategic and Root-equivalent. `L2TreasurySpend` is domain-local treasury execution. `L2ParameterChange` must stay inside genuinely delegated domain-owned surfaces. `Intent` and `L2SignalToL1` stay advisory by contract.
 
-Some tempting surfaces remain outside tactical-domain ownership: TMC launch physics, staking admin onboarding/recovery, AAA global controls, and asset-registry registration or migration. A tactical domain must use an explicit handoff such as `L2SignalToL1` instead of pretending it already owns those areas.
+Some tempting surfaces remain outside tactical-domain ownership: TMC launch physics, staking admin onboarding/recovery, Actors global controls, and asset-registry registration or migration. A tactical domain must use an explicit handoff such as `L2SignalToL1` instead of pretending it already owns those areas.
 
 ## Live Read Model
 

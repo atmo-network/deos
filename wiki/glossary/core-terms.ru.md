@@ -16,7 +16,7 @@ sources:
   - ../../CHANGELOG.md
   - ../../docs/tmctol.specification.en.md
   - ../../docs/core.architecture.en.md
-  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/actors/docs/specification.en.md
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
   - ../../docs/read-model.contract.en.md
@@ -67,13 +67,13 @@ confidence: 0.9
 
 `Treasury-Owned Liquidity`. Ликвидность под контролем протокола, разделенная на домены buckets.
 
-### AAA
+### Actors
 
 `Account Abstraction Actors`. В DEOS так называется вся runtime-система: паллет, планировщик, правила жизненного цикла и среда исполнения.
 
 ### AA-Актор
 
-Один конкретный ограниченный runtime-экземпляр внутри более широкой системы AAA.
+Один конкретный ограниченный runtime-экземпляр внутри более широкой системы Actors.
 
 ### DEOS Router
 

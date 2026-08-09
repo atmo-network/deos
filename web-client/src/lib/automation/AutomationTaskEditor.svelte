@@ -1,6 +1,6 @@
 <!--
 Domain: Automation task editor
-Owns: Typed parameter controls for every current AAA Task variant.
+Owns: Typed parameter controls for every current Actors Task variant.
 Excludes: Adapter execution, asset discovery, quotes, balances, task semantics, and plan lowering.
 Zone: Automation presentation helper; binds one authoring task through finite UI Kit controls.
 -->
@@ -8,11 +8,11 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
   import { Plus, X } from '@lucide/svelte';
 
   import {
-    AAA_AUTHORING_TASK_TYPES,
-    type AaaAuthoringTask,
-    createAaaAuthoringTask,
+    ACTORS_AUTHORING_TASK_TYPES,
+    type ActorAuthoringTask,
+    createActorAuthoringTask,
   } from '$lib/automation/authoring';
-  import type { AaaPlanType } from '$lib/automation/plan-artifact';
+  import type { ActorPlanType } from '$lib/automation/plan-artifact';
   import {
     Button,
     IconButton,
@@ -25,23 +25,23 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
   import AutomationAssetEditor from './AutomationAssetEditor.svelte';
 
   type Props = {
-    task: AaaAuthoringTask;
-    aaaType: AaaPlanType;
+    task: ActorAuthoringTask;
+    actorType: ActorPlanType;
     compact?: boolean;
   };
 
-  let { task = $bindable(), aaaType, compact = false }: Props = $props();
+  let { task = $bindable(), actorType, compact = false }: Props = $props();
 
   const fieldGrid = $derived(compact ? 'grid gap-2' : 'grid grid-cols-2 gap-2');
 
   function selectTaskType(event: Event) {
-    task = createAaaAuthoringTask(
+    task = createActorAuthoringTask(
       (event.currentTarget as HTMLSelectElement)
-        .value as AaaAuthoringTask['type'],
+        .value as ActorAuthoringTask['type'],
     );
   }
 
-  function taskLabel(type: AaaAuthoringTask['type']) {
+  function taskLabel(type: ActorAuthoringTask['type']) {
     return type.replace(/([a-z])([A-Z])/g, '$1 $2');
   }
 
@@ -81,8 +81,8 @@ Zone: Automation presentation helper; binds one authoring task through finite UI
     onchange={selectTaskType}
     selectClass="h-9 py-1.5 text-xs font-medium"
   >
-    {#each AAA_AUTHORING_TASK_TYPES as type}
-      <option value={type} disabled={type === 'Mint' && aaaType !== 'System'}>
+    {#each ACTORS_AUTHORING_TASK_TYPES as type}
+      <option value={type} disabled={type === 'Mint' && actorType !== 'System'}>
         {taskLabel(type)}
       </option>
     {/each}

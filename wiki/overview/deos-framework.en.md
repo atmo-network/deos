@@ -21,7 +21,7 @@ tags:
   - deos
 related:
   - First Steps
-  - AAA System
+  - Actors System
   - AA-Actor
   - DEOS Router
   - Token Minting Curve
@@ -84,7 +84,7 @@ In the current line, that model appears through:
 
 - TMC for deterministic mint-side issuance
 - DEOS Router for route selection and fee burning
-- AAA for deterministic execution infrastructure
+- Actors for deterministic execution infrastructure
 - Staking and governance for bounded social control surfaces
 - An explicit read-model split between canonical on-chain projections and materialized views
 
@@ -92,8 +92,8 @@ In the current line, that model appears through:
 
 - [First Steps](../getting-started/first-steps.en.md)
 - [Forking DEOS](../usage/forking-deos.en.md)
-- [AAA System](aaa-system.en.md)
-- [AA-Actor](aa-actor.en.md)
+- [Actors System](actor-system.en.md)
+- [AA-Actor](actor.en.md)
 - [DEOS Router](router.en.md)
 - [Token Minting Curve](token-minting-curve.en.md)
 - [Governance](governance.en.md)

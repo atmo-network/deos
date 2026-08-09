@@ -1,6 +1,6 @@
 <!--
 Domain: Automation widget
-Owns: System AAA actor snapshots plus typed linear plan authoring, validation, and exact artifact identity presentation.
+Owns: System Actor snapshots plus typed linear plan authoring, validation, and exact artifact identity presentation.
 Excludes: Runtime actor scheduling, submission authority, static weight models, simulation providers, and layout state.
 Zone: Presentation widget; composes system projections, automation capabilities, and UI Kit helpers.
 -->
@@ -11,18 +11,18 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   import AutomationStepEditor from '$lib/automation/AutomationStepEditor.svelte';
   import AutomationTriggerEditor from '$lib/automation/AutomationTriggerEditor.svelte';
   import {
-    type AaaAuthoringIssue,
-    type AaaAuthoringTrigger,
-    DEOS_AAA_AUTHORING_LIMITS,
-    appendAaaStep,
-    createAaaArtifactFromAuthoring,
-    createAaaAuthoringProgram,
-    createAaaAuthoringStep,
-    moveAaaStep,
-    removeAaaStep,
-    validateAaaAuthoringProgram,
+    type ActorAuthoringIssue,
+    type ActorAuthoringTrigger,
+    DEOS_ACTORS_AUTHORING_LIMITS,
+    appendActorStep,
+    createActorArtifactFromAuthoring,
+    createActorAuthoringProgram,
+    createActorAuthoringStep,
+    moveActorStep,
+    removeActorStep,
+    validateActorAuthoringProgram,
   } from '$lib/automation/authoring';
-  import type { AaaPlanArtifact } from '$lib/automation/plan-artifact';
+  import type { ActorPlanArtifact } from '$lib/automation/plan-artifact';
   import type {
     AutomationActorSnapshot,
     AutomationAuthoringContext,
@@ -51,10 +51,10 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   let error = $state<string | null>(null);
   let actors = $state<AutomationActorSnapshot[]>([]);
   let view = $state<AutomationView>('actors');
-  let draft = $state(createAaaAuthoringProgram());
+  let draft = $state(createActorAuthoringProgram());
   let autoCloseTargetText = $state('');
   let nextStepId = $state(2);
-  let artifact = $state<AaaPlanArtifact | null>(null);
+  let artifact = $state<ActorPlanArtifact | null>(null);
   let artifactContext = $state<AutomationAuthoringContext | null>(null);
   let boundDraftFingerprint = $state<string | null>(null);
   let artifactBusy = $state(false);
@@ -63,7 +63,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const automationProvenance = fromClientBoundedProjection(
     true,
-    'automationWidget <- AAA.ActorIdentities + AAA.ActorHot + AAA.ActorProgram + AAA.ContinuationState + System.Account + AaaEligibilityApi',
+    'automationWidget <- Actors.ActorIdentities + Actors.ActorHot + Actors.ActorProgram + Actors.ContinuationState + System.Account + ActorEligibilityApi',
   ).provenance;
 
   function syncViewport() {
@@ -85,8 +85,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
 
   const compactPane = $derived(viewport.width > 0 && viewport.width < 520);
   const densePane = $derived(viewport.width > 0 && viewport.width < 340);
-  const validation = $derived.by(() => validateAaaAuthoringProgram(draft));
-  const maxSteps = DEOS_AAA_AUTHORING_LIMITS.maxExecutionPlanSteps;
+  const validation = $derived.by(() => validateActorAuthoringProgram(draft));
+  const maxSteps = DEOS_ACTORS_AUTHORING_LIMITS.maxExecutionPlanSteps;
   const canAddStep = $derived(draft.steps.length < maxSteps);
   const rootIssues = $derived(
     validation.issues.filter((issue) => !issue.path.startsWith('steps[')),
@@ -97,7 +97,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     return source.type === 'OnAddressEvent' ? 'Address event' : source.type;
   }
 
-  function triggerSummary(trigger: AaaAuthoringTrigger) {
+  function triggerSummary(trigger: ActorAuthoringTrigger) {
     if (trigger.type === 'Immediate') {
       return `Immediate · ${trigger.sources.map(triggerSourceSummary).join(' + ')}`;
     }
@@ -139,19 +139,21 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     }
   }
 
-  function issuesForStep(index: number): AaaAuthoringIssue[] {
+  function issuesForStep(index: number): ActorAuthoringIssue[] {
     return validation.issues.filter((issue) =>
       issue.path.startsWith(`steps[${index}]`),
     );
   }
 
-  function selectAaaType(event: Event) {
-    const aaaType = (event.currentTarget as HTMLSelectElement).value as
+  function selectActorType(event: Event) {
+    const actorType = (event.currentTarget as HTMLSelectElement).value as
       | 'User'
       | 'System';
-    draft.aaaType = aaaType;
+    draft.actorType = actorType;
     draft.fundingPolicy =
-      aaaType === 'System' ? { type: 'RuntimePolicy' } : { type: 'OwnerOnly' };
+      actorType === 'System'
+        ? { type: 'RuntimePolicy' }
+        : { type: 'OwnerOnly' };
   }
 
   function setAutoCloseTarget(event: Event) {
@@ -170,21 +172,21 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     if (!canAddStep) return;
     const key = `step-${nextStepId}`;
     nextStepId += 1;
-    draft = appendAaaStep(draft, createAaaAuthoringStep(key));
+    draft = appendActorStep(draft, createActorAuthoringStep(key));
   }
 
   function moveStep(index: number, direction: -1 | 1) {
-    draft = moveAaaStep(draft, index, index + direction);
+    draft = moveActorStep(draft, index, index + direction);
   }
 
   function deleteStep(key: string) {
-    draft = removeAaaStep(draft, key);
+    draft = removeActorStep(draft, key);
   }
 
   async function bindArtifact() {
     artifactMessage = null;
     copiedPlanId = false;
-    const currentValidation = validateAaaAuthoringProgram(draft);
+    const currentValidation = validateActorAuthoringProgram(draft);
     if (!currentValidation.valid) {
       artifactMessage = 'Resolve the visible validation findings first.';
       return;
@@ -198,7 +200,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
     artifactBusy = true;
     try {
       const context = await loadContext.call(systemStore.adapter);
-      const nextArtifact = createAaaArtifactFromAuthoring({
+      const nextArtifact = createActorArtifactFromAuthoring({
         program: draft,
         metadataBytes: context.metadataBytes,
         runtime: context.runtime,
@@ -235,11 +237,11 @@ Zone: Presentation widget; composes system projections, automation capabilities,
   async function loadObservationInspection(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    aaaId?: number,
+    actorId?: number,
   ) {
     const load = systemStore.adapter.getObservationInspection;
     if (!load) throw new Error('Canonical observation state unavailable');
-    return await load.call(systemStore.adapter, feed, maxAgeBlocks, aaaId);
+    return await load.call(systemStore.adapter, feed, maxAgeBlocks, actorId);
   }
 
   $effect(() => {
@@ -349,7 +351,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         {:else if error}
           <Notice variant="warn">{error}</Notice>
         {:else}
-          {#each actors as actor (actor.aaaId)}
+          {#each actors as actor (actor.actorId)}
             <div
               class={[
                 'rounded-xl border bg-white',
@@ -446,7 +448,8 @@ Zone: Presentation widget; composes system projections, automation capabilities,
                   />
                   <DetailRow
                     label="Completion"
-                    value={actor.completionPolicy === 'CloseAfterProductiveCycle'
+                    value={actor.completionPolicy ===
+                    'CloseAfterProductiveCycle'
                       ? 'Close after committed effect'
                       : (actor.completionPolicy ?? 'Unavailable')}
                     valueClass="text-(--mono-text)"
@@ -507,7 +510,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
       <ObservationInspector
         refreshKey={systemStore.snapshot?.blockNumber ?? 0}
         compact={compactPane}
-        actorOptions={actors.map(({ aaaId, label }) => ({ aaaId, label }))}
+        actorOptions={actors.map(({ actorId, label }) => ({ actorId, label }))}
         loadFeeds={systemStore.adapter.getObservationFeeds
           ? loadObservationFeeds
           : null}
@@ -528,13 +531,13 @@ Zone: Presentation widget; composes system projections, automation capabilities,
         >
           <div class={compactPane ? 'grid gap-2' : 'grid grid-cols-2 gap-2'}>
             <SelectField
-              label="AAA class"
-              value={draft.aaaType}
-              onchange={selectAaaType}
+              label="Actors class"
+              value={draft.actorType}
+              onchange={selectActorType}
               selectClass="h-9 py-1.5 text-xs"
             >
-              <option value="User">User AAA</option>
-              <option value="System">System AAA</option>
+              <option value="User">User Actors</option>
+              <option value="System">System Actors</option>
             </SelectField>
             <SelectField
               label="Mutability"
@@ -644,7 +647,7 @@ Zone: Presentation widget; composes system projections, automation capabilities,
               bind:step={draft.steps[index]}
               {index}
               total={draft.steps.length}
-              aaaType={draft.aaaType}
+              actorType={draft.actorType}
               mutability={draft.mutability}
               compact={compactPane}
               issues={issuesForStep(index)}

@@ -1,6 +1,6 @@
 /*
 Domain: Typed observation inspection validation
-Owns: Deterministic browser evidence generated from runtime, metadata, descriptors, and AAA weights.
+Owns: Deterministic browser evidence generated from runtime, metadata, descriptors, and Actors weights.
 Excludes: Runtime builds, metadata export, descriptor generation, live chain access, and release identity.
 Zone: Web-client validation/generation entrypoint for observation evidence.
 */
@@ -22,17 +22,17 @@ const paths = {
   descriptors: path.join(webClientRoot, '.papi/descriptors/package.json'),
   runtime: path.join(projectRoot, 'template/runtime/src/lib.rs'),
   runtimeConfigs: path.join(projectRoot, 'template/runtime/src/configs'),
-  aaaConfig: path.join(
+  actorConfig: path.join(
     projectRoot,
-    'template/runtime/src/configs/aaa_config.rs',
+    'template/runtime/src/configs/actor_config.rs',
   ),
   oracleConfig: path.join(
     projectRoot,
     'template/runtime/src/configs/oracle_config.rs',
   ),
-  aaaWeights: path.join(
+  actorWeights: path.join(
     projectRoot,
-    'template/runtime/src/weights/pallet_aaa.rs',
+    'template/runtime/src/weights/pallet_deos_actors.rs',
   ),
   databaseWeights: path.join(
     projectRoot,
@@ -181,15 +181,15 @@ async function rustSources(root) {
 function certifiedObservationPublishers(source, runtimeConfigSources) {
   const body = requireMatch(
     source,
-    /AAA_OBSERVATION_PUBLISHER_INVENTORY[^=]*=\s*&\[([^\]]*)\]/,
-    'AAA observation publisher inventory',
+    /ACTORS_OBSERVATION_PUBLISHER_INVENTORY[^=]*=\s*&\[([^\]]*)\]/,
+    'Actors observation publisher inventory',
   );
   const publishers = [...body.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
   if (
     publishers.length === 0 ||
     new Set(publishers).size !== publishers.length
   ) {
-    fail('AAA observation publisher inventory must be nonempty and unique');
+    fail('Actors observation publisher inventory must be nonempty and unique');
   }
   const ingressCalls = runtimeConfigSources.filter(({ source: candidate }) =>
     /ObservationChangeIngress<[^>]+>>::note_observation_changed\(/.test(
@@ -206,7 +206,7 @@ function certifiedObservationPublishers(source, runtimeConfigSources) {
   }
   if (
     runtimeConfigSources.some(({ source: candidate }) =>
-      /(?:crate::)?AAA::note_observation_changed\(/.test(candidate),
+      /(?:crate::)?Actors::note_observation_changed\(/.test(candidate),
     )
   ) {
     fail(
@@ -222,9 +222,9 @@ async function generatedSource(runtimeCodeHashFallback = null) {
     descriptorBytes,
     runtimeCode,
     runtime,
-    aaaConfig,
+    actorConfig,
     oracleConfig,
-    aaaWeights,
+    actorWeights,
     databaseWeightSource,
     runtimeConfigSources,
   ] = await Promise.all([
@@ -232,9 +232,9 @@ async function generatedSource(runtimeCodeHashFallback = null) {
     readFile(paths.descriptors),
     readFile(paths.runtimeCode).catch(() => null),
     readFile(paths.runtime, 'utf8'),
-    readFile(paths.aaaConfig, 'utf8'),
+    readFile(paths.actorConfig, 'utf8'),
     readFile(paths.oracleConfig, 'utf8'),
-    readFile(paths.aaaWeights, 'utf8'),
+    readFile(paths.actorWeights, 'utf8'),
     readFile(paths.databaseWeights, 'utf8'),
     rustSources(paths.runtimeConfigs),
   ]);
@@ -259,18 +259,18 @@ async function generatedSource(runtimeCodeHashFallback = null) {
     proofSize: Math.floor(maximumBlock.proofSize / 5),
   };
   const fanoutBaseWeight = weightParts(
-    aaaWeights,
+    actorWeights,
     'observation_fanout_base',
     databaseWeights,
   );
   const serviceUnitWeight = weightParts(
-    aaaWeights,
+    actorWeights,
     'observation_fanout_page',
     databaseWeights,
   );
   const configuredUnits = rustInteger(
-    aaaConfig,
-    'AaaMaxObservationFanoutPagesPerBlock',
+    actorConfig,
+    'ActorMaxObservationFanoutPagesPerBlock',
   );
   const maxServiceUnitsPerBlock = Math.min(
     configuredUnits,
@@ -292,7 +292,7 @@ async function generatedSource(runtimeCodeHashFallback = null) {
     metadataHash: blake2AsHex(metadata, 256),
     metadataSha256: sha256(metadata),
     descriptorIdentity: descriptorPackage.version,
-    weightIdentity: `sha256:${sha256(Buffer.from(aaaWeights))}`,
+    weightIdentity: `sha256:${sha256(Buffer.from(actorWeights))}`,
     certifiedPublishers: certifiedObservationPublishers(
       oracleConfig,
       runtimeConfigSources,
@@ -304,11 +304,11 @@ async function generatedSource(runtimeCodeHashFallback = null) {
       serviceUnitWeight,
       maxServiceUnitsPerBlock,
       maxActiveDirtyFeeds:
-        rustInteger(aaaConfig, 'AaaMaxActiveActors') *
-        rustInteger(aaaConfig, 'AaaMaxTriggerSources'),
+        rustInteger(actorConfig, 'ActorMaxActiveActors') *
+        rustInteger(actorConfig, 'ActorMaxTriggerSources'),
       maxSubscriberPagesPerFeed: Math.ceil(
-        rustInteger(aaaConfig, 'AaaMaxActiveActors') /
-          rustInteger(aaaConfig, 'AaaQueuePageSize'),
+        rustInteger(actorConfig, 'ActorMaxActiveActors') /
+          rustInteger(actorConfig, 'ActorQueuePageSize'),
       ),
     },
   };

@@ -90,7 +90,7 @@ It is **not** authoritative for:
 
 - Substrate block weight accounting or proof size
 - Origin, permission, dispatch, and pallet storage semantics
-- AAA scheduling, actor lifecycle, or runtime adapter behavior
+- Actors scheduling, actor lifecycle, or runtime adapter behavior
 - Governance execution, XCM, collator/session logic, or frontend flows
 - Market/MEV guarantees beyond the explicit economic assumptions modeled in the tests
 
