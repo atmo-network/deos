@@ -1,42 +1,42 @@
 /*
-Domain: AAA control-plane local simulation
+Domain: Actors control-plane local simulation
 Owns: Honest adapter-local partial-execution projection, task rollback, scalar Continuation outcomes, and donation sensitivity.
 Excludes: Runtime-Wasm execution, chain queries, scheduler prediction, signing, submission, and persistence.
 Zone: Automation domain capability; matching-runtime truth requires a separate Wasm/state-proof adapter.
 */
-import { AAA_MAX_RETRY_ATTEMPTS } from './aaa-protocol-bounds.ts';
-import type { AaaPlanArtifact, AaaPlanHex } from './plan-artifact';
+import { ACTORS_MAX_RETRY_ATTEMPTS } from './actors-protocol-bounds.ts';
+import type { ActorPlanArtifact, ActorPlanHex } from './plan-artifact';
 
-export type AaaLocalSimulationProvenance = {
+export type ActorLocalSimulationProvenance = {
   truth: 'AdapterLocalProjection';
-  planId: AaaPlanHex;
-  blockHash: AaaPlanHex;
-  metadataHash: AaaPlanHex;
+  planId: ActorPlanHex;
+  blockHash: ActorPlanHex;
+  metadataHash: ActorPlanHex;
   model: string;
   modelVersion: string;
 };
 
-export type AaaStepErrorPolicy =
+export type ActorStepErrorPolicy =
   | { type: 'AbortCycle' }
   | { type: 'ContinueNextStep' }
   | { type: 'RetryLater'; maxAttempts: number };
 
-export type AaaLocalConditionSet<Condition> =
+export type ActorLocalConditionSet<Condition> =
   | { type: 'Always' }
   | { type: 'All' | 'Any'; conditions: Condition[] };
 
-export type AaaLocalStep<Condition> = {
+export type ActorLocalStep<Condition> = {
   stepIndex: number;
-  conditionSet: AaaLocalConditionSet<Condition>;
+  conditionSet: ActorLocalConditionSet<Condition>;
   taskControl: 'Execute' | 'StopCycle';
-  onError: AaaStepErrorPolicy;
+  onError: ActorStepErrorPolicy;
 };
 
-export type AaaLocalConditionOutcome =
+export type ActorLocalConditionOutcome =
   | { kind: 'Value'; value: boolean }
   | { kind: 'Error'; retry: 'Temporary' | 'Permanent'; error: string };
 
-export type AaaLocalStepOutcome =
+export type ActorLocalStepOutcome =
   | { kind: 'Executed' }
   | { kind: 'Stopped' }
   | { kind: 'SkippedCondition' }
@@ -44,7 +44,7 @@ export type AaaLocalStepOutcome =
   | { kind: 'FundingUnavailable' }
   | { kind: 'Failed'; retry: 'Temporary' | 'Permanent'; error: string };
 
-export type AaaLocalSimulationCounts = {
+export type ActorLocalSimulationCounts = {
   executedSteps: number;
   committedEffectfulTasks: number;
   skippedConditions: number;
@@ -53,14 +53,14 @@ export type AaaLocalSimulationCounts = {
   failedSteps: number;
 };
 
-export type AaaLocalSimulationJournalEntry = {
+export type ActorLocalSimulationJournalEntry = {
   stepIndex: number;
-  outcome: AaaLocalStepOutcome;
+  outcome: ActorLocalStepOutcome;
   stateCommitted: boolean;
 };
 
-export type AaaLocalSimulationResult<State> = {
-  provenance: AaaLocalSimulationProvenance;
+export type ActorLocalSimulationResult<State> = {
+  provenance: ActorLocalSimulationProvenance;
   status: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
   closeReason: 'RetryAttemptsExhausted' | 'ProductiveCycleCompleted' | null;
   cycleNonce: bigint;
@@ -69,11 +69,11 @@ export type AaaLocalSimulationResult<State> = {
   continuationCursor: number | null;
   unsuccessfulAttemptsAtCursor: number | null;
   state: State;
-  cumulative: AaaLocalSimulationCounts;
-  journal: AaaLocalSimulationJournalEntry[];
+  cumulative: ActorLocalSimulationCounts;
+  journal: ActorLocalSimulationJournalEntry[];
 };
 
-export type AaaDonationSurface = {
+export type ActorDonationSurface = {
   stepIndex: number;
   surface: string;
   resolution:
@@ -85,7 +85,7 @@ export type AaaDonationSurface = {
   observation: 'ActorBalance' | 'ActorFunding' | 'AdapterState';
 };
 
-export type AaaDonationSensitivity = {
+export type ActorDonationSensitivity = {
   stepIndex: number;
   surface: string;
   sensitivity:
@@ -97,7 +97,7 @@ export type AaaDonationSensitivity = {
   reason: string;
 };
 
-const EMPTY_COUNTS: AaaLocalSimulationCounts = {
+const EMPTY_COUNTS: ActorLocalSimulationCounts = {
   executedSteps: 0,
   committedEffectfulTasks: 0,
   skippedConditions: 0,
@@ -113,17 +113,17 @@ function validateIndex(value: number, field: string) {
 }
 
 function increment(
-  counts: AaaLocalSimulationCounts,
-  key: keyof AaaLocalSimulationCounts,
+  counts: ActorLocalSimulationCounts,
+  key: keyof ActorLocalSimulationCounts,
 ) {
   const value = counts[key] + 1;
   if (!Number.isSafeInteger(value)) throw new Error(`${key} overflow`);
   counts[key] = value;
 }
 
-export function simulateAaaLocally<State, Condition>(input: {
-  artifact: AaaPlanArtifact;
-  blockHash: AaaPlanHex;
+export function simulateActorLocally<State, Condition>(input: {
+  artifact: ActorPlanArtifact;
+  blockHash: ActorPlanHex;
   model: string;
   modelVersion: string;
   cycleNonce: bigint;
@@ -132,17 +132,17 @@ export function simulateAaaLocally<State, Condition>(input: {
   completionPolicy?: 'Persistent' | 'CloseAfterProductiveCycle';
   unsuccessfulAttemptsAtCursor?: number;
   initialState: State;
-  initialCounts?: AaaLocalSimulationCounts;
-  steps: AaaLocalStep<Condition>[];
+  initialCounts?: ActorLocalSimulationCounts;
+  steps: ActorLocalStep<Condition>[];
   evaluateCondition?: (
     condition: Condition,
     state: Readonly<State>,
-  ) => AaaLocalConditionOutcome;
+  ) => ActorLocalConditionOutcome;
   runTask: (
-    step: AaaLocalStep<Condition>,
+    step: ActorLocalStep<Condition>,
     taskLocalState: State,
-  ) => AaaLocalStepOutcome;
-}): AaaLocalSimulationResult<State> {
+  ) => ActorLocalStepOutcome;
+}): ActorLocalSimulationResult<State> {
   validateIndex(input.attempt, 'attempt');
   validateIndex(input.startCursor, 'startCursor');
   if (input.cycleNonce < 0n) throw new Error('cycleNonce must be non-negative');
@@ -175,10 +175,10 @@ export function simulateAaaLocally<State, Condition>(input: {
       step.onError.type === 'RetryLater' &&
       (!Number.isSafeInteger(step.onError.maxAttempts) ||
         step.onError.maxAttempts <= 0 ||
-        step.onError.maxAttempts > AAA_MAX_RETRY_ATTEMPTS)
+        step.onError.maxAttempts > ACTORS_MAX_RETRY_ATTEMPTS)
     ) {
       throw new Error(
-        `RetryLater maxAttempts must be within 1..${AAA_MAX_RETRY_ATTEMPTS}`,
+        `RetryLater maxAttempts must be within 1..${ACTORS_MAX_RETRY_ATTEMPTS}`,
       );
     }
     if (
@@ -200,11 +200,11 @@ export function simulateAaaLocally<State, Condition>(input: {
   let state = structuredClone(input.initialState);
   const cumulative = structuredClone(input.initialCounts ?? EMPTY_COUNTS);
   for (const key of Object.keys(cumulative) as Array<
-    keyof AaaLocalSimulationCounts
+    keyof ActorLocalSimulationCounts
   >) {
     validateIndex(cumulative[key], `initialCounts.${key}`);
   }
-  const journal: AaaLocalSimulationJournalEntry[] = [];
+  const journal: ActorLocalSimulationJournalEntry[] = [];
 
   for (let index = input.startCursor; index < input.steps.length; index += 1) {
     const step = input.steps[index];
@@ -213,7 +213,7 @@ export function simulateAaaLocally<State, Condition>(input: {
       if (step.conditionSet.type !== 'Always') {
         let truth = step.conditionSet.type === 'All';
         let firstError: Extract<
-          AaaLocalConditionOutcome,
+          ActorLocalConditionOutcome,
           { kind: 'Error' }
         > | null = null;
         for (const condition of step.conditionSet.conditions) {
@@ -349,11 +349,11 @@ export function simulateAaaLocally<State, Condition>(input: {
 }
 
 function provenance(input: {
-  artifact: AaaPlanArtifact;
-  blockHash: AaaPlanHex;
+  artifact: ActorPlanArtifact;
+  blockHash: ActorPlanHex;
   model: string;
   modelVersion: string;
-}): AaaLocalSimulationProvenance {
+}): ActorLocalSimulationProvenance {
   return {
     truth: 'AdapterLocalProjection',
     planId: input.artifact.planId,
@@ -364,9 +364,9 @@ function provenance(input: {
   };
 }
 
-export function classifyAaaDonationSensitivity(
-  surfaces: AaaDonationSurface[],
-): AaaDonationSensitivity[] {
+export function classifyActorDonationSensitivity(
+  surfaces: ActorDonationSurface[],
+): ActorDonationSensitivity[] {
   return surfaces.map((surface) => {
     validateIndex(surface.stepIndex, 'stepIndex');
     if (surface.surface.length === 0) {

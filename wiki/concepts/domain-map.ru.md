@@ -24,7 +24,7 @@ tags:
 related:
   - Обзор фреймворка DEOS
   - Стандарт TMCTOL
-  - Система AAA
+  - Система Actors
   - Governance
   - Экономика $BLDR
   - Эталонный клиент
@@ -56,9 +56,9 @@ DEOS проще понимать как набор связанных домен
 
 ### Автономные акторы
 
-Домен акторов объясняет, как protocol-owned accounts выполняют ограниченные задачи. System AAA actors сжигают, маршрутизируют, добавляют ликвидность, разделяют потоки, держат buckets и исполняют treasury policies без зависимости от специальных manager pallets.
+Домен акторов объясняет, как protocol-owned accounts выполняют ограниченные задачи. System Actors сжигают, маршрутизируют, добавляют ликвидность, разделяют потоки, держат buckets и исполняют treasury policies без зависимости от специальных manager pallets.
 
-Читайте [Систему AAA](../overview/aaa-system.ru.md), [AA-Актор](../overview/aa-actor.ru.md) и [Токен-управляемую автоматизацию](token-driven-automation.ru.md).
+Читайте [Систему Actors](../overview/actor-system.ru.md), [AA-Актор](../overview/actor.ru.md) и [Токен-управляемую автоматизацию](token-driven-automation.ru.md).
 
 ### Маршрутизация и идентичность активов
 
@@ -123,7 +123,7 @@ DEOS проще понимать как набор связанных домен
 - [Сквозные сценарии](end-to-end-flows.ru.md)
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Система AAA](../overview/aaa-system.ru.md)
+- [Система Actors](../overview/actor-system.ru.md)
 - [Governance](../overview/governance.ru.md)
 - [Экономика $BLDR](builder-economy.ru.md)
 - [Эталонный клиент](../overview/reference-client.ru.md)

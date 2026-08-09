@@ -786,7 +786,7 @@ Bucket_A counted as protected anchor support MUST satisfy all conditions below:
 
 - It is held in protocol-owned or treasury-owned accounts governed by the default protected governance surface
 - It is deployed in an in-domain XYK pool or another explicitly qualifying floor-supporting reserve position
-- It is held by a System Immutable AAA or equivalent hard protocol anchor that runtime extrinsics, including governance/root, cannot mutate, pause, close, or reopen
+- It is held by a System Immutable Actors or equivalent hard protocol anchor that runtime extrinsics, including governance/root, cannot mutate, pause, close, or reopen
 - It cannot be withdrawn, migrated, spent, or reclassified by unilateral admin authority
 - Any migration is limited to anchor-excess liquidity above the required anchor target unless a runtime upgrade, fork, or explicit standard revision degrades the guarantee surface
 - Any emergency path that can bypass this invariant MUST classify the floor state as emergency or degraded before users can rely on the former reported floor

@@ -74,15 +74,19 @@ pub const ASSET_FOREIGN: u32 = TYPE_FOREIGN | 1;
 
 // Token-driven actor accounts from pallet configurations
 pub fn burning_manager_account() -> AccountId {
-  crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID)
+  crate::Actors::sovereign_account_id_system(
+    primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID,
+  )
 }
 
 pub fn liquidity_actor_account() -> AccountId {
-  crate::AAA::sovereign_account_id_system(primitives::ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID)
+  crate::Actors::sovereign_account_id_system(
+    primitives::ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
+  )
 }
 
-pub fn aaa_fee_sink_account() -> AccountId {
-  <Runtime as pallet_aaa::Config>::FeeSink::get()
+pub fn actor_fee_sink_account() -> AccountId {
+  <Runtime as pallet_deos_actors::Config>::FeeSink::get()
 }
 
 pub fn tmc_pallet_account() -> AccountId {
@@ -113,7 +117,7 @@ pub fn new_test_ext() -> TestExternalities {
     (EVE, INITIAL_BALANCE),
   ];
   initial_balances.extend(
-    crate::configs::aaa_config::TmctolGenesisSystemAaas::native_flow_anchor_accounts()
+    crate::configs::actor_config::TmctolGenesisSystemActors::native_flow_anchor_accounts()
       .into_iter()
       .map(|account| (account, EXISTENTIAL_DEPOSIT)),
   );
@@ -150,7 +154,7 @@ pub fn new_test_ext() -> TestExternalities {
   }
   .assimilate_storage(&mut t)
   .unwrap();
-  pallet_aaa::GenesisConfig::<Runtime>::default()
+  pallet_deos_actors::GenesisConfig::<Runtime>::default()
     .assimilate_storage(&mut t)
     .unwrap();
   let mut ext = TestExternalities::new(t);
@@ -215,7 +219,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
       axial_router_account(),
       burning_manager_account(),
       liquidity_actor_account(),
-      aaa_fee_sink_account(),
+      actor_fee_sink_account(),
       tmc_pallet_account(),
     ];
     for account in &system_accounts {

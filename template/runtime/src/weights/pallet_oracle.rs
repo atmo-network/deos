@@ -116,12 +116,12 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 	/// Proof: `Oracle::Feeds` (`max_values`: None, `max_size`: Some(86), added: 2561, mode: `MaxEncodedLen`)
 	/// Storage: `Oracle::Observations` (r:1 w:1)
 	/// Proof: `Oracle::Observations` (`max_values`: None, `max_size`: Some(61), added: 2536, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ObservationSubscriberCount` (r:1 w:0)
-	/// Proof: `AAA::ObservationSubscriberCount` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ObservationIngressRevisions` (r:1 w:0)
-	/// Proof: `AAA::ObservationIngressRevisions` (`max_values`: None, `max_size`: Some(41), added: 2516, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::DirtyObservationFeeds` (r:1 w:0)
-	/// Proof: `AAA::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(94), added: 2569, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::ObservationSubscriberCount` (r:1 w:0)
+	/// Proof: `Actors::ObservationSubscriberCount` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::ObservationIngressRevisions` (r:1 w:0)
+	/// Proof: `Actors::ObservationIngressRevisions` (`max_values`: None, `max_size`: Some(41), added: 2516, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::DirtyObservationFeeds` (r:1 w:0)
+	/// Proof: `Actors::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(94), added: 2569, mode: `MaxEncodedLen`)
 	fn publish_last_value() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `631`
@@ -136,12 +136,12 @@ impl<T: polkadot_sdk::frame_system::Config> pallet_oracle::WeightInfo for Substr
 	/// Proof: `Oracle::Feeds` (`max_values`: None, `max_size`: Some(86), added: 2561, mode: `MaxEncodedLen`)
 	/// Storage: `Oracle::Observations` (r:1 w:1)
 	/// Proof: `Oracle::Observations` (`max_values`: None, `max_size`: Some(61), added: 2536, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ObservationSubscriberCount` (r:1 w:0)
-	/// Proof: `AAA::ObservationSubscriberCount` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::ObservationIngressRevisions` (r:1 w:0)
-	/// Proof: `AAA::ObservationIngressRevisions` (`max_values`: None, `max_size`: Some(41), added: 2516, mode: `MaxEncodedLen`)
-	/// Storage: `AAA::DirtyObservationFeeds` (r:1 w:0)
-	/// Proof: `AAA::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(94), added: 2569, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::ObservationSubscriberCount` (r:1 w:0)
+	/// Proof: `Actors::ObservationSubscriberCount` (`max_values`: None, `max_size`: Some(37), added: 2512, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::ObservationIngressRevisions` (r:1 w:0)
+	/// Proof: `Actors::ObservationIngressRevisions` (`max_values`: None, `max_size`: Some(41), added: 2516, mode: `MaxEncodedLen`)
+	/// Storage: `Actors::DirtyObservationFeeds` (r:1 w:0)
+	/// Proof: `Actors::DirtyObservationFeeds` (`max_values`: None, `max_size`: Some(94), added: 2569, mode: `MaxEncodedLen`)
 	fn publish_ema_changed() -> Weight {
 		// Proof Size summary in bytes:
 		//  Measured:  `710`

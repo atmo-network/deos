@@ -17,7 +17,7 @@ Checks:
   - runtime asset-conversion integration test module/file spelling is canonical
   - framework artifact names do not regress to pre-DEOS tmctol runtime/pallet names
   - browser wallet helper aliases do not regress to TMCTOL-branded framework names
-  - AAA embedding guide remains linked from docs and pallet entrypoints
+  - Actors embedding guide remains linked from docs and pallet entrypoints
 
 Options:
   --warn    Print findings but exit successfully
@@ -121,33 +121,33 @@ check_legacy_wallet_helper_aliases() {
     fi
 }
 
-check_legacy_aaa_liquidity_adapter() {
+check_legacy_actor_liquidity_adapter() {
     local matches
     matches="$(rg -n 'LiquidityDonationOps' "$TEMPLATE_DIR" "$PROJECT_ROOT/docs" "$PROJECT_ROOT/web-client" || true)"
     if [[ -n "$matches" ]]; then
-        record_finding "legacy AAA LiquidityDonationOps alias detected"
+        record_finding "legacy Actors LiquidityDonationOps alias detected"
         echo "$matches"
     fi
 }
 
-check_aaa_embedding_links() {
-    local guide="$TEMPLATE_DIR/pallets/aaa/docs/embedding.md"
+check_actor_embedding_links() {
+    local guide="$TEMPLATE_DIR/pallets/actors/docs/embedding.md"
     if [[ ! -f "$guide" ]]; then
-        record_finding "package-owned AAA embedding guide is missing"
+        record_finding "package-owned Actors embedding guide is missing"
         return 0
     fi
     local missing=()
-    if ! rg -q 'template/pallets/aaa/docs/embedding\.md' "$PROJECT_ROOT/docs/README.md"; then
+    if ! rg -q 'template/pallets/actors/docs/embedding\.md' "$PROJECT_ROOT/docs/README.md"; then
         missing+=("docs/README.md")
     fi
-    if ! rg -q 'template/pallets/aaa/docs/embedding\.md' "$PROJECT_ROOT/README.md"; then
+    if ! rg -q 'template/pallets/actors/docs/embedding\.md' "$PROJECT_ROOT/README.md"; then
         missing+=("README.md")
     fi
-    if ! rg -q 'docs/embedding\.md' "$TEMPLATE_DIR/pallets/aaa/README.md"; then
-        missing+=("template/pallets/aaa/README.md")
+    if ! rg -q 'docs/embedding\.md' "$TEMPLATE_DIR/pallets/actors/README.md"; then
+        missing+=("template/pallets/actors/README.md")
     fi
     if [[ ${#missing[@]} -gt 0 ]]; then
-        record_finding "AAA embedding guide is not linked from required entrypoints"
+        record_finding "Actors embedding guide is not linked from required entrypoints"
         printf '%s\n' "${missing[@]}"
     fi
 }
@@ -163,8 +163,8 @@ main() {
     check_asset_conversion_name
     check_legacy_framework_artifact_names
     check_legacy_wallet_helper_aliases
-    check_legacy_aaa_liquidity_adapter
-    check_aaa_embedding_links
+    check_legacy_actor_liquidity_adapter
+    check_actor_embedding_links
     if [[ ${#FINDINGS[@]} -eq 0 ]]; then
         log_success "Template readiness audit passed"
         return 0

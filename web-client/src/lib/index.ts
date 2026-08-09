@@ -22,10 +22,10 @@ export {
   type DeosSignerMatch,
 } from './adapters/blockchain';
 export {
-  runDeosAaaFinalizedSimulation,
-  type AaaFinalizedSimulationInput,
-  type AaaFinalizedSimulationMode,
-} from './adapters/blockchain/aaa-simulation';
+  runDeosActorFinalizedSimulation,
+  type ActorFinalizedSimulationInput,
+  type ActorFinalizedSimulationMode,
+} from './adapters/blockchain/actor-simulation';
 export {
   DEFAULT_DEOS_WS_ENDPOINT,
   DeosPapiConnection,

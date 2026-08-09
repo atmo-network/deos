@@ -1,15 +1,15 @@
 /*
-Domain: AAA eligibility projection
-Owns: Canonical mapping of the read-only runtime `AaaEligibilityApi` result into the browser domain.
+Domain: Actors eligibility projection
+Owns: Canonical mapping of the read-only runtime `ActorEligibilityApi` result into the browser domain.
 Excludes: Chain transport, storage reads, scheduler execution, and plan authoring.
 Zone: Automation public contract; adapters and widgets import it, never reimplementing cadence,
 cooldown, window, retry backoff, breaker, or latch arithmetic.
 */
-export const AAA_ELIGIBILITY_RUNTIME_API =
-  'AaaEligibilityApi_aaa_eligibility' as const;
-export const AAA_ELIGIBILITY_RUNTIME_API_VERSION = 1 as const;
+export const ACTORS_ELIGIBILITY_RUNTIME_API =
+  'ActorEligibilityApi_actor_eligibility' as const;
+export const ACTORS_ELIGIBILITY_RUNTIME_API_VERSION = 1 as const;
 
-export type AaaEligibilityPhase =
+export type ActorEligibilityPhase =
   | 'NotRegistered'
   | 'Dormant'
   | 'Ready'
@@ -20,14 +20,14 @@ export type AaaEligibilityPhase =
   | 'WaitingRetry'
   | 'WaitingTemporal';
 
-export type AaaEligibilityFailure =
+export type ActorEligibilityFailure =
   | 'ActorInvariant'
   | 'ContinuationInvariant'
   | 'ComputationOverflow';
 
-export type AaaEligibilityProjection = {
+export type ActorEligibilityProjection = {
   /** Scheduler-owned readiness or blocking phase. */
-  phase: AaaEligibilityPhase;
+  phase: ActorEligibilityPhase;
   /** Terminal reason when phase is CloseDue. */
   closeReason: string | null;
   /** Next block at which temporal eligibility opens, or null when none is computable. */
@@ -77,9 +77,9 @@ function asOptionalBlock(value: unknown, field: string): number | null {
   return value;
 }
 
-export function projectAaaEligibility(
+export function projectActorEligibility(
   value: unknown,
-): AaaEligibilityProjection {
+): ActorEligibilityProjection {
   const result = asRecord(value, 'runtime Result');
   if (result.success === false) {
     const failure = asVariant(result.value, 'eligibility error');
@@ -87,7 +87,7 @@ export function projectAaaEligibility(
       throw new Error(`Unsupported runtime eligibility error ${failure}`);
     }
     throw new Error(
-      `Runtime eligibility projection rejected: ${failure as AaaEligibilityFailure}`,
+      `Runtime eligibility projection rejected: ${failure as ActorEligibilityFailure}`,
     );
   }
   if (result.success !== true) {
@@ -100,7 +100,7 @@ export function projectAaaEligibility(
     throw new Error(`Unsupported runtime eligibility phase ${phase}`);
   }
   return {
-    phase: phase as AaaEligibilityPhase,
+    phase: phase as ActorEligibilityPhase,
     closeReason:
       phase === 'CloseDue'
         ? asVariant(phaseVariant.value, 'eligibility close reason')

@@ -158,8 +158,8 @@
           },
           "page_type": "faq",
           "summary": {
-            "en": "Quick orientation for recurring newcomer questions about DEOS, TMCTOL, AAA, governance, docs/wiki navigation, UI Kit, Domain DAG, and the reference client.",
-            "ru": "Быстрая ориентация по главным вопросам новичков о DEOS, TMCTOL, AAA, governance, docs/wiki navigation, UI Kit, Domain DAG и эталонном клиенте."
+            "en": "Quick orientation for recurring newcomer questions about DEOS, TMCTOL, Actors, governance, docs/wiki navigation, UI Kit, Domain DAG, and the reference client.",
+            "ru": "Быстрая ориентация по главным вопросам новичков о DEOS, TMCTOL, Actors, governance, docs/wiki navigation, UI Kit, Domain DAG и эталонном клиенте."
           }
         }
       ]
@@ -279,8 +279,8 @@
           },
           "page_type": "concept",
           "summary": {
-            "en": "Concrete walkthroughs that connect user actions, runtime routing, AAA actor wakeups, buckets, read-model surfaces, and validation choices.",
-            "ru": "Конкретные сценарии, связывающие пользовательские действия, runtime routing, пробуждение AAA акторов, buckets, read-model surfaces и validation."
+            "en": "Concrete walkthroughs that connect user actions, runtime routing, Actor wakeups, buckets, read-model surfaces, and validation choices.",
+            "ru": "Конкретные сценарии, связывающие пользовательские действия, runtime routing, пробуждение Actors акторов, buckets, read-model surfaces и validation."
           }
         },
         {
@@ -295,8 +295,8 @@
           },
           "page_type": "concept",
           "summary": {
-            "en": "Compact text diagrams for subsystem relationships, routing, AAA actor graphs, governance/staking, and read-model boundaries.",
-            "ru": "Компактные текстовые схемы связей подсистем, routing, AAA actor graphs, governance/staking и read-model boundaries."
+            "en": "Compact text diagrams for subsystem relationships, routing, Actor graphs, governance/staking, and read-model boundaries.",
+            "ru": "Компактные текстовые схемы связей подсистем, routing, Actor graphs, governance/staking и read-model boundaries."
           }
         },
         {
@@ -421,35 +421,35 @@
       },
       "items": [
         {
-          "id": "aaa-system",
+          "id": "actor-system",
           "title": {
-            "en": "AAA System",
-            "ru": "Система AAA"
+            "en": "Actors System",
+            "ru": "Система Actors"
           },
           "path": {
-            "en": "overview/aaa-system.en.md",
-            "ru": "overview/aaa-system.ru.md"
+            "en": "overview/actor-system.en.md",
+            "ru": "overview/actor-system.ru.md"
           },
           "page_type": "overview",
           "summary": {
-            "en": "AAA as a bounded actor runtime with task-scoped atomicity, sparse progress-preserving Continuation, and portable host-adapter boundaries.",
-            "ru": "AAA как ограниченная среда акторов с атомарностью отдельных задач, разреженным сохранением прогресса и переносимыми границами интерфейсов."
+            "en": "Actors as a bounded actor runtime with task-scoped atomicity, sparse progress-preserving Continuation, and portable host-adapter boundaries.",
+            "ru": "Actors как ограниченная среда акторов с атомарностью отдельных задач, разреженным сохранением прогресса и переносимыми границами интерфейсов."
           }
         },
         {
-          "id": "aa-actor",
+          "id": "actor",
           "title": {
             "en": "AA-Actor",
             "ru": "AA-Актор"
           },
           "path": {
-            "en": "overview/aa-actor.en.md",
-            "ru": "overview/aa-actor.ru.md"
+            "en": "overview/actor.en.md",
+            "ru": "overview/actor.ru.md"
           },
           "page_type": "overview",
           "summary": {
-            "en": "One concrete bounded execution instance inside the broader AAA system.",
-            "ru": "Один конкретный ограниченный экземпляр исполнения внутри более широкой системы AAA."
+            "en": "One concrete bounded execution instance inside the broader Actors system.",
+            "ru": "Один конкретный ограниченный экземпляр исполнения внутри более широкой системы Actors."
           }
         },
         {
@@ -480,8 +480,8 @@
           },
           "page_type": "overview",
           "summary": {
-            "en": "Bounded current typed observation truth for producers, Router consumers, reactive AAA, and finalized client inspection.",
-            "ru": "Ограниченная текущая истина типизированных наблюдений для producers, Router consumers, реактивного AAA и финализированной инспекции клиента."
+            "en": "Bounded current typed observation truth for producers, Router consumers, reactive Actors, and finalized client inspection.",
+            "ru": "Ограниченная текущая истина типизированных наблюдений для producers, Router consumers, реактивного Actors и финализированной инспекции клиента."
           }
         },
         {

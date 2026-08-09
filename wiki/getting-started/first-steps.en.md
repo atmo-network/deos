@@ -67,7 +67,7 @@ Use [TMCTOL Standard](../concepts/tmctol-standard.en.md), [TMCTOL Formulas](../m
 
 ### Runtime and actors
 
-Use [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor.en.md), [Runtime Patterns](../overview/runtime-patterns.en.md), and [Asset Identity](../overview/asset-identity.en.md) when implementation behavior, scheduler flows, assets, or integrations are involved.
+Use [Actors System](../overview/actor-system.en.md), [AA-Actor](../overview/actor.en.md), [Runtime Patterns](../overview/runtime-patterns.en.md), and [Asset Identity](../overview/asset-identity.en.md) when implementation behavior, scheduler flows, assets, or integrations are involved.
 
 ### Governance and protection
 

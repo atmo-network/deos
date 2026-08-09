@@ -1,40 +1,41 @@
 /*
-Domain: AAA configuration IR and syntax adapters
+Domain: Actors configuration IR and syntax adapters
 Owns: Format-neutral actor configuration structure, deterministic normalization, structural diagnostics/diff, and JSON/TOML/Markdown interchange.
 Excludes: Runtime metadata decoding, SCALE semantics, signing, submission, comments, presentation prose, and a second execution language.
 Zone: Automation domain capability; lowers only through the canonical authoring contract.
 */
 import {
-  type AaaAuthoringLimits,
-  type AaaAuthoringProgram,
-  type AaaAuthoringStep,
-  DEOS_AAA_AUTHORING_LIMITS,
-  lowerAaaAuthoringProgram,
-  validateAaaAuthoringProgram,
+  type ActorAuthoringLimits,
+  type ActorAuthoringProgram,
+  type ActorAuthoringStep,
+  DEOS_ACTORS_AUTHORING_LIMITS,
+  lowerActorAuthoringProgram,
+  validateActorAuthoringProgram,
 } from './authoring.ts';
 
-export const AAA_CONFIGURATION_IR_FORMAT = 'deos.aaa.configuration-ir' as const;
-export const AAA_CONFIGURATION_IR_VERSION = 1 as const;
+export const ACTORS_CONFIGURATION_IR_FORMAT =
+  'deos.actor.configuration-ir' as const;
+export const ACTORS_CONFIGURATION_IR_VERSION = 1 as const;
 
-export type AaaConfigurationIrStep = Omit<AaaAuthoringStep, 'key'>;
+export type ActorConfigurationIrStep = Omit<ActorAuthoringStep, 'key'>;
 
-export type AaaConfigurationIr = Omit<
-  AaaAuthoringProgram,
+export type ActorConfigurationIr = Omit<
+  ActorAuthoringProgram,
   'steps' | 'autoCloseAtCycleNonce'
 > & {
-  format: typeof AAA_CONFIGURATION_IR_FORMAT;
-  formatVersion: typeof AAA_CONFIGURATION_IR_VERSION;
+  format: typeof ACTORS_CONFIGURATION_IR_FORMAT;
+  formatVersion: typeof ACTORS_CONFIGURATION_IR_VERSION;
   autoCloseAtCycleNonce: string | null;
-  steps: AaaConfigurationIrStep[];
+  steps: ActorConfigurationIrStep[];
 };
 
-export type AaaConfigurationIrDiagnostic = {
+export type ActorConfigurationIrDiagnostic = {
   path: string;
   severity: 'Error';
   message: string;
 };
 
-export type AaaConfigurationIrDiff = {
+export type ActorConfigurationIrDiff = {
   path: string;
   kind: 'Added' | 'Removed' | 'Replaced';
   before?: unknown;
@@ -42,7 +43,7 @@ export type AaaConfigurationIrDiff = {
 };
 
 const FIELD_NAMES = [
-  'aaaType',
+  'actorType',
   'mutability',
   'completionPolicy',
   'autoCloseAtCycleNonce',
@@ -51,7 +52,7 @@ const FIELD_NAMES = [
   'scheduleWindow',
   'fundingPolicy',
   'steps',
-] as const satisfies readonly (keyof AaaConfigurationIr)[];
+] as const satisfies readonly (keyof ActorConfigurationIr)[];
 
 function stableValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stableValue);
@@ -65,7 +66,7 @@ function stableValue(value: unknown): unknown {
   return value;
 }
 
-export function stableAaaConfigurationIrJson(value: unknown, space?: number) {
+export function stableActorConfigurationIrJson(value: unknown, space?: number) {
   return JSON.stringify(stableValue(value), null, space);
 }
 
@@ -76,18 +77,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-export function normalizeAaaConfigurationIr(
+export function normalizeActorConfigurationIr(
   value: unknown,
-): AaaConfigurationIr {
-  const record = requireRecord(value, 'AAA configuration IR');
-  if (record.format !== AAA_CONFIGURATION_IR_FORMAT) {
+): ActorConfigurationIr {
+  const record = requireRecord(value, 'Actors configuration IR');
+  if (record.format !== ACTORS_CONFIGURATION_IR_FORMAT) {
     throw new Error(
-      `Unsupported AAA configuration IR format: ${String(record.format)}`,
+      `Unsupported Actors configuration IR format: ${String(record.format)}`,
     );
   }
-  if (record.formatVersion !== AAA_CONFIGURATION_IR_VERSION) {
+  if (record.formatVersion !== ACTORS_CONFIGURATION_IR_VERSION) {
     throw new Error(
-      `Unsupported AAA configuration IR version: ${String(record.formatVersion)}`,
+      `Unsupported Actors configuration IR version: ${String(record.formatVersion)}`,
     );
   }
   const allowedFields = new Set<string>([
@@ -97,11 +98,11 @@ export function normalizeAaaConfigurationIr(
   ]);
   for (const field of FIELD_NAMES) {
     if (!(field in record))
-      throw new Error(`Missing AAA configuration IR field: ${field}`);
+      throw new Error(`Missing Actors configuration IR field: ${field}`);
   }
   for (const field of Object.keys(record)) {
     if (!allowedFields.has(field))
-      throw new Error(`Unknown AAA configuration IR field: ${field}`);
+      throw new Error(`Unknown Actors configuration IR field: ${field}`);
   }
   if (
     record.autoCloseAtCycleNonce !== null &&
@@ -112,19 +113,19 @@ export function normalizeAaaConfigurationIr(
       'autoCloseAtCycleNonce must be null or a canonical positive integer string',
     );
   }
-  const normalized = stableValue(record) as AaaConfigurationIr;
+  const normalized = stableValue(record) as ActorConfigurationIr;
   return JSON.parse(
-    stableAaaConfigurationIrJson(normalized),
-  ) as AaaConfigurationIr;
+    stableActorConfigurationIrJson(normalized),
+  ) as ActorConfigurationIr;
 }
 
 export function authoringProgramToConfigurationIr(
-  program: AaaAuthoringProgram,
-): AaaConfigurationIr {
-  return normalizeAaaConfigurationIr({
-    format: AAA_CONFIGURATION_IR_FORMAT,
-    formatVersion: AAA_CONFIGURATION_IR_VERSION,
-    aaaType: program.aaaType,
+  program: ActorAuthoringProgram,
+): ActorConfigurationIr {
+  return normalizeActorConfigurationIr({
+    format: ACTORS_CONFIGURATION_IR_FORMAT,
+    formatVersion: ACTORS_CONFIGURATION_IR_VERSION,
+    actorType: program.actorType,
     mutability: program.mutability,
     completionPolicy: program.completionPolicy,
     autoCloseAtCycleNonce: program.autoCloseAtCycleNonce?.toString() ?? null,
@@ -142,10 +143,10 @@ export function authoringProgramToConfigurationIr(
 
 export function configurationIrToAuthoringProgram(
   value: unknown,
-): AaaAuthoringProgram {
-  const ir = normalizeAaaConfigurationIr(value);
+): ActorAuthoringProgram {
+  const ir = normalizeActorConfigurationIr(value);
   return {
-    aaaType: ir.aaaType,
+    actorType: ir.actorType,
     mutability: ir.mutability,
     completionPolicy: ir.completionPolicy,
     autoCloseAtCycleNonce:
@@ -165,12 +166,12 @@ export function configurationIrToAuthoringProgram(
   };
 }
 
-export function diagnoseAaaConfigurationIr(
+export function diagnoseActorConfigurationIr(
   value: unknown,
-  limits: AaaAuthoringLimits = DEOS_AAA_AUTHORING_LIMITS,
-): AaaConfigurationIrDiagnostic[] {
+  limits: ActorAuthoringLimits = DEOS_ACTORS_AUTHORING_LIMITS,
+): ActorConfigurationIrDiagnostic[] {
   try {
-    const validation = validateAaaAuthoringProgram(
+    const validation = validateActorAuthoringProgram(
       configurationIrToAuthoringProgram(value),
       limits,
     );
@@ -192,11 +193,11 @@ export function diagnoseAaaConfigurationIr(
   }
 }
 
-export function lowerAaaConfigurationIr(
+export function lowerActorConfigurationIr(
   value: unknown,
-  limits: AaaAuthoringLimits = DEOS_AAA_AUTHORING_LIMITS,
+  limits: ActorAuthoringLimits = DEOS_ACTORS_AUTHORING_LIMITS,
 ) {
-  return lowerAaaAuthoringProgram(
+  return lowerActorAuthoringProgram(
     configurationIrToAuthoringProgram(value),
     limits,
   );
@@ -206,10 +207,11 @@ function diffValues(
   before: unknown,
   after: unknown,
   path: string,
-  output: AaaConfigurationIrDiff[],
+  output: ActorConfigurationIrDiff[],
 ) {
   if (
-    stableAaaConfigurationIrJson(before) === stableAaaConfigurationIrJson(after)
+    stableActorConfigurationIrJson(before) ===
+    stableActorConfigurationIrJson(after)
   )
     return;
   if (Array.isArray(before) && Array.isArray(after)) {
@@ -250,49 +252,49 @@ function diffValues(
   output.push({ path: path || '/', kind: 'Replaced', before, after });
 }
 
-export function diffAaaConfigurationIr(
+export function diffActorConfigurationIr(
   before: unknown,
   after: unknown,
-): AaaConfigurationIrDiff[] {
-  const output: AaaConfigurationIrDiff[] = [];
+): ActorConfigurationIrDiff[] {
+  const output: ActorConfigurationIrDiff[] = [];
   diffValues(
-    normalizeAaaConfigurationIr(before),
-    normalizeAaaConfigurationIr(after),
+    normalizeActorConfigurationIr(before),
+    normalizeActorConfigurationIr(after),
     '',
     output,
   );
   return output;
 }
 
-export function serializeAaaConfigurationJson(value: unknown) {
-  return `${stableAaaConfigurationIrJson(normalizeAaaConfigurationIr(value), 2)}\n`;
+export function serializeActorConfigurationJson(value: unknown) {
+  return `${stableActorConfigurationIrJson(normalizeActorConfigurationIr(value), 2)}\n`;
 }
 
-export function parseAaaConfigurationJson(source: string) {
-  return normalizeAaaConfigurationIr(JSON.parse(source));
+export function parseActorConfigurationJson(source: string) {
+  return normalizeActorConfigurationIr(JSON.parse(source));
 }
 
-export function serializeAaaConfigurationToml(value: unknown) {
-  const ir = normalizeAaaConfigurationIr(value);
+export function serializeActorConfigurationToml(value: unknown) {
+  const ir = normalizeActorConfigurationIr(value);
   const lines = [
-    `format = ${JSON.stringify(AAA_CONFIGURATION_IR_FORMAT)}`,
-    `format_version = ${AAA_CONFIGURATION_IR_VERSION}`,
+    `format = ${JSON.stringify(ACTORS_CONFIGURATION_IR_FORMAT)}`,
+    `format_version = ${ACTORS_CONFIGURATION_IR_VERSION}`,
     '',
     '[genome]',
   ];
   for (const field of FIELD_NAMES) {
     lines.push(
-      `${field} = ${JSON.stringify(stableAaaConfigurationIrJson(ir[field]))}`,
+      `${field} = ${JSON.stringify(stableActorConfigurationIrJson(ir[field]))}`,
     );
   }
   return `${lines.join('\n')}\n`;
 }
 
-export function parseAaaConfigurationToml(source: string) {
+export function parseActorConfigurationToml(source: string) {
   const format = source.match(/^format\s*=\s*("(?:[^"\\]|\\.)*")\s*$/m);
   const version = source.match(/^format_version\s*=\s*(\d+)\s*$/m);
   if (format == null || version == null)
-    throw new Error('Invalid AAA configuration TOML header');
+    throw new Error('Invalid Actors configuration TOML header');
   const record: Record<string, unknown> = {
     format: JSON.parse(format[1]),
     formatVersion: Number(version[1]),
@@ -302,25 +304,25 @@ export function parseAaaConfigurationToml(source: string) {
       new RegExp(`^${field}\\s*=\\s*("(?:[^"\\\\]|\\\\.)*")\\s*$`, 'm'),
     );
     if (match == null)
-      throw new Error(`Missing AAA configuration TOML field: ${field}`);
+      throw new Error(`Missing Actors configuration TOML field: ${field}`);
     record[field] = JSON.parse(JSON.parse(match[1]));
   }
-  return normalizeAaaConfigurationIr(record);
+  return normalizeActorConfigurationIr(record);
 }
 
-export function serializeAaaConfigurationMarkdown(value: unknown) {
-  const ir = normalizeAaaConfigurationIr(value);
+export function serializeActorConfigurationMarkdown(value: unknown) {
+  const ir = normalizeActorConfigurationIr(value);
   const sections = FIELD_NAMES.map(
     (field) =>
-      `## ${field}\n\n\`\`\`json\n${stableAaaConfigurationIrJson(ir[field], 2)}\n\`\`\``,
+      `## ${field}\n\n\`\`\`json\n${stableActorConfigurationIrJson(ir[field], 2)}\n\`\`\``,
   );
-  return `# AAA Configuration Genome\n\n<!-- ${AAA_CONFIGURATION_IR_FORMAT}@${AAA_CONFIGURATION_IR_VERSION} -->\n\n${sections.join('\n\n')}\n`;
+  return `# Actors Configuration Genome\n\n<!-- ${ACTORS_CONFIGURATION_IR_FORMAT}@${ACTORS_CONFIGURATION_IR_VERSION} -->\n\n${sections.join('\n\n')}\n`;
 }
 
-export function parseAaaConfigurationMarkdown(source: string) {
+export function parseActorConfigurationMarkdown(source: string) {
   const marker = source.match(/<!--\s*([^@\s]+)@(\d+)\s*-->/);
   if (marker == null)
-    throw new Error('Invalid AAA configuration Markdown header');
+    throw new Error('Invalid Actors configuration Markdown header');
   const record: Record<string, unknown> = {
     format: marker[1],
     formatVersion: Number(marker[2]),
@@ -333,8 +335,8 @@ export function parseAaaConfigurationMarkdown(source: string) {
       ),
     );
     if (match == null)
-      throw new Error(`Missing AAA configuration Markdown field: ${field}`);
+      throw new Error(`Missing Actors configuration Markdown field: ${field}`);
     record[field] = JSON.parse(match[1]);
   }
-  return normalizeAaaConfigurationIr(record);
+  return normalizeActorConfigurationIr(record);
 }

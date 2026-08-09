@@ -1,5 +1,5 @@
 /*
-Domain: AAA control-plane artifacts
+Domain: Actors control-plane artifacts
 Owns: Metadata-bound plan identity, SCALE round trips, lossless projections, and structural diffs.
 Excludes: Runtime state queries, amount/fee forecasts, simulation, governance submission, and history persistence.
 Zone: Automation domain capability; safe for adapters, stores, and widgets to import.
@@ -15,84 +15,84 @@ import {
 } from '@polkadot-api/substrate-bindings';
 import { blake2AsHex } from '@polkadot/util-crypto';
 
-export const AAA_PLAN_FORMAT = 'deos.aaa.plan' as const;
-export const AAA_PLAN_FORMAT_VERSION = 1 as const;
+export const ACTORS_PLAN_FORMAT = 'deos.actor.plan' as const;
+export const ACTORS_PLAN_FORMAT_VERSION = 1 as const;
 
-export type AaaPlanType = 'User' | 'System';
-export type AaaPlanMutability = 'Mutable' | 'Immutable';
-export type AaaPlanHex = `0x${string}`;
+export type ActorPlanType = 'User' | 'System';
+export type ActorPlanMutability = 'Mutable' | 'Immutable';
+export type ActorPlanHex = `0x${string}`;
 
-export type AaaPlanArtifact = {
-  format: typeof AAA_PLAN_FORMAT;
-  formatVersion: typeof AAA_PLAN_FORMAT_VERSION;
-  genesisHash: AaaPlanHex;
+export type ActorPlanArtifact = {
+  format: typeof ACTORS_PLAN_FORMAT;
+  formatVersion: typeof ACTORS_PLAN_FORMAT_VERSION;
+  genesisHash: ActorPlanHex;
   specVersion: number;
   transactionVersion: number;
-  metadataHash: AaaPlanHex;
-  aaaType: AaaPlanType;
-  mutability: AaaPlanMutability;
-  programScale: AaaPlanHex;
-  planId: AaaPlanHex;
+  metadataHash: ActorPlanHex;
+  actorType: ActorPlanType;
+  mutability: ActorPlanMutability;
+  programScale: ActorPlanHex;
+  planId: ActorPlanHex;
 };
 
-export type AaaPlanProjection =
+export type ActorPlanProjection =
   | null
   | boolean
   | string
-  | { $bytes: AaaPlanHex }
+  | { $bytes: ActorPlanHex }
   | { $integer: string; $runtimeType: 'number' | 'bigint' }
   | { $none: true }
-  | AaaPlanProjection[]
-  | { [key: string]: AaaPlanProjection };
+  | ActorPlanProjection[]
+  | { [key: string]: ActorPlanProjection };
 
-export type AaaPlanInspection =
+export type ActorPlanInspection =
   | {
       valid: true;
-      artifact: AaaPlanArtifact;
-      projection: AaaPlanProjection;
+      artifact: ActorPlanArtifact;
+      projection: ActorPlanProjection;
       runtimeValue: unknown;
     }
   | { valid: false; errors: string[] };
 
-export type AaaPlanRuntimeIdentity = {
-  genesisHash: AaaPlanHex;
+export type ActorPlanRuntimeIdentity = {
+  genesisHash: ActorPlanHex;
   specVersion: number;
   transactionVersion: number;
 };
 
-export type AaaPlanDiff =
+export type ActorPlanDiff =
   | {
       kind: 'add';
       path: string;
-      value: AaaPlanProjection;
+      value: ActorPlanProjection;
     }
   | {
       kind: 'remove';
       path: string;
-      value: AaaPlanProjection;
+      value: ActorPlanProjection;
     }
   | {
       kind: 'replace';
       path: string;
-      before: AaaPlanProjection;
-      after: AaaPlanProjection;
+      before: ActorPlanProjection;
+      after: ActorPlanProjection;
     }
   | {
       kind: 'move';
       path: string;
       from: string;
-      value: AaaPlanProjection;
+      value: ActorPlanProjection;
     };
 
-export type AaaPlanDiffResult =
-  | { compatible: true; changes: AaaPlanDiff[] }
+export type ActorPlanDiffResult =
+  | { compatible: true; changes: ActorPlanDiff[] }
   | {
       compatible: false;
       reason: 'IncompatibleUntilRebound';
       mismatches: Array<'genesisHash' | 'metadataHash'>;
     };
 
-const PLAN_DOMAIN_BYTES = new TextEncoder().encode('deos:aaa-plan:v1');
+const PLAN_DOMAIN_BYTES = new TextEncoder().encode('deos:actor-plan:v1');
 const HEX_PATTERN = /^0x(?:[0-9a-f]{2})*$/;
 const HASH_PATTERN = /^0x[0-9a-f]{64}$/;
 
@@ -116,10 +116,10 @@ function encodeLeU32(value: number) {
   return bytes;
 }
 
-function bytesToHex(bytes: Uint8Array): AaaPlanHex {
+function bytesToHex(bytes: Uint8Array): ActorPlanHex {
   let value = '0x';
   for (const byte of bytes) value += byte.toString(16).padStart(2, '0');
-  return value as AaaPlanHex;
+  return value as ActorPlanHex;
 }
 
 function hexToBytes(value: string) {
@@ -162,11 +162,14 @@ function enumDiscriminant(
 }
 
 function programCodec(metadata: UnifiedMetadata) {
-  const entry = metadataEntry(metadata, 'pallet_aaa::types::ProgramInput');
+  const entry = metadataEntry(
+    metadata,
+    'pallet_deos_actors::types::ProgramInput',
+  );
   return getDynamicBuilder(getLookupFn(metadata)).buildDefinition(entry.id);
 }
 
-function decodeProgram(metadata: UnifiedMetadata, programScale: AaaPlanHex) {
+function decodeProgram(metadata: UnifiedMetadata, programScale: ActorPlanHex) {
   const codec = programCodec(metadata);
   const sourceBytes = hexToBytes(programScale);
   const runtimeValue = codec.dec(sourceBytes);
@@ -179,7 +182,7 @@ function decodeProgram(metadata: UnifiedMetadata, programScale: AaaPlanHex) {
   return { runtimeValue, projection: projectRuntimeValue(runtimeValue) };
 }
 
-function projectRuntimeValue(value: unknown): AaaPlanProjection {
+function projectRuntimeValue(value: unknown): ActorPlanProjection {
   if (value === undefined) return { $none: true };
   if (
     value === null ||
@@ -199,7 +202,7 @@ function projectRuntimeValue(value: unknown): AaaPlanProjection {
   if (value instanceof Uint8Array) return { $bytes: bytesToHex(value) };
   if (Array.isArray(value)) return value.map(projectRuntimeValue);
   if (typeof value === 'object') {
-    const projection: Record<string, AaaPlanProjection> = {};
+    const projection: Record<string, ActorPlanProjection> = {};
     for (const key of Object.keys(value).sort()) {
       projection[key] = projectRuntimeValue(
         (value as Record<string, unknown>)[key],
@@ -212,7 +215,7 @@ function projectRuntimeValue(value: unknown): AaaPlanProjection {
 
 function planIdBytes(
   metadata: UnifiedMetadata,
-  artifact: Omit<AaaPlanArtifact, 'planId'>,
+  artifact: Omit<ActorPlanArtifact, 'planId'>,
 ) {
   return concatBytes([
     PLAN_DOMAIN_BYTES,
@@ -220,10 +223,14 @@ function planIdBytes(
     encodeLeU32(artifact.transactionVersion),
     hexToBytes(artifact.genesisHash),
     hexToBytes(artifact.metadataHash),
-    enumDiscriminant(metadata, 'pallet_aaa::types::AaaType', artifact.aaaType),
     enumDiscriminant(
       metadata,
-      'pallet_aaa::types::Mutability',
+      'pallet_deos_actors::types::ActorType',
+      artifact.actorType,
+    ),
+    enumDiscriminant(
+      metadata,
+      'pallet_deos_actors::types::Mutability',
       artifact.mutability,
     ),
     hexToBytes(artifact.programScale),
@@ -232,9 +239,9 @@ function planIdBytes(
 
 function calculatePlanId(
   metadata: UnifiedMetadata,
-  artifact: Omit<AaaPlanArtifact, 'planId'>,
+  artifact: Omit<ActorPlanArtifact, 'planId'>,
 ) {
-  return blake2AsHex(planIdBytes(metadata, artifact), 256) as AaaPlanHex;
+  return blake2AsHex(planIdBytes(metadata, artifact), 256) as ActorPlanHex;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -253,15 +260,15 @@ function isU32(value: unknown): value is number {
 function parseArtifact(
   value: unknown,
   errors: string[],
-): AaaPlanArtifact | null {
+): ActorPlanArtifact | null {
   if (!isRecord(value)) {
     errors.push('Artifact must be an object');
     return null;
   }
-  if (value.format !== AAA_PLAN_FORMAT)
-    errors.push(`format must be ${AAA_PLAN_FORMAT}`);
-  if (value.formatVersion !== AAA_PLAN_FORMAT_VERSION) {
-    errors.push(`formatVersion must be ${AAA_PLAN_FORMAT_VERSION}`);
+  if (value.format !== ACTORS_PLAN_FORMAT)
+    errors.push(`format must be ${ACTORS_PLAN_FORMAT}`);
+  if (value.formatVersion !== ACTORS_PLAN_FORMAT_VERSION) {
+    errors.push(`formatVersion must be ${ACTORS_PLAN_FORMAT_VERSION}`);
   }
   for (const field of ['genesisHash', 'metadataHash', 'planId'] as const) {
     if (typeof value[field] !== 'string' || !HASH_PATTERN.test(value[field])) {
@@ -279,57 +286,57 @@ function parseArtifact(
   if (!isU32(value.transactionVersion)) {
     errors.push('transactionVersion must be an unsigned u32');
   }
-  if (value.aaaType !== 'User' && value.aaaType !== 'System') {
-    errors.push('aaaType must be User or System');
+  if (value.actorType !== 'User' && value.actorType !== 'System') {
+    errors.push('actorType must be User or System');
   }
   if (value.mutability !== 'Mutable' && value.mutability !== 'Immutable') {
     errors.push('mutability must be Mutable or Immutable');
   }
-  return errors.length === 0 ? (value as AaaPlanArtifact) : null;
+  return errors.length === 0 ? (value as ActorPlanArtifact) : null;
 }
 
-export function encodeAaaProgramValue(
+export function encodeActorProgramValue(
   metadataBytes: Uint8Array,
   runtimeValue: unknown,
-): AaaPlanHex {
+): ActorPlanHex {
   const metadata = unifyMetadata(decAnyMetadata(metadataBytes));
   const programScale = bytesToHex(programCodec(metadata).enc(runtimeValue));
   decodeProgram(metadata, programScale);
   return programScale;
 }
 
-export function createAaaPlanArtifact(input: {
+export function createActorPlanArtifact(input: {
   metadataBytes: Uint8Array;
-  runtime: AaaPlanRuntimeIdentity;
-  aaaType: AaaPlanType;
-  mutability: AaaPlanMutability;
-  programScale: AaaPlanHex;
-}): AaaPlanArtifact {
+  runtime: ActorPlanRuntimeIdentity;
+  actorType: ActorPlanType;
+  mutability: ActorPlanMutability;
+  programScale: ActorPlanHex;
+}): ActorPlanArtifact {
   const metadata = unifyMetadata(decAnyMetadata(input.metadataBytes));
   decodeProgram(metadata, input.programScale);
-  const artifact: Omit<AaaPlanArtifact, 'planId'> = {
-    format: AAA_PLAN_FORMAT,
-    formatVersion: AAA_PLAN_FORMAT_VERSION,
+  const artifact: Omit<ActorPlanArtifact, 'planId'> = {
+    format: ACTORS_PLAN_FORMAT,
+    formatVersion: ACTORS_PLAN_FORMAT_VERSION,
     ...input.runtime,
-    metadataHash: blake2AsHex(input.metadataBytes, 256) as AaaPlanHex,
-    aaaType: input.aaaType,
+    metadataHash: blake2AsHex(input.metadataBytes, 256) as ActorPlanHex,
+    actorType: input.actorType,
     mutability: input.mutability,
     programScale: input.programScale,
   };
   return { ...artifact, planId: calculatePlanId(metadata, artifact) };
 }
 
-export function inspectAaaPlanArtifact(
+export function inspectActorPlanArtifact(
   value: unknown,
   metadataBytes: Uint8Array,
-  expectedRuntime?: AaaPlanRuntimeIdentity,
-): AaaPlanInspection {
+  expectedRuntime?: ActorPlanRuntimeIdentity,
+): ActorPlanInspection {
   const errors: string[] = [];
   const artifact = parseArtifact(value, errors);
   if (artifact == null) return { valid: false, errors };
 
   try {
-    const metadataHash = blake2AsHex(metadataBytes, 256) as AaaPlanHex;
+    const metadataHash = blake2AsHex(metadataBytes, 256) as ActorPlanHex;
     if (artifact.metadataHash !== metadataHash)
       errors.push('metadataHash does not match metadata');
     if (expectedRuntime != null) {
@@ -366,13 +373,13 @@ function childPath(path: string, segment: string | number) {
   return `${path}/${pointerSegment(segment)}`;
 }
 
-function projectionFingerprint(value: AaaPlanProjection) {
+function projectionFingerprint(value: ActorPlanProjection) {
   return JSON.stringify(value);
 }
 
 function longestCommonSubsequence(
-  before: AaaPlanProjection[],
-  after: AaaPlanProjection[],
+  before: ActorPlanProjection[],
+  after: ActorPlanProjection[],
 ) {
   const rows = before.length + 1;
   const columns = after.length + 1;
@@ -409,10 +416,10 @@ function longestCommonSubsequence(
 }
 
 function diffArrays(
-  before: AaaPlanProjection[],
-  after: AaaPlanProjection[],
+  before: ActorPlanProjection[],
+  after: ActorPlanProjection[],
   path: string,
-  changes: AaaPlanDiff[],
+  changes: ActorPlanDiff[],
 ) {
   const matchedBefore = new Set<number>();
   const matchedAfter = new Set<number>();
@@ -474,10 +481,10 @@ function diffArrays(
 }
 
 function diffProjection(
-  before: AaaPlanProjection,
-  after: AaaPlanProjection,
+  before: ActorPlanProjection,
+  after: ActorPlanProjection,
   path: string,
-  changes: AaaPlanDiff[],
+  changes: ActorPlanDiff[],
 ) {
   if (projectionFingerprint(before) === projectionFingerprint(after)) return;
   if (Array.isArray(before) && Array.isArray(after)) {
@@ -485,8 +492,8 @@ function diffProjection(
     return;
   }
   if (isRecord(before) && isRecord(after)) {
-    const beforeRecord = before as Record<string, AaaPlanProjection>;
-    const afterRecord = after as Record<string, AaaPlanProjection>;
+    const beforeRecord = before as Record<string, ActorPlanProjection>;
+    const afterRecord = after as Record<string, ActorPlanProjection>;
     const keys = [
       ...new Set([...Object.keys(beforeRecord), ...Object.keys(afterRecord)]),
     ].sort();
@@ -509,10 +516,10 @@ function diffProjection(
   changes.push({ kind: 'replace', path, before, after });
 }
 
-export function diffAaaPlanArtifacts(
-  before: { artifact: AaaPlanArtifact; projection: AaaPlanProjection },
-  after: { artifact: AaaPlanArtifact; projection: AaaPlanProjection },
-): AaaPlanDiffResult {
+export function diffActorPlanArtifacts(
+  before: { artifact: ActorPlanArtifact; projection: ActorPlanProjection },
+  after: { artifact: ActorPlanArtifact; projection: ActorPlanProjection },
+): ActorPlanDiffResult {
   const mismatches: Array<'genesisHash' | 'metadataHash'> = [];
   if (before.artifact.genesisHash !== after.artifact.genesisHash) {
     mismatches.push('genesisHash');
@@ -527,7 +534,7 @@ export function diffAaaPlanArtifacts(
       mismatches,
     };
   }
-  const changes: AaaPlanDiff[] = [];
+  const changes: ActorPlanDiff[] = [];
   diffProjection(before.projection, after.projection, '', changes);
   return { compatible: true, changes };
 }

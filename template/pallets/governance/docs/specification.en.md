@@ -632,7 +632,7 @@ Contract rules:
 7. `Intent` and `L2SignalToL1` are non-executable advisory payloads; they MUST NOT dispatch privileged state transitions by themselves
 8. If an L2 domain needs Root-equivalent action, it MUST use `L2SignalToL1` so the domain records and exports its will without directly executing super-user power
 9. `L2ParameterChange` MUST target explicit domain-owned or explicitly delegated control surfaces; it MUST NOT be justified only by the existence of a convenient admin setter somewhere else in the runtime
-10. If a mechanism still remains system-owned or L1-owned rather than explicitly delegated to that domain (for example a System AAA policy surface not yet delegated), the L2 domain MUST use `L2SignalToL1` or another explicit handoff surface instead of mutating that mechanism as though it were already domain-local
+10. If a mechanism still remains system-owned or L1-owned rather than explicitly delegated to that domain (for example a System Actors policy surface not yet delegated), the L2 domain MUST use `L2SignalToL1` or another explicit handoff surface instead of mutating that mechanism as though it were already domain-local
 11. If enactment dispatch fails, the item MUST enter explicit `ExecutionFailed` state or an equivalent explicit failure status rather than pretending the proposal was enacted successfully
 12. Execution MUST be transactional: a failed enactment MUST NOT leave partial multi-step side effects behind
 

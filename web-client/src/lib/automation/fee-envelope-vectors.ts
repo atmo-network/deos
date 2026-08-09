@@ -1,62 +1,62 @@
 /*
-Domain: AAA generated fee-envelope vectors
+Domain: Actors generated fee-envelope vectors
 Owns: Validation and policy projection of package-generated fee-envelope conformance vectors.
 Excludes: Runtime weight calculation, plan simulation, metadata decoding, and fee collection.
 Zone: Automation domain contract; generated Rust vectors constrain browser fee forecasting.
 */
-import vectorsJson from './aaa-fee-envelope-vectors.json' with { type: 'json' };
+import vectorsJson from './actors-fee-envelope-vectors.json' with { type: 'json' };
 
-export type AaaFeeEnvelopeActorType = 'User' | 'System';
-export type AaaFeeChargeKind = 'EvaluationOnly' | 'Attempted';
+export type ActorFeeEnvelopeActorType = 'User' | 'System';
+export type ActorFeeChargeKind = 'EvaluationOnly' | 'Attempted';
 
-type AaaFeeEnvelopeInput = {
+type ActorFeeEnvelopeInput = {
   evaluation: string;
   execution: string;
 };
 
-type AaaFeeEnvelopeStep = AaaFeeEnvelopeInput & {
+type ActorFeeEnvelopeStep = ActorFeeEnvelopeInput & {
   total: string;
 };
 
-export type AaaFeeEnvelopeVector = {
-  actorType: AaaFeeEnvelopeActorType;
+export type ActorFeeEnvelopeVector = {
+  actorType: ActorFeeEnvelopeActorType;
   cursor: number;
-  inputs: AaaFeeEnvelopeInput[];
-  steps: AaaFeeEnvelopeStep[];
+  inputs: ActorFeeEnvelopeInput[];
+  steps: ActorFeeEnvelopeStep[];
   total: string;
 };
 
-export type AaaFeeSettlementCase = {
+export type ActorFeeSettlementCase = {
   name: string;
-  actorType: AaaFeeEnvelopeActorType;
+  actorType: ActorFeeEnvelopeActorType;
   cursor: number;
-  inputs: AaaFeeEnvelopeInput[];
+  inputs: ActorFeeEnvelopeInput[];
   initialReservation: string;
-  chargeKinds: AaaFeeChargeKind[];
+  chargeKinds: ActorFeeChargeKind[];
   charges: string[];
   reservationRemaining: string[];
 };
 
-export type AaaFeeFloorCase = {
+export type ActorFeeFloorCase = {
   name: string;
-  actorType: AaaFeeEnvelopeActorType;
+  actorType: ActorFeeEnvelopeActorType;
   isFeeNative: boolean;
   assetMinimum: string;
   minUserBalance: string;
   protectedMinimum: string;
 };
 
-export type AaaFeeEnvelopeVectors = {
-  format: 'deos.aaa.fee-envelope-vectors';
+export type ActorFeeEnvelopeVectors = {
+  format: 'deos.actor.fee-envelope-vectors';
   formatVersion: 2;
   metadataSha256: string;
   weightSha256: string;
-  vectors: AaaFeeEnvelopeVector[];
-  settlementCases: AaaFeeSettlementCase[];
-  floorCases: AaaFeeFloorCase[];
+  vectors: ActorFeeEnvelopeVector[];
+  settlementCases: ActorFeeSettlementCase[];
+  floorCases: ActorFeeFloorCase[];
 };
 
-export type AaaFeeStepSettlement = {
+export type ActorFeeStepSettlement = {
   charge: bigint;
   reservationRemaining: bigint;
 };
@@ -75,24 +75,24 @@ function decimal(value: unknown, label: string): bigint {
   return BigInt(value);
 }
 
-function actorType(value: unknown, label: string): AaaFeeEnvelopeActorType {
+function actorType(value: unknown, label: string): ActorFeeEnvelopeActorType {
   if (value === 'User' || value === 'System') return value;
   throw new Error(`${label} must be User or System`);
 }
 
-function chargeKind(value: unknown, label: string): AaaFeeChargeKind {
+function chargeKind(value: unknown, label: string): ActorFeeChargeKind {
   if (value === 'EvaluationOnly' || value === 'Attempted') return value;
   throw new Error(`${label} must be EvaluationOnly or Attempted`);
 }
 
-function input(value: unknown, label: string): AaaFeeEnvelopeInput {
+function input(value: unknown, label: string): ActorFeeEnvelopeInput {
   const projected = record(value, label);
   decimal(projected.evaluation, `${label}.evaluation`);
   decimal(projected.execution, `${label}.execution`);
-  return projected as AaaFeeEnvelopeInput;
+  return projected as ActorFeeEnvelopeInput;
 }
 
-function inputs(value: unknown, label: string): AaaFeeEnvelopeInput[] {
+function inputs(value: unknown, label: string): ActorFeeEnvelopeInput[] {
   if (!Array.isArray(value)) throw new Error(`${label} must be an array`);
   return value.map((entry, index) => input(entry, `${label}[${index}]`));
 }
@@ -112,14 +112,14 @@ function cursor(value: unknown, label: string): number {
   return value;
 }
 
-function vector(value: unknown, index: number): AaaFeeEnvelopeVector {
+function vector(value: unknown, index: number): ActorFeeEnvelopeVector {
   const label = `fee-envelope vectors[${index}]`;
   const projected = record(value, label);
   const parsedInputs = inputs(projected.inputs, `${label}.inputs`);
   if (!Array.isArray(projected.steps)) {
     throw new Error(`${label}.steps must be an array`);
   }
-  const parsed: AaaFeeEnvelopeVector = {
+  const parsed: ActorFeeEnvelopeVector = {
     actorType: actorType(projected.actorType, `${label}.actorType`),
     cursor: cursor(projected.cursor, `${label}.cursor`),
     inputs: parsedInputs,
@@ -128,7 +128,7 @@ function vector(value: unknown, index: number): AaaFeeEnvelopeVector {
       decimal(step.evaluation, `${label}.steps[${stepIndex}].evaluation`);
       decimal(step.execution, `${label}.steps[${stepIndex}].execution`);
       decimal(step.total, `${label}.steps[${stepIndex}].total`);
-      return step as AaaFeeEnvelopeStep;
+      return step as ActorFeeEnvelopeStep;
     }),
     total: typeof projected.total === 'string' ? projected.total : '',
   };
@@ -175,21 +175,21 @@ function vector(value: unknown, index: number): AaaFeeEnvelopeVector {
   return parsed;
 }
 
-export function settleAaaFeeStep(
-  actorType: AaaFeeEnvelopeActorType,
+export function settleActorFeeStep(
+  actorType: ActorFeeEnvelopeActorType,
   reservation: bigint,
   fee: { evaluation: bigint; execution: bigint },
-  kind: AaaFeeChargeKind,
-): AaaFeeStepSettlement {
+  kind: ActorFeeChargeKind,
+): ActorFeeStepSettlement {
   if (reservation < 0n || fee.evaluation < 0n || fee.execution < 0n) {
-    throw new Error('AAA fee settlement inputs must be non-negative');
+    throw new Error('Actors fee settlement inputs must be non-negative');
   }
   if (actorType === 'System') {
     return { charge: 0n, reservationRemaining: 0n };
   }
   const total = fee.evaluation + fee.execution;
   if (reservation < total) {
-    throw new Error('AAA fee reservation underflows the selected step');
+    throw new Error('Actors fee reservation underflows the selected step');
   }
   return {
     charge: kind === 'EvaluationOnly' ? fee.evaluation : total,
@@ -197,13 +197,13 @@ export function settleAaaFeeStep(
   };
 }
 
-export function aaaFeeStepCharge(
-  actorType: AaaFeeEnvelopeActorType,
+export function actorFeeStepCharge(
+  actorType: ActorFeeEnvelopeActorType,
   evaluation: bigint,
   execution: bigint,
-  kind: AaaFeeChargeKind,
+  kind: ActorFeeChargeKind,
 ): bigint {
-  return settleAaaFeeStep(
+  return settleActorFeeStep(
     actorType,
     evaluation + execution,
     { evaluation, execution },
@@ -211,13 +211,13 @@ export function aaaFeeStepCharge(
   ).charge;
 }
 
-export function aaaUserFeeBudgetAdmits(
+export function actorUserFeeBudgetAdmits(
   feeNativeBalance: bigint,
   minUserBalance: bigint,
   attemptFeeUpper: bigint,
 ): boolean {
   if (feeNativeBalance < 0n || minUserBalance < 0n || attemptFeeUpper < 0n) {
-    throw new Error('AAA fee-budget inputs must be non-negative');
+    throw new Error('Actors fee-budget inputs must be non-negative');
   }
   return (
     feeNativeBalance >= minUserBalance &&
@@ -225,14 +225,14 @@ export function aaaUserFeeBudgetAdmits(
   );
 }
 
-export function aaaFeeNativeProtectedMinimum(
-  actorType: AaaFeeEnvelopeActorType,
+export function actorFeeNativeProtectedMinimum(
+  actorType: ActorFeeEnvelopeActorType,
   isFeeNative: boolean,
   assetMinimum: bigint,
   minUserBalance: bigint,
 ): bigint {
   if (assetMinimum < 0n || minUserBalance < 0n) {
-    throw new Error('AAA protected-minimum inputs must be non-negative');
+    throw new Error('Actors protected-minimum inputs must be non-negative');
   }
   return actorType === 'User' && isFeeNative
     ? assetMinimum > minUserBalance
@@ -241,7 +241,7 @@ export function aaaFeeNativeProtectedMinimum(
     : assetMinimum;
 }
 
-function settlementCase(value: unknown, index: number): AaaFeeSettlementCase {
+function settlementCase(value: unknown, index: number): ActorFeeSettlementCase {
   const label = `fee-envelope settlement cases[${index}]`;
   const projected = record(value, label);
   const parsedInputs = inputs(projected.inputs, `${label}.inputs`);
@@ -270,7 +270,7 @@ function settlementCase(value: unknown, index: number): AaaFeeSettlementCase {
   if (typeof projected.name !== 'string' || projected.name.length === 0) {
     throw new Error(`${label}.name must be a non-empty string`);
   }
-  const parsed: AaaFeeSettlementCase = {
+  const parsed: ActorFeeSettlementCase = {
     name: projected.name,
     actorType: actorType(projected.actorType, `${label}.actorType`),
     cursor: parsedCursor,
@@ -305,7 +305,7 @@ function settlementCase(value: unknown, index: number): AaaFeeSettlementCase {
   }
   parsed.chargeKinds.forEach((kind, stepIndex) => {
     const source = parsed.inputs[parsed.cursor + stepIndex];
-    const settlement = settleAaaFeeStep(
+    const settlement = settleActorFeeStep(
       parsed.actorType,
       reservation,
       {
@@ -339,7 +339,7 @@ function settlementCase(value: unknown, index: number): AaaFeeSettlementCase {
   return parsed;
 }
 
-function floorCase(value: unknown, index: number): AaaFeeFloorCase {
+function floorCase(value: unknown, index: number): ActorFeeFloorCase {
   const label = `fee-envelope floor cases[${index}]`;
   const projected = record(value, label);
   if (typeof projected.name !== 'string' || projected.name.length === 0) {
@@ -348,7 +348,7 @@ function floorCase(value: unknown, index: number): AaaFeeFloorCase {
   if (typeof projected.isFeeNative !== 'boolean') {
     throw new Error(`${label}.isFeeNative must be boolean`);
   }
-  const parsed: AaaFeeFloorCase = {
+  const parsed: ActorFeeFloorCase = {
     name: projected.name,
     actorType: actorType(projected.actorType, `${label}.actorType`),
     isFeeNative: projected.isFeeNative,
@@ -363,7 +363,7 @@ function floorCase(value: unknown, index: number): AaaFeeFloorCase {
         ? projected.protectedMinimum
         : '',
   };
-  const expected = aaaFeeNativeProtectedMinimum(
+  const expected = actorFeeNativeProtectedMinimum(
     parsed.actorType,
     parsed.isFeeNative,
     decimal(parsed.assetMinimum, `${label}.assetMinimum`),
@@ -400,32 +400,32 @@ function identity(value: unknown, label: string): string {
   return value;
 }
 
-export function parseAaaFeeEnvelopeVectors(
+export function parseActorFeeEnvelopeVectors(
   value: unknown,
-): AaaFeeEnvelopeVectors {
-  const projected = record(value, 'AAA fee-envelope vectors');
-  if (projected.format !== 'deos.aaa.fee-envelope-vectors') {
-    throw new Error('Unsupported AAA fee-envelope vector format');
+): ActorFeeEnvelopeVectors {
+  const projected = record(value, 'Actors fee-envelope vectors');
+  if (projected.format !== 'deos.actor.fee-envelope-vectors') {
+    throw new Error('Unsupported Actors fee-envelope vector format');
   }
   if (projected.formatVersion !== 2) {
-    throw new Error('Unsupported AAA fee-envelope vector version');
+    throw new Error('Unsupported Actors fee-envelope vector version');
   }
   const metadataSha256 = identity(
     projected.metadataSha256,
-    'AAA fee-envelope metadata identity',
+    'Actors fee-envelope metadata identity',
   );
   const weightSha256 = identity(
     projected.weightSha256,
-    'AAA fee-envelope weight identity',
+    'Actors fee-envelope weight identity',
   );
   if (!Array.isArray(projected.vectors)) {
-    throw new Error('AAA fee-envelope vectors must be an array');
+    throw new Error('Actors fee-envelope vectors must be an array');
   }
   if (!Array.isArray(projected.settlementCases)) {
-    throw new Error('AAA fee-envelope settlement cases must be an array');
+    throw new Error('Actors fee-envelope settlement cases must be an array');
   }
   if (!Array.isArray(projected.floorCases)) {
-    throw new Error('AAA fee-envelope floor cases must be an array');
+    throw new Error('Actors fee-envelope floor cases must be an array');
   }
   const vectors = projected.vectors.map(vector);
   for (const expected of ['User', 'System'] as const) {
@@ -435,23 +435,25 @@ export function parseAaaFeeEnvelopeVectors(
           candidate.actorType === expected && candidate.cursor === 0,
       )
     ) {
-      throw new Error(`AAA fee-envelope vectors omit ${expected} cursor zero`);
+      throw new Error(
+        `Actors fee-envelope vectors omit ${expected} cursor zero`,
+      );
     }
   }
   const settlementCases = projected.settlementCases.map(settlementCase);
   requireNames(
     settlementCases,
     ['releaseToZero', 'attemptPricedRollback', 'systemFeeExemption'],
-    'AAA fee-envelope settlement cases',
+    'Actors fee-envelope settlement cases',
   );
   const floorCases = projected.floorCases.map(floorCase);
   requireNames(
     floorCases,
     ['userFeeNative', 'userNonFeeNative', 'systemFeeNative'],
-    'AAA fee-envelope floor cases',
+    'Actors fee-envelope floor cases',
   );
   return {
-    format: 'deos.aaa.fee-envelope-vectors',
+    format: 'deos.actor.fee-envelope-vectors',
     formatVersion: 2,
     metadataSha256,
     weightSha256,
@@ -461,10 +463,11 @@ export function parseAaaFeeEnvelopeVectors(
   };
 }
 
-export const AAA_FEE_ENVELOPE_VECTORS = parseAaaFeeEnvelopeVectors(vectorsJson);
+export const ACTORS_FEE_ENVELOPE_VECTORS =
+  parseActorFeeEnvelopeVectors(vectorsJson);
 
 const FEE_CHARGES_BY_ACTOR = new Map(
-  AAA_FEE_ENVELOPE_VECTORS.vectors
+  ACTORS_FEE_ENVELOPE_VECTORS.vectors
     .filter((vector) => vector.cursor === 0)
     .map((vector) => [
       vector.actorType,
@@ -472,12 +475,12 @@ const FEE_CHARGES_BY_ACTOR = new Map(
     ]),
 );
 
-export function aaaFeeEnvelopeCharges(
-  actorType: AaaFeeEnvelopeActorType,
+export function actorFeeEnvelopeCharges(
+  actorType: ActorFeeEnvelopeActorType,
 ): boolean {
   const charges = FEE_CHARGES_BY_ACTOR.get(actorType);
   if (charges == null) {
-    throw new Error(`AAA fee-envelope vectors omit ${actorType} fee policy`);
+    throw new Error(`Actors fee-envelope vectors omit ${actorType} fee policy`);
   }
   return charges;
 }

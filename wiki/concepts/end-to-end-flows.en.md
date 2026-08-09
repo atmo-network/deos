@@ -1,7 +1,7 @@
 ---
 page_type: concept
 title: End-to-End Flows
-summary: Concrete walkthroughs that connect user actions, runtime routing, AAA actor wakeups, buckets, read-model surfaces, and validation choices inside DEOS.
+summary: Concrete walkthroughs that connect user actions, runtime routing, Actor wakeups, buckets, read-model surfaces, and validation choices inside DEOS.
 locale: en
 canonical_page_id: end-to-end-flows
 translation_status: source
@@ -10,7 +10,7 @@ available_locales:
   - ru
 sources:
   - ../../template/pallets/router/docs/architecture.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
   - ../../docs/tmctol.specification.en.md
   - ../../template/pallets/staking/docs/architecture.en.md
 status: active
@@ -19,12 +19,12 @@ tags:
   - concept
   - flows
   - routing
-  - aaa
+  - actor
   - onboarding
 related:
   - Domain Map
   - Routing and Minting Loop
-  - AAA System
+  - Actors System
   - AA-Actor
   - TMCTOL Standard
   - Staking
@@ -55,12 +55,12 @@ Owner pages: [Routing and Minting Loop](routing-and-minting-loop.en.md), [DEOS R
 ## Actor Wakeup Chain
 
 1. A System actor reaches its configured trigger: balance ingress for omnivorous actors or a bounded schedule for timer-driven actors.
-2. AAA scheduler admits the actor only if lifecycle, cooldown, fee, and bounded-execution rules allow it.
+2. Actors scheduler admits the actor only if lifecycle, cooldown, fee, and bounded-execution rules allow it.
 3. The actor executes a typed plan such as swap, burn, add/remove liquidity, split transfer, stake, or unstake.
 4. Its output may land on another ingress-driven actor account and wake that actor.
 5. A larger protocol behavior emerges from small bounded steps, but remains inspectable as an actor graph.
 
-Owner pages: [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor.en.md), [Token-Driven Automation](token-driven-automation.en.md).
+Owner pages: [Actors System](../overview/actor-system.en.md), [AA-Actor](../overview/actor.en.md), [Token-Driven Automation](token-driven-automation.en.md).
 
 ## Temporary Middle-Step Failure
 
@@ -114,8 +114,8 @@ See [Three-Layer Validation](../development/three-layer-validation.en.md).
 
 - [Domain Map](domain-map.en.md)
 - [Routing and Minting Loop](routing-and-minting-loop.en.md)
-- [AAA System](../overview/aaa-system.en.md)
-- [AA-Actor](../overview/aa-actor.en.md)
+- [Actors System](../overview/actor-system.en.md)
+- [AA-Actor](../overview/actor.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [Staking](../overview/staking.en.md)
 - [Read-Model Split](read-model-split.en.md)

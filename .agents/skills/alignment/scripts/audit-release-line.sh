@@ -8,7 +8,7 @@ usage() {
 Usage: audit-release-line.sh [OPTIONS]
 
 Checks release-line consistency across CHANGELOG.md, the current framework
-boundary, package metadata, and AAA package-owned documentation. The audit
+boundary, package metadata, and Actors package-owned documentation. The audit
 prevents release fragmentation while preserving standalone normative
 specification authority and stable package navigation.
 
@@ -275,24 +275,31 @@ run_audit() {
         exit 1
     fi
 
-    local aaa_spec="$TEMPLATE_DIR/pallets/aaa/docs/specification.en.md"
-    check_exact_line "$aaa_spec" "- **Scope**: Account Abstraction Actors runtime contract" "AAA specification-scope drift"
-    check_exact_line "$aaa_spec" "- **Status**: Normative" "AAA specification-status drift"
-    if rg -q '^- \*\*(Specification line|Release focus|Source basis)\*\*:' "$aaa_spec"; then
-        log_error "AAA specification purity drift: implementation markers must remain outside the normative specification"
+    local actor_spec="$TEMPLATE_DIR/pallets/actors/docs/specification.en.md"
+    check_exact_line "$actor_spec" "- **Scope**: Bounded economic actor runtime contract" "Actors specification-scope drift"
+    check_exact_line "$actor_spec" "- **Status**: Normative" "Actors specification-status drift"
+    if rg -q '^- \*\*(Specification line|Release focus|Source basis)\*\*:' "$actor_spec"; then
+        log_error "Actors specification purity drift: implementation markers must remain outside the normative specification"
         exit 1
     fi
-    if rg -q '\b(DEOS|TMCTOL)\b' "$aaa_spec"; then
-        log_error "AAA specification purity drift: DEOS product/runtime framing remains in the standalone contract"
+    if tail -n +2 "$actor_spec" | rg -q '\b(DEOS|TMCTOL)\b'; then
+        log_error "Actors specification purity drift: DEOS product/runtime framing remains in the standalone contract"
         exit 1
     fi
-    check_markdown_release_marker "$TEMPLATE_DIR/pallets/aaa/docs/embedding.md" "Release line" "$latest_version"
+    check_markdown_release_marker "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" "Release line" "$latest_version"
     local package
+    local integration_doc
     local integration_label
-    for package in aaa oracle; do
+    for package in actors oracle; do
         case "$package" in
-            aaa) integration_label="AAA Integration in DEOS" ;;
-            oracle) integration_label="DEOS Oracle Integration" ;;
+            actors)
+                integration_doc="actors"
+                integration_label="DEOS Actors Integration"
+                ;;
+            oracle)
+                integration_doc="oracle"
+                integration_label="DEOS Oracle Integration"
+                ;;
         esac
         if [[ ! -f "$TEMPLATE_DIR/pallets/$package/docs/embedding.md" ]]; then
             log_error "Package embedding drift: missing canonical pallets/$package/docs/embedding.md"
@@ -302,34 +309,34 @@ run_audit() {
             log_error "Package embedding drift: uppercase pallets/$package/EMBEDDING.md alias exists"
             exit 1
         fi
-        if [[ ! -f "$PROJECT_ROOT/docs/$package.integration.en.md" ]]; then
-            log_error "Integration-document drift: missing docs/$package.integration.en.md"
+        if [[ ! -f "$PROJECT_ROOT/docs/$integration_doc.integration.en.md" ]]; then
+            log_error "Integration-document drift: missing docs/$integration_doc.integration.en.md"
             exit 1
         fi
-        check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[$integration_label](./$package.integration.en.md)" "$package integration-navigation drift"
+        check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[$integration_label](./$integration_doc.integration.en.md)" "$package integration-navigation drift"
     done
 
     local forbidden
-    for forbidden in TmctolGenesisSystemAaas TmctolAssetOps AaaSystemExecutionReserve "Canonical Address Catalog" Production-Wasm FEE_SINK_AAA_ID MAX_SYSTEM_REFERENCE_AGE_BLOCKS; do
-        if grep -Fq "$forbidden" "$TEMPLATE_DIR/pallets/aaa/docs/architecture.en.md"; then
-            log_error "AAA package-purity drift: concrete integration marker remains: $forbidden"
+    for forbidden in TmctolGenesisSystemActors TmctolAssetOps ActorSystemExecutionReserve "Canonical Address Catalog" Production-Wasm FEE_SINK_ACTORS_ID MAX_SYSTEM_REFERENCE_AGE_BLOCKS; do
+        if grep -Fq "$forbidden" "$TEMPLATE_DIR/pallets/actors/docs/architecture.en.md"; then
+            log_error "Actors package-purity drift: concrete integration marker remains: $forbidden"
             exit 1
         fi
     done
-    for forbidden in "pallet index \`52\`" AaaObservationChangeIngress "Production Weight Evidence" "DEOS Router publishes" "Axial Router publishes"; do
+    for forbidden in "pallet index \`52\`" ActorObservationChangeIngress "Production Weight Evidence" "DEOS Router publishes" "Axial Router publishes"; do
         if grep -Fq "$forbidden" "$TEMPLATE_DIR/pallets/oracle/docs/architecture.en.md"; then
             log_error "Oracle package-purity drift: concrete integration marker remains: $forbidden"
             exit 1
         fi
     done
-    for forbidden in "System AAA #" "| Role | aaa_id |" "AAA #0" "AAA #2"; do
+    for forbidden in "System Actors #" "| Role | actor_id |" "Actors #0" "Actors #2"; do
         if grep -Fq "$forbidden" "$PROJECT_ROOT/docs/core.architecture.en.md"; then
             log_error "Core-architecture ownership drift: concrete System topology remains: $forbidden"
             exit 1
         fi
     done
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/aaa-system.en.md" "../../docs/aaa.integration.en.md" "AAA wiki-provenance drift"
-    check_fixed_reference "$PROJECT_ROOT/wiki/overview/aaa-system.en.md" "../../docs/oracle.integration.en.md" "Oracle wiki-provenance drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/overview/actor-system.en.md" "../../docs/actors.integration.en.md" "Actors wiki-provenance drift"
+    check_fixed_reference "$PROJECT_ROOT/wiki/overview/actor-system.en.md" "../../docs/oracle.integration.en.md" "Oracle wiki-provenance drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.en.md" "../../docs/oracle.integration.en.md" "Oracle wiki-provenance drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.en.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.ru.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
@@ -385,16 +392,16 @@ run_audit() {
         exit 1
     fi
 
-    check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[AAA Specification](../template/pallets/aaa/docs/specification.en.md)" "AAA package-navigation drift"
-    check_fixed_reference "$TEMPLATE_DIR/pallets/aaa/README.md" "[AAA Specification](./docs/specification.en.md)" "AAA package-navigation drift"
+    check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)" "Actors package-navigation drift"
+    check_fixed_reference "$TEMPLATE_DIR/pallets/actors/README.md" "[DEOS Actors Specification](./docs/specification.en.md)" "Actors package-navigation drift"
     check_fixed_reference "$PROJECT_ROOT/docs/README.md" "[Web Client Architecture](../web-client/docs/architecture.en.md)" "Web-client architecture-navigation drift"
     check_fixed_reference "$PROJECT_ROOT/web-client/README.md" "[\`docs/architecture.en.md\`](./docs/architecture.en.md)" "Web-client architecture-navigation drift"
     if [[ ! -f "$PROJECT_ROOT/web-client/docs/architecture.en.md" || -e "$PROJECT_ROOT/docs/web-client.architecture.en.md" ]]; then
         log_error "Web-client architecture ownership drift"
         exit 1
     fi
-    if [[ -e "$PROJECT_ROOT/docs/aaa.specification.en.md" ]]; then
-        log_error "AAA package-navigation drift: obsolete root specification path exists"
+    if [[ -e "$PROJECT_ROOT/docs/actor.specification.en.md" ]]; then
+        log_error "Actors package-navigation drift: obsolete root specification path exists"
         exit 1
     fi
     log_success "Release-line audit passed"

@@ -45,7 +45,7 @@ DEOS changes the default. It moves the core economic loop into the runtime: mint
 
 A partner fork does not start from a blank chain template. It starts from a reference framework with:
 
-- Runtime pallets for asset identity, routing, staking, governance, TMC, and AAA automation
+- Runtime pallets for asset identity, routing, staking, governance, TMC, and Actors automation
 - TMCTOL as the first economic standard: mint-only curve, treasury-owned liquidity, fee burn, bucketed policy, and bounded governance
 - A reference client that separates direct on-chain truth from materialized views
 - Operator scripts and validation gates for local networks, docs, wiki, and runtime work

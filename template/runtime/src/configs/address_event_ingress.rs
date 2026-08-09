@@ -1,14 +1,14 @@
-//! Runtime ingress adapter for AAA `OnAddressEvent` trigger.
+//! Runtime ingress adapter for Actors `OnAddressEvent` trigger.
 //!
 //! Ingress producers (router fees, TMC distribution, asset transfer/mint hooks)
-//! call this adapter instead of touching AAA storage directly. Every movement path
-//! that claims AAA ingress must be registered in `AAA_ADDRESS_EVENT_PRODUCER_INVENTORY`;
+//! call this adapter instead of touching Actors storage directly. Every movement path
+//! that claims Actors ingress must be registered in `ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY`;
 //! movement outside that inventory is balance-only.
 
 use super::*;
 
 use codec::{Decode, DecodeWithMemTracking, Encode};
-use pallet_aaa::{AddressEvent, FundingProvenance, IngressFailure};
+use pallet_deos_actors::{AddressEvent, FundingProvenance, IngressFailure};
 use polkadot_sdk::sp_runtime::{
   DispatchResult, impl_tx_ext_default,
   traits::{DispatchInfoOf, PostDispatchInfoOf, StaticLookup, TransactionExtension},
@@ -27,15 +27,15 @@ fn map_asset_id(asset_id: u32) -> AssetKind {
 }
 
 impl RuntimeAddressEventIngress {
-  fn resolve_aaa(recipient: &AccountId) -> Option<pallet_aaa::AaaId> {
-    crate::AAA::sovereign_index(recipient)
+  fn resolve_actor(recipient: &AccountId) -> Option<pallet_deos_actors::ActorId> {
+    crate::Actors::sovereign_index(recipient)
   }
 
   /// Sole certified-producer inventory accessor (spec 5.3). The generated ingress
   /// evidence parses the same constant; the runtime test binds both.
   #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
   pub const fn certified_producer_inventory() -> &'static [AddressEventProducer] {
-    AAA_ADDRESS_EVENT_PRODUCER_INVENTORY
+    ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY
   }
 
   /// Provenance-specific certified-ingress helpers. Each constructs one typed
@@ -47,7 +47,7 @@ impl RuntimeAddressEventIngress {
     amount: Balance,
     source: &AccountId,
   ) -> Result<(), IngressFailure> {
-    crate::AAA::preflight_ingress(&AddressEvent {
+    crate::Actors::preflight_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: Some(source.clone()),
       asset,
@@ -62,7 +62,7 @@ impl RuntimeAddressEventIngress {
     amount: Balance,
     source: &AccountId,
   ) -> Result<(), IngressFailure> {
-    crate::AAA::notify_ingress(&AddressEvent {
+    crate::Actors::notify_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: Some(source.clone()),
       asset,
@@ -77,7 +77,7 @@ impl RuntimeAddressEventIngress {
     amount: Balance,
     source: &AccountId,
   ) -> Result<(), IngressFailure> {
-    crate::AAA::preflight_ingress(&AddressEvent {
+    crate::Actors::preflight_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: Some(source.clone()),
       asset,
@@ -92,7 +92,7 @@ impl RuntimeAddressEventIngress {
     amount: Balance,
     source: &AccountId,
   ) -> Result<(), IngressFailure> {
-    crate::AAA::notify_ingress(&AddressEvent {
+    crate::Actors::notify_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: Some(source.clone()),
       asset,
@@ -106,7 +106,7 @@ impl RuntimeAddressEventIngress {
     asset: AssetKind,
     amount: Balance,
   ) -> Result<(), IngressFailure> {
-    crate::AAA::notify_ingress(&AddressEvent {
+    crate::Actors::notify_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: None,
       asset,
@@ -130,7 +130,7 @@ pub struct AddressEventProducer {
 }
 
 #[allow(dead_code)] // evidence surface consumed by runtime tests and generated drift checks
-pub const AAA_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
+pub const ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
   AddressEventProducer {
     id: "AddressEventIngressExtension::signed_transfer",
     credited_surface: "Recipient sovereign",
@@ -189,9 +189,9 @@ pub const AAA_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
     id: "XCM asset deposit",
     credited_surface: "Recipient sovereign",
     source_provenance: "XCM origin / Xcm",
-    preflight_owner: "AaaAwareAssetTransactor::preflight_ingress",
-    notify_owner: "AaaAwareAssetTransactor::notify_ingress",
-    rollback_owner: "AaaAwareAssetTransactor deposit revert",
+    preflight_owner: "ActorAwareAssetTransactor::preflight_ingress",
+    notify_owner: "ActorAwareAssetTransactor::notify_ingress",
+    rollback_owner: "ActorAwareAssetTransactor deposit revert",
     weight_owner: "One-asset deposit generated weight",
   },
   AddressEventProducer {
@@ -199,8 +199,8 @@ pub const AAA_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
     credited_surface: "Recipient sovereign",
     source_provenance: "Source-less / none",
     preflight_owner: "Source-less preflight inside notify",
-    notify_owner: "AaaAwareAssetTransactor::on_inbound_without_source",
-    rollback_owner: "AaaAwareAssetTransactor deposit revert",
+    notify_owner: "ActorAwareAssetTransactor::on_inbound_without_source",
+    rollback_owner: "ActorAwareAssetTransactor deposit revert",
     weight_owner: "One-asset deposit generated weight",
   },
   AddressEventProducer {
@@ -214,13 +214,15 @@ pub const AAA_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
   },
 ];
 
-impl pallet_aaa::AddressEventIngress<AccountId, AssetKind, Balance> for RuntimeAddressEventIngress {
+impl pallet_deos_actors::AddressEventIngress<AccountId, AssetKind, Balance>
+  for RuntimeAddressEventIngress
+{
   fn preflight(event: &AddressEvent<AccountId, AssetKind, Balance>) -> Result<(), IngressFailure> {
-    crate::AAA::preflight_ingress(event)
+    crate::Actors::preflight_ingress(event)
   }
 
   fn notify(event: &AddressEvent<AccountId, AssetKind, Balance>) -> Result<(), IngressFailure> {
-    crate::AAA::notify_ingress(event)
+    crate::Actors::notify_ingress(event)
   }
 }
 
@@ -253,11 +255,11 @@ pub enum AddressEventIngressPre {
 
 impl AddressEventIngressExtension {
   fn base_weight() -> Weight {
-    <<Runtime as pallet_aaa::Config>::WeightInfo as pallet_aaa::WeightInfo>::transaction_extension_ingress_base()
+    <<Runtime as pallet_deos_actors::Config>::WeightInfo as pallet_deos_actors::WeightInfo>::transaction_extension_ingress_base()
   }
 
   fn notify_weight() -> Weight {
-    <<Runtime as pallet_aaa::Config>::WeightInfo as pallet_aaa::WeightInfo>::transaction_extension_ingress_notify()
+    <<Runtime as pallet_deos_actors::Config>::WeightInfo as pallet_deos_actors::WeightInfo>::transaction_extension_ingress_notify()
   }
 
   pub(crate) fn post_dispatch_refund(result_is_err: bool, submitted: bool) -> Weight {
@@ -383,13 +385,13 @@ impl AddressEventIngressExtension {
     let Some((recipient, asset, preflight_amount, amount)) = candidate else {
       return Ok(None);
     };
-    // Only movements to an AAA sovereign are certified: a non-sovereign recipient
+    // Only movements to an Actors sovereign are certified: a non-sovereign recipient
     // is balance-only and must not carry the notification envelope.
-    if RuntimeAddressEventIngress::resolve_aaa(&recipient).is_none() {
+    if RuntimeAddressEventIngress::resolve_actor(&recipient).is_none() {
       return Ok(None);
     }
-    let provenance = pallet_aaa::FundingProvenance::Signed;
-    crate::AAA::preflight_ingress(&AddressEvent {
+    let provenance = pallet_deos_actors::FundingProvenance::Signed;
+    crate::Actors::preflight_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: Some(source.clone()),
       asset,
@@ -439,12 +441,12 @@ impl AddressEventIngressExtension {
     let Some((recipient, asset, amount)) = candidate else {
       return Ok(None);
     };
-    // Only movements to an AAA sovereign are certified: a non-sovereign recipient
+    // Only movements to an Actors sovereign are certified: a non-sovereign recipient
     // is balance-only and must not carry the notification envelope.
-    if RuntimeAddressEventIngress::resolve_aaa(&recipient).is_none() {
+    if RuntimeAddressEventIngress::resolve_actor(&recipient).is_none() {
       return Ok(None);
     }
-    crate::AAA::preflight_ingress(&AddressEvent {
+    crate::Actors::preflight_ingress(&AddressEvent {
       destination: recipient.clone(),
       source: None,
       asset,
@@ -555,7 +557,7 @@ impl TransactionExtension<RuntimeCall> for AddressEventIngressExtension {
         if amount == 0 {
           false
         } else {
-          crate::AAA::notify_ingress(&AddressEvent {
+          crate::Actors::notify_ingress(&AddressEvent {
             destination: candidate.recipient.clone(),
             source: candidate.source.clone(),
             asset: candidate.asset,
@@ -563,7 +565,7 @@ impl TransactionExtension<RuntimeCall> for AddressEventIngressExtension {
             provenance: candidate
               .source
               .as_ref()
-              .map(|_| pallet_aaa::FundingProvenance::Signed),
+              .map(|_| pallet_deos_actors::FundingProvenance::Signed),
           })
           .map_err(|_| InvalidTransaction::Custom(40))?;
           true

@@ -81,7 +81,7 @@ Protection тоже имеет доменную форму. Домен реша�
 
 Execution authority ограничивается доменом. `L1RootAction` — стратегический и Root-эквивалентный. `L2TreasurySpend` — domain-local treasury execution. `L2ParameterChange` должен оставаться внутри реально делегированных domain-owned surfaces. `Intent` и `L2SignalToL1` остаются advisory по контракту.
 
-Некоторые соблазнительные поверхности остаются вне тактического доменного владения: TMC launch physics, staking admin onboarding/recovery, AAA global controls и asset-registry registration/migration. Тактический домен должен использовать явную передачу вроде `L2SignalToL1`, а не делать вид, что уже владеет этими зонами.
+Некоторые соблазнительные поверхности остаются вне тактического доменного владения: TMC launch physics, staking admin onboarding/recovery, Actors global controls и asset-registry registration/migration. Тактический домен должен использовать явную передачу вроде `L2SignalToL1`, а не делать вид, что уже владеет этими зонами.
 
 ## Живой read model
 

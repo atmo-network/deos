@@ -130,12 +130,12 @@ scenario_full_economic_cycle() {
     log_success "Scenario 3 passed"
 }
 
-scenario_aaa_lifecycle() {
-    log_info "Scenario 4: AAA lifecycle (create -> execute cycles -> close)"
+scenario_actor_lifecycle() {
+    log_info "Scenario 4: Actors lifecycle (create -> execute cycles -> close)"
     run_shell_step \
-        "AAA lifecycle runtime proxy" \
+        "Actors lifecycle runtime proxy" \
         "" \
-        "cd '$TEMPLATE_DIR' && cargo test -p deos-runtime tests::aaa_integration_tests::user_dca_e2e_lifecycle_with_natural_close"
+        "cd '$TEMPLATE_DIR' && cargo test -p deos-runtime tests::actor_integration_tests::user_dca_e2e_lifecycle_with_natural_close"
     log_success "Scenario 4 passed"
 }
 
@@ -151,7 +151,7 @@ main() {
     scenario_block_stability
     scenario_xcm_foreign_registration
     scenario_full_economic_cycle
-    scenario_aaa_lifecycle
+    scenario_actor_lifecycle
     print_summary
 }
 

@@ -6,7 +6,7 @@ The current pallet set is maintained against the repository's `Polkadot SDK 2606
 
 ## 🏗️ Available Pallets
 
-### [AAA](./aaa/README.md)
+### [Actors](./actor/README.md)
 
 Deterministic account-abstraction actor runtime for bounded execution plans, scheduling, event-driven triggers, and lifecycle management.
 
@@ -57,7 +57,7 @@ Each pallet directory contains:
 
 Direct local entrypoints:
 
-- [AAA README](./aaa/README.md)
+- [Actors README](./actor/README.md)
 - [Asset Registry README](./asset-registry/README.md)
 - [DEOS Router README](./router/README.md)
 - [Governance README](./governance/README.md)

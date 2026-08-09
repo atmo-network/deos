@@ -6,7 +6,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 MODE="${MODE:-check}"
 WS_URI="${WS_URI:-ws://127.0.0.1:9988}"
 NATIVE_STAKING_ASSET_ID="${NATIVE_STAKING_ASSET_ID:-0}"
-NATIVE_STAKING_LP_FARMER_AAA_ID="${NATIVE_STAKING_LP_FARMER_AAA_ID:-14}"
+NATIVE_STAKING_LP_FARMER_ACTORS_ID="${NATIVE_STAKING_LP_FARMER_ACTORS_ID:-14}"
 OPERATOR_ADDRESS="${OPERATOR_ADDRESS:-}"
 STAKE_AMOUNT="${STAKE_AMOUNT:-5000000000000}"
 LIQUIDITY_NATIVE="${LIQUIDITY_NATIVE:-5000000000000}"
@@ -24,13 +24,13 @@ Plan/read-only tooling for the canonical local NTVE/stNTVE staking-pool bootstra
 It never signs or submits transactions.
 
 Subcommands:
-  check            Check staking assets, native pool, AMM liquidity, and LP Farmer AAA readiness
+  check            Check staking assets, native pool, AMM liquidity, and LP Farmer Actors readiness
   prepare-calls    Emit the next Root/governance or signed operator call data needed for bootstrap
 
 Options:
   --ws URI                  WebSocket endpoint (default: ws://127.0.0.1:9988)
   --native-asset-id ID      Local native staking asset id (default: 0)
-  --aaa-id ID               Native Staking LP Farmer AAA id for check mode (default: 14)
+  --actor-id ID               Native Staking LP Farmer Actors id for check mode (default: 14)
   --operator-address SS58   Operator account for prepare-calls mode
   --stake-amount AMOUNT     NTVE amount to stake into stNTVE before liquidity
   --liquidity-native AMOUNT NTVE side for initial add_liquidity
@@ -69,9 +69,9 @@ parse_args() {
                 NATIVE_STAKING_ASSET_ID="$2"
                 shift
                 ;;
-            --aaa-id)
-                [[ $# -ge 2 ]] || { log_error "Missing value for --aaa-id"; usage; exit 1; }
-                NATIVE_STAKING_LP_FARMER_AAA_ID="$2"
+            --actor-id)
+                [[ $# -ge 2 ]] || { log_error "Missing value for --actor-id"; usage; exit 1; }
+                NATIVE_STAKING_LP_FARMER_ACTORS_ID="$2"
                 shift
                 ;;
             --operator-address)
@@ -137,7 +137,7 @@ check_prerequisites() {
     require_directory "$WEB_CLIENT_DIR" "web-client workspace"
     require_commands node
     require_uint "$NATIVE_STAKING_ASSET_ID" "Native staking asset id"
-    require_uint "$NATIVE_STAKING_LP_FARMER_AAA_ID" "AAA id"
+    require_uint "$NATIVE_STAKING_LP_FARMER_ACTORS_ID" "Actors id"
     if [[ "$MODE" == "prepare-calls" ]]; then
         require_uint "$STAKE_AMOUNT" "Stake amount"
         require_uint "$LIQUIDITY_NATIVE" "Liquidity native amount"
@@ -173,7 +173,7 @@ print_plan() {
     echo "  WS URI:          $WS_URI"
     echo "  Native asset id: $NATIVE_STAKING_ASSET_ID"
     if [[ "$MODE" == "check" ]]; then
-        echo "  LP farmer AAA:   $NATIVE_STAKING_LP_FARMER_AAA_ID"
+        echo "  LP farmer Actors:   $NATIVE_STAKING_LP_FARMER_ACTORS_ID"
     else
         echo "  Operator:        $OPERATOR_ADDRESS"
         echo "  Stake amount:    $STAKE_AMOUNT"
@@ -192,7 +192,7 @@ run_node_flow() {
         MODE="$MODE" \
         WS_URI="$WS_URI" \
         NATIVE_STAKING_ASSET_ID="$NATIVE_STAKING_ASSET_ID" \
-        NATIVE_STAKING_LP_FARMER_AAA_ID="$NATIVE_STAKING_LP_FARMER_AAA_ID" \
+        NATIVE_STAKING_LP_FARMER_ACTORS_ID="$NATIVE_STAKING_LP_FARMER_ACTORS_ID" \
         OPERATOR_ADDRESS="$OPERATOR_ADDRESS" \
         STAKE_AMOUNT="$STAKE_AMOUNT" \
         LIQUIDITY_NATIVE="$LIQUIDITY_NATIVE" \
@@ -228,7 +228,7 @@ function parseEnvBigUint(name) {
 const mode = process.env.MODE;
 const wsUri = process.env.WS_URI;
 const nativeAssetId = parseEnvU32("NATIVE_STAKING_ASSET_ID");
-const aaaId = parseEnvBigUint("NATIVE_STAKING_LP_FARMER_AAA_ID");
+const actorId = parseEnvBigUint("NATIVE_STAKING_LP_FARMER_ACTORS_ID");
 const operatorAddress = process.env.OPERATOR_ADDRESS;
 const stakeAmount = parseEnvBigUint("STAKE_AMOUNT");
 const liquidityNative = parseEnvBigUint("LIQUIDITY_NATIVE");
@@ -256,8 +256,8 @@ function checkPhase(checks) {
   if (!checks.nativeAssetExists || !checks.stakedAssetExists || !checks.exchangeRateAvailable) return "missing-staking-assets";
   if (!checks.nativeStakingPoolExists) return "missing-ntve-stntve-pool";
   if (!checks.nativeStakingPoolHasLiquidity) return "empty-ntve-stntve-pool";
-  if (!checks.lpFarmerAaaExists) return "missing-native-staking-lp-farmer-aaa";
-  return "ready-for-guarded-aaa-activation";
+  if (!checks.lpFarmerActorExists) return "missing-native-staking-lp-farmer-actor";
+  return "ready-for-guarded-actor-activation";
 }
 
 function checkRecommendation(phase) {
@@ -265,7 +265,7 @@ function checkRecommendation(phase) {
     case "missing-staking-assets": return "Regenerate the chain spec with current presets or run staking asset registration before creating the pool";
     case "missing-ntve-stntve-pool": return "Create the canonical Local(NTVE)/Local(stNTVE) Asset Conversion pool";
     case "empty-ntve-stntve-pool": return "Seed balanced initial NTVE/stNTVE liquidity before enabling dependent flows";
-    case "missing-native-staking-lp-farmer-aaa": return "Ensure genesis/system AAA configuration includes the Native Staking LP Farmer skeleton before activation";
+    case "missing-native-staking-lp-farmer-actor": return "Ensure genesis/system Actors configuration includes the Native Staking LP Farmer skeleton before activation";
     default: return "Run the guarded Native Staking LP Farmer activation path if it is not active yet; otherwise bootstrap is ready";
   }
 }
@@ -299,10 +299,10 @@ try {
   const pool = await api.view.Staking.native_staking_liquidity_pool({ at: block.hash });
   if (mode === "check") {
     const [lpFarmerHot, lpFarmerProgram] = await Promise.all([
-      api.query.AAA.ActorHot.getValue(aaaId, { at: block.hash }),
-      api.query.AAA.ActorProgram.getValue(aaaId, { at: block.hash }),
+      api.query.Actors.ActorHot.getValue(actorId, { at: block.hash }),
+      api.query.Actors.ActorProgram.getValue(actorId, { at: block.hash }),
     ]);
-    const lpFarmerAaa = lpFarmerHot != null && lpFarmerProgram != null
+    const lpFarmerActor = lpFarmerHot != null && lpFarmerProgram != null
       ? { hot: lpFarmerHot, program: lpFarmerProgram }
       : null;
     const checks = {
@@ -311,15 +311,15 @@ try {
       exchangeRateAvailable: exchangeRate != null,
       nativeStakingPoolExists: pool != null,
       nativeStakingPoolHasLiquidity: pool != null && pool.reserve_native > 0n && pool.reserve_staked > 0n && pool.lp_total_issuance > 0n,
-      lpFarmerAaaExists: lpFarmerAaa != null,
+      lpFarmerActorExists: lpFarmerActor != null,
     };
     const phase = checkPhase(checks);
-    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, aaaId: Number(aaaId), phase, recommendedAction: checkRecommendation(phase), checks, exchangeRate, pool, lpFarmerAaa };
+    const payload = { wsUri, block: block.number, nativeAssetId, stakedNativeAssetId, actorId: Number(actorId), phase, recommendedAction: checkRecommendation(phase), checks, exchangeRate, pool, lpFarmerActor };
     if (jsonOutput) console.log(stringify(payload));
     else {
       console.log(`Phase: ${payload.phase}`);
       console.log(`Recommended action: ${payload.recommendedAction}`);
-      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, aaaId: payload.aaaId, checks, exchangeRate, pool, lpFarmerAaa }));
+      console.log(stringify({ block: payload.block, nativeAssetId, stakedNativeAssetId, actorId: payload.actorId, checks, exchangeRate, pool, lpFarmerActor }));
     }
   } else {
     const operatorStakedBalance = await api.view.Assets.balance_of(operatorAddress, stakedNativeAssetId, { at: block.hash }) ?? 0n;

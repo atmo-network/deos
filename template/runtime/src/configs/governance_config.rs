@@ -483,8 +483,8 @@ fn tactical_governance_domain() -> AssetId {
 
 fn governance_treasury_account(domain: AssetId) -> Option<AccountId> {
   if domain == tactical_governance_domain() {
-    return Some(crate::AAA::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::BLDR_TREASURY_AAA_ID,
+    return Some(crate::Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
     ));
   }
   None
@@ -650,7 +650,7 @@ impl pallet_governance::Config for Runtime {
   type AdminOrigin = EnsureRoot<AccountId>;
   type Currency = Balances;
   type ProposalOpeningFee = ProposalOpeningFee;
-  type ProposalFeeRecipient = crate::configs::aaa_config::AaaFeeRecipient;
+  type ProposalFeeRecipient = crate::configs::actor_config::ActorFeeRecipient;
   type DomainId = AssetId;
   type WinningVoteItemId = u32;
   type Epoch = BlockNumber;

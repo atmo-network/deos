@@ -95,7 +95,7 @@ confidence: 0.85
 ## Если вы меняете поведение runtime
 
 1. [Паттерны runtime](../overview/runtime-patterns.ru.md)
-2. [Система AAA](../overview/aaa-system.ru.md)
+2. [Система Actors](../overview/actor-system.ru.md)
 3. [Сквозные сценарии](../concepts/end-to-end-flows.ru.md)
 4. [Идентичность активов](../overview/asset-identity.ru.md)
 5. [Контур маршрутизации и минтинга](../concepts/routing-and-minting-loop.ru.md)

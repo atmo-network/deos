@@ -89,7 +89,7 @@ Runtime и клиентский код не должны накапливать 
 - Добавляет feature growth без выявленного давления домена;
 - Переносит unbounded history в состояние consensus;
 - Делает indexers скрытой зависимостью для канонических потоков;
-- Возвращает manager/farmer wording для текущих System AAA actors;
+- Возвращает manager/farmer wording для текущих System Actors;
 - Превращает wiki-страницы в заметки релиза или дубликат docs.
 
 ## Связанные страницы

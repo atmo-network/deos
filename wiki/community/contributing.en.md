@@ -88,7 +88,7 @@ Risky contributions usually:
 - Add feature growth without an identified domain pressure;
 - Move unbounded history into consensus state;
 - Make indexers a silent dependency for canonical flows;
-- Reintroduce manager/farmer wording for current System AAA actors;
+- Reintroduce manager/farmer wording for current System Actors;
 - Turn wiki pages into release notes or duplicate docs.
 
 ## Related

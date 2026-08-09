@@ -1,14 +1,14 @@
 use super::common::{
-  ALICE, BOB, INITIAL_BALANCE, aaa_fee_sink_account, add_liquidity, create_pool, new_test_ext,
+  ALICE, BOB, INITIAL_BALANCE, actor_fee_sink_account, add_liquidity, create_pool, new_test_ext,
 };
 use crate::{
-  AAA, Assets, Balances, Runtime, RuntimeOrigin, Staking,
+  Actors, Assets, Balances, Runtime, RuntimeOrigin, Staking,
   configs::{
     AssetKind, RuntimeFeeCollector,
-    aaa_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemAaas},
+    actor_config::{TmctolAssetOps, TmctolFeeCollector, TmctolGenesisSystemActors},
   },
 };
-use pallet_aaa::{AssetOps, FeeCollector};
+use pallet_deos_actors::{AssetOps, FeeCollector};
 use polkadot_sdk::frame_support::{
   assert_ok,
   traits::{
@@ -24,7 +24,7 @@ use polkadot_sdk::pallet_asset_conversion::PoolLocator;
 #[test]
 fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
   new_test_ext().execute_with(|| {
-    let fee_sink = aaa_fee_sink_account();
+    let fee_sink = actor_fee_sink_account();
     let amount = 1_000_000_000_000u128;
     let sink_before = Balances::free_balance(&fee_sink);
     let credit = <Balances as Balanced<_>>::withdraw(
@@ -44,10 +44,10 @@ fn runtime_fee_collector_routes_the_full_credit_to_fee_sink() {
 #[test]
 fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures() {
   new_test_ext().execute_with(|| {
-    let fee_sink = aaa_fee_sink_account();
+    let fee_sink = actor_fee_sink_account();
     let staking_pool = Staking::pool_account_for(0);
-    let lp_farmer = AAA::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+    let lp_farmer = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
     );
     let anchor = crate::EXISTENTIAL_DEPOSIT;
     assert_eq!(Balances::free_balance(&fee_sink), anchor);
@@ -62,14 +62,14 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
         2,
       ));
       crate::System::set_block_number(block);
-      let _ = AAA::on_initialize(block);
-      let _ = AAA::on_idle(block, Weight::MAX);
+      let _ = Actors::on_initialize(block);
+      let _ = Actors::on_idle(block, Weight::MAX);
     }
 
     assert_eq!(Balances::free_balance(&fee_sink), anchor);
     assert_eq!(Balances::free_balance(&staking_pool), anchor + 3);
     assert_eq!(Balances::free_balance(&lp_farmer), anchor + 3);
-    let actor = AAA::active_actor_view(primitives::ecosystem::aaa_ids::FEE_SINK_AAA_ID)
+    let actor = Actors::active_actor_view(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
       .expect("Fee Sink actor remains active");
     assert_eq!(actor.cycle_nonce, 3);
     assert_eq!(actor.consecutive_failures, 0);
@@ -116,13 +116,11 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
       1,
       &BOB,
     ));
-    assert_ok!(TmctolGenesisSystemAaas::activate_native_staking_lp_farming(
-      1
-    ));
-    let fee_sink = aaa_fee_sink_account();
+    assert_ok!(TmctolGenesisSystemActors::activate_native_staking_lp_farming(1));
+    let fee_sink = actor_fee_sink_account();
     let staking_pool = Staking::pool_account_for(native_asset_id);
-    let lp_farmer = AAA::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::NATIVE_STAKING_LP_FARMER_AAA_ID,
+    let lp_farmer = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
     );
     let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
       &base_asset,
@@ -148,12 +146,12 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
       crate::Balance,
     >>::mint(&fee_sink, AssetKind::Native, amount));
     crate::System::set_block_number(2);
-    let _ = AAA::on_initialize(2);
-    let _ = AAA::on_idle(2, Weight::from_parts(u64::MAX, u64::MAX));
+    let _ = Actors::on_initialize(2);
+    let _ = Actors::on_idle(2, Weight::from_parts(u64::MAX, u64::MAX));
     for block in 3..=12 {
       crate::System::set_block_number(block);
-      let _ = AAA::on_initialize(block);
-      let _ = AAA::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
+      let _ = Actors::on_initialize(block);
+      let _ = Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
     }
     let lp_supply_after =
       <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolAssets::total_issuance(

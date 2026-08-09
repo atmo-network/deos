@@ -1,7 +1,7 @@
 ---
 page_type: faq
 title: FAQ для новичков
-summary: Короткий самодостаточный FAQ по главным вопросам новичков о DEOS, TMCTOL, AAA, governance, стейкинге, поверхностях данных, доменах wiki и эталонном клиенте.
+summary: Короткий самодостаточный FAQ по главным вопросам новичков о DEOS, TMCTOL, Actors, governance, стейкинге, поверхностях данных, доменах wiki и эталонном клиенте.
 locale: ru
 canonical_page_id: newcomer-faq
 translation_of: newcomer-faq.en.md
@@ -13,7 +13,7 @@ sources:
   - ../../README.md
   - ../../docs/README.md
   - ../../docs/manifesto.en.md
-  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/actors/docs/specification.en.md
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/staking/docs/specification.en.md
   - ../../docs/read-model.contract.en.md
@@ -29,7 +29,7 @@ related:
   - Обзор фреймворка DEOS
   - Первые шаги
   - Маршруты чтения
-  - Система AAA
+  - Система Actors
   - Physics-first против politics-first
   - Generated Wiki
   - Базовые термины
@@ -41,7 +41,7 @@ confidence: 0.85
 
 ## Кратко
 
-На этой странице собраны ответы на вопросы, которые обычно возникают первыми: что такое DEOS, как в него вписывается TMCTOL, что контролирует governance, как на высоком уровне устроены AAA и staking, как организована wiki и насколько честным должен быть эталонный клиент.
+На этой странице собраны ответы на вопросы, которые обычно возникают первыми: что такое DEOS, как в него вписывается TMCTOL, что контролирует governance, как на высоком уровне устроены Actors и staking, как организована wiki и насколько честным должен быть эталонный клиент.
 
 Используйте [Карту доменов](../concepts/domain-map.ru.md), когда нужна общая форма системы, и [Маршруты чтения](../getting-started/reading-paths.ru.md), когда у вас есть конкретная задача.
 
@@ -61,7 +61,7 @@ confidence: 0.85
 
 **Что значит deterministic?** Реакции под управлением протокола явны и повторяемы для одного и того же состояния chain. Это не значит, что рынки становятся предсказуемыми.
 
-**Что такое AAA и AA-Актор?** `AAA` — вся система Account Abstraction Actors: scheduler, правила жизненного цикла, execution plans, actor accounts и task execution. `AA-Актор` — один конкретный runtime-экземпляр внутри этой системы. Смотрите [Систему AAA](../overview/aaa-system.ru.md) и [AA-Актор](../overview/aa-actor.ru.md).
+**Что такое Actors и AA-Актор?** `Actors` — вся система Account Abstraction Actors: scheduler, правила жизненного цикла, execution plans, actor accounts и task execution. `AA-Актор` — один конкретный runtime-экземпляр внутри этой системы. Смотрите [Систему Actors](../overview/actor-system.ru.md) и [AA-Актор](../overview/actor.ru.md).
 
 **Как устроен staking?** Staking — это домен multi-asset share-vault. [Стейкинг](../overview/staking.ru.md) объясняют native `stNTVE`, LP nomination и snapshots наград.
 
@@ -81,7 +81,7 @@ confidence: 0.85
 - [Обзор фреймворка DEOS](../overview/deos-framework.ru.md)
 - [Первые шаги](../getting-started/first-steps.ru.md)
 - [Маршруты чтения](../getting-started/reading-paths.ru.md)
-- [Система AAA](../overview/aaa-system.ru.md)
+- [Система Actors](../overview/actor-system.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
 - [Generated Wiki](../concepts/generated-wiki.ru.md)
 - [Базовые термины](../glossary/core-terms.ru.md)

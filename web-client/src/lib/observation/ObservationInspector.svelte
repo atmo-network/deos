@@ -23,7 +23,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
   type Props = {
     refreshKey: number;
     compact?: boolean;
-    actorOptions?: readonly { aaaId: number; label: string }[];
+    actorOptions?: readonly { actorId: number; label: string }[];
     loadFeeds:
       | (() => Promise<ReadModelValue<ObservationFeedIdentity[]>>)
       | null;
@@ -31,7 +31,7 @@ Zone: Observation domain UI; receives provider capabilities from its composition
       | ((
           feed: ObservationFeedIdentity,
           maxAgeBlocks: number,
-          aaaId?: number,
+          actorId?: number,
         ) => Promise<ReadModelValue<ObservationInspection>>)
       | null;
   };
@@ -171,8 +171,10 @@ Zone: Observation domain UI; receives provider capabilities from its composition
       selectClass="h-9 py-1.5 text-xs"
     >
       <option value="">No actor selected</option>
-      {#each actorOptions as actor (actor.aaaId)}
-        <option value={actor.aaaId}>{actor.label} · AAA {actor.aaaId}</option>
+      {#each actorOptions as actor (actor.actorId)}
+        <option value={actor.actorId}
+          >{actor.label} · Actors {actor.actorId}</option
+        >
       {/each}
     </SelectField>
     <NumberInput
@@ -346,7 +348,8 @@ Zone: Observation domain UI; receives provider capabilities from its composition
             <Notice variant="warn">
               Numerical fanout estimates are unavailable: {delivery.evidenceMismatchReasons.join(
                 '; ',
-              )}. Canonical observation and AAA delivery state remain visible.
+              )}. Canonical observation and Actors delivery state remain
+              visible.
             </Notice>
           {/if}
           {#if delivery.selectedActor}
@@ -363,8 +366,8 @@ Zone: Observation domain UI; receives provider capabilities from its composition
                   : 'grid grid-cols-2 gap-x-4 gap-y-1'}
               >
                 <DetailRow
-                  label="AAA id / lane"
-                  value={`${actor.aaaId.toString()} / ${actor.queueLane ?? 'Unavailable'}`}
+                  label="Actors id / lane"
+                  value={`${actor.actorId.toString()} / ${actor.queueLane ?? 'Unavailable'}`}
                   valueClass="tabnum"
                 />
                 <DetailRow

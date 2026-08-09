@@ -57,7 +57,7 @@ graph TD
     User[User] -->|stake_native(amount)| NativePool[NTVE share-vault]
     NativePool -->|mint liquid receipt| StNTVE[stNTVE]
     User -->|add liquidity| Amm[Zero-fee NTVE/stNTVE AMM]
-    AAA[System AAA LP provisioning actor] -->|DonateLiquidity NTVE/stNTVE| Amm
+    Actors[System Actors LP provisioning actor] -->|DonateLiquidity NTVE/stNTVE| Amm
     Amm -->|mint LP to user| Lp[NTVE/stNTVE LP]
     User -->|lock_native_lp_for_collator| CollatorLock[Collator LP lock custody]
     CollatorLock -->|conservative native value| Session[Collator session ranking]
@@ -76,13 +76,13 @@ graph TD
 
 The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-Axial action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning.
 
-The LP-donation half flows through Fee Sink → AAA #14, with a native-balance bridge into the local native-staking asset before donation execution. After that donation hook, the staking-yield half burns native balance held by the staking pool account and mints the local native-staking asset into pool truth.
+The LP-donation half flows through Fee Sink → Actors #14, with a native-balance bridge into the local native-staking asset before donation execution. After that donation hook, the staking-yield half burns native balance held by the staking pool account and mints the local native-staking asset into pool truth.
 
 A future permissionless phase may divide Fee Sink flow into equal security-reward, staking-ingress, and liquidity-provisioning thirds. Explicit LP nomination and claimable native rewards remain subordinate to the unresolved bounded security-reward contract.
 
 Phase 2 is treated as a runtime-upgrade boundary. The current launch line should not expose a governance parameter that can silently enable LP nomination or claimable nomination rewards while collator selection is still permissioned.
 
-The outer collection rule sends 100% of transaction, AAA, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split. Block issuance remains unconfigured and must receive a separate source/amount decision before entering either Fee Sink or the future security budget.
+The outer collection rule sends 100% of transaction, Actors, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split. Block issuance remains unconfigured and must receive a separate source/amount decision before entering either Fee Sink or the future security budget.
 
 ### Per-asset sovereign channels
 
@@ -92,7 +92,7 @@ Each registered staking asset has three deterministic ingress accounts:
 - `lp_reward_account(asset_id)`: LP-donation funding before actor/runtime conversion into balanced AMM donation
 - `reward_account(asset_id)`: claimable reward funding and liabilities without directly changing pool share price
 
-The account split is essential: backing inflow changes `stXXX` value, LP reward inflow strengthens AMM reserves, and claimable reward inflow stays claimable through bounded epoch accounting. Phase 1 now wires the LP-donation half directly into AAA #14 rather than through `lp_reward_account`, while `pool_account` receives staking-yield truth through the post-donation native-balance bridge. Phase 2 additionally activates `reward_account` for native nomination rewards.
+The account split is essential: backing inflow changes `stXXX` value, LP reward inflow strengthens AMM reserves, and claimable reward inflow stays claimable through bounded epoch accounting. Phase 1 now wires the LP-donation half directly into Actors #14 rather than through `lp_reward_account`, while `pool_account` receives staking-yield truth through the post-donation native-balance bridge. Phase 2 additionally activates `reward_account` for native nomination rewards.
 
 ### Receipt asset lifecycle
 
@@ -401,9 +401,9 @@ The reference runtime wires `pallet-staking` with these key adapters:
 - `RuntimeLegacyRewardSnapshotEventIngress`: legacy non-native event scanner
 - `RuntimeNativeGovernanceLockProvider`: reads governance lock horizon
 
-## AAA and Asset Conversion Integration
+## Actors and Asset Conversion Integration
 
-`pallet-deos-aaa` remains tokenomics-agnostic. It exposes generic:
+`pallet-deos-actors` remains tokenomics-agnostic. It exposes generic:
 
 ```text
 Task::DonateLiquidity { asset_a, asset_b, amount, max_ratio_error }
@@ -423,7 +423,7 @@ That helper:
 4. Donates both legs directly into the pool account without minting LP
 5. Rolls back transactionally on any failure
 
-This is the protocol LP-farming path: System AAA strengthens existing LP holders by increasing reserves per LP token rather than minting claimable rewards.
+This is the protocol LP-farming path: System Actors strengthens existing LP holders by increasing reserves per LP token rather than minting claimable rewards.
 
 The runtime also exposes:
 
@@ -467,7 +467,7 @@ Do not move unbounded history or sorted dashboards into consensus state.
 
 ### Native AMM availability
 
-Native LP nomination, AAA donation, read-model valuation, and claim+compound require the canonical `NTVE/stNTVE` pool to exist and be non-empty. The local development preset now registers the native staking asset and `stNTVE` receipt at genesis and seeds the LP asset-id namespace, while `scripts/seed-web-client-state.sh` can create/fund the local `NTVE/stNTVE` pool after the chain starts.
+Native LP nomination, Actors donation, read-model valuation, and claim+compound require the canonical `NTVE/stNTVE` pool to exist and be non-empty. The local development preset now registers the native staking asset and `stNTVE` receipt at genesis and seeds the LP asset-id namespace, while `scripts/seed-web-client-state.sh` can create/fund the local `NTVE/stNTVE` pool after the chain starts.
 
 ### Production/operator NTVE/stNTVE bootstrap flow
 
@@ -478,7 +478,7 @@ Outside the local-dev preset, the canonical pool should be launched through an e
 3. Create the canonical `AssetKind::Local(NTVE) / AssetKind::Local(stNTVE)` pool through the runtime/governance-approved pool-creation path.
 4. Seed balanced initial liquidity from a designated bootstrap account; this mints the initial LP supply to that account and makes read-model valuation non-empty.
 5. Run readiness checks before enabling dependent flows: `native_staking_liquidity_pool()` returns a pool, both reserves are non-zero, LP total issuance is non-zero, and `RuntimeNativeStakingLpAssetValidator` accepts the LP id. Operators can use `scripts/bootstrap-native-staking-local.sh check` as the local read-only readiness probe for this phase.
-6. Activate the native staking LP provisioning System AAA only after the readiness checks pass; activation remains guarded by `activate_native_staking_lp_farming` so donation execution cannot start against a missing or empty pool.
+6. Activate the native staking LP provisioning System Actors only after the readiness checks pass; activation remains guarded by `activate_native_staking_lp_farming` so donation execution cannot start against a missing or empty pool.
 7. If any step after pool creation fails, leave the actor inactive and treat remediation as an operator/governance action; do not silently fall back to liquid `stNTVE` balances or transfer-event-derived backing.
 
 ### Governance locks block vote-power withdrawal

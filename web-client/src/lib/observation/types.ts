@@ -85,7 +85,7 @@ export type ObservationActorAdmissionStatus =
   | 'WakeupScheduled';
 
 export type ObservationActorDeliveryInspection = {
-  aaaId: bigint;
+  actorId: bigint;
   exists: boolean;
   pendingSignal: boolean | null;
   queueLane: 'System' | 'User' | null;
@@ -132,6 +132,6 @@ export type ObservationInspectionProvider = {
   getObservationInspection?(
     feed: ObservationFeedIdentity,
     maxAgeBlocks: number,
-    aaaId?: number,
+    actorId?: number,
   ): Promise<ReadModelValue<ObservationInspection>>;
 };

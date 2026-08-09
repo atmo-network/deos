@@ -1,11 +1,14 @@
 /*
 Domain: Automation contracts
-Owns: System AAA actor snapshots plus portable plan-authoring policy shapes.
+Owns: System Actor snapshots plus portable plan-authoring policy shapes.
 Excludes: Runtime actor scheduling, adapter transport, transaction composition, and widget rendering.
 Zone: Automation public contract; safe for adapters, stores, and widgets to import.
 */
-import type { AaaEligibilityProjection } from './eligibility.ts';
-import type { AaaPlanHex, AaaPlanRuntimeIdentity } from './plan-artifact.ts';
+import type { ActorEligibilityProjection } from './eligibility.ts';
+import type {
+  ActorPlanHex,
+  ActorPlanRuntimeIdentity,
+} from './plan-artifact.ts';
 
 export const AUTOMATION_STEP_ERROR_POLICIES = [
   'AbortCycle',
@@ -36,15 +39,15 @@ export function automationPolicyAllowed(
 
 export type AutomationAuthoringContext = {
   metadataBytes: Uint8Array;
-  runtime: AaaPlanRuntimeIdentity;
+  runtime: ActorPlanRuntimeIdentity;
   finalizedBlock: {
-    hash: AaaPlanHex;
+    hash: ActorPlanHex;
     number: number;
   };
 };
 
 export type AutomationActorSnapshot = {
-  aaaId: number;
+  actorId: number;
   label: string;
   role: string;
   exists: boolean;
@@ -70,5 +73,5 @@ export type AutomationActorSnapshot = {
    * is unavailable. Clients never reimplement cadence, cooldown, window, retry
    * backoff, breaker, or latch arithmetic.
    */
-  eligibility: AaaEligibilityProjection | null;
+  eligibility: ActorEligibilityProjection | null;
 };

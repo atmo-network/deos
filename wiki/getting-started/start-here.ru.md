@@ -137,7 +137,7 @@ node simulator/tests.js
 | Изменение | Где начать | Что потом трогать | Минимальная проверка |
 | --- | --- | --- | --- |
 | TMC price/slope | Simulator + formulas | Runtime config после математики | Simulator, затем TMC tests |
-| TOL split/reserves | TMCTOL spec + simulator | AAA topology, runtime config, docs | Simulator + runtime tests |
+| TOL split/reserves | TMCTOL spec + simulator | Actors topology, runtime config, docs | Simulator + runtime tests |
 | Router fee policy | DEOS Router | Router config, governance bounds | Router tests + claims |
 | Governance domains/payloads | Governance overview | Gov pallet/config, client | Governance + client checks |
 | UI copy/onboarding | `web-client/` + `wiki/` | Runtime только при смене data contract | Client validate + wiki trust |

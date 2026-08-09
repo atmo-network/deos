@@ -59,7 +59,7 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
 10. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`, where `amount_out` is the amount delivered to `recipient` (for DirectMint, excluding protocol/sink allocation).
 
-`Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets or System AAA adapters for burn/liquidity actor swaps with automatic fee exemption and keep-alive awareness.
+`Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets or System Actors adapters for burn/liquidity actor swaps with automatic fee exemption and keep-alive awareness.
 
 `Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes plus path execution returning actual input spent. `quote_exact_out` evaluates at most direct XYK and one reverse-quoted Native-anchored path, selects minimum required post-fee input, and adds the caller-aware router fee. `execute_exact_out_for` enforces the total-input cap transactionally and reports actual total spend. Direct TMC mint remains exact-input only because it cannot promise an exact recipient amount.
 
@@ -89,7 +89,7 @@ The router is a pure execution mechanism: it always picks the candidate route wi
 | `Math` | `Perbill::mul_floor(amount_in)` — overflow-safe |
 | `Routing` | One-hop: `User → Burn Actor` (no intermediate buffer) |
 | `Governance` | Updatable via `update_router_fee` within `MaxRouterFee` |
-| `Self-Taxation` | Router and System AAA actor accounts are fee-exempt via `is_fee_exempt()` |
+| `Self-Taxation` | Router and System Actor accounts are fee-exempt via `is_fee_exempt()` |
 
 The `FeeRoutingAdapter` trait provides the transfer interface:
 
@@ -171,7 +171,7 @@ The Router no longer declares local EMA value or update-block storage. Oracle me
 
 Canonical local-pool indexing admits two initially uninitialized `pallet-oracle` identities: ordered forward and reverse feeds at scale `12`, `PreExecutionSpot`, EMA half-life `100`, and DEOS Router pallet-account provenance. Re-indexing requires an exact immutable match and adds no duplicate. The LP index plus both feed registrations share one transaction, and top-level pool calls declare two worst-case oracle registration Weight envelopes.
 
-`PriceOracleImpl<Runtime>` publishes pre-execution samples through the DEOS Router pallet account and reads current standalone EMA truth. The System AAA reference guard consumes Fresh observations and otherwise falls back to direct reserves.
+`PriceOracleImpl<Runtime>` publishes pre-execution samples through the DEOS Router pallet account and reads current standalone EMA truth. The System Actors reference guard consumes Fresh observations and otherwise falls back to direct reserves.
 
 TVL is not oracle-smoothed — it is read directly from pool reserves via `get_pool_reserves()` during route selection, always reflecting the current on-chain state.
 
@@ -216,7 +216,7 @@ fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Err
 
 ## Price-Observation Ownership Decision
 
-The historical `0.7.6` extraction gate remained a no-go. The current `0.7.9` line provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-AAA freshness semantics. This remains local-pool observation rather than generalized market truth.
+The historical `0.7.6` extraction gate remained a no-go. The current `0.7.9` line provides bounded pair admission, typed status/provenance, Router publication, current-value reads, and System-Actors freshness semantics. This remains local-pool observation rather than generalized market truth.
 
 | Dimension | Current owner and contract |
 | --- | --- |
@@ -228,11 +228,11 @@ The historical `0.7.6` extraction gate remained a no-go. The current `0.7.9` lin
 | Ordering | Direct route validates against the previous EMA, collects fee, snapshots pre-execution reserves into EMA, then executes; transaction rollback covers failure |
 | Direction | Only the executed `from -> to` key updates; reverse state remains independent |
 | Router consumers | Direct-route deviation and informational direct-route price impact; multi-hop deviation uses slippage rather than EMA |
-| AAA consumer | System reference guard accepts a Fresh nonzero standalone observation through age 100, otherwise direct-reserve fallback, then fails Temporary if neither exists |
+| Actors consumer | System reference guard accepts a Fresh nonzero standalone observation through age 100, otherwise direct-reserve fallback, then fails Temporary if neither exists |
 | Governance | Canonical pool indexing admits exact immutable feed configurations; Router governance controls only the bounded fee rate |
 | History | Changed values emit bounded current-revision events; archive/history remains materialized-provider work |
 
-Router-local observation storage, tracking calls, metadata, and generated weights have been removed. The non-noop AAA dirty hook binds at Oracle publication. The composed failed-swap regression installs a real subscriber and preserves pre-execution ordering, directional math, Router outcomes, System-AAA freshness behavior, and whole-swap rollback including exact AAA dirty-map and active-list state. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and AAA oracle predicates remain outside that price-only candidate.
+Router-local observation storage, tracking calls, metadata, and generated weights have been removed. The non-noop Actors dirty hook binds at Oracle publication. The composed failed-swap regression installs a real subscriber and preserves pre-execution ordering, directional math, Router outcomes, System-Actors freshness behavior, and whole-swap rollback including exact Actors dirty-map and active-list state. General feeds, arbitrary bytes, callbacks, off-chain correctness, multi-source quorum, and Actors oracle predicates remain outside that price-only candidate.
 
 ## Storage Summary
 
@@ -380,7 +380,7 @@ Located in `runtime/src/tests/axial_router_integration_tests.rs`:
 
 ### Benchmarks
 
-`swap` and `update_router_fee` use generated V2 runtime weights. The swap benchmark includes standalone Oracle publication and the subscriber-independent AAA change hook through admitted directional pool feeds.
+`swap` and `update_router_fee` use generated V2 runtime weights. The swap benchmark includes standalone Oracle publication and the subscriber-independent Actors change hook through admitted directional pool feeds.
 
 Production `50 × 20` generation measures `swap` at `323,020,000 / 10,609`, 22 reads, and 11 writes. `update_router_fee` measures `11,244,000 / 1,489`, one read, and one write. Accepted Router weights SHA-256 is `7b5eaef584f58154ff3aebb3d247ca1ad2c8763c221ebf11a8cdcefd3e5e1b0a`; these fixed paths imply no route or actor throughput.
 

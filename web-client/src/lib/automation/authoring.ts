@@ -1,5 +1,5 @@
 /*
-Domain: AAA linear plan authoring
+Domain: Actors linear plan authoring
 Owns: Typed step drafts, immutable ordered-step operations, structural validation, exact ProgramInput lowering, and canonical artifact production.
 Excludes: Runtime submission, governance authority, adapter execution, simulation, weight modeling, recipes, and widget state.
 Zone: Automation domain capability; composes the canonical plan-artifact codec without defining another runtime language.
@@ -7,26 +7,26 @@ Zone: Automation domain capability; composes the canonical plan-artifact codec w
 import { decodeAddress } from '@polkadot/util-crypto';
 
 import {
-  AAA_MAX_EXECUTION_PLAN_STEPS,
-  AAA_MAX_RETRY_ATTEMPTS,
-} from './aaa-protocol-bounds.ts';
+  ACTORS_MAX_EXECUTION_PLAN_STEPS,
+  ACTORS_MAX_RETRY_ATTEMPTS,
+} from './actors-protocol-bounds.ts';
 import {
-  type AaaPlanArtifact,
-  type AaaPlanRuntimeIdentity,
-  type AaaPlanType,
-  createAaaPlanArtifact,
-  encodeAaaProgramValue,
+  type ActorPlanArtifact,
+  type ActorPlanRuntimeIdentity,
+  type ActorPlanType,
+  createActorPlanArtifact,
+  encodeActorProgramValue,
 } from './plan-artifact.ts';
 import type {
   AutomationMutability,
   AutomationStepErrorPolicy,
 } from './types.ts';
 
-export type AaaAuthoringAsset =
+export type ActorAuthoringAsset =
   | { type: 'Native' }
   | { type: 'Local' | 'Foreign'; id: number };
 
-export type AaaAuthoringAmount =
+export type ActorAuthoringAmount =
   | { type: 'Fixed'; value: string }
   | {
       type:
@@ -37,22 +37,22 @@ export type AaaAuthoringAmount =
     }
   | { type: 'AllAvailable' };
 
-export type AaaAuthoringObservationFeed = {
-  assetIn: AaaAuthoringAsset;
-  assetOut: AaaAuthoringAsset;
+export type ActorAuthoringObservationFeed = {
+  assetIn: ActorAuthoringAsset;
+  assetOut: ActorAuthoringAsset;
   method: 'PreExecutionSpot';
   aggregation: { type: 'LastValue' } | { type: 'Ema'; halfLifeBlocks: number };
   scale: number;
 };
 
-export type AaaAuthoringCondition =
+export type ActorAuthoringCondition =
   | {
       type:
         | 'BalanceAbove'
         | 'BalanceBelow'
         | 'BalanceEquals'
         | 'BalanceNotEquals';
-      asset: AaaAuthoringAsset;
+      asset: ActorAuthoringAsset;
       threshold: string;
     }
   | {
@@ -65,80 +65,80 @@ export type AaaAuthoringCondition =
         | 'ObservationBelow'
         | 'ObservationEquals'
         | 'ObservationNotEquals';
-      feed: AaaAuthoringObservationFeed;
+      feed: ActorAuthoringObservationFeed;
       threshold: string;
       maxAgeBlocks: number;
     };
 
-export type AaaAuthoringInputLimit =
+export type ActorAuthoringInputLimit =
   | { type: 'LiveQuote' }
   | { type: 'Absolute'; amount: string };
 
-export type AaaAuthoringTask =
+export type ActorAuthoringTask =
   | {
       type: 'Transfer';
       to: string;
-      asset: AaaAuthoringAsset;
-      amount: AaaAuthoringAmount;
+      asset: ActorAuthoringAsset;
+      amount: ActorAuthoringAmount;
     }
   | {
       type: 'SplitTransfer';
-      asset: AaaAuthoringAsset;
-      amount: AaaAuthoringAmount;
+      asset: ActorAuthoringAsset;
+      amount: ActorAuthoringAmount;
       legs: Array<{ to: string; shareParts: number }>;
     }
   | {
       type: 'SwapIn';
-      assetIn: AaaAuthoringAsset;
-      amountIn: AaaAuthoringAmount;
-      assetOut: AaaAuthoringAsset;
+      assetIn: ActorAuthoringAsset;
+      amountIn: ActorAuthoringAmount;
+      assetOut: ActorAuthoringAsset;
       slippageParts: number;
     }
   | {
       type: 'SwapOut';
-      assetOut: AaaAuthoringAsset;
-      amountOut: AaaAuthoringAmount;
-      assetIn: AaaAuthoringAsset;
-      inputLimit: AaaAuthoringInputLimit;
+      assetOut: ActorAuthoringAsset;
+      amountOut: ActorAuthoringAmount;
+      assetIn: ActorAuthoringAsset;
+      inputLimit: ActorAuthoringInputLimit;
       slippageParts: number;
     }
   | {
       type: 'AddLiquidity';
-      assetA: AaaAuthoringAsset;
-      assetB: AaaAuthoringAsset;
-      amountA: AaaAuthoringAmount;
-      amountB: AaaAuthoringAmount;
+      assetA: ActorAuthoringAsset;
+      assetB: ActorAuthoringAsset;
+      amountA: ActorAuthoringAmount;
+      amountB: ActorAuthoringAmount;
       minLpOut: string;
     }
   | {
       type: 'RemoveLiquidity';
-      lpAsset: AaaAuthoringAsset;
-      assetA: AaaAuthoringAsset;
-      assetB: AaaAuthoringAsset;
-      lpAmount: AaaAuthoringAmount;
+      lpAsset: ActorAuthoringAsset;
+      assetA: ActorAuthoringAsset;
+      assetB: ActorAuthoringAsset;
+      lpAmount: ActorAuthoringAmount;
       minAmountA: string;
       minAmountB: string;
     }
   | {
       type: 'Burn' | 'Mint' | 'Stake';
-      asset: AaaAuthoringAsset;
-      amount: AaaAuthoringAmount;
+      asset: ActorAuthoringAsset;
+      amount: ActorAuthoringAmount;
     }
   | {
       type: 'DonateLiquidity';
-      assetA: AaaAuthoringAsset;
-      assetB: AaaAuthoringAsset;
-      maxAmountA: AaaAuthoringAmount;
+      assetA: ActorAuthoringAsset;
+      assetB: ActorAuthoringAsset;
+      maxAmountA: ActorAuthoringAmount;
       maxRatioErrorParts: number;
     }
   | {
       type: 'Unstake';
-      asset: AaaAuthoringAsset;
-      shares: AaaAuthoringAmount;
+      asset: ActorAuthoringAsset;
+      shares: ActorAuthoringAmount;
     }
   | { type: 'StopCycle' };
 
-export const AAA_AUTHORING_TASK_TYPES = [
+export const ACTORS_AUTHORING_TASK_TYPES = [
   'Transfer',
   'SplitTransfer',
   'SwapIn',
@@ -151,9 +151,9 @@ export const AAA_AUTHORING_TASK_TYPES = [
   'DonateLiquidity',
   'Unstake',
   'StopCycle',
-] as const satisfies readonly AaaAuthoringTask['type'][];
+] as const satisfies readonly ActorAuthoringTask['type'][];
 
-export const AAA_AUTHORING_CONDITION_TYPES = [
+export const ACTORS_AUTHORING_CONDITION_TYPES = [
   'BalanceAbove',
   'BalanceBelow',
   'BalanceEquals',
@@ -164,26 +164,26 @@ export const AAA_AUTHORING_CONDITION_TYPES = [
   'ObservationBelow',
   'ObservationEquals',
   'ObservationNotEquals',
-] as const satisfies readonly AaaAuthoringCondition['type'][];
+] as const satisfies readonly ActorAuthoringCondition['type'][];
 
-export type AaaAuthoringConditionSet =
+export type ActorAuthoringConditionSet =
   | { type: 'Always' }
-  | { type: 'All' | 'Any'; conditions: AaaAuthoringCondition[] };
+  | { type: 'All' | 'Any'; conditions: ActorAuthoringCondition[] };
 
-export type AaaAuthoringStep = {
+export type ActorAuthoringStep = {
   key: string;
-  conditionSet: AaaAuthoringConditionSet;
-  task: AaaAuthoringTask;
+  conditionSet: ActorAuthoringConditionSet;
+  task: ActorAuthoringTask;
   errorPolicy: AutomationStepErrorPolicy;
 };
 
-export type AaaAuthoringFundingPolicy =
+export type ActorAuthoringFundingPolicy =
   | { type: 'OwnerOnly' }
   | { type: 'RuntimePolicy' }
   | { type: 'AnyVerifiedIngress' }
   | { type: 'SignedAllowlist'; accounts: string[] };
 
-export type AaaAuthoringTriggerSource =
+export type ActorAuthoringTriggerSource =
   | { type: 'Manual' }
   | {
       type: 'OnAddressEvent';
@@ -193,37 +193,37 @@ export type AaaAuthoringTriggerSource =
         | { type: 'Whitelist'; accounts: string[] };
       assetFilter:
         | { type: 'Any' }
-        | { type: 'Whitelist'; assets: AaaAuthoringAsset[] };
+        | { type: 'Whitelist'; assets: ActorAuthoringAsset[] };
     }
-  | { type: 'OnObservationChange'; feed: AaaAuthoringObservationFeed };
+  | { type: 'OnObservationChange'; feed: ActorAuthoringObservationFeed };
 
-export type AaaAuthoringTrigger =
-  | { type: 'Immediate'; sources: AaaAuthoringTriggerSource[] }
+export type ActorAuthoringTrigger =
+  | { type: 'Immediate'; sources: ActorAuthoringTriggerSource[] }
   | {
       type: 'Cadenced';
       everyBlocks: number;
       mode:
         | { type: 'Always' }
-        | { type: 'WhenSignalled'; sources: AaaAuthoringTriggerSource[] };
+        | { type: 'WhenSignalled'; sources: ActorAuthoringTriggerSource[] };
     };
 
-export type AaaAuthoringCompletionPolicy =
+export type ActorAuthoringCompletionPolicy =
   | 'Persistent'
   | 'CloseAfterProductiveCycle';
 
-export type AaaAuthoringProgram = {
-  aaaType: AaaPlanType;
+export type ActorAuthoringProgram = {
+  actorType: ActorPlanType;
   mutability: AutomationMutability;
-  completionPolicy: AaaAuthoringCompletionPolicy;
+  completionPolicy: ActorAuthoringCompletionPolicy;
   autoCloseAtCycleNonce: bigint | null;
-  trigger: AaaAuthoringTrigger;
+  trigger: ActorAuthoringTrigger;
   cooldownBlocks: number;
   scheduleWindow: { start: number; end: number } | null;
-  fundingPolicy: AaaAuthoringFundingPolicy;
-  steps: AaaAuthoringStep[];
+  fundingPolicy: ActorAuthoringFundingPolicy;
+  steps: ActorAuthoringStep[];
 };
 
-export type AaaAuthoringLimits = {
+export type ActorAuthoringLimits = {
   maxExecutionPlanSteps: number;
   maxRetryAttempts: number;
   maxConditionsPerStep: number;
@@ -232,30 +232,30 @@ export type AaaAuthoringLimits = {
   maxTriggerSources: number;
 };
 
-export const DEOS_AAA_AUTHORING_LIMITS: AaaAuthoringLimits = {
-  maxExecutionPlanSteps: AAA_MAX_EXECUTION_PLAN_STEPS,
-  maxRetryAttempts: AAA_MAX_RETRY_ATTEMPTS,
+export const DEOS_ACTORS_AUTHORING_LIMITS: ActorAuthoringLimits = {
+  maxExecutionPlanSteps: ACTORS_MAX_EXECUTION_PLAN_STEPS,
+  maxRetryAttempts: ACTORS_MAX_RETRY_ATTEMPTS,
   maxConditionsPerStep: 4,
   maxSplitTransferLegs: 8,
   maxWhitelistSize: 16,
   maxTriggerSources: 4,
 };
 
-export type AaaAuthoringIssue = {
+export type ActorAuthoringIssue = {
   path: string;
   message: string;
 };
 
-export type AaaAuthoringValidation =
+export type ActorAuthoringValidation =
   | { valid: true; issues: [] }
-  | { valid: false; issues: AaaAuthoringIssue[] };
+  | { valid: false; issues: ActorAuthoringIssue[] };
 
-export function createAaaAuthoringTask(
-  type: AaaAuthoringTask['type'],
-): AaaAuthoringTask {
-  const native = (): AaaAuthoringAsset => ({ type: 'Native' });
-  const local = (): AaaAuthoringAsset => ({ type: 'Local', id: 0 });
-  const fixed = (): AaaAuthoringAmount => ({ type: 'Fixed', value: '0' });
+export function createActorAuthoringTask(
+  type: ActorAuthoringTask['type'],
+): ActorAuthoringTask {
+  const native = (): ActorAuthoringAsset => ({ type: 'Native' });
+  const local = (): ActorAuthoringAsset => ({ type: 'Local', id: 0 });
+  const fixed = (): ActorAuthoringAmount => ({ type: 'Fixed', value: '0' });
   switch (type) {
     case 'Transfer':
       return { type, to: '', asset: native(), amount: fixed() };
@@ -324,9 +324,9 @@ export function createAaaAuthoringTask(
   }
 }
 
-export function createAaaAuthoringCondition(
-  type: AaaAuthoringCondition['type'],
-): AaaAuthoringCondition {
+export function createActorAuthoringCondition(
+  type: ActorAuthoringCondition['type'],
+): ActorAuthoringCondition {
   switch (type) {
     case 'BalanceAbove':
     case 'BalanceBelow':
@@ -355,10 +355,10 @@ export function createAaaAuthoringCondition(
   }
 }
 
-export function createAaaAuthoringStep(
+export function createActorAuthoringStep(
   key: string,
-  task: AaaAuthoringTask = createAaaAuthoringTask('Transfer'),
-): AaaAuthoringStep {
+  task: ActorAuthoringTask = createActorAuthoringTask('Transfer'),
+): ActorAuthoringStep {
   return {
     key,
     conditionSet: { type: 'Always' },
@@ -367,9 +367,9 @@ export function createAaaAuthoringStep(
   };
 }
 
-export function createAaaAuthoringProgram(): AaaAuthoringProgram {
+export function createActorAuthoringProgram(): ActorAuthoringProgram {
   return {
-    aaaType: 'User',
+    actorType: 'User',
     mutability: 'Mutable',
     completionPolicy: 'Persistent',
     autoCloseAtCycleNonce: null,
@@ -377,7 +377,7 @@ export function createAaaAuthoringProgram(): AaaAuthoringProgram {
     cooldownBlocks: 0,
     scheduleWindow: null,
     fundingPolicy: { type: 'OwnerOnly' },
-    steps: [createAaaAuthoringStep('step-1')],
+    steps: [createActorAuthoringStep('step-1')],
   };
 }
 
@@ -394,7 +394,7 @@ function isU32(value: number) {
 function validatePerbill(
   value: number,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   if (!Number.isSafeInteger(value) || value < 0 || value > PERBILL_MAX) {
     issues.push({
@@ -407,7 +407,7 @@ function validatePerbill(
 function validateAddress(
   value: string,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   if (value.trim().length === 0) {
     issues.push({ path, message: 'Account is required' });
@@ -424,9 +424,9 @@ function validateAddress(
 }
 
 function validateAsset(
-  asset: AaaAuthoringAsset,
+  asset: ActorAuthoringAsset,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   switch (asset.type) {
     case 'Native':
@@ -440,9 +440,9 @@ function validateAsset(
 }
 
 function validateAmount(
-  amount: AaaAuthoringAmount,
+  amount: ActorAuthoringAmount,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   switch (amount.type) {
     case 'Fixed':
@@ -483,7 +483,7 @@ function validatePositiveBalanceBound(
   value: string,
   path: string,
   label: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   if (!UNSIGNED_INTEGER.test(value)) {
     issues.push({
@@ -502,9 +502,9 @@ function validatePositiveBalanceBound(
 }
 
 function validateObservationFeed(
-  feed: AaaAuthoringObservationFeed,
+  feed: ActorAuthoringObservationFeed,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   validateAsset(feed.assetIn, `${path}.assetIn`, issues);
   validateAsset(feed.assetOut, `${path}.assetOut`, issues);
@@ -527,9 +527,9 @@ function validateObservationFeed(
 }
 
 function validateCondition(
-  condition: AaaAuthoringCondition,
+  condition: ActorAuthoringCondition,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   switch (condition.type) {
     case 'BalanceAbove':
@@ -574,10 +574,10 @@ function validateCondition(
 }
 
 function validateDistinctAssets(
-  assetA: AaaAuthoringAsset,
-  assetB: AaaAuthoringAsset,
+  assetA: ActorAuthoringAsset,
+  assetB: ActorAuthoringAsset,
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
 ) {
   if (
     bytesKey(assetCanonicalBytes(assetA)) ===
@@ -588,11 +588,11 @@ function validateDistinctAssets(
 }
 
 function validateTask(
-  task: AaaAuthoringTask,
+  task: ActorAuthoringTask,
   path: string,
-  issues: AaaAuthoringIssue[],
-  limits: AaaAuthoringLimits,
-  aaaType: AaaPlanType,
+  issues: ActorAuthoringIssue[],
+  limits: ActorAuthoringLimits,
+  actorType: ActorPlanType,
 ) {
   switch (task.type) {
     case 'Transfer':
@@ -704,8 +704,11 @@ function validateTask(
       validateAmount(task.amount, `${path}.amount`, issues);
       return;
     case 'Mint':
-      if (aaaType !== 'System') {
-        issues.push({ path, message: 'Mint is available only to System AAA' });
+      if (actorType !== 'System') {
+        issues.push({
+          path,
+          message: 'Mint is available only to System Actors',
+        });
       }
       validateAsset(task.asset, `${path}.asset`, issues);
       validateAmount(task.amount, `${path}.amount`, issues);
@@ -733,7 +736,7 @@ function validateTask(
 function validateUniqueAddresses(
   accounts: string[],
   path: string,
-  issues: AaaAuthoringIssue[],
+  issues: ActorAuthoringIssue[],
   max: number,
 ) {
   if (accounts.length === 0 || accounts.length > max) {
@@ -759,10 +762,10 @@ function validateUniqueAddresses(
 }
 
 function validateTriggerSources(
-  sources: AaaAuthoringTriggerSource[],
+  sources: ActorAuthoringTriggerSource[],
   path: string,
-  issues: AaaAuthoringIssue[],
-  limits: AaaAuthoringLimits,
+  issues: ActorAuthoringIssue[],
+  limits: ActorAuthoringLimits,
 ) {
   if (sources.length === 0 || sources.length > limits.maxTriggerSources) {
     issues.push({
@@ -828,9 +831,9 @@ function validateTriggerSources(
 }
 
 function validateTrigger(
-  trigger: AaaAuthoringTrigger,
-  issues: AaaAuthoringIssue[],
-  limits: AaaAuthoringLimits,
+  trigger: ActorAuthoringTrigger,
+  issues: ActorAuthoringIssue[],
+  limits: ActorAuthoringLimits,
 ) {
   switch (trigger.type) {
     case 'Immediate':
@@ -859,11 +862,11 @@ function validateTrigger(
   }
 }
 
-export function validateAaaAuthoringProgram(
-  program: AaaAuthoringProgram,
-  limits = DEOS_AAA_AUTHORING_LIMITS,
-): AaaAuthoringValidation {
-  const issues: AaaAuthoringIssue[] = [];
+export function validateActorAuthoringProgram(
+  program: ActorAuthoringProgram,
+  limits = DEOS_ACTORS_AUTHORING_LIMITS,
+): ActorAuthoringValidation {
+  const issues: ActorAuthoringIssue[] = [];
   const maxSteps = limits.maxExecutionPlanSteps;
   if (
     program.completionPolicy !== 'Persistent' &&
@@ -888,7 +891,7 @@ export function validateAaaAuthoringProgram(
   if (program.steps.length === 0 || program.steps.length > maxSteps) {
     issues.push({
       path: 'steps',
-      message: `Active ${program.aaaType} program requires 1..${maxSteps} steps`,
+      message: `Active ${program.actorType} program requires 1..${maxSteps} steps`,
     });
   }
   if (!isU32(program.cooldownBlocks)) {
@@ -969,25 +972,25 @@ export function validateAaaAuthoringProgram(
         message: `RetryLater max attempts must be within 2..${limits.maxRetryAttempts}`,
       });
     }
-    validateTask(step.task, `${path}.task`, issues, limits, program.aaaType);
+    validateTask(step.task, `${path}.task`, issues, limits, program.actorType);
   });
   return issues.length === 0
     ? { valid: true, issues: [] }
     : { valid: false, issues };
 }
 
-export function appendAaaStep(
-  program: AaaAuthoringProgram,
-  step: AaaAuthoringStep,
-): AaaAuthoringProgram {
+export function appendActorStep(
+  program: ActorAuthoringProgram,
+  step: ActorAuthoringStep,
+): ActorAuthoringProgram {
   return { ...program, steps: [...program.steps, structuredClone(step)] };
 }
 
-export function replaceAaaStep(
-  program: AaaAuthoringProgram,
+export function replaceActorStep(
+  program: ActorAuthoringProgram,
   key: string,
-  step: AaaAuthoringStep,
-): AaaAuthoringProgram {
+  step: ActorAuthoringStep,
+): ActorAuthoringProgram {
   const index = program.steps.findIndex((candidate) => candidate.key === key);
   if (index < 0) throw new Error(`Unknown authoring step key: ${key}`);
   const steps = program.steps.map((candidate, candidateIndex) =>
@@ -996,10 +999,10 @@ export function replaceAaaStep(
   return { ...program, steps };
 }
 
-export function removeAaaStep(
-  program: AaaAuthoringProgram,
+export function removeActorStep(
+  program: ActorAuthoringProgram,
   key: string,
-): AaaAuthoringProgram {
+): ActorAuthoringProgram {
   const index = program.steps.findIndex((candidate) => candidate.key === key);
   if (index < 0) throw new Error(`Unknown authoring step key: ${key}`);
   return {
@@ -1010,11 +1013,11 @@ export function removeAaaStep(
   };
 }
 
-export function moveAaaStep(
-  program: AaaAuthoringProgram,
+export function moveActorStep(
+  program: ActorAuthoringProgram,
   fromIndex: number,
   toIndex: number,
-): AaaAuthoringProgram {
+): ActorAuthoringProgram {
   if (
     !Number.isSafeInteger(fromIndex) ||
     !Number.isSafeInteger(toIndex) ||
@@ -1038,7 +1041,7 @@ function runtimeVariant(type: string, value: unknown = undefined) {
   return { type, value };
 }
 
-function lowerAsset(asset: AaaAuthoringAsset) {
+function lowerAsset(asset: ActorAuthoringAsset) {
   switch (asset.type) {
     case 'Native':
       return runtimeVariant('Native');
@@ -1048,7 +1051,7 @@ function lowerAsset(asset: AaaAuthoringAsset) {
   }
 }
 
-function lowerAmount(amount: AaaAuthoringAmount) {
+function lowerAmount(amount: ActorAuthoringAmount) {
   switch (amount.type) {
     case 'Fixed':
       return runtimeVariant('Fixed', BigInt(amount.value));
@@ -1061,7 +1064,7 @@ function lowerAmount(amount: AaaAuthoringAmount) {
   }
 }
 
-function lowerObservationFeed(feed: AaaAuthoringObservationFeed) {
+function lowerObservationFeed(feed: ActorAuthoringObservationFeed) {
   return {
     asset_in: lowerAsset(feed.assetIn),
     asset_out: lowerAsset(feed.assetOut),
@@ -1076,7 +1079,7 @@ function lowerObservationFeed(feed: AaaAuthoringObservationFeed) {
   };
 }
 
-function lowerCondition(condition: AaaAuthoringCondition) {
+function lowerCondition(condition: ActorAuthoringCondition) {
   switch (condition.type) {
     case 'BalanceAbove':
     case 'BalanceBelow':
@@ -1101,7 +1104,7 @@ function lowerCondition(condition: AaaAuthoringCondition) {
   }
 }
 
-function lowerTask(task: AaaAuthoringTask) {
+function lowerTask(task: ActorAuthoringTask) {
   switch (task.type) {
     case 'Transfer':
       return runtimeVariant('Transfer', {
@@ -1208,7 +1211,7 @@ function boundedVecBytes(values: (Uint8Array | number[])[]) {
   return [values.length << 2, ...values.flatMap((value) => Array.from(value))];
 }
 
-function assetCanonicalBytes(asset: AaaAuthoringAsset) {
+function assetCanonicalBytes(asset: ActorAuthoringAsset) {
   switch (asset.type) {
     case 'Native':
       return [0];
@@ -1219,7 +1222,7 @@ function assetCanonicalBytes(asset: AaaAuthoringAsset) {
   }
 }
 
-function observationFeedCanonicalBytes(feed: AaaAuthoringObservationFeed) {
+function observationFeedCanonicalBytes(feed: ActorAuthoringObservationFeed) {
   return [
     ...assetCanonicalBytes(feed.assetIn),
     ...assetCanonicalBytes(feed.assetOut),
@@ -1233,7 +1236,7 @@ function observationFeedCanonicalBytes(feed: AaaAuthoringObservationFeed) {
 
 function sourceFilterCanonicalBytes(
   filter: Extract<
-    AaaAuthoringTriggerSource,
+    ActorAuthoringTriggerSource,
     { type: 'OnAddressEvent' }
   >['sourceFilter'],
 ) {
@@ -1256,7 +1259,7 @@ function sourceFilterCanonicalBytes(
 
 function assetFilterCanonicalBytes(
   filter: Extract<
-    AaaAuthoringTriggerSource,
+    ActorAuthoringTriggerSource,
     { type: 'OnAddressEvent' }
   >['assetFilter'],
 ) {
@@ -1280,7 +1283,7 @@ function assetFilterCanonicalBytes(
   }
 }
 
-function triggerSourceCanonicalBytes(source: AaaAuthoringTriggerSource) {
+function triggerSourceCanonicalBytes(source: ActorAuthoringTriggerSource) {
   switch (source.type) {
     case 'Manual':
       return [0];
@@ -1295,7 +1298,7 @@ function triggerSourceCanonicalBytes(source: AaaAuthoringTriggerSource) {
   }
 }
 
-function lowerTriggerSource(source: AaaAuthoringTriggerSource) {
+function lowerTriggerSource(source: ActorAuthoringTriggerSource) {
   switch (source.type) {
     case 'Manual':
       return runtimeVariant('Manual');
@@ -1338,7 +1341,7 @@ function lowerTriggerSource(source: AaaAuthoringTriggerSource) {
   }
 }
 
-function lowerTriggerSources(sources: AaaAuthoringTriggerSource[]) {
+function lowerTriggerSources(sources: ActorAuthoringTriggerSource[]) {
   return [...sources]
     .sort((left, right) =>
       compareBytes(
@@ -1349,7 +1352,7 @@ function lowerTriggerSources(sources: AaaAuthoringTriggerSource[]) {
     .map(lowerTriggerSource);
 }
 
-function lowerTrigger(trigger: AaaAuthoringTrigger) {
+function lowerTrigger(trigger: ActorAuthoringTrigger) {
   switch (trigger.type) {
     case 'Immediate':
       return runtimeVariant('Immediate', {
@@ -1373,7 +1376,7 @@ function compareAccountBytes(left: string, right: string) {
   return compareBytes(decodeAddress(left.trim()), decodeAddress(right.trim()));
 }
 
-function lowerFundingPolicy(policy: AaaAuthoringFundingPolicy) {
+function lowerFundingPolicy(policy: ActorAuthoringFundingPolicy) {
   switch (policy.type) {
     case 'OwnerOnly':
     case 'RuntimePolicy':
@@ -1387,14 +1390,14 @@ function lowerFundingPolicy(policy: AaaAuthoringFundingPolicy) {
   }
 }
 
-export function lowerAaaAuthoringProgram(
-  program: AaaAuthoringProgram,
-  limits = DEOS_AAA_AUTHORING_LIMITS,
+export function lowerActorAuthoringProgram(
+  program: ActorAuthoringProgram,
+  limits = DEOS_ACTORS_AUTHORING_LIMITS,
 ) {
-  const validation = validateAaaAuthoringProgram(program, limits);
+  const validation = validateActorAuthoringProgram(program, limits);
   if (!validation.valid) {
     throw new Error(
-      `Invalid AAA authoring program: ${validation.issues
+      `Invalid Actors authoring program: ${validation.issues
         .map((issue) => `${issue.path}: ${issue.message}`)
         .join('; ')}`,
     );
@@ -1433,21 +1436,24 @@ export function lowerAaaAuthoringProgram(
   });
 }
 
-export function createAaaArtifactFromAuthoring(input: {
-  program: AaaAuthoringProgram;
+export function createActorArtifactFromAuthoring(input: {
+  program: ActorAuthoringProgram;
   metadataBytes: Uint8Array;
-  runtime: AaaPlanRuntimeIdentity;
-  limits?: AaaAuthoringLimits;
-}): AaaPlanArtifact {
-  const runtimeValue = lowerAaaAuthoringProgram(
+  runtime: ActorPlanRuntimeIdentity;
+  limits?: ActorAuthoringLimits;
+}): ActorPlanArtifact {
+  const runtimeValue = lowerActorAuthoringProgram(
     input.program,
-    input.limits ?? DEOS_AAA_AUTHORING_LIMITS,
+    input.limits ?? DEOS_ACTORS_AUTHORING_LIMITS,
   );
-  const programScale = encodeAaaProgramValue(input.metadataBytes, runtimeValue);
-  return createAaaPlanArtifact({
+  const programScale = encodeActorProgramValue(
+    input.metadataBytes,
+    runtimeValue,
+  );
+  return createActorPlanArtifact({
     metadataBytes: input.metadataBytes,
     runtime: input.runtime,
-    aaaType: input.program.aaaType,
+    actorType: input.program.actorType,
     mutability: input.program.mutability,
     programScale,
   });

@@ -68,7 +68,7 @@ DEOS needs a runtime-first environment where economic rules, assets, automation,
 
 - Rust runtime workspace with DEOS pallets, primitives, and runtime configuration.
 - TMCTOL reference mechanics and specifications.
-- AAA actor automation model.
+- Actor automation model.
 - SvelteKit reference client with domain slices and wiki rendering.
 - Operator scripts, validation gates, and generated wiki metadata.
 

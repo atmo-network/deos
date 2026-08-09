@@ -317,7 +317,7 @@ const inventory = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
 const rule = inventory.rules.find((candidate) => candidate.id === process.argv[2]);
 if (!rule || !Array.isArray(rule.patterns)) process.exit(1);
 process.stdout.write(rule.patterns.join("|"));
-' "$PROJECT_ROOT/.agents/skills/alignment/rules/aaa-drift-rules.json" "$rule_id"
+' "$PROJECT_ROOT/.agents/skills/alignment/rules/actors-identity-rules.json" "$rule_id"
 }
 
 run_audit() {
@@ -326,7 +326,7 @@ run_audit() {
     fi
     phase_banner "Step 2: Architecture rules"
     local bounded_iteration_allowlist
-    bounded_iteration_allowlist="$(inventory_patterns aaa-bounded-iteration-allowlist)"
+    bounded_iteration_allowlist="$(inventory_patterns actors-bounded-iteration-allowlist)"
     check_rule "\\.iter\\(\\)|for .* in .*::iter\\(\\)" "Potential unbounded state iteration detected. DEOS prefers bounded/O(1) mechanics." "tests.rs|benchmarking.rs|mock.rs|deos-bypass: bounded-iter|legs\\.iter\\(|normalized_transfers\\.iter\\(|tracked\\.iter\\(|${bounded_iteration_allowlist}" "O(N) Iteration Anti-Pattern" "template/pallets/staking/docs/architecture.en.md" "FATAL" "hallucination" "The violation is a concrete false move against the O(1) contract"
     check_rule "StorageValue<.*, Vec<|StorageMap<.*, Vec<" "Unbounded Vec found in storage. Use BoundedVec for consensus state." "tests.rs|mock.rs|deos-bypass: vec" "Unbounded Vector Anti-Pattern" "docs/read-model.contract.en.md" "WARNING" "hallucination" "Consensus-state unboundedness is a direct architecture falsehood"
     check_rule "sudo_|ensure_root" "Admin/root policy detected. DEOS prefers mechanism over policy for core flows." "tests.rs|mock.rs|pallet-governance|deos-bypass: admin" "Sudo Root Policy Anti-Pattern" "docs/manifesto.en.md" "FATAL" "boundary-drift" "This usually signals a mechanism-to-policy drift across a constitutional boundary"

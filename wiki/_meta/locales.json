@@ -23,13 +23,13 @@
       "en": "overview/deos-framework.en.md",
       "ru": "overview/deos-framework.ru.md"
     },
-    "aaa-system": {
-      "en": "overview/aaa-system.en.md",
-      "ru": "overview/aaa-system.ru.md"
+    "actor-system": {
+      "en": "overview/actor-system.en.md",
+      "ru": "overview/actor-system.ru.md"
     },
-    "aa-actor": {
-      "en": "overview/aa-actor.en.md",
-      "ru": "overview/aa-actor.ru.md"
+    "actor": {
+      "en": "overview/actor.en.md",
+      "ru": "overview/actor.ru.md"
     },
     "router": {
       "en": "overview/router.en.md",

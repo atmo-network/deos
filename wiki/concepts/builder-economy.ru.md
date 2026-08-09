@@ -15,7 +15,7 @@ sources:
   - ../../docs/framework-instance.contract.en.md
   - ../../template/pallets/governance/docs/specification.en.md
   - ../../template/pallets/governance/docs/architecture.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
   - ../../docs/core.architecture.en.md
   - ../../template/pallets/tmc/docs/architecture.en.md
 status: active
@@ -32,7 +32,7 @@ related:
   - Домены Governance
   - Physics-first против politics-first
   - Стандарт TMCTOL
-  - Система AAA
+  - Система Actors
   - Сценарии TOL buckets
 last_compiled: 2026-07-20
 confidence: 0.9
@@ -97,12 +97,12 @@ TMC отправляет две трети выпущенного `$BLDR` в BLD
 
 ## Федеративный, а не изолированный домен
 
-У домена созидателей есть собственные токен, казна, система управления, контур ликвидности и System AAA Actors, но он не существует отдельно:
+У домена созидателей есть собственные токен, казна, система управления, контур ликвидности и System Actors, но он не существует отдельно:
 
 - `$NTVE` служит обеспечением для TMC и парным активом ликвидности;
 - Нативные экономические блокировки защищают домен управления;
 - Капитал L1 может поддерживать выкуп и сжигание `$BLDR`;
-- Управление `$BLDR` не может напрямую переписывать исходную физику TMC, глобальные настройки AAA, управление стейкингом или регистрацию активов.
+- Управление `$BLDR` не может напрямую переписывать исходную физику TMC, глобальные настройки Actors, управление стейкингом или регистрацию активов.
 
 Это паттерн Fractal Federation: тактический домен автономен в пределах объявленной компетенции, но разделяет капитал, защиту и инфраструктуру с родительской экономикой. Он действует как ограниченный орган DEOS, а не как суверенная замена всей системе.
 
@@ -124,5 +124,5 @@ TMC отправляет две трети выпущенного `$BLDR` в BLD
 - [Домены Governance](governance-domains.ru.md)
 - [Physics-first против politics-first](../comparisons/physics-vs-politics.ru.md)
 - [Стандарт TMCTOL](tmctol-standard.ru.md)
-- [Система AAA](../overview/aaa-system.ru.md)
+- [Система Actors](../overview/actor-system.ru.md)
 - [Сценарии TOL buckets](tol-bucket-scenarios.ru.md)

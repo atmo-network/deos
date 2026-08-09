@@ -10,7 +10,7 @@ Use this skill when checking or preparing the canonical `$NTVE/stNTVE` staking-p
 
 ## Ownership Boundary
 
-This skill owns operator sequencing, readiness interpretation, authority classification, and plan-only handoff. It does not define staking economics, asset identifiers, pool mechanics, System AAA policy, governance authority, transaction signing, or shared command implementation.
+This skill owns operator sequencing, readiness interpretation, authority classification, and plan-only handoff. It does not define staking economics, asset identifiers, pool mechanics, System Actors policy, governance authority, transaction signing, or shared command implementation.
 
 The current dependency chain remains ordered:
 
@@ -31,7 +31,7 @@ A later state never substitutes for missing evidence at an earlier step.
 | --- | --- |
 | Staking, receipt, custody, and reward semantics | Staking/runtime code, tests, specification, and architecture |
 | Pool and LP namespace behavior | Asset Conversion/runtime code and tests |
-| Liquidity Actor behavior and activation guard | AAA/runtime code, tests, and AAA architecture |
+| Liquidity Actor behavior and activation guard | Actors/runtime code, tests, and Actors architecture |
 | Readiness probe and call-data generation | `scripts/bootstrap-native-staking-local.sh` and its `--help` |
 | Operator sequence, evidence level, and authority handoff | This skill |
 | Remaining launch or release gates | `BACKLOG.md` |
@@ -54,7 +54,7 @@ Prepared call data proves only that a next action was encoded. It does not prove
 
 ## Route
 
-1. Read the staking architecture bootstrap sequence, runtime configuration, relevant staking/AAA tests, shared script `--help`, and open delivery gate.
+1. Read the staking architecture bootstrap sequence, runtime configuration, relevant staking/Actors tests, shared script `--help`, and open delivery gate.
 2. Bind the workflow to an explicit endpoint/network and obtain current state through the shared read-only `check` route.
 3. Classify the first unmet readiness state. Stop on inconsistent state, identifier collision, unexpected actor role, or unsupported authority rather than skipping ahead.
 4. Use the shared `prepare-calls` route only for the next justified transition. Keep generated Root/governance and signed-operator calls distinct.

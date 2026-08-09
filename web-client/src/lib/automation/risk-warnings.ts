@@ -1,13 +1,13 @@
 /*
-Domain: AAA risk and composition warnings
+Domain: Actors risk and composition warnings
 Owns: Bounded projection of shipped runtime facts into typed composition warnings.
 Excludes: New protocol policy, scoring, probability, economic stability claims, and runtime mutation.
 Zone: Automation domain capability; consumes ProgramStaticAnalysis and plan artifacts only.
 */
 import type { ProgramStaticAnalysis } from './analysis.ts';
-import type { AaaPlanArtifact } from './plan-artifact.ts';
+import type { ActorPlanArtifact } from './plan-artifact.ts';
 
-export type AaaCompositionWarningKind =
+export type ActorCompositionWarningKind =
   | 'ImmutableWithoutReachableTerminal'
   | 'ResidualCustodyThroughLocatorReuse'
   | 'DeepActorGraphAmplification'
@@ -15,15 +15,15 @@ export type AaaCompositionWarningKind =
   | 'StrictFifoHeadOfLine'
   | 'CompletedDoesNotImplyAllTasksSuccess';
 
-export type AaaCompositionWarning = {
-  kind: AaaCompositionWarningKind;
+export type ActorCompositionWarning = {
+  kind: ActorCompositionWarningKind;
   severity: 'info' | 'warning' | 'critical';
   message: string;
   evidence: string;
 };
 
-export type AaaCompositionWarningInput = {
-  artifact: AaaPlanArtifact;
+export type ActorCompositionWarningInput = {
+  artifact: ActorPlanArtifact;
   analysis: ProgramStaticAnalysis;
   strictFifoHeadOfLine?: boolean;
   simulatorStatus?: 'Completed' | 'Failed' | 'Suspended' | 'Closed';
@@ -43,10 +43,10 @@ function isTerminalStep(step: ProgramStaticAnalysis['steps'][number]): boolean {
  * canonical temporal placement, immutable custody, per-step error policy,
  * split-transfer minimum-balance classification), never new protocol policy.
  */
-export function projectAaaCompositionWarnings(
-  input: AaaCompositionWarningInput,
-): AaaCompositionWarning[] {
-  const warnings: AaaCompositionWarning[] = [];
+export function projectActorCompositionWarnings(
+  input: ActorCompositionWarningInput,
+): ActorCompositionWarning[] {
+  const warnings: ActorCompositionWarning[] = [];
   const { artifact, analysis } = input;
 
   if (artifact.mutability === 'Immutable') {
@@ -138,7 +138,7 @@ export function projectAaaCompositionWarnings(
   return warnings;
 }
 
-export const AAA_COMPOSITION_WARNING_KINDS: readonly AaaCompositionWarningKind[] =
+export const ACTORS_COMPOSITION_WARNING_KINDS: readonly ActorCompositionWarningKind[] =
   [
     'ImmutableWithoutReachableTerminal',
     'ResidualCustodyThroughLocatorReuse',

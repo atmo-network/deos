@@ -20,7 +20,7 @@ use sp_version::RuntimeVersion;
 
 // Local module imports
 use super::{
-  AAA, AccountId, AssetConversion, Balance, Block, BlockNumber, ConsensusHook, Executive,
+  AccountId, Actors, AssetConversion, Balance, Block, BlockNumber, ConsensusHook, Executive,
   InherentDataExt, Nonce, ParachainInfo, ParachainSystem, Runtime, RuntimeCall,
   RuntimeGenesisConfig, SLOT_DURATION, SessionKeys, System, TransactionPayment, VERSION,
 };
@@ -111,20 +111,20 @@ impl_runtime_apis! {
         }
     }
 
-    impl pallet_aaa::AaaSimulationApi<
+    impl pallet_deos_actors::ActorSimulationApi<
         Block,
-        pallet_aaa::ProgramInputOf<Runtime>,
-        pallet_aaa::SimulationResultOf<Runtime>,
+        pallet_deos_actors::ProgramInputOf<Runtime>,
+        pallet_deos_actors::SimulationResultOf<Runtime>,
     > for Runtime {
         fn simulate_current_program(
-            aaa_id: pallet_aaa::AaaId,
-            expected_type: pallet_aaa::AaaType,
-            expected_mutability: pallet_aaa::Mutability,
-            expected_program: pallet_aaa::ProgramInputOf<Runtime>,
-            mode: pallet_aaa::SimulationMode,
-        ) -> Result<pallet_aaa::SimulationResultOf<Runtime>, pallet_aaa::SimulationError> {
-            AAA::simulate_current_program(
-                aaa_id,
+            actor_id: pallet_deos_actors::ActorId,
+            expected_type: pallet_deos_actors::ActorType,
+            expected_mutability: pallet_deos_actors::Mutability,
+            expected_program: pallet_deos_actors::ProgramInputOf<Runtime>,
+            mode: pallet_deos_actors::SimulationMode,
+        ) -> Result<pallet_deos_actors::SimulationResultOf<Runtime>, pallet_deos_actors::SimulationError> {
+            Actors::simulate_current_program(
+                actor_id,
                 expected_type,
                 expected_mutability,
                 expected_program,
@@ -133,14 +133,14 @@ impl_runtime_apis! {
         }
     }
 
-    impl pallet_aaa::AaaEligibilityApi<Block, BlockNumber> for Runtime {
-        fn aaa_eligibility(
-            aaa_id: pallet_aaa::AaaId,
+    impl pallet_deos_actors::ActorEligibilityApi<Block, BlockNumber> for Runtime {
+        fn actor_eligibility(
+            actor_id: pallet_deos_actors::ActorId,
         ) -> Result<
-            pallet_aaa::AaaEligibilityProjection<BlockNumber>,
-            pallet_aaa::AaaEligibilityError,
+            pallet_deos_actors::ActorEligibilityProjection<BlockNumber>,
+            pallet_deos_actors::ActorEligibilityError,
         > {
-            AAA::aaa_eligibility(aaa_id)
+            Actors::actor_eligibility(actor_id)
         }
     }
 

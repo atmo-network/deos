@@ -44,9 +44,9 @@ pub enum GuaranteeStatus {
   Deserialize,
 )]
 pub enum AnchorDomain {
-  /// Native TMCTOL anchor bucket (`aaa_id = 3`).
+  /// Native TMCTOL anchor bucket (`actor_id = 3`).
   Tol,
-  /// BLDR TMCTOL anchor bucket (`aaa_id = 12`).
+  /// BLDR TMCTOL anchor bucket (`actor_id = 12`).
   Bldr,
 }
 
@@ -65,9 +65,9 @@ pub enum AnchorDomain {
   Deserialize,
 )]
 pub enum BurnDomain {
-  /// DEOS framework-level native burn through Burning Manager (`aaa_id = 0`).
+  /// DEOS framework-level native burn through Burning Manager (`actor_id = 0`).
   NativeBurningManager,
-  /// Reference TMCTOL BLDR buyback/burn policy through Treasury B (`aaa_id = 7`).
+  /// Reference TMCTOL BLDR buyback/burn policy through Treasury B (`actor_id = 7`).
   BldrBuyback,
 }
 
@@ -100,7 +100,7 @@ pub enum TmctolConformanceStatus {
 #[derive(Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, PartialEq, TypeInfo)]
 pub struct AnchorBucketState<AccountId> {
   pub domain: AnchorDomain,
-  pub aaa_id: u64,
+  pub actor_id: u64,
   pub status: GuaranteeStatus,
   pub sovereign_account: AccountId,
   pub is_custody_only: bool,

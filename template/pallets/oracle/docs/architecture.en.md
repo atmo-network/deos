@@ -4,7 +4,7 @@
 
 `pallet-deos-oracle` implements a reusable bounded scalar-observation package. It admits immutable typed feed identities, authorizes typed producers, stores only current scalar truth, applies deterministic LastValue or EMA aggregation, tracks change-only revisions, and invokes one transactional O(1) change hook.
 
-The package has no AAA, Router, DEOS topology, network, off-chain worker, history, subscription, or strategy dependency. A host supplies feed identity and meaning types, authority origins, bounds, hook behavior, and production weights. The independent embedding fixture uses unrelated sensor semantics to falsify accidental DEOS coupling.
+The package has no Actors, Router, DEOS topology, network, off-chain worker, history, subscription, or strategy dependency. A host supplies feed identity and meaning types, authority origins, bounds, hook behavior, and production weights. The independent embedding fixture uses unrelated sensor semantics to falsify accidental DEOS coupling.
 
 Concrete DEOS composition belongs to [`docs/oracle.integration.en.md`](../../../../docs/oracle.integration.en.md).
 
@@ -71,6 +71,6 @@ Registration exposes distinct existing-producer and new-producer measurements be
 
 Package tests pin SCALE variant order, storage names, duplicate and capacity rejection, lifecycle transitions, producer authorization, zero behavior, freshness boundaries, revision overflow, hook rollback and cardinality, exact EMA elapsed vectors, extreme arithmetic, and try-state corruption detection.
 
-The embedding runtime passes default, no-std, runtime-benchmark, and try-runtime profiles without DEOS types. Its unrelated sensor identities and provenance prove that the package contract does not require assets, pools, prices, Router, or AAA.
+The embedding runtime passes default, no-std, runtime-benchmark, and try-runtime profiles without DEOS types. Its unrelated sensor identities and provenance prove that the package contract does not require assets, pools, prices, Router, or Actors.
 
 A host integration remains incomplete until it supplies generated weights, validates maximum configured density, proves hook rollback at the composed transaction boundary, and classifies current versus materialized read surfaces.

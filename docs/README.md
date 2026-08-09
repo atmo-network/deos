@@ -48,14 +48,14 @@ The flagship economic standard combining minting curves with automatic liquidity
 - [DEOS Oracle Embedding Guide](../template/pallets/oracle/docs/embedding.md)
   Package-owned host-runtime obligations for generic types, authority, bounded hooks, consumers, production weights, and independent integration evidence.
 
-- [AAA Specification](../template/pallets/aaa/docs/specification.en.md)
+- [DEOS Actors Specification](../template/pallets/actors/docs/specification.en.md)
   Deterministic Account Abstraction Actors contract. Defines the actor model, scheduler semantics, execution-plan/task rules, event-driven trigger semantics, circuit breakers, lifecycle, and safety invariants, including balance-ingress triggers and the reconfigurable actor-graph behavior surface as part of a broader bounded execution contract.
 
-- [AAA External Runtime Embedding Guide](../template/pallets/aaa/docs/embedding.md)
-  Package-owned host-runtime checklist for reusing `pallet-deos-aaa` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.
+- [DEOS Actors External Runtime Embedding Guide](../template/pallets/actors/docs/embedding.md)
+  Package-owned host-runtime checklist for reusing `pallet-deos-actors` outside the current DEOS/TMCTOL topology, including adapter obligations, task-scoped atomicity, and read-model/UI boundaries.
 
-- [AAA Control-Plane Contract](./aaa-control-plane.contract.en.md)
-  Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded AAA programs.
+- [DEOS Actors Control-Plane Contract](./actors-control-plane.contract.en.md)
+  Off-chain artifact identity, typed projection, diff, forecast, simulation, governance-composition, and materialized-history boundary for bounded Actor programs.
 
 - [DEOS Staking Specification](../template/pallets/staking/docs/specification.en.md)
   Multi-asset share-vault staking contract: sovereign backing channels, share-based ownership, receipt direction, native-special-case rules, and the dual-inflow reward contract.
@@ -73,17 +73,17 @@ The flagship economic standard combining minting curves with automatic liquidity
 
 Implementation-specific documents describing how the current runtime realizes the contracts above.
 
-- [AAA Package Architecture](../template/pallets/aaa/docs/architecture.en.md)
+- [DEOS Actors Package Architecture](../template/pallets/actors/docs/architecture.en.md)
   Reusable crate implementation map covering actor state, execution, scheduler queues, wakeups, triggers, lifecycle, storage, extrinsics, adapter contracts, and package validation.
 
-- [AAA Integration in DEOS](./aaa.integration.en.md)
+- [DEOS Actors Integration](./actors.integration.en.md)
   Concrete reference composition covering deterministic System accounts, TMCTOL actor topology, runtime adapters, ingress, fees, block bounds, reactive delivery, generated artifacts, control-plane realization, validation, and operations.
 
 - [DEOS Oracle Package Architecture](../template/pallets/oracle/docs/architecture.en.md)
   Reusable crate implementation map covering host interfaces, bounded storage, lifecycle, transactional publication, current-state reads, benchmark design, and the independent fixture.
 
 - [DEOS Oracle Integration](./oracle.integration.en.md)
-  Concrete reference composition covering directional pool feeds, runtime authority and bounds, DEOS Router production/consumption, reactive AAA ingress, browser inspection, generated weight ownership, and cross-system rollback evidence.
+  Concrete reference composition covering directional pool feeds, runtime authority and bounds, DEOS Router production/consumption, reactive Actor ingress, browser inspection, generated weight ownership, and cross-system rollback evidence.
 
 - [Core Architecture](./core.architecture.en.md)
   _! SYSTEM BACKBONE !_

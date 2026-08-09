@@ -21,7 +21,7 @@ related:
   - Domain Map
   - DEOS Framework Overview
   - First Steps
-  - AAA System
+  - Actors System
   - Governance
   - $BLDR Builder Economy
   - Core Terms
@@ -63,7 +63,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [TOL Bucket Scenarios](concepts/tol-bucket-scenarios.en.md) — concrete A/B/C/D bucket wakeups and treasury lanes
 - [$BLDR Builder Economy](concepts/builder-economy.en.md) — useful-work invoices, tactical funding, and the founder-as-first-worker pattern
 - [Token Surfaces](concepts/token-surfaces.en.md) — Native, VETO, BLDR, receipts, and LP roles
-- [AAA System](overview/aaa-system.en.md) — autonomous protocol actors
+- [Actors System](overview/actor-system.en.md) — autonomous protocol actors
 - [DEOS Router](overview/router.en.md) — routing, fees, and protocol liquidity decisions
 - [Typed Observations](overview/typed-observations.en.md) — current scalar truth and reactive delivery
 - [Governance](overview/governance.en.md) — domain-scoped authority and protection
@@ -116,7 +116,7 @@ This wiki is a self-contained knowledge product for understanding that framework
 - [Domain Map](concepts/domain-map.en.md)
 - [DEOS Framework Overview](overview/deos-framework.en.md)
 - [First Steps](getting-started/first-steps.en.md)
-- [AAA System](overview/aaa-system.en.md)
+- [Actors System](overview/actor-system.en.md)
 - [Governance](overview/governance.en.md)
 - [$BLDR Builder Economy](concepts/builder-economy.en.md)
 - [Core Terms](glossary/core-terms.en.md)

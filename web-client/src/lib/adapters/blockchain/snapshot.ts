@@ -15,9 +15,9 @@ import type { SystemSnapshot } from '$lib/system/types';
 import type { DeosChainSnapshot } from './deos';
 import { toOptionalValue } from './quotes';
 import {
-  LIQUIDITY_ACTOR_AAA_ID,
+  LIQUIDITY_ACTOR_ACTORS_ID,
   TOL_BUCKETS,
-  deriveSystemAaaSovereignAccount,
+  deriveSystemActorSovereignAccount,
 } from './runtime-accounts';
 import {
   NATIVE_ASSET,
@@ -330,8 +330,8 @@ export class BlockchainSnapshotBuilder {
       return buckets;
     }
     await Promise.all(
-      TOL_BUCKETS.map(async ({ key, aaaId }) => {
-        const account = deriveSystemAaaSovereignAccount(aaaId);
+      TOL_BUCKETS.map(async ({ key, actorId }) => {
+        const account = deriveSystemActorSovereignAccount(actorId);
         const lpTokens =
           (await snapshot.typedApi.view.Assets.balance_of(account, lpAssetId, {
             at: snapshot.at,
@@ -413,8 +413,8 @@ export class BlockchainSnapshotBuilder {
     snapshot: DeosChainSnapshot,
     foreignAsset: RuntimeAssetKind,
   ): Promise<{ native: bigint; foreign: bigint }> {
-    const liquidityActorAccount = deriveSystemAaaSovereignAccount(
-      LIQUIDITY_ACTOR_AAA_ID,
+    const liquidityActorAccount = deriveSystemActorSovereignAccount(
+      LIQUIDITY_ACTOR_ACTORS_ID,
     );
     const nativeAccount = await snapshot.typedApi.query.System.Account.getValue(
       liquidityActorAccount,

@@ -148,7 +148,8 @@ impl ChainSpecBuilder {
       .into_iter()
       .map(|account| (account, self.economic_params.initial_endowment))
       .collect::<Vec<_>>();
-    for anchor in crate::configs::aaa_config::TmctolGenesisSystemAaas::native_flow_anchor_accounts()
+    for anchor in
+      crate::configs::actor_config::TmctolGenesisSystemActors::native_flow_anchor_accounts()
     {
       if !endowed_accounts.contains(&anchor) {
         native_balances.push((anchor, EXISTENTIAL_DEPOSIT));
@@ -370,7 +371,8 @@ mod tests {
     let balances = genesis["balances"]["balances"]
       .as_array()
       .expect("genesis balances must be an array");
-    for anchor in crate::configs::aaa_config::TmctolGenesisSystemAaas::native_flow_anchor_accounts()
+    for anchor in
+      crate::configs::actor_config::TmctolGenesisSystemActors::native_flow_anchor_accounts()
     {
       let encoded = serde_json::to_value(anchor).expect("anchor account must encode");
       let entry = balances

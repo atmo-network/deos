@@ -1,0 +1,573 @@
+#![cfg_attr(rustfmt, rustfmt_skip)]
+#![allow(unused_parens)]
+#![allow(unused_imports)]
+#![allow(missing_docs)]
+
+use core::marker::PhantomData;
+use polkadot_sdk::frame_support::{
+  traits::Get,
+  weights::Weight,
+};
+
+pub trait WeightInfo {
+  fn create_user_actor() -> Weight;
+  fn create_user_actor_at_slot() -> Weight;
+  fn create_system_actor() -> Weight;
+  fn create_system_actor_at_sovereign_id() -> Weight;
+  fn create_dormant_system_actor() -> Weight;
+  fn activate_actor() -> Weight;
+  fn deactivate_actor() -> Weight;
+  fn pause_actor() -> Weight;
+  fn resume_actor() -> Weight;
+  fn manual_trigger() -> Weight;
+  fn observation_change_ingress() -> Weight;
+  fn observation_fanout_base() -> Weight;
+  fn observation_fanout_page() -> Weight;
+  fn close_actor() -> Weight;
+  fn fee_collection() -> Weight;
+  fn condition_set_evaluation(conditions: u32) -> Weight;
+  fn cycle_orchestration() -> Weight;
+  fn step_orchestration(steps: u32) -> Weight;
+  fn task_transfer() -> Weight;
+  fn task_burn() -> Weight;
+  fn task_mint() -> Weight;
+  fn task_stop_cycle() -> Weight;
+  fn task_split_transfer(legs: u32) -> Weight;
+  fn xcm_asset_deposit() -> Weight;
+  fn task_add_liquidity() -> Weight;
+  fn task_donate_liquidity() -> Weight;
+  fn task_remove_liquidity() -> Weight;
+  fn task_stake() -> Weight;
+  fn task_unstake() -> Weight;
+  fn task_dex_exact_in() -> Weight;
+  fn task_dex_exact_out() -> Weight;
+  fn scheduler_on_idle_base() -> Weight;
+  fn scheduler_paged_append_existing_page() -> Weight;
+  fn scheduler_paged_append_new_page() -> Weight;
+  fn scheduler_wakeup_append_existing_page() -> Weight;
+  fn scheduler_wakeup_append_new_page() -> Weight;
+  fn scheduler_wakeup_replace_exact() -> Weight;
+  fn scheduler_wakeup_invalidate_middle_page() -> Weight;
+  fn scheduler_wakeup_drain_partial_page() -> Weight;
+  fn scheduler_wakeup_drain_full_page() -> Weight;
+  fn scheduler_wakeup_drain_dense_boundary() -> Weight;
+  fn scheduler_wakeup_drain_stale_page() -> Weight;
+  fn scheduler_wakeup_cursor_insert() -> Weight;
+  fn scheduler_wakeup_cursor_pop_min() -> Weight;
+  fn scheduler_wakeup_cursor_remove_exact() -> Weight;
+  fn scheduler_wakeup_cursor_worker_partial() -> Weight;
+  fn scheduler_wakeup_cursor_worker_remove() -> Weight;
+  fn scheduler_wakeup_cursor_worker_future() -> Weight;
+  fn scheduler_paged_consume_preserve_page() -> Weight;
+  fn scheduler_paged_consume_delete_page() -> Weight;
+  fn scheduler_paged_tombstone_drain(entries: u32) -> Weight;
+  fn scheduler_paged_mixed_scan(entries: u32) -> Weight;
+  fn scheduler_paged_execute_cheap(executions: u32) -> Weight;
+  fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight;
+  fn scheduler_actor_hot_probe() -> Weight;
+  fn scheduler_actor_program_probe() -> Weight;
+  fn transaction_extension_ingress_base() -> Weight;
+  fn transaction_extension_ingress_notify() -> Weight;
+  fn funding_snapshot_open(assets: u32) -> Weight;
+  fn continuation_suspend(snapshot_entries: u32) -> Weight;
+  fn continuation_retry() -> Weight;
+  fn continuation_complete() -> Weight;
+  fn continuation_cancel() -> Weight;
+  fn continuation_suffix_admission(steps: u32) -> Weight;
+  fn update_funding_source_policy() -> Weight;
+  fn update_schedule() -> Weight;
+  fn update_execution_plan() -> Weight;
+  fn set_global_circuit_breaker() -> Weight;
+  fn set_active_actor_limit() -> Weight;
+  fn permissionless_sweep() -> Weight;
+  fn permissionless_sweep_many(batch: u32) -> Weight;
+}
+
+pub struct SubstrateWeight<T>(PhantomData<T>);
+impl<T: polkadot_sdk::frame_system::Config + crate::Config> WeightInfo for SubstrateWeight<T> {
+  fn create_user_actor() -> Weight {
+    Weight::from_parts(25_000_000, 2000)
+      .saturating_add(T::DbWeight::get().reads(4))
+      .saturating_add(T::DbWeight::get().writes(5))
+  }
+
+  fn create_user_actor_at_slot() -> Weight {
+    Self::create_user_actor()
+  }
+
+  fn create_system_actor() -> Weight {
+    Weight::from_parts(25_000_000, 2000)
+      .saturating_add(T::DbWeight::get().reads(3))
+      .saturating_add(T::DbWeight::get().writes(4))
+  }
+
+  fn create_system_actor_at_sovereign_id() -> Weight {
+    Weight::from_parts(100_642_000, 174_945)
+      .saturating_add(T::DbWeight::get().reads(20))
+      .saturating_add(T::DbWeight::get().writes(4))
+  }
+
+  fn create_dormant_system_actor() -> Weight {
+    Self::create_system_actor()
+  }
+
+  fn activate_actor() -> Weight {
+    Self::create_system_actor()
+  }
+
+  fn deactivate_actor() -> Weight {
+    Weight::from_parts(60_623_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(4))
+      .saturating_add(T::DbWeight::get().writes(6))
+  }
+
+  fn pause_actor() -> Weight {
+    Weight::from_parts(15_000_000, 1200)
+      .saturating_add(T::DbWeight::get().reads(1))
+      .saturating_add(T::DbWeight::get().writes(2))
+  }
+
+  fn resume_actor() -> Weight {
+    Weight::from_parts(15_000_000, 1200)
+      .saturating_add(T::DbWeight::get().reads(1))
+      .saturating_add(T::DbWeight::get().writes(2))
+  }
+
+  fn manual_trigger() -> Weight {
+    Weight::from_parts(12_000_000, 1200)
+      .saturating_add(T::DbWeight::get().reads(1))
+      .saturating_add(T::DbWeight::get().writes(2))
+  }
+
+  fn observation_change_ingress() -> Weight {
+    Weight::from_parts(75_000_000, 24_000)
+  }
+
+  fn observation_fanout_base() -> Weight {
+    Weight::from_parts(15_000_000, 4_000)
+  }
+
+  fn observation_fanout_page() -> Weight {
+    Weight::from_parts(8_000_000_000, 750_000)
+  }
+
+  fn close_actor() -> Weight {
+    Weight::from_parts(84_719_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(8))
+      .saturating_add(T::DbWeight::get().writes(8))
+  }
+
+  fn fee_collection() -> Weight {
+    Weight::from_parts(112_097_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(6))
+      .saturating_add(T::DbWeight::get().writes(1))
+  }
+
+  fn condition_set_evaluation(conditions: u32) -> Weight {
+    if conditions == 0 {
+      return Weight::zero();
+    }
+    let bounded = u64::from(conditions.min(4));
+    Weight::from_parts(8_660_000, 3_675)
+      .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
+      .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(2u64.saturating_mul(bounded))))
+  }
+
+  fn cycle_orchestration() -> Weight {
+    Weight::from_parts(44_699_000, 9667).saturating_add(T::DbWeight::get().reads_writes(3, 2))
+  }
+
+  fn step_orchestration(steps: u32) -> Weight {
+    Weight::from_parts(44_555_323, 9667)
+      .saturating_add(Weight::from_parts(215_321, 0).saturating_mul(steps.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(3, 2))
+  }
+
+  fn task_transfer() -> Weight {
+    Weight::from_parts(159_800_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(12))
+      .saturating_add(T::DbWeight::get().writes(8))
+  }
+
+  fn task_burn() -> Weight {
+    Weight::from_parts(23_397_000, 3_593)
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn task_mint() -> Weight {
+    Weight::from_parts(105_812_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(10))
+      .saturating_add(T::DbWeight::get().writes(6))
+  }
+
+  fn task_stop_cycle() -> Weight {
+    Weight::from_parts(5_238_000, 0)
+  }
+
+  fn task_split_transfer(legs: u32) -> Weight {
+    let bounded = u64::from(legs.min(T::MaxSplitTransferLegs::get()));
+    Weight::from_parts(50_000_000, 4_000)
+      .saturating_add(Weight::from_parts(1_500_000_000, 800_000).saturating_mul(bounded))
+      .saturating_add(T::DbWeight::get().reads_writes(
+        bounded.saturating_mul(20),
+        bounded.saturating_mul(18),
+      ))
+  }
+
+  fn xcm_asset_deposit() -> Weight {
+    Weight::from_parts(1_600_000_000, 850_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 18))
+  }
+
+  fn task_add_liquidity() -> Weight {
+    Weight::from_parts(300_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_donate_liquidity() -> Weight {
+    Weight::from_parts(600_000_000, 48_000)
+      .saturating_add(T::DbWeight::get().reads_writes(40, 24))
+  }
+
+  fn task_remove_liquidity() -> Weight {
+    Weight::from_parts(178_587_000, 8_817)
+      .saturating_add(T::DbWeight::get().reads(8))
+      .saturating_add(T::DbWeight::get().writes(6))
+  }
+
+  fn task_stake() -> Weight {
+    Weight::from_parts(200_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_unstake() -> Weight {
+    Weight::from_parts(200_000_000, 24_000)
+      .saturating_add(T::DbWeight::get().reads_writes(20, 12))
+  }
+
+  fn task_dex_exact_in() -> Weight {
+    Weight::from_parts(280_000_000, 13_000)
+      .saturating_add(T::DbWeight::get().reads_writes(13, 10))
+  }
+
+  fn task_dex_exact_out() -> Weight {
+    Weight::from_parts(1_500_000_000, 64_000)
+      .saturating_add(T::DbWeight::get().reads_writes(64, 12))
+  }
+
+  fn scheduler_on_idle_base() -> Weight {
+    Weight::from_parts(25_000_000, 2_500)
+      .saturating_add(T::DbWeight::get().reads(7))
+      .saturating_add(T::DbWeight::get().writes(1))
+  }
+
+  fn scheduler_paged_append_existing_page() -> Weight {
+    Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 3))
+  }
+
+  fn scheduler_paged_append_new_page() -> Weight {
+    Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 3))
+  }
+
+  fn scheduler_wakeup_append_existing_page() -> Weight {
+    Weight::from_parts(100_000_000, 32_000).saturating_add(T::DbWeight::get().reads_writes(3, 3))
+  }
+
+  fn scheduler_wakeup_append_new_page() -> Weight {
+    Weight::from_parts(120_000_000, 48_000).saturating_add(T::DbWeight::get().reads_writes(4, 4))
+  }
+
+  fn scheduler_wakeup_replace_exact() -> Weight {
+    Weight::from_parts(160_000_000, 64_000).saturating_add(T::DbWeight::get().reads_writes(5, 6))
+  }
+
+  fn scheduler_wakeup_invalidate_middle_page() -> Weight {
+    Weight::from_parts(140_000_000, 64_000).saturating_add(T::DbWeight::get().reads_writes(5, 5))
+  }
+
+  fn scheduler_wakeup_drain_partial_page() -> Weight {
+    Weight::from_parts(1_000_000_000, 200_000).saturating_add(T::DbWeight::get().reads_writes(18, 18))
+  }
+
+  fn scheduler_wakeup_drain_full_page() -> Weight {
+    Weight::from_parts(2_000_000_000, 400_000).saturating_add(T::DbWeight::get().reads_writes(34, 34))
+  }
+
+  fn scheduler_wakeup_drain_dense_boundary() -> Weight {
+    Weight::from_parts(2_200_000_000, 450_000).saturating_add(T::DbWeight::get().reads_writes(36, 37))
+  }
+
+  fn scheduler_wakeup_drain_stale_page() -> Weight {
+    Weight::from_parts(1_500_000_000, 400_000).saturating_add(T::DbWeight::get().reads_writes(34, 2))
+  }
+
+  fn scheduler_wakeup_cursor_insert() -> Weight {
+    Weight::from_parts(2_000_000_000, 500_000).saturating_add(T::DbWeight::get().reads_writes(100, 100))
+  }
+
+  fn scheduler_wakeup_cursor_pop_min() -> Weight {
+    Weight::from_parts(2_000_000_000, 500_000).saturating_add(T::DbWeight::get().reads_writes(100, 100))
+  }
+
+  fn scheduler_wakeup_cursor_remove_exact() -> Weight {
+    Weight::from_parts(2_000_000_000, 500_000).saturating_add(T::DbWeight::get().reads_writes(100, 100))
+  }
+
+  fn scheduler_wakeup_cursor_worker_partial() -> Weight {
+    Weight::from_parts(3_000_000_000, 750_000).saturating_add(T::DbWeight::get().reads_writes(150, 150))
+  }
+
+  fn scheduler_wakeup_cursor_worker_remove() -> Weight {
+    Weight::from_parts(3_000_000_000, 750_000).saturating_add(T::DbWeight::get().reads_writes(150, 150))
+  }
+
+  fn scheduler_wakeup_cursor_worker_future() -> Weight {
+    Weight::from_parts(500_000_000, 100_000).saturating_add(T::DbWeight::get().reads(10))
+  }
+
+  fn scheduler_paged_consume_preserve_page() -> Weight {
+    Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 2))
+  }
+
+  fn scheduler_paged_consume_delete_page() -> Weight {
+    Weight::from_parts(80_000_000, 16_000).saturating_add(T::DbWeight::get().reads_writes(4, 4))
+  }
+
+  fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(Weight::from_parts(20_000_000, 3_000).saturating_mul(entries.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(
+        3u64.saturating_add(u64::from(entries)),
+        2u64.saturating_add(u64::from(entries)),
+      ))
+  }
+
+  fn scheduler_paged_mixed_scan(entries: u32) -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(Weight::from_parts(40_000_000, 4_000).saturating_mul(entries.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(
+        4u64.saturating_add(u64::from(entries).saturating_mul(4)),
+        2u64.saturating_add(u64::from(entries).saturating_mul(2)),
+      ))
+  }
+
+  fn scheduler_paged_execute_cheap(executions: u32) -> Weight {
+    Weight::from_parts(50_000_000, 8_000)
+      .saturating_add(Weight::from_parts(100_000_000, 8_000).saturating_mul(executions.into()))
+  }
+
+  fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight {
+    Weight::from_parts(75_000_000, 16_000)
+      .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
+  }
+
+  fn scheduler_actor_hot_probe() -> Weight {
+    Weight::from_parts(10_756_000, 3_665)
+      .saturating_add(T::DbWeight::get().reads(1))
+  }
+
+  fn scheduler_actor_program_probe() -> Weight {
+    Weight::from_parts(18_648_000, 9_928)
+      .saturating_add(T::DbWeight::get().reads(2))
+  }
+
+  fn transaction_extension_ingress_base() -> Weight {
+    Weight::from_parts(15_226_000, 6_052).saturating_add(T::DbWeight::get().reads(2))
+  }
+
+  fn transaction_extension_ingress_notify() -> Weight {
+    Weight::from_parts(88_280_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(9))
+      .saturating_add(T::DbWeight::get().writes(6))
+  }
+
+  fn funding_snapshot_open(assets: u32) -> Weight {
+    Weight::from_parts(15_653_872, 4_265)
+      .saturating_add(Weight::from_parts(146_253, 0).saturating_mul(assets.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+
+  fn continuation_suspend(snapshot_entries: u32) -> Weight {
+    Weight::from_parts(27_920_348, 4_178)
+      .saturating_add(Weight::from_parts(37_426, 0).saturating_mul(snapshot_entries.into()))
+      .saturating_add(T::DbWeight::get().reads_writes(2, 2))
+  }
+  fn continuation_retry() -> Weight {
+    Weight::from_parts(22_070_000, 4_266).saturating_add(T::DbWeight::get().reads_writes(1, 1))
+  }
+  fn continuation_complete() -> Weight {
+    Weight::from_parts(18_019_000, 4_030).saturating_add(T::DbWeight::get().reads_writes(1, 2))
+  }
+  fn continuation_cancel() -> Weight {
+    Weight::from_parts(56_782_000, 8_120).saturating_add(T::DbWeight::get().reads_writes(6, 4))
+  }
+  fn continuation_suffix_admission(steps: u32) -> Weight {
+    Weight::from_parts(1_438_574, 0)
+      .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
+  }
+
+  fn update_funding_source_policy() -> Weight {
+    Weight::from_parts(93_239_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(7))
+      .saturating_add(T::DbWeight::get().writes(7))
+  }
+
+  fn update_schedule() -> Weight {
+    Weight::from_parts(84_020_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(6))
+      .saturating_add(T::DbWeight::get().writes(7))
+  }
+
+  fn update_execution_plan() -> Weight {
+    Weight::from_parts(97_290_000, 8_120)
+      .saturating_add(T::DbWeight::get().reads(7))
+      .saturating_add(T::DbWeight::get().writes(8))
+  }
+
+  fn set_global_circuit_breaker() -> Weight {
+    Weight::from_parts(8_000_000, 600)
+      .saturating_add(T::DbWeight::get().writes(1))
+  }
+
+  fn set_active_actor_limit() -> Weight {
+    Weight::from_parts(10_000_000, 800)
+      .saturating_add(T::DbWeight::get().reads(1))
+      .saturating_add(T::DbWeight::get().writes(1))
+  }
+
+  fn permissionless_sweep() -> Weight {
+    Weight::from_parts(18_000_000, 1200)
+      .saturating_add(T::DbWeight::get().reads(2))
+      .saturating_add(T::DbWeight::get().writes(1))
+  }
+
+  fn permissionless_sweep_many(batch: u32) -> Weight {
+    let bounded = u64::from(batch.min(T::MaxSweepBatch::get()));
+    Weight::from_parts(
+      12_000_000u64.saturating_add(18_000_000u64.saturating_mul(bounded)),
+      1200u64.saturating_add(384u64.saturating_mul(bounded)),
+    )
+    .saturating_add(T::DbWeight::get().reads(1u64.saturating_add(bounded)))
+    .saturating_add(T::DbWeight::get().writes(bounded.saturating_mul(5)))
+  }
+}
+
+#[cfg(any(test, feature = "runtime-benchmarks"))]
+pub struct TestWeightInfo;
+
+#[cfg(any(test, feature = "runtime-benchmarks"))]
+impl WeightInfo for TestWeightInfo {
+  fn create_user_actor() -> Weight { Weight::from_parts(25_000_000, 2000) }
+  fn create_user_actor_at_slot() -> Weight { Self::create_user_actor() }
+  fn create_system_actor() -> Weight { Weight::from_parts(25_000_000, 2000) }
+  fn create_system_actor_at_sovereign_id() -> Weight { Weight::from_parts(100_642_000, 174_945) }
+  fn create_dormant_system_actor() -> Weight { Self::create_system_actor() }
+  fn activate_actor() -> Weight { Self::create_system_actor() }
+  fn deactivate_actor() -> Weight { Weight::from_parts(60_623_000, 8_120) }
+  fn pause_actor() -> Weight { Weight::from_parts(15_000_000, 1200) }
+  fn resume_actor() -> Weight { Weight::from_parts(15_000_000, 1200) }
+  fn manual_trigger() -> Weight { Weight::from_parts(12_000_000, 1200) }
+  fn observation_change_ingress() -> Weight { Weight::from_parts(75_000_000, 24_000) }
+  fn observation_fanout_base() -> Weight { Weight::from_parts(15_000_000, 4_000) }
+  fn observation_fanout_page() -> Weight { Weight::from_parts(8_000_000_000, 750_000) }
+  fn close_actor() -> Weight { Weight::from_parts(84_719_000, 8_120) }
+  fn fee_collection() -> Weight { Weight::from_parts(112_097_000, 8_120) }
+  fn condition_set_evaluation(conditions: u32) -> Weight {
+    if conditions == 0 {
+      return Weight::zero();
+    }
+    let bounded = u64::from(conditions.min(4));
+    Weight::from_parts(8_660_000, 3_675)
+      .saturating_add(Weight::from_parts(9_778_566, 2_561).saturating_mul(bounded))
+
+  }
+  fn cycle_orchestration() -> Weight { Weight::from_parts(44_699_000, 9667) }
+  fn step_orchestration(steps: u32) -> Weight {
+    Weight::from_parts(44_555_323, 9667)
+      .saturating_add(Weight::from_parts(215_321, 0).saturating_mul(steps.into()))
+  }
+  fn task_transfer() -> Weight { Weight::from_parts(159_800_000, 8_120) }
+  fn task_burn() -> Weight { Weight::from_parts(23_397_000, 3_593) }
+  fn task_mint() -> Weight { Weight::from_parts(105_812_000, 8_120) }
+  fn task_stop_cycle() -> Weight { Weight::from_parts(5_238_000, 0) }
+  fn task_split_transfer(legs: u32) -> Weight {
+    Weight::from_parts(50_000_000, 4_000)
+      .saturating_add(Weight::from_parts(1_500_000_000, 800_000).saturating_mul(legs.min(8).into()))
+  }
+  fn xcm_asset_deposit() -> Weight { Weight::from_parts(1_600_000_000, 850_000) }
+  fn task_add_liquidity() -> Weight { Weight::from_parts(300_000_000, 24_000) }
+  fn task_donate_liquidity() -> Weight { Weight::from_parts(600_000_000, 48_000) }
+  fn task_remove_liquidity() -> Weight { Weight::from_parts(178_587_000, 8_817) }
+  fn task_stake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
+  fn task_unstake() -> Weight { Weight::from_parts(200_000_000, 24_000) }
+  fn task_dex_exact_in() -> Weight { Weight::from_parts(280_000_000, 13_000) }
+  fn task_dex_exact_out() -> Weight { Weight::from_parts(1_500_000_000, 64_000) }
+  fn scheduler_on_idle_base() -> Weight { Weight::from_parts(25_000_000, 2_500) }
+  fn scheduler_paged_append_existing_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
+  fn scheduler_paged_append_new_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
+  fn scheduler_wakeup_append_existing_page() -> Weight { Weight::from_parts(100_000_000, 32_000) }
+  fn scheduler_wakeup_append_new_page() -> Weight { Weight::from_parts(120_000_000, 48_000) }
+  fn scheduler_wakeup_replace_exact() -> Weight { Weight::from_parts(160_000_000, 64_000) }
+  fn scheduler_wakeup_invalidate_middle_page() -> Weight { Weight::from_parts(140_000_000, 64_000) }
+  fn scheduler_wakeup_drain_partial_page() -> Weight { Weight::from_parts(1_000_000_000, 200_000) }
+  fn scheduler_wakeup_drain_full_page() -> Weight { Weight::from_parts(2_000_000_000, 400_000) }
+  fn scheduler_wakeup_drain_dense_boundary() -> Weight { Weight::from_parts(2_200_000_000, 450_000) }
+  fn scheduler_wakeup_drain_stale_page() -> Weight { Weight::from_parts(1_500_000_000, 400_000) }
+  fn scheduler_wakeup_cursor_insert() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
+  fn scheduler_wakeup_cursor_pop_min() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
+  fn scheduler_wakeup_cursor_remove_exact() -> Weight { Weight::from_parts(2_000_000_000, 500_000) }
+  fn scheduler_wakeup_cursor_worker_partial() -> Weight { Weight::from_parts(3_000_000_000, 750_000) }
+  fn scheduler_wakeup_cursor_worker_remove() -> Weight { Weight::from_parts(3_000_000_000, 750_000) }
+  fn scheduler_wakeup_cursor_worker_future() -> Weight { Weight::from_parts(500_000_000, 100_000) }
+  fn scheduler_paged_consume_preserve_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
+  fn scheduler_paged_consume_delete_page() -> Weight { Weight::from_parts(80_000_000, 16_000) }
+  fn scheduler_paged_tombstone_drain(entries: u32) -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(Weight::from_parts(20_000_000, 3_000).saturating_mul(entries.into()))
+  }
+  fn scheduler_paged_mixed_scan(entries: u32) -> Weight {
+    Weight::from_parts(20_000_000, 4_000)
+      .saturating_add(Weight::from_parts(40_000_000, 4_000).saturating_mul(entries.into()))
+  }
+  fn scheduler_paged_execute_cheap(executions: u32) -> Weight {
+    Weight::from_parts(50_000_000, 8_000)
+      .saturating_add(Weight::from_parts(100_000_000, 8_000).saturating_mul(executions.into()))
+  }
+  fn scheduler_paged_execute_cheap_mixed(executions: u32) -> Weight {
+    Weight::from_parts(75_000_000, 16_000)
+      .saturating_add(Weight::from_parts(125_000_000, 16_000).saturating_mul(executions.into()))
+  }
+  fn scheduler_actor_hot_probe() -> Weight { Weight::from_parts(10_756_000, 3_665) }
+  fn scheduler_actor_program_probe() -> Weight { Weight::from_parts(18_648_000, 9_928) }
+  fn transaction_extension_ingress_base() -> Weight { Weight::from_parts(15_226_000, 6_052) }
+  fn transaction_extension_ingress_notify() -> Weight { Weight::from_parts(88_280_000, 8_120) }
+  fn funding_snapshot_open(assets: u32) -> Weight {
+    Weight::from_parts(15_653_872, 4_265)
+      .saturating_add(Weight::from_parts(146_253, 0).saturating_mul(assets.into()))
+  }
+  fn continuation_suspend(snapshot_entries: u32) -> Weight {
+    Weight::from_parts(27_920_348, 4_178)
+      .saturating_add(Weight::from_parts(37_426, 0).saturating_mul(snapshot_entries.into()))
+  }
+  fn continuation_retry() -> Weight { Weight::from_parts(22_070_000, 4_266) }
+  fn continuation_complete() -> Weight { Weight::from_parts(18_019_000, 4_030) }
+  fn continuation_cancel() -> Weight { Weight::from_parts(56_782_000, 8_120) }
+  fn continuation_suffix_admission(steps: u32) -> Weight {
+    Weight::from_parts(1_438_574, 0)
+      .saturating_add(Weight::from_parts(432, 0).saturating_mul(steps.into()))
+  }
+  fn update_funding_source_policy() -> Weight { Weight::from_parts(93_239_000, 8_120) }
+  fn update_schedule() -> Weight { Weight::from_parts(84_020_000, 8_120) }
+  fn update_execution_plan() -> Weight { Weight::from_parts(97_290_000, 8_120) }
+  fn set_global_circuit_breaker() -> Weight { Weight::from_parts(8_000_000, 600) }
+  fn set_active_actor_limit() -> Weight { Weight::from_parts(10_000_000, 800) }
+  fn permissionless_sweep() -> Weight { Weight::from_parts(18_000_000, 1200) }
+  fn permissionless_sweep_many(batch: u32) -> Weight {
+    let bounded = u64::from(batch.min(3));
+    Weight::from_parts(
+      12_000_000u64.saturating_add(18_000_000u64.saturating_mul(bounded)),
+      1200u64.saturating_add(384u64.saturating_mul(bounded)),
+    )
+  }
+}
+

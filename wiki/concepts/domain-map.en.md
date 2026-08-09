@@ -23,7 +23,7 @@ tags:
 related:
   - DEOS Framework Overview
   - TMCTOL Standard
-  - AAA System
+  - Actors System
   - Governance
   - $BLDR Builder Economy
   - Reference Client
@@ -55,9 +55,9 @@ Read [TMCTOL Standard](tmctol-standard.en.md), [Token Surfaces](token-surfaces.e
 
 ### Autonomous actors
 
-The actor domain explains how protocol-owned accounts run bounded tasks. System AAA actors burn, route, provide liquidity, split flows, hold buckets, and execute treasury policies without making the protocol depend on bespoke manager pallets.
+The actor domain explains how protocol-owned accounts run bounded tasks. System Actors burn, route, provide liquidity, split flows, hold buckets, and execute treasury policies without making the protocol depend on bespoke manager pallets.
 
-Read [AAA System](../overview/aaa-system.en.md), [AA-Actor](../overview/aa-actor.en.md), and [Token-Driven Automation](token-driven-automation.en.md).
+Read [Actors System](../overview/actor-system.en.md), [AA-Actor](../overview/actor.en.md), and [Token-Driven Automation](token-driven-automation.en.md).
 
 ### Routing and asset identity
 
@@ -122,7 +122,7 @@ A useful traversal is:
 - [End-to-End Flows](end-to-end-flows.en.md)
 - [DEOS Framework Overview](../overview/deos-framework.en.md)
 - [TMCTOL Standard](tmctol-standard.en.md)
-- [AAA System](../overview/aaa-system.en.md)
+- [Actors System](../overview/actor-system.en.md)
 - [Governance](../overview/governance.en.md)
 - [$BLDR Builder Economy](builder-economy.en.md)
 - [Reference Client](../overview/reference-client.en.md)

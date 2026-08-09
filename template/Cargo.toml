@@ -7,7 +7,7 @@ edition = "2024"
 
 [workspace]
 default-members = ["pallets/router", "runtime"]
-members = ["pallets/aaa", "pallets/aaa/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
+members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
 resolver = "2"
 
 [workspace.lints.rust]
@@ -53,7 +53,7 @@ zero-prefixed-literal = { level = "allow", priority = 2 }
 [workspace.dependencies]
 deos-runtime = { path = "./runtime", default-features = false }
 primitives = { package = "deos-primitives", path = "./primitives", default-features = false }
-pallet-aaa = { package = "pallet-deos-aaa", path = "./pallets/aaa", default-features = false }
+pallet-deos-actors = { package = "pallet-deos-actors", path = "./pallets/actors", default-features = false }
 pallet-asset-registry = { package = "pallet-deos-asset-registry", path = "./pallets/asset-registry", default-features = false }
 pallet-axial-router = { package = "pallet-deos-router", path = "./pallets/router", default-features = false }
 pallet-governance = { package = "pallet-deos-governance", path = "./pallets/governance", default-features = false }

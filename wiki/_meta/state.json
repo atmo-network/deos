@@ -49,44 +49,44 @@
         ]
       }
     },
-    "aaa-system": {
+    "actor-system": {
       "path": {
-        "en": "overview/aaa-system.en.md",
-        "ru": "overview/aaa-system.ru.md"
+        "en": "overview/actor-system.en.md",
+        "ru": "overview/actor-system.ru.md"
       },
       "page_type": "overview",
       "title": {
-        "en": "AAA System",
-        "ru": "Система AAA"
+        "en": "Actors System",
+        "ru": "Система Actors"
       },
       "status": "active",
       "audience": "newcomer",
       "confidence": 0.95,
       "sources": {
         "en": [
-          "../template/pallets/aaa/docs/specification.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
-          "../docs/aaa.integration.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
+          "../docs/actors.integration.en.md",
           "../docs/oracle.integration.en.md",
-          "../docs/aaa-control-plane.contract.en.md",
-          "../template/pallets/aaa/docs/embedding.md",
+          "../docs/actors-control-plane.contract.en.md",
+          "../template/pallets/actors/docs/embedding.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../template/pallets/aaa/docs/specification.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
-          "../docs/aaa.integration.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
+          "../docs/actors.integration.en.md",
           "../docs/oracle.integration.en.md",
-          "../docs/aaa-control-plane.contract.en.md",
-          "../template/pallets/aaa/docs/embedding.md",
+          "../docs/actors-control-plane.contract.en.md",
+          "../template/pallets/actors/docs/embedding.md",
           "../docs/core.architecture.en.md"
         ]
       }
     },
-    "aa-actor": {
+    "actor": {
       "path": {
-        "en": "overview/aa-actor.en.md",
-        "ru": "overview/aa-actor.ru.md"
+        "en": "overview/actor.en.md",
+        "ru": "overview/actor.ru.md"
       },
       "page_type": "overview",
       "title": {
@@ -98,15 +98,15 @@
       "confidence": 0.9,
       "sources": {
         "en": [
-          "../template/pallets/aaa/docs/specification.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
-          "../docs/aaa.integration.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
+          "../docs/actors.integration.en.md",
           "../docs/core.architecture.en.md"
         ],
         "ru": [
-          "../template/pallets/aaa/docs/specification.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
-          "../docs/aaa.integration.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
+          "../docs/actors.integration.en.md",
           "../docs/core.architecture.en.md"
         ]
       }
@@ -431,15 +431,15 @@
       "sources": {
         "en": [
           "../docs/core.architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
-          "../docs/aaa.integration.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
+          "../docs/actors.integration.en.md",
           "../docs/oracle.integration.en.md",
           "../README.md"
         ],
         "ru": [
           "../docs/core.architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
-          "../docs/aaa.integration.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
+          "../docs/actors.integration.en.md",
           "../docs/oracle.integration.en.md",
           "../README.md"
         ]
@@ -659,7 +659,7 @@
           "../README.md",
           "../docs/README.md",
           "../docs/manifesto.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/staking/docs/specification.en.md",
           "../docs/read-model.contract.en.md",
@@ -670,7 +670,7 @@
           "../README.md",
           "../docs/README.md",
           "../docs/manifesto.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/staking/docs/specification.en.md",
           "../docs/read-model.contract.en.md",
@@ -728,7 +728,7 @@
           "../CHANGELOG.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
@@ -742,7 +742,7 @@
           "../CHANGELOG.md",
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../docs/read-model.contract.en.md",
@@ -767,13 +767,13 @@
       "sources": {
         "en": [
           "../template/pallets/router/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md",
           "../template/pallets/staking/docs/architecture.en.md"
         ],
         "ru": [
           "../template/pallets/router/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
           "../docs/tmctol.specification.en.md",
           "../template/pallets/staking/docs/architecture.en.md"
         ]
@@ -795,14 +795,14 @@
       "sources": {
         "en": [
           "../docs/core.architecture.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
           "../template/pallets/router/docs/architecture.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../template/pallets/staking/docs/architecture.en.md"
         ],
         "ru": [
           "../docs/core.architecture.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
           "../template/pallets/router/docs/architecture.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
           "../template/pallets/staking/docs/architecture.en.md"
@@ -857,7 +857,7 @@
           "../docs/framework-instance.contract.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/tmc/docs/architecture.en.md"
         ],
@@ -867,7 +867,7 @@
           "../docs/framework-instance.contract.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../template/pallets/governance/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/tmc/docs/architecture.en.md"
         ]
@@ -917,7 +917,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
-          "../template/pallets/aaa/docs/embedding.md",
+          "../template/pallets/actors/docs/embedding.md",
           "../template/README.md",
           "../web-client/README.md"
         ],
@@ -925,7 +925,7 @@
           "../AGENTS.md",
           "../README.md",
           "../docs/README.md",
-          "../template/pallets/aaa/docs/embedding.md",
+          "../template/pallets/actors/docs/embedding.md",
           "../template/README.md",
           "../web-client/README.md"
         ]
@@ -1005,14 +1005,14 @@
       "sources": {
         "en": [
           "../docs/tmctol.specification.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../AGENTS.md"
         ],
         "ru": [
           "../docs/tmctol.specification.en.md",
-          "../template/pallets/aaa/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/architecture.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../AGENTS.md"
         ]
       }
@@ -1036,7 +1036,7 @@
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/router/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../web-client/docs/architecture.en.md"
         ],
@@ -1045,7 +1045,7 @@
           "../docs/tmctol.specification.en.md",
           "../docs/core.architecture.en.md",
           "../template/pallets/router/docs/architecture.en.md",
-          "../template/pallets/aaa/docs/specification.en.md",
+          "../template/pallets/actors/docs/specification.en.md",
           "../template/pallets/governance/docs/specification.en.md",
           "../web-client/docs/architecture.en.md"
         ]

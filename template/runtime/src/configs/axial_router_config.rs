@@ -42,14 +42,14 @@ parameter_types! {
   pub const AxialRouterMaxPriceDeviation: Perbill = ecosystem::params::MAX_PRICE_DEVIATION;
 }
 
-/// The sovereign account of the Burning Manager System AAA (aaa_id=0).
-/// Address is deterministic from `(AaaPalletId, b"system", 0)` — see `ecosystem::aaa_ids`.
+/// The sovereign account of the Burning Manager System Actors (actor_id=0).
+/// Address is deterministic from `(ActorsPalletId, b"system", 0)` — see `ecosystem::actor_ids`.
 pub struct BurningManagerAccount;
 
 impl polkadot_sdk::frame_support::traits::Get<AccountId> for BurningManagerAccount {
   fn get() -> AccountId {
-    pallet_aaa::Pallet::<crate::Runtime>::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::BURNING_MANAGER_AAA_ID,
+    pallet_deos_actors::Pallet::<crate::Runtime>::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID,
     )
   }
 }
@@ -58,8 +58,8 @@ pub struct LiquidityActorAccount;
 
 impl polkadot_sdk::frame_support::traits::Get<AccountId> for LiquidityActorAccount {
   fn get() -> AccountId {
-    pallet_aaa::Pallet::<crate::Runtime>::sovereign_account_id_system(
-      primitives::ecosystem::aaa_ids::LIQUIDITY_ACTOR_AAA_ID,
+    pallet_deos_actors::Pallet::<crate::Runtime>::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
     )
   }
 }
@@ -153,35 +153,37 @@ impl AssetConversionAdapter {
     amount1: Balance,
     amount2: Balance,
     max_ratio_error: Perbill,
-  ) -> Result<(), pallet_aaa::TaskFailure> {
+  ) -> Result<(), pallet_deos_actors::TaskFailure> {
     if amount1.is_zero() || amount2.is_zero() || asset1 == asset2 {
-      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-        "InvalidDonation",
-      )));
+      return Err(pallet_deos_actors::TaskFailure::permanent(
+        DispatchError::Other("InvalidDonation"),
+      ));
     }
     let pool_account =
       <Runtime as pallet_asset_conversion::Config>::PoolLocator::pool_address(&asset1, &asset2)
         .map_err(|_| {
-          pallet_aaa::TaskFailure::temporary(DispatchError::Other("DonationPoolUnavailable"))
+          pallet_deos_actors::TaskFailure::temporary(DispatchError::Other(
+            "DonationPoolUnavailable",
+          ))
         })?;
     let reserve1 = Self::asset_balance(asset1, &pool_account);
     let reserve2 = Self::asset_balance(asset2, &pool_account);
     if reserve1.is_zero() || reserve2.is_zero() {
-      return Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
-        "DonationPoolEmpty",
-      )));
+      return Err(pallet_deos_actors::TaskFailure::temporary(
+        DispatchError::Other("DonationPoolEmpty"),
+      ));
     }
     Self::ensure_ratio_within_tolerance(amount1, amount2, reserve1, reserve2, max_ratio_error)
-      .map_err(pallet_aaa::TaskFailure::temporary)?;
+      .map_err(pallet_deos_actors::TaskFailure::temporary)?;
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(error) = Self::transfer_asset(asset1, donor, &pool_account, amount1) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          pallet_aaa::TaskFailure::permanent(error),
+          pallet_deos_actors::TaskFailure::permanent(error),
         ));
       }
       if let Err(error) = Self::transfer_asset(asset2, donor, &pool_account, amount2) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          pallet_aaa::TaskFailure::permanent(error),
+          pallet_deos_actors::TaskFailure::permanent(error),
         ));
       }
       polkadot_sdk::frame_support::storage::TransactionOutcome::Commit(Ok(()))
@@ -290,15 +292,15 @@ impl AssetConversionAdapter {
     total_native: Balance,
     max_staked_debit: Balance,
     max_ratio_error: Perbill,
-  ) -> Result<(Balance, Balance), pallet_aaa::TaskFailure> {
+  ) -> Result<(Balance, Balance), pallet_deos_actors::TaskFailure> {
     if total_native.is_zero() {
-      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-        "InvalidDonation",
-      )));
+      return Err(pallet_deos_actors::TaskFailure::permanent(
+        DispatchError::Other("InvalidDonation"),
+      ));
     }
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id).ok_or_else(|| {
-      pallet_aaa::TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable"))
+      pallet_deos_actors::TaskFailure::permanent(DispatchError::Other("StakedAssetUnavailable"))
     })?;
     let base_asset = AssetKind::Local(native_asset_id);
     let staked_asset = AssetKind::Local(staked_asset_id);
@@ -307,21 +309,23 @@ impl AssetConversionAdapter {
       &staked_asset,
     )
     .map_err(|_| {
-      pallet_aaa::TaskFailure::temporary(DispatchError::Other("DonationPoolUnavailable"))
+      pallet_deos_actors::TaskFailure::temporary(DispatchError::Other("DonationPoolUnavailable"))
     })?;
     let reserve_native = Self::asset_balance(base_asset, &pool_account);
     let reserve_staked = Self::asset_balance(staked_asset, &pool_account);
     let staking_pool = pallet_staking::Pools::<Runtime>::get(native_asset_id).ok_or_else(|| {
-      pallet_aaa::TaskFailure::temporary(DispatchError::Other("NativeStakingPoolUnavailable"))
+      pallet_deos_actors::TaskFailure::temporary(DispatchError::Other(
+        "NativeStakingPoolUnavailable",
+      ))
     })?;
     if reserve_native.is_zero()
       || reserve_staked.is_zero()
       || staking_pool.accounted_balance.is_zero()
       || staking_pool.total_shares.is_zero()
     {
-      return Err(pallet_aaa::TaskFailure::temporary(DispatchError::Other(
-        "DonationPoolEmpty",
-      )));
+      return Err(pallet_deos_actors::TaskFailure::temporary(
+        DispatchError::Other("DonationPoolEmpty"),
+      ));
     }
     let stake_amount = Self::native_stake_amount_for_balanced_donation(
       total_native,
@@ -330,14 +334,14 @@ impl AssetConversionAdapter {
       staking_pool.accounted_balance,
       staking_pool.total_shares,
     )
-    .map_err(pallet_aaa::TaskFailure::permanent)?;
+    .map_err(pallet_deos_actors::TaskFailure::permanent)?;
     let native_donation = total_native.checked_sub(stake_amount).ok_or_else(|| {
-      pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationAmountOverflow"))
+      pallet_deos_actors::TaskFailure::permanent(DispatchError::Other("DonationAmountOverflow"))
     })?;
     if stake_amount.is_zero() || native_donation.is_zero() {
-      return Err(pallet_aaa::TaskFailure::permanent(DispatchError::Other(
-        "DonationAmountTooSmall",
-      )));
+      return Err(pallet_deos_actors::TaskFailure::permanent(
+        DispatchError::Other("DonationAmountTooSmall"),
+      ));
     }
     let staked_before = Self::asset_balance(staked_asset, donor);
     polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -345,14 +349,16 @@ impl AssetConversionAdapter {
         crate::Staking::stake_native(RuntimeOrigin::signed(donor.clone()), stake_amount)
       {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          pallet_aaa::TaskFailure::permanent(error),
+          pallet_deos_actors::TaskFailure::permanent(error),
         ));
       }
       let staked_after = Self::asset_balance(staked_asset, donor);
       let staked_donation = staked_after.saturating_sub(staked_before);
       if staked_donation.is_zero() {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationAmountTooSmall")),
+          pallet_deos_actors::TaskFailure::permanent(DispatchError::Other(
+            "DonationAmountTooSmall",
+          )),
         ));
       }
       // The asset-B cap bounds the debit against the actor's pre-existing staked balance: the
@@ -363,7 +369,9 @@ impl AssetConversionAdapter {
       let staked_after_donation = staked_after.saturating_sub(staked_donation);
       if staked_after_donation < staked_before.saturating_sub(max_staked_debit) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          pallet_aaa::TaskFailure::permanent(DispatchError::Other("DonationExceedsAssetBCap")),
+          pallet_deos_actors::TaskFailure::permanent(DispatchError::Other(
+            "DonationExceedsAssetBCap",
+          )),
         ));
       }
       if let Err(error) = Self::donate_balanced_liquidity_classified(

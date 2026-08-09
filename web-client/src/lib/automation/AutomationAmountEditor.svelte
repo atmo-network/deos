@@ -5,11 +5,11 @@ Excludes: Balance queries, fee reserve policy, amount forecasting, and runtime l
 Zone: Automation presentation helper; binds one authoring amount through UI Kit fields.
 -->
 <script lang="ts">
-  import type { AaaAuthoringAmount } from '$lib/automation/authoring';
+  import type { ActorAuthoringAmount } from '$lib/automation/authoring';
   import { NumberInput, SelectField, TextField } from '$lib/ui';
 
   type Props = {
-    amount: AaaAuthoringAmount;
+    amount: ActorAuthoringAmount;
     label?: string;
     compact?: boolean;
   };
@@ -22,7 +22,7 @@ Zone: Automation presentation helper; binds one authoring amount through UI Kit 
 
   function selectAmountType(event: Event) {
     const type = (event.currentTarget as HTMLSelectElement)
-      .value as AaaAuthoringAmount['type'];
+      .value as ActorAuthoringAmount['type'];
     amount =
       type === 'Fixed'
         ? { type, value: '0' }

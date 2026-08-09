@@ -46,7 +46,7 @@
 - `Skill Ownership`: Repo-local skills own specialized workflows and audits; do not duplicate their internal procedures here.
 - `README Ownership`: Root and subtree READMEs own human orientation, setup, navigation, and current workspace purpose.
 - `Read-Model Ownership`: `docs/read-model.contract.en.md` owns chain/materialized data classification; `web-client/docs/architecture.en.md` owns browser realization.
-- `AAA Control-Plane Ownership`: `docs/aaa-control-plane.contract.en.md` owns off-chain plan artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized AAA history boundaries.
+- `Actors Control-Plane Ownership`: `docs/actors-control-plane.contract.en.md` owns off-chain plan artifacts, typed projection/diff, forecast/simulation provenance, governance composition inputs, and materialized Actor history boundaries.
 - `Framework Boundary Ownership`: `docs/framework-instance.contract.en.md` owns the reusable mechanism versus downstream policy contract.
 
 ## 3. Repository Topology
@@ -69,21 +69,21 @@
 
 - `Terminology Lockstep`: Stable specs, architecture docs, runtime/API surfaces, wiki, and client copy must use one canonical term per domain atom.
 - `Framework Naming`: Use `DEOS` for the framework/runtime/reference stack and `TMCTOL` only for the concrete economic standard.
-- `Concrete Subsystem Branding`: Use `DEOS Router`, `DEOS Governance`, `DEOS Staking`, and `DEOS Oracle` when naming those concrete framework subsystems; preserve stable Rust crate, runtime pallet/module, source-file, and generated-weight identifiers unless a separate compatibility change lands. Concept, mechanism, and domain labels remain unprefixed when they own a broader semantic object, and distinctive names such as AA-Actor, AAA System, and TMC remain unprefixed.
+- `Concrete Subsystem Branding`: Use `DEOS Router`, `DEOS Governance`, `DEOS Staking`, and `DEOS Oracle` when naming those concrete framework subsystems; preserve stable Rust crate, runtime pallet/module, source-file, and generated-weight identifiers unless a separate compatibility change lands. Concept, mechanism, and domain labels remain unprefixed when they own a broader semantic object, and distinctive names such as DEOS Actors and TMC remain unprefixed.
 - `Cargo Publication Naming`: Independently publishable DEOS packages use globally conflict-resistant framework names such as `pallet-deos-*` and `deos-primitives`; never substitute `deus` or an unqualified generic package name for the DEOS framework identity. Cargo package identity may change without renaming the stable Rust library crate.
 - `Governance Naming`: Use `DEOS Governance` for the concrete subsystem and `Governance` for the broader domain overview; runtime implementation remains `pallet-governance`.
 - `Asset Notation`: Prefix concrete asset symbols with `$` in specs and architecture prose (`$NTVE`, `$VETO`, `$BLDR`); keep bare labels for vote options and non-asset semantics.
-- `AAA Abstraction`: Describe automation by System AAA role and execution-plan family rather than legacy manager/farmer names.
-- `Actor Casing`: In prose, title-case established role names such as `Burn Actor`, `Liquidity Actor`, and `System AAA Actor`; keep ordinary descriptions lowercase and code identifiers idiomatic.
+- `Actors Abstraction`: Describe automation by System Actor role and execution-plan family rather than legacy manager/farmer names.
+- `Actor Casing`: In prose, title-case established role names such as `Burn Actor`, `Liquidity Actor`, and `System Actor`; keep ordinary descriptions lowercase and code identifiers idiomatic.
 - `Legacy Names`: Keep manager names only for historical orientation or explicit compatibility aliases at public boundaries.
 - `TMC`: The unidirectional issuance engine implementing the configured minting curve.
 - `TOL`: The protocol-owned liquidity accumulator and bucketed reserve topology of the TMCTOL standard.
 - `DEOS Router`: The fee-burning execution gateway selecting the candidate with maximum recipient output across XYK, TMC, and bounded Native-anchored routes.
 - `DEOS Oracle`: The bounded current typed observation owner; runtime implementation remains `pallet-oracle`.
 - `DEOS Staking`: The reference staking subsystem; runtime implementation remains `pallet-staking`.
-- `System AAA Actors`: Runtime-owned AAA instances executing bounded protocol economic flows.
-- `Burn Actor`: The System AAA role that processes configured balances into burn flow.
-- `Liquidity Actor`: The System AAA role family that provisions liquidity for configured pools or lanes.
+- `System Actors`: Runtime-owned Actor instances executing bounded protocol economic flows.
+- `Burn Actor`: The System Actor role that processes configured balances into burn flow.
+- `Liquidity Actor`: The System Actor role family that provisions liquidity for configured pools or lanes.
 - `Omnivorous Intake`: Balance-driven ingress semantics that react to assets arriving at an actor account rather than one bespoke extrinsic.
 - `Resilience`: Retry and cooldown behavior protecting actors during oracle, liquidity, or market unavailability.
 - `Runtime-as-Config`: Generic pallets receive economic and runtime policy through traits and adapters rather than hardcoded ecosystem logic.
@@ -94,10 +94,10 @@
 - `Framework Forkability`: Changes under `/template` must preserve generic utility and avoid hardcoding downstream ecosystem identity or business policy.
 - `Reusable Pallet Packaging`: Treat a reusable pallet as an independently consumable package; keep its public host contract and separate external-consumer fixtures under the pallet ownership boundary, while concrete DEOS adapters and topology remain in the reference runtime composition.
 - `Deterministic Mechanics`: Runtime-managed economic reactions must use explicit triggers, typed payloads, bounded state, and weight-accounted execution.
-- `AAA Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `template/pallets/aaa/docs/specification.en.md` owns the full contract.
-- `AAA Authority Simplicity`: Keep consensus authority at immutable `AaaType::{User, System}` until a concrete shipped need proves two types insufficient; every System actor receives bounded service through type-derived paged FIFO lanes under one scheduler, one global ticket allocator/cutoff, one actor-local ticket, and one wakeup/Continuation/lifecycle owner, not an AAA-id whitelist, owner-authored priority, a generic policy object, or pre-extrinsic execution.
-- `AAA Market Loss Bounds`: Every market task carries its owning spend/output bound; generic AAA must not impose an asset-agnostic raw-balance System cap. Every System swap additionally obeys the typed reference-deviation guard, and temporary market rejection uses one capped retry/wakeup path rather than accepting an adverse fill.
-- `AAA Observation Reactions`: Derive duplicate-free subscriptions from admitted typed trigger sources into actor-owned reusable slot-addressed pages; DEOS Oracle change context may mark bounded dirty state only, deferred fanout may set the existing pending latch, and the existing scheduler alone executes actors.
+- `Actors Progress Preservation`: Keep `RetryLater` Mutable-only and Temporary-only, with one sparse scalar-cursor Continuation on the canonical FIFO/wakeup substrate; preserve committed prefixes without compensation, whole-plan rollback, duplicate scheduler state, or off-chain correctness dependencies. `template/pallets/actors/docs/specification.en.md` owns the full contract.
+- `Actors Authority Simplicity`: Keep consensus authority at immutable `ActorType::{User, System}` until a concrete shipped need proves two types insufficient; every System actor receives bounded service through type-derived paged FIFO lanes under one scheduler, one global ticket allocator/cutoff, one actor-local ticket, and one wakeup/Continuation/lifecycle owner, not an Actor-id whitelist, owner-authored priority, a generic policy object, or pre-extrinsic execution.
+- `Actors Market Loss Bounds`: Every market task carries its owning spend/output bound; generic Actors must not impose an asset-agnostic raw-balance System cap. Every System swap additionally obeys the typed reference-deviation guard, and temporary market rejection uses one capped retry/wakeup path rather than accepting an adverse fill.
+- `Actors Observation Reactions`: Derive duplicate-free subscriptions from admitted typed trigger sources into actor-owned reusable slot-addressed pages; DEOS Oracle change context may mark bounded dirty state only, deferred fanout may set the existing pending latch, and the existing scheduler alone executes actors.
 - `Token-Driven Coordination`: Prefer asset movement and runtime hooks over privileged signed calls when token ingress itself defines the event.
 - `Bounded Consensus State`: Every storage collection, iteration, history surface, retry path, and projection must have a defensible bound.
 - `Read-Model Honesty`: Public data must be classified as bounded authoritative on-chain truth or externally indexed/materialized truth; canonical UX must not hide an indexer dependency.
@@ -127,7 +127,7 @@
 - `Bucket Policy`: Treat bucket topology and percentages as TMCTOL/reference-instance policy rather than mandatory DEOS kernel law.
 - `Burn Liveness`: Burn effects depend on funded, configured, schedulable execution; do not describe fee capture as automatic supply reduction before the Burn Actor completes it.
 - `Liquidity Liveness`: Liquidity effects depend on healthy pools, configured execution plans, bounded slippage, and valid reserve accounting.
-- `Simulator Authority`: Use the simulator for economic math and hypotheses, not as a shadow runtime for storage, weights, AAA, governance, XCM, or client parity.
+- `Simulator Authority`: Use the simulator for economic math and hypotheses, not as a shadow runtime for storage, weights, Actors, governance, XCM, or client parity.
 - `Deterministic Simulation`: Use fixed cases or explicit seeded PRNGs in correctness suites and keep wall-clock measurement in benchmark tooling.
 
 ## 7. Runtime Subsystem Contracts
@@ -138,7 +138,7 @@
 - `Sovereign Liquidity`: Foreign assets enter local `pallet-assets` through XCM reserve-transfer assumptions; DEOS does not delegate its liquidity accounting to foreign chains.
 - `Liquid Staking`: Keep one staking pallet, `stXXX` receipts, and native `stNTVE`; do not add a parallel nomination-token tier without evidence.
 - `Native Security`: Native collator backing uses explicit locked `NTVE/stNTVE` LP custody rather than liquid receipt ownership.
-- `AAA Staking Portability`: Keep `Stake` and `Unstake` tasks generic; runtime adapters decide native, non-native, or local representation behavior.
+- `Actors Staking Portability`: Keep `Stake` and `Unstake` tasks generic; runtime adapters decide native, non-native, or local representation behavior.
 
 ## 7A. Governance and Reward Contracts
 
@@ -155,9 +155,9 @@
 ## 7B. Fee and Security Contracts
 
 - `Liquidity Slippage`: Derive Liquidity Actor swap tolerance from current reserve depth and clamp it between explicit runtime bounds.
-- `Fee Collection`: Keep DEOS Router trading fees on the Burn Actor path; collect 100% of transaction, AAA, governance-opening, and XCM-execution fees into the Fee Sink System AAA independently of actor execution liveness, and name the generic AAA boundary by collection rather than trading-route semantics.
+- `Fee Collection`: Keep DEOS Router trading fees on the Burn Actor path; collect 100% of transaction, Actor-execution, governance-opening, and XCM-execution fees into the Fee Sink System Actor independently of actor execution liveness, and name the generic Actors boundary by collection rather than trading-route semantics.
 - `Fee Allocation Phases`: While collators remain permissioned, the Fee Sink distributes its available native balance 50/50 to staking ingress and liquidity provisioning; a future equal-thirds security/staking/liquidity plan requires permissionless collators and an explicit bounded security-reward contract, with indivisible remainder retained in Fee Sink for a later cycle.
-- `Native Flow Anchors`: The DEOS runtime endows System AAA, custody, and staking-ingress accounts admitted for arbitrarily small native flows with one persistent free-balance ED, preserves that anchor through spend resolution, and converts only newly received value. Generic AAA follows exact host-ledger consequences and does not promise provider-only or reserved-only zero-free sub-ED ingress.
+- `Native Flow Anchors`: The DEOS runtime endows System Actor, custody, and staking-ingress accounts admitted for arbitrarily small native flows with one persistent free-balance ED, preserves that anchor through spend resolution, and converts only newly received value. Generic Actors follows exact host-ledger consequences and does not promise provider-only or reserved-only zero-free sub-ED ingress.
 - `Collator Reward Gate`: Treat `CollatorRewardPot` as an unresolved design placeholder, not an accepted pallet or storage topology, until eligibility, contribution accounting, settlement cadence, custody, payout, leftovers, and failure behavior have explicit owners and bounds.
 
 ## 8. Engineering and Validation

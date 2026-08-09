@@ -15,7 +15,7 @@ env:
 
 jobs:
   scheduler-stress-lane:
-    name: AAA Scheduler Stress Lane
+    name: Actors Scheduler Stress Lane
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -59,5 +59,5 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-stress-
 
-      - name: AAA scheduler stress gate
-        run: ./scripts/aaa-release-gate.sh
+      - name: Actors scheduler stress gate
+        run: ./scripts/actors-release-gate.sh

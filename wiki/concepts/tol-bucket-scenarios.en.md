@@ -10,8 +10,8 @@ available_locales:
   - ru
 sources:
   - ../../docs/tmctol.specification.en.md
-  - ../../template/pallets/aaa/docs/architecture.en.md
-  - ../../template/pallets/aaa/docs/specification.en.md
+  - ../../template/pallets/actors/docs/architecture.en.md
+  - ../../template/pallets/actors/docs/specification.en.md
   - ../../AGENTS.md
 status: active
 audience: newcomer
@@ -20,12 +20,12 @@ tags:
   - tmctol
   - liquidity
   - buckets
-  - aaa
+  - actor
 related:
   - TMCTOL Standard
   - End-to-End Flows
   - Architecture Diagrams
-  - AAA System
+  - Actors System
   - Token-Driven Automation
 last_compiled: 2026-07-22
 confidence: 0.85
@@ -79,12 +79,12 @@ Bucket C -> Treasury C lane
 Bucket D -> Treasury D lane
 ```
 
-A downstream fork may alter policy, but it should preserve bucket provenance as part of the economic contract rather than accounting decoration. The reference split avoids a same-actor RemoveLiquidity plus dual-transfer plan that exceeds the 50% ProofSize reserve. If a fork activates or changes treasury lanes or actor plans, it must validate TMCTOL math and AAA execution behavior separately.
+A downstream fork may alter policy, but it should preserve bucket provenance as part of the economic contract rather than accounting decoration. The reference split avoids a same-actor RemoveLiquidity plus dual-transfer plan that exceeds the 50% ProofSize reserve. If a fork activates or changes treasury lanes or actor plans, it must validate TMCTOL math and Actors execution behavior separately.
 
 ## Related
 
 - [TMCTOL Standard](tmctol-standard.en.md)
 - [End-to-End Flows](end-to-end-flows.en.md)
 - [Architecture Diagrams](architecture-diagrams.en.md)
-- [AAA System](../overview/aaa-system.en.md)
+- [Actors System](../overview/actor-system.en.md)
 - [Token-Driven Automation](token-driven-automation.en.md)

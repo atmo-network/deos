@@ -1,7 +1,7 @@
 ---
 page_type: overview
 title: Typed Observations
-summary: Typed observations provide bounded current scalar truth while producers retain samples, AAA owns reactions, DEOS Router owns routing, and indexed providers own history.
+summary: Typed observations provide bounded current scalar truth while producers retain samples, Actors owns reactions, DEOS Router owns routing, and indexed providers own history.
 locale: en
 canonical_page_id: typed-observations
 translation_status: source
@@ -20,7 +20,7 @@ tags:
   - observations
 related:
   - DEOS Router
-  - AAA System
+  - Actors System
   - Token-Driven Automation
   - Read-Model Split
 last_compiled: 2026-07-28
@@ -33,7 +33,7 @@ confidence: 0.95
 
 Typed observations are the domain contract for bounded current scalar truth. DEOS Oracle is the current bounded owner. A feed fixes its producer, semantic meaning, scale, aggregation rule, zero policy, freshness contract, and provenance when governance registers it.
 
-The subsystem does not own raw sample history, routing decisions, actor execution, or unbounded analytics. Those responsibilities remain with producers, DEOS Router, AAA, and indexed providers.
+The subsystem does not own raw sample history, routing decisions, actor execution, or unbounded analytics. Those responsibilities remain with producers, DEOS Router, Actors, and indexed providers.
 
 ## Current Truth Contract
 
@@ -54,9 +54,9 @@ The DEOS reference runtime registers forward and reverse pool observations as di
 
 A direction is never inferred from its reverse. The feed records pre-execution reserves with Router provenance; it does not claim a universal fair price, manipulation immunity, or complete market history.
 
-## Reactive AAA Boundary
+## Reactive Actors Boundary
 
-A changed revision invokes a subscriber-independent O(1) AAA ingress hook. The hook marks only the latest dirty revision. Deferred fanout later traverses exact occupied subscriber pages and converges on the existing AAA pending latch, queue, wakeup, and scheduler.
+A changed revision invokes a subscriber-independent O(1) Actors ingress hook. The hook marks only the latest dirty revision. Deferred fanout later traverses exact occupied subscriber pages and converges on the existing Actors pending latch, queue, wakeup, and scheduler.
 
 Observation triggers request latest-state reconsideration. Conditions own thresholds and evaluate freshness when an actor attempt runs. DEOS Oracle does not synchronously execute subscribers or promise one actor run per intermediate revision.
 
@@ -69,6 +69,6 @@ The reference client reads finalized current state and labels provenance. It mus
 ## Related
 
 - [DEOS Router](router.en.md)
-- [AAA System](aaa-system.en.md)
+- [Actors System](actor-system.en.md)
 - [Token-Driven Automation](../concepts/token-driven-automation.en.md)
 - [Read-Model Split](../concepts/read-model-split.en.md)

@@ -54,7 +54,7 @@ parameter_types! {
   // and prepend `UniversalLocation` with `GlobalConsensus(RelayNetwork::get())`.
   pub UniversalLocation: InteriorLocation = Parachain(ParachainInfo::parachain_id().into()).into();
   pub UnitWeightCost: Weight =
-    <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::xcm_asset_deposit();
+    <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::xcm_asset_deposit();
 }
 
 /// Type for specifying how a `Location` can be converted into an `AccountId`. This is used
@@ -134,9 +134,9 @@ impl ContainsPair<Asset, Location> for ForeignAssetsFromSibling {
 
 type BaseAssetTransactor = (LocalAssetTransactor, ForeignAssetsTransactor);
 
-pub struct AaaAwareAssetTransactor;
+pub struct ActorAwareAssetTransactor;
 
-impl AaaAwareAssetTransactor {
+impl ActorAwareAssetTransactor {
   fn to_asset_kind_and_amount(what: &Asset) -> Option<(AssetKind, Balance)> {
     let amount = match what.fun {
       Fungible(value) => value,
@@ -172,7 +172,7 @@ impl AaaAwareAssetTransactor {
       return Ok(());
     };
     RuntimeAddressEventIngress::preflight_xcm_inbound(&recipient, asset, amount, &source)
-      .map_err(|_| XcmError::FailedToTransactAsset("AAA funding accumulator preflight failed"))
+      .map_err(|_| XcmError::FailedToTransactAsset("Actors funding accumulator preflight failed"))
   }
 
   fn notify_ingress(
@@ -195,10 +195,10 @@ impl AaaAwareAssetTransactor {
       });
     if let Some(source) = source {
       return RuntimeAddressEventIngress::on_xcm_inbound(&recipient, asset, amount, &source)
-        .map_err(|_| XcmError::FailedToTransactAsset("AAA funding notification failed"));
+        .map_err(|_| XcmError::FailedToTransactAsset("Actors funding notification failed"));
     }
     RuntimeAddressEventIngress::on_inbound_without_source(&recipient, asset, amount)
-      .map_err(|_| XcmError::FailedToTransactAsset("AAA ingress notification failed"))
+      .map_err(|_| XcmError::FailedToTransactAsset("Actors ingress notification failed"))
   }
 }
 
@@ -279,7 +279,7 @@ pub fn benchmark_foreign_asset_deposit(
     message_id: [0xAA; 32],
     topic: None,
   };
-  <AaaAwareAssetTransactor as TransactAsset>::deposit_asset(
+  <ActorAwareAssetTransactor as TransactAsset>::deposit_asset(
     holding,
     &account_location(recipient),
     Some(&context),
@@ -287,7 +287,7 @@ pub fn benchmark_foreign_asset_deposit(
   .map_err(|_| polkadot_sdk::sp_runtime::DispatchError::Other("XcmBenchmarkDepositFailed"))
 }
 
-impl TransactAsset for AaaAwareAssetTransactor {
+impl TransactAsset for ActorAwareAssetTransactor {
   fn can_check_in(origin: &Location, what: &Asset, context: &XcmContext) -> XcmResult {
     BaseAssetTransactor::can_check_in(origin, what, context)
   }
@@ -490,7 +490,7 @@ impl xcm_executor::Config for XcmConfig {
   type AssetExchanger = ();
   type AssetLocker = ();
   type AssetTrap = PolkadotXcm;
-  type AssetTransactor = AaaAwareAssetTransactor;
+  type AssetTransactor = ActorAwareAssetTransactor;
   type Barrier = Barrier;
   type CallDispatcher = RuntimeCall;
   type FeeManager = ();
@@ -570,11 +570,11 @@ mod tests {
   use primitives::assets::{AssetInspector, TYPE_FOREIGN};
 
   #[test]
-  fn xcm_fixed_instruction_weight_binds_single_asset_aaa_deposit_benchmark() {
+  fn xcm_fixed_instruction_weight_binds_single_asset_actor_deposit_benchmark() {
     assert_eq!(MaxAssetsIntoHolding::get(), 1);
     assert_eq!(
       UnitWeightCost::get(),
-      <crate::weights::pallet_aaa::SubstrateWeight<Runtime> as pallet_aaa::WeightInfo>::xcm_asset_deposit()
+      <crate::weights::pallet_deos_actors::SubstrateWeight<Runtime> as pallet_deos_actors::WeightInfo>::xcm_asset_deposit()
     );
     assert!(UnitWeightCost::get().proof_size() > 0);
   }

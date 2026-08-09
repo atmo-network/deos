@@ -8,11 +8,11 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   import { ArrowDown, ArrowUp, Plus, Trash2 } from '@lucide/svelte';
 
   import {
-    type AaaAuthoringIssue,
-    type AaaAuthoringStep,
-    createAaaAuthoringCondition,
+    type ActorAuthoringIssue,
+    type ActorAuthoringStep,
+    createActorAuthoringCondition,
   } from '$lib/automation/authoring';
-  import type { AaaPlanType } from '$lib/automation/plan-artifact';
+  import type { ActorPlanType } from '$lib/automation/plan-artifact';
   import type { AutomationMutability } from '$lib/automation/types';
   import {
     Badge,
@@ -27,13 +27,13 @@ Zone: Automation presentation helper; composes typed authoring fields without su
   import AutomationTaskEditor from './AutomationTaskEditor.svelte';
 
   type Props = {
-    step: AaaAuthoringStep;
+    step: ActorAuthoringStep;
     index: number;
     total: number;
-    aaaType: AaaPlanType;
+    actorType: ActorPlanType;
     mutability: AutomationMutability;
     compact?: boolean;
-    issues?: AaaAuthoringIssue[];
+    issues?: ActorAuthoringIssue[];
     onMove: (direction: -1 | 1) => void;
     onRemove: () => void;
   };
@@ -42,7 +42,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     step = $bindable(),
     index,
     total,
-    aaaType,
+    actorType,
     mutability,
     compact = false,
     issues = [],
@@ -63,7 +63,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
           : step.conditionSet.type === 'Always'
             ? {
                 type,
-                conditions: [createAaaAuthoringCondition('BalanceAbove')],
+                conditions: [createActorAuthoringCondition('BalanceAbove')],
               }
             : { type, conditions: step.conditionSet.conditions },
     };
@@ -101,7 +101,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
         ...step.conditionSet,
         conditions: [
           ...step.conditionSet.conditions,
-          createAaaAuthoringCondition('BalanceAbove'),
+          createActorAuthoringCondition('BalanceAbove'),
         ],
       },
     };
@@ -231,7 +231,7 @@ Zone: Automation presentation helper; composes typed authoring fields without su
     <div class="text-[10px] uppercase tracking-wider text-(--mono-muted)">
       Typed task
     </div>
-    <AutomationTaskEditor bind:task={step.task} {aaaType} {compact} />
+    <AutomationTaskEditor bind:task={step.task} {actorType} {compact} />
   </div>
 
   <div class="grid gap-1 border-t border-(--mono-border) pt-3">

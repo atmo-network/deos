@@ -56,11 +56,11 @@ Each numbered command is independently callable by a human or CI from any workin
 - [validate-local.sh](./validate-local.sh)
   Run only explicitly selected broad compositions for audits, CI, runtime build, dependency posture, or E2E. No plan runs by default: agents choose changed-scope routes through `alignment`, while humans/releases opt into `--audit-only`, one `--*-only` mode, or `--all`. Audit leaves remain owned by `alignment` and are orchestrated here without duplicating their implementation.
 
-- [aaa-release-gate.sh](./aaa-release-gate.sh)
-  Shared human/GitHub/CI/skill implementation of AAA semantic-manifest and fee-envelope-vector freshness, cross-language semantic contract, scheduler stress, and independent-runtime embedding checks. Quick mode validates the reactive corpus contract; full acceptance executes every corpus anchor in the selected Cargo profile. The `aaa-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
+- [actors-release-gate.sh](./actors-release-gate.sh)
+  Shared human/GitHub/CI/skill implementation of Actors semantic-manifest and fee-envelope-vector freshness, cross-language semantic contract, scheduler stress, and independent-runtime embedding checks. Quick mode validates the reactive corpus contract; full acceptance executes every corpus anchor in the selected Cargo profile. The `actors-delivery` skill owns quick/full selection, occupancy policy, evidence interpretation, and delivery handoff without duplicating execution.
 
 - [reactive-operations-corpus.sh](./reactive-operations-corpus.sh)
-  Validate all or one family of the machine-readable AAA reactive-operations corpus. `--execute` runs every selected Rust anchor, with optional `--release`; validation alone checks composition but does not execute tests. The contract enforces runtime identity, invariants, ordered checkpoints, rollback/weight ownership, deterministic seeds, and live anchors. Failures emit selected seed/initial-state evidence under `${TMPDIR:-/tmp}`.
+  Validate all or one family of the machine-readable Actors reactive-operations corpus. `--execute` runs every selected Rust anchor, with optional `--release`; validation alone checks composition but does not execute tests. The contract enforces runtime identity, invariants, ordered checkpoints, rollback/weight ownership, deterministic seeds, and live anchors. Failures emit selected seed/initial-state evidence under `${TMPDIR:-/tmp}`.
 
 - [try-runtime-local.sh](./try-runtime-local.sh)
   Build `deos-runtime` with `try-runtime` and optionally execute live dry-runs against the local parachain RPC.
@@ -70,7 +70,7 @@ Project-local audit leaves and targeted routes are documented in `/.agents/skill
 Commands executed through the shared script harness use compact output by default: successful test, build, lint, documentation, metadata, and benchmark steps print only their label, duration, and result. A failed step prints the last 80 lines and retains its complete output in a temporary log whose path appears in the error. Set `DEOS_VERBOSE=1` to restore live full output, or set `DEOS_FAILURE_TAIL_LINES=N` to change the failure excerpt without enabling verbose mode.
 
 - [benchmarks.sh](./benchmarks.sh)
-  Run pallet benchmarking flows and weight generation helpers. Supports `--extra` for AAA diagnostics, `--extrinsic NAME --output FILE` for focused evidence that must not replace complete production weights, and `--skip-build` when reusing a freshly built benchmark runtime. The [`benchmarking` skill](../.agents/skills/benchmarking/SKILL.md) owns case selection, evidence interpretation, weight handoff, and claim boundaries without duplicating this command surface.
+  Run pallet benchmarking flows and weight generation helpers. Supports `--extra` for Actors diagnostics, `--extrinsic NAME --output FILE` for focused evidence that must not replace complete production weights, and `--skip-build` when reusing a freshly built benchmark runtime. The [`benchmarking` skill](../.agents/skills/benchmarking/SKILL.md) owns case selection, evidence interpretation, weight handoff, and claim boundaries without duplicating this command surface.
 
 - [ci-local.sh](./ci-local.sh)
   Reproduce local CI or select one compact check with `--only`; narrow Cargo work further with `--package NAME`, `--test-filter NAME`, and explicit feature mode. Apply Rust formatting with `--only format --fix`. Agents should prefer this entrypoint over raw Cargo commands.
@@ -81,7 +81,7 @@ Commands executed through the shared script harness use compact output by defaul
   Idempotently prepare the composite live-chain state needed for local wallet, swap, and native-staking UI testing: verify genesis prerequisites, fund Alice, and create or top up the Native/foreign and `NTVE/stNTVE` pools. This is a named admin workflow rather than an atomic numbered leaf because it coordinates several state checks and transactions.
 
 - [export-papi-metadata.sh](./export-papi-metadata.sh)
-  Export native runtime metadata through the committed `deos-runtime` metadata example, regenerate PAPI descriptors, and project observation-inspector runtime evidence from the exact metadata, compact Wasm, runtime constants, production AAA weights, and descriptor identity. This replaces ad hoc metadata export and independently maintained inspector constants.
+  Export native runtime metadata through the committed `deos-runtime` metadata example, regenerate PAPI descriptors, and project observation-inspector runtime evidence from the exact metadata, compact Wasm, runtime constants, production Actors weights, and descriptor identity. This replaces ad hoc metadata export and independently maintained inspector constants.
 
 - [bootstrap-native-staking-local.sh](./bootstrap-native-staking-local.sh)
   Consolidated native staking bootstrap helper. `check` reads live readiness for the canonical `NTVE/stNTVE` pool and Native Staking LP Farmer skeleton; `prepare-calls` emits plan-only Root/governance or signed-operator call data for staking registration, pool creation, and liquidity seeding. It never signs or submits transactions. The [`staking-delivery` skill](../.agents/skills/staking-delivery/SKILL.md) owns readiness sequencing, authority boundaries, and activation handoff without duplicating this command.

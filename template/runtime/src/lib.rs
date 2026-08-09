@@ -5,7 +5,7 @@
 //! - Omni Node deployment (no custom node crate)
 //! - Frame V2 pallets with correct declaration order
 //! - Async backing enabled via FixedVelocityConsensusHook
-//! - Transactional mutation discipline followed in AAA and router pallets
+//! - Transactional mutation discipline followed in Actors and router pallets
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![recursion_limit = "256"]
@@ -251,7 +251,7 @@ mod runtime {
   #[runtime::pallet_index(52)]
   pub type Oracle = pallet_oracle;
   #[runtime::pallet_index(55)]
-  pub type AAA = pallet_aaa;
+  pub type Actors = pallet_deos_actors;
 }
 
 pub type Migrations = (

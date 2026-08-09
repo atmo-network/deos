@@ -65,9 +65,9 @@ Tactical `L2TreasurySpend` decodes a bounded invoice payload with `beneficiary`,
 
 The treasury authority topology remains explicit. The tactical `$BLDR` domain declares exactly one executable funding source, `BldrTreasury`, which resolves to the domain treasury sovereign account only for that domain. Wider source families or native payout topologies remain future opt-in work, not hidden rights of the invoice payload.
 
-Launch-line `$BLDR` referenda are live invoice-shaped rather than merely invoice-centric in concept. Changes to System AAA behavior still require `L2SignalToL1` or explicit delegation of those control surfaces into the domain.
+Launch-line `$BLDR` referenda are live invoice-shaped rather than merely invoice-centric in concept. Changes to System Actors behavior still require `L2SignalToL1` or explicit delegation of those control surfaces into the domain.
 
-A scan of Root-only custom-pallet controls narrows the next truthful `L2ParameterChange` search space. TMC launch-physics mutation remains out of contract; staking onboarding, recovery, and admin reward-bootstrap paths remain system-owned; AAA global breaker and actor-limit controls remain system-owned; asset-registry registration and migration remain L1-owned.
+A scan of Root-only custom-pallet controls narrows the next truthful `L2ParameterChange` search space. TMC launch-physics mutation remains out of contract; staking onboarding, recovery, and admin reward-bootstrap paths remain system-owned; Actors global breaker and actor-limit controls remain system-owned; asset-registry registration and migration remain L1-owned.
 
 The remaining runtime gap is narrower than a generic "more setters" wishlist. The next valid slice must expose a genuinely delegated, domain-owned parameter surface rather than opportunistically reuse unrelated Root setters.
 

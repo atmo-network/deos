@@ -1,5 +1,5 @@
 /*
-Domain: AAA matching-runtime simulation provenance
+Domain: Actors matching-runtime simulation provenance
 Owns: Runtime-code, metadata, finalized-state, provider-response, and runtime-output identity binding.
 Excludes: Runtime API implementation, Wasm execution, chain transport, signing, submission, and local outcome synthesis.
 Zone: Automation domain trust gate; providers execute while this module rejects mismatched or incomplete evidence.
@@ -7,50 +7,51 @@ Zone: Automation domain trust gate; providers execute while this module rejects 
 import { blake2AsHex } from '@polkadot/util-crypto';
 
 import {
-  type AaaPlanArtifact,
-  type AaaPlanHex,
-  type AaaPlanRuntimeIdentity,
-  inspectAaaPlanArtifact,
+  type ActorPlanArtifact,
+  type ActorPlanHex,
+  type ActorPlanRuntimeIdentity,
+  inspectActorPlanArtifact,
 } from './plan-artifact.ts';
 import {
-  type AaaDecodedRuntimeSimulationOutcome,
-  decodeAaaRuntimeSimulationResult,
+  type ActorDecodedRuntimeSimulationOutcome,
+  decodeActorRuntimeSimulationResult,
 } from './runtime-simulation-codec.ts';
 
-export type AaaMatchingWasmPin = {
-  planId: AaaPlanHex;
-  genesisHash: AaaPlanHex;
-  blockHash: AaaPlanHex;
+export type ActorMatchingWasmPin = {
+  planId: ActorPlanHex;
+  genesisHash: ActorPlanHex;
+  blockHash: ActorPlanHex;
   blockNumber: number;
-  stateRoot: AaaPlanHex;
+  stateRoot: ActorPlanHex;
   stateSource: 'FinalizedBlock' | 'VerifiedStateProof';
-  runtimeCodeHash: AaaPlanHex;
-  metadataHash: AaaPlanHex;
+  runtimeCodeHash: ActorPlanHex;
+  metadataHash: ActorPlanHex;
   specVersion: number;
   transactionVersion: number;
   runtimeApi: string;
   runtimeApiVersion: number;
 };
 
-export type AaaRuntimeSimulationOutcome = AaaDecodedRuntimeSimulationOutcome & {
-  resultScale: AaaPlanHex;
-};
+export type ActorRuntimeSimulationOutcome =
+  ActorDecodedRuntimeSimulationOutcome & {
+    resultScale: ActorPlanHex;
+  };
 
-export type AaaMatchingWasmResponse = {
+export type ActorMatchingWasmResponse = {
   engine: 'RuntimeWasm';
-  pin: AaaMatchingWasmPin;
-  outcome: AaaRuntimeSimulationOutcome;
+  pin: ActorMatchingWasmPin;
+  outcome: ActorRuntimeSimulationOutcome;
 };
 
-export type AaaMatchingWasmProvider = {
+export type ActorMatchingWasmProvider = {
   simulate(request: {
-    pin: AaaMatchingWasmPin;
-    aaaId: bigint;
+    pin: ActorMatchingWasmPin;
+    actorId: bigint;
     mode: 'FreshCurrentPlan' | 'CurrentContinuation';
-    programScale: AaaPlanHex;
-    aaaType: AaaPlanArtifact['aaaType'];
-    mutability: AaaPlanArtifact['mutability'];
-  }): Promise<AaaMatchingWasmResponse>;
+    programScale: ActorPlanHex;
+    actorType: ActorPlanArtifact['actorType'];
+    mutability: ActorPlanArtifact['mutability'];
+  }): Promise<ActorMatchingWasmResponse>;
 };
 
 const HASH_PATTERN = /^0x[0-9a-f]{64}$/;
@@ -68,42 +69,42 @@ function validateIndex(value: number, field: string) {
   }
 }
 
-function samePin(left: AaaMatchingWasmPin, right: AaaMatchingWasmPin) {
-  return (Object.keys(left) as Array<keyof AaaMatchingWasmPin>).every(
+function samePin(left: ActorMatchingWasmPin, right: ActorMatchingWasmPin) {
+  return (Object.keys(left) as Array<keyof ActorMatchingWasmPin>).every(
     (key) => left[key] === right[key],
   );
 }
 
-export async function runAaaMatchingWasmSimulation(input: {
-  artifact: AaaPlanArtifact;
-  aaaId: bigint;
+export async function runActorMatchingWasmSimulation(input: {
+  artifact: ActorPlanArtifact;
+  actorId: bigint;
   mode: 'FreshCurrentPlan' | 'CurrentContinuation';
   metadataBytes: Uint8Array;
-  runtime: AaaPlanRuntimeIdentity;
+  runtime: ActorPlanRuntimeIdentity;
   runtimeCodeBytes: Uint8Array;
   snapshot: {
-    blockHash: AaaPlanHex;
+    blockHash: ActorPlanHex;
     blockNumber: number;
-    stateRoot: AaaPlanHex;
-    stateSource: AaaMatchingWasmPin['stateSource'];
+    stateRoot: ActorPlanHex;
+    stateSource: ActorMatchingWasmPin['stateSource'];
   };
   runtimeApi: string;
   runtimeApiVersion: number;
-  provider: AaaMatchingWasmProvider;
-}): Promise<AaaMatchingWasmResponse> {
-  const inspection = inspectAaaPlanArtifact(
+  provider: ActorMatchingWasmProvider;
+}): Promise<ActorMatchingWasmResponse> {
+  const inspection = inspectActorPlanArtifact(
     input.artifact,
     input.metadataBytes,
     input.runtime,
   );
   if (!inspection.valid) {
     throw new Error(
-      `Invalid AAA plan artifact: ${inspection.errors.join('; ')}`,
+      `Invalid Actors plan artifact: ${inspection.errors.join('; ')}`,
     );
   }
   const maxSteps = activeExecutionPlanLength(inspection.runtimeValue);
-  if (input.aaaId < 0n) {
-    throw new Error('aaaId must be non-negative');
+  if (input.actorId < 0n) {
+    throw new Error('actorId must be non-negative');
   }
   if (!['FreshCurrentPlan', 'CurrentContinuation'].includes(input.mode)) {
     throw new Error('mode must identify one runtime simulation path');
@@ -130,14 +131,14 @@ export async function runAaaMatchingWasmSimulation(input: {
     );
   }
 
-  const pin: AaaMatchingWasmPin = {
+  const pin: ActorMatchingWasmPin = {
     planId: input.artifact.planId,
     genesisHash: input.artifact.genesisHash,
     blockHash: input.snapshot.blockHash,
     blockNumber: input.snapshot.blockNumber,
     stateRoot: input.snapshot.stateRoot,
     stateSource: input.snapshot.stateSource,
-    runtimeCodeHash: blake2AsHex(input.runtimeCodeBytes, 256) as AaaPlanHex,
+    runtimeCodeHash: blake2AsHex(input.runtimeCodeBytes, 256) as ActorPlanHex,
     metadataHash: input.artifact.metadataHash,
     specVersion: input.artifact.specVersion,
     transactionVersion: input.artifact.transactionVersion,
@@ -146,10 +147,10 @@ export async function runAaaMatchingWasmSimulation(input: {
   };
   const response = await input.provider.simulate({
     pin,
-    aaaId: input.aaaId,
+    actorId: input.actorId,
     mode: input.mode,
     programScale: input.artifact.programScale,
-    aaaType: input.artifact.aaaType,
+    actorType: input.artifact.actorType,
     mutability: input.artifact.mutability,
   });
   if (response.engine !== 'RuntimeWasm') {
@@ -161,7 +162,7 @@ export async function runAaaMatchingWasmSimulation(input: {
     );
   }
   validateOutcome(response.outcome, maxSteps);
-  const decoded = decodeAaaRuntimeSimulationResult(
+  const decoded = decodeActorRuntimeSimulationResult(
     input.metadataBytes,
     response.outcome.resultScale,
   );
@@ -195,8 +196,8 @@ function activeExecutionPlanLength(runtimeValue: unknown) {
 }
 
 function sameOutcome(
-  response: AaaRuntimeSimulationOutcome,
-  decoded: AaaDecodedRuntimeSimulationOutcome,
+  response: ActorRuntimeSimulationOutcome,
+  decoded: ActorDecodedRuntimeSimulationOutcome,
 ) {
   const comparableResponse = { ...response, resultScale: undefined };
   return (
@@ -210,7 +211,7 @@ function bigintReplacer(_key: string, value: unknown) {
 }
 
 function validateOutcome(
-  outcome: AaaRuntimeSimulationOutcome,
+  outcome: ActorRuntimeSimulationOutcome,
   maxSteps: number,
 ) {
   if (

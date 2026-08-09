@@ -1,6 +1,6 @@
 <!--
 Domain: Automation condition editor
-Owns: One typed AAA condition row and its bounded removal action.
+Owns: One typed Actors condition row and its bounded removal action.
 Excludes: Predicate evaluation, chain reads, condition ordering semantics, and plan validation.
 Zone: Automation presentation helper; composes authoring contracts and UI Kit fields.
 -->
@@ -8,16 +8,16 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
   import { X } from '@lucide/svelte';
 
   import {
-    AAA_AUTHORING_CONDITION_TYPES,
-    type AaaAuthoringCondition,
-    createAaaAuthoringCondition,
+    ACTORS_AUTHORING_CONDITION_TYPES,
+    type ActorAuthoringCondition,
+    createActorAuthoringCondition,
   } from '$lib/automation/authoring';
   import { IconButton, NumberInput, SelectField, TextField } from '$lib/ui';
 
   import AutomationAssetEditor from './AutomationAssetEditor.svelte';
 
   type Props = {
-    condition: AaaAuthoringCondition;
+    condition: ActorAuthoringCondition;
     compact?: boolean;
     onRemove: () => void;
   };
@@ -25,20 +25,20 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
   let { condition = $bindable(), compact = false, onRemove }: Props = $props();
 
   function selectConditionType(event: Event) {
-    condition = createAaaAuthoringCondition(
+    condition = createActorAuthoringCondition(
       (event.currentTarget as HTMLSelectElement)
-        .value as AaaAuthoringCondition['type'],
+        .value as ActorAuthoringCondition['type'],
     );
   }
 
-  function conditionLabel(type: AaaAuthoringCondition['type']) {
+  function conditionLabel(type: ActorAuthoringCondition['type']) {
     return type.replace(/([a-z])([A-Z])/g, '$1 $2');
   }
 
   function selectAggregation(event: Event) {
     if (!condition.type.startsWith('Observation')) return;
     const observation = condition as Extract<
-      AaaAuthoringCondition,
+      ActorAuthoringCondition,
       { feed: object }
     >;
     const type = (event.currentTarget as HTMLSelectElement).value;
@@ -57,7 +57,7 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
       class="min-w-0 flex-1"
       selectClass="h-9 py-1.5 text-xs"
     >
-      {#each AAA_AUTHORING_CONDITION_TYPES as type}
+      {#each ACTORS_AUTHORING_CONDITION_TYPES as type}
         <option value={type}>{conditionLabel(type)}</option>
       {/each}
     </SelectField>
@@ -93,7 +93,7 @@ Zone: Automation presentation helper; composes authoring contracts and UI Kit fi
     />
   {:else}
     {@const observationCondition = condition as Extract<
-      AaaAuthoringCondition,
+      ActorAuthoringCondition,
       { feed: object }
     >}
     <p

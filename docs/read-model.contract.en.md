@@ -143,32 +143,32 @@ Each subsystem below uses the same two buckets:
 
 Local-pool feed provenance describes DEOS Router pre-execution reserves only. Canonical status and scalar truth do not constitute an external fair-price, manipulation-resistance, MEV-protection, or ordering proof.
 
-A rejected publication is transaction feedback, not canonical feed or delivery state: atomic rollback leaves no observation revision, Oracle event, or AAA dirty marker to inspect. Clients may surface the exact direct-call error or the DEOS Router `InvalidOracleData` mapping from submission feedback, then reread finalized state after operator repair and retry.
+A rejected publication is transaction feedback, not canonical feed or delivery state: atomic rollback leaves no observation revision, Oracle event, or Actors dirty marker to inspect. Clients may surface the exact direct-call error or the DEOS Router `InvalidOracleData` mapping from submission feedback, then reread finalized state after operator repair and retry.
 
-### AAA / Automation Kernel
+### Actors / Automation Kernel
 
 #### On-Chain Canonical Projection
 
 - Actor configuration and lifecycle state
 - Schedule / trigger state needed for execution
 - Bounded readiness, queue, wakeup, and overflow surfaces
-- Read-only `AaaEligibilityApi::aaa_eligibility` projection: current readiness verdict, scheduler-owned phase, and next eligible block at one finalized block, so clients do not reimplement cadence, cooldown, window, backoff, breaker, or latch arithmetic
+- Read-only `ActorEligibilityApi::actor_eligibility` projection: current readiness verdict, scheduler-owned phase, and next eligible block at one finalized block, so clients do not reimplement cadence, cooldown, window, backoff, breaker, or latch arithmetic
 - Account ownership/control slots
 - Live balances and execution-side effects
 - Finalized point-in-time asset minimum and recipient-balance evidence when fetched directly at one bound block hash; downstream static findings must retain that evidence identity and block hash
 - Selected-feed reactive delivery from one finalized hash: exact `DirtyObservationFeeds`, global dirty-list head/tail/count/cursor, selected position through bounded predecessor links, occupied subscriber-page topology, and identified-budget page/block estimates
-- Optional selected-actor delivery from exact `ActorHot(aaa_id)`: existence, pending signal, type-derived lane, queue ticket or wakeup pointer, the current `cache_epoch` stamp, and factual admission status without execution timing
+- Optional selected-actor delivery from exact `ActorHot(actor_id)`: existence, pending signal, type-derived lane, queue ticket or wakeup pointer, the current `cache_epoch` stamp, and factual admission status without execution timing
 - Current sparse `IdleStarvationState` and bounded detection/recovery events when scheduler observability changes phase
 - Current sparse Continuation for a suspended actor, including cursor, logical-cycle attempt, unsuccessful-attempt count at that cursor, last-attempt block, frozen typed suffix inputs, cumulative outcomes, and bounded suspension/continuation/cancellation events
 
 #### Indexed / Materialized View
 
 - Long-lived execution history per actor
-- Per-step and per-attempt timeline replay across many logical cycles, correlated from `(aaa_id, cycle_nonce, attempt)` event boundaries
+- Per-step and per-attempt timeline replay across many logical cycles, correlated from `(actor_id, cycle_nonce, attempt)` event boundaries
 - Fleet dashboards, rankings, and operator analytics
 - Archived run logs beyond bounded on-chain observability
 - Historical starvation intervals, duration trends, and alert/recovery timelines reconstructed from runtime events
-- Metadata-bound plan artifacts when available, structural diffs, forecasts, simulations, and configuration-version history under the provenance rules in `aaa-control-plane.contract.en.md`
+- Metadata-bound plan artifacts when available, structural diffs, forecasts, simulations, and configuration-version history under the provenance rules in `actors-control-plane.contract.en.md`
 
 ### DEOS Staking
 

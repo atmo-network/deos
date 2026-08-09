@@ -13,7 +13,7 @@ sources:
   - ../../AGENTS.md
   - ../../README.md
   - ../../docs/README.md
-  - ../../template/pallets/aaa/docs/embedding.md
+  - ../../template/pallets/actors/docs/embedding.md
   - ../../docs/framework-instance.contract.en.md
   - ../../template/README.md
   - ../../web-client/README.md
@@ -58,11 +58,11 @@ Downstream fork обычно определяет:
 
 ## Механизм vs политика
 
-DEOS-owned surfaces — это reusable mechanisms и safety contracts: primitives, invariants, bounded execution, AAA task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates и reference patterns.
+DEOS-owned surfaces — это reusable mechanisms и safety contracts: primitives, invariants, bounded execution, Actors task language, governance/protection mechanisms, read-model provenance, configuration seams, validation gates и reference patterns.
 
 Instance-owned surfaces — это concrete policy: brand, dApps, launch economics, founder allocation или no-founder-allocation choices, contributor culture, invoice etiquette, bucket names/percentages, marketing и demand strategy.
 
-Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection и System AAA topologies — это механизмы. Fork может сохранить, переименовать, перенастроить, отключить или заменить policy choices, если честно сохраняет те гарантии, на которые претендует.
+Builder invoices, bucketed capital flows, protocol-owned liquidity, governance protection и System Actors topologies — это механизмы. Fork может сохранить, переименовать, перенастроить, отключить или заменить policy choices, если честно сохраняет те гарантии, на которые претендует.
 
 ## Что должно оставаться стабильным
 
@@ -70,7 +70,7 @@ Builder invoices, bucketed capital flows, protocol-owned liquidity, governance p
 
 - Deterministic protocol-managed economic reactions;
 - Bounded runtime read surfaces versus materialized/indexed views;
-- Явные AAA actor roles и execution-plan boundaries;
+- Явные Actor roles и execution-plan boundaries;
 - Проверка математики TMCTOL до runtime changes;
 - Разделение governance domains и protection;
 - Staking share-vault и receipt accounting invariants;
@@ -104,9 +104,9 @@ DEOS fork не должен запускаться простой заменой
 1. Переименуйте public identity, не переименовывая вслепую TMCTOL-specific standard concepts.
 2. Решите, какие assets и governance surfaces являются ecosystem-specific.
 3. Задайте launch parameters и считайте launch physics immutable, если только более сильный constitutional contract не говорит иначе.
-4. Проверьте System AAA actor roles и уберите assumptions, подходящие только reference ecosystem.
+4. Проверьте System Actor roles и уберите assumptions, подходящие только reference ecosystem.
 5. Считайте builder invoices и bucket policies opt-in механизмами: решите, что ваш инстанс включает, переименовывает, финансирует или отключает.
-6. Для переиспользования AAA реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в ядре `pallet_aaa`.
+6. Для переиспользования Actors реализуйте host-runtime adapters и держите business policy в adapters или genesis actor configuration, а не в ядре `pallet_deos_actors`.
 7. Классифицируйте каждый client datum как direct on-chain projection или materialized/indexed view.
 8. Обновите scripts, metadata export, endpoints и operator documentation.
 9. Запускайте минимально достаточную validation, затем поднимайтесь выше, если пересекаются math/runtime/client boundaries.

@@ -26,7 +26,7 @@ DEOS owns the portable substrate:
 - Runtime primitives and pallet contracts.
 - Economic invariants and bounded execution rules.
 - Protocol-owned-liquidity mechanisms and token-flow safety.
-- AAA task language, scheduling, admission, lifecycle, task-scoped atomicity, and observability.
+- Actors task language, scheduling, admission, lifecycle, task-scoped atomicity, and observability.
 - Governance and protection mechanisms as configurable bounded primitives.
 - Read-model provenance rules separating canonical-chain projections from materialized/indexed views.
 - Configuration seams that let instances choose parameters without rewriting core logic.
@@ -56,7 +56,7 @@ The following DEOS surfaces are mechanisms, not mandatory policies for every for
 - Bucketed capital flows.
 - Protocol-owned liquidity.
 - Governance protection / veto surfaces.
-- AAA execution plans and System AAA topologies.
+- Actors execution plans and System Actors topologies.
 - Tactical-domain tokens such as a builder token in the reference line.
 
 The framework may ship reference defaults and examples. Those defaults help a fork start safely, but they do not morally bind every downstream economy.
@@ -104,11 +104,11 @@ Reference TMCTOL semantics:
 
 A fork may rename, resize, merge, remove, or add buckets if it updates the claimed standard and validation surface honestly.
 
-## 7. AAA Extraction Rule
+## 7. Actors Extraction Rule
 
-When repeated treasury, vault, drip, buyback, burn, zap, liquidity, or distribution flows appear, prefer lifting the common behavior into bounded configurable AAA execution plans rather than multiplying bespoke pallets.
+When repeated treasury, vault, drip, buyback, burn, zap, liquidity, or distribution flows appear, prefer lifting the common behavior into bounded configurable Actors execution plans rather than multiplying bespoke pallets.
 
-This does not mean AAA should become a universal workflow engine. AAA remains a deterministic economic actor kernel with bounded tasks, explicit runtime adapters, and predictable weight/fee behavior.
+This does not mean Actors should become a universal workflow engine. Actors remains a deterministic economic actor kernel with bounded tasks, explicit runtime adapters, and predictable weight/fee behavior.
 
 ## 8. Primary Risk
 

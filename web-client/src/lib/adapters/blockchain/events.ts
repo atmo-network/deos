@@ -147,37 +147,37 @@ export function buildTransactionHighlights(
       );
       continue;
     }
-    if (event.type === 'AAA' && event.value?.type === 'LiquidityAdded') {
+    if (event.type === 'Actors' && event.value?.type === 'LiquidityAdded') {
       highlights.push(
-        `AAA liquidity · in ${formatUnknownAmount(objectProperty(payload, 'amount_a'))} / ${formatUnknownAmount(objectProperty(payload, 'amount_b'))} · LP ${formatUnknownAmount(objectProperty(payload, 'lp_minted'))}`,
+        `Actors liquidity · in ${formatUnknownAmount(objectProperty(payload, 'amount_a'))} / ${formatUnknownAmount(objectProperty(payload, 'amount_b'))} · LP ${formatUnknownAmount(objectProperty(payload, 'lp_minted'))}`,
       );
       continue;
     }
-    if (event.type === 'AAA' && event.value?.type === 'LiquidityRemoved') {
+    if (event.type === 'Actors' && event.value?.type === 'LiquidityRemoved') {
       highlights.push(
-        `AAA liquidity removed · LP ${formatUnknownAmount(objectProperty(payload, 'lp_amount'))} → ${formatUnknownAmount(objectProperty(payload, 'amount_a'))} / ${formatUnknownAmount(objectProperty(payload, 'amount_b'))}`,
+        `Actors liquidity removed · LP ${formatUnknownAmount(objectProperty(payload, 'lp_amount'))} → ${formatUnknownAmount(objectProperty(payload, 'amount_a'))} / ${formatUnknownAmount(objectProperty(payload, 'amount_b'))}`,
       );
       continue;
     }
-    if (event.type === 'AAA' && event.value?.type === 'SwapExecuted') {
+    if (event.type === 'Actors' && event.value?.type === 'SwapExecuted') {
       highlights.push(
-        `AAA swap · in ${formatUnknownAmount(objectProperty(payload, 'amount_in'))} → out ${formatUnknownAmount(objectProperty(payload, 'amount_out'))}`,
+        `Actors swap · in ${formatUnknownAmount(objectProperty(payload, 'amount_in'))} → out ${formatUnknownAmount(objectProperty(payload, 'amount_out'))}`,
       );
       continue;
     }
-    if (event.type === 'AAA' && event.value?.type === 'StepFailed') {
+    if (event.type === 'Actors' && event.value?.type === 'StepFailed') {
       const retry = objectProperty(payload, 'retry_class');
       const retryObject = asObject(retry);
       const retryType =
         retryObject !== null ? objectProperty(retryObject, 'type') : retry;
       highlights.push(
-        `AAA step failed (${typeof retryType === 'string' ? retryType : 'unknown'}) · step ${String(objectProperty(payload, 'step_index') ?? '?')}`,
+        `Actors step failed (${typeof retryType === 'string' ? retryType : 'unknown'}) · step ${String(objectProperty(payload, 'step_index') ?? '?')}`,
       );
       continue;
     }
-    if (event.type === 'AAA' && event.value?.type === 'CycleSummary') {
+    if (event.type === 'Actors' && event.value?.type === 'CycleSummary') {
       highlights.push(
-        `AAA cycle ${String(objectProperty(payload, 'cycle_nonce') ?? '?')} · ${String(objectProperty(payload, 'executed_steps') ?? 0)} executed / ${String(objectProperty(payload, 'committed_effectful_tasks') ?? 0)} effectful`,
+        `Actors cycle ${String(objectProperty(payload, 'cycle_nonce') ?? '?')} · ${String(objectProperty(payload, 'executed_steps') ?? 0)} executed / ${String(objectProperty(payload, 'committed_effectful_tasks') ?? 0)} effectful`,
       );
       continue;
     }

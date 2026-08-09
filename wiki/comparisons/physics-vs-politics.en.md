@@ -65,7 +65,7 @@ Physics-first does not abolish politics. It assigns politics a strategic role wh
 
 ## TMCTOL as the Reference Standard
 
-TMCTOL expresses Economic Physics through unidirectional curve issuance, Treasury-Owned Liquidity, max-output routing, System AAA execution, and domain-scoped governance.
+TMCTOL expresses Economic Physics through unidirectional curve issuance, Treasury-Owned Liquidity, max-output routing, System Actors execution, and domain-scoped governance.
 
 These mechanisms can create reserve support, recurring burn flow, and tighter coordination under documented preconditions. They do not guarantee price, profit, liquidity, volatility reduction, or protection from every implementation and governance failure.
 
