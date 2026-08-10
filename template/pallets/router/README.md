@@ -6,13 +6,13 @@
 
 The current kernel/runtime slice provides:
 
-- User-facing `swap` execution and pallet-facing `execute_swap_for(...)`
-- Route comparison across direct XYK, direct TMC mint, and Native-anchored multi-hop paths
-- Oracle-aware pricing and pre-execution EMA snapshots
-- Deterministic route selection by maximum recipient output
+- Exact-input `swap` plus pallet-facing exact-input and exact-output execution
+- Direct XYK, direct TMC mint, and Native-anchored XYK routes bounded to two legs
+- Per-leg directional reference validation and pre-execution observation publication
+- Deterministic maximum-output or minimum-input route selection
 - Router fee calculation and routing through a runtime adapter
-- Tracked-asset management for oracle monitoring
-- Fee exemption for designated system accounts
+- Canonical outcomes built from measured spend and recipient deltas
+- Fee exemption for configured host accounts
 
 ## Key rule
 
@@ -23,10 +23,10 @@ It chooses among bounded route families by maximum recipient output and uses the
 
 Execution should remain trustless and economically honest:
 
-- DEOS Oracle state updates happen before execution
-- Route selection is deterministic from runtime-visible liquidity inputs
-- Fees are applied through the configured fee-routing adapter
-- System account flows avoid recursive self-taxation
+- Execution prepares current state rather than trusting an earlier quote
+- Every actual XYK leg validates and publishes before that leg executes
+- Authored input/output bounds apply to measured committed facts
+- Fees, market effects, observations, and success events share one transaction
 
 ## Runtime-as-Config rule
 
@@ -36,8 +36,8 @@ Concrete chain policy belongs in runtime configuration, including:
 - Asset-conversion adapter
 - TMC interface wiring
 - Fee-routing adapter
-- Oracle parameters and tracked-asset limits
-- Admin origin, Native asset, router fee defaults, and max fee bounds
+- Directional price-observation adapter
+- Admin origin, account topology, Native asset, LP-index bound, and fee bounds
 
 ## Non-goals of the current slice
 
@@ -48,4 +48,4 @@ The current kernel does not yet include:
 - Governance policy over treasury deployment or bucket strategy
 - Generalized intent settlement outside the bounded TMCTOL route families
 
-See [`docs/architecture.en.md`](./docs/architecture.en.md) for the current contract.
+See the [DEOS Router specification](./docs/specification.en.md) for intended semantics, the [package architecture](./docs/architecture.en.md) for shipped implementation truth, and the [embedding contract](./docs/embedding.md) for independent host obligations.

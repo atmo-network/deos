@@ -5,7 +5,7 @@
 **Status**
 
 - **Component**: `pallet-deos-actors` (Rust crate `pallet_deos_actors`)
-- **Release line**: `0.7.13`
+- **Release line**: `0.7.14`
 - **Audience**: external runtime implementers embedding Actors without inheriting DEOS/TMCTOL topology
 - **Companions**: [`README.md`](../README.md), [DEOS Actors Specification](./specification.en.md), [DEOS Actors Architecture](./architecture.en.md)
 - **Non-goals**: DEOS governance policy, TMCTOL bucket topology, System Actor catalog standardization, UI product flows

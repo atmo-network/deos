@@ -81,7 +81,7 @@ _The intellectual layer atop raw liquidity._
   - `Protocol Liquidity`: Direct minting via TMC when that path delivers more output.
   - `Complex Paths`: Multi-hop Native-anchored XYK routes.
 - `Multi-Curve Routing`: For any pair where `has_curve(to) && supports_collateral(to, from)`, the Router considers TMC as a candidate route. This generalizes beyond Native-only minting to support BLDR and future protocol tokens.
-- `Security mitigations (not complete MEV defense)`: **Direct** routes validate the candidate quote against the previously stored EMA, then snapshot current pre-execution pool reserves into the EMA before executing the swap; multi-hop routes rely on user `min_amount_out` / slippage only. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
+- `Security mitigations (not complete MEV defense)`: Every actual XYK leg validates its prepared directional quote against the current reference, then publishes the leg's pre-execution reserve ratio immediately before market execution. Authored exact-input/output bounds remain mandatory. This launch line has no commit/reveal or ordering protection — do not claim flash-loan or sandwich immunity.
 - `Execution`: Uses `Balance-Delta Verification` — measures the physical change in the recipient's balance rather than relying on theoretical quotes.
 
 #### TMC (Pallet — The Ceiling)
@@ -185,7 +185,7 @@ The Router does not trust the return value of the AMM. It verifies the physical 
 
 ```rust
 // AssetConversionAdapter
-fn swap_exact_tokens_for_tokens(...) -> Result<Balance, DispatchError> {
+fn execute_single_pool_exact_input(...) -> Result<Balance, DispatchError> {
     let balance_before = match target_asset {
         AssetKind::Native => T::Currency::balance(&recipient),
         AssetKind::Local(id) => T::Assets::balance(id, &recipient),
@@ -199,16 +199,20 @@ fn swap_exact_tokens_for_tokens(...) -> Result<Balance, DispatchError> {
 }
 ```
 
-### 5.2 Direct-Route Deviation Validation and Pre-Execution Snapshot
+### 5.2 Per-Leg Deviation Validation and Pre-Execution Publication
 
-On direct routes the router first validates the selected quote against the previously stored EMA. After that validation succeeds, it snapshots the current pool reserves into the EMA before executing the swap. The current trade therefore cannot update the EMA before its own deviation check. This is a bounded local deviation check, not an external fair-price proof or complete flash-loan/MEV defense. Prior transactions may already have moved the observed pool; multi-hop relies on slippage and this launch line has no ordering/commit protection.
+Execution prepares current route truth instead of trusting a prior quote. It validates every prepared XYK leg against its directional reference, then publishes that leg's current reserve ratio immediately before executing the same leg. Native-anchored routes therefore validate and publish both actual pools in order; direct TMC mint has no XYK publication. This remains a bounded local deviation check, not an external fair-price proof or complete flash-loan/MEV defense.
 
 ```rust
-pub fn swap(from: AssetKind, to: AssetKind, ...) -> DispatchResult {
-    let route = Self::prepare_optimal_route(...)?; // Select route; validate slippage and direct-route deviation.
-    Self::update_oracle_from_reserves(from, to)?; // Snapshot current pre-execution reserves only after validation.
-    Self::execute_prepared_route(route, ...)?;
-    Ok(())
+pub fn execute_swap_for(...) -> Result<RouterOutcome, DispatchError> {
+    let prepared = Self::prepare_optimal_route(...)?;
+    Self::validate_prepared_legs(&prepared.legs)?;
+    for leg in prepared.legs {
+        Self::update_oracle_from_reserves(leg.asset_in, leg.asset_out)?;
+        Self::execute_single_pool_leg(leg, ...)?;
+    }
+    Self::verify_actual_intent_bounds(...)?;
+    Ok(Self::canonical_outcome(...))
 }
 ```
 

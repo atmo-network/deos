@@ -128,12 +128,14 @@
         "en": [
           "../template/pallets/router/docs/architecture.en.md",
           "../docs/oracle.integration.en.md",
-          "../docs/core.architecture.en.md"
+          "../docs/core.architecture.en.md",
+          "../template/pallets/router/docs/specification.en.md"
         ],
         "ru": [
           "../template/pallets/router/docs/architecture.en.md",
           "../docs/oracle.integration.en.md",
-          "../docs/core.architecture.en.md"
+          "../docs/core.architecture.en.md",
+          "../template/pallets/router/docs/specification.en.md"
         ]
       }
     },
@@ -462,12 +464,14 @@
         "en": [
           "../template/pallets/router/docs/architecture.en.md",
           "../template/pallets/tmc/docs/architecture.en.md",
-          "../docs/tmctol.specification.en.md"
+          "../docs/tmctol.specification.en.md",
+          "../template/pallets/router/docs/specification.en.md"
         ],
         "ru": [
           "../template/pallets/router/docs/architecture.en.md",
           "../template/pallets/tmc/docs/architecture.en.md",
-          "../docs/tmctol.specification.en.md"
+          "../docs/tmctol.specification.en.md",
+          "../template/pallets/router/docs/specification.en.md"
         ]
       }
     },

@@ -642,7 +642,10 @@ fn dexops_can_swap_foreign_to_native() {
       result.is_ok(),
       "Foreign→Native swap must succeed: {result:?}"
     );
-    assert!(result.unwrap() > 0, "Must receive native tokens");
+    assert!(
+      result.unwrap().recipient_amount_out > 0,
+      "Must receive native tokens"
+    );
   });
 }
 
@@ -668,7 +671,7 @@ fn dexops_normal_swap_succeeds() {
       Perbill::from_percent(50),
     );
     assert!(result.is_ok(), "Normal swap must succeed: {result:?}");
-    assert!(result.unwrap() > 0);
+    assert!(result.unwrap().recipient_amount_out > 0);
   });
 }
 
@@ -1877,11 +1880,11 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       .rev()
       .find_map(|r| {
         if let crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
-          mechanism,
+          outcome,
           ..
         }) = &r.event
         {
-          Some(mechanism.clone())
+          Some(outcome.family)
         } else {
           None
         }
@@ -1889,7 +1892,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       .expect("SwapExecuted event must exist");
     assert_eq!(
       used_mechanism,
-      pallet_axial_router::RouteMechanismKind::DirectMint,
+      pallet_axial_router::RouteFamily::DirectMint,
       "Router must select TMC (DirectMint) when TMC price is better than XYK"
     );
     assert_eq!(
@@ -1967,11 +1970,11 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
       .rev()
       .find_map(|r| {
         if let crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
-          mechanism,
+          outcome,
           ..
         }) = &r.event
         {
-          Some(mechanism.clone())
+          Some(outcome.family)
         } else {
           None
         }
@@ -1979,7 +1982,7 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
       .expect("SwapExecuted event must exist");
     assert_eq!(
       used_mechanism,
-      pallet_axial_router::RouteMechanismKind::DirectXyk,
+      pallet_axial_router::RouteFamily::DirectXyk,
       "Router must select XYK (DirectXyk) when TMC price is worse"
     );
   });
@@ -2021,11 +2024,11 @@ fn router_multi_hop_foreign_to_bldr() {
       .rev()
       .find_map(|r| {
         if let crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
-          mechanism,
+          outcome,
           ..
         }) = &r.event
         {
-          Some(mechanism.clone())
+          Some(outcome.family)
         } else {
           None
         }
@@ -2033,7 +2036,7 @@ fn router_multi_hop_foreign_to_bldr() {
       .expect("SwapExecuted event must exist");
     assert_eq!(
       used_mechanism,
-      pallet_axial_router::RouteMechanismKind::MultiHopNative,
+      pallet_axial_router::RouteFamily::NativeAnchoredXyk,
       "Router must use multi-hop (Foreign→NTVE→BLDR) when no direct pool exists"
     );
   });

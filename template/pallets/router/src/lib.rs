@@ -23,133 +23,212 @@ pub mod weights;
 pub use weights::WeightInfo;
 
 use frame::prelude::*;
-use polkadot_sdk::sp_runtime::Perbill;
+use polkadot_sdk::{frame_support::traits::ConstU32, sp_runtime::Perbill};
 use scale_info::prelude::vec::Vec;
 
-/// Route comparison result for optimal path selection
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RouteComparison {
-  /// Expected output amount
-  pub expected_output: Balance,
-  /// Route path (asset kinds)
-  pub path: Vec<AssetKind>,
-  /// Route mechanism type
-  pub mechanism: RouteMechanism,
-  /// Price impact percentage
-  pub price_impact: Perbill,
-  /// Total fees (router + AMM)
-  pub total_fees: Balance,
-}
+/// Maximum asset count for the accepted direct and Native-anchored route families.
+pub type MaxRouteAssets = ConstU32<3>;
 
-/// Route mechanism types for advanced routing
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RouteMechanism {
-  /// Direct XYK pool swap
-  DirectXyk { pool_id: (AssetKind, AssetKind) },
-  /// Direct mint via TMC curve
-  DirectMint { foreign_asset: AssetKind },
-  /// Multi-hop through Native
-  MultiHopNative { hops: Vec<AssetKind> },
-}
+/// Canonical bounded asset path. A path contains one more asset than market legs.
+pub type RoutePath = BoundedVec<AssetKind, MaxRouteAssets>;
 
-/// Simplified route mechanism for events (no unbounded types)
+/// Maximum market-leg count for the accepted route families.
+pub type MaxRouteLegs = ConstU32<2>;
+
 #[derive(
   Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
-pub enum RouteMechanismKind {
-  DirectXyk,
-  DirectMint,
-  MultiHopNative,
+pub enum PreparedLeg {
+  Xyk {
+    pool_id: (AssetKind, AssetKind),
+    asset_in: AssetKind,
+    asset_out: AssetKind,
+    quoted_amount_in: Balance,
+    quoted_amount_out: Balance,
+  },
+  TmcMint {
+    token_asset: AssetKind,
+    collateral_asset: AssetKind,
+    quoted_collateral_in: Balance,
+    quoted_recipient_out: Balance,
+  },
 }
 
-impl From<&RouteMechanism> for RouteMechanismKind {
-  fn from(m: &RouteMechanism) -> Self {
-    match m {
-      RouteMechanism::DirectXyk { .. } => Self::DirectXyk,
-      RouteMechanism::DirectMint { .. } => Self::DirectMint,
-      RouteMechanism::MultiHopNative { .. } => Self::MultiHopNative,
+pub type PreparedLegs = BoundedVec<PreparedLeg, MaxRouteLegs>;
+
+#[derive(
+  Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct ExactOutputExecution {
+  pub amount_in: Balance,
+  pub recipient_amount_out: Balance,
+}
+
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub enum RouteFamily {
+  DirectXyk,
+  DirectMint,
+  NativeAnchoredXyk,
+}
+
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub enum RouteWeightClass {
+  ExactInputDirectXyk,
+  ExactInputDirectMint,
+  ExactInputNativeAnchoredXyk,
+  ExactOutputDirectXyk,
+  ExactOutputNativeAnchoredXyk,
+}
+
+#[derive(
+  Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub enum RouterFailureClass {
+  InvalidRequest,
+  NoViableRoute,
+  ProtectionRejected,
+  LiquidityUnavailable,
+  FeeRejected,
+  PublicationRejected,
+  IngressRejected,
+  InvariantViolation,
+}
+
+#[derive(
+  Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct RouterOutcome {
+  pub family: RouteFamily,
+  pub legs: PreparedLegs,
+  pub total_amount_in: Balance,
+  pub router_fee: Balance,
+  pub routed_amount_in: Balance,
+  pub recipient_amount_out: Balance,
+  pub weight_class: RouteWeightClass,
+}
+
+/// Prepared route selected from current runtime state.
+#[derive(
+  Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
+pub struct PreparedRoute {
+  pub total_amount_in: Balance,
+  pub router_fee: Balance,
+  pub routed_amount_in: Balance,
+  pub recipient_amount_out: Balance,
+  pub weight_class: RouteWeightClass,
+  pub legs: PreparedLegs,
+  pub family: RouteFamily,
+}
+
+impl RouteFamily {
+  const fn rank(self) -> u8 {
+    match self {
+      Self::DirectXyk => 0,
+      Self::DirectMint => 1,
+      Self::NativeAnchoredXyk => 2,
     }
   }
 }
 
-/// Authoritative router quote surface for exact-input previews
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+/// Authoritative router quote surface for exact-input previews.
+#[derive(
+  Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
 pub struct RouterQuote {
-  /// Original amount presented to the router before router fee deduction
   pub amount_in: Balance,
-  /// Router fee charged on `amount_in`
   pub router_fee: Balance,
-  /// Amount that actually enters route selection after router fee
   pub amount_after_fee: Balance,
-  /// Best output amount under current router policy
   pub amount_out: Balance,
-  /// Canonical mechanism chosen by the router policy
-  pub mechanism: RouteMechanismKind,
-  /// Canonical path chosen by the router policy
-  pub path: Vec<AssetKind>,
-  /// Current route price-impact snapshot for client display
+  pub family: RouteFamily,
+  pub path: RoutePath,
+  pub legs: PreparedLegs,
   pub price_impact: Perbill,
-  /// Total fee burden reported with the quote
   pub total_fees: Balance,
 }
 
 /// Authoritative caller-aware exact-output quote.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, TypeInfo)]
+#[derive(
+  Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
+)]
 pub struct ExactOutputQuote {
-  /// Total input required, including the router fee.
   pub amount_in: Balance,
-  /// Router fee charged in the input asset.
   pub router_fee: Balance,
-  /// Maximum input passed into native route execution after fee collection.
   pub amount_after_fee: Balance,
-  /// Exact recipient output requested by the caller.
   pub amount_out: Balance,
-  /// Canonical exact-output mechanism.
-  pub mechanism: RouteMechanismKind,
-  /// Canonical direct or Native-anchored path.
-  pub path: Vec<AssetKind>,
-  /// Current route price-impact snapshot.
+  pub family: RouteFamily,
+  pub path: RoutePath,
+  pub legs: PreparedLegs,
   pub price_impact: Perbill,
-  /// Total known fee burden.
   pub total_fees: Balance,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ExactOutputRoute {
-  required_input: Balance,
-  path: Vec<AssetKind>,
-  mechanism: RouteMechanism,
-  price_impact: Perbill,
-}
-
-impl RouteComparison {
-  /// Create new route comparison
-  pub fn new(
-    expected_output: Balance,
-    path: Vec<AssetKind>,
-    mechanism: RouteMechanism,
-    price_impact: Perbill,
-    total_fees: Balance,
-  ) -> Self {
-    Self {
-      expected_output,
-      path,
-      mechanism,
-      price_impact,
-      total_fees,
+impl PreparedRoute {
+  fn path(&self) -> Option<RoutePath> {
+    let mut path = RoutePath::default();
+    let first = self.legs.first()?;
+    path
+      .try_push(match first {
+        PreparedLeg::Xyk { asset_in, .. } => *asset_in,
+        PreparedLeg::TmcMint {
+          collateral_asset, ..
+        } => *collateral_asset,
+      })
+      .ok()?;
+    for leg in &self.legs {
+      path
+        .try_push(match leg {
+          PreparedLeg::Xyk { asset_out, .. } => *asset_out,
+          PreparedLeg::TmcMint { token_asset, .. } => *token_asset,
+        })
+        .ok()?;
     }
+    Some(path)
   }
 
-  pub fn into_router_quote(self, amount_in: Balance, router_fee: Balance) -> RouterQuote {
+  fn with_ingress(mut self, total_amount_in: Balance, router_fee: Balance) -> Self {
+    self.total_amount_in = total_amount_in;
+    self.router_fee = router_fee;
+    self
+  }
+
+  fn compare_exact_input(&self, other: &Self) -> core::cmp::Ordering {
+    self
+      .recipient_amount_out
+      .cmp(&other.recipient_amount_out)
+      .then_with(|| other.family.rank().cmp(&self.family.rank()))
+      .then_with(|| other.path().cmp(&self.path()))
+  }
+
+  fn compare_exact_output(&self, other: &Self) -> core::cmp::Ordering {
+    self
+      .routed_amount_in
+      .cmp(&other.routed_amount_in)
+      .then_with(|| other.recipient_amount_out.cmp(&self.recipient_amount_out))
+      .then_with(|| self.family.rank().cmp(&other.family.rank()))
+      .then_with(|| self.path().cmp(&other.path()))
+  }
+
+  fn into_router_quote(
+    self,
+    amount_in: Balance,
+    router_fee: Balance,
+    price_impact: Perbill,
+  ) -> RouterQuote {
     RouterQuote {
       amount_in,
       router_fee,
-      amount_after_fee: amount_in.saturating_sub(router_fee),
-      amount_out: self.expected_output,
-      mechanism: RouteMechanismKind::from(&self.mechanism),
-      path: self.path,
-      price_impact: self.price_impact,
-      total_fees: self.total_fees.saturating_add(router_fee),
+      amount_after_fee: self.routed_amount_in,
+      amount_out: self.recipient_amount_out,
+      family: self.family,
+      path: self.path().unwrap_or_default(),
+      legs: self.legs,
+      price_impact,
+      total_fees: router_fee,
     }
   }
 }
@@ -202,6 +281,10 @@ pub mod pallet {
     /// Default router fee as Perbill (default: 0.5%)
     #[pallet::constant]
     type DefaultRouterFee: Get<Perbill>;
+
+    /// Maximum number of canonical LP reverse-index entries.
+    #[pallet::constant]
+    type MaxLpPairs: Get<u32>;
 
     /// Maximum router fee allowed for governance updates.
     #[pallet::constant]
@@ -262,11 +345,10 @@ pub mod pallet {
   /// Balance type
   pub type Balance = u128;
 
-  /// Reverse index from an Asset Conversion LP token to its canonical pool pair.
+  /// Bounded reverse index from Asset Conversion LP tokens to canonical pool pairs.
   #[pallet::storage]
-  #[pallet::getter(fn lp_pair_by_token_id)]
   pub type LpPairByTokenId<T: Config> =
-    StorageMap<_, Twox64Concat, u32, (AssetKind, AssetKind), OptionQuery>;
+    StorageValue<_, BoundedBTreeMap<u32, (AssetKind, AssetKind), T::MaxLpPairs>, ValueQuery>;
 
   /// Current router fee (can be updated by governance)
   #[pallet::storage]
@@ -281,9 +363,7 @@ pub mod pallet {
       who: T::AccountId,
       from: AssetKind,
       to: AssetKind,
-      amount_in: Balance,
-      amount_out: Balance,
-      mechanism: RouteMechanismKind,
+      outcome: RouterOutcome,
     },
     /// Fee collected and routed
     FeeCollected {
@@ -326,6 +406,36 @@ pub mod pallet {
     RouterFeeTooHigh,
     /// An LP token is already indexed to a different pool pair
     LpTokenPairCollision,
+    /// The bounded LP reverse index reached its configured capacity
+    LpPairCapacityExceeded,
+    /// A pool pair repeats an endpoint
+    InvalidPoolPair,
+    /// Prepared family and leg identity disagree
+    PreparedRouteMismatch,
+  }
+
+  impl<T: Config> Error<T> {
+    pub const fn failure_class(&self) -> RouterFailureClass {
+      match self {
+        Self::IdenticalAssets
+        | Self::ZeroAmount
+        | Self::AmountTooLow
+        | Self::DeadlinePassed
+        | Self::RouterFeeTooHigh => RouterFailureClass::InvalidRequest,
+        Self::NoRouteFound | Self::NoMultiHopRoute => RouterFailureClass::NoViableRoute,
+        Self::SlippageExceeded | Self::PriceDeviationExceeded => {
+          RouterFailureClass::ProtectionRejected
+        }
+        Self::InsufficientLiquidity => RouterFailureClass::LiquidityUnavailable,
+        Self::FeeRoutingFailed | Self::InsufficientInputBalance => RouterFailureClass::FeeRejected,
+        Self::InvalidOracleData => RouterFailureClass::PublicationRejected,
+        Self::LpTokenPairCollision
+        | Self::LpPairCapacityExceeded
+        | Self::InvalidPoolPair
+        | Self::PreparedRouteMismatch => RouterFailureClass::InvariantViolation,
+        _ => RouterFailureClass::InvariantViolation,
+      }
+    }
   }
 
   #[pallet::call]
@@ -365,13 +475,30 @@ pub mod pallet {
   }
 
   impl<T: Config> Pallet<T> {
+    pub fn lp_pair_by_token_id(lp_token_id: u32) -> Option<(AssetKind, AssetKind)> {
+      LpPairByTokenId::<T>::get().get(&lp_token_id).copied()
+    }
+
     pub fn register_lp_pair(lp_token_id: u32, pair: (AssetKind, AssetKind)) -> DispatchResult {
-      if let Some(existing) = LpPairByTokenId::<T>::get(lp_token_id) {
-        ensure!(existing == pair, Error::<T>::LpTokenPairCollision);
-        return Ok(());
-      }
-      LpPairByTokenId::<T>::insert(lp_token_id, pair);
-      Ok(())
+      ensure!(pair.0 != pair.1, Error::<T>::InvalidPoolPair);
+      let canonical_pair = if pair.0 < pair.1 {
+        pair
+      } else {
+        (pair.1, pair.0)
+      };
+      LpPairByTokenId::<T>::try_mutate(|pairs| {
+        if let Some(existing) = pairs.get(&lp_token_id) {
+          ensure!(
+            *existing == canonical_pair,
+            Error::<T>::LpTokenPairCollision
+          );
+          return Ok(());
+        }
+        pairs
+          .try_insert(lp_token_id, canonical_pair)
+          .map_err(|_| Error::<T>::LpPairCapacityExceeded)?;
+        Ok(())
+      })
     }
 
     pub fn apply_router_fee_update(new_fee: Perbill) -> DispatchResult {
@@ -388,18 +515,19 @@ pub mod pallet {
     /// Execute direct swap through asset conversion
     fn execute_direct_swap(
       who: &T::AccountId,
-      path: &[AssetKind],
+      path: &RoutePath,
       amount_in: Balance,
       min_amount_out: Balance,
       recipient: &T::AccountId,
       keep_alive: bool,
     ) -> Result<Balance, DispatchError> {
-      if path.len() < 2 {
+      if path.len() != 2 {
         return Err(Error::<T>::NoRouteFound.into());
       }
-      T::AssetConversion::swap_exact_tokens_for_tokens(
+      T::AssetConversion::execute_single_pool_exact_input(
         who.clone(),
-        path.to_vec(),
+        path[0],
+        path[1],
         amount_in,
         min_amount_out.max(1), // pallet_asset_conversion rejects zero
         recipient.clone(),
@@ -411,86 +539,223 @@ pub mod pallet {
     fn prepare_optimal_route(
       from: AssetKind,
       to: AssetKind,
-      amount_in: Balance,
+      total_amount_in: Balance,
+      router_fee: Balance,
       min_amount_out: Balance,
-    ) -> Result<RouteComparison, Error<T>> {
-      let route_comparison =
-        Self::find_optimal_route(from, to, amount_in).ok_or(Error::<T>::NoRouteFound)?;
-      Self::validate_price_protection(
-        &route_comparison.path,
-        amount_in,
-        min_amount_out,
-        route_comparison.expected_output,
-      )?;
-      Ok(route_comparison)
+    ) -> Result<PreparedRoute, Error<T>> {
+      let routed_amount_in = total_amount_in.saturating_sub(router_fee);
+      let prepared = Self::find_optimal_route(from, to, routed_amount_in)
+        .ok_or(Error::<T>::NoRouteFound)?
+        .with_ingress(total_amount_in, router_fee);
+      ensure!(
+        prepared.recipient_amount_out >= min_amount_out,
+        Error::<T>::SlippageExceeded
+      );
+      Self::validate_prepared_identity(&prepared)?;
+      Self::validate_prepared_legs(&prepared.legs)?;
+      Ok(prepared)
     }
 
-    /// Execute a route that was already selected and validated
+    /// Execute a route that was already selected and validated.
     fn execute_prepared_route(
       who: &T::AccountId,
       to: AssetKind,
-      amount_in: Balance,
       min_amount_out: Balance,
       recipient: &T::AccountId,
       keep_alive: bool,
-      route_comparison: RouteComparison,
-    ) -> Result<(Balance, RouteMechanismKind), DispatchError> {
-      let mechanism_kind = RouteMechanismKind::from(&route_comparison.mechanism);
-      let amount_out = match route_comparison.mechanism {
-        RouteMechanism::DirectMint { foreign_asset } => {
-          T::TmcPallet::mint_with_distribution(who, recipient, to, foreign_asset, amount_in)?
-        }
-        _ => Self::execute_direct_swap(
+      prepared: &PreparedRoute,
+    ) -> Result<Balance, DispatchError> {
+      if prepared.family == RouteFamily::DirectMint {
+        let Some(PreparedLeg::TmcMint {
+          token_asset,
+          collateral_asset,
+          ..
+        }) = prepared.legs.first()
+        else {
+          return Err(Error::<T>::PreparedRouteMismatch.into());
+        };
+        ensure!(*token_asset == to, Error::<T>::PreparedRouteMismatch);
+        let amount_out = T::TmcPallet::mint_with_distribution(
           who,
-          &route_comparison.path,
-          amount_in,
-          min_amount_out,
           recipient,
-          keep_alive,
-        )?,
-      };
-      Ok((amount_out, mechanism_kind))
+          *token_asset,
+          *collateral_asset,
+          prepared.routed_amount_in,
+        )?;
+        return Ok(amount_out);
+      }
+
+      let mut amount_in = prepared.routed_amount_in;
+      let mut amount_out = 0;
+      let last_leg = prepared.legs.len().saturating_sub(1);
+      for (index, leg) in prepared.legs.iter().enumerate() {
+        let PreparedLeg::Xyk {
+          asset_in,
+          asset_out,
+          quoted_amount_out,
+          ..
+        } = leg
+        else {
+          return Err(Error::<T>::NoRouteFound.into());
+        };
+        Self::update_oracle_from_reserves(*asset_in, *asset_out)?;
+        let is_last = index == last_leg;
+        let leg_recipient = if is_last { recipient } else { who };
+        let leg_floor = if is_last {
+          min_amount_out
+        } else {
+          *quoted_amount_out
+        };
+        let path = vec![*asset_in, *asset_out]
+          .try_into()
+          .map_err(|_| Error::<T>::NoRouteFound)?;
+        amount_out =
+          Self::execute_direct_swap(who, &path, amount_in, leg_floor, leg_recipient, keep_alive)?;
+        amount_in = amount_out;
+      }
+      Ok(amount_out)
     }
 
-    /// Validate price protection before swap execution
-    pub fn validate_price_protection(
-      path: &[AssetKind],
-      amount_in: Balance,
-      min_amount_out: Balance,
-      expected_output: Balance,
-    ) -> Result<(), Error<T>> {
-      // Basic slippage check on the quote
-      if expected_output < min_amount_out {
-        return Err(Error::<T>::SlippageExceeded);
+    fn execute_prepared_exact_output_legs(
+      who: &T::AccountId,
+      legs: &PreparedLegs,
+      recipient: &T::AccountId,
+      keep_alive: bool,
+    ) -> Result<ExactOutputExecution, DispatchError> {
+      let last_leg = legs.len().saturating_sub(1);
+      let mut external_amount_in = None;
+      let mut recipient_amount_out = 0;
+      for (index, leg) in legs.iter().enumerate() {
+        let PreparedLeg::Xyk {
+          asset_in,
+          asset_out,
+          quoted_amount_in,
+          quoted_amount_out,
+          ..
+        } = leg
+        else {
+          return Err(Error::<T>::NoRouteFound.into());
+        };
+        Self::update_oracle_from_reserves(*asset_in, *asset_out)?;
+        let is_last = index == last_leg;
+        let leg_recipient = if is_last { recipient } else { who };
+        let execution = T::AssetConversion::execute_single_pool_exact_output(
+          who.clone(),
+          *asset_in,
+          *asset_out,
+          *quoted_amount_out,
+          *quoted_amount_in,
+          leg_recipient.clone(),
+          keep_alive,
+        )?;
+        ensure!(
+          execution.amount_in <= *quoted_amount_in,
+          Error::<T>::SlippageExceeded
+        );
+        ensure!(
+          execution.recipient_amount_out >= *quoted_amount_out,
+          Error::<T>::SlippageExceeded
+        );
+        if external_amount_in.is_none() {
+          external_amount_in = Some(execution.amount_in);
+        }
+        if is_last {
+          recipient_amount_out = execution.recipient_amount_out;
+        }
       }
-      if path.len() < 2 {
-        return Err(Error::<T>::NoRouteFound);
-      }
-      let from = path.first().copied().ok_or(Error::<T>::NoRouteFound)?;
-      let to = path.last().copied().ok_or(Error::<T>::NoRouteFound)?;
-      if from == to {
-        return Err(Error::<T>::IdenticalAssets);
-      }
-      if path.len() == 2 {
-        let current_output = expected_output; // Use pre-calculated output to avoid double DB read
-        let current_price_normalized = current_output
-          .saturating_mul(T::Precision::get())
-          .saturating_div(amount_in);
-        T::PriceOracle::validate_price_deviation(from, to, current_price_normalized)
-          .map_err(|_| Error::<T>::PriceDeviationExceeded)?;
-      } else {
-        // Multi-hop (Native-anchored) routes are protected by user slippage only:
-        // the EMA deviation guard is intentionally a direct-pair check on the
-        // current launch line. Native is treated as the stable routing hub.
-        Self::quote_multi_hop_route(path, amount_in).ok_or(Error::<T>::NoRouteFound)?;
+      Ok(ExactOutputExecution {
+        amount_in: external_amount_in.ok_or(Error::<T>::NoRouteFound)?,
+        recipient_amount_out,
+      })
+    }
+
+    pub(crate) fn validate_prepared_identity(prepared: &PreparedRoute) -> Result<(), Error<T>> {
+      let path = prepared.path().ok_or(Error::<T>::PreparedRouteMismatch)?;
+      let valid = match (prepared.family, prepared.legs.as_slice(), path.as_slice()) {
+        (
+          RouteFamily::DirectXyk,
+          [
+            PreparedLeg::Xyk {
+              pool_id,
+              asset_in,
+              asset_out,
+              ..
+            },
+          ],
+          [path_in, path_out],
+        ) => {
+          asset_in == path_in
+            && asset_out == path_out
+            && T::AssetConversion::single_pool_id(*asset_in, *asset_out) == Some(*pool_id)
+        }
+        (
+          RouteFamily::DirectMint,
+          [
+            PreparedLeg::TmcMint {
+              token_asset,
+              collateral_asset,
+              ..
+            },
+          ],
+          [path_in, path_out],
+        ) => collateral_asset == path_in && token_asset == path_out,
+        (
+          RouteFamily::NativeAnchoredXyk,
+          [
+            PreparedLeg::Xyk {
+              pool_id: first_pool,
+              asset_in: first_in,
+              asset_out: first_out,
+              ..
+            },
+            PreparedLeg::Xyk {
+              pool_id: second_pool,
+              asset_in: second_in,
+              asset_out: second_out,
+              ..
+            },
+          ],
+          [path_in, path_middle, path_out],
+        ) => {
+          first_in == path_in
+            && first_out == path_middle
+            && second_in == path_middle
+            && second_out == path_out
+            && *path_middle == T::NativeAsset::get()
+            && T::AssetConversion::single_pool_id(*first_in, *first_out) == Some(*first_pool)
+            && T::AssetConversion::single_pool_id(*second_in, *second_out) == Some(*second_pool)
+        }
+        _ => false,
+      };
+      ensure!(valid, Error::<T>::PreparedRouteMismatch);
+      Ok(())
+    }
+
+    fn validate_prepared_legs(legs: &PreparedLegs) -> Result<(), Error<T>> {
+      for leg in legs {
+        if let PreparedLeg::Xyk {
+          asset_in,
+          asset_out,
+          quoted_amount_in,
+          quoted_amount_out,
+          ..
+        } = leg
+        {
+          ensure!(!quoted_amount_in.is_zero(), Error::<T>::InvalidOracleData);
+          let current_price = quoted_amount_out
+            .saturating_mul(T::Precision::get())
+            .saturating_div(*quoted_amount_in);
+          T::PriceOracle::validate_price_deviation(*asset_in, *asset_out, current_price)
+            .map_err(|_| Error::<T>::PriceDeviationExceeded)?;
+        }
       }
       Ok(())
     }
 
     /// Update the local EMA from pre-execution pool reserves
     fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Error<T>> {
-      if let Some(pool_id) = T::AssetConversion::get_pool_id(from, to) {
-        if let Some((res_a, res_b)) = T::AssetConversion::get_pool_reserves(pool_id) {
+      if let Some(pool_id) = T::AssetConversion::single_pool_id(from, to) {
+        if let Some((res_a, res_b)) = T::AssetConversion::single_pool_reserves(pool_id) {
           // CORRECT: Identify which reserve matches the 'from' asset
           let (reserve_in, reserve_out) = if pool_id.0 == from {
             (res_a, res_b)
@@ -568,7 +833,7 @@ pub mod pallet {
       amount_in: Balance,
       min_amount_out: Balance,
       recipient: &T::AccountId,
-    ) -> Result<Balance, DispatchError> {
+    ) -> Result<RouterOutcome, DispatchError> {
       ensure!(from != to, Error::<T>::IdenticalAssets);
       ensure!(amount_in > 0, Error::<T>::ZeroAmount);
       let system_account = Self::is_fee_exempt(who);
@@ -577,31 +842,36 @@ pub mod pallet {
       } else {
         Self::calculate_router_fee(amount_in)
       };
-      let amount_after_fee = amount_in.saturating_sub(fee);
       let keep_alive = !system_account;
       Self::ensure_can_debit_input(who, from, amount_in, keep_alive)?;
-      let route_comparison =
-        Self::prepare_optimal_route(from, to, amount_after_fee, min_amount_out)?;
+      let route_comparison = Self::prepare_optimal_route(from, to, amount_in, fee, min_amount_out)?;
       Self::collect_router_fee(from, fee, who)?;
-      Self::update_oracle_from_reserves(from, to)?;
-      let (amount_out, mechanism) = Self::execute_prepared_route(
+      let amount_out = Self::execute_prepared_route(
         who,
         to,
-        amount_after_fee,
         min_amount_out,
         recipient,
         keep_alive,
-        route_comparison,
+        &route_comparison,
       )?;
+      ensure!(amount_out >= min_amount_out, Error::<T>::SlippageExceeded);
+      let family = route_comparison.family;
+      let outcome = RouterOutcome {
+        family,
+        legs: route_comparison.legs,
+        total_amount_in: route_comparison.total_amount_in,
+        router_fee: route_comparison.router_fee,
+        routed_amount_in: route_comparison.routed_amount_in,
+        recipient_amount_out: amount_out,
+        weight_class: route_comparison.weight_class,
+      };
       Self::deposit_event(Event::SwapExecuted {
         who: who.clone(),
         from,
         to,
-        amount_in,
-        amount_out,
-        mechanism,
+        outcome: outcome.clone(),
       });
-      Ok(amount_out)
+      Ok(outcome)
     }
 
     /// Execute a caller-aware native exact-output XYK route under a total input cap.
@@ -613,41 +883,47 @@ pub mod pallet {
       amount_out: Balance,
       max_amount_in: Balance,
       recipient: &T::AccountId,
-    ) -> Result<Balance, DispatchError> {
+    ) -> Result<RouterOutcome, DispatchError> {
       ensure!(!max_amount_in.is_zero(), Error::<T>::ZeroAmount);
-      let quote = Self::prepare_exact_output_quote(who, from, to, amount_out)?;
+      let (prepared, router_fee, prepared_amount_in) =
+        Self::prepare_exact_output_route(who, from, to, amount_out)?;
       ensure!(
-        quote.amount_in <= max_amount_in,
+        prepared_amount_in <= max_amount_in,
         Error::<T>::SlippageExceeded
       );
       let keep_alive = !Self::is_fee_exempt(who);
-      Self::ensure_can_debit_input(who, from, quote.amount_in, keep_alive)?;
-      Self::validate_price_protection(&quote.path, quote.amount_after_fee, amount_out, amount_out)?;
-      Self::collect_router_fee(from, quote.router_fee, who)?;
-      Self::update_oracle_from_reserves(from, to)?;
-      let spent_after_fee = T::AssetConversion::swap_tokens_for_exact_tokens(
-        who.clone(),
-        quote.path.clone(),
-        amount_out,
-        quote.amount_after_fee,
-        recipient.clone(),
-        keep_alive,
-      )?;
+      Self::ensure_can_debit_input(who, from, prepared_amount_in, keep_alive)?;
+      Self::validate_prepared_legs(&prepared.legs)?;
+      Self::collect_router_fee(from, router_fee, who)?;
+      let execution =
+        Self::execute_prepared_exact_output_legs(who, &prepared.legs, recipient, keep_alive)?;
       ensure!(
-        spent_after_fee <= quote.amount_after_fee,
+        execution.amount_in <= prepared.routed_amount_in,
         Error::<T>::SlippageExceeded
       );
-      let amount_in = spent_after_fee.saturating_add(quote.router_fee);
+      ensure!(
+        execution.recipient_amount_out >= amount_out,
+        Error::<T>::SlippageExceeded
+      );
+      let amount_in = execution.amount_in.saturating_add(router_fee);
       ensure!(amount_in <= max_amount_in, Error::<T>::SlippageExceeded);
+      let family = prepared.family;
+      let outcome = RouterOutcome {
+        family,
+        legs: prepared.legs,
+        total_amount_in: amount_in,
+        router_fee: prepared.router_fee,
+        routed_amount_in: execution.amount_in,
+        recipient_amount_out: execution.recipient_amount_out,
+        weight_class: prepared.weight_class,
+      };
       Self::deposit_event(Event::SwapExecuted {
         who: who.clone(),
         from,
         to,
-        amount_in,
-        amount_out,
-        mechanism: quote.mechanism,
+        outcome: outcome.clone(),
       });
-      Ok(amount_in)
+      Ok(outcome)
     }
 
     /// Check whether an account is exempt from router fees (system actors)
@@ -673,7 +949,7 @@ pub mod pallet {
         return Err(Error::<T>::ZeroAmount.into());
       }
       // Get quote from asset conversion pallet
-      T::AssetConversion::quote_price_exact_tokens_for_tokens(asset_from, asset_to, amount_in, true)
+      T::AssetConversion::quote_single_pool_exact_input(asset_from, asset_to, amount_in, true)
         .ok_or_else(|| Error::<T>::NoRouteFound.into())
     }
 
@@ -682,64 +958,37 @@ pub mod pallet {
       T::PriceOracle::get_ema_price(asset_from, asset_to)
     }
 
-    /// Find best multi-hop route using Native anchor
-    fn find_best_multi_hop_route(
-      from: AssetKind,
-      to: AssetKind,
-      amount_after_fee: Balance,
-    ) -> Option<Vec<AssetKind>> {
-      let native_asset = T::NativeAsset::get();
-      // Only support Native-anchored routing for now
-      if from == native_asset || to == native_asset {
-        return None; // Direct route should be used
-      }
-      // Check if both hops have liquidity
-      let hop1_quote = T::AssetConversion::quote_price_exact_tokens_for_tokens(
-        from,
-        native_asset,
-        amount_after_fee,
-        true,
-      );
-      let hop2_quote = if let Some(intermediate_amount) = hop1_quote {
-        T::AssetConversion::quote_price_exact_tokens_for_tokens(
-          native_asset,
-          to,
-          intermediate_amount,
-          true,
-        )
-      } else {
-        None
-      };
-      if hop1_quote.is_some() && hop2_quote.is_some() {
-        Some(vec![from, native_asset, to])
-      } else {
-        None
-      }
-    }
-
     /// Advanced route selection with TMC integration
     fn find_optimal_route(
       from: AssetKind,
       to: AssetKind,
       amount_after_fee: Balance,
-    ) -> Option<RouteComparison> {
+    ) -> Option<PreparedRoute> {
       let native_asset = T::NativeAsset::get();
       let mut candidate_routes = Vec::new();
       // 1. Direct XYK route
       if let Some(direct_output) =
-        T::AssetConversion::quote_price_exact_tokens_for_tokens(from, to, amount_after_fee, true)
+        T::AssetConversion::quote_single_pool_exact_input(from, to, amount_after_fee, true)
       {
         let final_output = direct_output;
-        let price_impact = Self::calculate_price_impact(from, to, amount_after_fee, direct_output);
-        candidate_routes.push(RouteComparison::new(
-          final_output,
-          vec![from, to],
-          RouteMechanism::DirectXyk {
-            pool_id: (from, to),
-          },
-          price_impact,
-          0, // fee already collected in swap()
-        ));
+        let pool_id = T::AssetConversion::single_pool_id(from, to)?;
+        candidate_routes.push(PreparedRoute {
+          total_amount_in: amount_after_fee,
+          router_fee: 0,
+          routed_amount_in: amount_after_fee,
+          recipient_amount_out: final_output,
+          weight_class: RouteWeightClass::ExactInputDirectXyk,
+          legs: vec![PreparedLeg::Xyk {
+            pool_id,
+            asset_in: from,
+            asset_out: to,
+            quoted_amount_in: amount_after_fee,
+            quoted_amount_out: direct_output,
+          }]
+          .try_into()
+          .ok()?,
+          family: RouteFamily::DirectXyk,
+        });
       }
       // 2. Direct mint route (if applicable)
       // TMC mints the `to` token using `from` as collateral.
@@ -747,49 +996,52 @@ pub mod pallet {
       if T::TmcPallet::has_curve(to) && T::TmcPallet::supports_collateral(to, from) {
         if let Ok(tmc_output) = T::TmcPallet::calculate_recipient_receives(to, amount_after_fee) {
           let final_output = tmc_output;
-          let price_impact = Perbill::zero(); // TMC has predictable pricing
-          candidate_routes.push(RouteComparison::new(
-            final_output,
-            vec![from, to],
-            RouteMechanism::DirectMint {
-              foreign_asset: from,
-            },
-            price_impact,
-            0, // fee already collected in swap()
-          ));
+          candidate_routes.push(PreparedRoute {
+            total_amount_in: amount_after_fee,
+            router_fee: 0,
+            routed_amount_in: amount_after_fee,
+            recipient_amount_out: final_output,
+            weight_class: RouteWeightClass::ExactInputDirectMint,
+            legs: vec![PreparedLeg::TmcMint {
+              token_asset: to,
+              collateral_asset: from,
+              quoted_collateral_in: amount_after_fee,
+              quoted_recipient_out: tmc_output,
+            }]
+            .try_into()
+            .ok()?,
+            family: RouteFamily::DirectMint,
+          });
         }
       }
       // 3. Multi-hop Native route
       if from != native_asset && to != native_asset {
-        if let Some(multi_hop_path) = Self::find_best_multi_hop_route(from, to, amount_after_fee) {
-          if let Some(multi_hop_output) =
-            Self::quote_multi_hop_route(&multi_hop_path, amount_after_fee)
-          {
-            let final_output = multi_hop_output;
-            let price_impact = Self::calculate_multi_hop_price_impact(
-              &multi_hop_path,
-              amount_after_fee,
-              multi_hop_output,
-            );
-            candidate_routes.push(RouteComparison::new(
-              final_output,
-              multi_hop_path,
-              RouteMechanism::MultiHopNative {
-                hops: vec![from, native_asset, to],
-              },
-              price_impact,
-              0, // fee already collected in swap()
-            ));
-          }
+        let multi_hop_path: RoutePath = vec![from, native_asset, to].try_into().ok()?;
+        if let Some(legs) = Self::prepare_exact_input_xyk_legs(&multi_hop_path, amount_after_fee) {
+          let final_output = match legs.last()? {
+            PreparedLeg::Xyk {
+              quoted_amount_out, ..
+            } => *quoted_amount_out,
+            PreparedLeg::TmcMint { .. } => return None,
+          };
+          candidate_routes.push(PreparedRoute {
+            total_amount_in: amount_after_fee,
+            router_fee: 0,
+            routed_amount_in: amount_after_fee,
+            recipient_amount_out: final_output,
+            weight_class: RouteWeightClass::ExactInputNativeAnchoredXyk,
+            legs,
+            family: RouteFamily::NativeAnchoredXyk,
+          });
         }
       }
       // Mechanism selection: the router is a pure execution mechanism and always
       // picks the route that delivers the most output to the swap recipient.
-      // price_impact and total_fees stay on RouteComparison only as informational
-      // quote fields.
+      // Price impact and known market fees remain informational. Economic ties
+      // resolve by the specification's stable family rank and bounded path identity.
       candidate_routes
         .into_iter()
-        .max_by_key(|route| route.expected_output)
+        .max_by(PreparedRoute::compare_exact_input)
     }
 
     /// Select the exact-output XYK route requiring the least post-fee input.
@@ -799,52 +1051,75 @@ pub mod pallet {
       from: AssetKind,
       to: AssetKind,
       amount_out: Balance,
-    ) -> Option<ExactOutputRoute> {
+    ) -> Option<PreparedRoute> {
       let native_asset = T::NativeAsset::get();
       let mut candidates = Vec::new();
       if let Some(required_input) =
-        T::AssetConversion::quote_price_tokens_for_exact_tokens(from, to, amount_out, true)
+        T::AssetConversion::quote_single_pool_exact_output(from, to, amount_out, true)
       {
-        candidates.push(ExactOutputRoute {
-          required_input,
-          path: vec![from, to],
-          mechanism: RouteMechanism::DirectXyk {
-            pool_id: (from, to),
-          },
-          price_impact: Self::calculate_price_impact(from, to, required_input, amount_out),
+        let pool_id = T::AssetConversion::single_pool_id(from, to)?;
+        candidates.push(PreparedRoute {
+          total_amount_in: required_input,
+          router_fee: 0,
+          routed_amount_in: required_input,
+          recipient_amount_out: amount_out,
+          weight_class: RouteWeightClass::ExactOutputDirectXyk,
+          legs: vec![PreparedLeg::Xyk {
+            pool_id,
+            asset_in: from,
+            asset_out: to,
+            quoted_amount_in: required_input,
+            quoted_amount_out: amount_out,
+          }]
+          .try_into()
+          .ok()?,
+          family: RouteFamily::DirectXyk,
         });
       }
       if from != native_asset && to != native_asset {
-        let native_required = T::AssetConversion::quote_price_tokens_for_exact_tokens(
-          native_asset,
-          to,
-          amount_out,
-          true,
-        );
+        let native_required =
+          T::AssetConversion::quote_single_pool_exact_output(native_asset, to, amount_out, true);
         if let Some(native_required) = native_required {
-          if let Some(required_input) = T::AssetConversion::quote_price_tokens_for_exact_tokens(
+          if let Some(required_input) = T::AssetConversion::quote_single_pool_exact_output(
             from,
             native_asset,
             native_required,
             true,
           ) {
-            let path = vec![from, native_asset, to];
-            candidates.push(ExactOutputRoute {
-              required_input,
-              price_impact: Self::calculate_multi_hop_price_impact(
-                &path,
-                required_input,
-                amount_out,
-              ),
-              mechanism: RouteMechanism::MultiHopNative { hops: path.clone() },
-              path,
+            let first_pool = T::AssetConversion::single_pool_id(from, native_asset)?;
+            let second_pool = T::AssetConversion::single_pool_id(native_asset, to)?;
+            candidates.push(PreparedRoute {
+              total_amount_in: required_input,
+              router_fee: 0,
+              routed_amount_in: required_input,
+              recipient_amount_out: amount_out,
+              weight_class: RouteWeightClass::ExactOutputNativeAnchoredXyk,
+              legs: vec![
+                PreparedLeg::Xyk {
+                  pool_id: first_pool,
+                  asset_in: from,
+                  asset_out: native_asset,
+                  quoted_amount_in: required_input,
+                  quoted_amount_out: native_required,
+                },
+                PreparedLeg::Xyk {
+                  pool_id: second_pool,
+                  asset_in: native_asset,
+                  asset_out: to,
+                  quoted_amount_in: native_required,
+                  quoted_amount_out: amount_out,
+                },
+              ]
+              .try_into()
+              .ok()?,
+              family: RouteFamily::NativeAnchoredXyk,
             });
           }
         }
       }
       candidates
         .into_iter()
-        .min_by_key(|route| route.required_input)
+        .min_by(PreparedRoute::compare_exact_output)
     }
 
     fn exact_output_router_fee(who: &T::AccountId, required_input: Balance) -> Balance {
@@ -856,47 +1131,94 @@ pub mod pallet {
       Self::calculate_router_fee(gross_input)
     }
 
+    fn prepare_exact_output_route(
+      who: &T::AccountId,
+      from: AssetKind,
+      to: AssetKind,
+      amount_out: Balance,
+    ) -> Result<(PreparedRoute, Balance, Balance), Error<T>> {
+      ensure!(from != to, Error::<T>::IdenticalAssets);
+      ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmount);
+      let route = Self::find_optimal_exact_output_route(from, to, amount_out)
+        .ok_or(Error::<T>::NoRouteFound)?;
+      Self::validate_prepared_identity(&route)?;
+      let router_fee = Self::exact_output_router_fee(who, route.routed_amount_in);
+      let total_amount_in = route.routed_amount_in.saturating_add(router_fee);
+      Ok((
+        route.with_ingress(total_amount_in, router_fee),
+        router_fee,
+        total_amount_in,
+      ))
+    }
+
+    fn projected_price_impact(route: &PreparedRoute) -> Perbill {
+      let Some(path) = route.path() else {
+        return Perbill::zero();
+      };
+      match route.family {
+        RouteFamily::DirectMint => Perbill::zero(),
+        RouteFamily::DirectXyk => Self::calculate_price_impact(
+          path[0],
+          path[path.len() - 1],
+          route.routed_amount_in,
+          route.recipient_amount_out,
+        ),
+        RouteFamily::NativeAnchoredXyk => Self::calculate_multi_hop_price_impact(
+          &path,
+          route.routed_amount_in,
+          route.recipient_amount_out,
+        ),
+      }
+    }
+
     fn prepare_exact_output_quote(
       who: &T::AccountId,
       from: AssetKind,
       to: AssetKind,
       amount_out: Balance,
     ) -> Result<ExactOutputQuote, Error<T>> {
-      ensure!(from != to, Error::<T>::IdenticalAssets);
-      ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmount);
-      let route = Self::find_optimal_exact_output_route(from, to, amount_out)
-        .ok_or(Error::<T>::NoRouteFound)?;
-      let router_fee = Self::exact_output_router_fee(who, route.required_input);
+      let (route, router_fee, amount_in) =
+        Self::prepare_exact_output_route(who, from, to, amount_out)?;
+      let price_impact = Self::projected_price_impact(&route);
+      let path = route.path().ok_or(Error::<T>::PreparedRouteMismatch)?;
       Ok(ExactOutputQuote {
-        amount_in: route.required_input.saturating_add(router_fee),
+        amount_in,
         router_fee,
-        amount_after_fee: route.required_input,
-        amount_out,
-        mechanism: RouteMechanismKind::from(&route.mechanism),
-        path: route.path,
-        price_impact: route.price_impact,
+        amount_after_fee: route.routed_amount_in,
+        amount_out: route.recipient_amount_out,
+        family: route.family,
+        path,
+        legs: route.legs,
+        price_impact,
         total_fees: router_fee,
       })
     }
 
-    /// Quote multi-hop route output
-    fn quote_multi_hop_route(path: &[AssetKind], amount_in: Balance) -> Option<Balance> {
-      if path.len() < 2 {
-        return None;
-      }
+    fn prepare_exact_input_xyk_legs(path: &RoutePath, amount_in: Balance) -> Option<PreparedLegs> {
       let mut current_amount = amount_in;
+      let mut legs = PreparedLegs::default();
       for window in path.windows(2) {
-        let from = window[0];
-        let to = window[1];
-        if let Some(output) =
-          T::AssetConversion::quote_price_exact_tokens_for_tokens(from, to, current_amount, true)
-        {
-          current_amount = output;
-        } else {
-          return None;
-        }
+        let asset_in = window[0];
+        let asset_out = window[1];
+        let pool_id = T::AssetConversion::single_pool_id(asset_in, asset_out)?;
+        let quoted_amount_out = T::AssetConversion::quote_single_pool_exact_input(
+          asset_in,
+          asset_out,
+          current_amount,
+          true,
+        )?;
+        legs
+          .try_push(PreparedLeg::Xyk {
+            pool_id,
+            asset_in,
+            asset_out,
+            quoted_amount_in: current_amount,
+            quoted_amount_out,
+          })
+          .ok()?;
+        current_amount = quoted_amount_out;
       }
-      Some(current_amount)
+      Some(legs)
     }
 
     /// Calculate price impact for direct route
@@ -919,25 +1241,13 @@ pub mod pallet {
       Perbill::zero()
     }
 
-    /// Calculate price impact for multi-hop route
+    /// Calculate informational endpoint impact without performing another market quote.
     fn calculate_multi_hop_price_impact(
       path: &[AssetKind],
       amount_in: Balance,
       amount_out: Balance,
     ) -> Perbill {
-      // Simplified multi-hop price impact
-      // In production, this would calculate cumulative impact across all hops
-      if let Some(direct_quote) = T::AssetConversion::quote_price_exact_tokens_for_tokens(
-        path[0],
-        path[path.len() - 1],
-        amount_in,
-        true,
-      ) {
-        if direct_quote > amount_out {
-          return Perbill::from_rational(direct_quote - amount_out, direct_quote);
-        }
-      }
-      Perbill::zero()
+      Self::calculate_price_impact(path[0], path[path.len() - 1], amount_in, amount_out)
     }
 
     /// Calculate router fee for a given amount
@@ -954,6 +1264,13 @@ pub mod pallet {
         return Err(TryRuntimeError::Other(
           "RouterFee exceeds configured maximum",
         ));
+      }
+      for (_, pair) in LpPairByTokenId::<T>::get() {
+        if pair.0 >= pair.1 {
+          return Err(TryRuntimeError::Other(
+            "LP reverse index contains a non-canonical pair",
+          ));
+        }
       }
       Ok(())
     }
@@ -982,7 +1299,13 @@ pub mod pallet {
       let amount_after_fee = amount_in.saturating_sub(router_fee);
       let route =
         Self::find_optimal_route(from, to, amount_after_fee).ok_or(Error::<T>::NoRouteFound)?;
-      Ok(route.into_router_quote(amount_in, router_fee))
+      Self::validate_prepared_identity(&route)?;
+      let price_impact = Self::projected_price_impact(&route);
+      Ok(route.with_ingress(amount_in, router_fee).into_router_quote(
+        amount_in,
+        router_fee,
+        price_impact,
+      ))
     }
 
     /// Returns the least-input native XYK route for an exact recipient output.

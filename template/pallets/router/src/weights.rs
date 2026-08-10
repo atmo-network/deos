@@ -13,18 +13,31 @@ use core::marker::PhantomData;
 
 /// Weight functions for `pallet_axial_router`.
 pub trait WeightInfo {
-	fn swap() -> Weight;
+	fn swap() -> Weight {
+		let direct = Self::direct_xyk_exact_input();
+		let mint = Self::direct_mint_exact_input();
+		let anchored = Self::native_anchored_exact_input();
+		Weight::from_parts(
+			direct.ref_time().max(mint.ref_time()).max(anchored.ref_time()),
+			direct.proof_size().max(mint.proof_size()).max(anchored.proof_size()),
+		)
+	}
+	fn direct_xyk_exact_input() -> Weight;
+	fn direct_mint_exact_input() -> Weight;
+	fn native_anchored_exact_input() -> Weight;
+	fn direct_xyk_exact_output() -> Weight;
+	fn native_anchored_exact_output() -> Weight;
 	fn update_router_fee() -> Weight;
 }
 
 /// Weights for `pallet_axial_router` using the Substrate node and recommended hardware.
 pub struct SubstrateWeight<T>(PhantomData<T>);
 impl<T: polkadot_sdk::frame_system::Config> WeightInfo for SubstrateWeight<T> {
-	fn swap() -> Weight {
-		Weight::from_parts(200_000_000, 0)
-			.saturating_add(T::DbWeight::get().reads(1))
-			.saturating_add(T::DbWeight::get().writes(0))
-	}
+	fn direct_xyk_exact_input() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn direct_mint_exact_input() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn native_anchored_exact_input() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn direct_xyk_exact_output() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn native_anchored_exact_output() -> Weight { Weight::from_parts(200_000_000, 0) }
 	fn update_router_fee() -> Weight {
 		Weight::from_parts(10_000_000, 1000)
 			.saturating_add(T::DbWeight::get().reads(1))
@@ -34,9 +47,11 @@ impl<T: polkadot_sdk::frame_system::Config> WeightInfo for SubstrateWeight<T> {
 
 // For backwards compatibility and tests
 impl WeightInfo for () {
-	fn swap() -> Weight {
-		Weight::from_parts(200_000_000, 0)
-	}
+	fn direct_xyk_exact_input() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn direct_mint_exact_input() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn native_anchored_exact_input() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn direct_xyk_exact_output() -> Weight { Weight::from_parts(200_000_000, 0) }
+	fn native_anchored_exact_output() -> Weight { Weight::from_parts(200_000_000, 0) }
 	fn update_router_fee() -> Weight {
 		Weight::from_parts(10_000_000, 1000)
 	}

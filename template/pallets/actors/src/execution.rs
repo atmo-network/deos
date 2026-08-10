@@ -1760,16 +1760,16 @@ impl<T: Config> Pallet<T> {
             asset_out,
             slippage_tolerance,
           } => {
-            let amount_out = T::DexOps::swap_exact_in(
+            let outcome = T::DexOps::swap_exact_in(
               crate::ExecutionContext::new(actor, actor_type),
               asset_in,
               asset_out,
               amount_in,
               slippage_tolerance,
             )?;
-            if amount_out.is_zero() {
+            if outcome.recipient_amount_out.is_zero() || outcome.total_amount_in != amount_in {
               return Err(TaskFailure::permanent(DispatchError::Other(
-                "ZeroSwapOutput",
+                "InvalidSwapOutcome",
               )));
             }
             Self::deposit_event(Event::SwapExecuted {
@@ -1778,8 +1778,8 @@ impl<T: Config> Pallet<T> {
               step_index,
               asset_in,
               asset_out,
-              amount_in,
-              amount_out,
+              amount_in: outcome.total_amount_in,
+              amount_out: outcome.recipient_amount_out,
             });
           }
           PreparedTask::SwapOut {
@@ -1789,7 +1789,7 @@ impl<T: Config> Pallet<T> {
             max_amount_in,
             slippage_tolerance,
           } => {
-            let amount_in = T::DexOps::swap_exact_out(
+            let outcome = T::DexOps::swap_exact_out(
               crate::ExecutionContext::new(actor, actor_type),
               asset_in,
               asset_out,
@@ -1797,9 +1797,12 @@ impl<T: Config> Pallet<T> {
               max_amount_in,
               slippage_tolerance,
             )?;
-            if amount_in.is_zero() || amount_in > max_amount_in {
+            if outcome.total_amount_in.is_zero()
+              || outcome.total_amount_in > max_amount_in
+              || outcome.recipient_amount_out < amount_out
+            {
               return Err(TaskFailure::permanent(DispatchError::Other(
-                "InvalidSwapInput",
+                "InvalidSwapOutcome",
               )));
             }
             Self::deposit_event(Event::SwapExecuted {
@@ -1808,8 +1811,8 @@ impl<T: Config> Pallet<T> {
               step_index,
               asset_in,
               asset_out,
-              amount_in,
-              amount_out,
+              amount_in: outcome.total_amount_in,
+              amount_out: outcome.recipient_amount_out,
             });
           }
           PreparedTask::AddLiquidity {

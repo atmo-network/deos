@@ -1,10 +1,69 @@
-use crate::{Error, Event, RouteMechanismKind, mock::*, types::*};
+use crate::{
+  Error, Event, RouteFamily, RouteWeightClass, RouterFailureClass, RouterOutcome, mock::*, types::*,
+};
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
   traits::{Currency, Get, fungibles::Mutate},
 };
 use polkadot_sdk::sp_runtime::Perbill;
 use primitives::ecosystem::params::PRECISION;
+
+fn assert_last_swap(
+  who: u64,
+  from: AssetKind,
+  to: AssetKind,
+  total_amount_in: u128,
+  recipient_amount_out: u128,
+  family: RouteFamily,
+) {
+  let record = System::events().pop().expect("swap event exists");
+  let RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+    who: actual_who,
+    from: actual_from,
+    to: actual_to,
+    outcome,
+  }) = record.event
+  else {
+    panic!("last event is not a Router swap");
+  };
+  assert_eq!(actual_who, who);
+  assert_eq!(actual_from, from);
+  assert_eq!(actual_to, to);
+  assert_eq!(outcome.total_amount_in, total_amount_in);
+  assert_eq!(outcome.recipient_amount_out, recipient_amount_out);
+  assert_eq!(outcome.family, family);
+}
+
+#[test]
+fn adversarial_corpus_is_complete_unique_and_anchor_bound() {
+  let corpus: serde_json::Value = serde_json::from_str(include_str!(
+    "../tests/fixtures/router-adversarial-corpus.v1.json"
+  ))
+  .unwrap();
+  assert_eq!(corpus["format"], "deos.router.adversarial-corpus");
+  assert_eq!(corpus["formatVersion"], 1);
+  let cases = corpus["cases"].as_array().unwrap();
+  assert_eq!(cases.len(), 17);
+  let mut names = std::collections::BTreeSet::new();
+  for case in cases {
+    let name = case["name"].as_str().unwrap();
+    assert!(names.insert(name));
+    for key in [
+      "preState",
+      "request",
+      "injectedFault",
+      "expectedErrorClass",
+      "expectedEvents",
+      "expectedPublications",
+      "expectedBalances",
+      "expectedStorage",
+      "expectedWeightClass",
+      "executionAnchor",
+    ] {
+      assert!(!case[key].as_str().unwrap().is_empty(), "{name}.{key}");
+    }
+  }
+}
 
 #[test]
 fn router_fee_calculation_logic() {
@@ -51,8 +110,18 @@ fn quote_exact_input_view_matches_direct_xyk_policy_for_user() {
     assert_eq!(quote.router_fee, router_fee);
     assert_eq!(quote.amount_after_fee, amount_after_fee);
     assert_eq!(quote.amount_out, expected_out);
-    assert_eq!(quote.mechanism, RouteMechanismKind::DirectXyk);
+    assert_eq!(quote.family, RouteFamily::DirectXyk);
     assert_eq!(quote.path, vec![foreign, native]);
+    assert_eq!(
+      quote.legs.as_slice(),
+      &[crate::PreparedLeg::Xyk {
+        pool_id: (native, foreign),
+        asset_in: foreign,
+        asset_out: native,
+        quoted_amount_in: amount_after_fee,
+        quoted_amount_out: expected_out,
+      }]
+    );
   });
 }
 
@@ -71,7 +140,7 @@ fn quote_exact_input_view_omits_router_fee_for_fee_exempt_accounts() {
     assert_eq!(quote.router_fee, 0);
     assert_eq!(quote.amount_after_fee, amount_in);
     assert_eq!(quote.amount_out, expected_out);
-    assert_eq!(quote.mechanism, RouteMechanismKind::DirectXyk);
+    assert_eq!(quote.family, RouteFamily::DirectXyk);
   });
 }
 
@@ -85,12 +154,13 @@ fn asset_conversion_exact_output_boundary_quotes_and_executes_without_search() {
     let amount_out = 100 * PRECISION;
     set_pool(foreign, native, reserve, reserve);
     let required_in = <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::
-      quote_price_tokens_for_exact_tokens(foreign, native, amount_out, true)
+      quote_single_pool_exact_output(foreign, native, amount_out, true)
       .expect("direct exact output is quotable");
     assert_eq!(
-      <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::swap_tokens_for_exact_tokens(
+      <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::execute_single_pool_exact_output(
         user,
-        vec![foreign, native],
+        foreign,
+        native,
         amount_out,
         required_in.saturating_sub(1),
         user,
@@ -102,16 +172,18 @@ fn asset_conversion_exact_output_boundary_quotes_and_executes_without_search() {
     );
     let native_before = Balances::free_balance(user);
     let spent =
-      <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::swap_tokens_for_exact_tokens(
+      <MockAssetConversionAdapter as AssetConversionApi<u64, u128>>::execute_single_pool_exact_output(
         user,
-        vec![foreign, native],
+        foreign,
+        native,
         amount_out,
         required_in,
         user,
         true,
       )
       .expect("native exact-output execution succeeds");
-    assert_eq!(spent, required_in);
+    assert_eq!(spent.amount_in, required_in);
+    assert_eq!(spent.recipient_amount_out, amount_out);
     assert!(Balances::free_balance(user) >= native_before.saturating_add(amount_out));
   });
 }
@@ -130,7 +202,7 @@ fn router_exact_output_quote_and_execution_enforce_total_input_cap() {
     let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out)
       .expect("exact-output route is quotable");
     assert_eq!(quote.amount_out, amount_out);
-    assert_eq!(quote.mechanism, RouteMechanismKind::DirectXyk);
+    assert_eq!(quote.family, RouteFamily::DirectXyk);
     assert_eq!(quote.path, vec![foreign, native]);
     assert_eq!(quote.amount_in, quote.amount_after_fee + quote.router_fee);
     assert!(quote.router_fee > 0);
@@ -160,8 +232,98 @@ fn router_exact_output_quote_and_execution_enforce_total_input_cap() {
       &user,
     )
     .expect("quoted exact-output route executes");
-    assert_eq!(spent, quote.amount_in);
+    assert_eq!(spent.total_amount_in, quote.amount_in);
+    assert_eq!(spent.family, RouteFamily::DirectXyk);
+    assert_eq!(spent.weight_class, RouteWeightClass::ExactOutputDirectXyk);
+    assert_eq!(spent.legs, quote.legs);
     assert_eq!(Balances::free_balance(user), output_before + amount_out);
+  });
+}
+
+#[test]
+fn exact_input_recipient_shortfall_rolls_back_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let foreign = AssetKind::Local(2);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_in = 100 * PRECISION;
+    let min_amount_out = 1;
+    set_pool(foreign, native, reserve, reserve);
+    let input_before = Assets::balance(2, user);
+    let output_before = Balances::free_balance(user);
+    let events_before = System::events();
+    set_exact_input_reported_amount(Some(0));
+    assert_noop!(
+      AxialRouter::execute_swap_for(&user, foreign, native, amount_in, min_amount_out, &user,),
+      Error::<Test>::SlippageExceeded
+    );
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Balances::free_balance(user), output_before);
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn exact_output_actual_spend_overrun_rolls_back_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let foreign = AssetKind::Local(2);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_out = 100 * PRECISION;
+    set_pool(foreign, native, reserve, reserve);
+    let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Balances::free_balance(user);
+    let events_before = System::events();
+    set_exact_output_reported_input(Some(quote.amount_after_fee + 1));
+    assert_noop!(
+      AxialRouter::execute_exact_out_for(
+        &user,
+        foreign,
+        native,
+        amount_out,
+        quote.amount_in,
+        &user,
+      ),
+      Error::<Test>::SlippageExceeded
+    );
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Balances::free_balance(user), output_before);
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn exact_output_recipient_shortfall_rolls_back_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let foreign = AssetKind::Local(2);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_out = 100 * PRECISION;
+    set_pool(foreign, native, reserve, reserve);
+    let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Balances::free_balance(user);
+    set_exact_output_reported_amount(Some(amount_out - 1));
+    assert_noop!(
+      AxialRouter::execute_exact_out_for(
+        &user,
+        foreign,
+        native,
+        amount_out,
+        quote.amount_in,
+        &user,
+      ),
+      Error::<Test>::SlippageExceeded
+    );
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Balances::free_balance(user), output_before);
   });
 }
 
@@ -181,16 +343,343 @@ fn router_exact_output_selects_bounded_native_anchored_path_without_search() {
     let quote = AxialRouter::quote_exact_out(user, from, to, amount_out)
       .expect("Native-anchored exact-output route is quotable");
     assert_eq!(quote.amount_out, amount_out);
-    assert_eq!(quote.mechanism, RouteMechanismKind::MultiHopNative);
+    assert_eq!(quote.family, RouteFamily::NativeAnchoredXyk);
     assert_eq!(quote.path, vec![from, native, to]);
+    assert_eq!(quote.legs.len(), 2);
+    assert!(matches!(
+      quote.legs.as_slice(),
+      [
+        crate::PreparedLeg::Xyk {
+          asset_in,
+          asset_out,
+          quoted_amount_in,
+          quoted_amount_out,
+          ..
+        },
+        crate::PreparedLeg::Xyk {
+          asset_in: second_in,
+          asset_out: second_out,
+          quoted_amount_in: second_amount_in,
+          quoted_amount_out: second_amount_out,
+          ..
+        }
+      ] if *asset_in == from
+        && *asset_out == native
+        && *second_in == native
+        && *second_out == to
+        && *quoted_amount_in == quote.amount_after_fee
+        && *quoted_amount_out == *second_amount_in
+        && *second_amount_out == amount_out
+    ));
     assert!(quote.amount_after_fee > amount_out);
     let output_before = Assets::balance(3, user);
     let spent =
       AxialRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user)
         .expect("Native-anchored exact-output route executes");
-    assert_eq!(spent, quote.amount_in);
+    assert_eq!(spent.total_amount_in, quote.amount_in);
+    assert_eq!(spent.family, RouteFamily::NativeAnchoredXyk);
+    assert_eq!(
+      spent.weight_class,
+      RouteWeightClass::ExactOutputNativeAnchoredXyk
+    );
+    assert_eq!(spent.legs, quote.legs);
     assert_eq!(Assets::balance(3, user), output_before + amount_out);
+    let updates = ORACLE_UPDATES.with(|calls| calls.borrow().clone());
+    assert_eq!(updates.len(), 2);
+    assert_eq!((updates[0].0, updates[0].1), (from, native));
+    assert_eq!((updates[1].0, updates[1].1), (native, to));
+    let validations = ORACLE_VALIDATIONS.with(|calls| calls.borrow().clone());
+    assert_eq!(validations.len(), 2);
+    assert_eq!((validations[0].0, validations[0].1), (from, native));
+    assert_eq!((validations[1].0, validations[1].1), (native, to));
   });
+}
+
+#[test]
+fn second_leg_publication_follows_first_leg_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Local(3);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_in = 100 * PRECISION;
+    set_pool(from, native, reserve, reserve);
+    set_pool(native, to, reserve, reserve);
+    let first_pool_before = get_pool(from, native).unwrap();
+    let second_pool_before = get_pool(native, to).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Assets::balance(3, user);
+    let events_before = System::events();
+    set_fail_oracle_update_at(Some(1));
+
+    assert_noop!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      ),
+      Error::<Test>::InvalidOracleData
+    );
+    assert_eq!(
+      XYK_EXECUTIONS.with(|calls| calls.borrow().as_slice().to_vec()),
+      vec![(from, native)]
+    );
+    assert_ne!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(native, to), Some(second_pool_before));
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Assets::balance(3, user), output_before);
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn exact_output_second_leg_publication_follows_first_leg_execution() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Local(3);
+    let native = AssetKind::Native;
+    let reserve = 10_000 * PRECISION;
+    let amount_out = 100 * PRECISION;
+    set_pool(from, native, reserve, reserve);
+    set_pool(native, to, reserve, reserve);
+    let quote = AxialRouter::quote_exact_out(user, from, to, amount_out).unwrap();
+    let first_pool_before = get_pool(from, native).unwrap();
+    let second_pool_before = get_pool(native, to).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Assets::balance(3, user);
+    let events_before = System::events();
+    set_fail_oracle_update_at(Some(1));
+
+    assert_noop!(
+      AxialRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user,),
+      Error::<Test>::InvalidOracleData
+    );
+    assert_eq!(
+      XYK_EXECUTIONS.with(|calls| calls.borrow().as_slice().to_vec()),
+      vec![(from, native)]
+    );
+    assert_ne!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(native, to), Some(second_pool_before));
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Assets::balance(3, user), output_before);
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn exact_input_outcomes_cover_all_weight_classes() {
+  new_test_ext().execute_with(|| {
+    let user = 1u64;
+    let reserve = 10_000 * PRECISION;
+    set_pool(AssetKind::Local(2), AssetKind::Native, reserve, reserve);
+    let outcome = AxialRouter::execute_swap_for(
+      &user,
+      AssetKind::Local(2),
+      AssetKind::Native,
+      100 * PRECISION,
+      0,
+      &user,
+    )
+    .unwrap();
+    assert_eq!(outcome.family, RouteFamily::DirectXyk);
+    assert_eq!(outcome.weight_class, RouteWeightClass::ExactInputDirectXyk);
+    assert_eq!(outcome.legs.len(), 1);
+  });
+
+  new_test_ext().execute_with(|| {
+    let user = 1u64;
+    set_tmc_curve(AssetKind::Local(2), AssetKind::Local(1), 2 * PRECISION);
+    let outcome = AxialRouter::execute_swap_for(
+      &user,
+      AssetKind::Local(1),
+      AssetKind::Local(2),
+      100 * PRECISION,
+      0,
+      &user,
+    )
+    .unwrap();
+    assert_eq!(outcome.family, RouteFamily::DirectMint);
+    assert_eq!(outcome.weight_class, RouteWeightClass::ExactInputDirectMint);
+    assert_eq!(outcome.legs.len(), 1);
+  });
+
+  new_test_ext().execute_with(|| {
+    let user = 1u64;
+    let reserve = 10_000 * PRECISION;
+    set_pool(AssetKind::Local(2), AssetKind::Native, reserve, reserve);
+    set_pool(AssetKind::Native, AssetKind::Local(3), reserve, reserve);
+    AxialRouter::quote_exact_input(
+      user,
+      AssetKind::Local(2),
+      AssetKind::Local(3),
+      100 * PRECISION,
+    )
+    .unwrap();
+    assert_eq!(
+      EXACT_INPUT_QUOTE_CALLS.with(|calls| calls.borrow().clone()),
+      vec![
+        (AssetKind::Local(2), AssetKind::Local(3)),
+        (AssetKind::Local(2), AssetKind::Native),
+        (AssetKind::Native, AssetKind::Local(3)),
+      ]
+    );
+    let outcome = AxialRouter::execute_swap_for(
+      &user,
+      AssetKind::Local(2),
+      AssetKind::Local(3),
+      100 * PRECISION,
+      0,
+      &user,
+    )
+    .unwrap();
+    assert_eq!(outcome.family, RouteFamily::NativeAnchoredXyk);
+    assert_eq!(
+      outcome.weight_class,
+      RouteWeightClass::ExactInputNativeAnchoredXyk
+    );
+    assert_eq!(outcome.legs.len(), 2);
+  });
+}
+
+#[test]
+fn prepared_family_leg_mismatch_fails_closed() {
+  new_test_ext().execute_with(|| {
+    let malformed = crate::PreparedRoute {
+      total_amount_in: 100,
+      router_fee: 0,
+      routed_amount_in: 100,
+      recipient_amount_out: 90,
+      weight_class: RouteWeightClass::ExactInputDirectMint,
+      legs: vec![crate::PreparedLeg::Xyk {
+        pool_id: (AssetKind::Native, AssetKind::Local(2)),
+        asset_in: AssetKind::Local(2),
+        asset_out: AssetKind::Native,
+        quoted_amount_in: 100,
+        quoted_amount_out: 90,
+      }]
+      .try_into()
+      .unwrap(),
+      family: RouteFamily::DirectMint,
+    };
+    assert!(matches!(
+      AxialRouter::validate_prepared_identity(&malformed),
+      Err(Error::<Test>::PreparedRouteMismatch)
+    ));
+  });
+}
+
+#[test]
+fn lp_reverse_index_is_canonical_bounded_and_collision_safe() {
+  new_test_ext().execute_with(|| {
+    let canonical = (AssetKind::Native, AssetKind::Local(9));
+    assert_ok!(AxialRouter::register_lp_pair(7, (canonical.1, canonical.0)));
+    assert_eq!(AxialRouter::lp_pair_by_token_id(7), Some(canonical));
+    assert_ok!(AxialRouter::register_lp_pair(7, canonical));
+    assert_noop!(
+      AxialRouter::register_lp_pair(7, (AssetKind::Native, AssetKind::Local(10))),
+      Error::<Test>::LpTokenPairCollision
+    );
+    assert_noop!(
+      AxialRouter::register_lp_pair(8, (AssetKind::Native, AssetKind::Native)),
+      Error::<Test>::InvalidPoolPair
+    );
+
+    for index in 1..500u32 {
+      assert_ok!(AxialRouter::register_lp_pair(
+        100 + index,
+        (AssetKind::Native, AssetKind::Local(1_000 + index)),
+      ));
+    }
+    assert_noop!(
+      AxialRouter::register_lp_pair(10_000, (AssetKind::Native, AssetKind::Local(20_000)),),
+      Error::<Test>::LpPairCapacityExceeded
+    );
+  });
+}
+
+#[test]
+fn every_router_error_has_a_stable_failure_class() {
+  let cases = [
+    (
+      Error::<Test>::NoRouteFound,
+      RouterFailureClass::NoViableRoute,
+    ),
+    (
+      Error::<Test>::IdenticalAssets,
+      RouterFailureClass::InvalidRequest,
+    ),
+    (
+      Error::<Test>::ZeroAmount,
+      RouterFailureClass::InvalidRequest,
+    ),
+    (
+      Error::<Test>::AmountTooLow,
+      RouterFailureClass::InvalidRequest,
+    ),
+    (
+      Error::<Test>::InsufficientLiquidity,
+      RouterFailureClass::LiquidityUnavailable,
+    ),
+    (
+      Error::<Test>::SlippageExceeded,
+      RouterFailureClass::ProtectionRejected,
+    ),
+    (
+      Error::<Test>::DeadlinePassed,
+      RouterFailureClass::InvalidRequest,
+    ),
+    (
+      Error::<Test>::FeeRoutingFailed,
+      RouterFailureClass::FeeRejected,
+    ),
+    (
+      Error::<Test>::InsufficientInputBalance,
+      RouterFailureClass::FeeRejected,
+    ),
+    (
+      Error::<Test>::PriceDeviationExceeded,
+      RouterFailureClass::ProtectionRejected,
+    ),
+    (
+      Error::<Test>::InvalidOracleData,
+      RouterFailureClass::PublicationRejected,
+    ),
+    (
+      Error::<Test>::NoMultiHopRoute,
+      RouterFailureClass::NoViableRoute,
+    ),
+    (
+      Error::<Test>::RouterFeeTooHigh,
+      RouterFailureClass::InvalidRequest,
+    ),
+    (
+      Error::<Test>::LpTokenPairCollision,
+      RouterFailureClass::InvariantViolation,
+    ),
+    (
+      Error::<Test>::LpPairCapacityExceeded,
+      RouterFailureClass::InvariantViolation,
+    ),
+    (
+      Error::<Test>::InvalidPoolPair,
+      RouterFailureClass::InvariantViolation,
+    ),
+    (
+      Error::<Test>::PreparedRouteMismatch,
+      RouterFailureClass::InvariantViolation,
+    ),
+  ];
+  for (error, expected) in cases {
+    assert_eq!(error.failure_class(), expected);
+  }
 }
 
 #[test]
@@ -199,6 +688,108 @@ fn precision_constant_validation() {
   new_test_ext().execute_with(|| {
     let precision = <<Test as crate::Config>::Precision as Get<u128>>::get();
     assert_eq!(precision, 1_000_000_000_000u128);
+  });
+}
+
+#[test]
+fn exact_input_ties_are_independent_of_candidate_order() {
+  let direct = crate::PreparedRoute {
+    total_amount_in: 100,
+    router_fee: 0,
+    routed_amount_in: 100,
+    recipient_amount_out: 90,
+    weight_class: RouteWeightClass::ExactInputDirectXyk,
+    legs: Default::default(),
+    family: RouteFamily::DirectXyk,
+  };
+  let mint = crate::PreparedRoute {
+    family: RouteFamily::DirectMint,
+    weight_class: RouteWeightClass::ExactInputDirectMint,
+    ..direct.clone()
+  };
+  let anchored = crate::PreparedRoute {
+    family: RouteFamily::NativeAnchoredXyk,
+    weight_class: RouteWeightClass::ExactInputNativeAnchoredXyk,
+    ..direct.clone()
+  };
+  for order in [
+    [direct.clone(), mint.clone(), anchored.clone()],
+    [direct.clone(), anchored.clone(), mint.clone()],
+    [mint.clone(), direct.clone(), anchored.clone()],
+    [mint.clone(), anchored.clone(), direct.clone()],
+    [anchored.clone(), direct.clone(), mint.clone()],
+    [anchored.clone(), mint.clone(), direct.clone()],
+  ] {
+    let selected = order
+      .into_iter()
+      .max_by(crate::PreparedRoute::compare_exact_input)
+      .unwrap();
+    assert_eq!(selected.family, RouteFamily::DirectXyk);
+  }
+}
+
+#[test]
+fn exact_output_ties_are_independent_of_candidate_order() {
+  let direct = crate::PreparedRoute {
+    total_amount_in: 100,
+    router_fee: 0,
+    routed_amount_in: 100,
+    recipient_amount_out: 90,
+    weight_class: RouteWeightClass::ExactOutputDirectXyk,
+    legs: Default::default(),
+    family: RouteFamily::DirectXyk,
+  };
+  let anchored = crate::PreparedRoute {
+    family: RouteFamily::NativeAnchoredXyk,
+    weight_class: RouteWeightClass::ExactOutputNativeAnchoredXyk,
+    ..direct.clone()
+  };
+  for order in [
+    [direct.clone(), anchored.clone()],
+    [anchored.clone(), direct.clone()],
+  ] {
+    let selected = order
+      .into_iter()
+      .min_by(crate::PreparedRoute::compare_exact_output)
+      .unwrap();
+    assert_eq!(selected.family, RouteFamily::DirectXyk);
+  }
+}
+
+#[test]
+fn execution_reprepares_after_a_stale_projection() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(1);
+    let to = AssetKind::Native;
+    let amount_in = 1_000 * PRECISION;
+    set_tmc_curve(to, from, 1);
+    set_pool(from, to, 1_000 * PRECISION, 3_000 * PRECISION);
+    let projected = AxialRouter::quote_exact_input(user, from, to, amount_in).unwrap();
+    assert_eq!(projected.family, RouteFamily::DirectXyk);
+
+    set_tmc_rate(to, 2);
+    set_pool(from, to, 1_000 * PRECISION, 500 * PRECISION);
+    assert_ok!(AxialRouter::swap(
+      RuntimeOrigin::signed(user),
+      from,
+      to,
+      amount_in,
+      0,
+      user,
+      u64::MAX
+    ));
+    assert!(matches!(
+      System::events().last().map(|record| &record.event),
+      Some(RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+        outcome: RouterOutcome {
+          family: RouteFamily::DirectMint,
+          ..
+        },
+        ..
+      }))
+    ));
   });
 }
 
@@ -239,17 +830,15 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
     // Verify event: Expect XYK execution
     // After 0.5% fee deduction: 995*P in, output = (995*P * 3000*P) / (1995*P) ≈ 1496.240*P
     let expected_xyk_out = 1_496_240_601_503_759;
-    System::assert_last_event(
-      crate::Event::SwapExecuted {
-        who: user,
-        from: asset_in,
-        to: asset_out,
-        amount_in,
-        amount_out: expected_xyk_out,
-        mechanism: RouteMechanismKind::DirectXyk,
-      }
-      .into(),
+    assert_last_swap(
+      user,
+      asset_in,
+      asset_out,
+      amount_in,
+      expected_xyk_out,
+      RouteFamily::DirectXyk,
     );
+    assert_eq!(ORACLE_UPDATES.with(|calls| calls.borrow().len()), 1);
     // Scenario 2: Protocol Liquidity is better (TMC recipient output > XYK)
     // We want TMC recipient allocation ~497, XYK ~249
     // TMC Rate for Native token: 2.0 -> 1990*P total emission and 497.5*P
@@ -274,17 +863,15 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
     // to the swap recipient, not the total curve emission that includes the sink
     // allocation.
     let expected_tmc_out = 497_500_000_000_000;
-    System::assert_last_event(
-      crate::Event::SwapExecuted {
-        who: user,
-        from: asset_in,
-        to: asset_out,
-        amount_in,
-        amount_out: expected_tmc_out,
-        mechanism: RouteMechanismKind::DirectMint,
-      }
-      .into(),
+    assert_last_swap(
+      user,
+      asset_in,
+      asset_out,
+      amount_in,
+      expected_tmc_out,
+      RouteFamily::DirectMint,
     );
+    assert_eq!(ORACLE_UPDATES.with(|calls| calls.borrow().len()), 1);
   });
 }
 
@@ -408,16 +995,13 @@ fn slippage_protection_test() {
       u64::MAX
     ));
     // Verify actual output matches expected
-    System::assert_last_event(
-      crate::Event::SwapExecuted {
-        who: user,
-        from: asset_in,
-        to: asset_out,
-        amount_in,
-        amount_out: expected_out,
-        mechanism: RouteMechanismKind::DirectXyk,
-      }
-      .into(),
+    assert_last_swap(
+      user,
+      asset_in,
+      asset_out,
+      amount_in,
+      expected_out,
+      RouteFamily::DirectXyk,
     );
     // Case 2: Slippage exceeded (min_out > expected_out) - Failure
     assert_noop!(
@@ -470,12 +1054,12 @@ fn round_trip_buy_sell_is_net_negative_test() {
       .rev()
       .find_map(|r| {
         if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
-          amount_out,
+          outcome,
           who,
           ..
         }) = &r.event
         {
-          (*who == trader).then_some(*amount_out)
+          (*who == trader).then_some(outcome.recipient_amount_out)
         } else {
           None
         }
@@ -646,6 +1230,148 @@ fn forced_fee_failure_skips_direct_mint_route_execution() {
 }
 
 #[test]
+fn tmc_failure_after_input_debit_rolls_back_balances_and_events() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_tmc_curve(to, from, 2);
+    let input_before = Assets::balance(2, user);
+    let output_before = Balances::free_balance(user);
+    let sink_before = Balances::free_balance(888);
+    set_fail_tmc_after_debit(true);
+    System::reset_events();
+    assert!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      )
+      .is_err()
+    );
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Balances::free_balance(user), output_before);
+    assert_eq!(Balances::free_balance(888), sink_before);
+    assert!(System::events().is_empty());
+  });
+}
+
+#[test]
+fn first_xyk_leg_failure_leaves_market_and_frame_state_unchanged() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_pool(from, to, 10_000 * PRECISION, 10_000 * PRECISION);
+    let pool_before = get_pool(from, to).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Balances::free_balance(user);
+    set_fail_xyk_execution_at(Some(0));
+    System::reset_events();
+    assert!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      )
+      .is_err()
+    );
+    assert_eq!(get_pool(from, to), Some(pool_before));
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Balances::free_balance(user), output_before);
+    assert!(System::events().is_empty());
+  });
+}
+
+#[test]
+fn native_anchored_first_leg_failure_leaves_state_unchanged() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Local(3);
+    let native = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_pool(from, native, 10_000 * PRECISION, 10_000 * PRECISION);
+    set_pool(native, to, 10_000 * PRECISION, 10_000 * PRECISION);
+    let first_pool_before = get_pool(from, native).unwrap();
+    let second_pool_before = get_pool(native, to).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Assets::balance(3, user);
+    set_fail_xyk_execution_at(Some(0));
+    System::reset_events();
+    assert!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      )
+      .is_err()
+    );
+    assert_eq!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(get_pool(native, to), Some(second_pool_before));
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Assets::balance(3, user), output_before);
+    assert!(System::events().is_empty());
+  });
+}
+
+#[test]
+fn second_xyk_leg_failure_rolls_back_frame_state() {
+  new_test_ext().execute_with(|| {
+    System::set_block_number(1);
+    let user = 1u64;
+    let from = AssetKind::Local(2);
+    let to = AssetKind::Local(3);
+    let native = AssetKind::Native;
+    let amount_in = 100 * PRECISION;
+    set_pool(from, native, 10_000 * PRECISION, 10_000 * PRECISION);
+    set_pool(native, to, 10_000 * PRECISION, 10_000 * PRECISION);
+    let first_pool_before = get_pool(from, native).unwrap();
+    let input_before = Assets::balance(2, user);
+    let output_before = Assets::balance(3, user);
+    set_fail_xyk_execution_at(Some(1));
+    System::reset_events();
+    assert!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(user),
+        from,
+        to,
+        amount_in,
+        0,
+        user,
+        u64::MAX,
+      )
+      .is_err()
+    );
+    assert_eq!(
+      XYK_EXECUTIONS.with(|calls| calls.borrow().clone()),
+      vec![(from, native), (native, to)]
+    );
+    assert_ne!(get_pool(from, native), Some(first_pool_before));
+    assert_eq!(Assets::balance(2, user), input_before);
+    assert_eq!(Assets::balance(3, user), output_before);
+    assert!(System::events().is_empty());
+  });
+}
+
+#[test]
 fn forced_fee_failure_skips_multi_hop_route_execution() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
@@ -764,16 +1490,13 @@ fn tmc_route_is_skipped_for_mismatched_collateral() {
     let expected_xyk_out =
       (amount_after_fee * pool_reserve) / (pool_reserve.saturating_add(amount_after_fee));
 
-    System::assert_last_event(
-      crate::Event::SwapExecuted {
-        who: user,
-        from: from_asset,
-        to: to_asset,
-        amount_in,
-        amount_out: expected_xyk_out,
-        mechanism: RouteMechanismKind::DirectXyk,
-      }
-      .into(),
+    assert_last_swap(
+      user,
+      from_asset,
+      to_asset,
+      amount_in,
+      expected_xyk_out,
+      RouteFamily::DirectXyk,
     );
   });
 }
@@ -784,11 +1507,11 @@ fn asset_conversion_api_test() {
     let asset_a = AssetKind::Local(1);
     let asset_b = AssetKind::Native;
     set_pool(asset_a, asset_b, 1_000_000, 1_000_000);
-    let pool_id = <Test as crate::Config>::AssetConversion::get_pool_id(asset_a, asset_b);
+    let pool_id = <Test as crate::Config>::AssetConversion::single_pool_id(asset_a, asset_b);
     assert!(pool_id.is_some());
-    let reserves = <Test as crate::Config>::AssetConversion::get_pool_reserves(pool_id.unwrap());
+    let reserves = <Test as crate::Config>::AssetConversion::single_pool_reserves(pool_id.unwrap());
     assert_eq!(reserves, Some((1_000_000, 1_000_000)));
-    let quote = <Test as crate::Config>::AssetConversion::quote_price_exact_tokens_for_tokens(
+    let quote = <Test as crate::Config>::AssetConversion::quote_single_pool_exact_input(
       asset_a, asset_b, 1000, true,
     );
     // out = 1000 * 1000000 / 1001000 = 999
@@ -953,6 +1676,7 @@ fn multi_hop_swap_dot_native_usdc() {
     set_pool(dot, native, pool_reserve, pool_reserve);
     set_pool(native, usdc, pool_reserve, pool_reserve);
     // No direct DOT/USDC pool — forces multi-hop
+    let projected = AxialRouter::quote_exact_input(user, dot, usdc, amount_in).unwrap();
     assert_ok!(AxialRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
@@ -962,31 +1686,13 @@ fn multi_hop_swap_dot_native_usdc() {
       user,
       u64::MAX,
     ));
-    // Verify event emitted with correct assets
-    System::assert_has_event(
-      crate::Event::SwapExecuted {
-        who: user,
-        from: dot,
-        to: usdc,
-        amount_in,
-        amount_out: System::events()
-          .iter()
-          .rev()
-          .find_map(|r| {
-            if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
-              amount_out,
-              ..
-            }) = &r.event
-            {
-              Some(*amount_out)
-            } else {
-              None
-            }
-          })
-          .unwrap(),
-        mechanism: RouteMechanismKind::MultiHopNative,
-      }
-      .into(),
+    assert_last_swap(
+      user,
+      dot,
+      usdc,
+      amount_in,
+      projected.amount_out,
+      RouteFamily::NativeAnchoredXyk,
     );
   });
 }
@@ -1024,14 +1730,13 @@ fn multi_hop_output_matches_sequential_hops() {
       .rev()
       .find_map(|r| {
         if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
-          amount_out,
-          mechanism,
+          outcome,
           from,
           ..
         }) = &r.event
         {
           if *from == dot {
-            Some((*amount_out, mechanism.clone()))
+            Some((outcome.recipient_amount_out, outcome.family))
           } else {
             None
           }
@@ -1046,7 +1751,7 @@ fn multi_hop_output_matches_sequential_hops() {
     );
     assert_eq!(
       actual_mechanism,
-      RouteMechanismKind::MultiHopNative,
+      RouteFamily::NativeAnchoredXyk,
       "DOT→USDC with no direct pool must use multi-hop via Native"
     );
   });
@@ -1109,12 +1814,10 @@ fn multi_hop_not_used_when_direct_pool_exists() {
       .rev()
       .find_map(|r| {
         if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
-          amount_out,
-          mechanism,
-          ..
+          outcome, ..
         }) = &r.event
         {
-          Some((*amount_out, mechanism.clone()))
+          Some((outcome.recipient_amount_out, outcome.family))
         } else {
           None
         }
@@ -1130,7 +1833,7 @@ fn multi_hop_not_used_when_direct_pool_exists() {
     );
     assert_eq!(
       actual_mechanism,
-      RouteMechanismKind::DirectXyk,
+      RouteFamily::DirectXyk,
       "Direct XYK must be chosen over multi-hop when direct pool gives better output"
     );
   });
@@ -1186,16 +1889,13 @@ fn multi_hop_skipped_when_one_leg_is_native() {
     let fee = crate::Pallet::<Test>::calculate_router_fee(amount_in);
     let after_fee = amount_in - fee;
     let expected = (after_fee * 10_000 * PRECISION) / (10_000 * PRECISION + after_fee);
-    System::assert_last_event(
-      crate::Event::SwapExecuted {
-        who: user,
-        from: dot,
-        to: native,
-        amount_in,
-        amount_out: expected,
-        mechanism: RouteMechanismKind::DirectXyk,
-      }
-      .into(),
+    assert_last_swap(
+      user,
+      dot,
+      native,
+      amount_in,
+      expected,
+      RouteFamily::DirectXyk,
     );
   });
 }
@@ -1331,7 +2031,12 @@ mod proptest_router {
         let mut ba_after = ba_before;
         if let Ok(amount_out_1) = swap1 {
           let swap2 = crate::Pallet::<Test>::execute_swap_for(
-            &user, asset_b, asset_a, amount_out_1, 0, &user,
+            &user,
+            asset_b,
+            asset_a,
+            amount_out_1.recipient_amount_out,
+            0,
+            &user,
           );
           if swap2.is_ok() {
             ba_after = <Assets as FungiblesInspect<u64>>::balance(1, &user);

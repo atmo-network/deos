@@ -238,6 +238,13 @@ pub trait StakingOps<AccountId, AssetId, Balance> {
   fn share_asset(asset: AssetId) -> Option<AssetId>;
 }
 
+/// Actual committed swap facts returned by the runtime DEX adapter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DexSwapOutcome<Balance> {
+  pub total_amount_in: Balance,
+  pub recipient_amount_out: Balance,
+}
+
 /// Runtime DEX swap operations.
 pub trait DexOps<AccountId, AssetId, Balance> {
   fn swap_exact_in(
@@ -246,7 +253,7 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     asset_out: AssetId,
     amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, TaskFailure>;
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure>;
 
   fn swap_exact_out(
     context: ExecutionContext<'_, AccountId>,
@@ -255,7 +262,7 @@ pub trait DexOps<AccountId, AssetId, Balance> {
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, TaskFailure>;
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure>;
 }
 
 /// Runtime liquidity operations. Required when a liquidity task appears in a plan.
@@ -335,14 +342,14 @@ impl<AccountId, AssetId, Balance: Default> AssetOps<AccountId, AssetId, Balance>
 }
 
 /// Fail-closed `DexOps` fallback for runtimes without DEX support.
-impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> for () {
+impl<AccountId, AssetId, Balance> DexOps<AccountId, AssetId, Balance> for () {
   fn swap_exact_in(
     _: ExecutionContext<'_, AccountId>,
     _: AssetId,
     _: AssetId,
     _: Balance,
     _: Perbill,
-  ) -> Result<Balance, TaskFailure> {
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     Err(TaskFailure::permanent(DispatchError::Other(
       "DexOps not configured",
     )))
@@ -355,7 +362,7 @@ impl<AccountId, AssetId, Balance: Default> DexOps<AccountId, AssetId, Balance> f
     _: Balance,
     _: Balance,
     _: Perbill,
-  ) -> Result<Balance, TaskFailure> {
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     Err(TaskFailure::permanent(DispatchError::Other(
       "DexOps not configured",
     )))

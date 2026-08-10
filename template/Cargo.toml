@@ -7,7 +7,7 @@ edition = "2024"
 
 [workspace]
 default-members = ["pallets/router", "runtime"]
-members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
+members = ["pallets/actors", "pallets/actors/embedding-runtime", "pallets/asset-registry", "pallets/router", "pallets/router/embedding-runtime", "pallets/governance", "pallets/oracle", "pallets/oracle/embedding-runtime", "pallets/staking", "pallets/tmc", "primitives", "runtime"]
 resolver = "2"
 
 [workspace.lints.rust]

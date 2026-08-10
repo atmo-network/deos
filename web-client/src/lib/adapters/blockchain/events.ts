@@ -56,6 +56,13 @@ function formatUnknownAsset(value: unknown): string {
   return typeof assetType === 'string' ? assetType : 'asset';
 }
 
+function formatRouterSwapOutcome(payload: object): string {
+  const outcome = asObject(objectProperty(payload, 'outcome'));
+  const family = asObject(objectProperty(outcome, 'family'));
+  const familyType = objectProperty(family, 'type');
+  return `Swap ${typeof familyType === 'string' ? familyType : 'route'} · in ${formatUnknownAmount(objectProperty(outcome, 'total_amount_in'))} · out ${formatUnknownAmount(objectProperty(outcome, 'recipient_amount_out'))}`;
+}
+
 export function formatAmount(value: bigint): string {
   return (Number(value) / Number(PRECISION)).toLocaleString(undefined, {
     maximumFractionDigits: 6,
@@ -102,9 +109,7 @@ export function formatChainEventMessage(eventInput: unknown): string {
   const event = asChainEvent(eventInput);
   const payload = eventPayload(event);
   if (event.type === 'AxialRouter' && event.value?.type === 'SwapExecuted') {
-    const mechanism = asObject(objectProperty(payload, 'mechanism'));
-    const mechanismType = objectProperty(mechanism, 'type');
-    return `Swap ${typeof mechanismType === 'string' ? mechanismType : 'route'} · in ${formatUnknownAmount(objectProperty(payload, 'amount_in'))} · out ${formatUnknownAmount(objectProperty(payload, 'amount_out'))}`;
+    return formatRouterSwapOutcome(payload);
   }
   if (event.type === 'Balances' && event.value?.type === 'Transfer') {
     return `Native transfer ${formatUnknownAmount(objectProperty(payload, 'amount'))}`;
@@ -134,11 +139,7 @@ export function buildTransactionHighlights(
     const event = asChainEvent(eventInput);
     const payload = eventPayload(event);
     if (event.type === 'AxialRouter' && event.value?.type === 'SwapExecuted') {
-      const mechanism = asObject(objectProperty(payload, 'mechanism'));
-      const mechanismType = objectProperty(mechanism, 'type');
-      highlights.push(
-        `Swap ${typeof mechanismType === 'string' ? mechanismType : 'route'} · in ${formatUnknownAmount(objectProperty(payload, 'amount_in'))} · out ${formatUnknownAmount(objectProperty(payload, 'amount_out'))}`,
-      );
+      highlights.push(formatRouterSwapOutcome(payload));
       continue;
     }
     if (event.type === 'AxialRouter' && event.value?.type === 'FeeCollected') {

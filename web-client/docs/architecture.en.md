@@ -181,6 +181,8 @@ Concrete transport code stays behind adapter directories:
 - `adapters/governance/` — typed governance providers;
 - `adapters/materialized-history/` — explicit future-provider boundary for indexed/archive governance history.
 
+Router quote adapters invoke bounded FRAME view functions at the selected snapshot's explicit `at` block hash; the transport hash supplies quote state identity without embedding an unverifiable hash inside the SCALE payload. They consume canonical `family` rather than the retired mechanism projection. Router `SwapExecuted` formatting reads total input, recipient output, and family from the nested canonical outcome instead of reconstructing legacy flat event fields.
+
 Concrete adapters receive endpoint, selected address, and dApp name from `system/adapter-context.ts`. They should not import wallet stores or endpoint state directly.
 
 ## 6. UI Kit

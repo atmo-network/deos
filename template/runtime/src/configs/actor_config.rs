@@ -21,8 +21,8 @@ use polkadot_sdk::sp_runtime::{DispatchError, DispatchResult, Perbill, TokenErro
 
 use crate::{AssetConversion, RuntimeOrigin};
 use pallet_deos_actors::{
-  ActorType, AssetOps, DexOps, ExecutionContext, FeeCollector, FundingAuthority, LiquidityOps,
-  TaskFailure,
+  ActorType, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FeeCollector, FundingAuthority,
+  LiquidityOps, TaskFailure,
 };
 
 parameter_types! {
@@ -468,22 +468,16 @@ pub(crate) fn classify_remove_liquidity_failure(error: DispatchError) -> TaskFai
 }
 
 pub(crate) fn classify_router_failure(error: pallet_axial_router::Error<Runtime>) -> TaskFailure {
-  use pallet_axial_router::Error;
-  match error {
-    Error::NoRouteFound
-    | Error::InsufficientLiquidity
-    | Error::SlippageExceeded
-    | Error::PriceDeviationExceeded
-    | Error::InvalidOracleData
-    | Error::NoMultiHopRoute => TaskFailure::temporary(error),
-    Error::IdenticalAssets
-    | Error::ZeroAmount
-    | Error::AmountTooLow
-    | Error::DeadlinePassed
-    | Error::FeeRoutingFailed
-    | Error::InsufficientInputBalance
-    | Error::RouterFeeTooHigh
-    | Error::LpTokenPairCollision => TaskFailure::permanent(error),
+  use pallet_axial_router::RouterFailureClass;
+  match error.failure_class() {
+    RouterFailureClass::NoViableRoute
+    | RouterFailureClass::ProtectionRejected
+    | RouterFailureClass::LiquidityUnavailable
+    | RouterFailureClass::PublicationRejected => TaskFailure::temporary(error),
+    RouterFailureClass::InvalidRequest
+    | RouterFailureClass::FeeRejected
+    | RouterFailureClass::IngressRejected
+    | RouterFailureClass::InvariantViolation => TaskFailure::permanent(error),
   }
 }
 
@@ -496,7 +490,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     asset_out: AssetKind,
     amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, TaskFailure> {
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     let who = context.actor;
     let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
       who.clone(),
@@ -514,16 +508,13 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       quote.amount_after_fee,
       quote.amount_out,
     )?;
-    pallet_axial_router::Pallet::<Runtime>::validate_price_protection(
-      &quote.path,
-      quote.amount_after_fee,
-      min_out,
-      quote.amount_out,
-    )
-    .map_err(classify_router_failure)?;
     pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
       who, asset_in, asset_out, amount_in, min_out, who,
     )
+    .map(|outcome| DexSwapOutcome {
+      total_amount_in: outcome.total_amount_in,
+      recipient_amount_out: outcome.recipient_amount_out,
+    })
     .map_err(TaskFailure::permanent)
   }
 
@@ -534,7 +525,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, TaskFailure> {
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     let who = context.actor;
     let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_out(
       who.clone(),
@@ -573,13 +564,6 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       quote.amount_after_fee,
       quote.amount_out,
     )?;
-    pallet_axial_router::Pallet::<Runtime>::validate_price_protection(
-      &quote.path,
-      quote.amount_after_fee,
-      amount_out,
-      amount_out,
-    )
-    .map_err(classify_router_failure)?;
     pallet_axial_router::Pallet::<Runtime>::execute_exact_out_for(
       who,
       asset_in,
@@ -588,6 +572,10 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       execution_cap,
       who,
     )
+    .map(|outcome| DexSwapOutcome {
+      total_amount_in: outcome.total_amount_in,
+      recipient_amount_out: outcome.recipient_amount_out,
+    })
     .map_err(TaskFailure::permanent)
   }
 }
@@ -1765,7 +1753,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
   fn setup_remove_liquidity(
     owner: &AccountId,
   ) -> Result<(AssetKind, AssetKind, AssetKind, Balance), DispatchError> {
-    let pool_count = 1u32;
+    let pool_count = 2u32;
     let lp_namespace_start = primitives::assets::TYPE_LP | 1;
     let current_next_lp = pallet_asset_conversion::NextPoolAssetId::<Runtime>::get().unwrap_or(0);
     if current_next_lp < lp_namespace_start {
@@ -1783,7 +1771,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       if <pallet_assets::Pallet<Runtime> as FungiblesMutate<AccountId>>::mint_into(
         local_asset_id,
         owner,
-        liquidity.saturating_add(1),
+        liquidity.saturating_add(1_000_000_000),
       )
       .is_err()
       {
@@ -1896,7 +1884,11 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       &BurningManagerAccount::get(),
       EXISTENTIAL_DEPOSIT,
     );
-    Ok((AssetKind::Native, AssetKind::Local(100_000), 1_000_000))
+    Ok((
+      AssetKind::Local(100_000),
+      AssetKind::Local(100_001),
+      1_000_000,
+    ))
   }
 
   fn setup_swap_exact_out(
@@ -1908,8 +1900,8 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
       EXISTENTIAL_DEPOSIT,
     );
     Ok((
-      AssetKind::Native,
       AssetKind::Local(100_000),
+      AssetKind::Local(100_001),
       100_000,
       1_000_000_000,
     ))

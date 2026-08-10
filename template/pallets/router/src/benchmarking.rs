@@ -2,9 +2,6 @@ extern crate alloc;
 
 use crate::{types::BenchmarkHelper, *};
 use polkadot_sdk::frame_benchmarking::v2::*;
-use polkadot_sdk::frame_support::traits::{
-  fungible::Inspect as NativeInspect, fungibles::Inspect as FungiblesInspect,
-};
 use polkadot_sdk::frame_system::RawOrigin;
 use polkadot_sdk::sp_runtime::traits::SaturatedConversion;
 use primitives::AssetKind;
@@ -13,72 +10,119 @@ use primitives::AssetKind;
 mod benches {
   use super::*;
 
-  #[benchmark]
-  fn swap() {
-    let caller: T::AccountId = whitelisted_caller();
-    let from = AssetKind::Local(1);
-    let to = T::NativeAsset::get();
-    let amount_in = T::MinSwapForeign::get().saturating_mul(1000u32.into());
-    let min_amount_out = 1u128;
-    let recipient = caller.clone();
-    let deadline = 10000u32.into();
-    T::BenchmarkHelper::create_asset(from).expect("Failed to create asset");
-    let fund_amount: u128 = 1_000_000_000_000_000_000;
-    let liquidity_amount: u128 = 100_000_000_000_000_000;
-    T::BenchmarkHelper::mint_asset(to, &caller, fund_amount.saturated_into())
-      .expect("Failed to mint native");
-    T::BenchmarkHelper::mint_asset(from, &caller, fund_amount.saturated_into())
-      .expect("Failed to mint foreign");
-    T::BenchmarkHelper::create_pool(to, from).expect("Failed to create pool");
+  fn fund<T: Config>(caller: &T::AccountId, assets: &[AssetKind]) {
+    let amount: u128 = 1_000_000_000_000_000_000;
+    for asset in assets {
+      T::BenchmarkHelper::create_asset(*asset).expect("asset creation must succeed");
+      T::BenchmarkHelper::mint_asset(*asset, caller, amount.saturated_into())
+        .expect("asset funding must succeed");
+    }
+  }
+
+  fn add_pool<T: Config>(caller: &T::AccountId, asset_a: AssetKind, asset_b: AssetKind) {
+    let liquidity: u128 = 100_000_000_000_000_000;
+    T::BenchmarkHelper::create_pool(asset_a, asset_b).expect("pool creation must succeed");
     T::BenchmarkHelper::add_liquidity(
-      &caller,
-      to,
-      from,
-      liquidity_amount.saturated_into(),
-      liquidity_amount.saturated_into(),
+      caller,
+      asset_a,
+      asset_b,
+      liquidity.saturated_into(),
+      liquidity.saturated_into(),
     )
-    .expect("Failed to add liquidity");
-    let bm_account = T::BurningManagerAccount::get();
-    let caller_native_before = T::Currency::balance(&caller);
-    let caller_foreign_before = match from {
-      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &caller),
-      AssetKind::Native => 0,
-    };
-    let bm_foreign_before = match from {
-      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &bm_account),
-      AssetKind::Native => 0,
-    };
-    let expected_fee = Pallet::<T>::calculate_router_fee(amount_in);
+    .expect("liquidity setup must succeed");
+  }
 
-    #[extrinsic_call]
-    swap(
-      RawOrigin::Signed(caller.clone()),
-      from,
-      to,
-      amount_in,
-      min_amount_out,
-      recipient,
-      deadline,
-    );
+  #[benchmark]
+  fn direct_xyk_exact_input() {
+    let caller: T::AccountId = whitelisted_caller();
+    let from = AssetKind::Local(11);
+    let to = T::NativeAsset::get();
+    fund::<T>(&caller, &[from, to]);
+    add_pool::<T>(&caller, from, to);
+    let amount_in = T::MinSwapForeign::get().saturating_mul(1000u32.into());
 
-    let caller_native_after = T::Currency::balance(&caller);
-    let caller_foreign_after = match from {
-      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &caller),
-      AssetKind::Native => 0,
-    };
-    let bm_foreign_after = match from {
-      AssetKind::Local(id) | AssetKind::Foreign(id) => T::Assets::balance(id, &bm_account),
-      AssetKind::Native => 0,
-    };
-    assert!(caller_native_after > caller_native_before);
-    assert_eq!(
-      caller_foreign_before.saturating_sub(caller_foreign_after),
-      amount_in
-    );
-    assert_eq!(
-      bm_foreign_after.saturating_sub(bm_foreign_before),
-      expected_fee
-    );
+    #[block]
+    {
+      let outcome = Pallet::<T>::execute_swap_for(&caller, from, to, amount_in, 1, &caller)
+        .expect("direct exact-input execution must succeed");
+      assert_eq!(outcome.weight_class, RouteWeightClass::ExactInputDirectXyk);
+    }
+  }
+
+  #[benchmark]
+  fn direct_mint_exact_input() {
+    let caller: T::AccountId = whitelisted_caller();
+    let from = AssetKind::Local(12);
+    let to = AssetKind::Local(13);
+    fund::<T>(&caller, &[from, to]);
+    T::BenchmarkHelper::create_tmc_curve(to, from).expect("curve creation must succeed");
+    let amount_in = T::MinSwapForeign::get().saturating_mul(1000u32.into());
+
+    #[block]
+    {
+      let outcome = Pallet::<T>::execute_swap_for(&caller, from, to, amount_in, 1, &caller)
+        .expect("mint exact-input execution must succeed");
+      assert_eq!(outcome.weight_class, RouteWeightClass::ExactInputDirectMint);
+    }
+  }
+
+  #[benchmark]
+  fn native_anchored_exact_input() {
+    let caller: T::AccountId = whitelisted_caller();
+    let from = AssetKind::Local(14);
+    let to = AssetKind::Local(15);
+    let native = T::NativeAsset::get();
+    fund::<T>(&caller, &[from, native, to]);
+    add_pool::<T>(&caller, from, native);
+    add_pool::<T>(&caller, native, to);
+    let amount_in = T::MinSwapForeign::get().saturating_mul(1000u32.into());
+
+    #[block]
+    {
+      let outcome = Pallet::<T>::execute_swap_for(&caller, from, to, amount_in, 1, &caller)
+        .expect("Native-anchored exact-input execution must succeed");
+      assert_eq!(
+        outcome.weight_class,
+        RouteWeightClass::ExactInputNativeAnchoredXyk
+      );
+    }
+  }
+
+  #[benchmark]
+  fn direct_xyk_exact_output() {
+    let caller: T::AccountId = whitelisted_caller();
+    let from = AssetKind::Local(16);
+    let to = T::NativeAsset::get();
+    fund::<T>(&caller, &[from, to]);
+    add_pool::<T>(&caller, from, to);
+
+    #[block]
+    {
+      let outcome = Pallet::<T>::execute_exact_out_for(&caller, from, to, 1, u128::MAX, &caller)
+        .expect("direct exact-output execution must succeed");
+      assert_eq!(outcome.weight_class, RouteWeightClass::ExactOutputDirectXyk);
+    }
+  }
+
+  #[benchmark]
+  fn native_anchored_exact_output() {
+    let caller: T::AccountId = whitelisted_caller();
+    let from = AssetKind::Local(17);
+    let to = AssetKind::Local(18);
+    let native = T::NativeAsset::get();
+    fund::<T>(&caller, &[from, native, to]);
+    add_pool::<T>(&caller, from, native);
+    add_pool::<T>(&caller, native, to);
+
+    #[block]
+    {
+      let outcome = Pallet::<T>::execute_exact_out_for(&caller, from, to, 1, u128::MAX, &caller)
+        .expect("Native-anchored exact-output execution must succeed");
+      assert_eq!(
+        outcome.weight_class,
+        RouteWeightClass::ExactOutputNativeAnchoredXyk
+      );
+    }
   }
 
   #[benchmark]

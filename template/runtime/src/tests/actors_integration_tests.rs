@@ -40,8 +40,8 @@ use polkadot_sdk::frame_support::{
   },
   weights::Weight,
 };
-use polkadot_sdk::sp_core::{Pair, sr25519};
-use polkadot_sdk::sp_runtime::traits::TransactionExtension;
+use polkadot_sdk::sp_core::{Pair, crypto::Ss58Codec, sr25519};
+use polkadot_sdk::sp_runtime::traits::{AccountIdConversion, TransactionExtension};
 use polkadot_sdk::sp_runtime::{DispatchError, Perbill, generic};
 use polkadot_sdk::sp_weights::{WeightMeter, WeightToFee};
 use polkadot_sdk::{
@@ -52,6 +52,39 @@ use primitives::AssetKind;
 
 type RuntimeSchedule = ScheduleOf<Runtime>;
 type RuntimeSourceFilter = SourceFilterOf<Runtime>;
+
+#[test]
+fn canonical_actors_seed_derives_documented_accounts() {
+  let pallet_account: AccountId =
+    crate::configs::actor_config::ActorsPalletId::get().into_account_truncating();
+  assert_eq!(
+    pallet_account,
+    AccountId::from_ss58check("5EYCAe5fiQWMqjyVakD96Nwxv8toW2XYiWaTHmnmop8X9u5J").unwrap()
+  );
+  let expected = [
+    "5HG3S6PLHrykv65Vw8j19zRaEx2Bmb37iywfo2qK3cHosGKX",
+    "5Eiik51gjANLwbjZUXnVJv8pPpoTTVVic2x5sNwy8NaoVaJ9",
+    "5EL8uyEoZA3JQkhCC3ackopXhdujtKjHHRYVSM1BVrf5x6LW",
+    "5DHChJzyAY9pz54d6PXLmScG5vhdiarfNY2VjhkP4pG8vqSs",
+    "5F6w8Jd8mHTPphhHgBdUJdkTaT2hQ8mKYojDhzCre5TJqGPg",
+    "5CMBGiT8bLjfecCBLf7jSeWXoHKwEXtF7epoFHaLSTmxPhyp",
+    "5Epu2U8sJbpBH1AQhc2KW6yuPA62Hst9r3zSdEHx4vS386JW",
+    "5CvGRScqAYFFZRymun1fNJogwgUZCigd2ncmxCGvpquWy4nM",
+    "5FZaRybmQEh2eHXM95zB2tyty3vxBZPyrCYTekHu5YxuCKj8",
+    "5CeoQfeA6zkG7yToYZm3L8g5gjR5aMikm4b1gVLK69CgYzsC",
+    "5H3KvwhcEmU5QZNcXWjwwmtduXdrKTrR5WYZqjrJm23KK14u",
+    "5D7ZRz4hMphgVdq9UYBA9Gtk1q2cBjKTgoDCqpBETQi6Ziq4",
+    "5EoWnoVuB925BHs9UwHUfLkcm5rSbmqzrHgFZRzY5nA4M5B6",
+    "5CE6WsJ12vyyjAPMuvaqf2cdSQMVzAAxVjZDvXZK99VswFGe",
+    "5CX93X5agA9cbvbv4JKpXmR8RF9ywdLbyg6WR9qY15evri5L",
+  ];
+  for (actor_id, expected) in expected.into_iter().enumerate() {
+    assert_eq!(
+      Actors::sovereign_account_id_system(actor_id as u64),
+      AccountId::from_ss58check(expected).unwrap()
+    );
+  }
+}
 type RuntimeAssetFilter = AssetFilterOf<Runtime>;
 type RuntimeTask = TaskOf<Runtime>;
 type RuntimeStep = StepOf<Runtime>;
@@ -887,7 +920,9 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
     );
     assert_eq!(Assets::balance(pool.lp_token, &ALICE), lp_before_add_bound);
     let lp_amount = Assets::balance(pool.lp_token, &ALICE) / 2;
-    pallet_axial_router::LpPairByTokenId::<Runtime>::remove(pool.lp_token);
+    pallet_axial_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+      pairs.remove(&pool.lp_token);
+    });
     assert_noop!(
       <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::remove_liquidity(
         &ALICE,
@@ -1329,8 +1364,8 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.ref_time() / unit.ref_time())
     .min(available.proof_size() / unit.proof_size());
 
-  assert_eq!(base, Weight::from_parts(31_635_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(12_169_069_000, 166_430));
+  assert_eq!(base, Weight::from_parts(31_566_000, 1_543));
+  assert_eq!(unit, Weight::from_parts(12_127_164_000, 166_430));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
     units_per_block, 5,
@@ -1625,7 +1660,7 @@ fn swap_exact_in_zero_tolerance_matches_caller_aware_router_quote() {
       Perbill::zero(),
     )
     .expect("zero-tolerance exact-input swap succeeds at its executable quote");
-    assert_eq!(amount_out, quote.amount_out);
+    assert_eq!(amount_out.recipient_amount_out, quote.amount_out);
   });
 }
 
@@ -2229,6 +2264,9 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
     RouterError::<Runtime>::InsufficientInputBalance,
     RouterError::<Runtime>::RouterFeeTooHigh,
     RouterError::<Runtime>::LpTokenPairCollision,
+    RouterError::<Runtime>::LpPairCapacityExceeded,
+    RouterError::<Runtime>::InvalidPoolPair,
+    RouterError::<Runtime>::PreparedRouteMismatch,
   ] {
     assert_eq!(classify_router_failure(error).retry, RetryClass::Permanent);
   }

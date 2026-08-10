@@ -89,8 +89,11 @@ Implementation-specific documents describing how the current runtime realizes th
   _! SYSTEM BACKBONE !_
   The token-driven design foundation. Covers system accounts structure, "Omnivorous" balance monitoring, Bitmask Asset Taxonomy, separation of Abstract Actors from Concrete Pallets, and the operational token lifecycle checkpoint runbook.
 
+- [DEOS Router Specification](../template/pallets/router/docs/specification.en.md)
+  Defines bounded route families, intent protection, deterministic selection, atomic execution, outcomes, failure classes, Weight classes, and conformance.
+
 - [DEOS Router Architecture](../template/pallets/router/docs/architecture.en.md)
-  The economic coordination actor. Details mechanism-over-policy design, EMA oracle, fee burning flows, and integration with Asset Conversion.
+  Maps the shipped package implementation, EMA Oracle integration, fee routing, and Asset Conversion adapters.
 
 - [Token Minting Curve Architecture](../template/pallets/tmc/docs/architecture.en.md)
   The unidirectional minting engine. Covers the current runtime realization of the linear bonding curve, integral-based minting, read surfaces, and conservation invariants.

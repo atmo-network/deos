@@ -56,16 +56,20 @@ fn test_axial_router_basic_swap_functionality() {
       Assets::balance(ASSET_A, burning_manager_account()),
       burning_manager_before + quote.router_fee
     );
-    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
-      pallet_axial_router::Event::SwapExecuted {
-        who: ALICE,
-        from,
-        to,
-        amount_in: SWAP_AMOUNT,
-        amount_out: quote.amount_out,
-        mechanism: quote.mechanism,
-      },
-    ));
+    assert!(System::events().iter().any(|record| matches!(
+      &record.event,
+      crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+        who,
+        from: event_from,
+        to: event_to,
+        outcome,
+      }) if *who == ALICE
+        && *event_from == from
+        && *event_to == to
+        && outcome.total_amount_in == SWAP_AMOUNT
+        && outcome.recipient_amount_out == quote.amount_out
+        && outcome.legs == quote.legs
+    )));
   });
 }
 
@@ -199,6 +203,86 @@ fn test_axial_router_multi_hop_routing() {
       "SwapExecuted event should show ASSET_A → ASSET_B"
     );
   });
+}
+
+fn assert_native_anchored_market_failure_rolls_back(failure_index: usize) {
+  seeded_test_ext().execute_with(|| {
+    assert_ok!(setup_test_environment());
+    let from = AssetKind::Local(ASSET_A);
+    let to = AssetKind::Local(ASSET_B);
+    let native = ASSET_NATIVE;
+    let second_pool_liq = LIQUIDITY_AMOUNT / 4;
+    ensure_asset_conversion_pool(native, to);
+    assert_ok!(add_liquidity(
+      RuntimeOrigin::signed(ALICE),
+      native,
+      to,
+      second_pool_liq,
+      second_pool_liq,
+      MIN_LIQUIDITY,
+      MIN_LIQUIDITY,
+      &ALICE,
+    ));
+    let first_pool_before = crate::AssetConversion::get_reserves(from, native).unwrap();
+    let second_pool_before = crate::AssetConversion::get_reserves(native, to).unwrap();
+    let input_before = Assets::balance(ASSET_A, ALICE);
+    let output_before = Assets::balance(ASSET_B, ALICE);
+    let native_before = Balances::free_balance(ALICE);
+    let fee_before = Assets::balance(ASSET_A, burning_manager_account());
+    let first_feed = crate::configs::oracle_config::axial_router_pool_feed(from, native);
+    let second_feed = crate::configs::oracle_config::axial_router_pool_feed(native, to);
+    let first_observation_before = crate::Oracle::observations(first_feed);
+    let second_observation_before = crate::Oracle::observations(second_feed);
+    let events_before = System::events();
+    crate::configs::axial_router_config::set_fail_after_xyk_execution_at(Some(failure_index));
+
+    assert!(
+      AxialRouter::swap(
+        RuntimeOrigin::signed(ALICE),
+        from,
+        to,
+        SWAP_AMOUNT,
+        MIN_AMOUNT_OUT,
+        ALICE,
+        1_000,
+      )
+      .is_err()
+    );
+    assert_eq!(
+      crate::AssetConversion::get_reserves(from, native).unwrap(),
+      first_pool_before
+    );
+    assert_eq!(
+      crate::AssetConversion::get_reserves(native, to).unwrap(),
+      second_pool_before
+    );
+    assert_eq!(Assets::balance(ASSET_A, ALICE), input_before);
+    assert_eq!(Assets::balance(ASSET_B, ALICE), output_before);
+    assert_eq!(Balances::free_balance(ALICE), native_before);
+    assert_eq!(
+      Assets::balance(ASSET_A, burning_manager_account()),
+      fee_before
+    );
+    assert_eq!(
+      crate::Oracle::observations(first_feed),
+      first_observation_before
+    );
+    assert_eq!(
+      crate::Oracle::observations(second_feed),
+      second_observation_before
+    );
+    assert_eq!(System::events(), events_before);
+  });
+}
+
+#[test]
+fn native_anchored_first_market_failure_rolls_back_composed_runtime_state() {
+  assert_native_anchored_market_failure_rolls_back(0);
+}
+
+#[test]
+fn native_anchored_second_market_failure_rolls_back_composed_runtime_state() {
+  assert_native_anchored_market_failure_rolls_back(1);
 }
 
 #[test]
@@ -463,14 +547,12 @@ fn test_axial_router_direct_fee_processing() {
             who,
             from: event_from,
             to: event_to,
-            amount_in,
-            amount_out,
-            ..
+            outcome,
           } if *who == ALICE
             && *event_from == from
             && *event_to == to
-            && *amount_in == SWAP_AMOUNT
-            && *amount_out == quote.amount_out
+            && outcome.total_amount_in == SWAP_AMOUNT
+            && outcome.recipient_amount_out == quote.amount_out
         )
       })
       .expect("swap event must be present");
@@ -668,15 +750,19 @@ fn test_axial_router_events() {
         collector: burning_manager_account(),
       },
     ));
-    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
-      pallet_axial_router::Event::SwapExecuted {
-        who: ALICE,
-        from,
-        to,
-        amount_in: SWAP_AMOUNT,
-        amount_out: quote.amount_out,
-        mechanism: quote.mechanism,
-      },
-    ));
+    assert!(System::events().iter().any(|record| matches!(
+      &record.event,
+      crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+        who,
+        from: event_from,
+        to: event_to,
+        outcome,
+      }) if *who == ALICE
+        && *event_from == from
+        && *event_to == to
+        && outcome.total_amount_in == SWAP_AMOUNT
+        && outcome.recipient_amount_out == quote.amount_out
+        && outcome.legs == quote.legs
+    )));
   });
 }

@@ -264,7 +264,7 @@ impl pallet_deos_actors::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
     asset_out: AssetId,
     amount_in: Balance,
     _: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, pallet_deos_actors::TaskFailure> {
+  ) -> Result<pallet_deos_actors::DexSwapOutcome<Balance>, pallet_deos_actors::TaskFailure> {
     let who = context.actor;
     if asset_in != NATIVE_ASSET || asset_out != 2 {
       return Err(pallet_deos_actors::TaskFailure::permanent(
@@ -277,7 +277,10 @@ impl pallet_deos_actors::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
       ));
     }
     NativeAssetOps::transfer(who, &DEX_SINK, asset_in, amount_in)?;
-    Ok(amount_in)
+    Ok(pallet_deos_actors::DexSwapOutcome {
+      total_amount_in: amount_in,
+      recipient_amount_out: amount_in,
+    })
   }
 
   fn swap_exact_out(
@@ -287,7 +290,7 @@ impl pallet_deos_actors::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
     amount_out: Balance,
     max_amount_in: Balance,
     _: polkadot_sdk::sp_runtime::Perbill,
-  ) -> Result<Balance, pallet_deos_actors::TaskFailure> {
+  ) -> Result<pallet_deos_actors::DexSwapOutcome<Balance>, pallet_deos_actors::TaskFailure> {
     let who = context.actor;
     if asset_in != NATIVE_ASSET || asset_out != 1 {
       return Err(pallet_deos_actors::TaskFailure::permanent(
@@ -301,7 +304,10 @@ impl pallet_deos_actors::DexOps<AccountId, AssetId, Balance> for FixedRateDex {
       ));
     }
     NativeAssetOps::transfer(who, &DEX_SINK, asset_in, amount_in)?;
-    Ok(amount_in)
+    Ok(pallet_deos_actors::DexSwapOutcome {
+      total_amount_in: amount_in,
+      recipient_amount_out: amount_out,
+    })
   }
 }
 
