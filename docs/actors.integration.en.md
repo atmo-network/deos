@@ -83,9 +83,9 @@ The runtime keeps TMCTOL policy declarative through builders in `actor_config.rs
 | `build_bucket_lp_transfer_execution_plan` | Buckets B/C/D | Transfer bounded LP fraction to paired Treasury |
 | `build_treasury_lp_unwind_execution_plan` | Treasuries B/C/D | Remove configured LP into Treasury custody |
 | `build_bldr_splitter_execution_plan` | BLDR Splitter | Split minted BLDR share between liquidity and treasury lanes |
-| `build_bldr_zm_execution_plan` | BLDR Liquidity Actor | Add NTVE/BLDR liquidity → transfer LP to BLDR Bucket A |
+| `build_bldr_liquidity_execution_plan` | BLDR Liquidity Actor | Add NTVE/BLDR liquidity → transfer LP to BLDR Bucket A |
 | `build_treasury_b_buyback_execution_plan` | Treasury B | Optional NTVE buyback → burn acquired target |
-| `build_native_staking_lp_farming_execution_plan` | Staking LP actor | Donate balanced `NTVE/stNTVE` without minting LP |
+| `build_native_staking_liquidity_execution_plan` | Native Staking Liquidity Actor | Donate balanced `NTVE/stNTVE` without minting LP |
 
 These builders configure the reusable task language; they do not create pallet-level roles or Actors-id policy branches.
 
@@ -95,13 +95,13 @@ These builders configure the reusable task language; they do not create pallet-l
 
 `BLDR lane`: retain the BLDR Splitter at genesis, create the NTVE/BLDR pool, activate the BLDR Liquidity Actor, then optionally activate Treasury buyback/burn policy.
 
-`Native staking LP lane`: register native staking, initialize `stNTVE`, create and seed the AMM, then call `activate_native_staking_lp_farming`. Activation fails until receipt asset, staking pool, actor, and nonempty AMM all exist.
+`Native staking LP lane`: register native staking, initialize `stNTVE`, create and seed the AMM, then call `activate_native_staking_liquidity_actor`. Activation fails until receipt asset, staking pool, actor, and nonempty AMM all exist.
 
 Emergency policy pauses one actor through `pause_actor` or stops cycle execution globally through the circuit breaker while bounded bookkeeping remains active.
 
 ## Market Adapter Composition
 
-`TmctolDexOps` routes exact-input and exact-output swaps through DEOS Router with `ExecutionContext { actor, actor_type }` and returns actual `DexSwapOutcome { total_amount_in, recipient_amount_out }` facts to Actors. The accepted full production generation measures the Native-anchored maximum at `550,009,000 / 19,253` for exact-input and `551,126,000 / 19,253` for exact-output; accepted Actors weights SHA-256 is `552c4564b55ff02ff7b0235dcb79f520fb0075d05e8a2fbdaf85f0ef7d8ae277`. Actors supplies immutable actor authority; the adapter uses it only for typed market protection and never infers System status from the sovereign catalog.
+`TmctolDexOps` routes exact-input and exact-output swaps through DEOS Router with `ExecutionContext { actor, actor_type }` and returns actual `DexSwapOutcome { total_amount_in, recipient_amount_out }` facts to Actors. The accepted full production generation measures the Native-anchored maximum at `550,009,000 / 19,253` for exact-input and `551,126,000 / 19,253` for exact-output. Actors supplies immutable actor authority; the adapter uses it only for typed market protection and never infers System status from the sovereign catalog.
 
 Exact input derives `min_out` from the caller-aware quote and binds zero tolerance to that quote. Exact output obtains one reverse quote, adds authored tolerance with ceiling arithmetic, intersects it with live preservable input capacity, and executes under the explicit total-input cap.
 
@@ -240,21 +240,9 @@ Tombstone drain is `7,057,781 + 2,132,168 × n` RefTime and `2,982 + 2,492 × n`
 
 ## Generated Evidence and Artifacts
 
-Current DEOS 0.7.15 candidate artifact identities:
+`scripts/actors-assurance.sh` owns pre-release freshness checks for Actors semantic, fee-envelope, ABI, observation, ingress, weight, and metadata evidence. The deterministic final `release-evidence.json` owns candidate Wasm, metadata, descriptor, weight-tree, and specification hashes after semantic freeze; this integration document does not copy those release identities.
 
-| Artifact | SHA-256 |
-| --- | --- |
-| Actors runtime weights | `dd8aa0d9030b6e6815d3d44bcc9fd0cd6fdcaaa96c02420d32f713f55cb85b4d` |
-| DEOS Oracle runtime weights | `8c73cdf77227cacda32cc7fdebc87681885339556856f02905f27d9feadb648a` |
-| Compact compressed runtime Wasm | `2b6d7adc069e9e16316831686c8a89b494973a6575f3d4a2acd62883f0222ea2` |
-| SCALE-encoded V16 metadata | `46d1ecd23107ffc32d567420a2ea55ff419b9f0efa800d329e0043eeddb167e7` |
-| Actors semantic manifest | `820dc8e282694dc357f190712eddf5f4c6450a71124a295bae1dffb9d85f4c97` |
-| Actors fee-envelope vectors | `9256b8b8eae4c44d306b8c8f6680fa54b8d6d3ec221e4014bf7ef2f5d206e056` |
-| Actors ABI manifest | `0067461f6a07a54e4aeefe1ae050a7dfeae712405705fecf7965ad11bb8ac22c` |
-
-The metadata identity hashes the exact bytes at `web-client/.papi/metadata/deos.scale`. Fee-envelope `metadataSha256` and `weightSha256` equal the metadata and Actors-weight rows above. Observation evidence binds the same metadata SHA-256 and Actors-weight identity plus the rebuilt compact-Wasm runtime-code hash. No alternate compact-Wasm claim remains active.
-
-`template/runtime/src/weights/pallet_deos_actors.rs` owns complete generated methods and storage annotations. Architecture records only load-bearing admission values and accepted identities; benchmark-host timing never becomes a chain-throughput claim.
+`template/runtime/src/weights/pallet_deos_actors.rs` owns complete generated methods and storage annotations. Architecture records only load-bearing admission values; benchmark-host timing never becomes a chain-throughput claim.
 
 ### Generated Event Trace Corpus
 
@@ -282,11 +270,9 @@ Unbounded history, archive search, forecasting records, governance preparation h
 
 ## Validation and Operations
 
-Final reproducible validation used Rust/Cargo 1.96.1, Node 24.10.0, npm 11.7.0, and `frame-omni-bencher 0.22.0`. `scripts/actors-release-gate.sh` passed its artifact-freshness, package, embedding, Clippy, and three of its five required scheduler stress profiles; the remaining `stress_10k_actors_queue_scheduler` and `checkpoint_a_s6_dense_10k_wakeups_converge_without_drops` profiles carry pre-existing 0.7.11 test-versus-scheduler-semantics mismatches (creation-time wakeup-first scheduling and a changed theoretical-max throughput assertion) that the weight-evidence pass reports separately. `npm run validate:all`, full package architecture, script-entrypoint, semantic-terminology, release self-test, Markdown, readability, backlog, Domain DAG, wiki, and completion audits passed against the artifact identities above.
-
 Package tests own executable actor, scheduler, trigger, lifecycle, storage, and try-state behavior. Runtime tests own adapters, fees, ingress, genesis topology, Oracle/Router rollback, staking, XCM, generated-weight binding, block-budget partition, and full System/User composition.
 
-The full `scripts/actors-release-gate.sh` route covers package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and the occupancy profile. The canonical script owns command syntax and profile selection.
+`scripts/actors-assurance.sh` owns package portability, external embedding, runtime integration, scheduler fairness, dense/sparse liveness, 10,000-actor queue stress, and occupancy proof commands. Repository toolchain authorities and canonical release profiles own environment and profile selection; this integration document does not duplicate release results or version pins.
 
 `template/runtime/src/tests/fixtures/actors-reactive-operations.v1.json` is the machine-readable reactive-operations corpus. Every scenario names initial state, ordered actions, checkpoints, terminal state, global invariants, production weight class, rollback boundary, runtime evidence identity, and an executable Rust test anchor. Seeded scenarios also name their seed.
 

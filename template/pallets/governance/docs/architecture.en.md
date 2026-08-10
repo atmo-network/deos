@@ -49,7 +49,7 @@ Outside that exception, urgent handling remains disabled until constitutional/ru
 
 **3. Proposal control remains admin-heavy.**
 
-Signed users can cast votes. The browser exposes the bounded advisory submit path and the first minimal tactical treasury invoice submit path. The runtime also opts tactical `$BLDR` `L2TreasurySpend` into signed submission alongside the earlier advisory combinations.
+Signed users can cast votes. The browser exposes bounded advisory and tactical treasury submission plus protocol `L1RootAction` submission for signers with runtime-verified primary-track power; it does not infer eligibility from `$VETO` or expose direct Root dispatch.
 
 Manual resolution/rejection, requeue, and policy-aware early finalization otherwise remain `Root`-gated in the current runtime.
 
@@ -83,7 +83,7 @@ One constitutional acceleration rule overlays that path. Unanimous raw protectio
 
 The post-bootstrap role split stays explicit: governance authorizes the code hash, while `apply_authorized_upgrade` only transports already-authorized bytes rather than making a second governance decision.
 
-The repository ships `/scripts/authorized-upgrade-local.sh check` as a plan-only verifier for local WASM against the pending hash and `/scripts/authorized-upgrade-local.sh apply` as the explicit relay submit surface. Local dev bootstrap no longer depends on Sudo for the wallet/swap seeding surfaces that previously blocked this handoff.
+The repository ships `/scripts/authorized-upgrade-local.sh check` as a finalized, plan-only verifier for live-versus-local code identity, strategic submission authority, `$VETO` issuance, and any pending authorized hash. `/scripts/authorized-upgrade-local.sh apply` remains the explicit relay submit surface.
 
 **6. Invoice-family storage, queries, resolution, and runtime activation exist.**
 
@@ -273,8 +273,8 @@ Public read helpers now expose these governance-observability layers, and the sa
 10. `proposal_submission_authority(domain, payload_kind)`
 
 - Additive submission-scope scaffold over one `(domain, payload_kind)` pair
-- Reports whether the current runtime treats that combination as `Signed` or `AdminOnly`
-- The current launch line now opts the first bounded public submission slices in: `Intent` is `Signed` across domains, tactical `$BLDR` `L2SignalToL1` is also `Signed`, tactical `$BLDR` `L2TreasurySpend` is now `Signed` too, and the remaining executable kinds plus the remaining advisory combinations stay `AdminOnly`
+- Reports whether the runtime treats that combination as `Signed`, `PrimaryEligibleSigned`, or `AdminOnly`
+- The current line exposes protocol / Native `L1RootAction` as `PrimaryEligibleSigned`; `Intent` is `Signed` across domains, tactical `$BLDR` `L2SignalToL1` and `L2TreasurySpend` are `Signed`, and remaining combinations stay `AdminOnly`
 
 11. `proposal_opening_fee(domain, payload_kind)`
 
@@ -404,11 +404,14 @@ So the coefficient is normalized against the runtime's own configured capacity, 
 `submit_signed_proposal(domain, item_id, cadence_mode, payload_kind, payload_hash)`:
 
 - Signed submit path for runtime-approved public combinations only
+- `PrimaryEligibleSigned` additionally calls the host eligibility provider before any fee or proposal mutation
+- The DEOS provider admits protocol / Native `L1RootAction` only when the signer has nonzero direct primary-track staking power; `$VETO` protection balance never enters that predicate
 - Derives proposer identity from the signer rather than an admin-supplied sponsor field
 - Transfers the runtime-configured native opening fee into Fee Sink before proposal creation
 - Uses transactional semantics so duplicate/cap failures do not strand a collected fee
 - Reuses the same bounded active-proposal insertion path and GovXP authorship accounting once admitted
 - Emits `ProposalOpeningFeeCollected` when the opening fee is non-zero, then `ProposalSubmitted`
+- Charges a conservative measured `cast_vote` envelope plus four host reads for eligibility until a narrower runtime benchmark replaces that safe upper bound
 
 `cast_vote(domain, item_id, vote)`:
 
@@ -798,13 +801,14 @@ That means live proposal discovery and bounded recent-finalized discovery are ch
 
 ### Current runtime-upgrade operator path
 
-The current line now has one explicit bounded off-browser operator flow for already-authorized runtime code:
+The current line has one explicit bounded off-browser operator flow:
 
-1. governance authorizes one `code_hash` through the `L1RootAction -> System.authorize_upgrade { code_hash }` path
-2. operators read `authorized_runtime_upgrade()` to learn whether authorization exists and whether version checking remains enabled
-3. `/scripts/authorized-upgrade-local.sh check` compares a local WASM blob against that authorized hash and now classifies the result as `awaiting-governance-authorization`, `authorized-hash-mismatch`, or `ready-to-relay-code`
-4. once the phase reaches `ready-to-relay-code`, `/scripts/authorized-upgrade-local.sh apply` provides the dedicated operator-facing submit surface for the external relay step and stays plan-only unless `--submit` is passed explicitly
-5. only after that readiness check should an external system-origin path relay matching bytes through `System.apply_authorized_upgrade { code }`
+1. `/scripts/authorized-upgrade-local.sh check` pins one finalized block and compares its runtime code with the selected local candidate
+2. the same read-only check requires `PrimaryEligibleSigned` for protocol `L1RootAction` and reports current `$VETO` issuance; zero issuance fails strategic lifecycle readiness closed rather than implying authorization can complete
+3. `prepare-authorization` emits candidate-bound stake, exact preimage, and signed proposal call data with finalized item/balance/fee checks; it never signs and withholds the protection `Pass` call while lifecycle readiness fails
+4. separately approved governance actions may create the proposal and, after legitimate protection power exists, authorize one `code_hash` through `L1RootAction -> System.authorize_upgrade { code_hash }`
+5. operators read `authorized_runtime_upgrade()` and the helper classifies the selected code as `awaiting-governance-authorization`, `authorized-hash-mismatch`, or `ready-to-relay-code`
+6. at `ready-to-relay-code`, `/scripts/authorized-upgrade-local.sh apply` provides the dedicated relay submit surface and stays plan-only unless `--submit` is passed explicitly
 
 This is intentionally still an off-browser operator flow rather than a browser action. The browser governance surface remains read-only for that second step, while the verifier and relay helper both default to non-submitting behavior.
 
@@ -844,6 +848,12 @@ The implementation is covered by:
 - Runtime integration tests in `template/runtime/src/tests/staking_integration_tests.rs`
 - FRAME v2 benchmarks in `template/pallets/governance/src/benchmarking.rs`
 - Runtime weight bridge in `template/runtime/src/weights/pallet_governance.rs`
+
+The production bridge was regenerated with `frame-omni-bencher 0.22.0`, `50` steps, and `20` repeats.
+
+`submit_signed_proposal` measures primary-eligibility reads, opening-fee transfer, and proposal creation with the domain active-cap index filled to `MaxActiveProposalsPerDomain - 1`. Its runtime weight is `Weight::from_parts(162_104_000, 3_999)` plus `9` database reads and `8` writes.
+
+The runtime benchmark helper ensures the protocol governance asset and staking pool exist, funds the caller, and stakes it before measurement. Lifecycle benchmarks derive voting and maturity epochs from runtime lead-in and voting-period constants rather than mock-only block numbers.
 
 Coverage includes:
 

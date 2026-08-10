@@ -98,6 +98,144 @@ pub enum RouterFailureClass {
   InvariantViolation,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RetryClass {
+  Permanent,
+  RetryLater,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct AdapterFailure {
+  dispatch_error: DispatchError,
+  failure_class: RouterFailureClass,
+  retry_class: RetryClass,
+}
+
+impl AdapterFailure {
+  pub const fn new(
+    dispatch_error: DispatchError,
+    failure_class: RouterFailureClass,
+    retry_class: RetryClass,
+  ) -> Self {
+    Self {
+      dispatch_error,
+      failure_class,
+      retry_class,
+    }
+  }
+
+  pub const fn unknown(dispatch_error: DispatchError) -> Self {
+    Self::new(
+      dispatch_error,
+      RouterFailureClass::InvariantViolation,
+      RetryClass::Permanent,
+    )
+  }
+
+  pub const fn failure_class(&self) -> RouterFailureClass {
+    self.failure_class
+  }
+
+  pub const fn retry_class(&self) -> RetryClass {
+    self.retry_class
+  }
+
+  pub fn into_dispatch_error(self) -> DispatchError {
+    self.dispatch_error
+  }
+}
+
+impl From<DispatchError> for AdapterFailure {
+  fn from(error: DispatchError) -> Self {
+    Self::unknown(error)
+  }
+}
+
+pub enum ExecutionError<T: Config> {
+  Router(Error<T>),
+  Adapter(AdapterFailure),
+}
+
+impl<T: Config> core::fmt::Debug for ExecutionError<T> {
+  fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+    formatter
+      .debug_struct("ExecutionError")
+      .field("failure_class", &self.failure_class())
+      .field("retry_class", &self.retry_class())
+      .finish()
+  }
+}
+
+impl<T: Config> PartialEq for ExecutionError<T> {
+  fn eq(&self, other: &Self) -> bool {
+    match (self, other) {
+      (Self::Router(left), Self::Router(right)) => left.encode() == right.encode(),
+      (Self::Adapter(left), Self::Adapter(right)) => left == right,
+      _ => false,
+    }
+  }
+}
+
+impl<T: Config> Eq for ExecutionError<T> {}
+
+impl<T: Config> ExecutionError<T> {
+  pub fn failure_class(&self) -> RouterFailureClass {
+    match self {
+      Self::Router(error) => error.failure_class(),
+      Self::Adapter(failure) => failure.failure_class(),
+    }
+  }
+
+  pub fn retry_class(&self) -> RetryClass {
+    match self {
+      Self::Router(error) => error.retry_class(),
+      Self::Adapter(failure) => failure.retry_class(),
+    }
+  }
+
+  pub fn into_dispatch_error(self) -> DispatchError {
+    match self {
+      Self::Router(error) => error.into(),
+      Self::Adapter(failure) => match failure.failure_class() {
+        RouterFailureClass::NoViableRoute => Error::<T>::NoRouteFound.into(),
+        RouterFailureClass::ProtectionRejected => Error::<T>::PriceDeviationExceeded.into(),
+        RouterFailureClass::LiquidityUnavailable => Error::<T>::InsufficientLiquidity.into(),
+        RouterFailureClass::FeeRejected => Error::<T>::FeeRoutingFailed.into(),
+        RouterFailureClass::PublicationRejected | RouterFailureClass::IngressRejected => {
+          Error::<T>::InvalidOracleData.into()
+        }
+        RouterFailureClass::InvalidRequest | RouterFailureClass::InvariantViolation => {
+          failure.into_dispatch_error()
+        }
+      },
+    }
+  }
+}
+
+impl<T: Config> From<Error<T>> for ExecutionError<T> {
+  fn from(error: Error<T>) -> Self {
+    Self::Router(error)
+  }
+}
+
+impl<T: Config> From<AdapterFailure> for ExecutionError<T> {
+  fn from(failure: AdapterFailure) -> Self {
+    Self::Adapter(failure)
+  }
+}
+
+impl<T: Config> From<DispatchError> for ExecutionError<T> {
+  fn from(error: DispatchError) -> Self {
+    Self::Adapter(AdapterFailure::unknown(error))
+  }
+}
+
+impl<T: Config> From<ExecutionError<T>> for DispatchError {
+  fn from(error: ExecutionError<T>) -> Self {
+    error.into_dispatch_error()
+  }
+}
+
 #[derive(
   Debug, Clone, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
 )]
@@ -305,9 +443,9 @@ pub mod pallet {
     /// Fee manager interface
     type FeeAdapter: FeeRoutingAdapter<Self::AccountId, Balance>;
 
-    /// Burning manager account for fee processing
+    /// Burn Actor account for fee processing
     #[pallet::constant]
-    type BurningManagerAccount: Get<Self::AccountId>;
+    type BurnActorAccount: Get<Self::AccountId>;
 
     /// Liquidity Actor account (fee-exempt System Actor)
     #[pallet::constant]
@@ -433,7 +571,30 @@ pub mod pallet {
         | Self::LpPairCapacityExceeded
         | Self::InvalidPoolPair
         | Self::PreparedRouteMismatch => RouterFailureClass::InvariantViolation,
-        _ => RouterFailureClass::InvariantViolation,
+        Self::__Ignore(_, never) => match *never {},
+      }
+    }
+
+    pub const fn retry_class(&self) -> RetryClass {
+      match self {
+        Self::NoRouteFound
+        | Self::NoMultiHopRoute
+        | Self::InsufficientLiquidity
+        | Self::SlippageExceeded
+        | Self::PriceDeviationExceeded
+        | Self::InsufficientInputBalance
+        | Self::InvalidOracleData => RetryClass::RetryLater,
+        Self::IdenticalAssets
+        | Self::ZeroAmount
+        | Self::AmountTooLow
+        | Self::DeadlinePassed
+        | Self::FeeRoutingFailed
+        | Self::RouterFeeTooHigh
+        | Self::LpTokenPairCollision
+        | Self::LpPairCapacityExceeded
+        | Self::InvalidPoolPair
+        | Self::PreparedRouteMismatch => RetryClass::Permanent,
+        Self::__Ignore(_, never) => match *never {},
       }
     }
   }
@@ -461,7 +622,8 @@ pub mod pallet {
         frame_system::Pallet::<T>::block_number() <= deadline,
         Error::<T>::DeadlinePassed
       );
-      Self::execute_swap_for(&who, from, to, amount_in, min_amount_out, &recipient)?;
+      Self::execute_swap_for(&who, from, to, amount_in, min_amount_out, &recipient)
+        .map_err(DispatchError::from)?;
       Ok(())
     }
 
@@ -479,13 +641,18 @@ pub mod pallet {
       LpPairByTokenId::<T>::get().get(&lp_token_id).copied()
     }
 
-    pub fn register_lp_pair(lp_token_id: u32, pair: (AssetKind, AssetKind)) -> DispatchResult {
-      ensure!(pair.0 != pair.1, Error::<T>::InvalidPoolPair);
-      let canonical_pair = if pair.0 < pair.1 {
-        pair
+    fn canonical_lp_pair(pair: (AssetKind, AssetKind)) -> Option<(AssetKind, AssetKind)> {
+      if pair.0 == pair.1 {
+        None
+      } else if pair.0 < pair.1 {
+        Some(pair)
       } else {
-        (pair.1, pair.0)
-      };
+        Some((pair.1, pair.0))
+      }
+    }
+
+    pub fn register_lp_pair(lp_token_id: u32, pair: (AssetKind, AssetKind)) -> DispatchResult {
+      let canonical_pair = Self::canonical_lp_pair(pair).ok_or(Error::<T>::InvalidPoolPair)?;
       LpPairByTokenId::<T>::try_mutate(|pairs| {
         if let Some(existing) = pairs.get(&lp_token_id) {
           ensure!(
@@ -494,6 +661,10 @@ pub mod pallet {
           );
           return Ok(());
         }
+        ensure!(
+          !pairs.values().any(|existing| *existing == canonical_pair),
+          Error::<T>::LpTokenPairCollision
+        );
         pairs
           .try_insert(lp_token_id, canonical_pair)
           .map_err(|_| Error::<T>::LpPairCapacityExceeded)?;
@@ -520,7 +691,7 @@ pub mod pallet {
       min_amount_out: Balance,
       recipient: &T::AccountId,
       keep_alive: bool,
-    ) -> Result<Balance, DispatchError> {
+    ) -> Result<Balance, ExecutionError<T>> {
       if path.len() != 2 {
         return Err(Error::<T>::NoRouteFound.into());
       }
@@ -533,6 +704,7 @@ pub mod pallet {
         recipient.clone(),
         keep_alive,
       )
+      .map_err(Into::into)
     }
 
     /// Plan the optimal route and validate its protection bounds before execution
@@ -542,7 +714,7 @@ pub mod pallet {
       total_amount_in: Balance,
       router_fee: Balance,
       min_amount_out: Balance,
-    ) -> Result<PreparedRoute, Error<T>> {
+    ) -> Result<PreparedRoute, ExecutionError<T>> {
       let routed_amount_in = total_amount_in.saturating_sub(router_fee);
       let prepared = Self::find_optimal_route(from, to, routed_amount_in)
         .ok_or(Error::<T>::NoRouteFound)?
@@ -564,7 +736,7 @@ pub mod pallet {
       recipient: &T::AccountId,
       keep_alive: bool,
       prepared: &PreparedRoute,
-    ) -> Result<Balance, DispatchError> {
+    ) -> Result<Balance, ExecutionError<T>> {
       if prepared.family == RouteFamily::DirectMint {
         let Some(PreparedLeg::TmcMint {
           token_asset,
@@ -621,7 +793,7 @@ pub mod pallet {
       legs: &PreparedLegs,
       recipient: &T::AccountId,
       keep_alive: bool,
-    ) -> Result<ExactOutputExecution, DispatchError> {
+    ) -> Result<ExactOutputExecution, ExecutionError<T>> {
       let last_leg = legs.len().saturating_sub(1);
       let mut external_amount_in = None;
       let mut recipient_amount_out = 0;
@@ -731,7 +903,7 @@ pub mod pallet {
       Ok(())
     }
 
-    fn validate_prepared_legs(legs: &PreparedLegs) -> Result<(), Error<T>> {
+    fn validate_prepared_legs(legs: &PreparedLegs) -> Result<(), ExecutionError<T>> {
       for leg in legs {
         if let PreparedLeg::Xyk {
           asset_in,
@@ -745,15 +917,17 @@ pub mod pallet {
           let current_price = quoted_amount_out
             .saturating_mul(T::Precision::get())
             .saturating_div(*quoted_amount_in);
-          T::PriceOracle::validate_price_deviation(*asset_in, *asset_out, current_price)
-            .map_err(|_| Error::<T>::PriceDeviationExceeded)?;
+          T::PriceOracle::validate_price_deviation(*asset_in, *asset_out, current_price)?;
         }
       }
       Ok(())
     }
 
     /// Update the local EMA from pre-execution pool reserves
-    fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Error<T>> {
+    fn update_oracle_from_reserves(
+      from: AssetKind,
+      to: AssetKind,
+    ) -> Result<(), ExecutionError<T>> {
       if let Some(pool_id) = T::AssetConversion::single_pool_id(from, to) {
         if let Some((res_a, res_b)) = T::AssetConversion::single_pool_reserves(pool_id) {
           // CORRECT: Identify which reserve matches the 'from' asset
@@ -766,8 +940,7 @@ pub mod pallet {
             let spot_price = reserve_out
               .saturating_mul(T::Precision::get())
               .saturating_div(reserve_in);
-            T::PriceOracle::update_ema_price(from, to, spot_price)
-              .map_err(|_| Error::<T>::InvalidOracleData)?;
+            T::PriceOracle::update_ema_price(from, to, spot_price)?;
           }
         }
       }
@@ -800,20 +973,19 @@ pub mod pallet {
       fee_asset: AssetKind,
       fee_amount: Balance,
       who: &T::AccountId,
-    ) -> Result<(), Error<T>> {
+    ) -> Result<(), ExecutionError<T>> {
       if fee_amount == 0 {
         return Ok(());
       }
       if Self::is_fee_exempt(who) {
         return Ok(());
       }
-      T::FeeAdapter::route_fee(who, fee_asset, fee_amount)
-        .map_err(|_| Error::<T>::FeeRoutingFailed)?;
+      T::FeeAdapter::route_fee(who, fee_asset, fee_amount)?;
       Self::deposit_event(Event::<T>::FeeCollected {
         asset: fee_asset,
         amount: fee_amount,
         source: who.clone(),
-        collector: T::BurningManagerAccount::get(),
+        collector: T::BurnActorAccount::get(),
       });
       Ok(())
     }
@@ -833,7 +1005,7 @@ pub mod pallet {
       amount_in: Balance,
       min_amount_out: Balance,
       recipient: &T::AccountId,
-    ) -> Result<RouterOutcome, DispatchError> {
+    ) -> Result<RouterOutcome, ExecutionError<T>> {
       ensure!(from != to, Error::<T>::IdenticalAssets);
       ensure!(amount_in > 0, Error::<T>::ZeroAmount);
       let system_account = Self::is_fee_exempt(who);
@@ -883,7 +1055,7 @@ pub mod pallet {
       amount_out: Balance,
       max_amount_in: Balance,
       recipient: &T::AccountId,
-    ) -> Result<RouterOutcome, DispatchError> {
+    ) -> Result<RouterOutcome, ExecutionError<T>> {
       ensure!(!max_amount_in.is_zero(), Error::<T>::ZeroAmount);
       let (prepared, router_fee, prepared_amount_in) =
         Self::prepare_exact_output_route(who, from, to, amount_out)?;
@@ -929,7 +1101,7 @@ pub mod pallet {
     /// Check whether an account is exempt from router fees (system actors)
     pub fn is_fee_exempt(who: &T::AccountId) -> bool {
       who == &Self::account_id()
-        || who == &T::BurningManagerAccount::get()
+        || who == &T::BurnActorAccount::get()
         || who == &T::LiquidityActorAccount::get()
     }
 
@@ -1257,18 +1429,24 @@ pub mod pallet {
 
     #[cfg(feature = "try-runtime")]
     pub(crate) fn do_try_state() -> Result<(), polkadot_sdk::sp_runtime::TryRuntimeError> {
+      use alloc::collections::BTreeSet;
       use polkadot_sdk::sp_runtime::TryRuntimeError;
-      // Invariant 1: RouterFee stays within the configured governance mutation bound
       let fee = RouterFee::<T>::get();
       if fee > T::MaxRouterFee::get() {
         return Err(TryRuntimeError::Other(
           "RouterFee exceeds configured maximum",
         ));
       }
+      let mut indexed_pairs = BTreeSet::new();
       for (_, pair) in LpPairByTokenId::<T>::get() {
-        if pair.0 >= pair.1 {
+        if Self::canonical_lp_pair(pair) != Some(pair) {
           return Err(TryRuntimeError::Other(
             "LP reverse index contains a non-canonical pair",
+          ));
+        }
+        if !indexed_pairs.insert(pair) {
+          return Err(TryRuntimeError::Other(
+            "LP reverse index maps one pair to multiple LP tokens",
           ));
         }
       }

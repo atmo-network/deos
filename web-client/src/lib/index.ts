@@ -39,12 +39,10 @@ export type { Adapter } from './adapters/contract';
 export {
   GovernanceMockAdapter,
   GovernancePapiProvider,
-  GovernanceRpcProvider,
   GovernanceUnavailableBlockchainProvider,
 } from './adapters/governance';
 export type { GovernanceBlockchainProvider } from './adapters/governance';
 export {
-  DEFAULT_GOVERNANCE_RPC_ENDPOINT,
   DEFAULT_GOVERNANCE_WS_ENDPOINT,
   GOVERNANCE_QUERY_SURFACE_AVAILABILITY,
   GOVERNANCE_RUNTIME_WRITE_SURFACE,

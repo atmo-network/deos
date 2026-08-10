@@ -1291,7 +1291,7 @@ fn native_reward_account_transfer_is_ignored_by_event_ingress_and_reconciled_on_
 }
 
 #[test]
-fn direct_reward_ingress_weight_matches_aggregated_inflow_model() {
+fn non_native_reward_ingress_weight_matches_aggregated_inflow_model() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -1314,7 +1314,7 @@ fn direct_reward_ingress_weight_matches_aggregated_inflow_model() {
       reward_account.clone().into(),
       45,
     ));
-    let ingress_weight = <crate::configs::staking_config::RuntimeLegacyRewardSnapshotEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
+    let ingress_weight = <crate::configs::staking_config::RuntimeNonNativeRewardEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
       System::block_number(),
       128,
       Weight::MAX,
@@ -1329,7 +1329,7 @@ fn direct_reward_ingress_weight_matches_aggregated_inflow_model() {
 }
 
 #[test]
-fn direct_reward_ingress_weight_matches_governance_touch_model() {
+fn non_native_reward_ingress_weight_matches_governance_touch_model() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -1340,7 +1340,7 @@ fn direct_reward_ingress_weight_matches_governance_touch_model() {
     assert_ok!(Staking::stake(RuntimeOrigin::signed(BOB), ASSET_A, 400));
     System::reset_events();
     record_winning_vote(ASSET_A, 100, BOB);
-    let ingress_weight = <crate::configs::staking_config::RuntimeLegacyRewardSnapshotEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
+    let ingress_weight = <crate::configs::staking_config::RuntimeNonNativeRewardEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
       System::block_number(),
       128,
       Weight::MAX,
@@ -1357,7 +1357,7 @@ fn direct_reward_ingress_weight_matches_governance_touch_model() {
 }
 
 #[test]
-fn legacy_reward_event_ingress_aggregates_same_block_reward_inflows_under_finite_budget() {
+fn non_native_reward_event_ingress_aggregates_same_block_inflows_under_finite_budget() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -1404,7 +1404,7 @@ fn legacy_reward_event_ingress_aggregates_same_block_reward_inflows_under_finite
 }
 
 #[test]
-fn legacy_reward_event_ingress_stops_at_tiny_on_idle_weight_budget() {
+fn non_native_reward_event_ingress_stops_at_tiny_on_idle_weight_budget() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -1436,7 +1436,7 @@ fn legacy_reward_event_ingress_stops_at_tiny_on_idle_weight_budget() {
 }
 
 #[test]
-fn legacy_reward_event_ingress_stops_at_tiny_remaining_weight_budget() {
+fn non_native_reward_event_ingress_stops_at_tiny_remaining_weight_budget() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -1453,7 +1453,7 @@ fn legacy_reward_event_ingress_stops_at_tiny_remaining_weight_budget() {
       reward_account.into(),
       30,
     ));
-    let ingress_weight = <crate::configs::staking_config::RuntimeLegacyRewardSnapshotEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
+    let ingress_weight = <crate::configs::staking_config::RuntimeNonNativeRewardEventIngress as pallet_staking::RewardSnapshotEventIngress<crate::BlockNumber>>::ingest(
       System::block_number(),
       crate::configs::staking_config::MaxRewardEventScanPerBlock::get() as usize,
       Weight::from_parts(1_000, 0),
@@ -1465,7 +1465,7 @@ fn legacy_reward_event_ingress_stops_at_tiny_remaining_weight_budget() {
 }
 
 #[test]
-fn legacy_reward_event_ingress_records_governance_touches_under_finite_budget() {
+fn non_native_reward_event_ingress_records_governance_touches_under_finite_budget() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
@@ -1489,7 +1489,7 @@ fn legacy_reward_event_ingress_records_governance_touches_under_finite_budget() 
 }
 
 #[test]
-fn legacy_reward_ingress_receipt_lookup_probe_stays_event_bound_with_many_pools() {
+fn non_native_reward_ingress_receipt_lookup_stays_event_bound_with_many_pools() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     register_additional_staking_assets(10, 8);
@@ -1523,7 +1523,7 @@ fn legacy_reward_ingress_receipt_lookup_probe_stays_event_bound_with_many_pools(
 }
 
 #[test]
-fn legacy_reward_ingress_governance_lookup_probe_stays_domain_bound_with_many_pools() {
+fn non_native_reward_ingress_governance_lookup_stays_domain_bound_with_many_pools() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     register_additional_staking_assets(20, 8);
@@ -1548,7 +1548,7 @@ fn legacy_reward_ingress_governance_lookup_probe_stays_domain_bound_with_many_po
 }
 
 #[test]
-fn legacy_reward_event_ingress_emits_truncation_signal_when_scan_cap_is_hit_under_finite_budget() {
+fn non_native_reward_ingress_emits_truncation_when_scan_cap_is_hit() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
     assert_ok!(Staking::register_staking_asset(
@@ -1952,70 +1952,6 @@ fn registering_foreign_staking_pool_creates_dedicated_foreign_receipt_asset() {
 }
 
 #[test]
-fn governance_can_initialize_and_convert_legacy_runtime_pool_to_receipts() {
-  let mut ext = seeded_test_ext();
-  ext.execute_with(|| {
-    assert_ok!(mint_tokens(ASSET_A, &ALICE, &BOB, 1_000));
-    assert_ok!(mint_tokens(ASSET_A, &ALICE, &CHARLIE, 1_000));
-    let pool_account = Staking::pool_account_for(ASSET_A);
-    pallet_staking::Pools::<crate::Runtime>::insert(
-      ASSET_A,
-      pallet_staking::PoolState {
-        total_shares: 400,
-        accounted_balance: 400,
-        active_staker_count: 1,
-      },
-    );
-    pallet_staking::Positions::<crate::Runtime>::insert(
-      ASSET_A,
-      BOB,
-      pallet_staking::StakePosition { shares: 400 },
-    );
-    assert_ok!(Assets::transfer(
-      RuntimeOrigin::signed(BOB),
-      ASSET_A,
-      pool_account.clone().into(),
-      400,
-    ));
-    let staked_asset_id = Staking::staked_asset_id(ASSET_A).expect("staked asset id must resolve");
-    assert!(!<Assets as Inspect<_>>::asset_exists(staked_asset_id));
-    assert_ok!(Staking::initialize_staked_asset(
-      RuntimeOrigin::root(),
-      ASSET_A
-    ));
-    assert!(<Assets as Inspect<_>>::asset_exists(staked_asset_id));
-    assert_ok!(Staking::convert_position_to_receipt(
-      RuntimeOrigin::signed(BOB),
-      ASSET_A,
-    ));
-    assert_eq!(Staking::position(ASSET_A, BOB), None);
-    assert_eq!(<Assets as Inspect<_>>::balance(staked_asset_id, &BOB), 400);
-    assert_ok!(Staking::stake(RuntimeOrigin::signed(CHARLIE), ASSET_A, 200));
-    assert_eq!(Staking::position(ASSET_A, CHARLIE), None);
-    assert_eq!(
-      <Assets as Inspect<_>>::balance(staked_asset_id, &CHARLIE),
-      200
-    );
-    assert_eq!(Staking::stake_value(ASSET_A, &BOB), Some(400));
-    assert_eq!(Staking::stake_value(ASSET_A, &CHARLIE), Some(200));
-    System::assert_has_event(RuntimeEvent::Staking(
-      pallet_staking::Event::StakedAssetInitialized {
-        asset_id: ASSET_A,
-        staked_asset_id,
-        pool_account,
-      },
-    ));
-    System::assert_has_event(RuntimeEvent::Staking(
-      pallet_staking::Event::LegacyPositionConverted {
-        asset_id: ASSET_A,
-        account: BOB,
-        converted_shares: 400,
-      },
-    ));
-  });
-}
-
-#[test]
 fn staking_pool_registers_and_stakes_local_asset() {
   let mut ext = seeded_test_ext();
   ext.execute_with(|| {
@@ -2028,7 +1964,6 @@ fn staking_pool_registers_and_stakes_local_asset() {
     let pool = Staking::pool(ASSET_A).expect("pool must exist");
     assert_eq!(pool.total_shares, 400);
     assert_eq!(pool.accounted_balance, 400);
-    assert!(Staking::position(ASSET_A, BOB).is_none());
     assert_eq!(Staking::stake_value(ASSET_A, &BOB), Some(400));
     System::assert_has_event(RuntimeEvent::Staking(pallet_staking::Event::Staked {
       asset_id: ASSET_A,

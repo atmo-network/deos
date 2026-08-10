@@ -90,7 +90,7 @@ The same native value surface can also be locked for governance-only `NativeVote
 
 ## Phase 2 Native Nomination Rewards
 
-The specification reserves native-specific claim paths for Phase 2. Generic same-asset reward settlement rejects the native staking asset so `$NTVE` nomination rewards cannot escape through legacy auto-compound semantics.
+The specification reserves native-specific claim paths for Phase 2. Generic same-asset reward settlement rejects the native staking asset so `$NTVE` nomination rewards cannot escape through the non-native auto-compound path.
 
 The implemented settlement surface includes:
 
@@ -105,7 +105,7 @@ Staking and governance remain separate subsystems:
 - Staking owns pool math, receipts, locked LP custody, reward snapshots, and settlement
 - Governance owns bounded participation memory, vote-power policy, execution state, and exported reward coefficients
 
-For non-native assets, same-asset reward settlement can still auto-compound into fresh receipts. Native `$NTVE` nomination rewards remain a dedicated, phase-gated flow and stay inactive on the trusted-collator Phase 1 launch line.
+For non-native assets, same-asset reward settlement can still auto-compound into fresh receipts. Current recognition uses bounded current-block event ingress with explicit scan and Weight budgets; truncation makes the epoch unclaimable, and this path never claims historical replay. Native `$NTVE` nomination rewards remain a dedicated, phase-gated flow and stay inactive on the trusted-collator Phase 1 launch line.
 
 ## Related
 

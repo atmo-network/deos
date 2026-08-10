@@ -37,9 +37,12 @@ The architecture intentionally splits automation into two distinct classes to ma
 
 Numbered scripts perform specific leaf operations and do not orchestrate each other. They handle direct tasks such as:
 
-- `01-download-binaries.sh`: Fetch Polkadot SDK binaries
 - `03-build-runtime.sh`: Compile the WASM artifact
 - `05-spawn-zombienet.sh`: Launch the local network
+- `06-network-smoke.sh`: Observe bounded finalized relay and parachain progress
+- `07-network-e2e.sh`: Prove one signed finalized transfer against live event and storage truth
+- `08-session-transition.sh`: Observe one finalized session transition through both collator RPC views
+- `09-composed-economic-path.sh`: Reconcile a finalized Router, Oracle, and Burn Actor execution path against events and storage
 
 ### Orchestrators
 
@@ -47,7 +50,8 @@ Named workflow scripts compose atomic steps into larger developer flows:
 
 - `bootstrap-local-network.sh`: Build the runtime, generate the spec, and spin up the local chain and web client
 - `validate-local.sh`: Run the selected local audit, build, and E2E validation plan
-- `actors-release-gate.sh`: Run heavy stress tests for the Actors scheduler
+- `actors-assurance.sh`: Run heavy stress and capacity proofs for the Actors scheduler
+- `network-assurance-local.sh`: Compose topology, finality, failover, restart, and signed-transfer evidence; `SESSION_TRANSITION=1` adds the multi-hour session proof and `COMPOSED_PATH=1` adds finalized Router, Oracle, and Burn Actor evidence
 - `benchmarks.sh`: Run runtime benchmark compilation and weight-generation flows
 
 ## Admin Utilities
@@ -60,8 +64,10 @@ Important examples include:
 - `export-papi-metadata.sh`: Export Rust runtime metadata and regenerate PAPI descriptors for the web client
 - `bootstrap-native-staking-local.sh check`: Read native staking bootstrap readiness without submitting transactions
 - `bootstrap-native-staking-local.sh prepare-calls`: Emit the next plan-only Root/governance staking-admin or signed operator call data needed to register/initialize native staking, create the canonical `NTVE/stNTVE` pool, or seed initial liquidity
-- `authorized-upgrade-local.sh check`: Verify if the locally compiled WASM hash matches the pending authorized runtime upgrade on-chain
+- `authorized-upgrade-local.sh check`: Pin finalized runtime identity, compare live and local code, inspect strategic submission authority and `$VETO` issuance, and verify any pending authorized hash without submitting
+- `authorized-upgrade-local.sh prepare-authorization`: Emit candidate-bound stake, preimage, and strategic proposal call data without signing; protection `Pass` remains unavailable until the lifecycle is ready
 - `authorized-upgrade-local.sh apply`: Relay already-authorized runtime code bytes only with explicit `--submit`
+- `authorized-upgrade-local.sh snapshot|verify`: Capture finalized non-empty baseline state and verify exact Router, Oracle, Actors, runtime-version, and candidate-code preservation after an upgrade
 - `teardown-local-network.sh`: Safely terminate background processes and remove temporary network state
 
 ## Native Staking Bootstrap Helpers
@@ -69,7 +75,7 @@ Important examples include:
 The native staking bootstrap path is split into two operator-safe tools:
 
 1. `bootstrap-native-staking-local.sh prepare-calls` reads live state and prepares the next call data for the production/operator path
-2. `bootstrap-native-staking-local.sh check` verifies that the canonical `NTVE/stNTVE` pool, native staking exchange rate, and dormant native staking LP provisioning actor are ready
+2. `bootstrap-native-staking-local.sh check` verifies that the canonical `NTVE/stNTVE` pool, native staking exchange rate, and dormant Native Staking Liquidity Actor are ready
 
 Both helpers are plan/read-only by default. The preparation helper never signs or submits transactions; it only emits call data plus the expected authority for each step.
 

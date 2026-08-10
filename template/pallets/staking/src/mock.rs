@@ -189,6 +189,9 @@ pub fn set_native_governance_lock(account: AccountId, lock_until: u64) {
 pub struct MockStakedAssetIdResolver;
 impl pallet_staking::StakedAssetIdResolver<AssetId> for MockStakedAssetIdResolver {
   fn staked_asset_id(asset_id: AssetId) -> Option<AssetId> {
+    if asset_id == 99 {
+      return None;
+    }
     const TYPE_FOREIGN: AssetId = 0xF000_0000;
     const TYPE_STAKED: AssetId = 0x5000_0000;
     const TYPE_STAKED_FOREIGN: AssetId = 0x6000_0000;

@@ -1,12 +1,14 @@
-use polkadot_sdk::frame_support::pallet_prelude::*;
+use crate::AdapterFailure;
+#[cfg(feature = "runtime-benchmarks")]
+use polkadot_sdk::frame_support::pallet_prelude::DispatchResult;
 
 // Re-export AssetKind from primitives as the single source of truth
 pub use primitives::AssetKind;
 
-/// Fee routing adapter for direct fee transfer to burning manager
+/// Fee routing adapter for direct fee transfer to the Burn Actor.
 pub trait FeeRoutingAdapter<AccountId, Balance> {
-  /// Route fee directly from sender to burning manager account
-  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> DispatchResult;
+  /// Route fee directly from sender to the Burn Actor account.
+  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), AdapterFailure>;
 }
 
 /// Price-observation interface for local deviation checks
@@ -16,7 +18,7 @@ pub trait PriceOracle<Balance> {
     asset_in: AssetKind,
     asset_out: AssetKind,
     price: Balance,
-  ) -> Result<(), DispatchError>;
+  ) -> Result<(), AdapterFailure>;
 
   /// Get current EMA price for an asset pair
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<Balance>;
@@ -26,7 +28,7 @@ pub trait PriceOracle<Balance> {
     asset_in: AssetKind,
     asset_out: AssetKind,
     current_price: Balance,
-  ) -> Result<(), DispatchError>;
+  ) -> Result<(), AdapterFailure>;
 }
 
 /// TMC interface for DEOS Router integration
@@ -43,7 +45,7 @@ pub trait TmcInterface<AccountId, Balance> {
   fn calculate_recipient_receives(
     token_asset: AssetKind,
     foreign_amount: Balance,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, AdapterFailure>;
 
   /// Mint with distribution. Collateral is taken from `who` while the freshly
   /// minted user allocation is delivered to `recipient`; the zap allocation
@@ -55,7 +57,7 @@ pub trait TmcInterface<AccountId, Balance> {
     token_asset: AssetKind,
     foreign_asset: AssetKind,
     foreign_amount: Balance,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, AdapterFailure>;
 }
 
 /// Asset conversion API for XYK pools
@@ -91,7 +93,7 @@ pub trait AssetConversionApi<AccountId, Balance> {
     min_amount_out: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, AdapterFailure>;
 
   /// Execute one identified XYK pool leg under an exact-output ceiling.
   fn execute_single_pool_exact_output(
@@ -102,7 +104,7 @@ pub trait AssetConversionApi<AccountId, Balance> {
     max_amount_in: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<crate::ExactOutputExecution, DispatchError>;
+  ) -> Result<crate::ExactOutputExecution, AdapterFailure>;
 }
 
 /// Helper for benchmarking

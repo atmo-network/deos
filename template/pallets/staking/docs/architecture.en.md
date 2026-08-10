@@ -27,7 +27,7 @@ The current native implementation adds a separate security layer on top of that 
 - Collator nomination requires explicit custody of `NTVE/stNTVE` LP through `lock_native_lp_for_collator`
 - Native `NativeVotePower` comes from explicit custody sources, not transferable receipt movement
 - Native nomination rewards are recognized by epoch reconciliation and claimed from `reward_account(NTVE)`
-- Remaining event scanning is scoped as legacy non-native reward compatibility
+- Non-native share-vault rewards use bounded current-block event ingress; native nomination rewards do not
 
 This document describes shipped implementation truth. The broader normative target lives in `template/pallets/staking/docs/specification.en.md`.
 
@@ -74,7 +74,7 @@ graph TD
 
 ### Launch reward phases
 
-The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-DEOS action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning.
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects transaction, Actor-execution, governance-opening, and XCM-execution fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning. DEOS Router trading fees remain on the Burn Actor path.
 
 The LP-donation half flows through Fee Sink → Actors #14, with a native-balance bridge into the local native-staking asset before donation execution. After that donation hook, the staking-yield half burns native balance held by the staking pool account and mints the local native-staking asset into pool truth.
 
@@ -102,7 +102,7 @@ Receipt ids are runtime-resolved by `StakedAssetIdResolver`:
 - Foreign assets derive into `TYPE_STAKED_FOREIGN = 0x6000_0000`
 - Receipt classes are local `pallet-assets` assets
 
-At `register_staking_asset(asset_id)` the runtime lifecycle hook creates the receipt class when the id is resolvable. For `$NTVE`, metadata is currently `Staked Native Token` / `stNTVE` / `12` decimals.
+`register_staking_asset(asset_id)` requires a resolvable receipt id and atomically creates and indexes the receipt class through the runtime lifecycle hook. For `$NTVE`, metadata is currently `Staked Native Token` / `stNTVE` / `12` decimals.
 
 ### Canonical native LP token
 
@@ -121,12 +121,9 @@ The Asset Conversion adapter seeds `NextPoolAssetId` into the LP namespace befor
 
 | Storage | Role | Notes |
 | --- | --- | --- |
-| `Pools[asset_id]` | Share-vault totals | shares, accounted balance, staker count |
+| `Pools[asset_id]` | Share-vault totals | shares and accounted balance |
 | `LiveStakedAssetBaseAssets[staked_asset_id]` | Reverse receipt lookup | bounded receipt -> base lookup |
-| `Positions[(asset_id, account)]` | Legacy share ownership | bridge for pre-receipt positions |
 | `OperatorCommissions[operator]` | Operator commission | bounded by `MaxOperatorCommission` |
-
-`Positions` is retained only for legacy compatibility. Fresh ownership is receipt-based.
 
 ### Native LP security state
 
@@ -163,7 +160,7 @@ Standalone governance LP feeds NativeVotePower but does not feed `AccountNativeC
 - `RewardClaims[((asset_id, epoch), account)]`: claim-consumption marker and claimed amount
 - `LastProcessedRewardEpoch`: last fully completed reward epoch rollover
 - `PendingRewardEpochRollover`: bounded rollover cursor from prior epoch to target epoch
-- `LastRewardIngressTruncatedEpoch`: latest legacy event-scan truncation signal
+- `LastRewardIngressTruncatedEpoch`: latest non-native event-ingress truncation signal
 - `RewardTruncatedEpochs[epoch]`: incomplete epoch marker; claims rejected
 
 Native reward snapshots use `RuntimeRewardBaseWeightProvider`, which replaces the default share-balance base with conservative collator-locked LP value.
@@ -176,7 +173,7 @@ Native reward snapshots use `RuntimeRewardBaseWeightProvider`, which replaces th
 
 1. Requires `AdminOrigin`
 2. Requires base asset existence
-3. Creates receipt asset through `StakedAssetLifecycle` when supported
+3. Requires a resolvable receipt id and creates the receipt asset through `StakedAssetLifecycle`
 4. Indexes receipt -> base in `LiveStakedAssetBaseAssets`
 5. Creates `Pools[asset_id]` with current pool-account backing as `accounted_balance`
 6. Emits `StakingAssetRegistered`
@@ -206,25 +203,19 @@ Implementation details:
 - Math uses `U256` intermediates
 - `sync_pool_state(asset_id)` runs before crediting shares
 - `total_shares == 0 && accounted_balance > 0` rejects as `PoolHasUnownedBalance`
-- Receipt mode mints `stXXX`
-- Legacy mode writes `Positions`
+- Every successful stake mints the resolved `stXXX` receipt
 - Successful stake touches reward snapshot state for the next epoch
 
 For native `$NTVE`, staking is liquid and passive: it creates `stNTVE`, not collator security backing.
 
 ### 3. Unstake
 
-`unstake(asset_id, shares)` works against the migration-era effective ownership surface:
+`unstake(asset_id, shares)` burns the caller's resolved `stXXX` receipt balance and returns the proportional base-asset amount:
 
 ```text
-available_shares = live stXXX balance + legacy Position shares
+available_shares = live stXXX balance
 amount_out = shares * accounted_balance / total_shares
 ```
-
-Burn order:
-
-1. Burn receipt balance first
-2. Burn residual `Positions` only if needed
 
 Native unstake is therefore an exit from liquid `stNTVE` value, not an exit from collator nomination. Collator nomination exits use the LP unlock lifecycle.
 
@@ -331,9 +322,9 @@ Native reward snapshots do not depend on:
 - `stNTVE` transfer events
 - Governance event scanning
 
-### Legacy non-native reward ingress
+### Non-native reward event ingress
 
-`RuntimeLegacyRewardSnapshotEventIngress` remains wired as compatibility support for non-native share-vault rewards. It scans current block events with bounded budget and emits truncation state when the scan cap is hit.
+`RuntimeNonNativeRewardEventIngress` owns current non-native share-vault reward recognition. It scans only current-block events under the configured scan and Weight budgets, aggregates same-asset reward-account inflows, records bounded receipt/governance touches, and emits truncation state when complete processing cannot fit.
 
 Native filters deliberately exclude:
 
@@ -341,11 +332,11 @@ Native filters deliberately exclude:
 - Native `stNTVE` receipt transfers
 - Native governance-domain expansion
 
-The caveat is operationally important: legacy event ingress only sees current block events via `System::read_events_no_consensus()`. It is not a historical event processor.
+The caveat is operationally important: non-native event ingress only sees current-block events via `System::read_events_no_consensus()`. It is not a historical event processor, and a truncated epoch remains unclaimable.
 
 ### Claim paths
 
-`claim_reward(asset_id, epoch)` and `claim_reward_batch(asset_id, epochs)` remain the generic same-asset auto-compound paths for non-native staking assets. They move reward amount from `reward_account(asset_id)` into pool backing and mint fresh `stXXX` receipts. Passing the native staking asset is rejected so `$NTVE` nomination rewards cannot escape through the legacy auto-compound surface.
+`claim_reward(asset_id, epoch)` and `claim_reward_batch(asset_id, epochs)` remain the generic same-asset auto-compound paths for non-native staking assets. They move reward amount from `reward_account(asset_id)` into pool backing and mint fresh `stXXX` receipts. Passing the native staking asset is rejected so `$NTVE` nomination rewards cannot escape through the non-native auto-compound surface.
 
 Native nomination rewards use separate entrypoints:
 
@@ -398,7 +389,7 @@ The reference runtime wires `pallet-staking` with these key adapters:
 - `RuntimeRewardBaseWeightProvider`: overrides native reward base to collator-locked LP value
 - `RuntimeNativeNominationRewardCompounder`: routes claim+compound into Asset Conversion and LP locking
 - `RuntimeNativeStakingReadModelProvider`: exposes native pool/LP valuation for bounded views
-- `RuntimeLegacyRewardSnapshotEventIngress`: legacy non-native event scanner
+- `RuntimeNonNativeRewardEventIngress`: bounded current-block non-native reward scanner
 - `RuntimeNativeGovernanceLockProvider`: reads governance lock horizon
 
 ## Actors and Asset Conversion Integration
@@ -478,7 +469,7 @@ Outside the local-dev preset, the canonical pool should be launched through an e
 3. Create the canonical `AssetKind::Local(NTVE) / AssetKind::Local(stNTVE)` pool through the runtime/governance-approved pool-creation path.
 4. Seed balanced initial liquidity from a designated bootstrap account; this mints the initial LP supply to that account and makes read-model valuation non-empty.
 5. Run readiness checks before enabling dependent flows: `native_staking_liquidity_pool()` returns a pool, both reserves are non-zero, LP total issuance is non-zero, and `RuntimeNativeStakingLpAssetValidator` accepts the LP id. Operators can use `scripts/bootstrap-native-staking-local.sh check` as the local read-only readiness probe for this phase.
-6. Activate the native staking LP provisioning System Actors only after the readiness checks pass; activation remains guarded by `activate_native_staking_lp_farming` so donation execution cannot start against a missing or empty pool.
+6. Activate the native staking LP provisioning System Actors only after the readiness checks pass; activation remains guarded by `activate_native_staking_liquidity_actor` so donation execution cannot start against a missing or empty pool.
 7. If any step after pool creation fails, leave the actor inactive and treat remediation as an operator/governance action; do not silently fall back to liquid `stNTVE` balances or transfer-event-derived backing.
 
 ### Governance locks block vote-power withdrawal
@@ -489,9 +480,9 @@ Unlock requests for native governance custody and collator LP check the account 
 
 Funding `reward_account(NTVE)` after the epoch rollover will be recognized in a later epoch. Tests intentionally fund before the transition that reconciles the reward account.
 
-### Truncated legacy reward epochs are unclaimable
+### Truncated non-native reward epochs are unclaimable
 
-If legacy event scanning exceeds the bounded scan cap, the epoch is marked incomplete and claims for that epoch are rejected.
+If non-native event ingress exceeds its bounded scan or Weight budget, the epoch is marked incomplete and claims for that epoch are rejected.
 
 ### Pre-fork storage baseline
 
@@ -499,7 +490,5 @@ This repository is still the forkable framework line. Storage versions are curre
 
 ## Current Limitations and Remaining Work
 
-- Legacy non-native reward event scanning still exists until non-native reward surfaces are migrated away from the older share-vault event model
-- Architecture docs should be revisited after any future replacement of non-native reward ingress
 - Browser staking surfaces are now wired for the bounded native views and first signed action paths, but product-grade onboarding copy and guided flows can still improve
 - Runtime staking weights have been regenerated from the expanded benchmark set; production forks should rerun benchmarks on their target hardware and runtime profile before launch

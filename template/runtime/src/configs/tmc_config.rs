@@ -57,7 +57,7 @@ impl pallet_tmc::MintOutputResolver<AccountId> for TmctolMintOutput {
       AssetKind::Local(id) if id == ecosystem::protocol_tokens::BLDR_ASSET_ID => {
         pallet_tmc::MintOutputAccounts {
           collateral: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-            ecosystem::actor_ids::BLDR_ZM_ACTORS_ID,
+            ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
           ),
           minted: pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
             ecosystem::actor_ids::BLDR_SPLITTER_ACTORS_ID,
@@ -136,7 +136,7 @@ impl pallet_tmc::BenchmarkHelper<AccountId> for TmcBenchmarkHelper {
       let _ = pallet_assets::Pallet::<Runtime>::force_create(
         RuntimeOrigin::root(),
         asset_id,
-        polkadot_sdk::sp_runtime::MultiAddress::Id(BurningManagerAccount::get()),
+        polkadot_sdk::sp_runtime::MultiAddress::Id(BurnActorAccount::get()),
         true,
         1,
       );

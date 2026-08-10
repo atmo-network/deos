@@ -5,8 +5,6 @@ source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 WS_ENDPOINT="${WS_ENDPOINT:-ws://127.0.0.1:9988}"
 FOREIGN_ID="${FOREIGN_ID:-4026531841}"
-INITIAL_PRICE="${INITIAL_PRICE:-1000000000000}"
-SLOPE="${SLOPE:-1000000}"
 MINT_AMOUNT="${MINT_AMOUNT:-50000000000000}"
 LIQUIDITY_NATIVE="${LIQUIDITY_NATIVE:-5000000000000}"
 LIQUIDITY_FOREIGN="${LIQUIDITY_FOREIGN:-5000000000000}"
@@ -21,7 +19,7 @@ Usage: seed-web-client-state.sh [OPTIONS]
 Seeds the live local parachain with the remaining minimum economic state needed for real
 web-client wallet/swap/native-staking testing: the current dev/local chain spec is expected to
 already provide the foreign asset, local native-staking asset, stNTVE receipt,
-router tracking, native curve, and staking registration, while this script tops
+native curve, and staking registration, while this script tops
 up Alice's balances when needed and creates/boots the native/foreign plus
 NTVE/stNTVE pools with starter liquidity if they are still empty.
 
@@ -31,8 +29,6 @@ Options:
 Environment:
   WS_ENDPOINT=ws://127.0.0.1:9988
   FOREIGN_ID=4026531841
-  INITIAL_PRICE=1000000000000
-  SLOPE=1000000
   MINT_AMOUNT=50000000000000
   LIQUIDITY_NATIVE=5000000000000
   LIQUIDITY_FOREIGN=5000000000000
@@ -72,8 +68,6 @@ seed_state() {
         cd "$PROJECT_ROOT/web-client"
         WS_ENDPOINT="$WS_ENDPOINT" \
         FOREIGN_ID="$FOREIGN_ID" \
-        INITIAL_PRICE="$INITIAL_PRICE" \
-        SLOPE="$SLOPE" \
         MINT_AMOUNT="$MINT_AMOUNT" \
         LIQUIDITY_NATIVE="$LIQUIDITY_NATIVE" \
         LIQUIDITY_FOREIGN="$LIQUIDITY_FOREIGN" \
@@ -109,8 +103,6 @@ function parseEnvBigUint(name) {
 
 const WS = process.env.WS_ENDPOINT;
 const FOREIGN_ID = parseEnvU32('FOREIGN_ID');
-const INITIAL_PRICE = parseEnvBigUint('INITIAL_PRICE');
-const SLOPE = parseEnvBigUint('SLOPE');
 const MINT_AMOUNT = parseEnvBigUint('MINT_AMOUNT');
 const LIQUIDITY_NATIVE = parseEnvBigUint('LIQUIDITY_NATIVE');
 const LIQUIDITY_FOREIGN = parseEnvBigUint('LIQUIDITY_FOREIGN');
@@ -177,7 +169,6 @@ async function main() {
     const nativeStakingAssetDetails = await api.view.Assets.asset_details(NATIVE_STAKING_ASSET_ID, { at: fin.hash });
     const stakedNativeAssetDetails = await api.view.Assets.asset_details(STAKED_NATIVE_ASSET_ID, { at: fin.hash });
     const poolId = await api.query.AssetConversion.Pools.getValue([assetNative(), assetForeign()], { at: fin.hash });
-    const reserves = await api.view.AssetConversion.get_reserves(assetForeign(), assetNative(), { at: fin.hash });
 
     if (!assetDetails) {
       throw new Error(`Foreign asset ${FOREIGN_ID} is missing. Regenerate the local chain spec with the current runtime presets before running this seed script.`);
@@ -194,11 +185,6 @@ async function main() {
     } else {
       console.log('\n== foreign funding ==\nAlice already has sufficient foreign balance');
     }
-
-    if (!tracked.some((asset) => asset.type === 'Foreign' && asset.value === FOREIGN_ID)) {
-      throw new Error(`Foreign asset ${FOREIGN_ID} is not tracked by DeosRouter. Regenerate the local chain spec with the current runtime presets before running this seed script.`);
-    }
-    console.log('\n== tracked assets ==\nforeign asset already tracked from genesis bootstrap');
 
     if (!curve) {
       throw new Error('Native curve is missing. Regenerate the local chain spec with the current runtime presets before running this seed script.');

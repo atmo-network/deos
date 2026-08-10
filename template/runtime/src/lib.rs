@@ -18,12 +18,10 @@ use frame_support::weights::{
 };
 use polkadot_sdk::{sp_runtime::traits::BlakeTwo256, staging_parachain_info as parachain_info, *};
 use smallvec::smallvec;
-use sp_consensus_aura::sr25519::AuthorityId as AuraId;
 use sp_runtime::{Perbill, generic, impl_opaque_keys};
 
 mod apis;
 mod benchmarks;
-mod chain_specs;
 mod configs;
 mod genesis_config_presets;
 #[cfg(any(test, feature = "std"))]
@@ -70,7 +68,9 @@ mod runtime_version_tests {
   use super::VERSION;
 
   #[test]
-  fn pre_launch_framework_runtime_version_uses_fresh_genesis_baseline() {
+  fn framework_runtime_version_matches_release_compatibility_baseline() {
+    assert_eq!(VERSION.spec_name.as_ref(), "deos-runtime");
+    assert_eq!(VERSION.impl_name.as_ref(), "deos-runtime");
     assert_eq!(VERSION.authoring_version, 1);
     assert_eq!(VERSION.impl_version, 1);
     assert_eq!(VERSION.system_version, 3);

@@ -186,7 +186,7 @@ Zone: Governance presentation component; receives typed proposal data and vote c
           value={submissionAuthorityLabel(proposal.submissionAuthority)}
           valueClass="text-(--mono-text)"
         />
-        {#if proposal.submissionAuthority === 'Signed'}
+        {#if proposal.submissionAuthority !== 'AdminOnly'}
           <DetailRow
             label="Opening fee"
             value={openingFeeLabel(

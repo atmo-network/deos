@@ -5,7 +5,7 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}")" && pwd)"
 PROJECT_ROOT="${DEOS_PROJECT_ROOT:-$(dirname "$SCRIPT_DIR")}"
 TEMPLATE_DIR="$PROJECT_ROOT/template"
-BIN_DIR="$PROJECT_ROOT/bin"
+BIN_DIR="${DEOS_BINARY_DIR:-$PROJECT_ROOT/bin}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -41,6 +41,33 @@ add_path_if_dir() {
 hydrate_local_tool_paths() {
     add_path_if_dir "$BIN_DIR"
     add_path_if_dir "$HOME/.cargo/bin"
+}
+
+activate_pinned_node() {
+    local package_json="$PROJECT_ROOT/web-client/package.json"
+    [[ -f "$package_json" ]] || { log_error "Node version authority not found: $package_json"; exit 1; }
+    command -v node >/dev/null 2>&1 || { log_error "Node is required to read $package_json"; exit 1; }
+    local expected actual
+    expected="$(node -e 'const p=require(process.argv[1]); process.stdout.write(p.volta?.node ?? "")' "$package_json")"
+    [[ -n "$expected" ]] || { log_error "web-client package.json volta.node is required"; exit 1; }
+    actual="$(node --version 2>/dev/null || true)"
+    actual="${actual#v}"
+    if [[ "$actual" == "$expected" ]]; then
+        return 0
+    fi
+    local nvm_dir="${NVM_DIR:-$HOME/.nvm}"
+    if [[ ! -s "$nvm_dir/nvm.sh" ]]; then
+        log_error "Node $expected is required and nvm is unavailable at $nvm_dir/nvm.sh"
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    source "$nvm_dir/nvm.sh"
+    nvm install "$expected"
+    nvm use "$expected" >/dev/null
+    actual="$(node --version)"
+    actual="${actual#v}"
+    [[ "$actual" == "$expected" ]] || { log_error "Unable to activate Node $expected"; exit 1; }
+    log_info "Activated repository Node $expected"
 }
 
 require_directory() {

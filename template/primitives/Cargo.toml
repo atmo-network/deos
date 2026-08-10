@@ -1,6 +1,6 @@
 [package]
 name = "deos-primitives"
-version = "0.7.15"
+version.workspace = true
 description = "Shared primitive types for the DEOS reference runtime"
 authors.workspace = true
 homepage.workspace = true

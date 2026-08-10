@@ -155,7 +155,7 @@ fn floor_price_proxy_after_tol_accumulation() {
     assert_ok!(setup_deos_router_infrastructure());
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
-    // 1. Create BLDR pool and activate ZM so TOL accumulates as LP
+    // 1. Create the BLDR pool and activate its Liquidity Actor so TOL accumulates as LP.
     super::common::setup_bldr_pool(1_000 * PRECISION);
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
       .find(|(pair, _)| {
@@ -163,7 +163,7 @@ fn floor_price_proxy_after_tol_accumulation() {
       })
       .expect("BLDR pool must exist");
     let lp_id = pool_info.lp_token;
-    // Seed Bucket A with LP (simulating prior ZM activity)
+    // Seed Bucket A with LP, simulating prior BLDR Liquidity Actor activity.
     let bucket_a = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
     assert_ok!(
       <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(
@@ -227,7 +227,7 @@ fn floor_price_proxy_after_tol_accumulation() {
 #[test]
 fn native_issuance_deflation_after_burn_cycle() {
   seeded_test_ext().execute_with(|| {
-    let bm = crate::Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = crate::Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let deposit = 50 * EXISTENTIAL_DEPOSIT;
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
       crate::AccountId,
@@ -414,11 +414,11 @@ fn heavy_use_invariants_preserved() {
     );
     // 3. BLDR mass conservation: total issuance equals sum of known holdings
     let splitter = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
-    let zm = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_ZM_ACTORS_ID);
+    let liquidity = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_LIQUIDITY_ACTOR_ID);
     let treasury = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_TREASURY_ACTORS_ID);
     let bucket_a = crate::Actors::sovereign_account_id_system(actor_ids::BLDR_BUCKET_A_ACTORS_ID);
     let total_bldr_issued = Assets::total_issuance(bldr_id);
-    let known_holders = [ALICE, BOB, CHARLIE, splitter, zm, treasury, bucket_a];
+    let known_holders = [ALICE, BOB, CHARLIE, splitter, liquidity, treasury, bucket_a];
     let sum_known: u128 = known_holders
       .iter()
       .map(|a| Assets::balance(bldr_id, a))

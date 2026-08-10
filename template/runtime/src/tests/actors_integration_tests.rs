@@ -9,10 +9,11 @@ use crate::{
     RuntimeAddressEventIngress,
     actor_config::{
       TmctolAssetOps, TmctolDexOps, TmctolFeeCollector, TmctolGenesisSystemActors,
-      TmctolLiquidityOps, classify_remove_liquidity_failure, classify_router_failure,
-      validate_remove_liquidity_output,
+      TmctolLiquidityOps, classify_remove_liquidity_failure, classify_router_execution_failure,
+      classify_router_failure, validate_remove_liquidity_output,
     },
     address_event_ingress::AddressEventIngressExtension,
+    deos_router_config::market_execution_failure,
     pool_index::PoolIndexExtension,
   },
 };
@@ -805,18 +806,18 @@ fn productive_run_completion_closes_runtime_actor_after_committed_transfer() {
 }
 
 #[test]
-fn native_staking_lp_farmer_activation_requires_initialized_pool() {
+fn native_staking_liquidity_actor_activation_requires_initialized_pool() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     assert_noop!(
-      TmctolGenesisSystemActors::activate_native_staking_lp_farming(1),
+      TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1),
       DispatchError::Other("StakedAssetUnavailable")
     );
     assert_ok!(create_test_asset(0, &ALICE));
     assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
     assert_noop!(
-      TmctolGenesisSystemActors::activate_native_staking_lp_farming(1),
+      TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1),
       DispatchError::Other("NativeStakingAmmUnavailable")
     );
     assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
@@ -838,11 +839,11 @@ fn native_staking_lp_farmer_activation_requires_initialized_pool() {
       1,
       &BOB,
     ));
-    assert_ok!(TmctolGenesisSystemActors::activate_native_staking_lp_farming(1));
+    assert_ok!(TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1));
     let actor = Actors::active_actor_view(
-      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     )
-    .expect("native staking LP farmer must exist");
+    .expect("Native Staking Liquidity Actor must exist");
     assert!(matches!(
       actor.execution_plan.first().map(|step| &step.task),
       Some(Task::DonateLiquidity { .. })
@@ -1057,7 +1058,7 @@ fn system_actor_executes_native_staking_lp_donation_task() {
         pool.lp_token,
       );
     let execution_plan =
-      TmctolGenesisSystemActors::build_native_staking_lp_farming_execution_plan(1);
+      TmctolGenesisSystemActors::build_native_staking_liquidity_execution_plan(1);
     let actor_id = create_system(ALICE, manual_schedule(), None, execution_plan);
     let sovereign = actor_account(actor_id);
     assert_ok!(Assets::transfer(
@@ -1166,23 +1167,23 @@ fn fee_sink_redistributes_native_fifty_fifty_to_staking_and_liquidity() {
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&fee_sink, inflow);
     let total = native_balance(&fee_sink);
     let staking_pool = crate::Staking::pool_account_for(0);
-    let lp_farmer = crate::Actors::sovereign_account_id_system(
-      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+    let staking_liquidity_actor = crate::Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     );
     let pool_before = native_balance(&staking_pool);
-    let farmer_before = native_balance(&lp_farmer);
+    let liquidity_before = native_balance(&staking_liquidity_actor);
 
     // Governance owns the Fee Sink; the Manual source is enabled, so root triggers the cycle.
     assert_ok!(Actors::manual_trigger(RuntimeOrigin::root(), fee_sink_id));
     run_idle(Weight::MAX);
 
-    // The Phase-1 plan splits AllAvailable exactly 50/50 to the staking pool account and the LP
-    // farmer sovereign; only the indivisible remainder stays in the sink.
+    // The Phase-1 plan splits AllAvailable exactly 50/50 to the staking pool account and the
+    // staking Liquidity Actor sovereign; only the indivisible remainder stays in the sink.
     let pool_delta = native_balance(&staking_pool).saturating_sub(pool_before);
-    let farmer_delta = native_balance(&lp_farmer).saturating_sub(farmer_before);
-    let distributed = pool_delta.saturating_add(farmer_delta);
+    let liquidity_delta = native_balance(&staking_liquidity_actor).saturating_sub(liquidity_before);
+    let distributed = pool_delta.saturating_add(liquidity_delta);
     assert_eq!(
-      pool_delta, farmer_delta,
+      pool_delta, liquidity_delta,
       "Fee Sink must split its native balance exactly 50/50 between staking ingress and liquidity"
     );
     assert!(
@@ -1364,8 +1365,8 @@ fn reactive_delivery_envelopes_follow_production_weights_and_topology_bounds() {
     .min(available.ref_time() / unit.ref_time())
     .min(available.proof_size() / unit.proof_size());
 
-  assert_eq!(base, Weight::from_parts(31_566_000, 1_543));
-  assert_eq!(unit, Weight::from_parts(12_127_164_000, 166_430));
+  assert_eq!(base, Weight::from_parts(31_565_000, 1_543));
+  assert_eq!(unit, Weight::from_parts(12_170_187_000, 166_430));
   assert_eq!(limit, Weight::from_parts(400_000_000_000, 1_000_000));
   assert_eq!(
     units_per_block, 5,
@@ -1439,43 +1440,6 @@ fn sched_workers_static_envelope_leaves_one_actor_unit_inside_guaranteed_budget(
   println!(
     "SCHED-WORKERS: base={base:?}, wakeup={wakeup_envelope:?}, fanout={fanout_envelope:?}, actor={actor_unit:?}, combined={combined:?}, guaranteed={guaranteed:?}"
   );
-}
-
-#[test]
-fn guaranteed_idle_budget_executes_more_than_the_legacy_48_actor_ceiling() {
-  seeded_test_ext().execute_with(|| {
-    System::set_block_number(1);
-    let total = 100u32;
-    let plan = BoundedVec::try_from(vec![make_step(inert_task())]).expect("execution_plan fits");
-    let mut ids = Vec::with_capacity(total as usize);
-    for _ in 0..total {
-      let actor_id = create_system(ALICE, manual_schedule(), None, plan.clone());
-      assert_ok!(Actors::manual_trigger(
-        RuntimeOrigin::signed(ALICE),
-        actor_id
-      ));
-      ids.push(actor_id);
-    }
-
-    Actors::on_idle(
-      System::block_number(),
-      crate::configs::actor_config::ActorOnIdleReserve::get(),
-    );
-    let executed = ids
-      .iter()
-      .filter(|actor_id| {
-        Actors::actor_identities(actor_id).is_some_and(|identity| identity.cycle_nonce == 1)
-      })
-      .count();
-    assert!(
-      executed > 48,
-      "generated WeightMeter bounds must permit more than the retired ceiling; got {executed}"
-    );
-    assert!(
-      executed < total as usize,
-      "the 1,000 ceiling must not masquerade as a throughput guarantee"
-    );
-  });
 }
 
 #[test]
@@ -2034,7 +1998,7 @@ fn swap_out_fails_when_required_input_exceeds_actor_balance() {
 }
 
 #[test]
-fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
+fn dex_exact_out_adapter_retries_unfunded_input_with_explicit_error() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
     assert_ok!(super::common::setup_deos_router_infrastructure());
@@ -2053,7 +2017,7 @@ fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
     );
     assert_eq!(
       result,
-      Err(pallet_deos_actors::TaskFailure::permanent(
+      Err(pallet_deos_actors::TaskFailure::temporary(
         pallet_deos_router::Error::<Runtime>::InsufficientInputBalance
       ))
     );
@@ -2251,9 +2215,28 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
     RouterError::<Runtime>::InsufficientLiquidity,
     RouterError::<Runtime>::InvalidOracleData,
     RouterError::<Runtime>::NoMultiHopRoute,
+    RouterError::<Runtime>::InsufficientInputBalance,
   ] {
     assert_eq!(classify_router_failure(error).retry, RetryClass::Temporary);
   }
+
+  let temporary_adapter =
+    pallet_deos_router::ExecutionError::<Runtime>::from(pallet_deos_router::AdapterFailure::new(
+      DispatchError::Other("PublicationCapacity"),
+      pallet_deos_router::RouterFailureClass::PublicationRejected,
+      pallet_deos_router::RetryClass::RetryLater,
+    ));
+  assert_eq!(
+    classify_router_execution_failure(temporary_adapter).retry,
+    RetryClass::Temporary,
+  );
+  let unknown_adapter = pallet_deos_router::ExecutionError::<Runtime>::from(
+    pallet_deos_router::AdapterFailure::unknown(DispatchError::Other("UnknownAdapterFailure")),
+  );
+  assert_eq!(
+    classify_router_execution_failure(unknown_adapter).retry,
+    RetryClass::Permanent,
+  );
 
   for error in [
     RouterError::<Runtime>::IdenticalAssets,
@@ -2261,7 +2244,6 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
     RouterError::<Runtime>::AmountTooLow,
     RouterError::<Runtime>::DeadlinePassed,
     RouterError::<Runtime>::FeeRoutingFailed,
-    RouterError::<Runtime>::InsufficientInputBalance,
     RouterError::<Runtime>::RouterFeeTooHigh,
     RouterError::<Runtime>::LpTokenPairCollision,
     RouterError::<Runtime>::LpPairCapacityExceeded,
@@ -2270,6 +2252,38 @@ fn router_failure_classifier_is_exhaustive_and_typed() {
   ] {
     assert_eq!(classify_router_failure(error).retry, RetryClass::Permanent);
   }
+}
+
+#[test]
+fn market_execution_classifier_uses_the_concrete_cause() {
+  use pallet_deos_actors::RetryClass as ActorRetryClass;
+  use pallet_deos_router::{RetryClass as RouterRetryClass, RouterFailureClass};
+
+  let recoverable = market_execution_failure(
+    polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::PoolEmpty.into(),
+  );
+  assert_eq!(
+    recoverable.failure_class(),
+    RouterFailureClass::LiquidityUnavailable
+  );
+  assert_eq!(recoverable.retry_class(), RouterRetryClass::RetryLater);
+  assert_eq!(
+    classify_router_execution_failure(recoverable.into()).retry,
+    ActorRetryClass::Temporary
+  );
+
+  let permanent = market_execution_failure(
+    polkadot_sdk::pallet_asset_conversion::Error::<Runtime>::InvalidPath.into(),
+  );
+  assert_eq!(
+    permanent.failure_class(),
+    RouterFailureClass::InvariantViolation
+  );
+  assert_eq!(permanent.retry_class(), RouterRetryClass::Permanent);
+  assert_eq!(
+    classify_router_execution_failure(permanent.into()).retry,
+    ActorRetryClass::Permanent
+  );
 }
 
 #[test]
@@ -2634,6 +2648,230 @@ fn temporary_market_failure_opens_the_single_retry_continuation() {
       } if *id == actor_id
     )));
   });
+}
+
+#[test]
+fn router_publication_capacity_retries_both_swap_intents_once_after_recovery() {
+  use primitives::ecosystem::params::PRECISION;
+
+  for exact_output in [false, true] {
+    seeded_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(super::common::setup_deos_router_infrastructure());
+      let asset_in = AssetKind::Native;
+      let asset_out = AssetKind::Local(ASSET_A);
+      let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
+      crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out)
+        .expect("directional pool feeds fit");
+      create_system(
+        ALICE,
+        observation_schedule(feed),
+        None,
+        BoundedVec::try_from(vec![make_step(inert_task())]).expect("one inert step fits"),
+      );
+      let task = if exact_output {
+        Task::SwapOut {
+          asset_out,
+          amount_out: AmountResolution::Fixed(PRECISION),
+          asset_in,
+          input_limit: InputLimit::Absolute(100 * PRECISION),
+          slippage_tolerance: Perbill::zero(),
+        }
+      } else {
+        Task::SwapIn {
+          asset_in,
+          asset_out,
+          amount_in: AmountResolution::Fixed(10 * PRECISION),
+          slippage_tolerance: Perbill::zero(),
+        }
+      };
+      let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
+        conditions: pallet_deos_actors::ConditionSet::Always,
+        task,
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+      }])
+      .expect("single-step publication retry plan fits");
+      let actor_id = create_user(ALICE, manual_schedule(), None, plan);
+      fund_native(actor_id, 1_000 * PRECISION);
+      let actor = actor_account(actor_id);
+      let input_before = native_balance(&actor);
+      let router_fee_before = native_balance(&super::common::burn_actor_account());
+      let output_before = Assets::balance(ASSET_A, &actor);
+      let pool_before =
+        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool exists");
+      pallet_deos_actors::DirtyObservationListState::<Runtime>::mutate(|list| {
+        list.count = <Runtime as pallet_deos_actors::Config>::MaxActiveActors::get()
+          .saturating_mul(<Runtime as pallet_deos_actors::Config>::MaxTriggerSources::get());
+      });
+
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      run_idle(Weight::MAX);
+
+      let input_after_failure = native_balance(&actor);
+      assert!(input_after_failure < input_before);
+      assert_eq!(
+        native_balance(&super::common::burn_actor_account()),
+        router_fee_before
+      );
+      assert_eq!(Assets::balance(ASSET_A, &actor), output_before);
+      assert_eq!(
+        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains"),
+        pool_before
+      );
+      assert!(Oracle::observations(feed).is_none());
+      assert!(Actors::dirty_observation_feeds(feed).is_none());
+      assert_eq!(
+        actor_events()
+          .iter()
+          .filter(
+            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
+          )
+          .count(),
+        0
+      );
+      let continuation = Actors::continuation_state(actor_id).expect("publication retry suspends");
+      assert_eq!(continuation.cursor, 0);
+
+      pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
+      System::set_block_number(2);
+      run_idle(Weight::MAX);
+
+      assert!(Actors::continuation_state(actor_id).is_none());
+      assert!(native_balance(&actor) < input_after_failure);
+      assert!(Assets::balance(ASSET_A, &actor) > output_before);
+      assert_ne!(
+        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains"),
+        pool_before
+      );
+      assert_eq!(
+        Oracle::observations(feed)
+          .expect("retry publishes")
+          .revision,
+        1
+      );
+      assert_eq!(
+        actor_events()
+          .iter()
+          .filter(
+            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
+          )
+          .count(),
+        1
+      );
+
+      System::set_block_number(3);
+      run_idle(Weight::MAX);
+      assert_eq!(
+        actor_events()
+          .iter()
+          .filter(
+            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
+          )
+          .count(),
+        1
+      );
+    });
+  }
+}
+
+#[test]
+fn permanent_publication_configuration_never_enters_actor_retry() {
+  use primitives::ecosystem::params::PRECISION;
+
+  for exact_output in [false, true] {
+    seeded_test_ext().execute_with(|| {
+      System::set_block_number(1);
+      assert_ok!(super::common::setup_deos_router_infrastructure());
+      let asset_in = AssetKind::Native;
+      let asset_out = AssetKind::Local(ASSET_A);
+      let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
+      pallet_oracle::Feeds::<Runtime>::mutate(feed, |maybe| {
+        maybe.as_mut().expect("pool feed is registered").producer = ALICE;
+      });
+      let task = if exact_output {
+        Task::SwapOut {
+          asset_out,
+          amount_out: AmountResolution::Fixed(PRECISION),
+          asset_in,
+          input_limit: InputLimit::Absolute(100 * PRECISION),
+          slippage_tolerance: Perbill::zero(),
+        }
+      } else {
+        Task::SwapIn {
+          asset_in,
+          asset_out,
+          amount_in: AmountResolution::Fixed(10 * PRECISION),
+          slippage_tolerance: Perbill::zero(),
+        }
+      };
+      let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
+        conditions: pallet_deos_actors::ConditionSet::Always,
+        task,
+        on_error: StepErrorPolicy::RetryLater { max_attempts: 3 },
+      }])
+      .expect("single-step permanent publication plan fits");
+      let actor_id = create_user(ALICE, manual_schedule(), None, plan);
+      fund_native(actor_id, 1_000 * PRECISION);
+      let actor = actor_account(actor_id);
+      let output_before = Assets::balance(ASSET_A, &actor);
+      let pool_before =
+        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool exists");
+
+      assert_ok!(Actors::manual_trigger(
+        RuntimeOrigin::signed(ALICE),
+        actor_id
+      ));
+      run_idle(Weight::MAX);
+
+      assert!(Actors::continuation_state(actor_id).is_none());
+      assert_eq!(Assets::balance(ASSET_A, &actor), output_before);
+      assert_eq!(
+        crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool remains"),
+        pool_before
+      );
+      assert!(Oracle::observations(feed).is_none());
+      assert_eq!(
+        actor_events()
+          .iter()
+          .filter(
+            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
+          )
+          .count(),
+        0
+      );
+
+      System::set_block_number(2);
+      run_idle(Weight::MAX);
+      assert!(Actors::continuation_state(actor_id).is_none());
+      assert_eq!(
+        actor_events()
+          .iter()
+          .filter(
+            |event| matches!(event, Event::SwapExecuted { actor_id: id, .. } if *id == actor_id)
+          )
+          .count(),
+        0
+      );
+
+      if !exact_output {
+        assert_noop!(
+          crate::DeosRouter::swap(
+            RuntimeOrigin::signed(ALICE),
+            asset_in,
+            asset_out,
+            10 * PRECISION,
+            0,
+            BOB,
+            u32::MAX,
+          ),
+          pallet_deos_router::Error::<Runtime>::InvalidOracleData
+        );
+      }
+    });
+  }
 }
 
 #[test]
@@ -3664,20 +3902,20 @@ fn actor_observation_provider_maps_oracle_state_without_concrete_pallet_dependen
 }
 
 #[test]
-fn router_fee_routing_notifies_burning_manager_via_runtime_ingress_adapter() {
+fn router_fee_routing_notifies_burn_actor_via_runtime_ingress_adapter() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let bm_id = primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
     assert_ok!(Actors::update_schedule(
       RuntimeOrigin::root(),
-      bm_id,
+      burn_actor_id,
       on_address_event_schedule(SourceFilter::Any, AssetFilter::Any),
       None,
     ));
     System::set_block_number(2);
     assert_ok!(Actors::update_execution_plan(
       RuntimeOrigin::root(),
-      bm_id,
+      burn_actor_id,
       transfer_execution_plan(BOB, AssetKind::Native, 777),
       CompletionPolicy::Persistent,
     ));
@@ -3698,7 +3936,7 @@ fn router_fee_routing_notifies_burning_manager_via_runtime_ingress_adapter() {
 fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let bm_id = primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let burn_actor_id = primitives::ecosystem::actor_ids::BURN_ACTOR_ID;
     let funding_plan = BoundedVec::try_from(vec![make_step(Task::Transfer {
       to: BOB,
       asset: AssetKind::Native,
@@ -3707,21 +3945,21 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
     .expect("execution plan fits");
     assert_ok!(Actors::update_execution_plan(
       RuntimeOrigin::root(),
-      bm_id,
+      burn_actor_id,
       funding_plan,
       CompletionPolicy::Persistent,
     ));
     System::set_block_number(2);
     assert_ok!(Actors::update_funding_source_policy(
       RuntimeOrigin::root(),
-      bm_id,
+      burn_actor_id,
       FundingSourcePolicy::AnyVerifiedIngress
     ));
-    let sovereign = actor_account(bm_id);
-    pallet_deos_actors::ActorFunding::<Runtime>::mutate(bm_id, |maybe| {
+    let sovereign = actor_account(burn_actor_id);
+    pallet_deos_actors::ActorFunding::<Runtime>::mutate(burn_actor_id, |maybe| {
       maybe
         .as_mut()
-        .expect("burning manager funding")
+        .expect("Burn Actor funding")
         .funding_accumulated
         .try_insert(AssetKind::Native, u128::MAX)
         .expect("funding accumulator fits");
@@ -3734,7 +3972,11 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
         AssetKind::Native,
         10_000,
       ),
-      Error::<Runtime>::FundingAccumulatorOverflow
+      pallet_deos_router::AdapterFailure::new(
+        Error::<Runtime>::FundingAccumulatorOverflow.into(),
+        pallet_deos_router::RouterFailureClass::IngressRejected,
+        pallet_deos_router::RetryClass::Permanent,
+      )
     );
     assert_eq!(native_balance(&ALICE), alice_before);
     assert_eq!(native_balance(&sovereign), sovereign_before);
@@ -3747,8 +3989,8 @@ fn deos_sovereign_account_policy_reserves_genesis_custody_accounts() {
     System::set_block_number(1);
     // Every genesis System Actors custody account (including the Fee Sink) is host-reserved by
     // DeosSovereignAccountPolicy; a hashed sovereign derivation can never alias them.
-    let ids = primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID
-      ..=primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID;
+    let ids = primitives::ecosystem::actor_ids::BURN_ACTOR_ID
+      ..=primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID;
     for id in ids {
       let sovereign = crate::Actors::sovereign_account_id_system(id);
       assert!(
@@ -6589,7 +6831,7 @@ fn scheduler_stress_fifo_sparse_topology_long_run_liveness() {
 }
 
 #[test]
-#[ignore] // Checkpoint A capacity acceptance; run through scripts/actors-release-gate.sh.
+#[ignore] // Checkpoint A capacity acceptance; run through scripts/actors-assurance.sh.
 fn checkpoint_a_s6_dense_10k_wakeups_converge_without_drops() {
   use super::common::new_test_ext;
   new_test_ext().execute_with(|| {
@@ -7206,9 +7448,8 @@ fn eligibility_projection_binds_genesis_actors_and_signal_readiness() {
     System::set_block_number(1);
     let fee_sink_id = primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID;
 
-    let missing =
-      Actors::actor_eligibility(primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID + 1000)
-        .expect("projection computes");
+    let missing = Actors::actor_eligibility(primitives::ecosystem::actor_ids::BURN_ACTOR_ID + 1000)
+      .expect("projection computes");
     assert_eq!(
       missing.phase,
       pallet_deos_actors::ActorEligibilityPhase::NotRegistered

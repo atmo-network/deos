@@ -207,10 +207,10 @@ impl TmctolReadModel {
   }
 
   fn native_burn_liveness() -> BurnLivenessState<AccountId, Balance> {
-    let actor_id = ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let actor_id = ecosystem::actor_ids::BURN_ACTOR_ID;
     let target_asset = AssetKind::Native;
     Self::burn_liveness_state(
-      BurnDomain::NativeBurningManager,
+      BurnDomain::NativeBurnActor,
       actor_id,
       target_asset,
       false,
@@ -248,7 +248,7 @@ impl TmctolReadModel {
   ) -> BurnLivenessState<AccountId, Balance> {
     let sovereign_account = crate::Actors::sovereign_account_id_system(actor_id);
     let target_balance = Self::asset_balance(target_asset, &sovereign_account);
-    let dust_threshold = ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust_threshold = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let maybe_actor = pallet_deos_actors::ActorIdentities::<Runtime>::get(actor_id)
       .zip(pallet_deos_actors::ActorHot::<Runtime>::get(actor_id))
       .zip(pallet_deos_actors::ActorProgram::<Runtime>::get(actor_id));

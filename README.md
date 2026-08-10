@@ -100,7 +100,7 @@ Default changed-scope completion gate:
 Select narrower or escalated routes through the [Project Skill Graph](./.agents/skills/README.md) and [`alignment` route matrix](./.agents/skills/alignment/SKILL.md). Run the broad local audit only when that complete surface is intended:
 
 ```bash
-./scripts/validate-local.sh --audit-only
+./scripts/validate-local.sh fast
 ```
 
 When tokenomics, formulas, thresholds, or invariants change:

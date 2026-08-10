@@ -10,7 +10,7 @@ use super::common::{
   ALICE, ASSET_A, BOB, CHARLIE, DAVE, EVE, INITIAL_BALANCE, SWAP_AMOUNT,
   publish_deos_router_observation, setup_basic_test_environment, setup_deos_router_infrastructure,
 };
-use crate::configs::deos_router_config::{BurningManagerAccount, FeeManagerImpl};
+use crate::configs::deos_router_config::{BurnActorAccount, FeeManagerImpl};
 use crate::{AccountId, Assets, Balances, DeosRouter, Runtime, RuntimeOrigin, System};
 use pallet_deos_router::FeeRoutingAdapter;
 
@@ -24,9 +24,9 @@ fn deos_router_account() -> crate::AccountId {
   DeosRouter::account_id()
 }
 
-/// Helper function for burning manager account
-fn burning_manager_account() -> crate::AccountId {
-  super::common::burning_manager_account()
+/// Return the Burn Actor account.
+fn burn_actor_account() -> crate::AccountId {
+  super::common::burn_actor_account()
 }
 
 /// Setup function for load testing environment
@@ -84,8 +84,8 @@ fn test_high_throughput_swap_operations() {
     let final_block = System::block_number();
     assert_eq!(final_block, start_block + 10);
     // Verify fee accumulation occurred
-    let native_fee_buffer = Balances::free_balance(BurningManagerAccount::get());
-    let foreign_fee_buffer = Assets::balance(ASSET_A, BurningManagerAccount::get());
+    let native_fee_buffer = Balances::free_balance(BurnActorAccount::get());
+    let foreign_fee_buffer = Assets::balance(ASSET_A, BurnActorAccount::get());
     assert!(
       native_fee_buffer > 0 || foreign_fee_buffer > 0,
       "Router should have accumulated fees"
@@ -135,8 +135,8 @@ fn test_stress_large_transaction_volumes() {
     }
 
     // Verify economic properties maintained under stress
-    let native_fee_buffer = Balances::free_balance(BurningManagerAccount::get());
-    let foreign_fee_buffer = Assets::balance(ASSET_A, BurningManagerAccount::get());
+    let native_fee_buffer = Balances::free_balance(BurnActorAccount::get());
+    let foreign_fee_buffer = Assets::balance(ASSET_A, BurnActorAccount::get());
     let total_fees = native_fee_buffer + foreign_fee_buffer;
     // Should have collected significant fees from large transactions
     assert!(
@@ -168,9 +168,9 @@ fn test_concurrent_operations_robustness() {
       (Some(ASSET_A), fee_amount),
     ];
 
-    // Ensure router and burning manager accounts have native balance for asset deposits
-    let burning_manager_account = burning_manager_account();
-    let burning_manager_native_balance = Balances::free_balance(&burning_manager_account);
+    // Ensure Router and Burn Actor accounts have native balance for asset deposits.
+    let burn_actor_account = burn_actor_account();
+    let burn_actor_native_balance = Balances::free_balance(&burn_actor_account);
     let router_native_balance = Balances::free_balance(&router_account);
     // Ensure router account has native balance for asset deposits
     if router_native_balance < crate::EXISTENTIAL_DEPOSIT * 10 {
@@ -180,10 +180,10 @@ fn test_concurrent_operations_robustness() {
         crate::EXISTENTIAL_DEPOSIT * 10
       ));
     }
-    if burning_manager_native_balance < crate::EXISTENTIAL_DEPOSIT * 10 {
+    if burn_actor_native_balance < crate::EXISTENTIAL_DEPOSIT * 10 {
       assert_ok!(Balances::transfer_allow_death(
         RuntimeOrigin::signed(ALICE),
-        polkadot_sdk::sp_runtime::MultiAddress::Id(burning_manager_account),
+        polkadot_sdk::sp_runtime::MultiAddress::Id(burn_actor_account),
         crate::EXISTENTIAL_DEPOSIT * 10
       ));
     }
@@ -210,7 +210,7 @@ fn test_concurrent_operations_robustness() {
         }
       };
 
-      // Now router can transfer fees to burning manager
+      // The Router can now transfer fees to the Burn Actor.
       assert_ok!(FeeManagerImpl::<Runtime>::route_fee(
         &router_account,
         asset_kind,
@@ -220,11 +220,11 @@ fn test_concurrent_operations_robustness() {
 
     // Verify all operations completed successfully
     // Check that fee manager processed all transactions
-    let native_fee_buffer = Balances::free_balance(BurningManagerAccount::get());
-    let foreign_fee_buffer_a = Assets::balance(ASSET_A, BurningManagerAccount::get());
-    let foreign_fee_buffer_b = Assets::balance(ASSET_A, BurningManagerAccount::get());
-    let foreign_fee_buffer_c = Assets::balance(ASSET_A, BurningManagerAccount::get());
-    let foreign_fee_buffer_d = Assets::balance(ASSET_A, BurningManagerAccount::get());
+    let native_fee_buffer = Balances::free_balance(BurnActorAccount::get());
+    let foreign_fee_buffer_a = Assets::balance(ASSET_A, BurnActorAccount::get());
+    let foreign_fee_buffer_b = Assets::balance(ASSET_A, BurnActorAccount::get());
+    let foreign_fee_buffer_c = Assets::balance(ASSET_A, BurnActorAccount::get());
+    let foreign_fee_buffer_d = Assets::balance(ASSET_A, BurnActorAccount::get());
     let accumulated_fees = native_fee_buffer
       + foreign_fee_buffer_a
       + foreign_fee_buffer_b
@@ -239,7 +239,7 @@ fn test_concurrent_operations_robustness() {
 
     assert!(
       native_fee_buffer > 0,
-      "Native fees should be buffered on Burning Manager Actors sovereign"
+      "Native fees should be buffered on the Burn Actor sovereign"
     );
     assert!(
       foreign_fee_buffer_a > 0,
@@ -347,8 +347,8 @@ fn test_economic_properties_under_load() {
       "Fee burning should not increase total supply. Initial: {initial_supply}, Final: {final_supply}"
     );
     // Verify fee accumulation occurred
-    let native_fee_buffer = Balances::free_balance(BurningManagerAccount::get());
-    let foreign_fee_buffer = Assets::balance(ASSET_A, BurningManagerAccount::get());
+    let native_fee_buffer = Balances::free_balance(BurnActorAccount::get());
+    let foreign_fee_buffer = Assets::balance(ASSET_A, BurnActorAccount::get());
     let accumulated_fees = native_fee_buffer + foreign_fee_buffer;
     assert!(
       accumulated_fees > 0,
@@ -400,8 +400,8 @@ fn test_system_recovery_after_load() {
     let final_block = System::block_number();
     assert_eq!(final_block, 6);
     // Verify economic coordination continued through recovery
-    let native_fee_buffer = Balances::free_balance(BurningManagerAccount::get());
-    let foreign_fee_buffer = Assets::balance(ASSET_A, BurningManagerAccount::get());
+    let native_fee_buffer = Balances::free_balance(BurnActorAccount::get());
+    let foreign_fee_buffer = Assets::balance(ASSET_A, BurnActorAccount::get());
     let total_fees = native_fee_buffer + foreign_fee_buffer;
     assert!(
       total_fees > 0,

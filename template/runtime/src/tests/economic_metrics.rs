@@ -11,10 +11,10 @@
 // Use common module account constants and standardized asset constants
 
 use super::common::{
-  ALICE, ASSET_A, BOB, CHARLIE, SWAP_AMOUNT, burning_manager_account, deos_router_account,
+  ALICE, ASSET_A, BOB, CHARLIE, SWAP_AMOUNT, burn_actor_account, deos_router_account,
   setup_basic_test_environment, setup_deos_router_infrastructure,
 };
-use crate::configs::deos_router_config::{BurningManagerAccount, FeeManagerImpl};
+use crate::configs::deos_router_config::{BurnActorAccount, FeeManagerImpl};
 use crate::{Assets, Balances, DeosRouter, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System};
 use pallet_deos_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::assert_ok;
@@ -67,8 +67,8 @@ fn collect_economic_metrics() -> EconomicMetrics {
   let block_number = System::block_number();
   let total_supply = Balances::total_issuance();
   // Calculate economic coordination metrics
-  let native_fee_buffer = Balances::free_balance(BurningManagerAccount::get());
-  let foreign_fee_buffer = Assets::balance(ASSET_A, BurningManagerAccount::get());
+  let native_fee_buffer = Balances::free_balance(BurnActorAccount::get());
+  let foreign_fee_buffer = Assets::balance(ASSET_A, BurnActorAccount::get());
   let accumulated_fees = native_fee_buffer + foreign_fee_buffer;
   // Simplified metrics calculation for testing
   let burn_velocity = calculate_burn_velocity();
@@ -120,7 +120,7 @@ fn test_economic_metrics_collection() {
     // Execute economic activity - test FeeManager directly even though router swaps already go
     // through the production AssetConversion adapter
     let router_account = deos_router_account();
-    let burning_manager_account = burning_manager_account();
+    let burn_actor_account = burn_actor_account();
 
     // Ensure router account has native balance for asset deposits
     let router_native_balance = Balances::free_balance(&router_account);
@@ -133,13 +133,13 @@ fn test_economic_metrics_collection() {
       ));
     }
 
-    // Ensure burning manager account has native balance for asset deposits
-    let burning_manager_native_balance = Balances::free_balance(&burning_manager_account);
-    if burning_manager_native_balance < EXISTENTIAL_DEPOSIT * 10 {
-      // Transfer native tokens to burning manager account for asset deposits
+    // Ensure the Burn Actor account has native balance for asset deposits.
+    let burn_actor_native_balance = Balances::free_balance(&burn_actor_account);
+    if burn_actor_native_balance < EXISTENTIAL_DEPOSIT * 10 {
+      // Transfer native tokens to the Burn Actor account for asset deposits.
       assert_ok!(Balances::transfer_allow_death(
         RuntimeOrigin::signed(ALICE),
-        polkadot_sdk::sp_runtime::MultiAddress::Id(burning_manager_account.clone()),
+        polkadot_sdk::sp_runtime::MultiAddress::Id(burn_actor_account.clone()),
         EXISTENTIAL_DEPOSIT * 10
       ));
     }
@@ -158,7 +158,7 @@ fn test_economic_metrics_collection() {
         fee_amount
       ));
 
-      // Now router can transfer fees to burning manager
+      // The Router can now transfer fees to the Burn Actor.
       assert_ok!(FeeManagerImpl::<Runtime>::route_fee(
         &router_account,
         primitives::AssetKind::Local(ASSET_A),

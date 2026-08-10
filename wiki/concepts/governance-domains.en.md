@@ -70,7 +70,7 @@ The ordinary public cadence is currently shared:
 - `7 day` primary voting window;
 - `3 day` enactment delay.
 
-The signed public path remains intentionally bounded: `Intent` across domains, tactical `$BLDR` `L2SignalToL1`, and tactical `$BLDR` `L2TreasurySpend`.
+The signed path remains intentionally bounded: `Intent` across domains, tactical `$BLDR` `L2SignalToL1`, tactical `$BLDR` `L2TreasurySpend`, and protocol `L1RootAction` only for signers with nonzero primary-track staking power. `$VETO` remains protection-only and never grants proposal submission eligibility.
 
 ## Tracks, Payloads, and Authority
 

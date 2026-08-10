@@ -455,6 +455,9 @@ function proposalSubmissionAuthority(
   domainId: GovernanceDomainId,
   payloadKind: GovernanceProposalPayloadKind,
 ): GovernanceProposalSubmissionAuthority {
+  if (domainId === 0 && payloadKind === 'L1RootAction') {
+    return 'PrimaryEligibleSigned';
+  }
   if (payloadKind === 'Intent') {
     return 'Signed';
   }
@@ -468,9 +471,9 @@ function proposalOpeningFee(
   domainId: GovernanceDomainId,
   payloadKind: GovernanceProposalPayloadKind,
 ): GovernanceProposalOpeningFee | null {
-  return proposalSubmissionAuthority(domainId, payloadKind) === 'Signed'
-    ? 10n
-    : null;
+  return proposalSubmissionAuthority(domainId, payloadKind) === 'AdminOnly'
+    ? null
+    : 10n;
 }
 
 function proposalPrimaryTrackFamily(

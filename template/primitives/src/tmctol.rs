@@ -65,8 +65,8 @@ pub enum AnchorDomain {
   Deserialize,
 )]
 pub enum BurnDomain {
-  /// DEOS framework-level native burn through Burning Manager (`actor_id = 0`).
-  NativeBurningManager,
+  /// DEOS framework-level native burn through the Burn Actor (`actor_id = 0`).
+  NativeBurnActor,
   /// Reference TMCTOL BLDR buyback/burn policy through Treasury B (`actor_id = 7`).
   BldrBuyback,
 }

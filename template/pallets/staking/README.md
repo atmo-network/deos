@@ -15,7 +15,7 @@ The current core/runtime slice provides:
 - No automatic staking-pool creation from asset-registration hooks
 - One deterministic sovereign pool account per registered asset
 - One deterministic future reward-account helper per registered asset (`reward_account_for(asset_id)`) for the planned governance-conditioned reward channel
-- Per-asset pool state (`total_shares`, `accounted_balance`, `active_staker_count`)
+- Per-asset pool state (`total_shares`, `accounted_balance`)
 - Per-account share positions
 - Tokenized receipt mode for native/local (`0x5...`) and foreign (`0x6...`) staking assets
 - Lazy `sync_pool` against actual sovereign balance

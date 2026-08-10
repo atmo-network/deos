@@ -2,12 +2,11 @@
 //!
 //! The `tmctol_` prefix is intentional: this module tests the TMCTOL standard
 //! (TMC, TOL, Router, Splitter, Liquidity Actor, Bucket) running on top of the DEOS
-//! runtime. Per AGENTS.md Artifact-Name Tail Policy, standard-specific identifiers
-//! remain as conscious legacy names; only framework identifiers were migrated.
-//! Do not rename this file to `deos_integration_tests`.
+//! runtime. The `tmctol_` module identity remains standard-specific because these
+//! tests verify one concrete economy rather than the reusable DEOS kernel.
 
 use super::common::{
-  ALICE, ASSET_A, ASSET_B, add_liquidity, burning_manager_account, create_pool, get_pool_lp_asset,
+  ALICE, ASSET_A, ASSET_B, add_liquidity, burn_actor_account, create_pool, get_pool_lp_asset,
   liquidity_actor_account, new_test_ext, publish_bidirectional_deos_router_observation,
   publish_deos_router_observation, seeded_test_ext,
 };
@@ -131,7 +130,7 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
       crate::configs::actor_config::TmctolGenesisSystemActors::build_treasury_b_buyback_execution_plan(
         AssetKind::Local(protocol_tokens::BLDR_ASSET_ID),
         primitives::ecosystem::params::TREASURY_B_BUYBACK_PCT,
-        primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD,
+        primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD,
         primitives::ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE,
       );
     assert_ok!(Actors::activate_actor(
@@ -167,23 +166,20 @@ fn tmctol_guarantee_state_reports_bldr_buyback_liveness_when_configured() {
 #[test]
 fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
   new_test_ext().execute_with(|| {
-    pallet_deos_actors::ActorProgram::<Runtime>::mutate(
-      actor_ids::BURNING_MANAGER_ACTORS_ID,
-      |maybe| {
-        let program = maybe.as_mut().expect("Burning Manager program exists");
-        program.execution_plan = alloc::vec![pallet_deos_actors::Step {
-          conditions: Default::default(),
-          task: pallet_deos_actors::Task::Transfer {
-            to: ALICE,
-            asset: AssetKind::Native,
-            amount: AmountResolution::Fixed(0),
-          },
-          on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
-        }]
-        .try_into()
-        .expect("malformed burn plan fits");
-      },
-    );
+    pallet_deos_actors::ActorProgram::<Runtime>::mutate(actor_ids::BURN_ACTOR_ID, |maybe| {
+      let program = maybe.as_mut().expect("Burn Actor program exists");
+      program.execution_plan = alloc::vec![pallet_deos_actors::Step {
+        conditions: Default::default(),
+        task: pallet_deos_actors::Task::Transfer {
+          to: ALICE,
+          asset: AssetKind::Native,
+          amount: AmountResolution::Fixed(0),
+        },
+        on_error: pallet_deos_actors::StepErrorPolicy::AbortCycle,
+      }]
+      .try_into()
+      .expect("malformed burn plan fits");
+    });
 
     let state = crate::tmctol_read_model::TmctolReadModel::tmctol_guarantee_state();
     assert_eq!(state.native_burn_liveness.status, GuaranteeStatus::Violated);
@@ -202,7 +198,7 @@ fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
       crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
         foreign,
         lp_asset,
-        primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD,
+        primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD,
       );
     assert_ok!(activate_dormant_system(
       actor_ids::LIQUIDITY_ACTOR_ACTORS_ID,
@@ -326,11 +322,10 @@ fn tmctol_guarantee_state_flags_anchor_mutation_as_violation() {
 }
 
 #[test]
-fn genesis_burning_manager_actor_has_deterministic_sovereign_and_correct_state() {
+fn genesis_burn_actor_has_deterministic_sovereign_and_correct_state() {
   new_test_ext().execute_with(|| {
-    let actor_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
-    let instance =
-      Actors::active_actor_view(actor_id).expect("Burning Manager Actors must exist at genesis");
+    let actor_id = actor_ids::BURN_ACTOR_ID;
+    let instance = Actors::active_actor_view(actor_id).expect("Burn Actor must exist at genesis");
     let expected_sovereign = Actors::sovereign_account_id_system(actor_id);
     assert_eq!(instance.sovereign_account, expected_sovereign);
     assert_eq!(
@@ -348,7 +343,7 @@ fn genesis_burning_manager_actor_has_deterministic_sovereign_and_correct_state()
     assert!(!instance.pending_signal);
     assert_eq!(
       Actors::next_actor_id(),
-      actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID + 1
+      actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID + 1
     );
     assert_eq!(
       pallet_deos_actors::SovereignIndex::<Runtime>::get(&expected_sovereign),
@@ -358,11 +353,11 @@ fn genesis_burning_manager_actor_has_deterministic_sovereign_and_correct_state()
 }
 
 #[test]
-fn genesis_burning_manager_actor_sovereign_is_stable_across_rebuilds() {
-  let sovereign_a = new_test_ext()
-    .execute_with(|| Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID));
-  let sovereign_b = new_test_ext()
-    .execute_with(|| Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID));
+fn genesis_burn_actor_sovereign_is_stable_across_rebuilds() {
+  let sovereign_a =
+    new_test_ext().execute_with(|| Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID));
+  let sovereign_b =
+    new_test_ext().execute_with(|| Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID));
   assert_eq!(sovereign_a, sovereign_b);
 }
 
@@ -370,7 +365,7 @@ fn genesis_burning_manager_actor_sovereign_is_stable_across_rebuilds() {
 fn genesis_value_driven_programs_use_omnivorous_address_event_triggers() {
   new_test_ext().execute_with(|| {
     for actor_id in [
-      actor_ids::BURNING_MANAGER_ACTORS_ID,
+      actor_ids::BURN_ACTOR_ID,
       actor_ids::FEE_SINK_ACTORS_ID,
       actor_ids::BLDR_SPLITTER_ACTORS_ID,
     ] {
@@ -383,12 +378,12 @@ fn genesis_value_driven_programs_use_omnivorous_address_event_triggers() {
   });
 }
 
-// --- Burning Manager ---
+// --- Burn Actor ---
 
 #[test]
-fn bm_burns_native_on_address_event() {
+fn burn_actor_burns_native_on_address_event() {
   seeded_test_ext().execute_with(|| {
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let deposit = 50 * crate::EXISTENTIAL_DEPOSIT;
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
       crate::AccountId,
@@ -415,9 +410,9 @@ fn bm_burns_native_on_address_event() {
 }
 
 #[test]
-fn bm_skips_burn_when_signaled_balance_is_below_dust() {
+fn burn_actor_skips_burn_when_signaled_balance_is_below_dust() {
   new_test_ext().execute_with(|| {
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
       crate::AccountId,
       AssetKind,
@@ -438,10 +433,10 @@ fn bm_skips_burn_when_signaled_balance_is_below_dust() {
 }
 
 #[test]
-fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
+fn router_fee_flows_to_burn_actor_and_burns_after_ingress_signal() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
-    let bm_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let bm_id = actor_ids::BURN_ACTOR_ID;
     let bm = Actors::sovereign_account_id_system(bm_id);
     for block in 11..=30 {
       System::set_block_number(block);
@@ -508,10 +503,10 @@ fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
 }
 
 #[test]
-fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
+fn burn_actor_swaps_foreign_to_native_then_burns_via_updated_plan() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
-    let bm_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let bm_id = actor_ids::BURN_ACTOR_ID;
     let bm = Actors::sovereign_account_id_system(bm_id);
     let pre_seeded = crate::Assets::balance(super::common::ASSET_A, &bm);
     if pre_seeded > 0 {
@@ -532,7 +527,7 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
       AssetKind::Native,
       price,
     ));
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let new_execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![
       pallet_deos_actors::Step {
         conditions: pallet_deos_actors::ConditionSet::All(
@@ -611,7 +606,7 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
 fn dexops_can_swap_foreign_to_native() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let price = 1_000_000_000_000u128;
     assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Local(super::common::ASSET_A),
@@ -653,7 +648,7 @@ fn dexops_can_swap_foreign_to_native() {
 fn dexops_normal_swap_succeeds() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let amount = primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount * 10);
     let price = 1_000_000_000_000u128;
@@ -725,7 +720,7 @@ fn deos_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
 fn oracle_deviation_rejects_swap_via_dexops() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let amount = 10 * primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount);
     let deviated_price = 10_000_000_000_000u128;
@@ -752,7 +747,7 @@ fn oracle_deviation_rejects_swap_via_dexops() {
 fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(super::common::setup_deos_router_infrastructure());
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let amount = primitives::ecosystem::params::PRECISION;
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
       crate::AccountId,
@@ -777,7 +772,7 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
     },]
     .try_into()
     .unwrap();
-    let actor_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let actor_id = actor_ids::BURN_ACTOR_ID;
     assert_ok!(Actors::update_execution_plan(
       RuntimeOrigin::root(),
       actor_id,
@@ -803,7 +798,7 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
 fn swap_without_pool_fails_execution_plan() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let bm_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
+    let bm_id = actor_ids::BURN_ACTOR_ID;
     let bm = Actors::sovereign_account_id_system(bm_id);
     let execution_plan: ExecutionPlanOf<Runtime> = alloc::vec![pallet_deos_actors::Step {
       conditions: Default::default(),
@@ -857,7 +852,7 @@ fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
   seeded_test_ext().execute_with(|| {
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = AssetKind::Local(999);
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let execution_plan =
       crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
         foreign, lp_asset, dust,
@@ -918,7 +913,7 @@ fn zap_execution_plan_builder_produces_valid_3_step_execution_plan() {
 #[test]
 fn zap_execution_plan_tightens_slippage_as_native_depth_grows() {
   seeded_test_ext().execute_with(|| {
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let shallow_foreign = AssetKind::Local(ASSET_A);
     let deep_foreign = AssetKind::Local(ASSET_B);
     let pool_seed = primitives::ecosystem::params::PRECISION * 100;
@@ -1035,7 +1030,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       .expect("pool must exist after setup");
     let lp_asset_id = pool_info.lp_token;
     let lp_asset = AssetKind::Local(lp_asset_id);
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let execution_plan =
       crate::configs::actor_config::TmctolGenesisSystemActors::build_zap_execution_plan(
         foreign, lp_asset, dust,
@@ -1116,8 +1111,8 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       .expect("pool must exist after setup");
     let lp_asset_id = pool_info.lp_token;
     let lp_asset = AssetKind::Local(lp_asset_id);
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
-    let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
+    let bm = Actors::sovereign_account_id_system(actor_ids::BURN_ACTOR_ID);
     let liquidity_actor = Actors::sovereign_account_id_system(actor_ids::LIQUIDITY_ACTOR_ACTORS_ID);
     // Clear preexisting balances to ensure clean test state
     let pre_seeded_bm_native = Balances::free_balance(&bm);
@@ -1176,7 +1171,7 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       );
     assert_ok!(Actors::update_execution_plan(
       RuntimeOrigin::root(),
-      actor_ids::BURNING_MANAGER_ACTORS_ID,
+      actor_ids::BURN_ACTOR_ID,
       burn_execution_plan,
       CompletionPolicy::Persistent,
     ));
@@ -1187,7 +1182,7 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
     // Explicitly trigger execution since we deposited funds before updating execution plans
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::root(),
-      actor_ids::BURNING_MANAGER_ACTORS_ID
+      actor_ids::BURN_ACTOR_ID
     ));
     assert_ok!(Actors::manual_trigger(
       RuntimeOrigin::root(),
@@ -1510,7 +1505,8 @@ fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
     let curve = crate::TokenMintingCurve::get_curve(bldr_asset).unwrap();
     assert_eq!(curve.foreign_asset, AssetKind::Native);
     let splitter_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
-    let bldr_zm_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_ZM_ACTORS_ID);
+    let bldr_liquidity_sov =
+      Actors::sovereign_account_id_system(actor_ids::BLDR_LIQUIDITY_ACTOR_ID);
     // Mint BLDR via TMC directly to verify distribution
     let mint_amount = 10 * primitives::ecosystem::params::PRECISION;
     let alice_native_before = Balances::free_balance(&ALICE);
@@ -1551,9 +1547,9 @@ fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
       "Splitter (66%) must receive more than user (33%)"
     );
     // 7. Verify collateral (NTVE) went directly to the BLDR Liquidity Actor
-    let bldr_zm_native = Balances::free_balance(&bldr_zm_sov);
+    let bldr_liquidity_native = Balances::free_balance(&bldr_liquidity_sov);
     assert!(
-      bldr_zm_native > crate::EXISTENTIAL_DEPOSIT,
+      bldr_liquidity_native > crate::EXISTENTIAL_DEPOSIT,
       "BLDR Liquidity Actor must receive NTVE collateral from TMC output"
     );
     assert_eq!(
@@ -1565,15 +1561,16 @@ fn bldr_tmc_mint_routes_collateral_and_tokens_correctly() {
 }
 
 #[test]
-fn bldr_splitter_distributes_to_zm_and_treasury() {
+fn bldr_splitter_distributes_to_liquidity_and_treasury() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
   use primitives::ecosystem::{actor_ids, protocol_tokens};
   seeded_test_ext().execute_with(|| {
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let splitter_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
-    let bldr_zm_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_ZM_ACTORS_ID);
+    let bldr_liquidity_sov =
+      Actors::sovereign_account_id_system(actor_ids::BLDR_LIQUIDITY_ACTOR_ID);
     let bldr_treasury_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_TREASURY_ACTORS_ID);
     // Fund splitter with the minted BLDR share (simulating TMC output)
     let fund_amount = 100 * primitives::ecosystem::params::PRECISION;
@@ -1605,16 +1602,19 @@ fn bldr_splitter_distributes_to_zm_and_treasury() {
       Actors::on_initialize(block);
       Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
     }
-    let zm_bldr = crate::Assets::balance(bldr_id, &bldr_zm_sov);
+    let liquidity_bldr = crate::Assets::balance(bldr_id, &bldr_liquidity_sov);
     let treasury_bldr = crate::Assets::balance(bldr_id, &bldr_treasury_sov);
-    assert!(zm_bldr > 0, "BLDR ZM must receive BLDR from splitter");
+    assert!(
+      liquidity_bldr > 0,
+      "BLDR Liquidity Actor must receive BLDR from splitter"
+    );
     assert!(
       treasury_bldr > 0,
       "BLDR Treasury must receive BLDR from splitter"
     );
     // 50/50 split (within rounding tolerance)
-    let total_distributed = zm_bldr + treasury_bldr;
-    let diff = zm_bldr.abs_diff(treasury_bldr);
+    let total_distributed = liquidity_bldr + treasury_bldr;
+    let diff = liquidity_bldr.abs_diff(treasury_bldr);
     assert!(diff <= 1, "BLDR split must be 50/50 (diff={})", diff);
     assert!(
       total_distributed >= fund_amount - 2,
@@ -1625,10 +1625,10 @@ fn bldr_splitter_distributes_to_zm_and_treasury() {
   });
 }
 
-// --- BLDR Full E2E: Router → TMC → Splitter → ZM → LP → Bucket A ---
+// --- BLDR Full E2E: Router → TMC → Splitter → Liquidity Actor → LP → Bucket A ---
 
 #[test]
-fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
+fn bldr_full_e2e_router_tmc_splitter_liquidity_bucket() {
   use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
   use primitives::ecosystem::{actor_ids, protocol_tokens};
   seeded_test_ext().execute_with(|| {
@@ -1636,30 +1636,33 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
     // BLDR TMC curve created at genesis (9.5), Splitter execution_plan active at genesis (9.6)
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let precision = primitives::ecosystem::params::PRECISION;
     let splitter_id = actor_ids::BLDR_SPLITTER_ACTORS_ID;
-    let zm_id = actor_ids::BLDR_ZM_ACTORS_ID;
+    let liquidity_id = actor_ids::BLDR_LIQUIDITY_ACTOR_ID;
     let bucket_a_id = actor_ids::BLDR_BUCKET_A_ACTORS_ID;
     let splitter_sov = Actors::sovereign_account_id_system(splitter_id);
-    let zm_sov = Actors::sovereign_account_id_system(zm_id);
+    let liquidity_sov = Actors::sovereign_account_id_system(liquidity_id);
     let treasury_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_TREASURY_ACTORS_ID);
     let bucket_a_sov = Actors::sovereign_account_id_system(bucket_a_id);
-    // 1. Create NTVE-BLDR pool so ZM can add liquidity. Seed it against
+    // 1. Create the NTVE-BLDR pool so the Liquidity Actor can provision it. Seed it against
     // BLDR buys so the router exercises the TMC mint path rather than XYK.
     super::common::setup_bldr_pool_with_reserves(900 * precision, 10 * precision);
-    // 2. Activate ZM execution_plan (AddLiquidity + LP → Bucket A)
+    // 2. Activate the BLDR Liquidity Actor execution plan (AddLiquidity + LP → Bucket A).
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, bldr_asset);
-    let zm_execution_plan =
-      crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_zm_execution_plan(
+    let liquidity_execution_plan =
+      crate::configs::actor_config::TmctolGenesisSystemActors::build_bldr_liquidity_execution_plan(
         bldr_asset, lp_asset, dust,
       );
-    assert_ok!(activate_dormant_system(zm_id, zm_execution_plan));
-    // 3. Keep ZM ingress-driven with no cooldown for the chained test.
+    assert_ok!(activate_dormant_system(
+      liquidity_id,
+      liquidity_execution_plan
+    ));
+    // 3. Keep BLDR liquidity ingress-driven with no cooldown for the chained test.
     System::set_block_number(System::block_number().saturating_add(1));
     assert_ok!(Actors::update_schedule(
       RuntimeOrigin::root(),
-      zm_id,
+      liquidity_id,
       pallet_deos_actors::Schedule {
         trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
           pallet_deos_actors::SourceFilter::Any,
@@ -1699,11 +1702,11 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
     let splitter_bldr =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     assert!(
-      Balances::free_balance(&zm_sov) > crate::EXISTENTIAL_DEPOSIT,
+      Balances::free_balance(&liquidity_sov) > crate::EXISTENTIAL_DEPOSIT,
       "BLDR Liquidity Actor must hold NTVE collateral"
     );
     assert!(splitter_bldr > 0, "Splitter must hold BLDR zap share");
-    // 5. Run blocks to execute Splitter → ZM → Bucket A chain.
+    // 5. Run blocks to execute the Splitter → Liquidity Actor → Bucket A chain.
     // The queue scheduler should keep this chain progressing without starvation.
     System::reset_events();
     for block in 2..=40 {
@@ -1711,13 +1714,13 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
       Actors::on_initialize(block);
       Actors::on_idle(block, Weight::from_parts(u64::MAX, u64::MAX));
     }
-    // 6. Verify: Splitter distributed BLDR to both ZM and Treasury. ZM may
+    // 6. Verify: Splitter distributed BLDR to both Liquidity Actor and Treasury. The Actor may
     // consume received NTVE immediately into LP, so the durable final proof is
     // Bucket A receiving LP plus the Splitter sovereign draining below dust.
     let treasury_bldr =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &treasury_sov);
     assert!(treasury_bldr > 0, "Treasury must have received BLDR");
-    // 8. Verify: Bucket A received LP tokens (ZM provisioned liquidity)
+    // 8. Verify: Bucket A received LP tokens provisioned by the Liquidity Actor.
     if let Some(lp_id) = match lp_asset {
       AssetKind::Local(id) => Some(id),
       _ => None,
@@ -1726,7 +1729,7 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
         <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(lp_id, &bucket_a_sov);
       assert!(
         bucket_lp > 0,
-        "Bucket A must hold LP tokens from ZM liquidity provisioning"
+        "Bucket A must hold LP tokens from BLDR Liquidity Actor provisioning"
       );
     }
     // 9. Verify: Splitter distributed its complete BLDR input below dust
@@ -1752,7 +1755,7 @@ fn treasury_b_buyback_burns_bldr() {
     // Use ASSET_A as buyback target (pool already exists from setup)
     let target_id = super::common::ASSET_A;
     let target_asset = AssetKind::Local(target_id);
-    let dust = primitives::ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = primitives::ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     let slippage = primitives::ecosystem::params::SYSTEM_ACTORS_MAX_SWAP_SLIPPAGE;
     let buyback_pct = primitives::ecosystem::params::TREASURY_B_BUYBACK_PCT;
     let treasury_b_id = actor_ids::TREASURY_B_ACTORS_ID;
@@ -1841,9 +1844,9 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       crate::DeosRouter::quote_exact_input(ALICE, AssetKind::Native, bldr_asset, mint_amount)
         .expect("direct-mint quote must exist");
     let splitter_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
-    let zm_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_ZM_ACTORS_ID);
-    let burning_manager_before = Balances::free_balance(&burning_manager_account());
-    let zm_native_before = Balances::free_balance(&zm_sov);
+    let liquidity_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_LIQUIDITY_ACTOR_ID);
+    let burn_actor_before = Balances::free_balance(&burn_actor_account());
+    let liquidity_native_before = Balances::free_balance(&liquidity_sov);
     let splitter_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let alice_bldr_before =
@@ -1859,7 +1862,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
     ));
     let alice_bldr_after =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
-    let zm_native_after = Balances::free_balance(&zm_sov);
+    let liquidity_native_after = Balances::free_balance(&liquidity_sov);
     let splitter_bldr_after =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let received = alice_bldr_after.saturating_sub(alice_bldr_before);
@@ -1896,12 +1899,12 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       "Router must select TMC (DirectMint) when TMC price is better than XYK"
     );
     assert_eq!(
-      Balances::free_balance(&burning_manager_account()) - burning_manager_before,
+      Balances::free_balance(&burn_actor_account()) - burn_actor_before,
       quote.router_fee,
-      "Router direct-mint path must route the native fee to the burning manager"
+      "Router direct-mint path must route the native fee to the Burn Actor"
     );
     assert_eq!(
-      zm_native_after - zm_native_before,
+      liquidity_native_after - liquidity_native_before,
       quote.amount_after_fee,
       "BLDR Liquidity Actor must receive the post-fee native collateral"
     );

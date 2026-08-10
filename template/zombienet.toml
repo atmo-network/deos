@@ -17,8 +17,14 @@ id = 2000
 chain_spec_path = "./chain_spec.json"
 onboard_as_parachain = true
 
-[parachains.collator]
+[[parachains.collators]]
 name = "charlie"
 rpc_port = 9988
+command = "polkadot-omni-node"
+args = ["--force-authoring"]
+
+[[parachains.collators]]
+name = "dave"
+rpc_port = 9999
 command = "polkadot-omni-node"
 args = ["--force-authoring"]

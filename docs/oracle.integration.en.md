@@ -103,7 +103,7 @@ Changed publication measurement includes the composed no-subscriber Actors hook 
 
 The component-wise maximum DEOS Oracle publication method plus that hook declares `668,166,000 / 9,687` before execution. Equal refresh receives the same conservative dispatch envelope even though it invokes no hook.
 
-Accepted DEOS Oracle weights SHA-256 is `ffd422bd67a6b75c8bc4e76f7ace4aad5b40a352cf2b10a70547a241e261259e`. These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
+These values bound configured operations only; they imply no publication, subscriber, or actor throughput.
 
 ## Falsification and Validation
 

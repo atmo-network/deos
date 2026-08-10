@@ -1,11 +1,12 @@
 use crate::{
-  Error, Event, RouteFamily, RouteWeightClass, RouterFailureClass, RouterOutcome, mock::*, types::*,
+  AdapterFailure, Error, Event, ExecutionError, RetryClass, RouteFamily, RouteWeightClass,
+  RouterFailureClass, RouterOutcome, mock::*, types::*,
 };
 use polkadot_sdk::frame_support::{
   assert_noop, assert_ok,
   traits::{Currency, Get, fungibles::Mutate},
 };
-use polkadot_sdk::sp_runtime::Perbill;
+use polkadot_sdk::sp_runtime::{DispatchError, Perbill};
 use primitives::ecosystem::params::PRECISION;
 
 fn assert_last_swap(
@@ -129,7 +130,7 @@ fn quote_exact_input_view_matches_direct_xyk_policy_for_user() {
 fn quote_exact_input_view_omits_router_fee_for_fee_exempt_accounts() {
   new_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let fee_exempt = <Test as crate::Config>::BurningManagerAccount::get();
+    let fee_exempt = <Test as crate::Config>::BurnActorAccount::get();
     let foreign = AssetKind::Local(2);
     let native = AssetKind::Native;
     let amount_in = 1_000 * PRECISION;
@@ -166,8 +167,10 @@ fn asset_conversion_exact_output_boundary_quotes_and_executes_without_search() {
         user,
         true,
       ),
-      Err(polkadot_sdk::sp_runtime::DispatchError::Other(
-        "SlippageExceeded"
+      Err(AdapterFailure::new(
+        polkadot_sdk::sp_runtime::DispatchError::Other("SlippageExceeded"),
+        RouterFailureClass::ProtectionRejected,
+        RetryClass::RetryLater,
       ))
     );
     let native_before = Balances::free_balance(user);
@@ -454,7 +457,11 @@ fn exact_output_second_leg_publication_follows_first_leg_execution() {
 
     assert_noop!(
       DeosRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user,),
-      Error::<Test>::InvalidOracleData
+      AdapterFailure::new(
+        polkadot_sdk::sp_runtime::DispatchError::Other("Forced oracle publication failure"),
+        RouterFailureClass::PublicationRejected,
+        RetryClass::RetryLater,
+      )
     );
     assert_eq!(
       XYK_EXECUTIONS.with(|calls| calls.borrow().as_slice().to_vec()),
@@ -582,6 +589,10 @@ fn lp_reverse_index_is_canonical_bounded_and_collision_safe() {
       Error::<Test>::LpTokenPairCollision
     );
     assert_noop!(
+      DeosRouter::register_lp_pair(8, canonical),
+      Error::<Test>::LpTokenPairCollision
+    );
+    assert_noop!(
       DeosRouter::register_lp_pair(8, (AssetKind::Native, AssetKind::Native)),
       Error::<Test>::InvalidPoolPair
     );
@@ -599,81 +610,184 @@ fn lp_reverse_index_is_canonical_bounded_and_collision_safe() {
   });
 }
 
+#[cfg(feature = "try-runtime")]
 #[test]
-fn every_router_error_has_a_stable_failure_class() {
+fn router_try_state_detects_each_persisted_registry_corruption() {
+  #[derive(Clone, Copy)]
+  enum Corruption {
+    FeeBound,
+    NonCanonicalPair,
+    DuplicatePair,
+  }
+
+  new_test_ext().execute_with(|| {
+    let cases = [
+      (
+        Corruption::FeeBound,
+        "Other(\"RouterFee exceeds configured maximum\")",
+      ),
+      (
+        Corruption::NonCanonicalPair,
+        "Other(\"LP reverse index contains a non-canonical pair\")",
+      ),
+      (
+        Corruption::DuplicatePair,
+        "Other(\"LP reverse index maps one pair to multiple LP tokens\")",
+      ),
+    ];
+    for (corruption, expected) in cases {
+      crate::RouterFee::<Test>::kill();
+      crate::LpPairByTokenId::<Test>::kill();
+      assert_ok!(DeosRouter::do_try_state());
+      match corruption {
+        Corruption::FeeBound => crate::RouterFee::<Test>::put(Perbill::from_percent(2)),
+        Corruption::NonCanonicalPair => {
+          crate::LpPairByTokenId::<Test>::mutate(|pairs| {
+            pairs
+              .try_insert(1, (AssetKind::Local(1), AssetKind::Native))
+              .expect("one corrupt entry fits");
+          });
+        }
+        Corruption::DuplicatePair => {
+          crate::LpPairByTokenId::<Test>::mutate(|pairs| {
+            let pair = (AssetKind::Native, AssetKind::Local(1));
+            pairs.try_insert(1, pair).expect("first entry fits");
+            pairs.try_insert(2, pair).expect("second entry fits");
+          });
+        }
+      }
+      assert_eq!(
+        DeosRouter::do_try_state().map_err(|error| format!("{error:?}")),
+        Err(expected.into())
+      );
+    }
+    crate::RouterFee::<Test>::kill();
+    crate::LpPairByTokenId::<Test>::kill();
+    assert_ok!(DeosRouter::do_try_state());
+  });
+}
+
+#[test]
+fn every_router_error_has_stable_failure_and_retry_classes() {
   let cases = [
     (
       Error::<Test>::NoRouteFound,
       RouterFailureClass::NoViableRoute,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::IdenticalAssets,
       RouterFailureClass::InvalidRequest,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::ZeroAmount,
       RouterFailureClass::InvalidRequest,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::AmountTooLow,
       RouterFailureClass::InvalidRequest,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::InsufficientLiquidity,
       RouterFailureClass::LiquidityUnavailable,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::SlippageExceeded,
       RouterFailureClass::ProtectionRejected,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::DeadlinePassed,
       RouterFailureClass::InvalidRequest,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::FeeRoutingFailed,
       RouterFailureClass::FeeRejected,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::InsufficientInputBalance,
       RouterFailureClass::FeeRejected,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::PriceDeviationExceeded,
       RouterFailureClass::ProtectionRejected,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::InvalidOracleData,
       RouterFailureClass::PublicationRejected,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::NoMultiHopRoute,
       RouterFailureClass::NoViableRoute,
+      RetryClass::RetryLater,
     ),
     (
       Error::<Test>::RouterFeeTooHigh,
       RouterFailureClass::InvalidRequest,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::LpTokenPairCollision,
       RouterFailureClass::InvariantViolation,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::LpPairCapacityExceeded,
       RouterFailureClass::InvariantViolation,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::InvalidPoolPair,
       RouterFailureClass::InvariantViolation,
+      RetryClass::Permanent,
     ),
     (
       Error::<Test>::PreparedRouteMismatch,
       RouterFailureClass::InvariantViolation,
+      RetryClass::Permanent,
     ),
   ];
-  for (error, expected) in cases {
-    assert_eq!(error.failure_class(), expected);
+  for (error, failure_class, retry_class) in cases {
+    assert_eq!(error.failure_class(), failure_class);
+    assert_eq!(error.retry_class(), retry_class);
   }
+}
+
+#[test]
+fn adapter_failure_keeps_boundary_and_retry_independent() {
+  for failure_class in [
+    RouterFailureClass::PublicationRejected,
+    RouterFailureClass::IngressRejected,
+    RouterFailureClass::FeeRejected,
+  ] {
+    for retry_class in [RetryClass::Permanent, RetryClass::RetryLater] {
+      let error = ExecutionError::<Test>::from(AdapterFailure::new(
+        DispatchError::Other("TypedAdapterFailure"),
+        failure_class,
+        retry_class,
+      ));
+      assert_eq!(error.failure_class(), failure_class);
+      assert_eq!(error.retry_class(), retry_class);
+    }
+  }
+
+  let unknown = ExecutionError::<Test>::from(AdapterFailure::unknown(DispatchError::Other(
+    "UnknownAdapterFailure",
+  )));
+  assert_eq!(
+    unknown.failure_class(),
+    RouterFailureClass::InvariantViolation
+  );
+  assert_eq!(unknown.retry_class(), RetryClass::Permanent);
 }
 
 #[test]
@@ -763,7 +877,7 @@ fn execution_reprepares_after_a_stale_projection() {
     let projected = DeosRouter::quote_exact_input(user, from, to, amount_in).unwrap();
     assert_eq!(projected.family, RouteFamily::DirectXyk);
 
-    set_tmc_rate(to, 2);
+    set_tmc_curve(to, from, 2);
     set_pool(from, to, 1_000 * PRECISION, 500 * PRECISION);
     assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
@@ -837,7 +951,7 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
     // We want TMC recipient allocation ~497, XYK ~249
     // TMC Rate for Native token: 2.0 -> 1990*P total emission and 497.5*P
     // recipient output after the router fee.
-    set_tmc_rate(asset_out, 2); // asset_out is Native
+    set_tmc_curve(asset_out, asset_in, 2); // asset_out is Native
     // XYK: We need a pool that gives < TMC output (995*P)
     // With amount_in = 995*P (after 0.5% fee), reserve_in = 1000*P, reserve_out = 500*P:
     // out = (995*P * 500*P) / (1995*P) ≈ 249.373*P
@@ -1429,7 +1543,7 @@ fn tmc_interface_test() {
     let user = 1u64;
     let token_asset = AssetKind::Native; // Token being minted
     let foreign_asset = AssetKind::Local(1); // Collateral
-    set_tmc_rate(token_asset, 2); // 1 unit -> 2 Native
+    set_tmc_curve(token_asset, foreign_asset, 2); // 1 unit -> 2 Native
     assert!(<Test as crate::Config>::TmcPallet::has_curve(token_asset));
     let receives =
       <Test as crate::Config>::TmcPallet::calculate_recipient_receives(token_asset, 100).unwrap();

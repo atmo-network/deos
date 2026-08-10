@@ -40,7 +40,7 @@ const paths = {
   ),
   runtimeCode: path.join(
     projectRoot,
-    'template/target/release/wbuild/deos-runtime/deos_runtime.compact.wasm',
+    'template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm',
   ),
   output: path.join(
     webClientRoot,

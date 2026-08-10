@@ -120,7 +120,7 @@ Observation predicates author the complete typed feed identity, raw `u128` thres
 
 `projectObservationDeliveryInspection` owns the fail-closed reactive delivery projection over one finalized input. `projectObservationFanoutServiceTopology` is its single numerical owner: it counts occupied-page attempts plus cursorless restart/cleanup transitions, then derives the exclusive-budget lower bound and stable-topology fair-service ceiling from cursor distance, active-feed count, and the identified RefTime/ProofSize service budget. Impossible revision, active-list, cursor, page-count, or mixed-snapshot relationships throw instead of producing partial timing claims.
 
-The blockchain adapter pins every Oracle and Actors query to one finalized hash, follows the exact active dirty-feed links and occupied subscriber-page links under stored count bounds, and never enumerates subscribers through a storage prefix. `runtime-evidence.generated.ts` owns the browser's expected runtime/metadata/code/descriptor/weight identity and fanout envelope; `scripts/generate-observation-runtime-evidence.mjs --check` fails when runtime source, compact Wasm, metadata, descriptors, or generated Actors weights drift.
+The blockchain adapter pins every Oracle and Actors query to one finalized hash, follows the exact active dirty-feed links and occupied subscriber-page links under stored count bounds, and never enumerates subscribers through a storage prefix. `runtime-evidence.generated.ts` owns the browser's expected runtime/metadata/code/descriptor/weight identity and fanout envelope; `scripts/generate-observation-runtime-evidence.mjs --check` fails when runtime source, compressed runtime-code Wasm, metadata, descriptors, or generated Actors weights drift.
 
 The adapter facade reads runtime versions, V16 metadata, runtime code, and fanout constants at the same finalized hash as observation state, then compares them with generated evidence. Transport failure or any identity, version, constant, descriptor-bound metadata, code-bound weight, or budget mismatch produces `EvidenceMismatch`: factual Oracle/Actors topology remains visible while every numerical service estimate becomes unavailable.
 
@@ -270,7 +270,7 @@ npm run validate
 That script runs formatting, Svelte checks, and the production build. For source-boundary, wiki trust, and wiki consolidation checks, the repo fast audit stack already includes the Domain DAG plus wiki gates:
 
 ```sh
-../scripts/validate-local.sh --audit-only
+../scripts/validate-local.sh fast
 ```
 
 From inside the client workspace, the same boundary gate is available directly:

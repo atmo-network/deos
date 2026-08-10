@@ -19,15 +19,15 @@ DIAGNOSTIC_HEAVY_PROFILES=("profile_scheduler_wallclock_matrix")
 
 usage() {
     cat <<'EOF'
-Usage: actors-release-gate.sh [OPTIONS]
+Usage: actors-assurance.sh [OPTIONS]
 
-Runs the DEOS Actors release gate across the package archive, external-consumer fixture, and deos-runtime.
+Runs the DEOS Actors assurance contract across the package archive, external-consumer fixture, and deos-runtime.
 
 Options:
   --skip-occupancy-profile   Skip the gating 10k occupancy profile
   --quick                    Run only fast checks (Clippy + light tests)
 
-The wall-clock matrix is diagnostic/non-gating and is not executed by this gate.
+The wall-clock matrix remains diagnostic and does not run in this contract.
   -h, --help                 Show this help message
 
 Environment:
@@ -100,8 +100,8 @@ verify_heavy_profiles_resolve_exactly_once() {
 }
 
 run_gate() {
-    run_shell_step "Actors gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json"
-    run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
+    run_shell_step "Actors gate: semantic manifest freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example semantic_manifest -- --check ../web-client/src/lib/automation/actors-semantic-manifest.json"
+    run_shell_step "Actors gate: fee-envelope vector freshness" "" "cd \"$TEMPLATE_DIR\" && cargo run -q --locked -p pallet-deos-actors --example fee_envelope_vectors -- --check ../web-client/src/lib/automation/actors-fee-envelope-vectors.json"
     run_shell_step "Actors gate: ABI manifest drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-abi"
     run_shell_step "Actors gate: accepted specification hash" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-spec-acceptance"
 run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web-client\" && npm run check:actors-normative-drift"
@@ -112,8 +112,8 @@ run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web
     run_shell_step "Actors gate: reactive operations corpus contract" "" "\"$PROJECT_ROOT/scripts/reactive-operations-corpus.sh\""
 
     if [[ "$QUICK_MODE" == "1" ]]; then
-        run_shell_step "Actors quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy -p pallet-deos-actors -p deos-runtime -p pallet-deos-actors-embedding-fixture --all-targets -- -D warnings"
-        run_shell_step "Actors quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q -p pallet-deos-actors --lib && cargo test -q -p pallet-deos-actors-embedding-fixture --lib"
+        run_shell_step "Actors quick gate: Clippy" "" "cd \"$TEMPLATE_DIR\" && cargo clippy --locked -p pallet-deos-actors -p deos-runtime -p pallet-deos-actors-embedding-fixture --all-targets -- -D warnings"
+        run_shell_step "Actors quick gate: basic tests" "" "cd \"$TEMPLATE_DIR\" && cargo test -q --locked -p pallet-deos-actors --lib && cargo test -q --locked -p pallet-deos-actors-embedding-fixture --lib"
         run_shell_step "Actors quick gate: package archive surface" "" "cd \"$TEMPLATE_DIR\" && cargo package -p pallet-deos-actors --allow-dirty --locked --list"
         return
     fi
@@ -170,12 +170,12 @@ run_shell_step "Actors gate: normative surface drift" "" "cd \"$PROJECT_ROOT/web
 
 main() {
     parse_args "$@"
-    phase_banner "DEOS Actors release gate"
+    phase_banner "DEOS Actors assurance"
     check_prerequisites
     log_info "Profile: $CARGO_PROFILE | quick: $QUICK_MODE | occupancy: $INCLUDE_OCCUPANCY_PROFILE"
     run_gate
     phase_banner "Summary"
-    log_success "Actors scheduler release gate completed successfully"
+    log_success "Actors scheduler assurance completed successfully"
 }
 
 run_entrypoint() {
@@ -193,7 +193,7 @@ run_entrypoint() {
     done
     local script_path
     script_path="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
-    run_command_step "DEOS Actors release gate" "" "$script_path" --internal "$@"
+    run_command_step "DEOS Actors assurance" "" "$script_path" --internal "$@"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

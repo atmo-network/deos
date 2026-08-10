@@ -73,10 +73,8 @@ pub const ASSET_E: u32 = TYPE_TEST | 4;
 pub const ASSET_FOREIGN: u32 = TYPE_FOREIGN | 1;
 
 // Token-driven actor accounts from pallet configurations
-pub fn burning_manager_account() -> AccountId {
-  crate::Actors::sovereign_account_id_system(
-    primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID,
-  )
+pub fn burn_actor_account() -> AccountId {
+  crate::Actors::sovereign_account_id_system(primitives::ecosystem::actor_ids::BURN_ACTOR_ID)
 }
 
 pub fn liquidity_actor_account() -> AccountId {
@@ -217,7 +215,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
     // Add native token deposits for system accounts to enable asset operations
     let system_accounts = vec![
       deos_router_account(),
-      burning_manager_account(),
+      burn_actor_account(),
       liquidity_actor_account(),
       actor_fee_sink_account(),
       tmc_pallet_account(),
@@ -233,7 +231,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
       DAVE,
       EVE,
       deos_router_account(),
-      burning_manager_account(),
+      burn_actor_account(),
       liquidity_actor_account(),
       tmc_pallet_account(),
     ];

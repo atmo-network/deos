@@ -354,6 +354,11 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<AssetId>
     domain: AssetId,
     payload_kind: pallet_governance::ProposalPayloadKind,
   ) -> pallet_governance::ProposalSubmissionAuthority {
+    if domain == protocol_governance_domain()
+      && payload_kind == pallet_governance::ProposalPayloadKind::L1RootAction
+    {
+      return pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned;
+    }
     if payload_kind == pallet_governance::ProposalPayloadKind::Intent {
       return pallet_governance::ProposalSubmissionAuthority::Signed;
     }
@@ -367,6 +372,45 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<AssetId>
       return pallet_governance::ProposalSubmissionAuthority::Signed;
     }
     pallet_governance::ProposalSubmissionAuthority::AdminOnly
+  }
+}
+
+pub struct RuntimeProposalSubmissionEligibilityProvider;
+impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, AssetId>
+  for RuntimeProposalSubmissionEligibilityProvider
+{
+  fn has_primary_governance_power(domain: AssetId, account: &AccountId) -> bool {
+    domain == protocol_governance_domain() && ordinary_track_base_weight(domain, account) > 0
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct RuntimeGovernanceBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_governance::BenchmarkHelper<AccountId, AssetId> for RuntimeGovernanceBenchmarkHelper {
+  fn prepare_primary_eligible_submitter(
+    account: &AccountId,
+  ) -> Result<AssetId, polkadot_sdk::sp_runtime::DispatchError> {
+    use polkadot_sdk::frame_support::traits::{Currency, fungibles::Mutate};
+    let domain = protocol_governance_domain();
+    if !<crate::Assets as polkadot_sdk::frame_support::traits::fungibles::Inspect<AccountId>>::asset_exists(domain) {
+      crate::Assets::force_create(
+        RuntimeOrigin::root(),
+        domain,
+        account.clone().into(),
+        true,
+        1,
+      )?;
+    }
+    if crate::Staking::pool(domain).is_none() {
+      crate::Staking::register_staking_asset(RuntimeOrigin::root(), domain)?;
+    }
+    let amount = primitives::ecosystem::params::PRECISION.saturating_mul(100);
+    <crate::Assets as Mutate<AccountId>>::mint_into(domain, account, amount)?;
+    let _ = <crate::Balances as Currency<AccountId>>::deposit_creating(account, amount);
+    crate::Staking::stake_native(RuntimeOrigin::signed(account.clone()), amount / 2)?;
+    Ok(domain)
   }
 }
 
@@ -686,6 +730,7 @@ impl pallet_governance::Config for Runtime {
   type ProposalPrimaryTrackFamilyProvider = RuntimeProposalPrimaryTrackFamilyProvider;
   type ProposalUrgentPolicyProvider = RuntimeProposalUrgentPolicyProvider;
   type ProposalSubmissionAuthorityProvider = RuntimeProposalSubmissionAuthorityProvider;
+  type ProposalSubmissionEligibilityProvider = RuntimeProposalSubmissionEligibilityProvider;
   type ProposalRuntimeUpgradeAuthorizationProvider =
     RuntimeProposalRuntimeUpgradeAuthorizationProvider;
   type ProposalPayloadPreimageNoteCostProvider = RuntimeProposalPayloadPreimageNoteCostProvider;
@@ -693,6 +738,8 @@ impl pallet_governance::Config for Runtime {
   type ProposalPayloadPreimageProvider = RuntimeProposalPayloadPreimageProvider;
   type ProposalPayloadExecutor = RuntimeProposalPayloadExecutor;
   type WinningVoteRewardTouchHandler = RuntimeWinningVoteRewardTouchHandler;
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = RuntimeGovernanceBenchmarkHelper;
   type WeightInfo = crate::weights::pallet_governance::SubstrateWeight<Runtime>;
 }
 

@@ -28,7 +28,7 @@
       "actions": [
         {
           "kind": "ValidateRuntimeEvidence",
-          "candidateIdentity": "deos-runtime@spec-2:tx-1:system-3"
+          "candidateIdentity": "deos-runtime@spec-1:tx-1:system-3"
         }
       ],
       "checkpoints": [
@@ -45,13 +45,16 @@
         "acceptedIdentity": "deos-runtime@spec-1:tx-1:system-3",
         "candidateAccepted": false
       },
-      "invariants": ["runtimeIdentityExact", "boundedWork"],
+      "invariants": [
+        "runtimeIdentityExact",
+        "boundedWork"
+      ],
       "expectedWeightClass": "NonConsensusEvidenceValidation",
       "rollbackBoundary": "NoConsensusMutation",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
       "executionAnchor": {
         "path": "template/runtime/src/lib.rs",
-        "symbol": "pre_launch_framework_runtime_version_uses_fresh_genesis_baseline"
+        "symbol": "framework_runtime_version_matches_release_compatibility_baseline"
       }
     },
     {
@@ -64,10 +67,18 @@
         "feeBudget": "Exhausted"
       },
       "actions": [
-        { "kind": "ActivateCircuitBreaker" },
-        { "kind": "SchedulerExecution" },
-        { "kind": "DeactivateCircuitBreaker" },
-        { "kind": "SchedulerExecution" }
+        {
+          "kind": "ActivateCircuitBreaker"
+        },
+        {
+          "kind": "SchedulerExecution"
+        },
+        {
+          "kind": "DeactivateCircuitBreaker"
+        },
+        {
+          "kind": "SchedulerExecution"
+        }
       ],
       "checkpoints": [
         {
@@ -108,10 +119,20 @@
         "manualSignals": 1
       },
       "actions": [
-        { "kind": "SchedulerExecution" },
-        { "kind": "AdvanceBlock", "block": 2 },
-        { "kind": "AdvanceBlockAndRecoverAdapter", "block": 3 },
-        { "kind": "SchedulerExecution" }
+        {
+          "kind": "SchedulerExecution"
+        },
+        {
+          "kind": "AdvanceBlock",
+          "block": 2
+        },
+        {
+          "kind": "AdvanceBlockAndRecoverAdapter",
+          "block": 3
+        },
+        {
+          "kind": "SchedulerExecution"
+        }
       ],
       "checkpoints": [
         {
@@ -124,7 +145,10 @@
         },
         {
           "afterAction": 2,
-          "expect": { "continuationAttempt": 0, "manualSignals": 1 }
+          "expect": {
+            "continuationAttempt": 0,
+            "manualSignals": 1
+          }
         }
       ],
       "terminalState": {
@@ -133,7 +157,11 @@
         "runState": "Idle",
         "manualSignals": 1
       },
-      "invariants": ["admissionExclusive", "wakeupUnique", "boundedWork"],
+      "invariants": [
+        "admissionExclusive",
+        "wakeupUnique",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::scheduler_actor_cycle+Actors::continuation_retry+wakeup_page",
       "rollbackBoundary": "ContinuationAttempt",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -150,7 +178,12 @@
         "closeReason": "BalanceExhausted",
         "circuitBreaker": true
       },
-      "actions": [{ "kind": "PermissionlessSweep", "maximumActors": 1 }],
+      "actions": [
+        {
+          "kind": "PermissionlessSweep",
+          "maximumActors": 1
+        }
+      ],
       "checkpoints": [
         {
           "afterAction": 1,
@@ -167,7 +200,10 @@
         "closeEvents": 1,
         "hiddenTaskExecution": false
       },
-      "invariants": ["admissionExclusive", "boundedWork"],
+      "invariants": [
+        "admissionExclusive",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::permissionless_sweep+Actors::close_actor",
       "rollbackBoundary": "OneActorRepairSweep",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -186,18 +222,33 @@
         "oracleRevision": 0
       },
       "actions": [
-        { "kind": "OraclePublish", "value": "1000000000000" },
-        { "kind": "OraclePublish", "value": "1000000000000" },
-        { "kind": "OraclePublish", "value": "2000000000000" }
+        {
+          "kind": "OraclePublish",
+          "value": "1000000000000"
+        },
+        {
+          "kind": "OraclePublish",
+          "value": "1000000000000"
+        },
+        {
+          "kind": "OraclePublish",
+          "value": "2000000000000"
+        }
       ],
       "checkpoints": [
         {
           "afterAction": 1,
-          "expect": { "latestRevision": 1, "activeMemberships": 1 }
+          "expect": {
+            "latestRevision": 1,
+            "activeMemberships": 1
+          }
         },
         {
           "afterAction": 2,
-          "expect": { "latestRevision": 1, "activeMemberships": 1 }
+          "expect": {
+            "latestRevision": 1,
+            "activeMemberships": 1
+          }
         }
       ],
       "terminalState": {
@@ -205,7 +256,11 @@
         "latestReactiveRevision": 2,
         "dirtyFeeds": 1
       },
-      "invariants": ["oracleRevisionLinked", "dirtyFeedUnique", "boundedWork"],
+      "invariants": [
+        "oracleRevisionLinked",
+        "dirtyFeedUnique",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::observation_change_ingress",
       "rollbackBoundary": "OraclePublicationAndActorHook",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -225,14 +280,24 @@
         "nextPage": 1
       },
       "actions": [
-        { "kind": "FanoutServiceUnit" },
-        { "kind": "ObservationChange", "revision": 2 },
-        { "kind": "FanoutUntilStable" }
+        {
+          "kind": "FanoutServiceUnit"
+        },
+        {
+          "kind": "ObservationChange",
+          "revision": 2
+        },
+        {
+          "kind": "FanoutUntilStable"
+        }
       ],
       "checkpoints": [
         {
           "afterAction": 2,
-          "expect": { "latestRevision": 2, "restartRequired": true }
+          "expect": {
+            "latestRevision": 2,
+            "restartRequired": true
+          }
         }
       ],
       "terminalState": {
@@ -313,14 +378,23 @@
         "pendingSignals": 0
       },
       "actions": [
-        { "kind": "FanoutServiceUnit" },
-        { "kind": "ReleaseQueueCapacity" },
-        { "kind": "FanoutServiceUnit" }
+        {
+          "kind": "FanoutServiceUnit"
+        },
+        {
+          "kind": "ReleaseQueueCapacity"
+        },
+        {
+          "kind": "FanoutServiceUnit"
+        }
       ],
       "checkpoints": [
         {
           "afterAction": 1,
-          "expect": { "pageRetained": true, "pendingSignal": true }
+          "expect": {
+            "pageRetained": true,
+            "pendingSignal": true
+          }
         }
       ],
       "terminalState": {
@@ -431,7 +505,11 @@
         "latestRevision": 4,
         "dirtyFeeds": 1
       },
-      "invariants": ["oracleRevisionLinked", "dirtyFeedUnique", "boundedWork"],
+      "invariants": [
+        "oracleRevisionLinked",
+        "dirtyFeedUnique",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::observation_change_ingress",
       "rollbackBoundary": "ObservationIngressTransaction",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -449,18 +527,33 @@
         "serviceUnits": 1
       },
       "actions": [
-        { "kind": "FanoutServiceUnit" },
-        { "kind": "RemoveCursorFeed" },
-        { "kind": "FanoutServiceUnit" }
+        {
+          "kind": "FanoutServiceUnit"
+        },
+        {
+          "kind": "RemoveCursorFeed"
+        },
+        {
+          "kind": "FanoutServiceUnit"
+        }
       ],
       "checkpoints": [
         {
           "afterAction": 2,
-          "expect": { "dirtyFeeds": 2, "cursorReciprocal": true }
+          "expect": {
+            "dirtyFeeds": 2,
+            "cursorReciprocal": true
+          }
         }
       ],
-      "terminalState": { "dirtyFeeds": 2, "eachRemainingFeedVisited": true },
-      "invariants": ["dirtyFeedUnique", "boundedWork"],
+      "terminalState": {
+        "dirtyFeeds": 2,
+        "eachRemainingFeedVisited": true
+      },
+      "invariants": [
+        "dirtyFeedUnique",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::observation_fanout_base+Actors::observation_fanout_page",
       "rollbackBoundary": "OneServiceUnit",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -478,18 +571,33 @@
         "fragmentedSlots": 0
       },
       "actions": [
-        { "kind": "RemoveMiddleSubscriptions" },
-        { "kind": "AddSubscriptionsIntoReusableSlots" },
-        { "kind": "ValidatePageLinks" }
+        {
+          "kind": "RemoveMiddleSubscriptions"
+        },
+        {
+          "kind": "AddSubscriptionsIntoReusableSlots"
+        },
+        {
+          "kind": "ValidatePageLinks"
+        }
       ],
       "checkpoints": [
         {
           "afterAction": 1,
-          "expect": { "slotReuseAvailable": true, "reciprocalLinks": true }
+          "expect": {
+            "slotReuseAvailable": true,
+            "reciprocalLinks": true
+          }
         }
       ],
-      "terminalState": { "duplicateReachability": 0, "orphanOccupiedPages": 0 },
-      "invariants": ["subscriberPageReachable", "boundedWork"],
+      "terminalState": {
+        "duplicateReachability": 0,
+        "orphanOccupiedPages": 0
+      },
+      "invariants": [
+        "subscriberPageReachable",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::set_program",
       "rollbackBoundary": "ProgramReplacementTransaction",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -501,13 +609,27 @@
     {
       "id": "last-subscriber-removal-unlinks-dirty-feed",
       "family": "topology-churn",
-      "initialState": { "dirtyFeeds": 1, "subscribers": 1, "occupiedPages": 1 },
+      "initialState": {
+        "dirtyFeeds": 1,
+        "subscribers": 1,
+        "occupiedPages": 1
+      },
       "actions": [
-        { "kind": "RemoveFinalSubscription" },
-        { "kind": "ValidateDirtyList" }
+        {
+          "kind": "RemoveFinalSubscription"
+        },
+        {
+          "kind": "ValidateDirtyList"
+        }
       ],
       "checkpoints": [
-        { "afterAction": 1, "expect": { "subscribers": 0, "occupiedPages": 0 } }
+        {
+          "afterAction": 1,
+          "expect": {
+            "subscribers": 0,
+            "occupiedPages": 0
+          }
+        }
       ],
       "terminalState": {
         "dirtyFeeds": 0,
@@ -695,11 +817,18 @@
         "targetFeedDirty": false,
         "oracleRevision": 0
       },
-      "actions": [{ "kind": "ObservationChangeAtCapacity" }],
+      "actions": [
+        {
+          "kind": "ObservationChangeAtCapacity"
+        }
+      ],
       "checkpoints": [
         {
           "afterAction": 1,
-          "expect": { "result": "Error", "targetFeedDirty": false }
+          "expect": {
+            "result": "Error",
+            "targetFeedDirty": false
+          }
         }
       ],
       "terminalState": {
@@ -728,17 +857,30 @@
         "pendingSignals": 0
       },
       "actions": [
-        { "kind": "FanoutWithInsufficientProofSize" },
-        { "kind": "FanoutWithInsufficientRefTime" }
+        {
+          "kind": "FanoutWithInsufficientProofSize"
+        },
+        {
+          "kind": "FanoutWithInsufficientRefTime"
+        }
       ],
       "checkpoints": [
         {
           "afterAction": 1,
-          "expect": { "state": "PreState", "consumedWeight": "BaseOnly" }
+          "expect": {
+            "state": "PreState",
+            "consumedWeight": "BaseOnly"
+          }
         }
       ],
-      "terminalState": { "state": "PreState", "eventsAdded": 0 },
-      "invariants": ["atomicFailureRestoresOwnedState", "boundedWork"],
+      "terminalState": {
+        "state": "PreState",
+        "eventsAdded": 0
+      },
+      "invariants": [
+        "atomicFailureRestoresOwnedState",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::observation_fanout_base",
       "rollbackBoundary": "PreServiceUnit",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",
@@ -756,7 +898,10 @@
         "dirtyFeeds": 1
       },
       "actions": [
-        { "kind": "FanoutUntilStable", "budget": "ProductionOnIdleBudget" }
+        {
+          "kind": "FanoutUntilStable",
+          "budget": "ProductionOnIdleBudget"
+        }
       ],
       "checkpoints": [
         {
@@ -793,18 +938,28 @@
         "dirtyFeeds": 1,
         "corruption": "ReciprocalLinkMismatch"
       },
-      "actions": [{ "kind": "TryState" }],
+      "actions": [
+        {
+          "kind": "TryState"
+        }
+      ],
       "checkpoints": [
         {
           "afterAction": 1,
-          "expect": { "result": "Error", "repairInvented": false }
+          "expect": {
+            "result": "Error",
+            "repairInvented": false
+          }
         }
       ],
       "terminalState": {
         "corruptionStillVisible": true,
         "consensusMutation": false
       },
-      "invariants": ["dirtyFeedUnique", "boundedWork"],
+      "invariants": [
+        "dirtyFeedUnique",
+        "boundedWork"
+      ],
       "expectedWeightClass": "Actors::try_state(read-only)",
       "rollbackBoundary": "ReadOnlyInvariantCheck",
       "expectedEvidenceIdentity": "deos-runtime@spec-1:tx-1:system-3",

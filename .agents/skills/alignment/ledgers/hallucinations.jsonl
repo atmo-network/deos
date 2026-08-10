@@ -5,3 +5,4 @@
 {"timestamp":"2026-08-09T20:20:03Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"template/runtime/src/tmctol_read_model.rs"}
 {"timestamp":"2026-08-10T05:39:34Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"template/pallets/router/examples/conformance_vectors.rs"}
 {"timestamp":"2026-08-10T07:49:55Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"template/runtime/src/configs/deos_router_config.rs"}
+{"timestamp":"2026-08-11T02:00:59Z","severity":"FATAL","rule":"O(N) Iteration Anti-Pattern","files":"template/runtime/src/genesis_config_presets.rs"}

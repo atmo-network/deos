@@ -1,9 +1,11 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use pallet_deos_router::{
-  AssetKind, ExactOutputExecution, FeeRoutingAdapter, PriceOracle, TmcInterface,
+  AdapterFailure, AssetKind, ExactOutputExecution, FeeRoutingAdapter, PriceOracle, TmcInterface,
   types::AssetConversionApi,
 };
+#[cfg(feature = "runtime-benchmarks")]
+use polkadot_sdk::sp_runtime::DispatchResult;
 use polkadot_sdk::{
   frame_support::{
     PalletId, construct_runtime, derive_impl, parameter_types,
@@ -11,7 +13,7 @@ use polkadot_sdk::{
   },
   frame_system,
   sp_runtime::{
-    DispatchError, DispatchResult, Perbill,
+    DispatchError, Perbill,
     testing::H256,
     traits::{BlakeTwo256, IdentityLookup},
   },
@@ -106,8 +108,8 @@ impl TmcInterface<AccountId, Balance> for HostTmc {
   fn calculate_recipient_receives(
     _token: AssetKind,
     _amount: Balance,
-  ) -> Result<Balance, DispatchError> {
-    Err(DispatchError::Other("NoCurve"))
+  ) -> Result<Balance, AdapterFailure> {
+    Err(DispatchError::Other("NoCurve").into())
   }
   fn mint_with_distribution(
     _who: &AccountId,
@@ -115,8 +117,8 @@ impl TmcInterface<AccountId, Balance> for HostTmc {
     _token: AssetKind,
     _collateral: AssetKind,
     _amount: Balance,
-  ) -> Result<Balance, DispatchError> {
-    Err(DispatchError::Other("NoCurve"))
+  ) -> Result<Balance, AdapterFailure> {
+    Err(DispatchError::Other("NoCurve").into())
   }
 }
 
@@ -152,8 +154,8 @@ impl AssetConversionApi<AccountId, Balance> for HostXyk {
     _minimum: Balance,
     _recipient: AccountId,
     _keep_alive: bool,
-  ) -> Result<Balance, DispatchError> {
-    Err(DispatchError::Other("NoPool"))
+  ) -> Result<Balance, AdapterFailure> {
+    Err(DispatchError::Other("NoPool").into())
   }
   fn execute_single_pool_exact_output(
     _who: AccountId,
@@ -163,21 +165,25 @@ impl AssetConversionApi<AccountId, Balance> for HostXyk {
     _maximum: Balance,
     _recipient: AccountId,
     _keep_alive: bool,
-  ) -> Result<ExactOutputExecution, DispatchError> {
-    Err(DispatchError::Other("NoPool"))
+  ) -> Result<ExactOutputExecution, AdapterFailure> {
+    Err(DispatchError::Other("NoPool").into())
   }
 }
 
 pub struct HostFees;
 impl FeeRoutingAdapter<AccountId, Balance> for HostFees {
-  fn route_fee(_who: &AccountId, _asset: AssetKind, _amount: Balance) -> DispatchResult {
+  fn route_fee(
+    _who: &AccountId,
+    _asset: AssetKind,
+    _amount: Balance,
+  ) -> Result<(), AdapterFailure> {
     Ok(())
   }
 }
 
 pub struct HostOracle;
 impl PriceOracle<Balance> for HostOracle {
-  fn update_ema_price(_a: AssetKind, _b: AssetKind, _price: Balance) -> Result<(), DispatchError> {
+  fn update_ema_price(_a: AssetKind, _b: AssetKind, _price: Balance) -> Result<(), AdapterFailure> {
     Ok(())
   }
   fn get_ema_price(_a: AssetKind, _b: AssetKind) -> Option<Balance> {
@@ -187,7 +193,7 @@ impl PriceOracle<Balance> for HostOracle {
     _a: AssetKind,
     _b: AssetKind,
     _price: Balance,
-  ) -> Result<(), DispatchError> {
+  ) -> Result<(), AdapterFailure> {
     Ok(())
   }
 }
@@ -217,7 +223,7 @@ impl pallet_deos_router::Config for Runtime {
   type EmaHalfLife = ConstU32<100>;
   type MaxPriceDeviation = MaxPriceDeviation;
   type FeeAdapter = HostFees;
-  type BurningManagerAccount = BurningAccount;
+  type BurnActorAccount = BurningAccount;
   type LiquidityActorAccount = LiquidityAccount;
   type PriceOracle = HostOracle;
   type MinSwapForeign = ConstU128<1>;

@@ -1,0 +1,48 @@
+name: Reusable DEOS Validation
+
+on:
+  workflow_call:
+    inputs:
+      profile:
+        description: Canonical validate-local profile
+        required: true
+        type: string
+
+jobs:
+  validate:
+    name: ${{ inputs.profile }} validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.profile == 'full' && 720 || inputs.profile == 'heavy' && 240 || 120 }}
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      SKIP_WASM_BUILD: ${{ inputs.profile == 'full' && '0' || '1' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install validation prerequisites
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
+
+      - name: Setup pinned Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: web-client/package.json
+
+      - name: Restore validation caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.npm
+            /tmp/deos-assurance-bin
+            template/target
+          key: ${{ runner.os }}-${{ inputs.profile }}-${{ hashFiles('template/Cargo.lock', 'template/rust-toolchain.toml', 'web-client/package.json', 'web-client/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ inputs.profile }}-
+            ${{ runner.os }}-
+
+      - name: Run canonical profile
+        run: ./scripts/validate-local.sh "${{ inputs.profile }}"

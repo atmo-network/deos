@@ -59,7 +59,7 @@ pub use address_event_ingress::RuntimeAddressEventIngress;
 pub use assets_config::{AssetKind, genesis_protocol_asset_metadata, genesis_protocol_assets};
 #[allow(unused_imports)]
 pub use deos_router_config::{
-  AssetConversionAdapter, BurningManagerAccount, LiquidityActorAccount, NativeAsset,
+  AssetConversionAdapter, BurnActorAccount, LiquidityActorAccount, NativeAsset,
 };
 #[allow(unused_imports)]
 pub use tmc_config::TmcPalletId;

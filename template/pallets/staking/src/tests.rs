@@ -25,6 +25,18 @@ fn advance_to_block(target: u64) {
 }
 
 #[test]
+fn registration_requires_resolvable_receipt_identity() {
+  new_test_ext().execute_with(|| {
+    assert_ok!(Assets::force_create(RuntimeOrigin::root(), 99, 1, true, 1));
+    assert_noop!(
+      Staking::register_staking_asset(RuntimeOrigin::root(), 99),
+      Error::<Test>::StakedAssetUnsupported
+    );
+    assert!(Staking::pool(99).is_none());
+  });
+}
+
+#[test]
 fn lock_native_lp_for_collator_moves_lp_into_lock_account() {
   const LP_ASSET: AssetId = 0x7000_0001;
   new_test_ext().execute_with(|| {
@@ -439,131 +451,6 @@ fn query_surface_prefers_receipt_balances_once_receipts_exist() {
 }
 
 #[test]
-fn mixed_legacy_and_receipt_shares_sum_in_query_surface() {
-  const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
-  new_test_ext().execute_with(|| {
-    let pool_account = Staking::pool_account_for(2);
-    assert_ok!(Assets::force_create(
-      RuntimeOrigin::root(),
-      TYPE_STAKED_LOCAL,
-      pool_account,
-      true,
-      1,
-    ));
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 100,
-        accounted_balance: 100,
-        active_staker_count: 1,
-      },
-    );
-    crate::Positions::<Test>::insert(2, 1, crate::StakePosition { shares: 60 });
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      2,
-      &pool_account,
-      100
-    ));
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      TYPE_STAKED_LOCAL,
-      &1,
-      40
-    ));
-    assert_eq!(
-      Staking::effective_share_balance_for_queries(2, &1),
-      Some(100)
-    );
-    assert_eq!(Staking::stake_fraction(2, &1), Some((100, 100)));
-    assert_eq!(Staking::stake_value(2, &1), Some(100));
-  });
-}
-
-#[test]
-fn legacy_pool_with_receipt_asset_mints_new_stakes_as_receipts() {
-  const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
-  new_test_ext().execute_with(|| {
-    let pool_account = Staking::pool_account_for(2);
-    assert_ok!(Assets::force_create(
-      RuntimeOrigin::root(),
-      TYPE_STAKED_LOCAL,
-      pool_account,
-      true,
-      1,
-    ));
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 100,
-        accounted_balance: 100,
-        active_staker_count: 1,
-      },
-    );
-    crate::Positions::<Test>::insert(2, 1, crate::StakePosition { shares: 100 });
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      2,
-      &pool_account,
-      100
-    ));
-    assert_ok!(Staking::stake(RuntimeOrigin::signed(2), 2, 50));
-    let pool = Staking::pool(2).expect("pool must exist");
-    assert_eq!(pool.total_shares, 150);
-    assert_eq!(pool.accounted_balance, 150);
-    assert_eq!(pool.active_staker_count, 1);
-    assert_eq!(Staking::position(2, 2), None);
-    assert_eq!(
-      <Assets as Inspect<AccountId>>::balance(TYPE_STAKED_LOCAL, &2),
-      50
-    );
-    assert_eq!(Staking::stake_value(2, &1), Some(100));
-    assert_eq!(Staking::stake_value(2, &2), Some(50));
-  });
-}
-
-#[test]
-fn legacy_position_holder_can_unstake_after_receipt_mode_starts() {
-  const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
-  new_test_ext().execute_with(|| {
-    let pool_account = Staking::pool_account_for(2);
-    assert_ok!(Assets::force_create(
-      RuntimeOrigin::root(),
-      TYPE_STAKED_LOCAL,
-      pool_account,
-      true,
-      1,
-    ));
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 150,
-        accounted_balance: 150,
-        active_staker_count: 1,
-      },
-    );
-    crate::Positions::<Test>::insert(2, 1, crate::StakePosition { shares: 100 });
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      2,
-      &pool_account,
-      150
-    ));
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      TYPE_STAKED_LOCAL,
-      &2,
-      50
-    ));
-    let before = <Assets as Inspect<AccountId>>::balance(2, &1);
-    assert_ok!(Staking::unstake(RuntimeOrigin::signed(1), 2, 40));
-    let after = <Assets as Inspect<AccountId>>::balance(2, &1);
-    assert_eq!(after - before, 40);
-    assert_eq!(
-      Staking::position(2, 1),
-      Some(crate::StakePosition { shares: 60 })
-    );
-    assert_eq!(Staking::stake_value(2, &1), Some(60));
-    assert_eq!(Staking::stake_value(2, &2), Some(50));
-  });
-}
-
-#[test]
 fn transferred_receipt_holder_can_unstake_via_receipt_balance() {
   const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
   new_test_ext().execute_with(|| {
@@ -601,7 +488,6 @@ fn register_asset_creates_empty_pool() {
     let pool = Staking::pool(2).expect("pool must exist");
     assert_eq!(pool.total_shares, 0);
     assert_eq!(pool.accounted_balance, 0);
-    assert_eq!(pool.active_staker_count, 0);
     assert!(<Assets as Inspect<AccountId>>::asset_exists(
       TYPE_STAKED_LOCAL
     ));
@@ -1282,167 +1168,14 @@ fn foreign_asset_uses_dedicated_receipt_namespace() {
 }
 
 #[test]
-fn initialize_staked_asset_backfills_legacy_pool_receipt_class() {
-  const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
-  new_test_ext().execute_with(|| {
-    let pool_account = Staking::pool_account_for(2);
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 100,
-        accounted_balance: 100,
-        active_staker_count: 1,
-      },
-    );
-    crate::Positions::<Test>::insert(2, 1, crate::StakePosition { shares: 100 });
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      2,
-      &pool_account,
-      100
-    ));
-    assert!(!<Assets as Inspect<AccountId>>::asset_exists(
-      TYPE_STAKED_LOCAL
-    ));
-    assert_eq!(
-      Staking::base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
-      None
-    );
-    assert_eq!(
-      Staking::live_base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
-      None
-    );
-    assert_ok!(Staking::initialize_staked_asset(RuntimeOrigin::root(), 2));
-    assert!(<Assets as Inspect<AccountId>>::asset_exists(
-      TYPE_STAKED_LOCAL
-    ));
-    assert_eq!(
-      Staking::base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
-      Some(2)
-    );
-    assert_eq!(
-      Staking::live_base_asset_for_staked_asset(TYPE_STAKED_LOCAL),
-      Some(2)
-    );
-    assert_eq!(
-      <Assets as MetadataInspect<AccountId>>::name(TYPE_STAKED_LOCAL),
-      b"Staked Asset 2".to_vec()
-    );
-    System::assert_last_event(RuntimeEvent::Staking(Event::StakedAssetInitialized {
-      asset_id: 2,
-      staked_asset_id: TYPE_STAKED_LOCAL,
-      pool_account,
-    }));
-    assert_ok!(Staking::stake(RuntimeOrigin::signed(2), 2, 50));
-    assert_eq!(Staking::position(2, 2), None);
-    assert_eq!(
-      <Assets as Inspect<AccountId>>::balance(TYPE_STAKED_LOCAL, &2),
-      50
-    );
-    assert_eq!(Staking::stake_value(2, &1), Some(100));
-    assert_eq!(Staking::stake_value(2, &2), Some(50));
-  });
-}
-
-#[test]
-fn initialize_staked_asset_rejects_existing_receipt_class() {
-  const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
-  new_test_ext().execute_with(|| {
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 0,
-        accounted_balance: 0,
-        active_staker_count: 0,
-      },
-    );
-    assert_ok!(Assets::force_create(
-      RuntimeOrigin::root(),
-      TYPE_STAKED_LOCAL,
-      1,
-      true,
-      1
-    ));
-    assert_noop!(
-      Staking::initialize_staked_asset(RuntimeOrigin::root(), 2),
-      Error::<Test>::StakedAssetAlreadyInitialized
-    );
-  });
-}
-
-#[test]
-fn convert_position_to_receipt_moves_legacy_shares_into_stxxx() {
-  const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
-  new_test_ext().execute_with(|| {
-    let pool_account = Staking::pool_account_for(2);
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 100,
-        accounted_balance: 100,
-        active_staker_count: 1,
-      },
-    );
-    crate::Positions::<Test>::insert(2, 1, crate::StakePosition { shares: 100 });
-    assert_ok!(<Assets as Mutate<AccountId>>::mint_into(
-      2,
-      &pool_account,
-      100
-    ));
-    assert_ok!(Staking::initialize_staked_asset(RuntimeOrigin::root(), 2));
-    assert_ok!(Staking::convert_position_to_receipt(
-      RuntimeOrigin::signed(1),
-      2,
-    ));
-    assert_eq!(Staking::position(2, 1), None);
-    assert_eq!(
-      Staking::pool(2)
-        .expect("pool must exist")
-        .active_staker_count,
-      0
-    );
-    assert_eq!(
-      <Assets as Inspect<AccountId>>::balance(TYPE_STAKED_LOCAL, &1),
-      100
-    );
-    assert_eq!(Staking::stake_value(2, &1), Some(100));
-    System::assert_last_event(RuntimeEvent::Staking(Event::LegacyPositionConverted {
-      asset_id: 2,
-      account: 1,
-      converted_shares: 100,
-    }));
-  });
-}
-
-#[test]
-fn convert_position_to_receipt_requires_initialized_staked_asset() {
-  new_test_ext().execute_with(|| {
-    crate::Pools::<Test>::insert(
-      2,
-      crate::PoolState {
-        total_shares: 100,
-        accounted_balance: 100,
-        active_staker_count: 1,
-      },
-    );
-    crate::Positions::<Test>::insert(2, 1, crate::StakePosition { shares: 100 });
-    assert_noop!(
-      Staking::convert_position_to_receipt(RuntimeOrigin::signed(1), 2),
-      Error::<Test>::StakedAssetNotInitialized
-    );
-  });
-}
-
-#[test]
 fn first_stake_mints_equal_shares() {
   const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
     assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 2, 100));
     let pool = Staking::pool(2).expect("pool must exist");
-    assert!(Staking::position(2, 1).is_none());
     assert_eq!(pool.total_shares, 100);
     assert_eq!(pool.accounted_balance, 100);
-    assert_eq!(pool.active_staker_count, 0);
     assert_eq!(
       <Assets as Inspect<AccountId>>::balance(TYPE_STAKED_LOCAL, &1),
       100
@@ -1463,8 +1196,6 @@ fn second_stake_into_non_empty_pool_mints_proportional_shares() {
     let pool = Staking::pool(2).expect("pool must exist");
     assert_eq!(pool.total_shares, 150);
     assert_eq!(pool.accounted_balance, 150);
-    assert!(Staking::position(2, 1).is_none());
-    assert!(Staking::position(2, 2).is_none());
     assert_eq!(Staking::stake_value(2, &1), Some(100));
     assert_eq!(Staking::stake_value(2, &2), Some(50));
   });
@@ -1515,12 +1246,11 @@ fn partial_unstake_burns_shares_and_returns_correct_underlying() {
     let pool = Staking::pool(2).expect("pool must exist");
     assert_eq!(pool.total_shares, 150);
     assert_eq!(pool.accounted_balance, 225);
-    assert!(Staking::position(2, 1).is_none());
   });
 }
 
 #[test]
-fn transferred_receipt_holder_can_unstake_without_legacy_position() {
+fn transferred_receipt_holder_can_unstake() {
   const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
@@ -1532,7 +1262,6 @@ fn transferred_receipt_holder_can_unstake_without_legacy_position() {
       40,
       polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
     ));
-    assert_eq!(Staking::position(2, 2), None);
     let before = <Assets as Inspect<AccountId>>::balance(2, &2);
     assert_ok!(Staking::unstake(RuntimeOrigin::signed(2), 2, 40));
     let after = <Assets as Inspect<AccountId>>::balance(2, &2);
@@ -1545,7 +1274,7 @@ fn transferred_receipt_holder_can_unstake_without_legacy_position() {
 }
 
 #[test]
-fn full_exit_removes_position_cleanly() {
+fn full_receipt_exit_clears_pool_totals() {
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
     assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 2, 100));
@@ -1553,8 +1282,6 @@ fn full_exit_removes_position_cleanly() {
     let pool = Staking::pool(2).expect("pool must exist");
     assert_eq!(pool.total_shares, 0);
     assert_eq!(pool.accounted_balance, 0);
-    assert_eq!(pool.active_staker_count, 0);
-    assert!(Staking::position(2, 1).is_none());
   });
 }
 
@@ -1609,13 +1336,12 @@ fn recover_unowned_pool_transfers_balance_and_unblocks_first_stake() {
       amount: 100,
     }));
     assert_ok!(Staking::stake(RuntimeOrigin::signed(1), 2, 100));
-    assert!(Staking::position(2, 1).is_none());
     assert_eq!(Staking::stake_value(2, &1), Some(100));
   });
 }
 
 #[test]
-fn recover_unowned_pool_ignores_stale_legacy_position_count_after_receipt_exit() {
+fn recover_unowned_pool_accepts_prefunding_after_full_receipt_exit() {
   const TYPE_STAKED_LOCAL: AssetId = 0x5000_0000 | 2;
   new_test_ext().execute_with(|| {
     assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 2));
@@ -1629,7 +1355,6 @@ fn recover_unowned_pool_ignores_stale_legacy_position_count_after_receipt_exit()
     ));
     assert_ok!(Staking::unstake(RuntimeOrigin::signed(2), 2, 100));
     assert_eq!(Staking::pool(2).expect("pool must exist").total_shares, 0);
-    assert!(Staking::position(2, 1).is_none());
     let pool_account = Staking::pool_account_for(2);
     assert_ok!(<Assets as Mutate<AccountId>>::transfer(
       2,

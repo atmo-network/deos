@@ -256,6 +256,27 @@ Router failures expose stable classes for direct callers and Actor mapping.
 
 The public error enum may retain finer variants. Every variant maps exhaustively to one class. New variants fail compilation or conformance until classified. Unknown errors remain Permanent.
 
+Router execution preserves one internal typed value until the signed-dispatch boundary:
+
+```rust
+pub enum RetryClass { Permanent, RetryLater }
+
+pub struct AdapterFailure {
+    dispatch_error: DispatchError,
+    failure_class: FailureClass,
+    retry_class: RetryClass,
+}
+
+pub enum ExecutionError<T> {
+    Router(Error<T>),
+    Adapter(AdapterFailure),
+}
+```
+
+`ExecutionError::failure_class()` and `ExecutionError::retry_class()` delegate to the concrete Router variant or adapter value independently. Conversion to `DispatchError` occurs only in the signed extrinsic; pallet-to-pallet callers receive `ExecutionError`. Unknown external failures construct `AdapterFailure` with `InvariantViolation` and `Permanent`, never a temporary wildcard.
+
+Quote-time and execution-time adapter failures use the same cause constructors. An adapter must select a typed cause before returning across the Router host boundary; Router and Actors do not reconstruct retry policy from an erased `DispatchError`.
+
 ## Route Weight Classes
 
 ```rust
@@ -282,7 +303,7 @@ Actor admission uses the maximum Router Weight class reachable by the authored s
 
 `FeeRoutingAdapter` exposes preflight when the host can provide it and one transactional fee transfer. `AddressEventIngress` remains the certified host boundary for any balance movement that claims Actor ingress.
 
-Every adapter method documents whether failure is state-dependent or configuration/invariant failure so the Router taxonomy remains exhaustive.
+Every fallible adapter method that can participate in quote or execution returns `AdapterFailure` rather than bare `DispatchError`. The adapter selects the concrete boundary and retry disposition from host truth; state-dependent absence/capacity may return `RetryLater`, configuration/invariant failures return `Permanent`, and unrecognized host errors fail closed as Permanent. Read-only absence represented by `Option` remains valid only where absence itself has one unambiguous policy.
 
 ## Storage Contract
 
@@ -293,7 +314,7 @@ Router consensus storage remains bounded to:
 | `RouterFee` | One fee rate bounded by `MaxRouterFee`. |
 | `LpPairByTokenId` | Bounded reverse index to one canonical ordered pool pair. |
 
-`try_state` proves the fee bound, canonical pair ordering, reverse-index consistency with the host pool registry where available, and LP-token collision freedom. The Router stores no route cache, quote cache, unbounded path, execution history, or Oracle history.
+Package `try_state` proves the fee bound, canonical pair ordering, and one-to-one LP-token/pair ownership visible in Router storage. Runtime integration checks own existence and exact agreement with the host pool registry; the package does not claim cross-pallet proof. The Router stores no route cache, quote cache, unbounded path, execution history, or Oracle history.
 
 ## Public Calls and Runtime APIs
 
@@ -305,7 +326,7 @@ Bounded quote runtime APIs return the current projection shape and state identit
 
 ## Compatibility and Upgrade Contract
 
-The current pre-launch release retains the `pallet_deos_router` Rust crate and runtime pallet identity, pallet index, call indices, and storage prefixes. Public semantic changes land as one coherent ABI before launch; no deprecated alias or dual event/API surface is added.
+The pre-launch contract retains the `pallet_deos_router` Rust crate and runtime pallet identity, pallet index, call indices, and storage prefixes. `PreparedRoute` is a public Rust conformance type for deterministic package tooling but remains absent from calls, events, storage, and runtime APIs. Public semantic changes land as one coherent ABI before launch; no deprecated alias or dual event/API surface is added.
 
 A downstream launched chain owns migrations and monotonic runtime-version changes. This repository's pre-launch baseline may reset storage versions and generated metadata coherently.
 
@@ -356,7 +377,6 @@ A quote projection may equal the later prepared route only when its bound state 
 - Benchmarks measure RefTime and ProofSize for every route Weight class at worst-case bounded occupancy.
 - Metadata and client checks reject stale route types, errors, events, outcomes, and Weight identities.
 - Workspace Clippy passes for all targets with warnings denied.
-- Production Wasm, Router release evidence, documentation, wiki, and repository completion gates pass before release.
 
 ## Non-Goals
 
