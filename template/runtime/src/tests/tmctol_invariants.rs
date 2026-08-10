@@ -7,10 +7,10 @@
 //! Cross-reference: /docs/testing.simulator-runtime-mapping.en.md
 
 use super::common::{
-  ALICE, ASSET_A, BOB, CHARLIE, SWAP_AMOUNT, seeded_test_ext, setup_axial_router_infrastructure,
+  ALICE, ASSET_A, BOB, CHARLIE, SWAP_AMOUNT, seeded_test_ext, setup_deos_router_infrastructure,
 };
 use crate::{
-  Assets, AxialRouter, Balances, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System,
+  Assets, Balances, DeosRouter, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System,
   TokenMintingCurve,
 };
 use pallet_deos_actors::AssetOps;
@@ -89,7 +89,7 @@ fn tmc_mint_conservation_exact() {
 fn tol_balances_monotonic_under_user_operations() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(setup_axial_router_infrastructure());
+    assert_ok!(setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     // Get LP asset for the pool
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
@@ -113,7 +113,7 @@ fn tol_balances_monotonic_under_user_operations() {
     let before = tol_bucket_lp_balances(lp_id);
     // Run 10 user swaps — these must never touch TOL buckets
     for _ in 0..10 {
-      let _ = AxialRouter::swap(
+      let _ = DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Native,
         foreign,
@@ -122,7 +122,7 @@ fn tol_balances_monotonic_under_user_operations() {
         ALICE,
         System::block_number().saturating_add(100),
       );
-      let _ = AxialRouter::swap(
+      let _ = DeosRouter::swap(
         RuntimeOrigin::signed(BOB),
         foreign,
         AssetKind::Native,
@@ -152,7 +152,7 @@ fn tol_balances_monotonic_under_user_operations() {
 fn floor_price_proxy_after_tol_accumulation() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(setup_axial_router_infrastructure());
+    assert_ok!(setup_deos_router_infrastructure());
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
     // 1. Create BLDR pool and activate ZM so TOL accumulates as LP
@@ -189,7 +189,7 @@ fn floor_price_proxy_after_tol_accumulation() {
     assert_ok!(
       <crate::Assets as FungiblesMutate<crate::AccountId>>::mint_into(bldr_id, &ALICE, dump_amount)
     );
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       bldr_asset,
       AssetKind::Native,
@@ -254,13 +254,13 @@ fn native_issuance_deflation_after_burn_cycle() {
 #[test]
 fn router_round_trip_never_creates_value() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(setup_axial_router_infrastructure());
+    assert_ok!(setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let initial_native = Balances::free_balance(&ALICE);
     let initial_foreign = Assets::balance(ASSET_A, &ALICE);
     // Leg 1: Native -> Foreign
     let swap1_amount = SWAP_AMOUNT;
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE.clone()),
       AssetKind::Native,
       foreign,
@@ -273,7 +273,7 @@ fn router_round_trip_never_creates_value() {
     let acquired = foreign_after_1.saturating_sub(initial_foreign);
     assert!(acquired > 0, "First leg must produce positive output");
     // Leg 2: Foreign -> Native (round-trip)
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE.clone()),
       foreign,
       AssetKind::Native,
@@ -307,7 +307,7 @@ fn router_round_trip_never_creates_value() {
 fn heavy_use_invariants_preserved() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(setup_axial_router_infrastructure());
+    assert_ok!(setup_deos_router_infrastructure());
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
     let foreign = AssetKind::Local(ASSET_A);
@@ -333,7 +333,7 @@ fn heavy_use_invariants_preserved() {
       match op % 5 {
         // Swap Native -> Foreign
         0 => {
-          let _ = AxialRouter::swap(
+          let _ = DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             AssetKind::Native,
             foreign,
@@ -345,7 +345,7 @@ fn heavy_use_invariants_preserved() {
         }
         // Swap Foreign -> Native
         1 => {
-          let _ = AxialRouter::swap(
+          let _ = DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             foreign,
             AssetKind::Native,
@@ -435,7 +435,7 @@ fn heavy_use_invariants_preserved() {
       diff
     );
     // 4. System must still be operational (liveness)
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       foreign,

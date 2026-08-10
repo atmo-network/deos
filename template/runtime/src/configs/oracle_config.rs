@@ -11,15 +11,15 @@ use primitives::{
   OracleProvenance, ecosystem,
 };
 
-use super::axial_router_config::{AxialRouterEmaHalfLife, AxialRouterPalletId};
+use super::deos_router_config::{DeosRouterEmaHalfLife, RouterPalletId};
 
-pub const AXIAL_ROUTER_ORACLE_SCALE: u8 = 12;
-pub const AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
+pub const DEOS_ROUTER_ORACLE_SCALE: u8 = 12;
+pub const DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS: u32 = 500;
 
 /// Closed runtime inventory of publishers certified to create Actors observation ingress.
 pub const ACTORS_OBSERVATION_PUBLISHER_INVENTORY: &[&str] = &["DEOS Oracle::OnObservationChanged"];
 
-pub const fn axial_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
+pub const fn deos_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
   OracleFeedId::directional_local_pool_price(
     asset_in,
     asset_out,
@@ -27,12 +27,12 @@ pub const fn axial_router_pool_feed(asset_in: AssetKind, asset_out: AssetKind) -
     OracleAggregationId::Ema {
       half_life_blocks: ecosystem::params::EMA_HALF_LIFE_BLOCKS,
     },
-    AXIAL_ROUTER_ORACLE_SCALE,
+    DEOS_ROUTER_ORACLE_SCALE,
   )
 }
 
 #[transactional]
-pub(crate) fn ensure_axial_router_pool_feeds(
+pub(crate) fn ensure_deos_router_pool_feeds(
   asset_a: AssetKind,
   asset_b: AssetKind,
 ) -> DispatchResult {
@@ -40,31 +40,31 @@ pub(crate) fn ensure_axial_router_pool_feeds(
     asset_a != asset_b,
     DispatchError::Other("Identical oracle feed assets")
   );
-  let forward = axial_router_pool_feed(asset_a, asset_b);
+  let forward = deos_router_pool_feed(asset_a, asset_b);
   let reverse = forward.reverse();
-  let producer: AccountId = AxialRouterPalletId::get().into_account_truncating();
+  let producer: AccountId = RouterPalletId::get().into_account_truncating();
   let current = pallet_oracle::ProducerFeeds::<Runtime>::get(&producer).len() as u32;
   let missing = u32::from(!pallet_oracle::Feeds::<Runtime>::contains_key(forward)).saturating_add(
     u32::from(!pallet_oracle::Feeds::<Runtime>::contains_key(reverse)),
   );
   ensure!(
-    current.saturating_add(missing) <= AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS.saturating_mul(2),
+    current.saturating_add(missing) <= DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS.saturating_mul(2),
     DispatchError::Other("DEOS Router pool feed capacity reached")
   );
-  ensure_axial_router_feed(forward)?;
-  ensure_axial_router_feed(reverse)
+  ensure_deos_router_feed(forward)?;
+  ensure_deos_router_feed(reverse)
 }
 
-fn ensure_axial_router_feed(feed: OracleFeedId) -> DispatchResult {
-  let producer: AccountId = AxialRouterPalletId::get().into_account_truncating();
+fn ensure_deos_router_feed(feed: OracleFeedId) -> DispatchResult {
+  let producer: AccountId = RouterPalletId::get().into_account_truncating();
   let aggregation = Aggregation::Ema {
-    half_life_blocks: AxialRouterEmaHalfLife::get(),
+    half_life_blocks: DeosRouterEmaHalfLife::get(),
   };
   let expected = FeedConfig {
     producer: producer.clone(),
     meaning: feed.meaning(),
-    provenance: OracleProvenance::AxialRouterPreExecutionReserves,
-    scale: AXIAL_ROUTER_ORACLE_SCALE,
+    provenance: OracleProvenance::DeosRouterPreExecutionReserves,
+    scale: DEOS_ROUTER_ORACLE_SCALE,
     aggregation,
     zero_policy: ZeroPolicy::Reject,
     lifecycle: FeedLifecycle::Active,
@@ -81,8 +81,8 @@ fn ensure_axial_router_feed(feed: OracleFeedId) -> DispatchResult {
     feed,
     producer,
     feed.meaning(),
-    OracleProvenance::AxialRouterPreExecutionReserves,
-    AXIAL_ROUTER_ORACLE_SCALE,
+    OracleProvenance::DeosRouterPreExecutionReserves,
+    DEOS_ROUTER_ORACLE_SCALE,
     aggregation,
     ZeroPolicy::Reject,
     false,

@@ -8,21 +8,20 @@
 
 use super::common::{
   ALICE, ASSET_A, BOB, CHARLIE, DAVE, EVE, INITIAL_BALANCE, SWAP_AMOUNT,
-  publish_axial_router_observation, setup_axial_router_infrastructure,
-  setup_basic_test_environment,
+  publish_deos_router_observation, setup_basic_test_environment, setup_deos_router_infrastructure,
 };
-use crate::configs::axial_router_config::{BurningManagerAccount, FeeManagerImpl};
-use crate::{AccountId, Assets, AxialRouter, Balances, Runtime, RuntimeOrigin, System};
-use pallet_axial_router::FeeRoutingAdapter;
+use crate::configs::deos_router_config::{BurningManagerAccount, FeeManagerImpl};
+use crate::{AccountId, Assets, Balances, DeosRouter, Runtime, RuntimeOrigin, System};
+use pallet_deos_router::FeeRoutingAdapter;
 
 use polkadot_sdk::frame_support::traits::fungibles::{Inspect, Mutate};
 use polkadot_sdk::frame_support::traits::{Currency, Get};
 use polkadot_sdk::frame_support::{assert_noop, assert_ok};
 use primitives::AssetKind;
 
-/// Helper function for axial router account
-fn axial_router_account() -> crate::AccountId {
-  AxialRouter::account_id()
+/// Helper function for deos router account
+fn deos_router_account() -> crate::AccountId {
+  DeosRouter::account_id()
 }
 
 /// Helper function for burning manager account
@@ -36,8 +35,8 @@ fn setup_load_test_environment() -> polkadot_sdk::sp_io::TestExternalities {
   ext.execute_with(|| {
     // Initialize system
     System::set_block_number(1);
-    assert_ok!(setup_axial_router_infrastructure());
-    // Standard assets and pools are already set up by setup_axial_router_infrastructure
+    assert_ok!(setup_deos_router_infrastructure());
+    // Standard assets and pools are already set up by setup_deos_router_infrastructure
   });
   ext
 }
@@ -69,7 +68,7 @@ fn test_high_throughput_swap_operations() {
           3 => (AssetKind::Local(ASSET_A), AssetKind::Native),
           _ => unreachable!(),
         };
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(user.clone()),
           asset_pair.0,
           asset_pair.1,
@@ -114,7 +113,7 @@ fn test_stress_large_transaction_volumes() {
       System::set_block_number(start_block + block_offset);
       // Large swaps that stress the system
       for _ in 0..3 {
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(ALICE),
           AssetKind::Native,
           AssetKind::Local(ASSET_A),
@@ -123,7 +122,7 @@ fn test_stress_large_transaction_volumes() {
           ALICE,
           System::block_number() + 100,
         ));
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(BOB.clone()),
           AssetKind::Local(ASSET_A),
           AssetKind::Native,
@@ -157,7 +156,7 @@ fn test_concurrent_operations_robustness() {
     // Test FeeManager directly with concurrent fee collection to isolate buffer behavior while the
     // router already uses the live AssetConversion adapter for swaps
     let fee_amount = SWAP_AMOUNT * 5; // Use larger fee amount to ensure buffer accumulation
-    let router_account = axial_router_account();
+    let router_account = deos_router_account();
 
     // Simulate concurrent fee collection from multiple operations
     // Use Option<u32> where None represents Native asset
@@ -177,7 +176,7 @@ fn test_concurrent_operations_robustness() {
     if router_native_balance < crate::EXISTENTIAL_DEPOSIT * 10 {
       assert_ok!(Balances::transfer_allow_death(
         RuntimeOrigin::signed(ALICE),
-        polkadot_sdk::sp_runtime::MultiAddress::Id(axial_router_account()),
+        polkadot_sdk::sp_runtime::MultiAddress::Id(deos_router_account()),
         crate::EXISTENTIAL_DEPOSIT * 10
       ));
     }
@@ -204,7 +203,7 @@ fn test_concurrent_operations_robustness() {
           assert_ok!(Assets::mint(
             RuntimeOrigin::signed(ALICE),
             id,
-            polkadot_sdk::sp_runtime::MultiAddress::Id(axial_router_account()),
+            polkadot_sdk::sp_runtime::MultiAddress::Id(deos_router_account()),
             amount
           ));
           AssetKind::Local(id)
@@ -275,7 +274,7 @@ fn test_memory_and_storage_efficiency() {
       System::set_block_number(block);
       // Regular swap operations
       for _ in 0..1 {
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(ALICE.clone()),
           AssetKind::Native,
           AssetKind::Local(ASSET_A),
@@ -326,7 +325,7 @@ fn test_economic_properties_under_load() {
             1 => (AssetKind::Local(ASSET_A), AssetKind::Native),
             _ => unreachable!(),
           };
-          assert_ok!(AxialRouter::swap(
+          assert_ok!(DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             asset_in,
             asset_out,
@@ -370,7 +369,7 @@ fn test_system_recovery_after_load() {
       System::set_block_number(block);
       // High-frequency operations
       for _ in 0..2 {
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(ALICE.clone()),
           AssetKind::Native,
           AssetKind::Local(ASSET_A),
@@ -386,7 +385,7 @@ fn test_system_recovery_after_load() {
     for block in 4..=6 {
       System::set_block_number(block);
       // Normal operations
-      assert_ok!(AxialRouter::swap(
+      assert_ok!(DeosRouter::swap(
         RuntimeOrigin::signed(BOB.clone()),
         AssetKind::Local(ASSET_A),
         AssetKind::Native,
@@ -476,7 +475,7 @@ fn test_multi_user_concurrent_chaos() {
       match operation_type {
         0 => {
           // Swap: Asset A -> Native
-          let _ = AxialRouter::swap(
+          let _ = DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             AssetKind::Local(ASSET_A),
             AssetKind::Native,
@@ -488,7 +487,7 @@ fn test_multi_user_concurrent_chaos() {
         }
         1 => {
           // Mint via TMC (simulated via direct mint call if accessible, or swap Native->AssetA)
-          let _ = AxialRouter::swap(
+          let _ = DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             AssetKind::Local(ASSET_A),
             AssetKind::Native,
@@ -500,7 +499,7 @@ fn test_multi_user_concurrent_chaos() {
         }
         2 => {
           // "Burn" via high fee swap
-          let _ = AxialRouter::swap(
+          let _ = DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             AssetKind::Local(ASSET_A),
             AssetKind::Native,
@@ -537,7 +536,7 @@ fn test_multi_user_concurrent_chaos() {
 
     // Verify System Liveness
     // Check that the system is still operational after chaos
-    let _ = AxialRouter::swap(
+    let _ = DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Local(ASSET_A),
       AssetKind::Native,
@@ -558,7 +557,7 @@ fn test_flash_loan_like_single_block_roundtrip_has_no_profit_extraction() {
     let amount_in = SWAP_AMOUNT.saturating_mul(20);
     let initial_native = Balances::free_balance(&attacker);
     let initial_asset = Assets::balance(ASSET_A, &attacker);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(attacker.clone()),
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
@@ -573,7 +572,7 @@ fn test_flash_loan_like_single_block_roundtrip_has_no_profit_extraction() {
       roundtrip_input > 0,
       "First leg must produce positive output for the roundtrip"
     );
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(attacker.clone()),
       AssetKind::Local(ASSET_A),
       AssetKind::Native,
@@ -604,13 +603,13 @@ fn test_oracle_manipulation_resistance_rejects_deviated_quote() {
     System::set_block_number(1);
     // Inject strongly deviated EMA quote to emulate manipulation/stale oracle state
     let manipulated_price = 10_000_000_000_000u128;
-    assert_ok!(publish_axial_router_observation(
+    assert_ok!(publish_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       manipulated_price,
     ));
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Native,
         AssetKind::Local(ASSET_A),
@@ -619,10 +618,10 @@ fn test_oracle_manipulation_resistance_rejects_deviated_quote() {
         ALICE,
         System::block_number() + 100,
       ),
-      pallet_axial_router::Error::<Runtime>::PriceDeviationExceeded
+      pallet_deos_router::Error::<Runtime>::PriceDeviationExceeded
     );
     // Restore fair EMA and verify swap path becomes available again
-    let feed = crate::configs::oracle_config::axial_router_pool_feed(
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
     );
@@ -634,7 +633,7 @@ fn test_oracle_manipulation_resistance_rejects_deviated_quote() {
         revision: 2,
       },
     );
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       AssetKind::Local(ASSET_A),

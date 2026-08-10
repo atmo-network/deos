@@ -333,8 +333,8 @@ export class BlockchainObservationReader {
           : {
               producer: config.producer,
               provenance:
-                config.provenance.type === 'AxialRouterPreExecutionReserves'
-                  ? 'AxialRouterPreExecutionReserves'
+                config.provenance.type === 'DeosRouterPreExecutionReserves'
+                  ? 'DeosRouterPreExecutionReserves'
                   : (() => {
                       throw new Error(
                         `Unsupported observation provenance: ${config.provenance.type}`,

@@ -589,10 +589,10 @@ impl pallet_governance::ProposalPayloadExecutor<AccountId, AssetId, u32, Hash>
         let call = RuntimeCall::decode(&mut &bytes[..])
           .map_err(|_| pallet_governance::ProposalExecutionFailureReason::InvalidPreimage)?;
         match call {
-          RuntimeCall::AxialRouter(pallet_axial_router::Call::update_router_fee { new_fee })
+          RuntimeCall::DeosRouter(pallet_deos_router::Call::update_router_fee { new_fee })
             if domain == protocol_governance_domain() =>
           {
-            crate::AxialRouter::apply_router_fee_update(new_fee)
+            crate::DeosRouter::apply_router_fee_update(new_fee)
               .map(
                 |_| pallet_governance::ProposalExecutionReceipt::ParameterChangeExecuted {
                   surface: pallet_governance::ProposalParameterChangeSurface::RouterFee,

@@ -1,6 +1,6 @@
 # pallet-deos-router
 
-`pallet-deos-router` (Rust crate `pallet_axial_router`) is the DEOS deterministic routing and swap pallet for the current TMCTOL route families.
+`pallet-deos-router` (Rust crate `pallet_deos_router`) is the DEOS deterministic routing and swap pallet for the current TMCTOL route families.
 
 ## Scope
 

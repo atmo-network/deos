@@ -196,7 +196,7 @@ async function main() {
     }
 
     if (!tracked.some((asset) => asset.type === 'Foreign' && asset.value === FOREIGN_ID)) {
-      throw new Error(`Foreign asset ${FOREIGN_ID} is not tracked by AxialRouter. Regenerate the local chain spec with the current runtime presets before running this seed script.`);
+      throw new Error(`Foreign asset ${FOREIGN_ID} is not tracked by DeosRouter. Regenerate the local chain spec with the current runtime presets before running this seed script.`);
     }
     console.log('\n== tracked assets ==\nforeign asset already tracked from genesis bootstrap');
 

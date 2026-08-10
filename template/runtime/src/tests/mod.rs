@@ -7,9 +7,9 @@ pub mod asset_conversion_integration_tests;
 #[cfg(test)]
 pub mod asset_registry_integration_tests;
 #[cfg(test)]
-pub mod axial_router_integration_tests;
-#[cfg(test)]
 pub mod common;
+#[cfg(test)]
+pub mod deos_router_integration_tests;
 #[cfg(test)]
 pub mod economic_metrics;
 #[cfg(test)]

@@ -177,7 +177,7 @@ pub const ACTORS_ADDRESS_EVENT_PRODUCER_INVENTORY: &[AddressEventProducer] = &[
     weight_owner: "TMC distribution generated weights",
   },
   AddressEventProducer {
-    id: "AxialRouter::route_fee",
+    id: "DeosRouter::route_fee",
     credited_surface: "Burn Actor sovereign",
     source_provenance: "Fee payer / InternalProtocol",
     preflight_owner: "FeeManagerImpl::route_fee preflight",

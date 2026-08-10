@@ -146,7 +146,7 @@ class MarketStore {
       const quote = await adapter.getQuoteBuy(foreignAmount);
       if (requestId === this.quoteRequestId) {
         this.quoteView = quote
-          ? fromRuntimeView(quote, 'AxialRouter.quote_exact_input', {
+          ? fromRuntimeView(quote, 'DeosRouter.quote_exact_input', {
               asOfBlock: this.snapshot()?.blockNumber ?? undefined,
             })
           : null;
@@ -171,7 +171,7 @@ class MarketStore {
       const quote = await adapter.getQuoteSell(nativeAmount);
       if (requestId === this.quoteRequestId) {
         this.quoteView = quote
-          ? fromRuntimeView(quote, 'AxialRouter.quote_exact_input', {
+          ? fromRuntimeView(quote, 'DeosRouter.quote_exact_input', {
               asOfBlock: this.snapshot()?.blockNumber ?? undefined,
             })
           : null;

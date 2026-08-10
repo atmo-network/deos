@@ -30,30 +30,30 @@ pub const DAVE: AccountId = AccountId::new([4u8; 32]);
 pub const EVE: AccountId = AccountId::new([5u8; 32]);
 
 // DEOS Router account from pallet configuration
-pub fn axial_router_account() -> AccountId {
-  crate::AxialRouter::account_id()
+pub fn deos_router_account() -> AccountId {
+  crate::DeosRouter::account_id()
 }
 
-pub fn publish_axial_router_observation(
+pub fn publish_deos_router_observation(
   asset_in: AssetKind,
   asset_out: AssetKind,
   value: Balance,
 ) -> DispatchResult {
-  crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out)?;
+  crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out)?;
   Oracle::publish(
-    RuntimeOrigin::signed(axial_router_account()),
-    crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out),
+    RuntimeOrigin::signed(deos_router_account()),
+    crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out),
     value,
   )
 }
 
-pub fn publish_bidirectional_axial_router_observation(
+pub fn publish_bidirectional_deos_router_observation(
   asset_a: AssetKind,
   asset_b: AssetKind,
   value: Balance,
 ) -> DispatchResult {
-  publish_axial_router_observation(asset_a, asset_b, value)?;
-  publish_axial_router_observation(asset_b, asset_a, value)
+  publish_deos_router_observation(asset_a, asset_b, value)?;
+  publish_deos_router_observation(asset_b, asset_a, value)
 }
 
 // Standard test constants
@@ -137,7 +137,7 @@ pub fn new_test_ext() -> TestExternalities {
   .assimilate_storage(&mut t)
   .unwrap();
   // Pallet genesis configs: anchored runtime-topology accounts + tracked assets
-  pallet_axial_router::GenesisConfig::<Runtime>::default()
+  pallet_deos_router::GenesisConfig::<Runtime>::default()
     .assimilate_storage(&mut t)
     .unwrap();
   pallet_tmc::GenesisConfig::<Runtime> {
@@ -216,7 +216,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
     }
     // Add native token deposits for system accounts to enable asset operations
     let system_accounts = vec![
-      axial_router_account(),
+      deos_router_account(),
       burning_manager_account(),
       liquidity_actor_account(),
       actor_fee_sink_account(),
@@ -232,7 +232,7 @@ pub fn setup_basic_test_environment() -> TestExternalities {
       CHARLIE,
       DAVE,
       EVE,
-      axial_router_account(),
+      deos_router_account(),
       burning_manager_account(),
       liquidity_actor_account(),
       tmc_pallet_account(),
@@ -489,7 +489,7 @@ pub fn get_pool_lp_asset(asset1: AssetKind, asset2: AssetKind) -> AssetKind {
 }
 
 /// Sets up the asset conversion infrastructure used by DEOS Router tests.
-pub fn setup_axial_router_infrastructure() -> Result<(), &'static str> {
+pub fn setup_deos_router_infrastructure() -> Result<(), &'static str> {
   use crate::configs::AssetKind;
   // Create single pool for native ↔ asset pair used by tests
   // Using single pool to avoid "InUse" errors from Assets pallet in test environment

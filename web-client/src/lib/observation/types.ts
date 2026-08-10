@@ -33,7 +33,7 @@ export type ObservationInspection = {
   status: ObservationCurrentStatus;
   lifecycle: 'Active' | 'Paused' | 'Deactivated' | 'Unavailable';
   producer: string | null;
-  provenance: 'AxialRouterPreExecutionReserves' | 'Unavailable';
+  provenance: 'DeosRouterPreExecutionReserves' | 'Unavailable';
   aggregation: ObservationAggregation;
   scale: number;
   value: bigint | null;

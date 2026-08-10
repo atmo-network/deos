@@ -9,7 +9,7 @@ polkadot_sdk::frame_benchmarking::define_benchmarks!(
   [cumulus_pallet_xcmp_queue, XcmpQueue]
   [cumulus_pallet_weight_reclaim, WeightReclaim]
   [pallet_xcm, pallet_xcm::benchmarking::Pallet::<Runtime>]
-  [pallet_axial_router, AxialRouter]
+  [pallet_deos_router, DeosRouter]
   [pallet_tmc, TokenMintingCurve]
   [pallet_asset_registry, AssetRegistry]
   [pallet_governance, Governance]

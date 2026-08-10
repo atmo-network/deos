@@ -112,7 +112,7 @@ pub enum OracleMeaning {
   Clone, Debug, Decode, DecodeWithMemTracking, Encode, Eq, MaxEncodedLen, PartialEq, TypeInfo,
 )]
 pub enum OracleProvenance {
-  AxialRouterPreExecutionReserves,
+  DeosRouterPreExecutionReserves,
 }
 
 #[cfg(feature = "runtime-benchmarks")]
@@ -142,7 +142,7 @@ impl Default for OracleMeaning {
 #[cfg(feature = "runtime-benchmarks")]
 impl Default for OracleProvenance {
   fn default() -> Self {
-    Self::AxialRouterPreExecutionReserves
+    Self::DeosRouterPreExecutionReserves
   }
 }
 

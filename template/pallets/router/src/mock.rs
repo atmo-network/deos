@@ -1,4 +1,4 @@
-use crate as pallet_axial_router;
+use crate as pallet_deos_router;
 
 use polkadot_sdk::frame_support::traits::fungible::Mutate as FungibleMutate;
 use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
@@ -130,7 +130,7 @@ construct_runtime!(
     // We don't strictly need real AssetConversion pallet since we mock the adapter,
     // but keeping it doesn't hurt if we want types from it.
     AssetConversion: polkadot_sdk::pallet_asset_conversion,
-    AxialRouter: pallet_axial_router,
+    DeosRouter: pallet_deos_router,
   }
 );
 
@@ -300,7 +300,7 @@ impl Get<PalletId> for PalletIdStub {
 // MOCK IMPLEMENTATIONS
 
 pub struct MockTmcPallet;
-impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
+impl pallet_deos_router::types::TmcInterface<u64, u128> for MockTmcPallet {
   fn has_curve(asset: AssetKind) -> bool {
     TMC_RATES.with(|r| r.borrow().contains_key(&asset))
   }
@@ -375,7 +375,7 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
 }
 
 pub struct MockFeeAdapter;
-impl pallet_axial_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter {
+impl pallet_deos_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter {
   fn route_fee(who: &u64, asset: AssetKind, amount: u128) -> Result<(), DispatchError> {
     if FORCE_FEE_FAILURE.with(|flag| *flag.borrow()) {
       return Err(DispatchError::Other("Forced fee routing failure"));
@@ -410,7 +410,7 @@ impl pallet_axial_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter
 }
 
 pub struct MockPriceOracle;
-impl pallet_axial_router::types::PriceOracle<u128> for MockPriceOracle {
+impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
   fn update_ema_price(
     asset_in: AssetKind,
     asset_out: AssetKind,
@@ -443,7 +443,7 @@ impl pallet_axial_router::types::PriceOracle<u128> for MockPriceOracle {
 
 // Adapter for AssetConversionApi
 pub struct MockAssetConversionAdapter;
-impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConversionAdapter {
+impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConversionAdapter {
   fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
     POOLS.with(|p| {
       let pools = p.borrow();
@@ -653,7 +653,7 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
 pub struct RouterFeeStub;
 impl Get<Perbill> for RouterFeeStub {
   fn get() -> Perbill {
-    primitives::ecosystem::params::AXIAL_ROUTER_FEE
+    primitives::ecosystem::params::DEOS_ROUTER_FEE
   }
 }
 
@@ -667,11 +667,11 @@ impl Get<Perbill> for MaxPriceDeviationStub {
 pub struct MaxRouterFeeStub;
 impl Get<Perbill> for MaxRouterFeeStub {
   fn get() -> Perbill {
-    primitives::ecosystem::params::MAX_AXIAL_ROUTER_FEE
+    primitives::ecosystem::params::MAX_DEOS_ROUTER_FEE
   }
 }
 
-impl pallet_axial_router::Config for Test {
+impl pallet_deos_router::Config for Test {
   type AdminOrigin = polkadot_sdk::frame_system::EnsureRoot<u64>;
   type Currency = Balances;
   type Assets = Assets;
@@ -692,16 +692,14 @@ impl pallet_axial_router::Config for Test {
   type MinSwapForeign = ConstU128<{ primitives::ecosystem::params::MIN_SWAP_FOREIGN }>;
   type WeightInfo = ();
   #[cfg(feature = "runtime-benchmarks")]
-  type BenchmarkHelper = AxialRouterBenchmarkHelper;
+  type BenchmarkHelper = DeosRouterBenchmarkHelper;
 }
 
 #[cfg(feature = "runtime-benchmarks")]
-pub struct AxialRouterBenchmarkHelper;
+pub struct DeosRouterBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl crate::types::BenchmarkHelper<primitives::AssetKind, u64, u128>
-  for AxialRouterBenchmarkHelper
-{
+impl crate::types::BenchmarkHelper<primitives::AssetKind, u64, u128> for DeosRouterBenchmarkHelper {
   fn create_asset(asset: primitives::AssetKind) -> polkadot_sdk::sp_runtime::DispatchResult {
     if let primitives::AssetKind::Local(id) | primitives::AssetKind::Foreign(id) = asset {
       let _ = Assets::force_create(frame_system::RawOrigin::Root.into(), id, 1, true, 1);

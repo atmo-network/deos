@@ -1,13 +1,13 @@
 # DEOS Router: Minimalist Multi-Token Routing Architecture
 
-> **On-Chain Account** (PalletId: `axialrt0`)
+> **On-Chain Account** (PalletId: `router00`)
 >
-> - SS58: `5EYCAe5fjMgntj8Tch49FZ3RXMR1XiQbrSA1z2oYgQAiXukN`
-> - Hex: `0x6d6f646c617869616c7274300000000000000000000000000000000000000000`
+> - SS58: `5EYCAe5j8X3dxkxG3NE9Yzf561FKmh4XYPRgrjz26bNojgZ6`
+> - Hex: `0x6d6f646c726f7574657230300000000000000000000000000000000000000000`
 
 ## Executive Summary
 
-DEOS Router is a specialized `Deterministic Economic Automaton` designed for TMC (Token Minting Curve) ecosystems. Unlike general-purpose aggregators, it operates as a strict `Decision Engine` atop the parachain's internal liquidity. Its Cargo package is `pallet-deos-router` at `template/pallets/router`; the Rust crate and runtime API retain the stable `pallet_axial_router` identity.
+DEOS Router is a specialized `Deterministic Economic Automaton` designed for TMC (Token Minting Curve) ecosystems. Unlike general-purpose aggregators, it operates as a strict `Decision Engine` atop the parachain's internal liquidity. Its Cargo package is `pallet-deos-router` at `template/pallets/router`; the Rust crate and runtime API retain the stable `pallet_deos_router` identity.
 
 It enforces a `Mechanism-Over-Policy` routing rule: it evaluates every viable path and always selects the route that delivers the most output to the recipient, arbitrating between Market Liquidity (XYK pools) and Protocol Liquidity (TMC curves), using the Native token as the sole multi-hop anchor.
 
@@ -299,9 +299,9 @@ All constants are sourced from `primitives::ecosystem` — single source of trut
 
 | Constant | Value | Source |
 | --- | --- | --- |
-| `PalletId` | `*b"axialrt0"` | `ecosystem::pallet_ids::AXIAL_ROUTER_PALLET_ID` |
-| `DefaultRouterFee` | `Perbill::from_parts(5_000_000)` (0.5%) | `ecosystem::params::AXIAL_ROUTER_FEE` |
-| `MaxRouterFee` | `Perbill::from_percent(1)` | `ecosystem::params::MAX_AXIAL_ROUTER_FEE` |
+| `PalletId` | `*b"router00"` | `ecosystem::pallet_ids::ROUTER_PALLET_ID` |
+| `DefaultRouterFee` | `Perbill::from_parts(5_000_000)` (0.5%) | `ecosystem::params::DEOS_ROUTER_FEE` |
+| `MaxRouterFee` | `Perbill::from_percent(1)` | `ecosystem::params::MAX_DEOS_ROUTER_FEE` |
 | `Precision` | `1_000_000_000_000` (10¹²) | `ecosystem::params::PRECISION` |
 | `EmaHalfLife` | `100` blocks (~10 min @ 6s/block) | `ecosystem::params::EMA_HALF_LIFE_BLOCKS` |
 | `MaxPriceDeviation` | `Perbill::from_percent(20)` | `ecosystem::params::MAX_PRICE_DEVIATION` |
@@ -365,7 +365,7 @@ If a future launch line wants wider quote families, multi-scenario simulation, o
 
 ## Runtime Adapters
 
-The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementations:
+The runtime (`deos_router_config.rs`) provides 4 concrete adapter implementations:
 
 | Adapter | Trait | Strategy |
 | --- | --- | --- |
@@ -409,7 +409,7 @@ The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementatio
 
 ### Integration Tests
 
-Located in `runtime/src/tests/axial_router_integration_tests.rs`:
+Located in `runtime/src/tests/deos_router_integration_tests.rs`:
 
 - Basic swap, fee processing, anti-self-taxation, error handling, native token swaps, fee calculation accuracy, minimum amount protection, direct fee processing, consistent fee burning, multiple accumulation cycles, fee collection only on success, path validation, empty pools, events.
 - `Multi-Hop` (3 tests): real ASSET_A → Native → ASSET_B swap with balance verification, fee-collected-once across hops, NoRouteFound when second pool is missing.
@@ -422,13 +422,13 @@ Production `50 × 20` generation measures every semantic route class independent
 
 | Class | RefTime / ProofSize | Reads / Writes |
 | --- | --- | --- |
-| Exact-input direct XYK | `346,139,000 / 9,667` | `25 / 12` |
-| Exact-input direct mint | `362,133,000 / 21,862` | `32 / 14` |
-| Exact-input Native-anchored XYK | `510,967,000 / 19,253` | `36 / 17` |
-| Exact-output direct XYK | `199,051,000 / 6,208` | `10 / 5` |
-| Exact-output Native-anchored XYK | `369,606,000 / 16,644` | `21 / 10` |
+| Exact-input direct XYK | `340,691,000 / 9,667` | `25 / 12` |
+| Exact-input direct mint | `360,526,000 / 21,862` | `32 / 14` |
+| Exact-input Native-anchored XYK | `502,866,000 / 19,253` | `36 / 17` |
+| Exact-output direct XYK | `195,978,000 / 6,208` | `10 / 5` |
+| Exact-output Native-anchored XYK | `365,276,000 / 16,644` | `21 / 10` |
 
-The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `11,384,000 / 1,489`, one read, and one write. Accepted Router weights SHA-256 is `bf81292b97f5ea34382c99e484874cc9a3b176f63537fc1a2b929c2a6d440c78`.
+The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `11,385,000 / 1,489`, one read, and one write. Accepted Router weights SHA-256 is `4e008ea77119a789024d9d2c59d3d67194be29811a26740777fec87edaf37b40`.
 
 The accepted full Actors production generation uses the same maximum for exact-input and exact-output DEX tasks. It measures exact-input at `550,009,000 / 19,253` with 37 reads and 17 writes and exact-output at `551,126,000 / 19,253` with 36 reads and 17 writes. Accepted Actors weights SHA-256 is `552c4564b55ff02ff7b0235dcb79f520fb0075d05e8a2fbdaf85f0ef7d8ae277`.
 

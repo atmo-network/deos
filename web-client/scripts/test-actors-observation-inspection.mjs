@@ -29,7 +29,7 @@ const feed = {
 };
 const config = {
   producer: '5FProducer',
-  provenance: 'AxialRouterPreExecutionReserves',
+  provenance: 'DeosRouterPreExecutionReserves',
   lifecycle: 'Active',
   scale: 12,
   aggregation: { type: 'Ema', halfLifeBlocks: 100 },

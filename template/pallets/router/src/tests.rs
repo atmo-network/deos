@@ -17,7 +17,7 @@ fn assert_last_swap(
   family: RouteFamily,
 ) {
   let record = System::events().pop().expect("swap event exists");
-  let RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+  let RuntimeEvent::DeosRouter(crate::Event::SwapExecuted {
     who: actual_who,
     from: actual_from,
     to: actual_to,
@@ -102,8 +102,8 @@ fn quote_exact_input_view_matches_direct_xyk_policy_for_user() {
     let amount_in = 1_000 * PRECISION;
     let pool_reserve = 10_000 * PRECISION;
     set_pool(foreign, native, pool_reserve, pool_reserve);
-    let quote = AxialRouter::quote_exact_input(user, foreign, native, amount_in).unwrap();
-    let router_fee = AxialRouter::calculate_router_fee(amount_in);
+    let quote = DeosRouter::quote_exact_input(user, foreign, native, amount_in).unwrap();
+    let router_fee = DeosRouter::calculate_router_fee(amount_in);
     let amount_after_fee = amount_in - router_fee;
     let expected_out = (amount_after_fee * pool_reserve) / (pool_reserve + amount_after_fee);
     assert_eq!(quote.amount_in, amount_in);
@@ -135,7 +135,7 @@ fn quote_exact_input_view_omits_router_fee_for_fee_exempt_accounts() {
     let amount_in = 1_000 * PRECISION;
     let pool_reserve = 10_000 * PRECISION;
     set_pool(foreign, native, pool_reserve, pool_reserve);
-    let quote = AxialRouter::quote_exact_input(fee_exempt, foreign, native, amount_in).unwrap();
+    let quote = DeosRouter::quote_exact_input(fee_exempt, foreign, native, amount_in).unwrap();
     let expected_out = (amount_in * pool_reserve) / (pool_reserve + amount_in);
     assert_eq!(quote.router_fee, 0);
     assert_eq!(quote.amount_after_fee, amount_in);
@@ -199,7 +199,7 @@ fn router_exact_output_quote_and_execution_enforce_total_input_cap() {
     let amount_out = 100 * PRECISION;
     set_pool(foreign, native, reserve, reserve);
 
-    let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out)
+    let quote = DeosRouter::quote_exact_out(user, foreign, native, amount_out)
       .expect("exact-output route is quotable");
     assert_eq!(quote.amount_out, amount_out);
     assert_eq!(quote.family, RouteFamily::DirectXyk);
@@ -210,7 +210,7 @@ fn router_exact_output_quote_and_execution_enforce_total_input_cap() {
     let input_before = Assets::balance(2, user);
     let output_before = Balances::free_balance(user);
     assert_noop!(
-      AxialRouter::execute_exact_out_for(
+      DeosRouter::execute_exact_out_for(
         &user,
         foreign,
         native,
@@ -223,15 +223,9 @@ fn router_exact_output_quote_and_execution_enforce_total_input_cap() {
     assert_eq!(Assets::balance(2, user), input_before);
     assert_eq!(Balances::free_balance(user), output_before);
 
-    let spent = AxialRouter::execute_exact_out_for(
-      &user,
-      foreign,
-      native,
-      amount_out,
-      quote.amount_in,
-      &user,
-    )
-    .expect("quoted exact-output route executes");
+    let spent =
+      DeosRouter::execute_exact_out_for(&user, foreign, native, amount_out, quote.amount_in, &user)
+        .expect("quoted exact-output route executes");
     assert_eq!(spent.total_amount_in, quote.amount_in);
     assert_eq!(spent.family, RouteFamily::DirectXyk);
     assert_eq!(spent.weight_class, RouteWeightClass::ExactOutputDirectXyk);
@@ -256,7 +250,7 @@ fn exact_input_recipient_shortfall_rolls_back_execution() {
     let events_before = System::events();
     set_exact_input_reported_amount(Some(0));
     assert_noop!(
-      AxialRouter::execute_swap_for(&user, foreign, native, amount_in, min_amount_out, &user,),
+      DeosRouter::execute_swap_for(&user, foreign, native, amount_in, min_amount_out, &user,),
       Error::<Test>::SlippageExceeded
     );
     assert_eq!(Assets::balance(2, user), input_before);
@@ -275,13 +269,13 @@ fn exact_output_actual_spend_overrun_rolls_back_execution() {
     let reserve = 10_000 * PRECISION;
     let amount_out = 100 * PRECISION;
     set_pool(foreign, native, reserve, reserve);
-    let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out).unwrap();
+    let quote = DeosRouter::quote_exact_out(user, foreign, native, amount_out).unwrap();
     let input_before = Assets::balance(2, user);
     let output_before = Balances::free_balance(user);
     let events_before = System::events();
     set_exact_output_reported_input(Some(quote.amount_after_fee + 1));
     assert_noop!(
-      AxialRouter::execute_exact_out_for(
+      DeosRouter::execute_exact_out_for(
         &user,
         foreign,
         native,
@@ -307,12 +301,12 @@ fn exact_output_recipient_shortfall_rolls_back_execution() {
     let reserve = 10_000 * PRECISION;
     let amount_out = 100 * PRECISION;
     set_pool(foreign, native, reserve, reserve);
-    let quote = AxialRouter::quote_exact_out(user, foreign, native, amount_out).unwrap();
+    let quote = DeosRouter::quote_exact_out(user, foreign, native, amount_out).unwrap();
     let input_before = Assets::balance(2, user);
     let output_before = Balances::free_balance(user);
     set_exact_output_reported_amount(Some(amount_out - 1));
     assert_noop!(
-      AxialRouter::execute_exact_out_for(
+      DeosRouter::execute_exact_out_for(
         &user,
         foreign,
         native,
@@ -340,7 +334,7 @@ fn router_exact_output_selects_bounded_native_anchored_path_without_search() {
     set_pool(from, native, reserve, reserve);
     set_pool(native, to, reserve, reserve);
 
-    let quote = AxialRouter::quote_exact_out(user, from, to, amount_out)
+    let quote = DeosRouter::quote_exact_out(user, from, to, amount_out)
       .expect("Native-anchored exact-output route is quotable");
     assert_eq!(quote.amount_out, amount_out);
     assert_eq!(quote.family, RouteFamily::NativeAnchoredXyk);
@@ -374,7 +368,7 @@ fn router_exact_output_selects_bounded_native_anchored_path_without_search() {
     assert!(quote.amount_after_fee > amount_out);
     let output_before = Assets::balance(3, user);
     let spent =
-      AxialRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user)
+      DeosRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user)
         .expect("Native-anchored exact-output route executes");
     assert_eq!(spent.total_amount_in, quote.amount_in);
     assert_eq!(spent.family, RouteFamily::NativeAnchoredXyk);
@@ -415,7 +409,7 @@ fn second_leg_publication_follows_first_leg_execution() {
     set_fail_oracle_update_at(Some(1));
 
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -450,7 +444,7 @@ fn exact_output_second_leg_publication_follows_first_leg_execution() {
     let amount_out = 100 * PRECISION;
     set_pool(from, native, reserve, reserve);
     set_pool(native, to, reserve, reserve);
-    let quote = AxialRouter::quote_exact_out(user, from, to, amount_out).unwrap();
+    let quote = DeosRouter::quote_exact_out(user, from, to, amount_out).unwrap();
     let first_pool_before = get_pool(from, native).unwrap();
     let second_pool_before = get_pool(native, to).unwrap();
     let input_before = Assets::balance(2, user);
@@ -459,7 +453,7 @@ fn exact_output_second_leg_publication_follows_first_leg_execution() {
     set_fail_oracle_update_at(Some(1));
 
     assert_noop!(
-      AxialRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user,),
+      DeosRouter::execute_exact_out_for(&user, from, to, amount_out, quote.amount_in, &user,),
       Error::<Test>::InvalidOracleData
     );
     assert_eq!(
@@ -480,7 +474,7 @@ fn exact_input_outcomes_cover_all_weight_classes() {
     let user = 1u64;
     let reserve = 10_000 * PRECISION;
     set_pool(AssetKind::Local(2), AssetKind::Native, reserve, reserve);
-    let outcome = AxialRouter::execute_swap_for(
+    let outcome = DeosRouter::execute_swap_for(
       &user,
       AssetKind::Local(2),
       AssetKind::Native,
@@ -497,7 +491,7 @@ fn exact_input_outcomes_cover_all_weight_classes() {
   new_test_ext().execute_with(|| {
     let user = 1u64;
     set_tmc_curve(AssetKind::Local(2), AssetKind::Local(1), 2 * PRECISION);
-    let outcome = AxialRouter::execute_swap_for(
+    let outcome = DeosRouter::execute_swap_for(
       &user,
       AssetKind::Local(1),
       AssetKind::Local(2),
@@ -516,7 +510,7 @@ fn exact_input_outcomes_cover_all_weight_classes() {
     let reserve = 10_000 * PRECISION;
     set_pool(AssetKind::Local(2), AssetKind::Native, reserve, reserve);
     set_pool(AssetKind::Native, AssetKind::Local(3), reserve, reserve);
-    AxialRouter::quote_exact_input(
+    DeosRouter::quote_exact_input(
       user,
       AssetKind::Local(2),
       AssetKind::Local(3),
@@ -531,7 +525,7 @@ fn exact_input_outcomes_cover_all_weight_classes() {
         (AssetKind::Native, AssetKind::Local(3)),
       ]
     );
-    let outcome = AxialRouter::execute_swap_for(
+    let outcome = DeosRouter::execute_swap_for(
       &user,
       AssetKind::Local(2),
       AssetKind::Local(3),
@@ -570,7 +564,7 @@ fn prepared_family_leg_mismatch_fails_closed() {
       family: RouteFamily::DirectMint,
     };
     assert!(matches!(
-      AxialRouter::validate_prepared_identity(&malformed),
+      DeosRouter::validate_prepared_identity(&malformed),
       Err(Error::<Test>::PreparedRouteMismatch)
     ));
   });
@@ -580,26 +574,26 @@ fn prepared_family_leg_mismatch_fails_closed() {
 fn lp_reverse_index_is_canonical_bounded_and_collision_safe() {
   new_test_ext().execute_with(|| {
     let canonical = (AssetKind::Native, AssetKind::Local(9));
-    assert_ok!(AxialRouter::register_lp_pair(7, (canonical.1, canonical.0)));
-    assert_eq!(AxialRouter::lp_pair_by_token_id(7), Some(canonical));
-    assert_ok!(AxialRouter::register_lp_pair(7, canonical));
+    assert_ok!(DeosRouter::register_lp_pair(7, (canonical.1, canonical.0)));
+    assert_eq!(DeosRouter::lp_pair_by_token_id(7), Some(canonical));
+    assert_ok!(DeosRouter::register_lp_pair(7, canonical));
     assert_noop!(
-      AxialRouter::register_lp_pair(7, (AssetKind::Native, AssetKind::Local(10))),
+      DeosRouter::register_lp_pair(7, (AssetKind::Native, AssetKind::Local(10))),
       Error::<Test>::LpTokenPairCollision
     );
     assert_noop!(
-      AxialRouter::register_lp_pair(8, (AssetKind::Native, AssetKind::Native)),
+      DeosRouter::register_lp_pair(8, (AssetKind::Native, AssetKind::Native)),
       Error::<Test>::InvalidPoolPair
     );
 
     for index in 1..500u32 {
-      assert_ok!(AxialRouter::register_lp_pair(
+      assert_ok!(DeosRouter::register_lp_pair(
         100 + index,
         (AssetKind::Native, AssetKind::Local(1_000 + index)),
       ));
     }
     assert_noop!(
-      AxialRouter::register_lp_pair(10_000, (AssetKind::Native, AssetKind::Local(20_000)),),
+      DeosRouter::register_lp_pair(10_000, (AssetKind::Native, AssetKind::Local(20_000)),),
       Error::<Test>::LpPairCapacityExceeded
     );
   });
@@ -766,12 +760,12 @@ fn execution_reprepares_after_a_stale_projection() {
     let amount_in = 1_000 * PRECISION;
     set_tmc_curve(to, from, 1);
     set_pool(from, to, 1_000 * PRECISION, 3_000 * PRECISION);
-    let projected = AxialRouter::quote_exact_input(user, from, to, amount_in).unwrap();
+    let projected = DeosRouter::quote_exact_input(user, from, to, amount_in).unwrap();
     assert_eq!(projected.family, RouteFamily::DirectXyk);
 
     set_tmc_rate(to, 2);
     set_pool(from, to, 1_000 * PRECISION, 500 * PRECISION);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       from,
       to,
@@ -782,7 +776,7 @@ fn execution_reprepares_after_a_stale_projection() {
     ));
     assert!(matches!(
       System::events().last().map(|record| &record.event),
-      Some(RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+      Some(RuntimeEvent::DeosRouter(crate::Event::SwapExecuted {
         outcome: RouterOutcome {
           family: RouteFamily::DirectMint,
           ..
@@ -818,7 +812,7 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
     let reserve_out = 3_000 * PRECISION;
     set_pool(asset_in, asset_out, reserve_in, reserve_out);
     // Execute swap
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       asset_in,
       asset_out,
@@ -850,7 +844,7 @@ fn max_recipient_output_selects_between_xyk_and_tmc_test() {
     let reserve_in_2 = 1_000 * PRECISION;
     let reserve_out_2 = 500 * PRECISION;
     set_pool(asset_in, asset_out, reserve_in_2, reserve_out_2);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       asset_in,
       asset_out,
@@ -895,7 +889,7 @@ fn direct_mint_route_delivers_to_recipient_not_minter() {
     let minter_local_before = Assets::balance(2, minter);
     let minter_native_before = Balances::free_balance(minter);
     let recipient_native_before = Balances::free_balance(recipient);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(minter),
       collateral,
       minted,
@@ -932,7 +926,7 @@ fn direct_mint_slippage_uses_recipient_allocation_not_total_emission() {
     // emission and must fail when it correctly uses recipient output.
     let impossible_recipient_min = 50 * PRECISION;
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(minter),
         collateral,
         minted,
@@ -955,7 +949,7 @@ fn circular_swap_protection_test() {
     let asset = AssetKind::Local(1);
     let amount = 10_000 * primitives::ecosystem::params::PRECISION;
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         asset,
         asset,
@@ -985,7 +979,7 @@ fn slippage_protection_test() {
     // After fee: 995*P in, out = (995*P * 1000*P) / (1995*P) ≈ 498.746*P
     let expected_out = 498_746_867_167_919;
     // Case 1: Slippage met (min_out < expected_out) - Success
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       asset_in,
       asset_out,
@@ -1005,7 +999,7 @@ fn slippage_protection_test() {
     );
     // Case 2: Slippage exceeded (min_out > expected_out) - Failure
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         asset_in,
         asset_out,
@@ -1040,7 +1034,7 @@ fn round_trip_buy_sell_is_net_negative_test() {
     set_pool(asset_in, asset_out, pool_reserve, pool_reserve);
     // 1. Buy Local -> Native.
     let buy_in = 100 * PRECISION;
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(trader),
       asset_in,
       asset_out,
@@ -1053,7 +1047,7 @@ fn round_trip_buy_sell_is_net_negative_test() {
       .iter()
       .rev()
       .find_map(|r| {
-        if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+        if let crate::mock::RuntimeEvent::DeosRouter(crate::Event::SwapExecuted {
           outcome,
           who,
           ..
@@ -1066,7 +1060,7 @@ fn round_trip_buy_sell_is_net_negative_test() {
       })
       .expect("buy swap must emit SwapExecuted");
     // 2. Sell Native -> Local immediately, spending everything received.
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(trader),
       asset_out,
       asset_in,
@@ -1127,7 +1121,7 @@ fn native_input_swap_rejects_gross_debit_that_breaks_keep_alive() {
     let pool_before = get_pool(AssetKind::Native, target).expect("pool must exist");
     System::reset_events();
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         AssetKind::Native,
         target,
@@ -1144,7 +1138,7 @@ fn native_input_swap_rejects_gross_debit_that_breaks_keep_alive() {
     assert!(
       System::events()
         .into_iter()
-        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::DeosRouter(_)) })
     );
   });
 }
@@ -1165,7 +1159,7 @@ fn forced_fee_failure_skips_direct_xyk_route_execution() {
     set_force_fee_failure(true);
     System::reset_events();
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -1184,7 +1178,7 @@ fn forced_fee_failure_skips_direct_xyk_route_execution() {
     assert!(
       System::events()
         .into_iter()
-        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::DeosRouter(_)) })
     );
   });
 }
@@ -1205,7 +1199,7 @@ fn forced_fee_failure_skips_direct_mint_route_execution() {
     set_force_fee_failure(true);
     System::reset_events();
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -1224,7 +1218,7 @@ fn forced_fee_failure_skips_direct_mint_route_execution() {
     assert!(
       System::events()
         .into_iter()
-        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::DeosRouter(_)) })
     );
   });
 }
@@ -1244,7 +1238,7 @@ fn tmc_failure_after_input_debit_rolls_back_balances_and_events() {
     set_fail_tmc_after_debit(true);
     System::reset_events();
     assert!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -1277,7 +1271,7 @@ fn first_xyk_leg_failure_leaves_market_and_frame_state_unchanged() {
     set_fail_xyk_execution_at(Some(0));
     System::reset_events();
     assert!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -1313,7 +1307,7 @@ fn native_anchored_first_leg_failure_leaves_state_unchanged() {
     set_fail_xyk_execution_at(Some(0));
     System::reset_events();
     assert!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -1349,7 +1343,7 @@ fn second_xyk_leg_failure_rolls_back_frame_state() {
     set_fail_xyk_execution_at(Some(1));
     System::reset_events();
     assert!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         from,
         to,
@@ -1390,7 +1384,7 @@ fn forced_fee_failure_skips_multi_hop_route_execution() {
     set_force_fee_failure(true);
     System::reset_events();
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         dot,
         usdc,
@@ -1410,7 +1404,7 @@ fn forced_fee_failure_skips_multi_hop_route_execution() {
     assert!(
       System::events()
         .into_iter()
-        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::AxialRouter(_)) })
+        .all(|record| { !matches!(record.event, crate::mock::RuntimeEvent::DeosRouter(_)) })
     );
   });
 }
@@ -1475,7 +1469,7 @@ fn tmc_route_is_skipped_for_mismatched_collateral() {
     let pool_reserve = 10_000 * PRECISION;
     set_pool(from_asset, to_asset, pool_reserve, pool_reserve);
 
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       from_asset,
       to_asset,
@@ -1585,16 +1579,16 @@ fn governance_can_update_router_fee() {
     // Advance block to enable events
     System::set_block_number(1);
     // Initial fee should be the default
-    let initial_fee = AxialRouter::router_fee();
-    assert_eq!(initial_fee, primitives::ecosystem::params::AXIAL_ROUTER_FEE);
+    let initial_fee = DeosRouter::router_fee();
+    assert_eq!(initial_fee, primitives::ecosystem::params::DEOS_ROUTER_FEE);
     // Update router fee as root
     let new_fee = Perbill::from_percent(1); // 1%
-    assert_ok!(AxialRouter::update_router_fee(
+    assert_ok!(DeosRouter::update_router_fee(
       RuntimeOrigin::root(),
       new_fee
     ));
     // Verify fee was updated
-    let updated_fee = AxialRouter::router_fee();
+    let updated_fee = DeosRouter::router_fee();
     assert_eq!(updated_fee, new_fee);
     // Verify event was emitted
     System::assert_last_event(
@@ -1613,11 +1607,11 @@ fn only_governance_can_update_router_fee() {
     // Regular user cannot update router fee
     let new_fee = Perbill::from_percent(1);
     assert_noop!(
-      AxialRouter::update_router_fee(RuntimeOrigin::signed(1), new_fee),
+      DeosRouter::update_router_fee(RuntimeOrigin::signed(1), new_fee),
       polkadot_sdk::sp_runtime::DispatchError::BadOrigin
     );
     // Root can update within the configured bound
-    assert_ok!(AxialRouter::update_router_fee(
+    assert_ok!(DeosRouter::update_router_fee(
       RuntimeOrigin::root(),
       new_fee
     ));
@@ -1627,13 +1621,13 @@ fn only_governance_can_update_router_fee() {
 #[test]
 fn router_fee_update_rejects_values_above_configured_bound() {
   new_test_ext().execute_with(|| {
-    let initial_fee = AxialRouter::router_fee();
+    let initial_fee = DeosRouter::router_fee();
     let too_high = Perbill::from_percent(2);
     assert_noop!(
-      AxialRouter::update_router_fee(RuntimeOrigin::root(), too_high),
+      DeosRouter::update_router_fee(RuntimeOrigin::root(), too_high),
       Error::<Test>::RouterFeeTooHigh
     );
-    assert_eq!(AxialRouter::router_fee(), initial_fee);
+    assert_eq!(DeosRouter::router_fee(), initial_fee);
   });
 }
 
@@ -1644,16 +1638,16 @@ fn updated_fee_is_used_in_calculations() {
     System::set_block_number(1);
     let amount = 10_000u128;
     // Calculate fee with initial rate (0.5%)
-    let initial_fee = AxialRouter::calculate_router_fee(amount);
+    let initial_fee = DeosRouter::calculate_router_fee(amount);
     assert_eq!(initial_fee, 50); // 10,000 * 0.005 = 50
     // Update fee to 1%
     let new_fee_rate = Perbill::from_percent(1);
-    assert_ok!(AxialRouter::update_router_fee(
+    assert_ok!(DeosRouter::update_router_fee(
       RuntimeOrigin::root(),
       new_fee_rate
     ));
     // Calculate fee with new rate
-    let new_fee = AxialRouter::calculate_router_fee(amount);
+    let new_fee = DeosRouter::calculate_router_fee(amount);
     assert_eq!(new_fee, 100); // 10,000 * 0.01 = 100
   });
 }
@@ -1676,8 +1670,8 @@ fn multi_hop_swap_dot_native_usdc() {
     set_pool(dot, native, pool_reserve, pool_reserve);
     set_pool(native, usdc, pool_reserve, pool_reserve);
     // No direct DOT/USDC pool — forces multi-hop
-    let projected = AxialRouter::quote_exact_input(user, dot, usdc, amount_in).unwrap();
-    assert_ok!(AxialRouter::swap(
+    let projected = DeosRouter::quote_exact_input(user, dot, usdc, amount_in).unwrap();
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
       usdc,
@@ -1716,7 +1710,7 @@ fn multi_hop_output_matches_sequential_hops() {
     let hop1_out = (after_fee * pool_reserve) / (pool_reserve + after_fee);
     // Hop 2: Native → USDC (on fresh pool)
     let hop2_out = (hop1_out * pool_reserve) / (pool_reserve + hop1_out);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
       usdc,
@@ -1729,7 +1723,7 @@ fn multi_hop_output_matches_sequential_hops() {
       .iter()
       .rev()
       .find_map(|r| {
-        if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+        if let crate::mock::RuntimeEvent::DeosRouter(crate::Event::SwapExecuted {
           outcome,
           from,
           ..
@@ -1771,7 +1765,7 @@ fn multi_hop_slippage_protection() {
     set_pool(native, usdc, pool_reserve, pool_reserve);
     // Unreasonably high min_amount_out should fail
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         dot,
         usdc,
@@ -1800,7 +1794,7 @@ fn multi_hop_not_used_when_direct_pool_exists() {
     set_pool(dot, native, pool_reserve, pool_reserve); // Hop 1
     set_pool(native, usdc, pool_reserve, pool_reserve); // Hop 2
     // Direct pool should win because multi-hop loses to slippage on two hops
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
       usdc,
@@ -1813,7 +1807,7 @@ fn multi_hop_not_used_when_direct_pool_exists() {
       .iter()
       .rev()
       .find_map(|r| {
-        if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::SwapExecuted {
+        if let crate::mock::RuntimeEvent::DeosRouter(crate::Event::SwapExecuted {
           outcome, ..
         }) = &r.event
         {
@@ -1852,7 +1846,7 @@ fn multi_hop_no_route_when_intermediate_pool_missing() {
     set_pool(dot, native, 10_000 * PRECISION, 10_000 * PRECISION);
     // No DOT/USDC, No Native/USDC → no route
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(user),
         dot,
         usdc,
@@ -1876,7 +1870,7 @@ fn multi_hop_skipped_when_one_leg_is_native() {
     let amount_in = 100 * PRECISION;
     // DOT → Native is a direct route, not a multi-hop
     set_pool(dot, native, 10_000 * PRECISION, 10_000 * PRECISION);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
       native,
@@ -1912,7 +1906,7 @@ fn multi_hop_fee_collected_once() {
     let pool_reserve = 10_000 * PRECISION;
     set_pool(dot, native, pool_reserve, pool_reserve);
     set_pool(native, usdc, pool_reserve, pool_reserve);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
       usdc,
@@ -1928,7 +1922,7 @@ fn multi_hop_fee_collected_once() {
       .filter(|r| {
         matches!(
           &r.event,
-          crate::mock::RuntimeEvent::AxialRouter(crate::Event::FeeCollected { .. })
+          crate::mock::RuntimeEvent::DeosRouter(crate::Event::FeeCollected { .. })
         )
       })
       .collect();
@@ -1939,7 +1933,7 @@ fn multi_hop_fee_collected_once() {
     );
     // Verify fee amount
     let expected_fee = crate::Pallet::<Test>::calculate_router_fee(amount_in);
-    if let crate::mock::RuntimeEvent::AxialRouter(crate::Event::FeeCollected { amount, .. }) =
+    if let crate::mock::RuntimeEvent::DeosRouter(crate::Event::FeeCollected { amount, .. }) =
       &fee_events[0].event
     {
       assert_eq!(*amount, expected_fee);
@@ -1963,7 +1957,7 @@ fn multi_hop_pool_reserves_update_correctly() {
     let after_fee = amount_in - fee;
     // Pre-calculate expected intermediate amount
     let hop1_out = (after_fee * pool_reserve) / (pool_reserve + after_fee);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(user),
       dot,
       usdc,

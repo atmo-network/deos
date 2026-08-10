@@ -11,31 +11,31 @@
 
 use super::common::{
   ALICE, ASSET_A, ASSET_B, ASSET_NATIVE, LIQUIDITY_AMOUNT, MIN_AMOUNT_OUT, MIN_LIQUIDITY,
-  SWAP_AMOUNT, add_liquidity, axial_router_account, burning_manager_account,
-  ensure_asset_conversion_pool, seeded_test_ext, setup_axial_router_infrastructure,
+  SWAP_AMOUNT, add_liquidity, burning_manager_account, deos_router_account,
+  ensure_asset_conversion_pool, seeded_test_ext, setup_deos_router_infrastructure,
 };
-use crate::{Assets, AxialRouter, Balances, Runtime, RuntimeOrigin, System};
+use crate::{Assets, Balances, DeosRouter, Runtime, RuntimeOrigin, System};
 use polkadot_sdk::frame_support::{assert_noop, assert_ok};
 use primitives::AssetKind;
 
 /// Setup test environment with pools and liquidity
 fn setup_test_environment() -> Result<(), &'static str> {
-  setup_axial_router_infrastructure()
+  setup_deos_router_infrastructure()
 }
 
 #[test]
-fn test_axial_router_basic_swap_functionality() {
+fn test_deos_router_basic_swap_functionality() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+    let quote = DeosRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
       .expect("quote must exist for seeded direct pool");
     let alice_asset_before = Assets::balance(ASSET_A, ALICE);
     let alice_native_before = Balances::free_balance(ALICE);
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     System::reset_events();
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -58,7 +58,7 @@ fn test_axial_router_basic_swap_functionality() {
     );
     assert!(System::events().iter().any(|record| matches!(
       &record.event,
-      crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+      crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::SwapExecuted {
         who,
         from: event_from,
         to: event_to,
@@ -74,17 +74,17 @@ fn test_axial_router_basic_swap_functionality() {
 }
 
 #[test]
-fn test_axial_router_fee_processing() {
+fn test_deos_router_fee_processing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+    let quote = DeosRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
       .expect("quote must exist for seeded direct pool");
     let burning_manager = burning_manager_account();
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager.clone());
     System::reset_events();
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -97,8 +97,8 @@ fn test_axial_router_fee_processing() {
       Assets::balance(ASSET_A, burning_manager.clone()),
       burning_manager_before + quote.router_fee
     );
-    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
-      pallet_axial_router::Event::FeeCollected {
+    System::assert_has_event(crate::RuntimeEvent::DeosRouter(
+      pallet_deos_router::Event::FeeCollected {
         asset: from,
         amount: quote.router_fee,
         source: ALICE,
@@ -109,20 +109,20 @@ fn test_axial_router_fee_processing() {
 }
 
 #[test]
-fn test_axial_router_anti_self_taxation() {
+fn test_deos_router_anti_self_taxation() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let router = axial_router_account();
+    let router = deos_router_account();
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let quote = AxialRouter::quote_exact_input(router.clone(), from, to, SWAP_AMOUNT)
+    let quote = DeosRouter::quote_exact_input(router.clone(), from, to, SWAP_AMOUNT)
       .expect("router account should still receive a direct quote");
     let router_asset_before = Assets::balance(ASSET_A, router.clone());
     let router_native_before = Balances::free_balance(router.clone());
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     System::reset_events();
     assert_eq!(quote.router_fee, 0);
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(router.clone()),
       from,
       to,
@@ -146,14 +146,14 @@ fn test_axial_router_anti_self_taxation() {
     assert!(System::events().iter().all(|record| {
       !matches!(
         &record.event,
-        crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected { .. })
+        crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::FeeCollected { .. })
       )
     }));
   });
 }
 
 #[test]
-fn test_axial_router_multi_hop_routing() {
+fn test_deos_router_multi_hop_routing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     // setup_test_environment creates Native/ASSET_A pool with LIQUIDITY_AMOUNT.
@@ -174,7 +174,7 @@ fn test_axial_router_multi_hop_routing() {
     let alice_b_before = Assets::balance(ASSET_B, ALICE);
 
     // Multi-hop swap: ASSET_A → Native → ASSET_B
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Local(ASSET_A),
       AssetKind::Local(ASSET_B),
@@ -194,7 +194,7 @@ fn test_axial_router_multi_hop_routing() {
     assert!(
       System::events().iter().any(|r| matches!(
         &r.event,
-        crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+        crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::SwapExecuted {
           from: AssetKind::Local(a),
           to: AssetKind::Local(b),
           ..
@@ -229,15 +229,15 @@ fn assert_native_anchored_market_failure_rolls_back(failure_index: usize) {
     let output_before = Assets::balance(ASSET_B, ALICE);
     let native_before = Balances::free_balance(ALICE);
     let fee_before = Assets::balance(ASSET_A, burning_manager_account());
-    let first_feed = crate::configs::oracle_config::axial_router_pool_feed(from, native);
-    let second_feed = crate::configs::oracle_config::axial_router_pool_feed(native, to);
+    let first_feed = crate::configs::oracle_config::deos_router_pool_feed(from, native);
+    let second_feed = crate::configs::oracle_config::deos_router_pool_feed(native, to);
     let first_observation_before = crate::Oracle::observations(first_feed);
     let second_observation_before = crate::Oracle::observations(second_feed);
     let events_before = System::events();
-    crate::configs::axial_router_config::set_fail_after_xyk_execution_at(Some(failure_index));
+    crate::configs::deos_router_config::set_fail_after_xyk_execution_at(Some(failure_index));
 
     assert!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         from,
         to,
@@ -286,7 +286,7 @@ fn native_anchored_second_market_failure_rolls_back_composed_runtime_state() {
 }
 
 #[test]
-fn test_axial_router_multi_hop_fee_collected_once() {
+fn test_deos_router_multi_hop_fee_collected_once() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let second_pool_liq = LIQUIDITY_AMOUNT / 4;
@@ -304,7 +304,7 @@ fn test_axial_router_multi_hop_fee_collected_once() {
 
     System::reset_events();
 
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Local(ASSET_A),
       AssetKind::Local(ASSET_B),
@@ -320,7 +320,7 @@ fn test_axial_router_multi_hop_fee_collected_once() {
       .filter(|r| {
         matches!(
           &r.event,
-          crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected { .. })
+          crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::FeeCollected { .. })
         )
       })
       .count();
@@ -332,12 +332,12 @@ fn test_axial_router_multi_hop_fee_collected_once() {
 }
 
 #[test]
-fn test_axial_router_multi_hop_no_route_when_second_pool_missing() {
+fn test_deos_router_multi_hop_no_route_when_second_pool_missing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     // Only Native/ASSET_A pool exists. No Native/ASSET_B → no ASSET_A→ASSET_B route.
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Local(ASSET_B),
@@ -346,18 +346,18 @@ fn test_axial_router_multi_hop_no_route_when_second_pool_missing() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::NoRouteFound
+      pallet_deos_router::pallet::Error::<Runtime>::NoRouteFound
     );
   });
 }
 
 #[test]
-fn test_axial_router_error_handling() {
+fn test_deos_router_error_handling() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     // Test identical assets error
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Local(ASSET_A),
@@ -366,11 +366,11 @@ fn test_axial_router_error_handling() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::IdenticalAssets
+      pallet_deos_router::pallet::Error::<Runtime>::IdenticalAssets
     );
     // Test zero amount error (caught by MinSwapForeign check)
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Native,
@@ -379,12 +379,12 @@ fn test_axial_router_error_handling() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::AmountTooLow
+      pallet_deos_router::pallet::Error::<Runtime>::AmountTooLow
     );
     // Test deadline passed error
     System::set_block_number(1000);
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Native,
@@ -393,22 +393,22 @@ fn test_axial_router_error_handling() {
         ALICE,
         999, // deadline already passed
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::DeadlinePassed
+      pallet_deos_router::pallet::Error::<Runtime>::DeadlinePassed
     );
   });
 }
 
 #[test]
-fn test_axial_router_accumulated_balance_processing() {
+fn test_deos_router_accumulated_balance_processing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let amount = SWAP_AMOUNT / 10;
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let quote = AxialRouter::quote_exact_input(ALICE, from, to, amount)
+    let quote = DeosRouter::quote_exact_input(ALICE, from, to, amount)
       .expect("quote must exist for seeded direct pool");
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -425,17 +425,17 @@ fn test_axial_router_accumulated_balance_processing() {
 }
 
 #[test]
-fn test_axial_router_native_token_swaps() {
+fn test_deos_router_native_token_swaps() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let from = AssetKind::Native;
     let to = AssetKind::Local(ASSET_A);
-    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+    let quote = DeosRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
       .expect("quote must exist for seeded direct pool");
     let alice_native_before = Balances::free_balance(ALICE);
     let alice_asset_before = Assets::balance(ASSET_A, ALICE);
     let burning_manager_before = Balances::free_balance(burning_manager_account());
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -460,11 +460,11 @@ fn test_axial_router_native_token_swaps() {
 }
 
 #[test]
-fn test_axial_router_fee_calculation_accuracy() {
+fn test_deos_router_fee_calculation_accuracy() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let expected_fee = AxialRouter::calculate_router_fee(SWAP_AMOUNT);
-    let quote = AxialRouter::quote_exact_input(
+    let expected_fee = DeosRouter::calculate_router_fee(SWAP_AMOUNT);
+    let quote = DeosRouter::quote_exact_input(
       ALICE,
       AssetKind::Local(ASSET_A),
       AssetKind::Native,
@@ -477,12 +477,12 @@ fn test_axial_router_fee_calculation_accuracy() {
 }
 
 #[test]
-fn test_axial_router_minimum_amount_out_protection() {
+fn test_deos_router_minimum_amount_out_protection() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let unreasonably_high_min = SWAP_AMOUNT * 10;
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Native,
@@ -491,21 +491,21 @@ fn test_axial_router_minimum_amount_out_protection() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::SlippageExceeded
+      pallet_deos_router::pallet::Error::<Runtime>::SlippageExceeded
     );
   });
 }
 
 #[test]
-fn test_axial_router_direct_fee_processing() {
+fn test_deos_router_direct_fee_processing() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+    let quote = DeosRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
       .expect("quote must exist for seeded direct pool");
     System::reset_events();
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -517,7 +517,7 @@ fn test_axial_router_direct_fee_processing() {
     let router_events = System::events()
       .into_iter()
       .filter_map(|record| match record.event {
-        crate::RuntimeEvent::AxialRouter(event) => Some(event),
+        crate::RuntimeEvent::DeosRouter(event) => Some(event),
         _ => None,
       })
       .collect::<Vec<_>>();
@@ -526,7 +526,7 @@ fn test_axial_router_direct_fee_processing() {
       .position(|event| {
         matches!(
           event,
-          pallet_axial_router::Event::FeeCollected {
+          pallet_deos_router::Event::FeeCollected {
             asset,
             amount,
             source,
@@ -543,7 +543,7 @@ fn test_axial_router_direct_fee_processing() {
       .position(|event| {
         matches!(
           event,
-          pallet_axial_router::Event::SwapExecuted {
+          pallet_deos_router::Event::SwapExecuted {
             who,
             from: event_from,
             to: event_to,
@@ -561,15 +561,15 @@ fn test_axial_router_direct_fee_processing() {
 }
 
 #[test]
-fn test_axial_router_consistent_fee_burning() {
+fn test_deos_router_consistent_fee_burning() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let amount = SWAP_AMOUNT / 10;
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let fee = AxialRouter::calculate_router_fee(amount);
+    let fee = DeosRouter::calculate_router_fee(amount);
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -578,7 +578,7 @@ fn test_axial_router_consistent_fee_burning() {
       ALICE,
       1000,
     ));
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -595,14 +595,14 @@ fn test_axial_router_consistent_fee_burning() {
 }
 
 #[test]
-fn test_axial_router_multiple_accumulation_cycles() {
+fn test_deos_router_multiple_accumulation_cycles() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let amount = SWAP_AMOUNT / 10;
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
     System::reset_events();
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -611,7 +611,7 @@ fn test_axial_router_multiple_accumulation_cycles() {
       ALICE,
       1000,
     ));
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -625,13 +625,13 @@ fn test_axial_router_multiple_accumulation_cycles() {
       .filter(|record| {
         matches!(
           &record.event,
-          crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected {
+          crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::FeeCollected {
             asset,
             amount: event_amount,
             source,
             ..
           }) if *asset == from
-            && *event_amount == AxialRouter::calculate_router_fee(amount)
+            && *event_amount == DeosRouter::calculate_router_fee(amount)
             && *source == ALICE
         )
       })
@@ -641,14 +641,14 @@ fn test_axial_router_multiple_accumulation_cycles() {
 }
 
 #[test]
-fn test_axial_router_fee_collection_only_on_successful_swaps() {
+fn test_deos_router_fee_collection_only_on_successful_swaps() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     let unreasonably_high_min = SWAP_AMOUNT * 100;
     System::reset_events();
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Native,
@@ -657,7 +657,7 @@ fn test_axial_router_fee_collection_only_on_successful_swaps() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::SlippageExceeded
+      pallet_deos_router::pallet::Error::<Runtime>::SlippageExceeded
     );
     assert_eq!(
       Assets::balance(ASSET_A, burning_manager_account()),
@@ -666,21 +666,21 @@ fn test_axial_router_fee_collection_only_on_successful_swaps() {
     assert!(System::events().into_iter().all(|record| {
       !matches!(
         record.event,
-        crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::FeeCollected { .. })
+        crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::FeeCollected { .. })
       )
     }));
   });
 }
 
 #[test]
-fn test_axial_router_path_validation() {
+fn test_deos_router_path_validation() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
     let non_existent_asset = 999;
     System::reset_events();
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Local(non_existent_asset),
@@ -689,7 +689,7 @@ fn test_axial_router_path_validation() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::NoRouteFound
+      pallet_deos_router::pallet::Error::<Runtime>::NoRouteFound
     );
     assert_eq!(
       Assets::balance(ASSET_A, burning_manager_account()),
@@ -698,19 +698,19 @@ fn test_axial_router_path_validation() {
     assert!(
       System::events()
         .into_iter()
-        .all(|record| { !matches!(record.event, crate::RuntimeEvent::AxialRouter(_)) })
+        .all(|record| { !matches!(record.event, crate::RuntimeEvent::DeosRouter(_)) })
     );
   });
 }
 
 #[test]
-fn test_axial_router_with_empty_pools() {
+fn test_deos_router_with_empty_pools() {
   seeded_test_ext().execute_with(|| {
-    // Use basic test environment without pools (setup_axial_router_infrastructure is not called)
+    // Use basic test environment without pools (setup_deos_router_infrastructure is not called)
 
     // Test swap with empty/non-existent pools should fail with NoRouteFound
     assert_noop!(
-      AxialRouter::swap(
+      DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Local(ASSET_A),
         AssetKind::Native,
@@ -719,21 +719,21 @@ fn test_axial_router_with_empty_pools() {
         ALICE,
         1000,
       ),
-      pallet_axial_router::pallet::Error::<Runtime>::NoRouteFound
+      pallet_deos_router::pallet::Error::<Runtime>::NoRouteFound
     );
   });
 }
 
 #[test]
-fn test_axial_router_events() {
+fn test_deos_router_events() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
-    let quote = AxialRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
+    let quote = DeosRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
       .expect("quote must exist for seeded direct pool");
     System::reset_events();
-    assert_ok!(AxialRouter::swap(
+    assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
       to,
@@ -742,8 +742,8 @@ fn test_axial_router_events() {
       ALICE,
       1000,
     ));
-    System::assert_has_event(crate::RuntimeEvent::AxialRouter(
-      pallet_axial_router::Event::FeeCollected {
+    System::assert_has_event(crate::RuntimeEvent::DeosRouter(
+      pallet_deos_router::Event::FeeCollected {
         asset: from,
         amount: quote.router_fee,
         source: ALICE,
@@ -752,7 +752,7 @@ fn test_axial_router_events() {
     ));
     assert!(System::events().iter().any(|record| matches!(
       &record.event,
-      crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+      crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::SwapExecuted {
         who,
         from: event_from,
         to: event_to,

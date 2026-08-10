@@ -245,7 +245,7 @@ mod runtime {
 
   // DEOS reference-runtime pallets (currently shipping the TMCTOL standard).
   #[runtime::pallet_index(50)]
-  pub type AxialRouter = pallet_axial_router;
+  pub type DeosRouter = pallet_deos_router;
   #[runtime::pallet_index(51)]
   pub type TokenMintingCurve = pallet_tmc;
   #[runtime::pallet_index(52)]

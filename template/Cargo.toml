@@ -55,7 +55,7 @@ deos-runtime = { path = "./runtime", default-features = false }
 primitives = { package = "deos-primitives", path = "./primitives", default-features = false }
 pallet-deos-actors = { package = "pallet-deos-actors", path = "./pallets/actors", default-features = false }
 pallet-asset-registry = { package = "pallet-deos-asset-registry", path = "./pallets/asset-registry", default-features = false }
-pallet-axial-router = { package = "pallet-deos-router", path = "./pallets/router", default-features = false }
+pallet-deos-router = { package = "pallet-deos-router", path = "./pallets/router", default-features = false }
 pallet-governance = { package = "pallet-deos-governance", path = "./pallets/governance", default-features = false }
 pallet-oracle = { package = "pallet-deos-oracle", path = "./pallets/oracle", default-features = false }
 pallet-staking = { package = "pallet-deos-staking", path = "./pallets/staking", default-features = false }

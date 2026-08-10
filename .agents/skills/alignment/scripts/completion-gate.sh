@@ -117,6 +117,12 @@ should_run_simulator() {
     has_changed_path '^simulator/' || has_changed_path '^template/pallets/(tmc|router)/'
 }
 
+should_run_router_identity_audit() {
+    has_changed_path '(^|/)(router|deos_router|pallet_deos_router)' || \
+        has_changed_path '^template/primitives/src/(ecosystem|oracle)\.rs$' || \
+        has_changed_path '^\.agents/skills/alignment/scripts/audit-router-identity\.sh$'
+}
+
 should_run_cargo_check() {
     if [[ "$RUN_CARGO_CHECK" == "1" ]]; then
         return 0
@@ -316,6 +322,18 @@ run_economic_claim_validation() {
     fi
 }
 
+run_router_identity_validation() {
+    phase_banner "Step 9: DEOS Router identity"
+    if ! should_run_router_identity_audit; then
+        log_warning "Skipping Router identity audit because Router identity surfaces did not change"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-router-identity.sh"; then
+        log_error "DEOS Router identity validation failed"
+        exit 1
+    fi
+}
+
 run_release_line_validation() {
     phase_banner "Step 9: Release-line consistency"
     if ! should_run_release_line_audit; then
@@ -365,6 +383,7 @@ main() {
     run_markdown_table_validation
     run_wiki_trust_validation
     run_economic_claim_validation
+    run_router_identity_validation
     run_release_line_validation
     run_backlog_validation
     run_knowledge_sync

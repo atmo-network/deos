@@ -14,10 +14,10 @@ The reusable package contract and implementation remain in [`template/pallets/or
 | Runtime bounds, origins, pool-feed identity, and Actors hook | `template/runtime/src/configs/oracle_config.rs` |
 | Canonical LP pair plus directional-feed registration | `template/runtime/src/configs/assets_config.rs` |
 | Pool-index and feed-admission weight envelope | `template/runtime/src/configs/pool_index.rs` |
-| DEOS Router production and consumption | `template/runtime/src/configs/axial_router_config.rs`, `template/pallets/router/src/lib.rs` |
+| DEOS Router production and consumption | `template/runtime/src/configs/deos_router_config.rs`, `template/pallets/router/src/lib.rs` |
 | Runtime-generated DEOS Oracle weights | `template/runtime/src/weights/pallet_oracle.rs` |
 | Pallet index and metadata composition | `template/runtime/src/lib.rs` |
-| Runtime integration evidence | `template/runtime/src/tests/oracle_integration_tests.rs`, `template/runtime/src/tests/axial_router_integration_tests.rs` |
+| Runtime integration evidence | `template/runtime/src/tests/oracle_integration_tests.rs`, `template/runtime/src/tests/deos_router_integration_tests.rs` |
 | Canonical browser inspection | `web-client/src/lib/observation/`, `web-client/src/lib/adapters/blockchain/observations.ts` |
 
 ## Feed Identity and Authority

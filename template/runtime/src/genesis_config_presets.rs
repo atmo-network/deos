@@ -133,7 +133,7 @@ fn testnet_genesis(
     polkadot_xcm: PolkadotXcmConfig {
       safe_xcm_version: Some(SAFE_XCM_VERSION)
     },
-    axial_router: pallet_axial_router::GenesisConfig {
+    deos_router: pallet_deos_router::GenesisConfig {
       _marker: Default::default(),
     },
     token_minting_curve: pallet_tmc::GenesisConfig {

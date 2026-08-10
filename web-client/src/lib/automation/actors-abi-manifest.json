@@ -2,7 +2,7 @@
   "format": "deos.actor.abi-manifest",
   "formatVersion": 1,
   "metadata": {
-    "sha256": "cfabdcc97265e543fd6d774b8d9bf89cd12033fefd742d9cbb6ba9b62b6a9bfd",
+    "sha256": "46d1ecd23107ffc32d567420a2ea55ff419b9f0efa800d329e0043eeddb167e7",
     "version": 16
   },
   "pallet": {

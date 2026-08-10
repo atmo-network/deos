@@ -108,7 +108,7 @@ export function formatChainEventLabel(eventInput: unknown): string {
 export function formatChainEventMessage(eventInput: unknown): string {
   const event = asChainEvent(eventInput);
   const payload = eventPayload(event);
-  if (event.type === 'AxialRouter' && event.value?.type === 'SwapExecuted') {
+  if (event.type === 'DeosRouter' && event.value?.type === 'SwapExecuted') {
     return formatRouterSwapOutcome(payload);
   }
   if (event.type === 'Balances' && event.value?.type === 'Transfer') {
@@ -138,11 +138,11 @@ export function buildTransactionHighlights(
   for (const eventInput of events) {
     const event = asChainEvent(eventInput);
     const payload = eventPayload(event);
-    if (event.type === 'AxialRouter' && event.value?.type === 'SwapExecuted') {
+    if (event.type === 'DeosRouter' && event.value?.type === 'SwapExecuted') {
       highlights.push(formatRouterSwapOutcome(payload));
       continue;
     }
-    if (event.type === 'AxialRouter' && event.value?.type === 'FeeCollected') {
+    if (event.type === 'DeosRouter' && event.value?.type === 'FeeCollected') {
       highlights.push(
         `Router fee ${formatUnknownAmount(objectProperty(payload, 'amount'))} ${formatUnknownAsset(objectProperty(payload, 'asset'))}`,
       );

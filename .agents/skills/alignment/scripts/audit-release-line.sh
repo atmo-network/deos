@@ -323,7 +323,7 @@ run_audit() {
             exit 1
         fi
     done
-    for forbidden in "pallet index \`52\`" ActorObservationChangeIngress "Production Weight Evidence" "DEOS Router publishes" "Axial Router publishes"; do
+    for forbidden in "pallet index \`52\`" ActorObservationChangeIngress "Production Weight Evidence" "DEOS Router publishes" "DEOS Router publishes"; do
         if grep -Fq "$forbidden" "$TEMPLATE_DIR/pallets/oracle/docs/architecture.en.md"; then
             log_error "Oracle package-purity drift: concrete integration marker remains: $forbidden"
             exit 1
@@ -341,16 +341,8 @@ run_audit() {
     check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.en.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/overview/router.ru.md" "canonical_page_id: router" "DEOS Router canonical-id drift"
     check_fixed_reference "$PROJECT_ROOT/wiki/index.en.md" "[DEOS Router](overview/router.en.md)" "DEOS Router wiki-entrypoint drift"
-    if [[ -e "$PROJECT_ROOT/wiki/overview/axial-router.en.md" || -e "$PROJECT_ROOT/wiki/overview/axial-router.ru.md" ]]; then
-        log_error "DEOS Router wiki-identity drift: legacy Axial Router page exists"
-        exit 1
-    fi
-    if rg -q 'Axial Router|axial-router' "$PROJECT_ROOT/wiki"; then
-        log_error "DEOS Router wiki-identity drift: stale terminology remains"
-        exit 1
-    fi
-    if rg -q 'Axial Router|axial-router' "$PROJECT_ROOT/README.md" "$PROJECT_ROOT/docs" "$TEMPLATE_DIR" "$PROJECT_ROOT/web-client" --glob '*.md' --glob '*.rs' --glob '*.ts' --glob '*.svelte' --glob '*.mjs'; then
-        log_error "DEOS Router public-terminology drift: stale Axial Router prose remains"
+    if ! "$SCRIPT_DIR/audit-router-identity.sh"; then
+        log_error "DEOS Router identity drift"
         exit 1
     fi
     if [[ ! -f "$PROJECT_ROOT/wiki/overview/governance.en.md" || ! -f "$PROJECT_ROOT/wiki/overview/governance.ru.md" || -e "$PROJECT_ROOT/wiki/overview/deos-governance.en.md" || -e "$PROJECT_ROOT/wiki/overview/governance-overview.en.md" ]]; then

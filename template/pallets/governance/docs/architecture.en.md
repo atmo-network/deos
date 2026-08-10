@@ -59,7 +59,7 @@ The governance kernel has a canonical bounded enactment scaffold. Finalized prop
 
 The current runtime enables one bounded `L1RootAction` slice. In the strategic domain, it may dispatch preimage-backed `RuntimeCall::System(authorize_upgrade { code_hash })` under Root-equivalent authority.
 
-The bounded `L2ParameterChange` slice supports one narrow domain-local path. A preimage-backed bounded `RuntimeCall::AxialRouter(update_router_fee { new_fee })` applies through the governance-owned internal setter instead of Root dispatch.
+The bounded `L2ParameterChange` slice supports one narrow domain-local path. A preimage-backed bounded `RuntimeCall::DeosRouter(update_router_fee { new_fee })` applies through the governance-owned internal setter instead of Root dispatch.
 
 Tactical `L2TreasurySpend` decodes a bounded invoice payload with `beneficiary`, `payout_asset`, `base_amount`, and explicit funding source. It reads the resolved winning primary option from bounded governance state, applies the on-chain invoice scalar, and transfers from the designated BLDR Treasury sovereign account rather than as Root.
 
