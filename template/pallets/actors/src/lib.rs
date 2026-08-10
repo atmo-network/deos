@@ -21,9 +21,9 @@ pub use scheduler::EnqueueOutcome;
 
 pub mod adapters;
 pub use adapters::{
-  AddressEventIngress, AssetOps, DexOps, ExecutionContext, FundingAuthority, IngressFailure,
-  LiquidityOps, ObservationChangeIngress, ObservationProvider, RetryClass, ScalarObservationState,
-  StakingOps, TaskFailure,
+  AddressEventIngress, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FundingAuthority,
+  IngressFailure, LiquidityOps, ObservationChangeIngress, ObservationProvider, RetryClass,
+  ScalarObservationState, StakingOps, TaskFailure,
 };
 pub use types::{AddressEvent, InputLimit, Task, WakeupBucketState, WakeupCursorIndex};
 

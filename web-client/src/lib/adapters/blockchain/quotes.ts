@@ -34,8 +34,8 @@ export function toOptionalValue<T>(
   return result.value;
 }
 
-export function routeFromMechanism(mechanism: { type: string }): 'TMC' | 'XYK' {
-  return mechanism.type === 'DirectMint' ? 'TMC' : 'XYK';
+export function routeFromFamily(family: { type: string }): 'TMC' | 'XYK' {
+  return family.type === 'DirectMint' ? 'TMC' : 'XYK';
 }
 
 export async function tmcMintQuote(
@@ -107,7 +107,7 @@ export async function quoteBuyAtSnapshot(
     : 0n;
   return {
     out: authoritativeQuote.amount_out,
-    route: routeFromMechanism(authoritativeQuote.mechanism),
+    route: routeFromFamily(authoritativeQuote.family),
     effectivePrice:
       Number(foreignAmount) / Number(authoritativeQuote.amount_out),
     fee: authoritativeQuote.router_fee,
@@ -140,7 +140,7 @@ export async function quoteSellAtSnapshot(
   }
   return {
     out: authoritativeQuote.amount_out,
-    route: routeFromMechanism(authoritativeQuote.mechanism),
+    route: routeFromFamily(authoritativeQuote.family),
     effectivePrice:
       Number(authoritativeQuote.amount_out) / Number(nativeAmount),
     fee: authoritativeQuote.router_fee,

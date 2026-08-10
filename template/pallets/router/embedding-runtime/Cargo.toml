@@ -1,9 +1,11 @@
 [package]
-name = "pallet-oracle-embedding-fixture"
+name = "pallet-deos-router-embedding-fixture"
+description = "External-consumer runtime fixture for the public pallet-deos-router embedding contract"
 version = "0.7.14"
-description = "Independent runtime fixture for pallet-deos-oracle"
 authors.workspace = true
 license = "MIT-0"
+homepage.workspace = true
+repository.workspace = true
 edition.workspace = true
 publish = false
 
@@ -12,29 +14,29 @@ workspace = true
 
 [dependencies]
 codec = { workspace = true }
-pallet-oracle = { workspace = true }
+pallet-axial-router.workspace = true
+scale-info.workspace = true
 polkadot-sdk = { workspace = true, features = [
   "frame-support",
   "frame-system",
-  "sp-core",
-  "sp-io",
+  "pallet-assets",
+  "pallet-balances",
   "sp-runtime",
 ] }
-scale-info = { workspace = true }
 
 [features]
 default = ["std"]
 std = [
   "codec/std",
-  "pallet-oracle/std",
-  "polkadot-sdk/std",
+  "pallet-axial-router/std",
   "scale-info/std",
+  "polkadot-sdk/std",
 ]
 runtime-benchmarks = [
-  "pallet-oracle/runtime-benchmarks",
+  "pallet-axial-router/runtime-benchmarks",
   "polkadot-sdk/runtime-benchmarks",
 ]
 try-runtime = [
-  "pallet-oracle/try-runtime",
+  "pallet-axial-router/try-runtime",
   "polkadot-sdk/try-runtime",
 ]

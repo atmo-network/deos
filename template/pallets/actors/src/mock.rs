@@ -16,8 +16,8 @@ use alloc::vec;
 use core::cell::RefCell;
 
 use crate::{
-  ActorType, AssetOps, DexOps, ExecutionContext, FeeCollector, LiquidityOps, StakingOps,
-  TaskFailure,
+  ActorType, AssetOps, DexOps, DexSwapOutcome, ExecutionContext, FeeCollector, LiquidityOps,
+  StakingOps, TaskFailure,
 };
 
 type Block = polkadot_sdk::frame_system::mocking::MockBlock<Test>;
@@ -112,7 +112,7 @@ impl polkadot_sdk::pallet_balances::Config for Test {
 pub struct ActorsPalletId;
 impl Get<PalletId> for ActorsPalletId {
   fn get() -> PalletId {
-    PalletId(*b"deactors")
+    PalletId(*b"actors00")
   }
 }
 
@@ -529,7 +529,7 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     asset_out: TestAsset,
     amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, TaskFailure> {
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     let who = context.actor;
     LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow_mut() = Some(context.actor_type));
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
@@ -549,7 +549,10 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       return Err(DispatchError::Other("MockDexAfterInputTransferFailed").into());
     }
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
-    Ok(amount_out)
+    Ok(DexSwapOutcome {
+      total_amount_in: amount_in,
+      recipient_amount_out: amount_out,
+    })
   }
 
   fn swap_exact_out(
@@ -559,7 +562,7 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
     amount_out: Balance,
     max_amount_in: Balance,
     slippage_tolerance: Perbill,
-  ) -> Result<Balance, TaskFailure> {
+  ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     let who = context.actor;
     LAST_DEX_ACTORS_TYPE.with(|value| *value.borrow_mut() = Some(context.actor_type));
     let (ri, ro) = Self::get_reserves(asset_in, asset_out)?;
@@ -586,7 +589,10 @@ impl DexOps<AccountId, TestAsset, Balance> for MockDexOps {
       return Err(DispatchError::Other("MockDexAfterInputTransferFailed").into());
     }
     MockAssetOps::transfer(&u64::MAX, who, asset_out, amount_out)?;
-    Ok(amount_in)
+    Ok(DexSwapOutcome {
+      total_amount_in: amount_in,
+      recipient_amount_out: amount_out,
+    })
   }
 }
 

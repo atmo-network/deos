@@ -1,5 +1,4 @@
 use polkadot_sdk::frame_support::pallet_prelude::*;
-use scale_info::prelude::vec::Vec;
 
 // Re-export AssetKind from primitives as the single source of truth
 pub use primitives::AssetKind;
@@ -62,13 +61,13 @@ pub trait TmcInterface<AccountId, Balance> {
 /// Asset conversion API for XYK pools
 pub trait AssetConversionApi<AccountId, Balance> {
   /// Get pool ID for asset pair
-  fn get_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)>;
+  fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)>;
 
   /// Get pool reserves
-  fn get_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)>;
+  fn single_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)>;
 
   /// Quote the output received from an exact input to one XYK pool.
-  fn quote_price_exact_tokens_for_tokens(
+  fn quote_single_pool_exact_input(
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_in: Balance,
@@ -76,38 +75,34 @@ pub trait AssetConversionApi<AccountId, Balance> {
   ) -> Option<Balance>;
 
   /// Quote the input required to receive an exact output from one XYK pool.
-  fn quote_price_tokens_for_exact_tokens(
+  fn quote_single_pool_exact_output(
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_out: Balance,
     include_fee: bool,
   ) -> Option<Balance>;
 
-  /// Execute an exact-input swap.
-  fn swap_exact_tokens_for_tokens(
+  /// Execute one identified XYK pool leg under an exact-input floor.
+  fn execute_single_pool_exact_input(
     who: AccountId,
-    path: Vec<AssetKind>,
+    asset_in: AssetKind,
+    asset_out: AssetKind,
     amount_in: Balance,
     min_amount_out: Balance,
     recipient: AccountId,
     keep_alive: bool,
   ) -> Result<Balance, DispatchError>;
 
-  /// Execute an exact-output swap and return the actual input spent.
-  fn swap_tokens_for_exact_tokens(
+  /// Execute one identified XYK pool leg under an exact-output ceiling.
+  fn execute_single_pool_exact_output(
     who: AccountId,
-    path: Vec<AssetKind>,
+    asset_in: AssetKind,
+    asset_out: AssetKind,
     amount_out: Balance,
     max_amount_in: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<Balance, DispatchError>;
-}
-
-/// Weight information for benchmarking
-pub trait WeightInfo {
-  /// Weight for swap operation
-  fn swap() -> Weight;
+  ) -> Result<crate::ExactOutputExecution, DispatchError>;
 }
 
 /// Helper for benchmarking
@@ -116,6 +111,7 @@ pub trait BenchmarkHelper<AssetKind, AccountId, Balance> {
   fn create_asset(asset: AssetKind) -> DispatchResult;
   fn mint_asset(asset: AssetKind, to: &AccountId, amount: Balance) -> DispatchResult;
   fn create_pool(asset1: AssetKind, asset2: AssetKind) -> DispatchResult;
+  fn create_tmc_curve(token_asset: AssetKind, collateral_asset: AssetKind) -> DispatchResult;
   fn add_liquidity(
     who: &AccountId,
     asset1: AssetKind,

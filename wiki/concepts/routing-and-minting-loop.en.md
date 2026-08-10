@@ -12,6 +12,7 @@ sources:
   - ../../template/pallets/router/docs/architecture.en.md
   - ../../template/pallets/tmc/docs/architecture.en.md
   - ../../docs/tmctol.specification.en.md
+  - ../../template/pallets/router/docs/specification.en.md
 status: active
 audience: newcomer
 tags:
@@ -26,7 +27,7 @@ related:
   - Token-Driven Automation
   - Staking
   - Core Terms
-last_compiled: 2026-07-20
+last_compiled: 2026-08-10
 confidence: 0.9
 ---
 
@@ -48,7 +49,7 @@ The current architecture evaluates a small candidate set, including:
 - Direct mint routes
 - Native-anchored multi-hop routes
 
-It also updates its EMA oracle before direct execution paths and verifies exact-input outcomes through recipient balance deltas. This is a shipped mitigation against stale quote trust, not a blanket guarantee that all market manipulation disappears.
+It publishes and validates each actual XYK leg in execution order, re-prepares stale quote projections from current state, and verifies exact-input output plus exact-output spend/output through measured deltas. This is shipped bounded protection, not a blanket guarantee that market manipulation disappears.
 
 ## TMC Role
 
@@ -78,7 +79,7 @@ That is why the docs describe the router as an economic coordination actor rathe
 
 ## Canonical On-Chain Surface
 
-The router now exposes a typed quote view and the TMC pallet exposes bounded curve state. These are part of the live on-chain contract for route preview and minting truth.
+The router exposes bounded exact-input and exact-output quote views at an explicit state hash and the TMC pallet exposes bounded curve state. These are part of the live on-chain contract for route preview and minting truth.
 
 Long-range route analytics or chart history remain separate materialized concerns rather than canonical runtime state.
 

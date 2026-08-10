@@ -12,6 +12,7 @@ sources:
   - ../../template/pallets/router/docs/architecture.en.md
   - ../../docs/oracle.integration.en.md
   - ../../docs/core.architecture.en.md
+  - ../../template/pallets/router/docs/specification.en.md
 status: active
 audience: newcomer
 tags:
@@ -26,7 +27,7 @@ related:
   - TMCTOL Standard
   - Token-Driven Automation
   - Asset Identity
-last_compiled: 2026-07-27
+last_compiled: 2026-08-10
 confidence: 0.9
 ---
 
@@ -47,7 +48,7 @@ The router is deliberately opinionated:
 - It uses the native asset as the main routing anchor
 - It compares XYK pool routes with mint-side protocol routes
 - It publishes pre-execution pool samples to typed standalone Oracle feeds
-- It verifies exact-input outcomes by recipient balance delta rather than by quote math alone
+- It verifies actual exact-input output and exact-output spend/output deltas rather than trusting quote math
 
 That makes it a coordination layer, not just a convenience helper.
 
@@ -55,9 +56,9 @@ That makes it a coordination layer, not just a convenience helper.
 
 The current implementation evaluates a small candidate set such as direct XYK routes, direct mint routes, and native-anchored multi-hop routes.
 
-It then ranks those routes by recipient expected output and executes the best one. Price impact and fee fields on quotes stay informational. Direct routes also apply pre-swap EMA deviation guards; multi-hop routes rely on user slippage only. That is a local deviation surface, not a fair-price proof or flash-loan, ordering, or sandwich immunity.
+It ranks exact-input routes by maximum recipient output and exact-output routes by minimum total input, with deterministic family/path tie-breaking. Price impact and fee fields on quotes stay informational. Execution prepares current route truth again, validates every actual XYK leg against its directional reference, and enforces the authored output floor or total-input ceiling against measured deltas. These checks remain local protection, not a fair-price proof or flash-loan, ordering, or sandwich immunity.
 
-Directional pool observations now live in the standalone Oracle pallet. Canonical pool admission creates both typed directions with immutable producer, scale, aggregation, and provenance; the Router publishes the executed direction before direct execution. Router-local EMA and tracked-asset storage no longer exist. Generalized feeds and unbounded on-chain history remain out of scope.
+Directional pool observations live in the standalone Oracle pallet. Canonical pool admission creates both typed directions with immutable producer, scale, aggregation, and provenance; the Router publishes each actual XYK leg immediately before executing it in canonical order. Direct TMC mint publishes no XYK observation. Router-local EMA and tracked-asset storage no longer exist. Generalized feeds and unbounded on-chain history remain out of scope.
 
 The router is not optional glue around canonical product swaps. It is the reference protocol gateway for fee-bearing route comparison, while the runtime does not claim that every lower-level Asset Conversion call is technically unreachable.
 
@@ -69,7 +70,7 @@ That is why the router is a first-class economic actor in the architecture. It i
 
 ## Canonical On-Chain Surface
 
-The router exposes a typed on-chain quote view for exact-input previews. That gives clients a bounded route preview directly from the chain instead of forcing the browser to reconstruct router logic off-chain. The execution path still verifies the delivered recipient amount, so the quote is a preview rather than the final proof of outcome.
+The router exposes bounded typed on-chain quote views for exact-input and exact-output previews at an explicit block hash. That gives clients a bounded route preview directly from the chain instead of forcing the browser to reconstruct router logic off-chain. Execution never treats a quote as authority: it re-prepares current state and emits one canonical outcome containing family, legs, actual amounts, Router fee, and Weight class.
 
 Long-range analytics and historical route dashboards still belong to materialized views, not to canonical runtime state.
 

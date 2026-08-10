@@ -23,11 +23,35 @@ use polkadot_sdk::*;
 use crate::{AssetConversion, RuntimeOrigin};
 use primitives::{AssetKind, ecosystem};
 
+#[cfg(test)]
+std::thread_local! {
+  static FAIL_AFTER_XYK_EXECUTION_AT: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+  static XYK_EXECUTION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_fail_after_xyk_execution_at(index: Option<usize>) {
+  FAIL_AFTER_XYK_EXECUTION_AT.with(|value| value.set(index));
+  XYK_EXECUTION_COUNT.with(|value| value.set(0));
+}
+
+#[cfg(test)]
+fn fail_after_xyk_execution() -> bool {
+  let index = XYK_EXECUTION_COUNT.with(|value| {
+    let index = value.get();
+    value.set(index.saturating_add(1));
+    index
+  });
+  FAIL_AFTER_XYK_EXECUTION_AT.with(|value| value.get() == Some(index))
+}
+
 parameter_types! {
   /// Router fee as Perbill (derived from ecosystem constant 50bps = 0.5%)
   pub const AxialRouterFee: Perbill = ecosystem::params::AXIAL_ROUTER_FEE;
   /// Maximum governance-settable router fee for the current launch line
   pub const AxialRouterMaxFee: Perbill = ecosystem::params::MAX_AXIAL_ROUTER_FEE;
+  /// Maximum bounded LP reverse-index entries.
+  pub const AxialRouterMaxLpPairs: u32 = ecosystem::params::MAX_ROUTER_LP_PAIRS;
   /// Native asset (AssetKind::Native)
   pub const NativeAsset: AssetKind = AssetKind::Native;
   /// Pallet ID for the Axial router
@@ -469,7 +493,7 @@ impl AssetConversionAdapter {
 }
 
 impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConversionAdapter {
-  fn get_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
+  fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
     if asset_a == asset_b {
       return None;
     }
@@ -480,12 +504,12 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     }
   }
 
-  fn get_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)> {
+  fn single_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)> {
     let (asset_a, asset_b) = pool_id;
     AssetConversion::get_reserves(asset_a, asset_b).ok()
   }
 
-  fn quote_price_exact_tokens_for_tokens(
+  fn quote_single_pool_exact_input(
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_in: Balance,
@@ -499,7 +523,7 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     )
   }
 
-  fn quote_price_tokens_for_exact_tokens(
+  fn quote_single_pool_exact_output(
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_out: Balance,
@@ -513,19 +537,18 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     )
   }
 
-  fn swap_exact_tokens_for_tokens(
+  fn execute_single_pool_exact_input(
     who: AccountId,
-    path: Vec<AssetKind>,
+    asset_in: AssetKind,
+    asset_out: AssetKind,
     amount_in: Balance,
     min_amount_out: Balance,
     recipient: AccountId,
     keep_alive: bool,
   ) -> Result<Balance, sp_runtime::DispatchError> {
-    if path.len() < 2usize {
-      return Err(DispatchError::Other("Invalid asset path"));
-    }
+    let path = [asset_in, asset_out];
     // Get target asset and snapshot balance before swap
-    let target_asset = *path.last().unwrap();
+    let target_asset = asset_out;
     // Snapshot recipient balance before swap
     let balance_before = match target_asset {
       AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&recipient),
@@ -544,6 +567,10 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
       recipient.clone(),
       keep_alive,
     )?;
+    #[cfg(test)]
+    if fail_after_xyk_execution() {
+      return Err(DispatchError::Other("Injected post-XYK execution failure"));
+    }
     // Snapshot recipient balance after swap and calculate actual amount received
     let balance_after = match target_asset {
       AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&recipient),
@@ -556,24 +583,28 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     Ok(actual_amount_out)
   }
 
-  fn swap_tokens_for_exact_tokens(
+  fn execute_single_pool_exact_output(
     who: AccountId,
-    path: Vec<AssetKind>,
+    asset_in: AssetKind,
+    asset_out: AssetKind,
     amount_out: Balance,
     max_amount_in: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<Balance, sp_runtime::DispatchError> {
-    if path.len() < 2usize {
-      return Err(DispatchError::Other("Invalid asset path"));
-    }
-    let input_asset = *path
-      .first()
-      .ok_or(DispatchError::Other("Invalid asset path"))?;
+  ) -> Result<pallet_axial_router::ExactOutputExecution, sp_runtime::DispatchError> {
+    let path = [asset_in, asset_out];
+    let input_asset = asset_in;
+    let output_asset = asset_out;
     let balance_before = match input_asset {
       AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&who),
       AssetKind::Local(id) | AssetKind::Foreign(id) => {
         <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &who)
+      }
+    };
+    let recipient_before = match output_asset {
+      AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&recipient),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &recipient)
       }
     };
     let boxed_path: Vec<Box<AssetKind>> = path.into_iter().map(Box::new).collect();
@@ -582,7 +613,7 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
       boxed_path,
       amount_out,
       max_amount_in,
-      recipient,
+      recipient.clone(),
       keep_alive,
     )?;
     let balance_after = match input_asset {
@@ -591,7 +622,16 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
         <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &who)
       }
     };
-    Ok(balance_before.saturating_sub(balance_after))
+    let recipient_after = match output_asset {
+      AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&recipient),
+      AssetKind::Local(id) | AssetKind::Foreign(id) => {
+        <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &recipient)
+      }
+    };
+    Ok(pallet_axial_router::ExactOutputExecution {
+      amount_in: balance_before.saturating_sub(balance_after),
+      recipient_amount_out: recipient_after.saturating_sub(recipient_before),
+    })
   }
 }
 
@@ -747,6 +787,7 @@ impl pallet_axial_router::pallet::Config for Runtime {
   type EmaHalfLife = AxialRouterEmaHalfLife;
   type FeeAdapter = FeeManagerImpl<Runtime>;
   type MaxPriceDeviation = AxialRouterMaxPriceDeviation;
+  type MaxLpPairs = AxialRouterMaxLpPairs;
   type MaxRouterFee = AxialRouterMaxFee;
   type MinSwapForeign = MinSwapForeign;
   type NativeAsset = NativeAsset;
@@ -809,6 +850,19 @@ impl pallet_axial_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
       Box::new(asset2),
     )?;
     super::assets_config::register_pool_lp_pair(asset1, asset2)
+  }
+
+  fn create_tmc_curve(
+    token_asset: AssetKind,
+    collateral_asset: AssetKind,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    pallet_tmc::Pallet::<Runtime>::create_curve(
+      RuntimeOrigin::root(),
+      token_asset,
+      collateral_asset,
+      AxialRouterPrecision::get(),
+      0,
+    )
   }
 
   fn add_liquidity(

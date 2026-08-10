@@ -30,12 +30,22 @@ thread_local! {
 
     // Oracle Prices: (AssetA, AssetB) -> Price
     pub static ORACLE_PRICES: RefCell<BTreeMap<(AssetKind, AssetKind), u128>> = const { RefCell::new(BTreeMap::new()) };
+    pub static ORACLE_UPDATES: RefCell<Vec<(AssetKind, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
+    pub static FAIL_ORACLE_UPDATE_AT: RefCell<Option<usize>> = const { RefCell::new(None) };
+    pub static XYK_EXECUTIONS: RefCell<Vec<(AssetKind, AssetKind)>> = const { RefCell::new(Vec::new()) };
+    pub static EXACT_INPUT_QUOTE_CALLS: RefCell<Vec<(AssetKind, AssetKind)>> = const { RefCell::new(Vec::new()) };
+    pub static ORACLE_VALIDATIONS: RefCell<Vec<(AssetKind, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
 
     // Fee accumulator for verification
     pub static COLLECTED_FEES: RefCell<Vec<(u64, AssetKind, u128)>> = const { RefCell::new(Vec::new()) };
 
-    // Deterministic fee-routing failure switch for atomicity regressions
+    // Deterministic failure and outcome switches for atomicity regressions.
     pub static FORCE_FEE_FAILURE: RefCell<bool> = const { RefCell::new(false) };
+    pub static EXACT_INPUT_REPORTED_AMOUNT: RefCell<Option<u128>> = const { RefCell::new(None) };
+    pub static EXACT_OUTPUT_REPORTED_AMOUNT: RefCell<Option<u128>> = const { RefCell::new(None) };
+    pub static EXACT_OUTPUT_REPORTED_INPUT: RefCell<Option<u128>> = const { RefCell::new(None) };
+    pub static FAIL_XYK_EXECUTION_AT: RefCell<Option<usize>> = const { RefCell::new(None) };
+    pub static FAIL_TMC_AFTER_DEBIT: RefCell<bool> = const { RefCell::new(false) };
 }
 
 // Helper methods to setup state
@@ -75,6 +85,30 @@ pub fn get_collected_fees() -> Vec<(u64, AssetKind, u128)> {
 
 pub fn set_force_fee_failure(should_fail: bool) {
   FORCE_FEE_FAILURE.with(|flag| *flag.borrow_mut() = should_fail);
+}
+
+pub fn set_exact_input_reported_amount(amount: Option<u128>) {
+  EXACT_INPUT_REPORTED_AMOUNT.with(|value| *value.borrow_mut() = amount);
+}
+
+pub fn set_exact_output_reported_amount(amount: Option<u128>) {
+  EXACT_OUTPUT_REPORTED_AMOUNT.with(|value| *value.borrow_mut() = amount);
+}
+
+pub fn set_exact_output_reported_input(amount: Option<u128>) {
+  EXACT_OUTPUT_REPORTED_INPUT.with(|value| *value.borrow_mut() = amount);
+}
+
+pub fn set_fail_oracle_update_at(index: Option<usize>) {
+  FAIL_ORACLE_UPDATE_AT.with(|value| *value.borrow_mut() = index);
+}
+
+pub fn set_fail_xyk_execution_at(index: Option<usize>) {
+  FAIL_XYK_EXECUTION_AT.with(|value| *value.borrow_mut() = index);
+}
+
+pub fn set_fail_tmc_after_debit(should_fail: bool) {
+  FAIL_TMC_AFTER_DEBIT.with(|value| *value.borrow_mut() = should_fail);
 }
 
 pub fn get_pool(asset_a: AssetKind, asset_b: AssetKind) -> Option<(u128, u128)> {
@@ -321,6 +355,10 @@ impl pallet_axial_router::types::TmcInterface<u64, u128> for MockTmcPallet {
       }
     }
 
+    if FAIL_TMC_AFTER_DEBIT.with(|value| *value.borrow()) {
+      return Err(DispatchError::Other("Forced TMC failure after debit"));
+    }
+
     // 2. Apply 33.3% allocation to user (matching real TMC behavior)
     // For simplicity in mock: user gets 25% (1/4), rest goes to zap account (888)
     let user_allocation = total_amount / 4;
@@ -378,21 +416,35 @@ impl pallet_axial_router::types::PriceOracle<u128> for MockPriceOracle {
     asset_out: AssetKind,
     price: u128,
   ) -> Result<(), DispatchError> {
+    let update_index = ORACLE_UPDATES.with(|calls| {
+      let mut calls = calls.borrow_mut();
+      let index = calls.len();
+      calls.push((asset_in, asset_out, price));
+      index
+    });
+    if FAIL_ORACLE_UPDATE_AT.with(|value| *value.borrow() == Some(update_index)) {
+      return Err(DispatchError::Other("Forced oracle publication failure"));
+    }
     set_oracle_price(asset_in, asset_out, price);
     Ok(())
   }
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<u128> {
     ORACLE_PRICES.with(|p| p.borrow().get(&(asset_in, asset_out)).cloned())
   }
-  fn validate_price_deviation(_: AssetKind, _: AssetKind, _: u128) -> Result<(), DispatchError> {
-    Ok(()) // Always valid for now
+  fn validate_price_deviation(
+    asset_in: AssetKind,
+    asset_out: AssetKind,
+    price: u128,
+  ) -> Result<(), DispatchError> {
+    ORACLE_VALIDATIONS.with(|calls| calls.borrow_mut().push((asset_in, asset_out, price)));
+    Ok(())
   }
 }
 
 // Adapter for AssetConversionApi
 pub struct MockAssetConversionAdapter;
 impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConversionAdapter {
-  fn get_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
+  fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
     POOLS.with(|p| {
       let pools = p.borrow();
       if pools.contains_key(&(asset_a, asset_b)) {
@@ -405,19 +457,20 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
     })
   }
 
-  fn get_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(u128, u128)> {
+  fn single_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(u128, u128)> {
     POOLS.with(|p| p.borrow().get(&pool_id).cloned())
   }
 
-  fn quote_price_exact_tokens_for_tokens(
+  fn quote_single_pool_exact_input(
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_in: u128,
     _include_fee: bool,
   ) -> Option<u128> {
+    EXACT_INPUT_QUOTE_CALLS.with(|calls| calls.borrow_mut().push((asset_in, asset_out)));
     // 1. Identify Pool
-    let pool_id = Self::get_pool_id(asset_in, asset_out)?;
-    let (res_a, res_b) = Self::get_pool_reserves(pool_id)?;
+    let pool_id = Self::single_pool_id(asset_in, asset_out)?;
+    let (res_a, res_b) = Self::single_pool_reserves(pool_id)?;
 
     // 2. Identify Reserves (In vs Out)
     let (reserve_in, reserve_out) = if pool_id.0 == asset_in {
@@ -436,14 +489,14 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
     Some(amount_out)
   }
 
-  fn quote_price_tokens_for_exact_tokens(
+  fn quote_single_pool_exact_output(
     asset_in: AssetKind,
     asset_out: AssetKind,
     amount_out: u128,
     _include_fee: bool,
   ) -> Option<u128> {
-    let pool_id = Self::get_pool_id(asset_in, asset_out)?;
-    let (res_a, res_b) = Self::get_pool_reserves(pool_id)?;
+    let pool_id = Self::single_pool_id(asset_in, asset_out)?;
+    let (res_a, res_b) = Self::single_pool_reserves(pool_id)?;
     let (reserve_in, reserve_out) = if pool_id.0 == asset_in {
       (res_a, res_b)
     } else {
@@ -459,24 +512,31 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
       .checked_div(denominator)
   }
 
-  fn swap_exact_tokens_for_tokens(
+  fn execute_single_pool_exact_input(
     who: u64,
-    path: vec::Vec<AssetKind>,
+    asset_in: AssetKind,
+    asset_out: AssetKind,
     amount_in: u128,
     min_amount_out: u128,
     recipient: u64,
     keep_alive: bool,
   ) -> Result<u128, DispatchError> {
-    if path.len() < 2 {
-      return Err(DispatchError::Other("Path too short"));
-    }
-
+    let path = [asset_in, asset_out];
     let mut current_amount = amount_in;
     let mut current_holder = who;
 
     for window in path.windows(2) {
       let hop_in = window[0];
       let hop_out = window[1];
+      let execution_index = XYK_EXECUTIONS.with(|calls| {
+        let mut calls = calls.borrow_mut();
+        let index = calls.len();
+        calls.push((hop_in, hop_out));
+        index
+      });
+      if FAIL_XYK_EXECUTION_AT.with(|value| *value.borrow() == Some(execution_index)) {
+        return Err(DispatchError::Other("Forced XYK execution failure"));
+      }
       let hop_recipient = if window[1] == *path.last().unwrap() {
         recipient
       } else {
@@ -484,12 +544,12 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
       };
 
       let hop_amount_out =
-        Self::quote_price_exact_tokens_for_tokens(hop_in, hop_out, current_amount, true)
+        Self::quote_single_pool_exact_input(hop_in, hop_out, current_amount, true)
           .ok_or(DispatchError::Other("Pool not found for hop"))?;
 
       // Update pool reserves
       let pool_id =
-        Self::get_pool_id(hop_in, hop_out).ok_or(DispatchError::Other("Pool missing"))?;
+        Self::single_pool_id(hop_in, hop_out).ok_or(DispatchError::Other("Pool missing"))?;
       POOLS.with(|p| {
         let mut pools = p.borrow_mut();
         let (res_a, res_b) = pools.get(&pool_id).cloned().unwrap();
@@ -556,31 +616,37 @@ impl pallet_axial_router::types::AssetConversionApi<u64, u128> for MockAssetConv
       return Err(DispatchError::Other("SlippageExceeded"));
     }
 
-    Ok(current_amount)
+    Ok(EXACT_INPUT_REPORTED_AMOUNT.with(|value| value.borrow().unwrap_or(current_amount)))
   }
 
-  fn swap_tokens_for_exact_tokens(
+  fn execute_single_pool_exact_output(
     who: u64,
-    path: vec::Vec<AssetKind>,
+    asset_in: AssetKind,
+    asset_out: AssetKind,
     amount_out: u128,
     max_amount_in: u128,
     recipient: u64,
     keep_alive: bool,
-  ) -> Result<u128, DispatchError> {
-    if path.len() < 2 {
-      return Err(DispatchError::Other("Path too short"));
-    }
-    let mut required_in = amount_out;
-    for window in path.windows(2).rev() {
-      required_in =
-        Self::quote_price_tokens_for_exact_tokens(window[0], window[1], required_in, true)
-          .ok_or(DispatchError::Other("Pool not found for hop"))?;
-    }
+  ) -> Result<crate::ExactOutputExecution, DispatchError> {
+    let required_in = Self::quote_single_pool_exact_output(asset_in, asset_out, amount_out, true)
+      .ok_or(DispatchError::Other("Pool not found for hop"))?;
     if required_in > max_amount_in {
       return Err(DispatchError::Other("SlippageExceeded"));
     }
-    Self::swap_exact_tokens_for_tokens(who, path, required_in, amount_out, recipient, keep_alive)?;
-    Ok(required_in)
+    let recipient_amount_out = Self::execute_single_pool_exact_input(
+      who,
+      asset_in,
+      asset_out,
+      required_in,
+      amount_out,
+      recipient,
+      keep_alive,
+    )?;
+    Ok(crate::ExactOutputExecution {
+      amount_in: EXACT_OUTPUT_REPORTED_INPUT.with(|value| value.borrow().unwrap_or(required_in)),
+      recipient_amount_out: EXACT_OUTPUT_REPORTED_AMOUNT
+        .with(|value| value.borrow().unwrap_or(recipient_amount_out)),
+    })
   }
 }
 
@@ -617,6 +683,7 @@ impl pallet_axial_router::Config for Test {
   type Precision = ConstU128<1_000_000_000_000>;
   type EmaHalfLife = ConstU32<3600>;
   type MaxPriceDeviation = MaxPriceDeviationStub;
+  type MaxLpPairs = ConstU32<500>;
   type MaxRouterFee = MaxRouterFeeStub;
   type FeeAdapter = MockFeeAdapter;
   type BurningManagerAccount = ConstU64<123>;
@@ -668,6 +735,14 @@ impl crate::types::BenchmarkHelper<primitives::AssetKind, u64, u128>
     Ok(())
   }
 
+  fn create_tmc_curve(
+    token_asset: primitives::AssetKind,
+    collateral_asset: primitives::AssetKind,
+  ) -> polkadot_sdk::sp_runtime::DispatchResult {
+    set_tmc_curve(token_asset, collateral_asset, 2);
+    Ok(())
+  }
+
   fn add_liquidity(
     _who: &u64,
     asset1: primitives::AssetKind,
@@ -704,8 +779,18 @@ pub fn new_test_ext() -> polkadot_sdk::sp_io::TestExternalities {
   POOLS.with(|p| p.borrow_mut().clear());
   TMC_RATES.with(|r| r.borrow_mut().clear());
   ORACLE_PRICES.with(|p| p.borrow_mut().clear());
+  ORACLE_UPDATES.with(|calls| calls.borrow_mut().clear());
+  FAIL_ORACLE_UPDATE_AT.with(|value| *value.borrow_mut() = None);
+  XYK_EXECUTIONS.with(|calls| calls.borrow_mut().clear());
+  EXACT_INPUT_QUOTE_CALLS.with(|calls| calls.borrow_mut().clear());
+  ORACLE_VALIDATIONS.with(|calls| calls.borrow_mut().clear());
   COLLECTED_FEES.with(|f| f.borrow_mut().clear());
   FORCE_FEE_FAILURE.with(|flag| *flag.borrow_mut() = false);
+  EXACT_INPUT_REPORTED_AMOUNT.with(|value| *value.borrow_mut() = None);
+  EXACT_OUTPUT_REPORTED_AMOUNT.with(|value| *value.borrow_mut() = None);
+  EXACT_OUTPUT_REPORTED_INPUT.with(|value| *value.borrow_mut() = None);
+  FAIL_XYK_EXECUTION_AT.with(|value| *value.borrow_mut() = None);
+  FAIL_TMC_AFTER_DEBIT.with(|value| *value.borrow_mut() = false);
 
   ext.execute_with(|| {
     // Pre-fund accounts with Native Balance for deposits

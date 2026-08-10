@@ -57,13 +57,19 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 7. `Fee Collection`: One-hop transfer from user to the Burn Actor via `FeeAdapter::route_fee()`, inside the same transactional flow as the swap.
 8. `Pre-Swap Oracle Update`: Snapshot pool reserves and update EMA prices _before_ trade execution.
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
-10. `Event Emission`: `SwapExecuted { who, from, to, amount_in, amount_out }`, where `amount_out` is the amount delivered to `recipient` (for DirectMint, excluding protocol/sink allocation).
+10. `Outcome`: Execution constructs `RouterOutcome` from committed actual facts. `SwapExecuted` carries caller, request endpoints, and that complete outcome directly, so route family, prepared legs, amounts, fee, and Weight class retain one meaning.
 
-`Public API`: `execute_swap_for(who, from, to, amount_in, min_amount_out, recipient)` — callable by other pallets or System Actors adapters for burn/liquidity actor swaps with automatic fee exemption and keep-alive awareness.
+`Public API`: `execute_swap_for(...)` and `execute_exact_out_for(...)` return `RouterOutcome` with selected family, prepared legs, actual total/routed input, fee, recipient output, and route Weight class.
 
-`Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes plus path execution returning actual input spent. `quote_exact_out` evaluates at most direct XYK and one reverse-quoted Native-anchored path, selects minimum required post-fee input, and adds the caller-aware router fee. `execute_exact_out_for` enforces the total-input cap transactionally and reports actual total spend. Direct TMC mint remains exact-input only because it cannot promise an exact recipient amount.
+System Actor adapters preserve actual input/output facts in `DexSwapOutcome`. They derive authored slippage bounds and retain System-only reference policy, but they do not call a second Router path validator or own route preparation.
 
-`Authoritative View Surfaces`: `quote_exact_input(who, from, to, amount_in)` returns `RouterQuote`; `quote_exact_out(who, from, to, amount_out)` returns `ExactOutputQuote`. Both expose input, router fee, post-fee input, recipient output, mechanism, bounded path, price impact, and known fees without mutating state. Exact input compares maximum recipient output across XYK, TMC, and Native-anchored candidates; exact output compares minimum required input across its two native XYK candidates.
+`Native Exact-Output Boundary`: `AssetConversionApi` exposes one-pool reverse quotes and execution returning `ExactOutputExecution { amount_in, recipient_amount_out }` from measured caller and recipient deltas.
+
+`quote_exact_out` evaluates at most direct XYK and one reverse-quoted Native-anchored path, selects minimum required post-fee input, and adds the caller-aware Router fee. Execution enforces total-input and recipient-output bounds against actual deltas. Direct TMC mint remains exact-input only because it cannot promise an exact recipient amount.
+
+`Authoritative View Surfaces`: bounded FRAME view functions `quote_exact_input(...)` and `quote_exact_out(...)` return `RouterQuote` and `ExactOutputQuote`. RPC consumers invoke them at an explicit block hash; that transport `at` hash supplies state identity outside the SCALE payload.
+
+Both expose input, Router fee, routed input, recipient output, canonical `RouteFamily`, bounded path and legs, price impact, and known fees without mutation. Exact input maximizes recipient output across three candidates. Exact output minimizes required input across its two XYK candidates.
 
 ## Core Components
 
@@ -71,15 +77,21 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 
 The router utilizes a `Lazy Discovery` algorithm via `find_optimal_route()`. It evaluates up to 3 candidate routes and selects the one that delivers the most output (pure mechanism selection, per the project `Mechanism-Over-Policy` rule):
 
-- `Direct XYK`: `DirectXyk { pool_id }`; pool exists for `(from, to)` pair
-- `Direct Mint`: `DirectMint { foreign_asset }`; TMC curve exists for `to` and accepts `from` as collateral
-- `Multi-Hop`: `MultiHopNative { hops }`; non-native pair routed through both native pools
+- `Direct XYK`: `RouteFamily::DirectXyk` with one prepared XYK leg
+- `Direct Mint`: `RouteFamily::DirectMint` with one prepared TMC mint leg
+- `Native-Anchored XYK`: `RouteFamily::NativeAnchoredXyk` with two prepared XYK legs
 
 ### Route Selection Policy
 
 The router is a pure execution mechanism: it always picks the candidate route with the highest `expected_output`, i.e. the best price for the user. This is a deliberate `Mechanism-Over-Policy` choice — the router does not impose a quality/impact-weighted policy on top of price.
 
-`RouteComparison` still carries `price_impact` and `total_fees` fields, but only as informational quote fields surfaced to clients via `RouterQuote`. Price impact is approximated against EMA oracle prices for direct routes, or against a hypothetical direct quote for multi-hop routes. TMC routes report zero price impact (deterministic pricing). These fields do not influence route selection.
+Both selectors construct `PreparedRoute` with canonical family, bounded legs, total input, Router fee, routed input, recipient output, and Weight class. Quote paths derive from leg order. Price impact and known fees exist only on quote projections and do not enter prepared identity or comparison.
+
+`PreparedLegs` records canonical pool, ordered assets, and quoted input/output in execution order. No parallel object duplicates pool, collateral, or Native-anchor identity. Preparation rejects any mismatch among family, leg order, Native anchor, or adapter-supplied pool ID.
+
+Execution consumes `PreparedRoute` directly. Native-anchored exact-input preparation quotes each actual leg once and derives output from the final leg. It performs no separate availability or route-output quote pass.
+
+Price impact remains informational and TMC reports zero. Protection validates every prepared XYK leg against its directional reference. TMC bypasses XYK checks; System Actor reference policy remains outside Router ownership.
 
 ### Fee Architecture
 
@@ -109,15 +121,22 @@ The pallet is fully decoupled from concrete implementations through 4 trait boun
 
 ```rust
 pub trait AssetConversionApi<AccountId, Balance> {
-  fn get_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)>;
-  fn get_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)>;
-  fn quote_price_exact_tokens_for_tokens(
+  fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)>;
+  fn single_pool_reserves(pool_id: (AssetKind, AssetKind)) -> Option<(Balance, Balance)>;
+  fn quote_single_pool_exact_input(
     asset_in: AssetKind, asset_out: AssetKind, amount_in: Balance, include_fee: bool,
   ) -> Option<Balance>;
-  fn swap_exact_tokens_for_tokens(
-    who: AccountId, path: Vec<AssetKind>, amount_in: Balance,
+  fn quote_single_pool_exact_output(
+    asset_in: AssetKind, asset_out: AssetKind, amount_out: Balance, include_fee: bool,
+  ) -> Option<Balance>;
+  fn execute_single_pool_exact_input(
+    who: AccountId, asset_in: AssetKind, asset_out: AssetKind, amount_in: Balance,
     min_amount_out: Balance, recipient: AccountId, keep_alive: bool,
   ) -> Result<Balance, DispatchError>;
+  fn execute_single_pool_exact_output(
+    who: AccountId, asset_in: AssetKind, asset_out: AssetKind, amount_out: Balance,
+    max_amount_in: Balance, recipient: AccountId, keep_alive: bool,
+  ) -> Result<ExactOutputExecution, DispatchError>;
 }
 ```
 
@@ -187,7 +206,7 @@ Where `α = elapsed_blocks / (EmaHalfLife + elapsed_blocks)` uses `Perbill` floo
 
 ### Pre-Swap DEOS Oracle Invariant
 
-Oracle updates execute before the current swap modifies reserves and record that pre-execution pool ratio. Prior transactions may already have moved or manipulated the pool, so this snapshot is not a fair-price or ordering guarantee:
+Both intents traverse `PreparedLegs`, publish each directional pre-execution pool ratio, and execute that exact leg before advancing. Direct XYK publishes one ratio, Native-anchored XYK publishes two in execution order, and direct TMC mint publishes none. Both pallet-facing execution owners carry `#[transactional]`; fee routing, publication and Actors dirty ingress, every market leg, actual-bound verification, and success-event emission share that transaction. Prior transactions may already have moved or manipulated the pool, so this snapshot is not a fair-price or ordering guarantee:
 
 ```rust
 fn update_oracle_from_reserves(from: AssetKind, to: AssetKind) -> Result<(), Error<T>> {
@@ -226,8 +245,8 @@ The historical `0.7.6` extraction gate remained a no-go. The current `0.7.9` lin
 | Initialization | First nonzero observation replaces zero EMA directly |
 | Update | `elapsed = max(current - last, 1)`; `alpha = elapsed / (EmaHalfLife + elapsed)`; spot ratio uses saturating `Balance` multiplication and division |
 | Ordering | Direct route validates against the previous EMA, collects fee, snapshots pre-execution reserves into EMA, then executes; transaction rollback covers failure |
-| Direction | Only the executed `from -> to` key updates; reverse state remains independent |
-| Router consumers | Direct-route deviation and informational direct-route price impact; multi-hop deviation uses slippage rather than EMA |
+| Direction | Every prepared XYK leg updates its ordered `asset_in -> asset_out` key in execution order; reverse state remains independent |
+| Router consumers | Per-leg XYK deviation and informational price impact; direct TMC mint has no XYK reference or publication |
 | Actors consumer | System reference guard accepts a Fresh nonzero standalone observation through age 100, otherwise direct-reserve fallback, then fails Temporary if neither exists |
 | Governance | Canonical pool indexing admits exact immutable feed configurations; Router governance controls only the bounded fee rate |
 | History | Changed values emit bounded current-revision events; archive/history remains materialized-provider work |
@@ -239,7 +258,9 @@ Router-local observation storage, tracking calls, metadata, and generated weight
 | Storage | Type | Description |
 | --- | --- | --- |
 | `RouterFee<T>` | `StorageValue<Perbill>` | Current bounded governance fee rate |
-| `LpPairByTokenId<T>` | `StorageMap` | Reverse index from LP token ID to canonical pool pair |
+| `LpPairByTokenId<T>` | `StorageValue<BoundedBTreeMap<..., MaxLpPairs>>` | Bounded reverse index from LP token ID to canonical pool pair |
+
+LP registration canonicalizes pair order, rejects repeated endpoints and LP-token collisions, and fails closed at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. `try_state` verifies the fee ceiling and every retained pair's strict canonical order.
 
 ## Extrinsics
 
@@ -269,6 +290,8 @@ Router-local observation storage, tracking calls, metadata, and generated weight
 | `FeeRoutingFailed` | Fee transfer to Burn Actor failed |
 | `PriceDeviationExceeded` | Spot price deviates from EMA beyond threshold |
 | `RouterFeeTooHigh` | New router fee exceeds `MaxRouterFee` |
+
+Every public error maps exhaustively through `Error::failure_class()` to the stable Router taxonomy. The System Actor adapter derives retryability from that class: route availability, protection, liquidity, and publication rejection remain Temporary; invalid requests, fee rejection, ingress rejection, invariants, and unknown execution errors remain Permanent.
 
 ## Configuration Constants
 
@@ -351,6 +374,18 @@ The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementatio
 | `PriceOracleImpl<Runtime>` | `PriceOracle` | Typed publish/read delegation to standalone Oracle feeds |
 | `FeeManagerImpl<T>` | `FeeRoutingAdapter` | Direct transfer to Burn Actor (`Preservation::Protect`) |
 
+## Generated Conformance Vectors
+
+`examples/conformance_vectors.rs` emits and freshness-checks `tests/fixtures/router-conformance-vectors.v1.json`. The five vectors cover every supported family/intent combination, bind the specification, V16 metadata, Router weights, and Actors weights by SHA-256, encode prepared routes and outcomes as SCALE, and assert field-for-field cross-domain equality for every successful case.
+
+## Adversarial Corpus
+
+`tests/fixtures/router-adversarial-corpus.v1.json` binds 17 deterministic failure and stale-state scenarios to executable package/runtime anchors. Each case declares pre-state, request, injected fault, expected class, events, publications, balances, storage, Weight class, and anchor. Package validation rejects missing fields, duplicate names, or corpus cardinality drift.
+
+## Portability Evidence
+
+`embedding-runtime` compiles the public Config and adapter traits in an independent host with no DEOS runtime or Actors dependency. The fixture owns compile-time portability; package tests own reusable behavior and DEOS runtime tests own concrete composition.
+
 ## Test Coverage
 
 ### Unit Tests
@@ -358,6 +393,7 @@ The runtime (`axial_router_config.rs`) provides 4 concrete adapter implementatio
 - `Fee Math`: `router_fee_calculation_logic`, `large_amount_fee_calculation`, `zero_amount_fee_calculation`, `updated_fee_is_used_in_calculations`.
 - `Route Intelligence`: `router_intelligence_test` — verifies XYK preferred when output > TMC, TMC preferred when output > XYK.
 - `Protection`: `circular_swap_protection_test`, `slippage_protection_test`, `round_trip_buy_sell_is_net_negative_test` — characterizes round-trip execution cost (router fees both legs plus AMM curvature). This is an execution-cost check, not a sandwich/MEV-resistance guarantee; this launch line has no commit/reveal or frontrunning-ordering protection.
+- `Rollback`: Deterministic fixture switches cover fee rejection across all families, first/later publication and XYK-leg rejection, post-debit TMC rejection, prepared mismatch, and both actual-bound rejections. Runtime post-market injections prove first- and second-leg Native-anchored rollback across both pools, both Oracle observations, caller assets, intermediate Native, fee recipient, and events. The composed corrupt-Actors-ingress case additionally proves exact Actors dirty state and active-list rollback.
 - `Governance`: `governance_can_update_router_fee`, `only_governance_can_update_router_fee`.
 - `Adapter Contracts`: `fee_routing_adapter_test`, `price_oracle_test`, `tmc_interface_test`, `asset_conversion_api_test`.
 - `Integration Math`: `tmctol_integration_flow`, `tmctol_parameter_validation`, `precision_constant_validation`.
@@ -382,7 +418,19 @@ Located in `runtime/src/tests/axial_router_integration_tests.rs`:
 
 `swap` and `update_router_fee` use generated V2 runtime weights. The swap benchmark includes standalone Oracle publication and the subscriber-independent Actors change hook through admitted directional pool feeds.
 
-Production `50 × 20` generation measures `swap` at `323,020,000 / 10,609`, 22 reads, and 11 writes. `update_router_fee` measures `11,244,000 / 1,489`, one read, and one write. Accepted Router weights SHA-256 is `7b5eaef584f58154ff3aebb3d247ca1ad2c8763c221ebf11a8cdcefd3e5e1b0a`; these fixed paths imply no route or actor throughput.
+Production `50 × 20` generation measures every semantic route class independently:
+
+| Class | RefTime / ProofSize | Reads / Writes |
+| --- | --- | --- |
+| Exact-input direct XYK | `346,139,000 / 9,667` | `25 / 12` |
+| Exact-input direct mint | `362,133,000 / 21,862` | `32 / 14` |
+| Exact-input Native-anchored XYK | `510,967,000 / 19,253` | `36 / 17` |
+| Exact-output direct XYK | `199,051,000 / 6,208` | `10 / 5` |
+| Exact-output Native-anchored XYK | `369,606,000 / 16,644` | `21 / 10` |
+
+The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `11,384,000 / 1,489`, one read, and one write. Accepted Router weights SHA-256 is `bf81292b97f5ea34382c99e484874cc9a3b176f63537fc1a2b929c2a6d440c78`.
+
+The accepted full Actors production generation uses the same maximum for exact-input and exact-output DEX tasks. It measures exact-input at `550,009,000 / 19,253` with 37 reads and 17 writes and exact-output at `551,126,000 / 19,253` with 36 reads and 17 writes. Accepted Actors weights SHA-256 is `552c4564b55ff02ff7b0235dcb79f520fb0075d05e8a2fbdaf85f0ef7d8ae277`.
 
 ## Conclusion
 

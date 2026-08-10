@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-router"
-version = "0.7.13"
+version = "0.7.14"
 description = "Minimalist multi-token routing system optimized for TMC ecosystems"
 authors.workspace = true
 homepage.workspace = true
@@ -36,6 +36,8 @@ polkadot-sdk = { workspace = true, features = [
 
 [dev-dependencies]
 proptest = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
+sha2 = "0.10"
 
 [features]
 default = ["std"]
@@ -47,6 +49,7 @@ std = [
   "scale-info/std",
 ]
 runtime-benchmarks = [
+  "frame/runtime-benchmarks",
   "polkadot-sdk/runtime-benchmarks",
 ]
 try-runtime = ["polkadot-sdk/try-runtime"]

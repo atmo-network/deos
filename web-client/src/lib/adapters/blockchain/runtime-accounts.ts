@@ -11,7 +11,7 @@ import {
   u64,
 } from '@polkadot-api/substrate-bindings';
 
-export const ACTORS_PALLET_ID = 'deactors';
+export const ACTORS_PALLET_ID = 'actors00';
 export const SYSTEM_ACTORS_LABEL = 'system';
 export const SS58_FORMAT = 42;
 export const LIQUIDITY_ACTOR_ACTORS_ID = 2;

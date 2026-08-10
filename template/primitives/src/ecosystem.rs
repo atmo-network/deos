@@ -19,9 +19,9 @@ pub mod actor_ids {
   /// Burn Actor System Actors — collects DEOS Router fees and burns native tokens
   /// Created first at genesis (`actor_id = 0`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xeba61f8494ba498cb84ce3b771bc3c193dbd82f9a999153a55c383349f6e512e`
-  ///   SS58: `5HPgTa8GLrmzMDktPEWmuC82WtipKSibwd9C2pUQnESn4nAv`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0xe5d2c431c880d0bfbad3663b09164d86a76696dc2f137eeb502359fd28363f42`
+  ///   SS58: `5HG3S6PLHrykv65Vw8j19zRaEx2Bmb37iywfo2qK3cHosGKX`
   pub const BURNING_MANAGER_ACTORS_ID: u64 = 0;
 
   /// Fee Sink System Actors — unified fee collection and phase-aware redistribution
@@ -35,72 +35,72 @@ pub mod actor_ids {
   /// collators plus a bounded security-reward settlement contract; indivisible remainder stays
   /// in Fee Sink for a later cycle.
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xab373631522954b038699419fadc732893dff1230239bc30fbe17bf5fb12f084`
-  ///   SS58: `5FwCSs6WuW2tTv7uQFRB1o4rjmPQsgE6PesjKUUbroxfzKKh`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x7576c68c853f9f0427ae0c26043cd168ca5672bcdb221d9c0ad4ae7234d17e43`
+  ///   SS58: `5Eiik51gjANLwbjZUXnVJv8pPpoTTVVic2x5sNwy8NaoVaJ9`
   pub const FEE_SINK_ACTORS_ID: u64 = 1;
 
   /// Liquidity Actor System Actors — transforms protocol capital into LP tokens
   /// Created second active System Actors at genesis (`actor_id = 2`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xb136dc3f6dba4aac24a8c9f8be3c7b20e26b08422803b6999b7cd019c4ca50ab`
-  ///   SS58: `5G54dUVans8Rvnn1qdTea3fQ28osh8T7ijaWbi3gygm9sa7C`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x643d7f4212a9f0ad63071393bc9accbcc2eabb4d32e30ebbf546bb8c3f852b70`
+  ///   SS58: `5EL8uyEoZA3JQkhCC3ackopXhdujtKjHHRYVSM1BVrf5x6LW`
   pub const LIQUIDITY_ACTOR_ACTORS_ID: u64 = 2;
   /// TOL Bucket A (Anchor) — immutable LP accumulator
   /// Created at genesis (`actor_id = 3`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0x6f9a5aa8cd9ba27b2e69f1bac1c521d2ffde543275ebd787da11dbd131c50d25`
-  ///   SS58: `5Eb32Qkj9FpPMUXZMNreJzRESQRbYQWwiKXK4zf9VXifTEqX`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x35c4420572bfee8130a3ad5072f26d9b9ce0cf349bdb6fe1fb2c5b8fa99d4186`
+  ///   SS58: `5DHChJzyAY9pz54d6PXLmScG5vhdiarfNY2VjhkP4pG8vqSs`
   pub const TOL_BUCKET_A_ACTORS_ID: u64 = 3;
 
   /// TOL Bucket B (Building) — gradual LP unwind for BLDR buyback
   /// Created at genesis (`actor_id = 4`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0x03699bb4549d77d91390fc161867ccd3ef97d4f305f01757708905c84cb7d882`
-  ///   SS58: `5C9BNb4AoxDngwC6nzu8SEtAEbtGHiKeBjzJwgUewA9qDNL3`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x8667dc4e696df85145ff65005d50f842d4aa196b2b0481681d6086d38a98c263`
+  ///   SS58: `5F6w8Jd8mHTPphhHgBdUJdkTaT2hQ8mKYojDhzCre5TJqGPg`
   pub const TOL_BUCKET_B_ACTORS_ID: u64 = 4;
 
   /// TOL Bucket C (Capital) — gradual LP unwind for treasury operations
   /// Created at genesis (`actor_id = 5`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0x313e7fb07ed6681741b54c3d421f8c261027048e2a9b0668e1058654d369de29`
-  ///   SS58: `5DBGmawvmUvHAg9e2A4bcwZm3NiGX5KE5sPCKepN36SMJvfX`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x0c90365514a0e365f883e8f4a14f18b2090e77d952d3be055847a10ef7fc8b0e`
+  ///   SS58: `5CMBGiT8bLjfecCBLf7jSeWXoHKwEXtF7epoFHaLSTmxPhyp`
   pub const TOL_BUCKET_C_ACTORS_ID: u64 = 5;
 
   /// TOL Bucket D (Dormant) — LP held until governance decides future policy
   /// Created at genesis (`actor_id = 6`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xd23baab9890a6990ff23e7ad7ab9d1ad34712d7add2344917d110e3cec5b9242`
-  ///   SS58: `5GpMdwY6iMiA8LRUczsZH6p9WoxN4rX15U7FJWbeqTqTrPLX`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x7a2cdcdf546f84c94b2de0d2db31906a3872ece0f1604816a6ff16b2f292d459`
+  ///   SS58: `5Epu2U8sJbpBH1AQhc2KW6yuPA62Hst9r3zSdEHx4vS386JW`
   pub const TOL_BUCKET_D_ACTORS_ID: u64 = 6;
 
   /// Treasury B (Building Treasury) — paired custody lane for admitted Bucket B LP unwind
   /// Created at genesis (`actor_id = 7`), Noop by default
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xa027809984f38031e61246efe8ad1f28ddacd9870f6bed081560089c15f9b966`
-  ///   SS58: `5FghFeZDxtGWmvASpM4etxnYtreW9yamSx1Pwh1aGYkny2uv`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x25cca60a36d1458c32e01b8d6d70aa836a98d53e13c5c51b1f8566633677d72d`
+  ///   SS58: `5CvGRScqAYFFZRymun1fNJogwgUZCigd2ncmxCGvpquWy4nM`
   pub const TREASURY_B_ACTORS_ID: u64 = 7;
 
   /// Treasury C (Capital Treasury) — paired custody lane for admitted Bucket C LP unwind
   /// Created at genesis (`actor_id = 8`), Noop by default
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xcae77c85e5665e0cbe994898429478d3facf4c29a9b7539902f95ad7b3b4bf9b`
-  ///   SS58: `5GekJ6zNwu6ABqhpcagnxbPmP6UtJ1gUKdvJywZKugWkCLhe`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x9ab9d1e2aa163c1e0df8910b3f840824bde1c3be288be2d2c4a75910b68362fd`
+  ///   SS58: `5FZaRybmQEh2eHXM95zB2tyty3vxBZPyrCYTekHu5YxuCKj8`
   pub const TREASURY_C_ACTORS_ID: u64 = 8;
 
   /// Treasury D (Dormant Treasury) — paired custody lane for admitted Bucket D LP unwind
   /// Created at genesis (`actor_id = 9`), Noop by default
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xc81b0eb40aea260eb09b950cfbe2c43f9be1dc73bf62cf081c376cff4bdae0ca`
-  ///   SS58: `5Gb5UKWyYyyttHG3GCsyEhN2Qtb92auewWLZzPaQCvp1RHaj`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x1a01084c8c17375cf01299a8f492de6023bc29b78e56024510630be56b5c38f3`
+  ///   SS58: `5CeoQfeA6zkG7yToYZm3L8g5gjR5aMikm4b1gVLK69CgYzsC`
   pub const TREASURY_D_ACTORS_ID: u64 = 9;
 
   // --- BLDR Domain (L2 Token Economy) ---
@@ -108,37 +108,41 @@ pub mod actor_ids {
   /// BLDR Splitter — receives minted $BLDR and splits to BLDR ZM and BLDR Treasury
   /// Created at genesis (`actor_id = 10`)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0x8a420d09aa8842c9075deefab7791be5e9f9471bc68baa8c926128cfc29b6962`
-  ///   SS58: `5FBz5y9kWN7ArW1w5TZiCLbszGmG3FmCSx6njj9w7VEuiK8N`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0xdc201c83f1db632704da438c2fe7e6212c4a25921c48cd9294f6dde633ef1d85`
+  ///   SS58: `5H3KvwhcEmU5QZNcXWjwwmtduXdrKTrR5WYZqjrJm23KK14u`
   pub const BLDR_SPLITTER_ACTORS_ID: u64 = 10;
 
   /// BLDR Liquidity Actor — provisions NTVE-BLDR liquidity
   /// Created at genesis (`actor_id = 11`; legacy constant name)
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0x6324e98949d19dbe10162a939df82b28368bef743a14aa8ce0a3d9a02d567221`
-  ///   SS58: `5EJhZc6rdqBKzZcJXfjeMwTaQvYsyTF9YJS39sWr1HEuEy17`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x2e699b4acc26bcf078237dc13eda2470505c8bd99450269eeb7eb4c5f5472968`
+  ///   SS58: `5D7ZRz4hMphgVdq9UYBA9Gtk1q2cBjKTgoDCqpBETQi6Ziq4`
   pub const BLDR_ZM_ACTORS_ID: u64 = 11;
 
   /// BLDR Bucket A (Anchor) — permanent LP accumulator for NTVE-BLDR pair
   /// Created at genesis (`actor_id = 12`), Noop by default
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0xb31a379c50afe1ba1ad65f1afafaf51df1c40ed2b6c08e9faf1a1ac2caf026de`
-  ///   SS58: `5G7YDX7r2L8q5Wn73dNyhp8cnbpP3sTGUcRW6Eos5Urrxax8`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x791ec3fe30f34d005232cdf3bb5abdc0ae14e51fe3caeb62914d35f7c81ae544`
+  ///   SS58: `5EoWnoVuB925BHs9UwHUfLkcm5rSbmqzrHgFZRzY5nA4M5B6`
   pub const BLDR_BUCKET_A_ACTORS_ID: u64 = 12;
 
   /// BLDR Treasury — receives 50% of minted $BLDR from Splitter
   /// Created at genesis (`actor_id = 13`), Noop by default
   ///
-  /// Sovereign account (ActorPalletId = `*b"deactors"`, SS58 prefix 42):
-  ///   hex:  `0x3a1bedf666c4852432a75dc0099fec586a02b813acb4457c9d4b150a03bdce45`
-  ///   SS58: `5DNtvy5YymuvPBM6Wk8ADHs9ggLK2gjEZoaSoeM3aHLykNKG`
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x07297bfba697b7593a93b6bc2c52f7dc4452d968c1e2c3badb09f2fafb8d1709`
+  ///   SS58: `5CE6WsJ12vyyjAPMuvaqf2cdSQMVzAAxVjZDvXZK99VswFGe`
   pub const BLDR_TREASURY_ACTORS_ID: u64 = 13;
 
   /// Native Staking LP Farmer — donates NTVE/stNTVE reserves without minting LP
   /// Created at genesis (`actor_id = 14`), Noop until the canonical pool is activated
+  ///
+  /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
+  ///   hex:  `0x14292af3e9e70acb4c39cfe83317039c1f2111b475b99e660d87b16948edc339`
+  ///   SS58: `5CX93X5agA9cbvbv4JKpXmR8RF9ywdLbyg6WR9qY15evri5L`
   pub const NATIVE_STAKING_LP_FARMER_ACTORS_ID: u64 = 14;
 }
 
@@ -167,9 +171,9 @@ pub mod pallet_ids {
   /// Actors (Account Abstraction Actors) pallet ID
   ///
   /// Pallet account (SS58 prefix 42):
-  ///   hex:  `0x6d6f646c61616163746f72300000000000000000000000000000000000000000`
-  ///   SS58: `5EYCAe5fiK3ZpinaPEDXwvtT6tFp5gBL16S5vyt4TYmgLaT1`
-  pub const ACTORS_PALLET_ID: &[u8; 8] = b"deactors";
+  ///   hex:  `0x6d6f646c6163746f727330300000000000000000000000000000000000000000`
+  ///   SS58: `5EYCAe5fiQWMqjyVakD96Nwxv8toW2XYiWaTHmnmop8X9u5J`
+  pub const ACTORS_PALLET_ID: &[u8; 8] = b"actors00";
 
   /// DEOS Router pallet ID (multi-token routing engine)
   ///
@@ -262,6 +266,9 @@ pub mod params {
   /// Bounds fee mutation so router policy cannot silently invalidate TMCTOL liveness
   /// or conservation assumptions while preserving a narrow launch-line adjustment band.
   pub const MAX_AXIAL_ROUTER_FEE: Perbill = Perbill::from_percent(1);
+
+  /// Maximum canonical LP reverse-index entries retained by DEOS Router.
+  pub const MAX_ROUTER_LP_PAIRS: u32 = 500;
 
   /// TMC curve slope parameter (0.000001 per token).
   ///
