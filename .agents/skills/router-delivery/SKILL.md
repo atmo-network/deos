@@ -1,6 +1,6 @@
 ---
 name: router-delivery
-description: Drives DEOS Router route-truth work from specification through bounded preparation, atomic execution, generated evidence, and release handoff.
+description: Drives DEOS Router route truth and typed failure delivery from specification through bounded preparation, atomic execution, generated evidence, and release handoff.
 title: DEOS Router Delivery
 status: draft
 fss: true
@@ -12,7 +12,7 @@ Canonical open work: ../../../BACKLOG.md
 
 ## Mission and Scope
 
-Guide the active Router route-truth closure without owning Router semantics or duplicating executable commands. Keep route discovery, protection, execution, publication, outcomes, and Weight classification on one bounded runtime-owned truth path.
+Guide active Router closure without owning Router semantics or duplicating executable commands. Keep route discovery, protection, execution, publication, outcomes, failure identity, retry disposition, and Weight classification on one bounded runtime-owned truth path.
 
 Exclude arbitrary graph routing, external solvers, new market families, product policy, release publication, and any Actor scheduler expansion beyond adapter synchronization.
 
@@ -31,6 +31,7 @@ Exclude arbitrary graph routing, external solvers, new market families, product 
 - Keep external quotes as projections; prepare current executable truth inside the transaction.
 - Keep fee routing, protection, Oracle publication, Actor ingress, market mutation, balance deltas, and Router events under one rollback boundary.
 - Treat Router protection and System Actor reference policy as distinct owners.
+- Preserve typed adapter and Router failures through pallet-to-pallet execution; convert only at signed dispatch, and default unknown external causes to permanent.
 - Reconcile the backlog after each validated slice and remove completed detail immediately.
 
 ## Knowledge Routing
@@ -43,7 +44,7 @@ Exclude arbitrary graph routing, external solvers, new market families, product 
 
 ## Evidence and Gates
 
-- Focused package tests must falsify each changed route, protection, rollback, and outcome boundary.
+- Focused package tests must falsify each changed route, protection, rollback, outcome, failure-class, and retry boundary.
 - Runtime integration must cover concrete adapters, Oracle ordering, Actor ingress, fee routing, and transaction rollback.
 - Every route family needs deterministic vectors and one measured Weight class before release.
 - Metadata, descriptors, client projections, documentation, wiki, and generated evidence move only after the ABI stabilizes.
@@ -51,4 +52,4 @@ Exclude arbitrary graph routing, external solvers, new market families, product 
 
 ## Evolution and Apoptosis
 
-Keep `status: draft` while Router 0.7.14 work or decisive evidence gates remain. Stabilize after the accepted contract ships and routine support no longer requires reconstruction. Remove this skill only if Router disappears, merges into another canonical feature owner, or host surfaces absorb every unique route, gate, and failure-guidance duty.
+Keep `status: draft` while Router closure work or decisive evidence gates remain. Stabilize after the accepted contract ships and routine support no longer requires reconstruction. Remove this skill only if Router disappears, merges into another canonical feature owner, or host surfaces absorb every unique route, gate, and failure-guidance duty.

@@ -1,5 +1,5 @@
 use super::common::{
-  ALICE, BOB, add_liquidity, burning_manager_account, create_pool, create_test_asset,
+  ALICE, BOB, add_liquidity, burn_actor_account, create_pool, create_test_asset,
   deos_router_account, mint_tokens, new_test_ext,
 };
 use crate::{
@@ -374,7 +374,7 @@ fn pair_registration_rolls_back_first_direction_when_reverse_identity_collides()
 }
 
 #[test]
-fn router_producer_matches_legacy_ema_vectors() {
+fn router_producer_matches_deterministic_ema_vectors() {
   new_test_ext().execute_with(|| {
     let asset_in = AssetKind::Native;
     let asset_out = AssetKind::Local(7);
@@ -480,8 +480,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
     let pool_before =
       crate::AssetConversion::get_reserves(asset_in, asset_out).expect("pool reserves exist");
     let alice_before = <Balances as Currency<crate::AccountId>>::free_balance(&ALICE);
-    let burn_before =
-      <Balances as Currency<crate::AccountId>>::free_balance(&burning_manager_account());
+    let burn_before = <Balances as Currency<crate::AccountId>>::free_balance(&burn_actor_account());
     let recipient_before =
       <Assets as FungiblesInspect<crate::AccountId>>::balance(OUTPUT_ASSET, &BOB);
     let events_before = System::events();
@@ -491,7 +490,14 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
     });
     assert_eq!(
       DeosRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,),
-      Err(pallet_deos_router::Error::<Runtime>::InvalidOracleData.into())
+      Err(
+        pallet_deos_router::AdapterFailure::new(
+          pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant.into(),
+          pallet_deos_router::RouterFailureClass::IngressRejected,
+          pallet_deos_router::RetryClass::Permanent,
+        )
+        .into()
+      )
     );
     assert_eq!(Oracle::observations(feed), None);
     assert!(Actors::dirty_observation_feeds(feed).is_none());
@@ -501,7 +507,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       alice_before
     );
     assert_eq!(
-      <Balances as Currency<crate::AccountId>>::free_balance(&burning_manager_account()),
+      <Balances as Currency<crate::AccountId>>::free_balance(&burn_actor_account()),
       burn_before
     );
     assert_eq!(
@@ -527,7 +533,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       alice_before
     );
     assert_eq!(
-      <Balances as Currency<crate::AccountId>>::free_balance(&burning_manager_account()),
+      <Balances as Currency<crate::AccountId>>::free_balance(&burn_actor_account()),
       burn_before
     );
     assert_eq!(

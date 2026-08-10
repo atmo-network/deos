@@ -293,14 +293,6 @@ pub mod pallet {
   pub struct PoolState<Balance> {
     pub total_shares: Balance,
     pub accounted_balance: Balance,
-    pub active_staker_count: u32,
-  }
-
-  #[derive(
-    Clone, Debug, PartialEq, Eq, Encode, Decode, DecodeWithMemTracking, MaxEncodedLen, TypeInfo,
-  )]
-  pub struct StakePosition<Balance> {
-    pub shares: Balance,
   }
 
   #[derive(Clone, Debug, PartialEq, Eq)]
@@ -385,18 +377,6 @@ pub mod pallet {
   #[pallet::getter(fn base_asset_for_staked_asset)]
   pub type LiveStakedAssetBaseAssets<T: Config> =
     StorageMap<_, Blake2_128Concat, T::AssetId, T::AssetId, OptionQuery>;
-
-  #[pallet::storage]
-  #[pallet::getter(fn position)]
-  pub type Positions<T: Config> = StorageDoubleMap<
-    _,
-    Blake2_128Concat,
-    T::AssetId,
-    Blake2_128Concat,
-    T::AccountId,
-    StakePosition<T::Balance>,
-    OptionQuery,
-  >;
 
   #[pallet::storage]
   #[pallet::getter(fn operator_commission)]
@@ -550,11 +530,10 @@ pub mod pallet {
           PoolState {
             total_shares: Zero::zero(),
             accounted_balance: Zero::zero(),
-            active_staker_count: 0,
           },
         );
-        Pallet::<T>::initialize_staked_asset_for_pool(*asset_id)
-          .expect("genesis staked asset initialization must succeed");
+        Pallet::<T>::create_staked_asset_for_pool(*asset_id)
+          .expect("genesis staked asset creation must succeed");
       }
     }
   }
@@ -665,11 +644,6 @@ pub mod pallet {
       pool_account: T::AccountId,
       reward_account: T::AccountId,
     },
-    StakedAssetInitialized {
-      asset_id: T::AssetId,
-      staked_asset_id: T::AssetId,
-      pool_account: T::AccountId,
-    },
     PoolSynced {
       asset_id: T::AssetId,
       actual_balance: T::Balance,
@@ -721,11 +695,6 @@ pub mod pallet {
       account: T::AccountId,
       amount_in: T::Balance,
       minted_shares: T::Balance,
-    },
-    LegacyPositionConverted {
-      asset_id: T::AssetId,
-      account: T::AccountId,
-      converted_shares: T::Balance,
     },
     Unstaked {
       asset_id: T::AssetId,
@@ -824,7 +793,6 @@ pub mod pallet {
     StakedAssetIdCollision,
     StakedAssetUnsupported,
     StakedAssetNotInitialized,
-    StakedAssetAlreadyInitialized,
     NativeStakeRequiresDedicatedCall,
     NativeRewardRequiresDedicatedClaim,
     CannotNominateSelf,
@@ -863,22 +831,13 @@ pub mod pallet {
         T::Assets::asset_exists(asset_id),
         Error::<T>::AssetDoesNotExist
       );
-      let pool_account = Self::pool_account_for(asset_id);
-      if let Some(staked_asset_id) = Self::staked_asset_id(asset_id) {
-        ensure!(
-          !T::Assets::asset_exists(staked_asset_id),
-          Error::<T>::StakedAssetIdCollision
-        );
-        T::StakedAssetLifecycle::register(asset_id, staked_asset_id, &pool_account)?;
-        Self::index_live_staked_asset(asset_id, staked_asset_id)?;
-      }
+      let (_, pool_account) = Self::create_staked_asset_for_pool(asset_id)?;
       let accounted_balance = T::Assets::balance(asset_id, &pool_account);
       Pools::<T>::insert(
         asset_id,
         PoolState {
           total_shares: Zero::zero(),
           accounted_balance,
-          active_staker_count: 0,
         },
       );
       Self::index_reward_governance_domain_asset(asset_id)?;
@@ -926,50 +885,21 @@ pub mod pallet {
       let account = ensure_signed(origin)?;
       ensure!(!shares.is_zero(), Error::<T>::ZeroAmount);
       let mut pool = Self::sync_pool_state(asset_id)?;
-      let using_staked_receipts = Self::uses_staked_receipts(asset_id);
-      let mut position = Positions::<T>::get(asset_id, &account);
-      let receipt_shares = using_staked_receipts
-        .map(|staked_asset_id| T::Assets::balance(staked_asset_id, &account))
-        .unwrap_or_else(Zero::zero);
-      let legacy_shares = position
-        .as_ref()
-        .map(|stored| stored.shares)
-        .unwrap_or_else(Zero::zero);
-      let available_shares = receipt_shares
-        .checked_add(&legacy_shares)
-        .ok_or(ArithmeticError::Overflow)?;
+      let staked_asset_id =
+        Self::uses_staked_receipts(asset_id).ok_or(Error::<T>::StakedAssetNotInitialized)?;
+      let available_shares = T::Assets::balance(staked_asset_id, &account);
       ensure!(!available_shares.is_zero(), Error::<T>::InsufficientShares);
       ensure!(available_shares >= shares, Error::<T>::InsufficientShares);
       let amount_out = Self::mul_div_floor(shares, pool.accounted_balance, pool.total_shares);
       ensure!(!amount_out.is_zero(), Error::<T>::ZeroAmountOut);
-      let receipt_shares_to_burn = if receipt_shares >= shares {
-        shares
-      } else {
-        receipt_shares
-      };
-      if let Some(staked_asset_id) = using_staked_receipts {
-        if !receipt_shares_to_burn.is_zero() {
-          let _ = T::Assets::burn_from(
-            staked_asset_id,
-            &account,
-            receipt_shares_to_burn,
-            Preservation::Expendable,
-            Precision::Exact,
-            Fortitude::Force,
-          )?;
-        }
-      }
-      let legacy_shares_to_burn = shares
-        .checked_sub(&receipt_shares_to_burn)
-        .ok_or(ArithmeticError::Underflow)?;
-      if !legacy_shares_to_burn.is_zero() {
-        if let Some(ref mut stored_position) = position {
-          stored_position.shares = stored_position
-            .shares
-            .checked_sub(&legacy_shares_to_burn)
-            .ok_or(ArithmeticError::Underflow)?;
-        }
-      }
+      let _ = T::Assets::burn_from(
+        staked_asset_id,
+        &account,
+        shares,
+        Preservation::Expendable,
+        Precision::Exact,
+        Fortitude::Force,
+      )?;
       let pool_account = Self::pool_account_for(asset_id);
       T::Assets::transfer(
         asset_id,
@@ -986,16 +916,6 @@ pub mod pallet {
         .accounted_balance
         .checked_sub(&amount_out)
         .ok_or(ArithmeticError::Underflow)?;
-      match position {
-        Some(stored_position) if stored_position.shares.is_zero() => {
-          Positions::<T>::remove(asset_id, &account);
-          pool.active_staker_count = pool.active_staker_count.saturating_sub(1);
-        }
-        Some(stored_position) => {
-          Positions::<T>::insert(asset_id, &account, stored_position);
-        }
-        None => {}
-      }
       Pools::<T>::insert(asset_id, pool);
       let _ = Self::note_reward_touch(asset_id, &account);
       Self::deposit_event(Event::Unstaked {
@@ -1016,14 +936,7 @@ pub mod pallet {
     ) -> DispatchResult {
       T::AdminOrigin::ensure_origin(origin)?;
       let mut pool = Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
-      if Self::live_staked_asset_id(asset_id).is_some() {
-        ensure!(pool.total_shares.is_zero(), Error::<T>::PoolNotEmpty);
-      } else {
-        ensure!(
-          pool.total_shares.is_zero() && pool.active_staker_count == 0,
-          Error::<T>::PoolNotEmpty
-        );
-      }
+      ensure!(pool.total_shares.is_zero(), Error::<T>::PoolNotEmpty);
       let pool_account = Self::pool_account_for(asset_id);
       let recoverable = T::Assets::balance(asset_id, &pool_account);
       ensure!(!recoverable.is_zero(), Error::<T>::NoRecoverableBalance);
@@ -1598,50 +1511,6 @@ pub mod pallet {
       Ok(())
     }
 
-    #[pallet::call_index(9)]
-    #[pallet::weight(T::WeightInfo::initialize_staked_asset())]
-    #[transactional]
-    pub fn initialize_staked_asset(origin: OriginFor<T>, asset_id: T::AssetId) -> DispatchResult {
-      T::AdminOrigin::ensure_origin(origin)?;
-      Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
-      let (staked_asset_id, pool_account) = Self::initialize_staked_asset_for_pool(asset_id)?;
-      Self::deposit_event(Event::StakedAssetInitialized {
-        asset_id,
-        staked_asset_id,
-        pool_account,
-      });
-      Ok(())
-    }
-
-    #[pallet::call_index(10)]
-    #[pallet::weight(T::WeightInfo::convert_position_to_receipt())]
-    pub fn convert_position_to_receipt(
-      origin: OriginFor<T>,
-      asset_id: T::AssetId,
-    ) -> DispatchResult {
-      let account = ensure_signed(origin)?;
-      let mut pool = Pools::<T>::get(asset_id).ok_or(Error::<T>::AssetNotRegistered)?;
-      let staked_asset_id =
-        Self::staked_asset_id(asset_id).ok_or(Error::<T>::StakedAssetUnsupported)?;
-      ensure!(
-        T::Assets::asset_exists(staked_asset_id),
-        Error::<T>::StakedAssetNotInitialized
-      );
-      let position =
-        Positions::<T>::get(asset_id, &account).ok_or(Error::<T>::InsufficientShares)?;
-      ensure!(!position.shares.is_zero(), Error::<T>::InsufficientShares);
-      let _ = T::Assets::mint_into(staked_asset_id, &account, position.shares)?;
-      Positions::<T>::remove(asset_id, &account);
-      pool.active_staker_count = pool.active_staker_count.saturating_sub(1);
-      Pools::<T>::insert(asset_id, pool);
-      Self::deposit_event(Event::LegacyPositionConverted {
-        asset_id,
-        account,
-        converted_shares: position.shares,
-      });
-      Ok(())
-    }
-
     #[pallet::call_index(11)]
     #[pallet::weight(T::WeightInfo::bootstrap_reward_snapshot())]
     pub fn bootstrap_reward_snapshot(
@@ -1909,7 +1778,8 @@ pub mod pallet {
         Self::mul_div_floor(amount, pool.total_shares, pool.accounted_balance)
       };
       ensure!(!minted_shares.is_zero(), Error::<T>::ZeroSharesMinted);
-      let staked_asset_id_for_mint = Self::uses_staked_receipts(asset_id);
+      let staked_asset_id_for_mint =
+        Self::uses_staked_receipts(asset_id).ok_or(Error::<T>::StakedAssetNotInitialized)?;
       let pool_account = Self::pool_account_for(asset_id);
       T::Assets::transfer(
         asset_id,
@@ -1926,28 +1796,13 @@ pub mod pallet {
         .accounted_balance
         .checked_add(&amount)
         .ok_or(ArithmeticError::Overflow)?;
-      if let Some(staked_asset_id) = staked_asset_id_for_mint {
-        let _ = T::Assets::mint_into(staked_asset_id, beneficiary, minted_shares)?;
-      } else {
-        let mut position = Positions::<T>::get(asset_id, beneficiary).unwrap_or(StakePosition {
-          shares: Zero::zero(),
-        });
-        let was_zero = position.shares.is_zero();
-        position.shares = position
-          .shares
-          .checked_add(&minted_shares)
-          .ok_or(ArithmeticError::Overflow)?;
-        if was_zero {
-          pool.active_staker_count = pool.active_staker_count.saturating_add(1);
-        }
-        Positions::<T>::insert(asset_id, beneficiary, position);
-      }
+      let _ = T::Assets::mint_into(staked_asset_id_for_mint, beneficiary, minted_shares)?;
       Pools::<T>::insert(asset_id, pool);
       let _ = Self::note_reward_touch(asset_id, beneficiary);
       Ok(minted_shares)
     }
 
-    fn initialize_staked_asset_for_pool(
+    fn create_staked_asset_for_pool(
       asset_id: T::AssetId,
     ) -> Result<(T::AssetId, T::AccountId), DispatchError> {
       let pool_account = Self::pool_account_for(asset_id);
@@ -1955,7 +1810,7 @@ pub mod pallet {
         Self::staked_asset_id(asset_id).ok_or(Error::<T>::StakedAssetUnsupported)?;
       ensure!(
         !T::Assets::asset_exists(staked_asset_id),
-        Error::<T>::StakedAssetAlreadyInitialized
+        Error::<T>::StakedAssetIdCollision
       );
       T::StakedAssetLifecycle::register(asset_id, staked_asset_id, &pool_account)?;
       Self::index_live_staked_asset(asset_id, staked_asset_id)?;
@@ -2306,22 +2161,10 @@ pub mod pallet {
       })
     }
 
-    fn legacy_position_shares(asset_id: T::AssetId, account: &T::AccountId) -> T::Balance {
-      Positions::<T>::get(asset_id, account)
-        .map(|position| position.shares)
-        .unwrap_or_else(Zero::zero)
-    }
-
     fn effective_share_balance(asset_id: T::AssetId, account: &T::AccountId) -> Option<T::Balance> {
-      let legacy_shares = Self::legacy_position_shares(asset_id, account);
-      let receipt_shares = Self::live_staked_asset_id(asset_id)
-        .map(|staked_asset_id| T::Assets::balance(staked_asset_id, account))
-        .unwrap_or_else(Zero::zero);
-      let total_shares = legacy_shares.checked_add(&receipt_shares)?;
-      if total_shares.is_zero() {
-        return None;
-      }
-      Some(total_shares)
+      let staked_asset_id = Self::live_staked_asset_id(asset_id)?;
+      let shares = T::Assets::balance(staked_asset_id, account);
+      (!shares.is_zero()).then_some(shares)
     }
 
     pub fn staked_asset_id_for_queries(asset_id: T::AssetId) -> Option<T::AssetId> {

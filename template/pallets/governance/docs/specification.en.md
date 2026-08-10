@@ -1,8 +1,6 @@
 # DEOS Governance Specification
 
 - **Component**: `pallet-governance` + runtime governance integration
-- **Version**: `0.1.0`
-- **Date**: April 2026
 - **Status**: Target Contract
 
 > The key words **MUST**, **REQUIRED**, **SHALL**, **SHOULD**, **RECOMMENDED**, **MAY**, and **OPTIONAL** in this document are to be interpreted as described in RFC 2119.
@@ -617,7 +615,22 @@ The specification MUST state the intended control contract honestly:
 6. Narrow admin recovery / override tools MAY exist, but they MUST be explicit and limited
 7. Public governance UX MUST NOT imply powers that still belong only to admin/root
 
-### 7.1 Proposal Payload and Execution Authority
+### 7.1 Strategic Proposal Ingress
+
+A protocol `L1RootAction` MUST be creatable after bootstrap through the existing signed proposal transaction without requiring an externally reachable Root origin.
+
+Contract rules:
+
+1. Signed strategic submission MUST be admitted only for the runtime-declared protocol / Native domain plus `L1RootAction` combination
+2. Admission MUST require a runtime provider to confirm that the signer has nonzero primary-track governance power for that domain; protection-track power MUST NOT satisfy this predicate
+3. The eligible signed path MUST retain the ordinary signed proposal opening fee, bounded active-proposal capacity, duplicate rejection, proposer identity, authorship counters, preimage contract, and transactional rollback behavior
+4. An ineligible signer MUST fail before fee transfer, events, authorship mutation, active-count mutation, maturity indexing, or preimage requests
+5. Submission grants only the right to create the bounded proposal lifecycle; it MUST NOT expose a direct Root dispatcher, arbitrary runtime call, or privileged control action to the signer
+6. Successful enactment MUST remain restricted to the existing strategic `L1RootAction` payload executor, which accepts only its dedicated bounded payload contract and derives Root-equivalent execution internally after governance approval
+7. `$VETO` remains protection power only: holding or voting `$VETO` MUST NOT satisfy primary submission eligibility or create positive agenda-setting authority
+8. Sudo, genesis-only proposal fixtures, development Root accounts, XCM superuser conversion, rehearsal-only authority, and fabricated pending authorization state are non-conforming substitutes for this ingress
+
+### 7.2 Proposal Payload and Execution Authority
 
 Every proposal MUST bind to exactly one `GovernanceDomain`, one `CadenceMode`, one `ProposalPayloadKind`, and one `executable payload identity`.
 
@@ -636,7 +649,7 @@ Contract rules:
 11. If enactment dispatch fails, the item MUST enter explicit `ExecutionFailed` state or an equivalent explicit failure status rather than pretending the proposal was enacted successfully
 12. Execution MUST be transactional: a failed enactment MUST NOT leave partial multi-step side effects behind
 
-### 7.2 Payload Preimage Admission Policy
+### 7.3 Payload Preimage Admission Policy
 
 This specification version intentionally separates `payload identity` from `payload readiness`.
 A proposal always binds one `payload_hash`, but different payload kinds may require different preimage readiness at different lifecycle points.

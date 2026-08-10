@@ -60,13 +60,6 @@ pub fn set_pool(asset_a: AssetKind, asset_b: AssetKind, reserve_a: u128, reserve
   });
 }
 
-pub fn set_tmc_rate(asset: AssetKind, rate: u128) {
-  TMC_RATES.with(|r| {
-    // Backward-compatible helper for tests that expect AssetKind::Local(1) collateral.
-    r.borrow_mut().insert(asset, (AssetKind::Local(1), rate));
-  });
-}
-
 pub fn set_tmc_curve(token_asset: AssetKind, foreign_asset: AssetKind, rate: u128) {
   TMC_RATES.with(|r| {
     r.borrow_mut().insert(token_asset, (foreign_asset, rate));
@@ -313,7 +306,7 @@ impl pallet_deos_router::types::TmcInterface<u64, u128> for MockTmcPallet {
   fn calculate_recipient_receives(
     token_asset: AssetKind,
     foreign_amount: u128,
-  ) -> Result<u128, DispatchError> {
+  ) -> Result<u128, pallet_deos_router::AdapterFailure> {
     let (_, rate) = TMC_RATES
       .with(|r| r.borrow().get(&token_asset).cloned())
       .ok_or(DispatchError::Other("No TMC Curve"))?;
@@ -328,9 +321,9 @@ impl pallet_deos_router::types::TmcInterface<u64, u128> for MockTmcPallet {
     token_asset: AssetKind,
     foreign_asset: AssetKind,
     foreign_amount: u128,
-  ) -> Result<u128, DispatchError> {
+  ) -> Result<u128, pallet_deos_router::AdapterFailure> {
     if !Self::supports_collateral(token_asset, foreign_asset) {
-      return Err(DispatchError::Other("TMC collateral mismatch"));
+      return Err(DispatchError::Other("TMC collateral mismatch").into());
     }
 
     let (_, rate) = TMC_RATES
@@ -341,7 +334,7 @@ impl pallet_deos_router::types::TmcInterface<u64, u128> for MockTmcPallet {
     // 1. Burn foreign asset from user
     match foreign_asset {
       AssetKind::Native => {
-        return Err(DispatchError::Other("TMC invalid asset"));
+        return Err(DispatchError::Other("TMC invalid asset").into());
       }
       AssetKind::Local(id) | AssetKind::Foreign(id) => {
         <Assets as FungiblesMutate<u64>>::burn_from(
@@ -356,7 +349,7 @@ impl pallet_deos_router::types::TmcInterface<u64, u128> for MockTmcPallet {
     }
 
     if FAIL_TMC_AFTER_DEBIT.with(|value| *value.borrow()) {
-      return Err(DispatchError::Other("Forced TMC failure after debit"));
+      return Err(DispatchError::Other("Forced TMC failure after debit").into());
     }
 
     // 2. Apply 33.3% allocation to user (matching real TMC behavior)
@@ -376,9 +369,17 @@ impl pallet_deos_router::types::TmcInterface<u64, u128> for MockTmcPallet {
 
 pub struct MockFeeAdapter;
 impl pallet_deos_router::types::FeeRoutingAdapter<u64, u128> for MockFeeAdapter {
-  fn route_fee(who: &u64, asset: AssetKind, amount: u128) -> Result<(), DispatchError> {
+  fn route_fee(
+    who: &u64,
+    asset: AssetKind,
+    amount: u128,
+  ) -> Result<(), pallet_deos_router::AdapterFailure> {
     if FORCE_FEE_FAILURE.with(|flag| *flag.borrow()) {
-      return Err(DispatchError::Other("Forced fee routing failure"));
+      return Err(pallet_deos_router::AdapterFailure::new(
+        DispatchError::Other("Forced fee routing failure"),
+        pallet_deos_router::RouterFailureClass::FeeRejected,
+        pallet_deos_router::RetryClass::Permanent,
+      ));
     }
     COLLECTED_FEES.with(|f| f.borrow_mut().push((*who, asset, amount)));
     let burn_mgr = 123;
@@ -415,7 +416,7 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
     asset_in: AssetKind,
     asset_out: AssetKind,
     price: u128,
-  ) -> Result<(), DispatchError> {
+  ) -> Result<(), pallet_deos_router::AdapterFailure> {
     let update_index = ORACLE_UPDATES.with(|calls| {
       let mut calls = calls.borrow_mut();
       let index = calls.len();
@@ -423,7 +424,11 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
       index
     });
     if FAIL_ORACLE_UPDATE_AT.with(|value| *value.borrow() == Some(update_index)) {
-      return Err(DispatchError::Other("Forced oracle publication failure"));
+      return Err(pallet_deos_router::AdapterFailure::new(
+        DispatchError::Other("Forced oracle publication failure"),
+        pallet_deos_router::RouterFailureClass::PublicationRejected,
+        pallet_deos_router::RetryClass::RetryLater,
+      ));
     }
     set_oracle_price(asset_in, asset_out, price);
     Ok(())
@@ -435,7 +440,7 @@ impl pallet_deos_router::types::PriceOracle<u128> for MockPriceOracle {
     asset_in: AssetKind,
     asset_out: AssetKind,
     price: u128,
-  ) -> Result<(), DispatchError> {
+  ) -> Result<(), pallet_deos_router::AdapterFailure> {
     ORACLE_VALIDATIONS.with(|calls| calls.borrow_mut().push((asset_in, asset_out, price)));
     Ok(())
   }
@@ -520,7 +525,7 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
     min_amount_out: u128,
     recipient: u64,
     keep_alive: bool,
-  ) -> Result<u128, DispatchError> {
+  ) -> Result<u128, pallet_deos_router::AdapterFailure> {
     let path = [asset_in, asset_out];
     let mut current_amount = amount_in;
     let mut current_holder = who;
@@ -535,7 +540,7 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
         index
       });
       if FAIL_XYK_EXECUTION_AT.with(|value| *value.borrow() == Some(execution_index)) {
-        return Err(DispatchError::Other("Forced XYK execution failure"));
+        return Err(DispatchError::Other("Forced XYK execution failure").into());
       }
       let hop_recipient = if window[1] == *path.last().unwrap() {
         recipient
@@ -613,7 +618,11 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
     }
 
     if current_amount < min_amount_out {
-      return Err(DispatchError::Other("SlippageExceeded"));
+      return Err(pallet_deos_router::AdapterFailure::new(
+        DispatchError::Other("SlippageExceeded"),
+        pallet_deos_router::RouterFailureClass::ProtectionRejected,
+        pallet_deos_router::RetryClass::RetryLater,
+      ));
     }
 
     Ok(EXACT_INPUT_REPORTED_AMOUNT.with(|value| value.borrow().unwrap_or(current_amount)))
@@ -627,11 +636,15 @@ impl pallet_deos_router::types::AssetConversionApi<u64, u128> for MockAssetConve
     max_amount_in: u128,
     recipient: u64,
     keep_alive: bool,
-  ) -> Result<crate::ExactOutputExecution, DispatchError> {
+  ) -> Result<crate::ExactOutputExecution, pallet_deos_router::AdapterFailure> {
     let required_in = Self::quote_single_pool_exact_output(asset_in, asset_out, amount_out, true)
       .ok_or(DispatchError::Other("Pool not found for hop"))?;
     if required_in > max_amount_in {
-      return Err(DispatchError::Other("SlippageExceeded"));
+      return Err(pallet_deos_router::AdapterFailure::new(
+        DispatchError::Other("SlippageExceeded"),
+        pallet_deos_router::RouterFailureClass::ProtectionRejected,
+        pallet_deos_router::RetryClass::RetryLater,
+      ));
     }
     let recipient_amount_out = Self::execute_single_pool_exact_input(
       who,
@@ -686,7 +699,7 @@ impl pallet_deos_router::Config for Test {
   type MaxLpPairs = ConstU32<500>;
   type MaxRouterFee = MaxRouterFeeStub;
   type FeeAdapter = MockFeeAdapter;
-  type BurningManagerAccount = ConstU64<123>;
+  type BurnActorAccount = ConstU64<123>;
   type LiquidityActorAccount = ConstU64<888>;
   type PriceOracle = MockPriceOracle;
   type MinSwapForeign = ConstU128<{ primitives::ecosystem::params::MIN_SWAP_FOREIGN }>;

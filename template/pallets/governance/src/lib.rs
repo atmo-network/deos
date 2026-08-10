@@ -105,6 +105,7 @@ pub trait ProposalUrgentPolicyProvider<DomainId> {
 )]
 pub enum ProposalSubmissionAuthority {
   Signed,
+  PrimaryEligibleSigned,
   AdminOnly,
 }
 
@@ -176,6 +177,32 @@ impl<DomainId> ProposalPrimaryTrackFamilyProvider<DomainId> for () {}
 impl<DomainId> ProposalUrgentPolicyProvider<DomainId> for () {}
 
 impl<DomainId> ProposalSubmissionAuthorityProvider<DomainId> for () {}
+
+pub trait ProposalSubmissionEligibilityProvider<AccountId, DomainId> {
+  fn has_primary_governance_power(_domain: DomainId, _account: &AccountId) -> bool {
+    false
+  }
+}
+
+impl<AccountId, DomainId> ProposalSubmissionEligibilityProvider<AccountId, DomainId> for () {}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub trait BenchmarkHelper<AccountId, DomainId> {
+  fn prepare_primary_eligible_submitter(
+    account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError>;
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+impl<AccountId, DomainId> BenchmarkHelper<AccountId, DomainId> for () {
+  fn prepare_primary_eligible_submitter(
+    _account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+    Err(polkadot_sdk::sp_runtime::DispatchError::Other(
+      "GovernanceBenchmarkHelperNotConfigured",
+    ))
+  }
+}
 
 pub trait WinningVoteRewardTouchHandler<AccountId, DomainId> {
   fn note_winning_vote_recorded(_domain: DomainId, _account: &AccountId) {}
@@ -361,6 +388,7 @@ pub trait WeightInfo {
   fn record_winning_vote() -> Weight;
   fn record_winning_vote_batch(accounts: u32) -> Weight;
   fn submit_proposal() -> Weight;
+  fn submit_signed_proposal() -> Weight;
   fn cast_vote() -> Weight;
   fn resolve_proposal(accounts: u32) -> Weight;
   fn resolve_proposal_from_votes(accounts: u32) -> Weight;
@@ -382,6 +410,10 @@ impl WeightInfo for () {
   }
 
   fn submit_proposal() -> Weight {
+    Weight::zero()
+  }
+
+  fn submit_signed_proposal() -> Weight {
     Weight::zero()
   }
 
@@ -443,7 +475,7 @@ pub mod pallet {
     EpochProvider as _, GovernanceDomainPolicyProvider as _,
     ProposalPayloadPreimageNoteCostProvider as _, ProposalPayloadPreimageProvider as _,
     ProposalRuntimeUpgradeAuthorizationProvider as _, ProposalSubmissionAuthorityProvider as _,
-    WeightInfo as _,
+    ProposalSubmissionEligibilityProvider as _, WeightInfo as _,
   };
   use codec::{Decode, Encode};
   use frame::prelude::*;
@@ -546,6 +578,7 @@ pub mod pallet {
     type ProposalPrimaryTrackFamilyProvider: crate::ProposalPrimaryTrackFamilyProvider<Self::DomainId>;
     type ProposalUrgentPolicyProvider: crate::ProposalUrgentPolicyProvider<Self::DomainId>;
     type ProposalSubmissionAuthorityProvider: crate::ProposalSubmissionAuthorityProvider<Self::DomainId>;
+    type ProposalSubmissionEligibilityProvider: crate::ProposalSubmissionEligibilityProvider<Self::AccountId, Self::DomainId>;
     type ProposalRuntimeUpgradeAuthorizationProvider: crate::ProposalRuntimeUpgradeAuthorizationProvider<Self::Hash>;
     type ProposalPayloadPreimageNoteCostProvider: crate::ProposalPayloadPreimageNoteCostProvider<BalanceOf<Self>>;
     type VetoVotePowerProvider: crate::VetoVotePowerProvider<
@@ -562,6 +595,8 @@ pub mod pallet {
         Self::Hash,
       >;
     type WinningVoteRewardTouchHandler: crate::WinningVoteRewardTouchHandler<Self::AccountId, Self::DomainId>;
+    #[cfg(feature = "runtime-benchmarks")]
+    type BenchmarkHelper: crate::BenchmarkHelper<Self::AccountId, Self::DomainId>;
     type WeightInfo: crate::WeightInfo;
   }
 
@@ -1487,6 +1522,7 @@ pub mod pallet {
     ProposalVoteAlreadyCast,
     ProposalVoteKindNotAllowedForPrimaryTrackFamily,
     ProposalSubmissionNotAllowedForSignedOrigin,
+    ProposalSubmitterNotPrimaryEligible,
     InsufficientProposalOpeningFeeBalance,
     ProposalVoteSetFull,
     ProposalProtectionTrackClosed,
@@ -1573,9 +1609,7 @@ pub mod pallet {
     }
 
     #[pallet::call_index(3)]
-    #[pallet::weight(
-      T::WeightInfo::submit_proposal().saturating_add(T::DbWeight::get().reads_writes(2, 2))
-    )]
+    #[pallet::weight(T::WeightInfo::submit_signed_proposal())]
     #[transactional]
     pub fn submit_signed_proposal(
       origin: OriginFor<T>,
@@ -1586,11 +1620,18 @@ pub mod pallet {
       payload_hash: T::Hash,
     ) -> DispatchResult {
       let proposer = ensure_signed(origin)?;
+      let submission_authority =
+        T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind);
       ensure!(
-        T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind)
-          == crate::ProposalSubmissionAuthority::Signed,
+        submission_authority != crate::ProposalSubmissionAuthority::AdminOnly,
         Error::<T>::ProposalSubmissionNotAllowedForSignedOrigin
       );
+      if submission_authority == crate::ProposalSubmissionAuthority::PrimaryEligibleSigned {
+        ensure!(
+          T::ProposalSubmissionEligibilityProvider::has_primary_governance_power(domain, &proposer,),
+          Error::<T>::ProposalSubmitterNotPrimaryEligible
+        );
+      }
       let opening_fee = T::ProposalOpeningFee::get();
       if !opening_fee.is_zero() {
         T::Currency::transfer(
@@ -1785,7 +1826,7 @@ pub mod pallet {
       payload_kind: ProposalPayloadKind,
     ) -> Option<BalanceOf<T>> {
       (T::ProposalSubmissionAuthorityProvider::authority(domain, payload_kind)
-        == crate::ProposalSubmissionAuthority::Signed)
+        != crate::ProposalSubmissionAuthority::AdminOnly)
         .then(T::ProposalOpeningFee::get)
     }
 

@@ -65,30 +65,6 @@ where
     .expect("benchmark mint must succeed");
 }
 
-fn seed_legacy_pool_with_position<T>(
-  asset_id: <T as Config>::AssetId,
-  holder: &T::AccountId,
-  shares: <T as Config>::Balance,
-) where
-  T: Config
-    + pallet_assets::Config<AssetId = <T as Config>::AssetId, Balance = <T as Config>::Balance>,
-  <T as pallet_assets::Config>::AssetIdParameter: From<<T as Config>::AssetId> + Copy,
-  <T as Config>::AssetId: From<u32>,
-{
-  create_asset::<T>(asset_id);
-  let pool_account = Pallet::<T>::pool_account_for(asset_id);
-  Pools::<T>::insert(
-    asset_id,
-    PoolState {
-      total_shares: shares,
-      accounted_balance: shares,
-      active_staker_count: 1,
-    },
-  );
-  Positions::<T>::insert(asset_id, holder, StakePosition { shares });
-  mint_to::<T>(asset_id, &pool_account, shares);
-}
-
 fn register_native_pool<T>() -> <T as Config>::AssetId
 where
   T: Config
@@ -191,44 +167,6 @@ mod benches {
   }
 
   #[benchmark]
-  fn initialize_staked_asset() {
-    let asset_id = benchmark_asset_id::<T>();
-    let holder: T::AccountId = account("legacy-holder", 0, 0);
-    let shares = <T as Config>::Balance::from(100u32);
-    seed_legacy_pool_with_position::<T>(asset_id, &holder, shares);
-    let staked_asset_id = Pallet::<T>::staked_asset_id(asset_id)
-      .expect("benchmark asset id must resolve receipt asset");
-    #[extrinsic_call]
-    initialize_staked_asset(RawOrigin::Root, asset_id);
-    assert!(<pallet_assets::Pallet<T> as Inspect<T::AccountId>>::asset_exists(staked_asset_id));
-  }
-
-  #[benchmark]
-  fn convert_position_to_receipt() {
-    let asset_id = benchmark_asset_id::<T>();
-    let holder: T::AccountId = whitelisted_caller();
-    let shares = <T as Config>::Balance::from(100u32);
-    seed_legacy_pool_with_position::<T>(asset_id, &holder, shares);
-    Pallet::<T>::initialize_staked_asset(RawOrigin::Root.into(), asset_id)
-      .expect("benchmark staked asset initialization must succeed");
-    let staked_asset_id = Pallet::<T>::staked_asset_id(asset_id)
-      .expect("benchmark asset id must resolve receipt asset");
-    #[extrinsic_call]
-    convert_position_to_receipt(RawOrigin::Signed(holder.clone()), asset_id);
-    assert!(Positions::<T>::get(asset_id, holder.clone()).is_none());
-    assert_eq!(
-      Pools::<T>::get(asset_id)
-        .expect("pool must exist after conversion")
-        .active_staker_count,
-      0
-    );
-    assert_eq!(
-      <pallet_assets::Pallet<T> as Inspect<T::AccountId>>::balance(staked_asset_id, &holder),
-      shares
-    );
-  }
-
-  #[benchmark]
   fn sync_pool() {
     let asset_id = benchmark_asset_id::<T>();
     register_pool::<T>(asset_id);
@@ -257,7 +195,6 @@ mod benches {
     mint_to::<T>(asset_id, &caller, amount + <T as Config>::Balance::one());
     #[extrinsic_call]
     stake(RawOrigin::Signed(caller.clone()), asset_id, amount);
-    assert!(Positions::<T>::get(asset_id, caller.clone()).is_none());
     assert_eq!(
       <pallet_assets::Pallet<T> as Inspect<T::AccountId>>::balance(staked_asset_id, &caller),
       amount
@@ -278,7 +215,6 @@ mod benches {
       .expect("benchmark stake setup must succeed");
     #[extrinsic_call]
     unstake(RawOrigin::Signed(caller.clone()), asset_id, burn);
-    assert!(Positions::<T>::get(asset_id, caller.clone()).is_none());
     assert_eq!(
       <pallet_assets::Pallet<T> as Inspect<T::AccountId>>::balance(staked_asset_id, &caller),
       amount - burn

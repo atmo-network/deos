@@ -3,12 +3,6 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-# CHAIN_TYPE controls the generated chain spec profile:
-#   Development  (default) — well-known dev accounts visible in Polkadot JS
-#   Local                  — local testnet with dev accounts
-#   Live                   — production-facing metadata/profile; final authorities/accounts
-#                            must still be replaced before deployment because no dedicated
-#                            "live" preset exists in the current chain-spec-builder flow
 CHAIN_TYPE="${CHAIN_TYPE:-Development}"
 PARA_ID="${PARA_ID:-2000}"
 RELAY_CHAIN="${RELAY_CHAIN:-rococo-local}"
@@ -17,6 +11,8 @@ LOCAL_WEB_CLIENT_FOREIGN_ID="${LOCAL_WEB_CLIENT_FOREIGN_ID:-4026531841}"
 LOCAL_WEB_CLIENT_INITIAL_PRICE="${LOCAL_WEB_CLIENT_INITIAL_PRICE:-1000000000000}"
 LOCAL_WEB_CLIENT_SLOPE="${LOCAL_WEB_CLIENT_SLOPE:-1000000}"
 LOCAL_WEB_CLIENT_FOREIGN_BALANCE="${LOCAL_WEB_CLIENT_FOREIGN_BALANCE:-1152921504606846976}"
+RUNTIME_WASM_PATH="${RUNTIME_WASM_PATH:-$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm}"
+CHAIN_SPEC_PATH="${CHAIN_SPEC_PATH:-$TEMPLATE_DIR/chain_spec.json}"
 
 usage() {
     cat <<'EOF'
@@ -36,12 +32,14 @@ Environment:
   LOCAL_WEB_CLIENT_INITIAL_PRICE=1000000000000
   LOCAL_WEB_CLIENT_SLOPE=1000000
   LOCAL_WEB_CLIENT_FOREIGN_BALANCE=1152921504606846976
+  RUNTIME_WASM_PATH=template/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm
+  CHAIN_SPEC_PATH=template/chain_spec.json
 
 Inputs:
-  Built DEOS runtime WASM, chain-spec-builder, jq, and the selected profile values.
+  Selected DEOS runtime Wasm, chain-spec-builder, Python, and profile values.
 
 Outputs:
-  template/chain_spec.json.
+  The selected CHAIN_SPEC_PATH.
 
 Side effects:
   Replaces the generated local chain spec; never deploys or starts a network.
@@ -97,46 +95,58 @@ check_prerequisites() {
     phase_banner "Step 1: Prerequisites"
     require_directory "$TEMPLATE_DIR" "Template directory"
     hydrate_local_tool_paths
-    require_commands chain-spec-builder python3 du cut mv
+    require_commands chain-spec-builder python3 du cut mv mkdir dirname mktemp rm
     log_success "Chain spec prerequisites checked"
 }
 
 generate_chain_spec() {
     phase_banner "Step 2: Generate chain spec"
-    local wasm_path="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
-    local chain_spec_path="$TEMPLATE_DIR/chain_spec.json"
+    local generation_dir generated_path
+    generation_dir="$(mktemp -d "${TMPDIR:-/tmp}/deos-chain-spec.XXXXXX")"
+    generated_path="$generation_dir/chain_spec.json"
 
     log_info "Generating chain specification"
     echo "  Chain type: $CHAIN_TYPE"
     echo "  Preset: $PRESET"
     echo "  Para ID: $PARA_ID"
     echo "  Relay chain: $RELAY_CHAIN"
-    echo "  WASM: $wasm_path"
+    echo "  WASM: $RUNTIME_WASM_PATH"
+    echo "  Output: $CHAIN_SPEC_PATH"
     echo ""
 
     if [[ "$CHAIN_TYPE" == "Live" ]]; then
         log_warning "CHAIN_TYPE=Live does not produce a final production authority set by itself"
     fi
 
-    if [[ ! -f "$wasm_path" ]]; then
+    if [[ ! -f "$RUNTIME_WASM_PATH" ]]; then
         log_error "Runtime WASM artifact not found."
-        echo "  Expected: $wasm_path"
+        echo "  Expected: $RUNTIME_WASM_PATH"
         exit 1
     fi
 
-    cd "$TEMPLATE_DIR"
-
-    chain-spec-builder create \
-        -c "$RELAY_CHAIN" \
-        -p "$PARA_ID" \
-        -r "$wasm_path" \
-        named-preset "$PRESET"
-
-    if [[ -f "$TEMPLATE_DIR/chain_spec.json" ]] && [[ "$TEMPLATE_DIR/chain_spec.json" != "$chain_spec_path" ]]; then
-        mv "$TEMPLATE_DIR/chain_spec.json" "$chain_spec_path"
+    if ! (
+        cd "$generation_dir"
+        chain-spec-builder create \
+            -c "$RELAY_CHAIN" \
+            -p "$PARA_ID" \
+            -r "$RUNTIME_WASM_PATH" \
+            named-preset "$PRESET"
+    ); then
+        rm -rf "$generation_dir"
+        log_error "chain-spec-builder failed"
+        exit 1
     fi
 
-    patch_chain_spec "$chain_spec_path"
+    if [[ ! -f "$generated_path" ]]; then
+        rm -rf "$generation_dir"
+        log_error "chain-spec-builder did not produce $generated_path"
+        exit 1
+    fi
+    mkdir -p "$(dirname "$CHAIN_SPEC_PATH")"
+    mv "$generated_path" "$CHAIN_SPEC_PATH"
+    rm -rf "$generation_dir"
+
+    patch_chain_spec "$CHAIN_SPEC_PATH"
 
     log_success "Chain specification generated"
 }
@@ -206,12 +216,11 @@ with open(spec_path, 'w') as f:
 
 verify_output() {
     phase_banner "Step 3: Verify output"
-    local chain_spec_path="$TEMPLATE_DIR/chain_spec.json"
-
-    if [[ -f "$chain_spec_path" ]]; then
-        local size=$(du -h "$chain_spec_path" | cut -f1)
+    if [[ -f "$CHAIN_SPEC_PATH" ]]; then
+        local size
+        size=$(du -h "$CHAIN_SPEC_PATH" | cut -f1)
         log_success "Chain spec file verified"
-        echo "  Path: $chain_spec_path"
+        echo "  Path: $CHAIN_SPEC_PATH"
         echo "  Size: $size"
         echo "  Chain type: $CHAIN_TYPE"
         echo "  Name: $CHAIN_NAME"

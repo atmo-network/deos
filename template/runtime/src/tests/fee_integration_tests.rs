@@ -46,13 +46,13 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
   new_test_ext().execute_with(|| {
     let fee_sink = actor_fee_sink_account();
     let staking_pool = Staking::pool_account_for(0);
-    let lp_farmer = Actors::sovereign_account_id_system(
-      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+    let staking_liquidity_actor = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     );
     let anchor = crate::EXISTENTIAL_DEPOSIT;
     assert_eq!(Balances::free_balance(&fee_sink), anchor);
     assert_eq!(Balances::free_balance(&staking_pool), anchor);
-    assert_eq!(Balances::free_balance(&lp_farmer), anchor);
+    assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor);
 
     for block in [2, 12, 22] {
       assert_ok!(TmctolFeeCollector::collect_fee(
@@ -68,7 +68,7 @@ fn repeated_low_volume_fee_sink_distributions_preserve_anchors_without_failures(
 
     assert_eq!(Balances::free_balance(&fee_sink), anchor);
     assert_eq!(Balances::free_balance(&staking_pool), anchor + 3);
-    assert_eq!(Balances::free_balance(&lp_farmer), anchor + 3);
+    assert_eq!(Balances::free_balance(&staking_liquidity_actor), anchor + 3);
     let actor = Actors::active_actor_view(primitives::ecosystem::actor_ids::FEE_SINK_ACTORS_ID)
       .expect("Fee Sink actor remains active");
     assert_eq!(actor.cycle_nonce, 3);
@@ -116,11 +116,11 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
       1,
       &BOB,
     ));
-    assert_ok!(TmctolGenesisSystemActors::activate_native_staking_lp_farming(1));
+    assert_ok!(TmctolGenesisSystemActors::activate_native_staking_liquidity_actor(1));
     let fee_sink = actor_fee_sink_account();
     let staking_pool = Staking::pool_account_for(native_asset_id);
-    let lp_farmer = Actors::sovereign_account_id_system(
-      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+    let staking_liquidity_actor = Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     );
     let pool_id = <Runtime as polkadot_sdk::pallet_asset_conversion::Config>::PoolLocator::pool_id(
       &base_asset,
@@ -163,9 +163,9 @@ fn fee_sink_actor_splits_phase1_native_flow_to_staking_and_lp_ingress() {
       Balances::free_balance(&staking_pool),
       crate::EXISTENTIAL_DEPOSIT
     );
-    assert!(Assets::balance(native_asset_id, &lp_farmer) <= 1);
+    assert!(Assets::balance(native_asset_id, &staking_liquidity_actor) <= 1);
     assert_eq!(
-      Balances::free_balance(&lp_farmer),
+      Balances::free_balance(&staking_liquidity_actor),
       crate::EXISTENTIAL_DEPOSIT
     );
     assert!(Assets::balance(native_asset_id, &pool_account) > lp_pool_native_before);

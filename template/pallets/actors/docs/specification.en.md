@@ -1,9 +1,7 @@
 # DEOS Actors Specification
 
 - **Scope**: Bounded economic actor runtime contract
-- **Revision**: `0.7.12`
 - **Target**: `pre-1.0.0`
-- **Date**: August 2026
 - **Status**: Normative
 
 RFC 2119/RFC 8174 key words are normative when uppercase. This document defines runtime behavior and semantic type meaning. Runtime metadata defines exact SCALE encoding. Generated storage and Weight descriptors define physical layout and measured values.

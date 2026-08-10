@@ -29,6 +29,7 @@
 - `Adoption Model`: Partner teams fork DEOS, configure their economy, and may contribute framework-hardening improvements back without moving product policy into the kernel.
 - `Mechanism vs Policy`: DEOS owns primitives, invariants, adapters, execution safety, bounded projections, and reference patterns; downstream instances own brand, founder economics, labor culture, invoice norms, bucket names/percentages, marketing, and demand strategy.
 - `Release Line`: The standalone repository release line began at `0.0.0`; `CHANGELOG.md` records this line only.
+- `Pre-1.0 Launch Boundary`: No downstream product network may launch before DEOS `1.0`; every `0.x` release evolves fresh-genesis source, permits breaking ABI/storage changes, and carries no production storage lineage or migration obligation.
 - `Acronym Semantics`: Deterministic means explicit bounded protocol reactions for the same on-chain state, Economic names the managed capital/liquidity domain, and Operating System means a domain-specific execution substrate rather than a general-purpose OS.
 - `Primary Human Entry`: `README.md` explains the framework and routes evaluators, builders, operators, and contributors to the right source of truth.
 
@@ -38,7 +39,7 @@
 - `Open Work`: Start repository work from `BACKLOG.md`; add newly discovered in-scope work there and remove completed items immediately.
 - `Backlog Shape`: Format open work as `- [ ] \`Domain\`: Description` with uppercase prose after the colon; track closable deliverables and explicit gates only, while evergreen disciplines belong in this protocol, subsystem docs, or skill contracts.
 - `Delivery History`: Record meaningful completed outcomes and impact in `CHANGELOG.md`, not in backlog or durable protocol prose.
-- `Changelog Shape`: Format delivery entries as `- \`Domain\`: Description`, using slash-separated domain qualifiers when needed; exclude package-marker chores, intermediate implementation diaries, and duplicated architecture explanations.
+- `Changelog Shape`: Format delivery entries as `- \`Domain\`: Description`, using slash-separated domain qualifiers when needed; keep at most 8 single-line entries per release and at most 512 characters per entry; exclude package-marker chores, intermediate implementation diaries, and duplicated architecture explanations.
 - `Spec Ownership`: Specifications own intended subsystem contracts, rationale, invariants, and public semantics.
 - `Package Architecture Ownership`: Package-owned architecture docs describe the shipped implementation of the independently reusable crate: storage topology, bounded algorithms, modules, generic interfaces, package evidence, and code anchors.
 - `Integration Documentation Ownership`: Root `docs/*.integration.en.md` documents concrete DEOS reference composition across runtime bindings, adapters, cross-pallet flows, System actor topology, production weights, client realization, and operational watchpoints.
@@ -71,6 +72,7 @@
 - `Framework Naming`: Use `DEOS` for the framework/runtime/reference stack and `TMCTOL` only for the concrete economic standard.
 - `Concrete Subsystem Branding`: Use `DEOS Router`, `DEOS Governance`, `DEOS Staking`, and `DEOS Oracle` when naming those concrete framework subsystems; preserve stable Rust crate, runtime pallet/module, source-file, and generated-weight identifiers unless a separate compatibility change lands. Concept, mechanism, and domain labels remain unprefixed when they own a broader semantic object, and distinctive names such as DEOS Actors and TMC remain unprefixed.
 - `Cargo Publication Naming`: Independently publishable DEOS packages use globally conflict-resistant framework names such as `pallet-deos-*` and `deos-primitives`; never substitute `deus` or an unqualified generic package name for the DEOS framework identity. Cargo package identity may change without renaming the stable Rust library crate.
+- `Cargo Release Identity`: `template/Cargo.toml` owns the lockstep DEOS workspace package version; every workspace member inherits `workspace.package.version`, and `Cargo.lock` records the resolved release identity.
 - `Governance Naming`: Use `DEOS Governance` for the concrete subsystem and `Governance` for the broader domain overview; runtime implementation remains `pallet-governance`.
 - `Asset Notation`: Prefix concrete asset symbols with `$` in specs and architecture prose (`$NTVE`, `$VETO`, `$BLDR`); keep bare labels for vote options and non-asset semantics.
 - `Actors Abstraction`: Describe automation by System Actor role and execution-plan family rather than legacy manager/farmer names.
@@ -112,7 +114,7 @@
 - `Cadence`: Keep block-duration assumptions explicit, benchmarked, and configuration-driven rather than fixing DEOS to one block speed.
 - `Protected Complexity`: Preserve complexity earned by real constraints and invariants; remove accidental complexity and speculative indirection.
 - `No Premature Optimization`: Prefer contract correctness and honest product flows over speculative loading, bundle, storage, or scheduler indirection.
-- `Pre-Fork Storage Lineage`: Before a downstream chain launches, reset fresh-baseline storage versions and remove historical migration ceremony; deployed forks own their migrations.
+- `Pre-Fork Storage Lineage`: Through DEOS `0.x`, reset fresh-baseline storage versions and remove historical migration ceremony; the first downstream production genesis may occur only from `1.0` or later, after which each deployed fork owns monotonic versions and migrations.
 - `Pre-Launch Contract Coherence`: Before any network launches and before a stability declaration, prefer one semantically ordered canonical SCALE/API contract over append-only compatibility, legacy aliases, or migration ceremony; group fields by domain meaning and hierarchy, then regenerate metadata, control-plane, client, tests, weights, and Wasm evidence together.
 
 ## 6. TMCTOL Economic Invariants
@@ -145,6 +147,7 @@
 - `Governance Domains`: Model governance as explicit domain-scoped primary/protection track pairs rather than proposal-id conventions or actor-profile hacks.
 - `Governance Shape`: Prefer `GovernanceDomain + CadenceMode + ProposalPayloadKind`; add richer proposal classes only after measured pressure.
 - `Urgent Policy`: Fast-track eligibility defaults deny and must be opted in per domain/payload combination.
+- `Strategic Governance Ingress`: A protocol-domain `L1RootAction` may enter only through the existing signed proposal surface gated by runtime-defined nonzero primary-track power, retaining ordinary fee/cap/rollback semantics; this grants no direct Root dispatch, gives `$VETO` no agenda-setting authority, and leaves Root-equivalent enactment inside the existing bounded payload executor. `template/pallets/governance/docs/specification.en.md` owns the full contract.
 - `L2 Parameters`: Treat delegated parameter changes as explicit bounded domain-owned surfaces, not permission to call arbitrary admin setters.
 - `Safety Bias`: Protection governance may fail closed; `$VETO` is negative constitutional power rather than a second positive-governance path.
 - `Governance Reward Memory`: Keep windows, expiry buckets, uniqueness, retention, and proposal maturity bounded; avoid full-account or full-proposal scans.
@@ -174,7 +177,7 @@
 - `Rust Warnings`: Maintain zero Clippy warnings across workspace/all targets.
 - `Workspace Lints`: Keep Substrate cfg allowances and the upstream-aligned lint set honest.
 - `WASM Builder`: Keep `substrate-wasm-builder` aligned with the current Polkadot SDK line.
-- `Runtime Version`: Before the first production genesis, keep the DEOS framework baseline at `authoring_version = 1`, `impl_version = 1`, `system_version = 3`, `spec_version = 1`, and `transaction_version = 1`; after a downstream network launches, its runtime owns monotonic compatibility bumps under SDK semantics.
+- `Runtime Version`: Through DEOS `0.x`, keep `authoring_version = 1`, `spec_version = 1`, `impl_version = 1`, `system_version = 3`, and `transaction_version = 1`; package versions may advance without simulating on-chain compatibility. After the first downstream production genesis from `1.0` or later, that deployed runtime owns monotonic compatibility bumps under SDK semantics.
 - `Source Headers`: Do not add license or copyright headers to source files.
 - `Suppressions`: Avoid broad JS/TS/Svelte lint and type suppressions; narrow and justify unavoidable exceptions.
 - `Complexity Feedback`: Treat compilation and integration failures as architectural feedback; simplify abstractions before adding compatibility layers.

@@ -1,6 +1,6 @@
 [package]
 name = "pallet-oracle-embedding-fixture"
-version = "0.7.15"
+version.workspace = true
 description = "Independent runtime fixture for pallet-deos-oracle"
 authors.workspace = true
 license = "MIT-0"

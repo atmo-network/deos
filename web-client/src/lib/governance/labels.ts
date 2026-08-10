@@ -149,16 +149,18 @@ export function executionAuthorityLabel(authority?: string | null) {
 export function submissionAuthorityLabel(authority?: string | null) {
   return authority === 'Signed'
     ? 'Signed public path'
-    : authority === 'AdminOnly'
-      ? 'Admin only'
-      : 'Unavailable';
+    : authority === 'PrimaryEligibleSigned'
+      ? 'Signed · primary governance eligibility required'
+      : authority === 'AdminOnly'
+        ? 'Admin only'
+        : 'Unavailable';
 }
 
 export function openingFeeLabel(
   authority?: string | null,
   openingFee?: bigint | null,
 ) {
-  if (authority !== 'Signed') return 'No public fee';
+  if (authority === 'AdminOnly') return 'No public fee';
   return openingFee == null
     ? 'Unavailable'
     : `${openingFee.toLocaleString()} native units`;

@@ -22,7 +22,7 @@ pub mod actor_ids {
   /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
   ///   hex:  `0xe5d2c431c880d0bfbad3663b09164d86a76696dc2f137eeb502359fd28363f42`
   ///   SS58: `5HG3S6PLHrykv65Vw8j19zRaEx2Bmb37iywfo2qK3cHosGKX`
-  pub const BURNING_MANAGER_ACTORS_ID: u64 = 0;
+  pub const BURN_ACTOR_ID: u64 = 0;
 
   /// Fee Sink System Actors — unified fee collection and phase-aware redistribution
   /// Created at genesis (`actor_id = 1`)
@@ -105,7 +105,7 @@ pub mod actor_ids {
 
   // --- BLDR Domain (L2 Token Economy) ---
 
-  /// BLDR Splitter — receives minted $BLDR and splits to BLDR ZM and BLDR Treasury
+  /// BLDR Splitter — receives minted $BLDR and splits to the BLDR Liquidity Actor and Treasury
   /// Created at genesis (`actor_id = 10`)
   ///
   /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
@@ -114,12 +114,12 @@ pub mod actor_ids {
   pub const BLDR_SPLITTER_ACTORS_ID: u64 = 10;
 
   /// BLDR Liquidity Actor — provisions NTVE-BLDR liquidity
-  /// Created at genesis (`actor_id = 11`; legacy constant name)
+  /// Created at genesis (`actor_id = 11`)
   ///
   /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
   ///   hex:  `0x2e699b4acc26bcf078237dc13eda2470505c8bd99450269eeb7eb4c5f5472968`
   ///   SS58: `5D7ZRz4hMphgVdq9UYBA9Gtk1q2cBjKTgoDCqpBETQi6Ziq4`
-  pub const BLDR_ZM_ACTORS_ID: u64 = 11;
+  pub const BLDR_LIQUIDITY_ACTOR_ID: u64 = 11;
 
   /// BLDR Bucket A (Anchor) — permanent LP accumulator for NTVE-BLDR pair
   /// Created at genesis (`actor_id = 12`), Noop by default
@@ -137,13 +137,13 @@ pub mod actor_ids {
   ///   SS58: `5CE6WsJ12vyyjAPMuvaqf2cdSQMVzAAxVjZDvXZK99VswFGe`
   pub const BLDR_TREASURY_ACTORS_ID: u64 = 13;
 
-  /// Native Staking LP Farmer — donates NTVE/stNTVE reserves without minting LP
+  /// Native Staking Liquidity Actor — donates NTVE/stNTVE reserves without minting LP
   /// Created at genesis (`actor_id = 14`), Noop until the canonical pool is activated
   ///
   /// Sovereign account (ActorPalletId = `*b"actors00"`, SS58 prefix 42):
   ///   hex:  `0x14292af3e9e70acb4c39cfe83317039c1f2111b475b99e660d87b16948edc339`
   ///   SS58: `5CX93X5agA9cbvbv4JKpXmR8RF9ywdLbyg6WR9qY15evri5L`
-  pub const NATIVE_STAKING_LP_FARMER_ACTORS_ID: u64 = 14;
+  pub const NATIVE_STAKING_LIQUIDITY_ACTOR_ID: u64 = 14;
 }
 
 /// Protocol-native token asset IDs.
@@ -258,7 +258,7 @@ pub mod params {
   /// DEOS Router fee (0.5%).
   ///
   /// Protocol captures 0.5% on all swaps routed through DEOS Router.
-  /// XYK pool fee is 0.0% — all fee revenue flows through the Router to the Burning Manager.
+  /// XYK pool fee is 0.0% — all fee revenue flows through the Router to the Burn Actor.
   pub const DEOS_ROUTER_FEE: Perbill = Perbill::from_parts(5_000_000); // 50 bps
 
   /// Maximum governance-settable DEOS Router fee (1%).
@@ -327,12 +327,12 @@ pub mod params {
   pub const NATIVE_STAKING_LP_DONATION_MAX_RATIO_ERROR: Perbill = Perbill::from_percent(1);
 
   /// Minimum foreign balance for BM to attempt a swap (prevents dust churn)
-  pub const BURNING_MANAGER_DUST_THRESHOLD: Balance = PRECISION; // 1.0
+  pub const BURN_ACTOR_DUST_THRESHOLD: Balance = PRECISION; // 1.0
 
   // --- BLDR Domain Parameters ---
 
-  /// BLDR Splitter: share directed to BLDR ZM (50%)
-  pub const BLDR_SPLITTER_ZM_SHARE: Perbill = Perbill::from_percent(50);
+  /// BLDR Splitter: share directed to the BLDR Liquidity Actor (50%)
+  pub const BLDR_SPLITTER_LIQUIDITY_SHARE: Perbill = Perbill::from_percent(50);
 
   /// BLDR Splitter: share directed to BLDR Treasury (50%)
   pub const BLDR_SPLITTER_TREASURY_SHARE: Perbill = Perbill::from_percent(50);
@@ -379,7 +379,7 @@ mod tests {
       "TOL bucket allocations must sum to 100%"
     );
 
-    let bldr_splitter_sum = params::BLDR_SPLITTER_ZM_SHARE.deconstruct()
+    let bldr_splitter_sum = params::BLDR_SPLITTER_LIQUIDITY_SHARE.deconstruct()
       + params::BLDR_SPLITTER_TREASURY_SHARE.deconstruct();
     assert_eq!(
       bldr_splitter_sum, 1_000_000_000,

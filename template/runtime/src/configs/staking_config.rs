@@ -242,9 +242,9 @@ impl pallet_staking::RewardBaseWeightProvider<AccountId, AssetId, Balance>
   }
 }
 
-pub struct RuntimeLegacyRewardSnapshotEventIngress;
+pub struct RuntimeNonNativeRewardEventIngress;
 impl pallet_staking::RewardSnapshotEventIngress<BlockNumber>
-  for RuntimeLegacyRewardSnapshotEventIngress
+  for RuntimeNonNativeRewardEventIngress
 {
   fn ingest(epoch: BlockNumber, max_scan: usize, remaining_weight: Weight) -> Weight {
     fn reward_base_asset_id(asset_id: AssetId) -> Option<AssetId> {
@@ -636,7 +636,7 @@ impl pallet_staking::Config for Runtime {
   type RewardBaseWeightProvider = RuntimeRewardBaseWeightProvider;
   type NativeNominationRewardCompounder = RuntimeNativeNominationRewardCompounder;
   type NativeStakingReadModelProvider = RuntimeNativeStakingReadModelProvider;
-  type RewardSnapshotEventIngress = RuntimeLegacyRewardSnapshotEventIngress;
+  type RewardSnapshotEventIngress = RuntimeNonNativeRewardEventIngress;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = RuntimeStakingBenchmarkHelper;
   type MaxOperatorCommission = MaxOperatorCommission;

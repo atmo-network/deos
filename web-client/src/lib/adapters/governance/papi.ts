@@ -267,6 +267,7 @@ function mapProposalExecutionAuthority(
 function mapProposalSubmissionAuthority(
   authority: GovernanceEnum<{
     Signed: undefined;
+    PrimaryEligibleSigned: undefined;
     AdminOnly: undefined;
   }>,
 ): GovernanceProposalSubmissionAuthority {
@@ -1560,9 +1561,9 @@ export class GovernancePapiProvider implements GovernanceBlockchainProvider {
       input.domainId,
       input.payloadKind,
     );
-    if (authority !== 'Signed') {
+    if (authority === 'AdminOnly') {
       throw new Error(
-        `Browser submission currently supports only runtime-signed public proposal kinds; ${input.payloadKind} is still admin-only for domain ${input.domainId}.`,
+        `Browser submission currently supports only runtime-signed proposal kinds; ${input.payloadKind} is admin-only for domain ${input.domainId}.`,
       );
     }
     const signer = await connectDeosSigner(

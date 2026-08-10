@@ -11,7 +11,7 @@
 
 use super::common::{
   ALICE, ASSET_A, ASSET_B, ASSET_NATIVE, LIQUIDITY_AMOUNT, MIN_AMOUNT_OUT, MIN_LIQUIDITY,
-  SWAP_AMOUNT, add_liquidity, burning_manager_account, deos_router_account,
+  SWAP_AMOUNT, add_liquidity, burn_actor_account, deos_router_account,
   ensure_asset_conversion_pool, seeded_test_ext, setup_deos_router_infrastructure,
 };
 use crate::{Assets, Balances, DeosRouter, Runtime, RuntimeOrigin, System};
@@ -21,6 +21,85 @@ use primitives::AssetKind;
 /// Setup test environment with pools and liquidity
 fn setup_test_environment() -> Result<(), &'static str> {
   setup_deos_router_infrastructure()
+}
+
+fn check_router_host_pool_registry() -> Result<(), &'static str> {
+  let indexed = pallet_deos_router::LpPairByTokenId::<Runtime>::get();
+  for (lp_token, pair) in &indexed {
+    let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
+      .ok_or("Router reverse index references an absent host pool")?;
+    if pool.lp_token != *lp_token {
+      return Err("Router LP token disagrees with the host pool registry");
+    }
+  }
+  for (pair, pool) in polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter() {
+    if indexed.get(&pool.lp_token) != Some(&pair) {
+      return Err("Host pool lacks its exact Router reverse entry");
+    }
+  }
+  Ok(())
+}
+
+#[test]
+fn router_host_pool_registry_corruption_matrix_is_deterministic() {
+  #[derive(Clone, Copy)]
+  enum Corruption {
+    None,
+    MissingReverse,
+    WrongLp,
+    OrphanReverse,
+  }
+
+  let cases = [
+    (Corruption::None, None),
+    (
+      Corruption::MissingReverse,
+      Some("Host pool lacks its exact Router reverse entry"),
+    ),
+    (
+      Corruption::WrongLp,
+      Some("Router LP token disagrees with the host pool registry"),
+    ),
+    (
+      Corruption::OrphanReverse,
+      Some("Router reverse index references an absent host pool"),
+    ),
+  ];
+  for (corruption, expected) in cases {
+    seeded_test_ext().execute_with(|| {
+      assert_ok!(setup_test_environment());
+      let (pair, pool) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
+        .next()
+        .expect("one host pool exists");
+      match corruption {
+        Corruption::None => {}
+        Corruption::MissingReverse => {
+          pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+            pairs.remove(&pool.lp_token);
+          });
+        }
+        Corruption::WrongLp => {
+          pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+            pairs.remove(&pool.lp_token);
+            pairs
+              .try_insert(pool.lp_token.saturating_add(1), pair)
+              .expect("one corrupt entry fits");
+          });
+        }
+        Corruption::OrphanReverse => {
+          pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+            pairs
+              .try_insert(
+                pool.lp_token.saturating_add(1),
+                (AssetKind::Local(900_000), AssetKind::Local(900_001)),
+              )
+              .expect("one corrupt entry fits");
+          });
+        }
+      }
+      assert_eq!(check_router_host_pool_registry().err(), expected);
+    });
+  }
 }
 
 #[test]
@@ -33,7 +112,7 @@ fn test_deos_router_basic_swap_functionality() {
       .expect("quote must exist for seeded direct pool");
     let alice_asset_before = Assets::balance(ASSET_A, ALICE);
     let alice_native_before = Balances::free_balance(ALICE);
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor_account());
     System::reset_events();
     assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
@@ -53,8 +132,8 @@ fn test_deos_router_basic_swap_functionality() {
       alice_native_before + quote.amount_out
     );
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      burning_manager_before + quote.router_fee
+      Assets::balance(ASSET_A, burn_actor_account()),
+      burn_actor_before + quote.router_fee
     );
     assert!(System::events().iter().any(|record| matches!(
       &record.event,
@@ -81,8 +160,8 @@ fn test_deos_router_fee_processing() {
     let to = AssetKind::Native;
     let quote = DeosRouter::quote_exact_input(ALICE, from, to, SWAP_AMOUNT)
       .expect("quote must exist for seeded direct pool");
-    let burning_manager = burning_manager_account();
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager.clone());
+    let burn_actor = burn_actor_account();
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor.clone());
     System::reset_events();
     assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
@@ -94,15 +173,15 @@ fn test_deos_router_fee_processing() {
       1000,
     ));
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager.clone()),
-      burning_manager_before + quote.router_fee
+      Assets::balance(ASSET_A, burn_actor.clone()),
+      burn_actor_before + quote.router_fee
     );
     System::assert_has_event(crate::RuntimeEvent::DeosRouter(
       pallet_deos_router::Event::FeeCollected {
         asset: from,
         amount: quote.router_fee,
         source: ALICE,
-        collector: burning_manager,
+        collector: burn_actor,
       },
     ));
   });
@@ -119,7 +198,7 @@ fn test_deos_router_anti_self_taxation() {
       .expect("router account should still receive a direct quote");
     let router_asset_before = Assets::balance(ASSET_A, router.clone());
     let router_native_before = Balances::free_balance(router.clone());
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor_account());
     System::reset_events();
     assert_eq!(quote.router_fee, 0);
     assert_ok!(DeosRouter::swap(
@@ -140,8 +219,8 @@ fn test_deos_router_anti_self_taxation() {
       router_native_before + quote.amount_out
     );
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      burning_manager_before
+      Assets::balance(ASSET_A, burn_actor_account()),
+      burn_actor_before
     );
     assert!(System::events().iter().all(|record| {
       !matches!(
@@ -228,7 +307,7 @@ fn assert_native_anchored_market_failure_rolls_back(failure_index: usize) {
     let input_before = Assets::balance(ASSET_A, ALICE);
     let output_before = Assets::balance(ASSET_B, ALICE);
     let native_before = Balances::free_balance(ALICE);
-    let fee_before = Assets::balance(ASSET_A, burning_manager_account());
+    let fee_before = Assets::balance(ASSET_A, burn_actor_account());
     let first_feed = crate::configs::oracle_config::deos_router_pool_feed(from, native);
     let second_feed = crate::configs::oracle_config::deos_router_pool_feed(native, to);
     let first_observation_before = crate::Oracle::observations(first_feed);
@@ -259,10 +338,7 @@ fn assert_native_anchored_market_failure_rolls_back(failure_index: usize) {
     assert_eq!(Assets::balance(ASSET_A, ALICE), input_before);
     assert_eq!(Assets::balance(ASSET_B, ALICE), output_before);
     assert_eq!(Balances::free_balance(ALICE), native_before);
-    assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      fee_before
-    );
+    assert_eq!(Assets::balance(ASSET_A, burn_actor_account()), fee_before);
     assert_eq!(
       crate::Oracle::observations(first_feed),
       first_observation_before
@@ -407,7 +483,7 @@ fn test_deos_router_accumulated_balance_processing() {
     let to = AssetKind::Native;
     let quote = DeosRouter::quote_exact_input(ALICE, from, to, amount)
       .expect("quote must exist for seeded direct pool");
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor_account());
     assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
@@ -418,8 +494,8 @@ fn test_deos_router_accumulated_balance_processing() {
       1000,
     ));
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      burning_manager_before + quote.router_fee
+      Assets::balance(ASSET_A, burn_actor_account()),
+      burn_actor_before + quote.router_fee
     );
   });
 }
@@ -434,7 +510,7 @@ fn test_deos_router_native_token_swaps() {
       .expect("quote must exist for seeded direct pool");
     let alice_native_before = Balances::free_balance(ALICE);
     let alice_asset_before = Assets::balance(ASSET_A, ALICE);
-    let burning_manager_before = Balances::free_balance(burning_manager_account());
+    let burn_actor_before = Balances::free_balance(burn_actor_account());
     assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
@@ -453,8 +529,8 @@ fn test_deos_router_native_token_swaps() {
       alice_asset_before + quote.amount_out
     );
     assert_eq!(
-      Balances::free_balance(burning_manager_account()),
-      burning_manager_before + quote.router_fee
+      Balances::free_balance(burn_actor_account()),
+      burn_actor_before + quote.router_fee
     );
   });
 }
@@ -534,7 +610,7 @@ fn test_deos_router_direct_fee_processing() {
           } if *asset == from
             && *amount == quote.router_fee
             && *source == ALICE
-            && *collector == burning_manager_account()
+            && *collector == burn_actor_account()
         )
       })
       .expect("fee event must be present");
@@ -568,7 +644,7 @@ fn test_deos_router_consistent_fee_burning() {
     let from = AssetKind::Local(ASSET_A);
     let to = AssetKind::Native;
     let fee = DeosRouter::calculate_router_fee(amount);
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor_account());
     assert_ok!(DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       from,
@@ -588,8 +664,8 @@ fn test_deos_router_consistent_fee_burning() {
       1000,
     ));
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      burning_manager_before + fee * 2
+      Assets::balance(ASSET_A, burn_actor_account()),
+      burn_actor_before + fee * 2
     );
   });
 }
@@ -644,7 +720,7 @@ fn test_deos_router_multiple_accumulation_cycles() {
 fn test_deos_router_fee_collection_only_on_successful_swaps() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor_account());
     let unreasonably_high_min = SWAP_AMOUNT * 100;
     System::reset_events();
     assert_noop!(
@@ -660,8 +736,8 @@ fn test_deos_router_fee_collection_only_on_successful_swaps() {
       pallet_deos_router::pallet::Error::<Runtime>::SlippageExceeded
     );
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      burning_manager_before
+      Assets::balance(ASSET_A, burn_actor_account()),
+      burn_actor_before
     );
     assert!(System::events().into_iter().all(|record| {
       !matches!(
@@ -676,7 +752,7 @@ fn test_deos_router_fee_collection_only_on_successful_swaps() {
 fn test_deos_router_path_validation() {
   seeded_test_ext().execute_with(|| {
     assert_ok!(setup_test_environment());
-    let burning_manager_before = Assets::balance(ASSET_A, burning_manager_account());
+    let burn_actor_before = Assets::balance(ASSET_A, burn_actor_account());
     let non_existent_asset = 999;
     System::reset_events();
     assert_noop!(
@@ -692,8 +768,8 @@ fn test_deos_router_path_validation() {
       pallet_deos_router::pallet::Error::<Runtime>::NoRouteFound
     );
     assert_eq!(
-      Assets::balance(ASSET_A, burning_manager_account()),
-      burning_manager_before
+      Assets::balance(ASSET_A, burn_actor_account()),
+      burn_actor_before
     );
     assert!(
       System::events()
@@ -747,7 +823,7 @@ fn test_deos_router_events() {
         asset: from,
         amount: quote.router_fee,
         source: ALICE,
-        collector: burning_manager_account(),
+        collector: burn_actor_account(),
       },
     ));
     assert!(System::events().iter().any(|record| matches!(

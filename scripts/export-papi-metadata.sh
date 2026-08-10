@@ -75,6 +75,7 @@ check_prerequisites() {
     require_directory "$TEMPLATE_DIR" "Template workspace"
     require_directory "$PROJECT_ROOT/web-client" "Web-client workspace"
     if [[ "$GENERATE_DESCRIPTORS" == "1" ]]; then
+        activate_pinned_node
         require_commands npm
     fi
     if [[ ! "$METADATA_VERSION" =~ ^[0-9]+$ ]]; then
@@ -91,7 +92,7 @@ main() {
     run_shell_step \
         "Export DEOS runtime metadata v$METADATA_VERSION" \
         "" \
-        "cd '$TEMPLATE_DIR' && cargo run -p deos-runtime --example export_metadata -- '$OUTPUT_PATH' '$METADATA_VERSION'"
+        "cd '$TEMPLATE_DIR' && cargo run --locked -p deos-runtime --example export_metadata -- '$OUTPUT_PATH' '$METADATA_VERSION'"
     if [[ "$GENERATE_DESCRIPTORS" == "1" ]]; then
         phase_banner "Generate PAPI descriptors"
         run_shell_step \

@@ -49,14 +49,18 @@ run_audit() {
     local pattern="$home_path|$agent_home|$agent_dir|$default_pi_phrase|$skill_dir_home"
     local matches
     matches="$({
-        git -C "$PROJECT_ROOT" ls-files -z \
+        cd "$PROJECT_ROOT"
+        git ls-files -co --exclude-standard -z \
             ':!:web-client/package-lock.json' \
             ':!:template/Cargo.lock' \
             ':!:**/target/**' \
             ':!:**/node_modules/**' \
             ':!:**/build/**' \
             ':!:**/.svelte-kit/**' \
-          | xargs -0 rg -n "$pattern" -- || true
+          | while IFS= read -r -d '' path; do
+                [[ -f "$path" ]] && printf '%s\0' "$path"
+            done \
+          | xargs -0 -r rg -n "$pattern" -- || true
     } || true)"
     if [[ -n "$matches" ]]; then
         log_error "Operator-local path or global agent dependency detected"

@@ -69,18 +69,17 @@ Select additional leaves only when the touched contract requires them. Routing f
 | Docs or context | Completion gate | Cargo, simulator, client, network | Owning code/math/wiki also changed |
 | One Rust package | `ci-local.sh --only CHECK --package NAME` for each required check | Other packages, Wasm, network | Cross-package/runtime boundary changed |
 | One Rust test family | Add `--test-filter NAME` to scoped tests | Unrelated tests | Shared state or integration behavior changed |
-| Actors scheduler slice | `actors-release-gate.sh --quick`, then completion gate | Full stress and occupancy profile | Capacity, fairness, liveness, or release gate changed |
+| Actors scheduler slice | `actors-assurance.sh --quick`, then completion gate | Full stress and occupancy profile | Capacity, fairness, liveness, or release gate changed |
 | Benchmark code | `benchmarks.sh --check`, then one exact extrinsic or owning pallet | Other pallets and runtime release build | Production weights or Wasm accepted |
 | Runtime integration | Scoped `deos-runtime` tests, then completion gate | Full workspace, E2E, client | Runtime metadata/Wasm or network behavior changed |
-| Upgrade delivery | `upgrade-delivery` evidence ladder through shared root scripts | Live relay and publication | Explicit target, matching authorization, and relay approval exist |
 | Staking delivery | `staking-delivery` readiness ladder through the shared bootstrap script | Signing, funds, governance execution | Explicit target state and mutation approval exist |
 | Wiki only | Wiki trust/consolidation leaves | Client build and Cargo | Renderer/client contract changed |
-| Full release | `validate-local.sh --all` | Nothing | Explicit release acceptance only |
+| Release validation | `validate-local.sh PROFILE` | Nothing selected outside the profile | Explicit `fast`, `heavy`, or `full` boundary |
 
 Network-backed dependency posture remains opt-in:
 
 ```bash
-./scripts/validate-local.sh --audit-only --dependency-audit
+./.agents/skills/alignment/scripts/audit-dependency-posture.sh
 ```
 
 Narrow leaves are available under:
@@ -89,7 +88,7 @@ Narrow leaves are available under:
 ./.agents/skills/alignment/scripts/<audit-name>.sh --help
 ```
 
-Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
+Current audit families cover Rust architecture drift, architecture-document readability, economic-claim anchors/falsification inventory, script entrypoint and skill-metadata contracts, template readiness, numeric parsing, simulator determinism/mirror sync, code suppressions, backlog shape, release-line/package-marker consistency, strategic-governance ingress and shortcut absence, repository portability, wiki trust/consolidation, dependency posture, runtime-source test gating, and the repo-local completion gate.
 
 ### Intensive Evolution Rule
 

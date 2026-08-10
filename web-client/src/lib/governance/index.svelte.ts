@@ -71,7 +71,7 @@ async function loadPublicSubmissionOptions(
     })),
   );
   return entries
-    .filter((entry) => entry.authority === 'Signed')
+    .filter((entry) => entry.authority !== 'AdminOnly')
     .map((entry) => ({
       payloadKind: entry.payloadKind,
       openingFee: entry.openingFee,

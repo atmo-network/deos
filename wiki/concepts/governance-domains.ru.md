@@ -71,7 +71,7 @@ Governance-домен — это одна типизированная governanc
 - `7 дней` primary voting window;
 - `3 дня` enactment delay.
 
-Signed public path остается намеренно ограниченным: `Intent` во всех доменах, тактический `$BLDR` `L2SignalToL1` и тактический `$BLDR` `L2TreasurySpend`.
+Signed path остается намеренно ограниченным: `Intent` во всех доменах, тактические `$BLDR` `L2SignalToL1` и `$BLDR` `L2TreasurySpend`, а также протокольный `L1RootAction` только для подписанта с ненулевым весом основного трека из стейкинга. `$VETO` остается исключительно защитным инструментом и не дает права создавать предложения.
 
 ## Tracks, payload и authority
 

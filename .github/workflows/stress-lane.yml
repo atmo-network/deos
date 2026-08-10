@@ -1,4 +1,4 @@
-name: Stress Lane
+name: Heavy Assurance
 
 on:
   schedule:
@@ -9,55 +9,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-env:
-  CARGO_TERM_COLOR: always
-  CARGO_INCREMENTAL: 0
-
 jobs:
-  scheduler-stress-lane:
-    name: Actors Scheduler Stress Lane
-    runs-on: ubuntu-24.04
-    timeout-minutes: 120
-    env:
-      SKIP_WASM_BUILD: 1
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain from template/rust-toolchain.toml
-        working-directory: template
-        run: |
-          python3 - <<'PY'
-          import subprocess
-          import tomllib
-          from pathlib import Path
-
-          toolchain = tomllib.loads(Path('rust-toolchain.toml').read_text())['toolchain']
-          command = [
-            'rustup',
-            'toolchain',
-            'install',
-            toolchain['channel'],
-            '--profile',
-            toolchain.get('profile', 'minimal'),
-          ]
-          for component in toolchain.get('components', []):
-            command.extend(['--component', component])
-          for target in toolchain.get('targets', []):
-            command.extend(['--target', target])
-          subprocess.check_call(command)
-          PY
-          rustup show active-toolchain
-
-      - name: Cache cargo registry & build artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            template/target
-          key: ${{ runner.os }}-cargo-stress-${{ hashFiles('template/Cargo.lock', 'template/rust-toolchain.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-cargo-stress-
-
-      - name: Actors scheduler stress gate
-        run: ./scripts/actors-release-gate.sh
+  heavy:
+    name: Heavy Release Validation
+    uses: ./.github/workflows/_validate.yml
+    with:
+      profile: heavy

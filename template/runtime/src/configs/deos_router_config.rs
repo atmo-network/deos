@@ -66,14 +66,14 @@ parameter_types! {
   pub const DeosRouterMaxPriceDeviation: Perbill = ecosystem::params::MAX_PRICE_DEVIATION;
 }
 
-/// The sovereign account of the Burning Manager System Actors (actor_id=0).
+/// The sovereign account of the Burn Actor (actor_id=0).
 /// Address is deterministic from `(ActorsPalletId, b"system", 0)` — see `ecosystem::actor_ids`.
-pub struct BurningManagerAccount;
+pub struct BurnActorAccount;
 
-impl polkadot_sdk::frame_support::traits::Get<AccountId> for BurningManagerAccount {
+impl polkadot_sdk::frame_support::traits::Get<AccountId> for BurnActorAccount {
   fn get() -> AccountId {
     pallet_deos_actors::Pallet::<crate::Runtime>::sovereign_account_id_system(
-      primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID,
+      primitives::ecosystem::actor_ids::BURN_ACTOR_ID,
     )
   }
 }
@@ -96,6 +96,77 @@ pub struct PriceOracleImpl<T: pallet_deos_router::pallet::Config>(core::marker::
 
 /// Token-driven fee manager implementation with account-based coordination
 pub struct FeeManagerImpl<T: pallet_deos_router::pallet::Config>(core::marker::PhantomData<T>);
+
+fn router_adapter_failure(
+  error: DispatchError,
+  failure_class: pallet_deos_router::RouterFailureClass,
+  retry_class: pallet_deos_router::RetryClass,
+) -> pallet_deos_router::AdapterFailure {
+  pallet_deos_router::AdapterFailure::new(error, failure_class, retry_class)
+}
+
+fn actor_ingress_failure(
+  failure: pallet_deos_actors::IngressFailure,
+) -> pallet_deos_router::AdapterFailure {
+  let retry = match failure.retry {
+    pallet_deos_actors::RetryClass::Permanent => pallet_deos_router::RetryClass::Permanent,
+    pallet_deos_actors::RetryClass::Temporary => pallet_deos_router::RetryClass::RetryLater,
+  };
+  router_adapter_failure(
+    failure.error,
+    pallet_deos_router::RouterFailureClass::IngressRejected,
+    retry,
+  )
+}
+
+pub(crate) fn market_execution_failure(error: DispatchError) -> pallet_deos_router::AdapterFailure {
+  use pallet_asset_conversion::Error as MarketError;
+  let retryable = [
+    MarketError::<Runtime>::ReserveLeftLessThanMinimal.into(),
+    MarketError::<Runtime>::AmountOutTooHigh.into(),
+    MarketError::<Runtime>::PoolNotFound.into(),
+    MarketError::<Runtime>::ProvidedMinimumNotSufficientForSwap.into(),
+    MarketError::<Runtime>::ProvidedMaximumNotSufficientForSwap.into(),
+    MarketError::<Runtime>::BelowMinimum.into(),
+    MarketError::<Runtime>::PoolEmpty.into(),
+  ];
+  if retryable.contains(&error) {
+    router_adapter_failure(
+      error,
+      pallet_deos_router::RouterFailureClass::LiquidityUnavailable,
+      pallet_deos_router::RetryClass::RetryLater,
+    )
+  } else {
+    pallet_deos_router::AdapterFailure::unknown(error)
+  }
+}
+
+fn oracle_publication_failure(error: DispatchError) -> pallet_deos_router::AdapterFailure {
+  let retryable = error == pallet_oracle::Error::<Runtime>::FeedPaused.into();
+  if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationCapacityExceeded.into() {
+    return router_adapter_failure(
+      error,
+      pallet_deos_router::RouterFailureClass::IngressRejected,
+      pallet_deos_router::RetryClass::RetryLater,
+    );
+  }
+  if error == pallet_deos_actors::Error::<Runtime>::DirtyObservationInvariant.into() {
+    return router_adapter_failure(
+      error,
+      pallet_deos_router::RouterFailureClass::IngressRejected,
+      pallet_deos_router::RetryClass::Permanent,
+    );
+  }
+  router_adapter_failure(
+    error,
+    pallet_deos_router::RouterFailureClass::PublicationRejected,
+    if retryable {
+      pallet_deos_router::RetryClass::RetryLater
+    } else {
+      pallet_deos_router::RetryClass::Permanent
+    },
+  )
+}
 
 pub struct AssetConversionAdapter;
 
@@ -545,7 +616,7 @@ impl pallet_deos_router::AssetConversionApi<AccountId, Balance> for AssetConvers
     min_amount_out: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<Balance, sp_runtime::DispatchError> {
+  ) -> Result<Balance, pallet_deos_router::AdapterFailure> {
     let path = [asset_in, asset_out];
     // Get target asset and snapshot balance before swap
     let target_asset = asset_out;
@@ -569,10 +640,13 @@ impl pallet_deos_router::AssetConversionApi<AccountId, Balance> for AssetConvers
       min_amount_out,
       recipient.clone(),
       keep_alive,
-    )?;
+    )
+    .map_err(market_execution_failure)?;
     #[cfg(test)]
     if fail_after_xyk_execution() {
-      return Err(DispatchError::Other("Injected post-XYK execution failure"));
+      return Err(pallet_deos_router::AdapterFailure::unknown(
+        DispatchError::Other("Injected post-XYK execution failure"),
+      ));
     }
     // Snapshot recipient balance after swap and calculate actual amount received
     let balance_after = match target_asset {
@@ -594,7 +668,7 @@ impl pallet_deos_router::AssetConversionApi<AccountId, Balance> for AssetConvers
     max_amount_in: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<pallet_deos_router::ExactOutputExecution, sp_runtime::DispatchError> {
+  ) -> Result<pallet_deos_router::ExactOutputExecution, pallet_deos_router::AdapterFailure> {
     let path = [asset_in, asset_out];
     let input_asset = asset_in;
     let output_asset = asset_out;
@@ -618,7 +692,8 @@ impl pallet_deos_router::AssetConversionApi<AccountId, Balance> for AssetConvers
       max_amount_in,
       recipient.clone(),
       keep_alive,
-    )?;
+    )
+    .map_err(market_execution_failure)?;
     let balance_after = match input_asset {
       AssetKind::Native => <Balances as NativeInspect<AccountId>>::balance(&who),
       AssetKind::Local(id) | AssetKind::Foreign(id) => {
@@ -655,8 +730,9 @@ where
   fn calculate_recipient_receives(
     token_asset: AssetKind,
     foreign_amount: Balance,
-  ) -> Result<Balance, sp_runtime::DispatchError> {
-    let total_minted = pallet_tmc::Pallet::<T>::calculate_total_mint(token_asset, foreign_amount)?;
+  ) -> Result<Balance, pallet_deos_router::AdapterFailure> {
+    let total_minted = pallet_tmc::Pallet::<T>::calculate_total_mint(token_asset, foreign_amount)
+      .map_err(pallet_deos_router::AdapterFailure::unknown)?;
     Ok(<T as pallet_tmc::pallet::Config>::UserAllocationRatio::get().mul_floor(total_minted))
   }
 
@@ -666,14 +742,15 @@ where
     token_asset: AssetKind,
     foreign_asset: AssetKind,
     foreign_amount: Balance,
-  ) -> Result<Balance, sp_runtime::DispatchError> {
+  ) -> Result<Balance, pallet_deos_router::AdapterFailure> {
     let total_minted = pallet_tmc::Pallet::<T>::mint_with_distribution(
       who,
       recipient,
       token_asset,
       foreign_asset,
       foreign_amount,
-    )?;
+    )
+    .map_err(pallet_deos_router::AdapterFailure::unknown)?;
     Ok(<T as pallet_tmc::pallet::Config>::UserAllocationRatio::get().mul_floor(total_minted))
   }
 }
@@ -683,13 +760,13 @@ impl pallet_deos_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
     asset_in: AssetKind,
     asset_out: AssetKind,
     price: Balance,
-  ) -> Result<(), sp_runtime::DispatchError> {
+  ) -> Result<(), pallet_deos_router::AdapterFailure> {
     let feed = super::oracle_config::deos_router_pool_feed(asset_in, asset_out);
     if !pallet_oracle::Feeds::<Runtime>::contains_key(feed) {
       return Ok(());
     }
     let producer: AccountId = RouterPalletId::get().into_account_truncating();
-    crate::Oracle::publish_from(producer, feed, price)
+    crate::Oracle::publish_from(producer, feed, price).map_err(oracle_publication_failure)
   }
 
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<Balance> {
@@ -708,7 +785,7 @@ impl pallet_deos_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
     asset_in: AssetKind,
     asset_out: AssetKind,
     current_price: Balance,
-  ) -> Result<(), sp_runtime::DispatchError> {
+  ) -> Result<(), pallet_deos_router::AdapterFailure> {
     if let Some(ema_price) = Self::get_ema_price(asset_in, asset_out) {
       let deviation = if current_price > ema_price {
         polkadot_sdk::sp_runtime::Perbill::from_rational(current_price - ema_price, ema_price)
@@ -716,7 +793,11 @@ impl pallet_deos_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
         polkadot_sdk::sp_runtime::Perbill::from_rational(ema_price - current_price, ema_price)
       };
       if deviation > DeosRouterMaxPriceDeviation::get() {
-        return Err(DispatchError::Other("Price deviation exceeded"));
+        return Err(router_adapter_failure(
+          DispatchError::Other("Price deviation exceeded"),
+          pallet_deos_router::RouterFailureClass::ProtectionRejected,
+          pallet_deos_router::RetryClass::RetryLater,
+        ));
       }
     }
     Ok(())
@@ -724,49 +805,55 @@ impl pallet_deos_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
 }
 
 impl pallet_deos_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImpl<Runtime> {
-  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> sp_runtime::DispatchResult {
-    let burning_manager_account = BurningManagerAccount::get();
+  fn route_fee(
+    who: &AccountId,
+    asset: AssetKind,
+    amount: Balance,
+  ) -> Result<(), pallet_deos_router::AdapterFailure> {
+    let burn_actor_account = BurnActorAccount::get();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
       if let Err(failure) = RuntimeAddressEventIngress::preflight_internal_inbound(
-        &burning_manager_account,
+        &burn_actor_account,
         asset,
         amount,
         who,
       ) {
         return polkadot_sdk::frame_support::storage::TransactionOutcome::Rollback(Err(
-          failure.error,
+          actor_ingress_failure(failure),
         ));
       }
-      let result = (|| -> sp_runtime::DispatchResult {
+      let result = (|| -> Result<(), pallet_deos_router::AdapterFailure> {
+        let funding_failure = || {
+          router_adapter_failure(
+            DispatchError::Token(TokenError::FundsUnavailable),
+            pallet_deos_router::RouterFailureClass::FeeRejected,
+            pallet_deos_router::RetryClass::RetryLater,
+          )
+        };
         match asset {
           AssetKind::Native => {
             Balances::transfer(
               who,
-              &burning_manager_account,
+              &burn_actor_account,
               amount,
               polkadot_sdk::frame_support::traits::tokens::ExistenceRequirement::KeepAlive,
             )
-            .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
+            .map_err(|_| funding_failure())?;
           }
           AssetKind::Local(id) | AssetKind::Foreign(id) => {
             use polkadot_sdk::frame_support::traits::fungibles::Mutate;
             <pallet_assets::Pallet<Runtime> as Mutate<AccountId>>::transfer(
               id,
               who,
-              &burning_manager_account,
+              &burn_actor_account,
               amount,
               polkadot_sdk::frame_support::traits::tokens::Preservation::Protect,
             )
-            .map_err(|_| DispatchError::Token(TokenError::FundsUnavailable))?;
+            .map_err(|_| funding_failure())?;
           }
         }
-        RuntimeAddressEventIngress::on_internal_inbound(
-          &burning_manager_account,
-          asset,
-          amount,
-          who,
-        )
-        .map_err(|failure| failure.error)?;
+        RuntimeAddressEventIngress::on_internal_inbound(&burn_actor_account, asset, amount, who)
+          .map_err(actor_ingress_failure)?;
         Ok(())
       })();
       match result {
@@ -783,7 +870,7 @@ impl pallet_deos_router::pallet::Config for Runtime {
   type AdminOrigin = frame_system::EnsureRoot<AccountId>;
   type AssetConversion = AssetConversionAdapter;
   type Assets = pallet_assets::Pallet<Runtime>;
-  type BurningManagerAccount = BurningManagerAccount;
+  type BurnActorAccount = BurnActorAccount;
   type LiquidityActorAccount = LiquidityActorAccount;
   type Currency = Balances;
   type DefaultRouterFee = DeosRouterFee;
@@ -816,7 +903,7 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
         let _ = pallet_assets::Pallet::<Runtime>::force_create(
           RuntimeOrigin::root(),
           id,
-          polkadot_sdk::sp_runtime::MultiAddress::Id(BurningManagerAccount::get()),
+          polkadot_sdk::sp_runtime::MultiAddress::Id(BurnActorAccount::get()),
           true,
           1,
         );
@@ -843,7 +930,7 @@ impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
   }
 
   fn create_pool(asset1: AssetKind, asset2: AssetKind) -> polkadot_sdk::sp_runtime::DispatchResult {
-    let creator = BurningManagerAccount::get();
+    let creator = BurnActorAccount::get();
     let _ =
       <Balances as Currency<AccountId>>::deposit_creating(&creator, 1_000_000_000_000_000_000);
     AssetConversionAdapter::ensure_lp_asset_namespace();

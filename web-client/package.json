@@ -1,13 +1,18 @@
 {
   "name": "web-client",
   "private": true,
-  "version": "0.7.15",
+  "version": "0.7.16",
   "type": "module",
+  "packageManager": "npm@11.7.0",
+  "volta": {
+    "node": "22.22.0",
+    "npm": "11.7.0"
+  },
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
     "preview": "vite preview",
-    "prepare": "svelte-kit sync || echo ''",
+    "prepare": "svelte-kit sync",
     "papi:generate": "papi generate",
     "generate:actors-abi": "node scripts/generate-actors-abi-manifest.mjs",
     "check:actors-abi": "node scripts/generate-actors-abi-manifest.mjs --check",
@@ -17,7 +22,7 @@
     "check:observation-evidence": "node scripts/generate-observation-runtime-evidence.mjs --check",
     "generate:ingress-evidence": "node scripts/generate-ingress-runtime-evidence.mjs",
     "check:ingress-evidence": "node scripts/generate-ingress-runtime-evidence.mjs --check",
-    "postinstall": "npm run papi:generate",
+    "postinstall": "npm run prepare && npm run papi:generate",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test:automation": "node --test scripts/test-actors-*.mjs",

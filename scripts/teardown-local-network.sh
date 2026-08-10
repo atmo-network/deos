@@ -71,7 +71,7 @@ clean_zombienet_temp() {
     local removed_count=0
     while IFS= read -r -d '' dir; do
         if rm -rf "$dir" 2>/dev/null; then
-            ((removed_count++))
+            removed_count=$((removed_count + 1))
         fi
     done < <(find /tmp -maxdepth 1 -type d -name "zombie-*" -print0 2>/dev/null || true)
 

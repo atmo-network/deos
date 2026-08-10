@@ -3,7 +3,9 @@
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
-ZOMBIENET_CONFIG="${ZOMBIENET_CONFIG:-$TEMPLATE_DIR/zombienet.toml}"
+NETWORK_WORK_DIR="${NETWORK_WORK_DIR:-$TEMPLATE_DIR}"
+ZOMBIENET_CONFIG="${ZOMBIENET_CONFIG:-$NETWORK_WORK_DIR/zombienet.toml}"
+CHAIN_SPEC_PATH="${CHAIN_SPEC_PATH:-$NETWORK_WORK_DIR/chain_spec.json}"
 
 usage() {
     cat <<'EOF'
@@ -15,10 +17,13 @@ Options:
   -h, --help        Show this help message
 
 Environment:
-  ZOMBIENET_CONFIG=template/zombienet.toml
+  NETWORK_WORK_DIR=template
+  ZOMBIENET_CONFIG=<NETWORK_WORK_DIR>/zombienet.toml
+  CHAIN_SPEC_PATH=<NETWORK_WORK_DIR>/chain_spec.json
 
 Inputs:
-  Existing Zombienet config, template/chain_spec.json, and node binaries on PATH.
+  Existing Zombienet config and matching chain spec in the selected network work
+  directory, plus node binaries on PATH.
 
 Outputs:
   Foreground local Zombienet process and its runtime logs.
@@ -59,9 +64,14 @@ verify_prerequisites() {
         exit 1
     fi
 
-    if [[ ! -f "$TEMPLATE_DIR/chain_spec.json" ]]; then
+    if [[ ! -d "$NETWORK_WORK_DIR" ]]; then
+        log_error "Network work directory not found: $NETWORK_WORK_DIR"
+        exit 1
+    fi
+
+    if [[ ! -f "$CHAIN_SPEC_PATH" ]]; then
         log_error "Chain spec not found."
-        echo "  Expected: $TEMPLATE_DIR/chain_spec.json"
+        echo "  Expected: $CHAIN_SPEC_PATH"
         exit 1
     fi
 
@@ -71,8 +81,9 @@ verify_prerequisites() {
 spawn_network() {
     phase_banner "Step 3: Spawn Zombienet"
     log_info "Spawning Zombienet network"
+    echo "  Work dir: $NETWORK_WORK_DIR"
     echo "  Config: $ZOMBIENET_CONFIG"
-    echo "  Chain spec: $TEMPLATE_DIR/chain_spec.json"
+    echo "  Chain spec: $CHAIN_SPEC_PATH"
     echo "  polkadot: $(command -v polkadot)"
     echo "  polkadot-omni-node: $(command -v polkadot-omni-node)"
     echo "  zombienet: $(command -v zombienet)"
@@ -81,7 +92,7 @@ spawn_network() {
     log_info "Starting network (Ctrl+C to stop)..."
     echo ""
 
-    cd "$TEMPLATE_DIR"
+    cd "$NETWORK_WORK_DIR"
     exec zombienet --provider native spawn "$ZOMBIENET_CONFIG"
 }
 

@@ -59,7 +59,9 @@ The `swap` extrinsic delegates to `execute_swap_for()`, the shared entry point f
 9. `Execution`: Dispatch to XYK adapter or TMC `mint_with_distribution`. System accounts use `keep_alive=false` (can drain balances); users use `keep_alive=true`.
 10. `Outcome`: Execution constructs `RouterOutcome` from committed actual facts. `SwapExecuted` carries caller, request endpoints, and that complete outcome directly, so route family, prepared legs, amounts, fee, and Weight class retain one meaning.
 
-`Public API`: `execute_swap_for(...)` and `execute_exact_out_for(...)` return `RouterOutcome` with selected family, prepared legs, actual total/routed input, fee, recipient output, and route Weight class.
+`Public API`: `execute_swap_for(...)` and `execute_exact_out_for(...)` return `RouterOutcome` on success and typed `ExecutionError` on failure. The outcome carries selected family, prepared legs, actual total/routed input, fee, recipient output, and route Weight class.
+
+`PreparedRoute` remains a public Rust package type solely for the deterministic conformance-vector example and independent consumer tooling. No call, event, storage item, or runtime API exposes it, so it does not form part of runtime metadata ABI; execution constructs it only inside the transaction.
 
 System Actor adapters preserve actual input/output facts in `DexSwapOutcome`. They derive authored slippage bounds and retain System-only reference policy, but they do not call a second Router path validator or own route preparation.
 
@@ -107,7 +109,7 @@ The `FeeRoutingAdapter` trait provides the transfer interface:
 
 ```rust
 pub trait FeeRoutingAdapter<AccountId, Balance> {
-  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> DispatchResult;
+  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), AdapterFailure>;
 }
 ```
 
@@ -132,15 +134,15 @@ pub trait AssetConversionApi<AccountId, Balance> {
   fn execute_single_pool_exact_input(
     who: AccountId, asset_in: AssetKind, asset_out: AssetKind, amount_in: Balance,
     min_amount_out: Balance, recipient: AccountId, keep_alive: bool,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, AdapterFailure>;
   fn execute_single_pool_exact_output(
     who: AccountId, asset_in: AssetKind, asset_out: AssetKind, amount_out: Balance,
     max_amount_in: Balance, recipient: AccountId, keep_alive: bool,
-  ) -> Result<ExactOutputExecution, DispatchError>;
+  ) -> Result<ExactOutputExecution, AdapterFailure>;
 }
 ```
 
-Runtime `AssetConversionAdapter` wraps `pallet_asset_conversion` with `Balance-Delta Verification`: it snapshots recipient balance before swap, executes, and returns `balance_after - balance_before` instead of theoretical quotes.
+Runtime `AssetConversionAdapter` wraps `pallet_asset_conversion` with `Balance-Delta Verification`: it snapshots recipient balance before swap, executes, and returns `balance_after - balance_before` instead of theoretical quotes. Known pool absence, empty-liquidity, capacity, and protection errors remain state-dependent typed failures; unknown market errors fail closed as permanent invariants.
 
 ### TmcInterface
 
@@ -148,11 +150,11 @@ Runtime `AssetConversionAdapter` wraps `pallet_asset_conversion` with `Balance-D
 pub trait TmcInterface<AccountId, Balance> {
   fn has_curve(asset: AssetKind) -> bool;
   fn supports_collateral(token_asset: AssetKind, foreign_asset: AssetKind) -> bool;
-  fn calculate_recipient_receives(token_asset: AssetKind, foreign_amount: Balance) -> Result<Balance, DispatchError>;
+  fn calculate_recipient_receives(token_asset: AssetKind, foreign_amount: Balance) -> Result<Balance, AdapterFailure>;
   fn mint_with_distribution(
     who: &AccountId, recipient: &AccountId, token_asset: AssetKind,
     foreign_asset: AssetKind, foreign_amount: Balance,
-  ) -> Result<Balance, DispatchError>;
+  ) -> Result<Balance, AdapterFailure>;
 }
 ```
 
@@ -162,19 +164,19 @@ Runtime `TmcPalletAdapter` delegates mint execution to `pallet_tmc::Pallet::<T>`
 
 ```rust
 pub trait PriceOracle<Balance> {
-  fn update_ema_price(asset_in: AssetKind, asset_out: AssetKind, price: Balance) -> Result<(), DispatchError>;
+  fn update_ema_price(asset_in: AssetKind, asset_out: AssetKind, price: Balance) -> Result<(), AdapterFailure>;
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<Balance>;
-  fn validate_price_deviation(asset_in: AssetKind, asset_out: AssetKind, current_price: Balance) -> Result<(), DispatchError>;
+  fn validate_price_deviation(asset_in: AssetKind, asset_out: AssetKind, current_price: Balance) -> Result<(), AdapterFailure>;
 }
 ```
 
-Runtime `PriceOracleImpl` maps the Router interface to pre-admitted directional `pallet-oracle` feeds. Missing feeds preserve the valid User-swap baseline without implicit registration; initialized observations provide deviation and price-impact references.
+Runtime `PriceOracleImpl` maps the Router interface to pre-admitted directional `pallet-oracle` feeds. Missing feeds preserve the valid User-swap baseline without implicit registration; initialized observations provide deviation and price-impact references. Paused publication and bounded dirty-ingress capacity remain retryable, while producer, feed, arithmetic, and dirty-topology errors remain permanent.
 
 ### FeeRoutingAdapter
 
 ```rust
 pub trait FeeRoutingAdapter<AccountId, Balance> {
-  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> DispatchResult;
+  fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> Result<(), AdapterFailure>;
 }
 ```
 
@@ -260,7 +262,7 @@ Router-local observation storage, tracking calls, metadata, and generated weight
 | `RouterFee<T>` | `StorageValue<Perbill>` | Current bounded governance fee rate |
 | `LpPairByTokenId<T>` | `StorageValue<BoundedBTreeMap<..., MaxLpPairs>>` | Bounded reverse index from LP token ID to canonical pool pair |
 
-LP registration canonicalizes pair order, rejects repeated endpoints and LP-token collisions, and fails closed at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. `try_state` verifies the fee ceiling and every retained pair's strict canonical order.
+LP registration canonicalizes pair order, rejects repeated endpoints, duplicate LP ownership in either direction, and capacity overflow at the ecosystem-owned `MAX_ROUTER_LP_PAIRS` bound. Package `try_state` uses the same canonical-pair predicate and verifies the fee ceiling, strict pair order, and one-to-one LP/pair ownership. Runtime integration owns host-pool existence and exact registry agreement.
 
 ## Extrinsics
 
@@ -291,7 +293,9 @@ LP registration canonicalizes pair order, rejects repeated endpoints and LP-toke
 | `PriceDeviationExceeded` | Spot price deviates from EMA beyond threshold |
 | `RouterFeeTooHigh` | New router fee exceeds `MaxRouterFee` |
 
-Every public error maps exhaustively through `Error::failure_class()` to the stable Router taxonomy. The System Actor adapter derives retryability from that class: route availability, protection, liquidity, and publication rejection remain Temporary; invalid requests, fee rejection, ingress rejection, invariants, and unknown execution errors remain Permanent.
+Every public error maps exhaustively through independent `Error::failure_class()` and `Error::retry_class()` authorities. `ExecutionError` preserves either that Router error or an `AdapterFailure` carrying independent boundary, retry, and dispatch values through pallet-to-pallet execution.
+
+Signed dispatch converts only at the extrinsic boundary; the System Actor adapter consumes the typed retry value directly. Host adapters classify known market, publication, ingress, fee, and protection causes before returning. Explicit fallback conversion treats unknown errors as invariant/permanent rather than a temporary wildcard.
 
 ## Configuration Constants
 
@@ -428,9 +432,9 @@ Production `50 × 20` generation measures every semantic route class independent
 | Exact-output direct XYK | `195,978,000 / 6,208` | `10 / 5` |
 | Exact-output Native-anchored XYK | `365,276,000 / 16,644` | `21 / 10` |
 
-The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `11,385,000 / 1,489`, one read, and one write. Accepted Router weights SHA-256 is `4e008ea77119a789024d9d2c59d3d67194be29811a26740777fec87edaf37b40`.
+The public exact-input extrinsic takes the component-wise maximum across its three measured classes, preserving the direct-mint proof bound and Native-anchored RefTime bound. `update_router_fee` measures `11,385,000 / 1,489`, one read, and one write.
 
-The accepted full Actors production generation uses the same maximum for exact-input and exact-output DEX tasks. It measures exact-input at `550,009,000 / 19,253` with 37 reads and 17 writes and exact-output at `551,126,000 / 19,253` with 36 reads and 17 writes. Accepted Actors weights SHA-256 is `552c4564b55ff02ff7b0235dcb79f520fb0075d05e8a2fbdaf85f0ef7d8ae277`.
+The accepted full Actors production generation uses the same maximum for exact-input and exact-output DEX tasks. It measures exact-input at `550,009,000 / 19,253` with 37 reads and 17 writes and exact-output at `551,126,000 / 19,253` with 36 reads and 17 writes.
 
 ## Conclusion
 

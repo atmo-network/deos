@@ -142,7 +142,10 @@ export type GovernanceAuthorizedRuntimeUpgrade = {
   codeHash: string;
   checkVersion: boolean;
 };
-export type GovernanceProposalSubmissionAuthority = 'Signed' | 'AdminOnly';
+export type GovernanceProposalSubmissionAuthority =
+  | 'Signed'
+  | 'PrimaryEligibleSigned'
+  | 'AdminOnly';
 export type GovernanceProposalOpeningFee = bigint;
 export type GovernancePayloadPreimageNoteCost = bigint;
 export type GovernanceProposalExecutionFailureReason =

@@ -1,7 +1,10 @@
 use crate::{
   AccountId, BalancesConfig, CollatorSelectionConfig, EXISTENTIAL_DEPOSIT, ParachainInfoConfig,
   PolkadotXcmConfig, RuntimeGenesisConfig, SessionConfig, SessionKeys,
-  configs::{AssetKind, genesis_protocol_asset_metadata, genesis_protocol_assets},
+  configs::{
+    AssetKind, actor_config::TmctolGenesisSystemActors, genesis_protocol_asset_metadata,
+    genesis_protocol_assets,
+  },
 };
 
 use alloc::{vec, vec::Vec};
@@ -87,6 +90,19 @@ fn local_web_client_curves() -> Vec<(AssetKind, AssetKind, u128, u128)> {
   )]
 }
 
+fn local_native_balances(endowed_accounts: Vec<AccountId>) -> Vec<(AccountId, u128)> {
+  let mut balances = endowed_accounts
+    .into_iter()
+    .map(|account| (account, 1u128 << 60))
+    .collect::<Vec<_>>();
+  balances.extend(
+    TmctolGenesisSystemActors::native_flow_anchor_accounts()
+      .into_iter()
+      .map(|account| (account, EXISTENTIAL_DEPOSIT)),
+  );
+  balances
+}
+
 fn testnet_genesis(
   invulnerables: Vec<(AccountId, AuraId)>,
   endowed_accounts: Vec<AccountId>,
@@ -95,11 +111,7 @@ fn testnet_genesis(
 ) -> Value {
   let mut patch = build_struct_json_patch!(RuntimeGenesisConfig {
     balances: BalancesConfig {
-      balances: endowed_accounts
-        .iter()
-        .cloned()
-        .map(|k| (k, 1u128 << 60))
-        .collect::<Vec<_>>(),
+      balances: local_native_balances(endowed_accounts),
     },
     assets: pallet_assets::GenesisConfig {
       assets: local_web_client_assets(&bootstrap_asset_owner),
@@ -218,7 +230,32 @@ mod tests {
   use super::*;
 
   #[test]
-  fn development_preset_includes_well_known_veto_asset_metadata() {
+  fn development_and_local_presets_fund_every_native_flow_anchor_with_one_ed() {
+    for genesis in [development_config_genesis(), local_testnet_genesis()] {
+      let balances = genesis["balances"]["balances"]
+        .as_array()
+        .expect("native balances must be a JSON array");
+      for account in TmctolGenesisSystemActors::native_flow_anchor_accounts() {
+        let account = serde_json::to_value(account).expect("account id must serialize");
+        let matching_entries = balances
+          .iter(/* deos-bypass: bounded-iter — fixed development genesis balances */)
+          .filter(|entry| {
+            entry.as_array().is_some_and(|fields| {
+              fields.first() == Some(&account)
+                && fields.get(1) == Some(&Value::from(EXISTENTIAL_DEPOSIT))
+            })
+          })
+          .count();
+        assert_eq!(
+          matching_entries, 1,
+          "native-flow anchor must receive exactly one free ED in the reference preset"
+        );
+      }
+    }
+  }
+
+  #[test]
+  fn development_preset_creates_well_known_veto_asset_without_issuance() {
     let genesis = development_config_genesis();
     let veto_asset_id = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
     assert_eq!(
@@ -238,6 +275,14 @@ mod tests {
       serde_json::json!(b"VETO".to_vec())
     );
     assert_eq!(genesis["assets"]["metadata"][0][3], Value::from(12));
+    let asset_accounts = genesis["assets"]["accounts"]
+      .as_array()
+      .expect("asset accounts must be a JSON array");
+    assert!(!asset_accounts
+      .iter(/* deos-bypass: bounded-iter — fixed development genesis asset accounts */)
+      .any(|account| {
+        account.as_array().and_then(|fields| fields.first()) == Some(&Value::from(veto_asset_id))
+      }));
     assert_eq!(
       genesis["assets"]["assets"][1][0],
       Value::from(LOCAL_WEB_CLIENT_NATIVE_STAKING_ASSET_ID)

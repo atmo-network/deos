@@ -2,7 +2,7 @@
   "format": "deos.actor.abi-manifest",
   "formatVersion": 1,
   "metadata": {
-    "sha256": "46d1ecd23107ffc32d567420a2ea55ff419b9f0efa800d329e0043eeddb167e7",
+    "sha256": "373c84e8c97a46e1c169580035a3f24f389a0f9c9c681e0ca870f337e6de1a52",
     "version": 16
   },
   "pallet": {
@@ -698,7 +698,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 624
+            "value": 623
           }
         }
       },
@@ -710,7 +710,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 629
+            "value": 628
           }
         }
       },
@@ -722,7 +722,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 630
+            "value": 629
           }
         }
       },
@@ -734,7 +734,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 635
+            "value": 634
           }
         }
       },
@@ -746,7 +746,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 641
+            "value": 640
           }
         }
       },
@@ -768,7 +768,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 642
+            "value": 641
           }
         }
       },
@@ -805,7 +805,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 643
+            "value": 642
           }
         }
       },
@@ -816,8 +816,8 @@
           "tag": "map",
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
-            "key": 646,
-            "value": 647
+            "key": 645,
+            "value": 646
           }
         }
       },
@@ -829,7 +829,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 652
+            "value": 651
           }
         }
       },
@@ -841,7 +841,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 653
+            "value": 652
           }
         }
       },
@@ -887,7 +887,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 10,
-            "value": 654
+            "value": 653
           }
         }
       },
@@ -933,7 +933,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 14,
-            "value": 655
+            "value": 654
           }
         }
       },
@@ -947,8 +947,8 @@
               { "tag": "Blake2128Concat" },
               { "tag": "Blake2128Concat" }
             ],
-            "key": 656,
-            "value": 657
+            "key": 655,
+            "value": 656
           }
         }
       },
@@ -960,7 +960,7 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 215,
-            "value": 660
+            "value": 659
           }
         }
       },
@@ -1001,14 +1001,14 @@
           "value": {
             "hashers": [{ "tag": "Blake2128Concat" }],
             "key": 215,
-            "value": 661
+            "value": 660
           }
         }
       },
       {
         "modifier": 1,
         "name": "DirtyObservationListState",
-        "type": { "tag": "plain", "value": 663 }
+        "type": { "tag": "plain", "value": 662 }
       },
       {
         "modifier": 1,
@@ -1018,7 +1018,7 @@
       {
         "modifier": 1,
         "name": "IdleStarvationState",
-        "type": { "tag": "plain", "value": 664 }
+        "type": { "tag": "plain", "value": 663 }
       }
     ]
   },
@@ -4200,7 +4200,7 @@
     },
     {
       "def": { "tag": "sequence", "value": 215 },
-      "id": 617,
+      "id": 616,
       "params": [],
       "path": []
     },
@@ -4211,13 +4211,13 @@
           {
             "docs": [],
             "name": "lifecycle",
-            "type": 625,
+            "type": 624,
             "typeName": "ActiveLifecycle"
           },
           {
             "docs": [],
             "name": "cycle_state",
-            "type": 626,
+            "type": 625,
             "typeName": "CycleState"
           },
           {
@@ -4247,7 +4247,7 @@
           {
             "docs": [],
             "name": "wakeup_pointer",
-            "type": 627,
+            "type": 626,
             "typeName": "Option<WakeupPointer<BlockNumber>>"
           },
           {
@@ -4270,7 +4270,7 @@
           }
         ]
       },
-      "id": 624,
+      "id": 623,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "ActorHotState"]
     },
@@ -4282,7 +4282,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Paused" }
         ]
       },
-      "id": 625,
+      "id": 624,
       "params": [],
       "path": ["pallet_deos_actors", "types", "ActiveLifecycle"]
     },
@@ -4294,7 +4294,7 @@
           { "docs": [], "fields": [], "index": 1, "name": "Suspended" }
         ]
       },
-      "id": 626,
+      "id": 625,
       "params": [],
       "path": ["pallet_deos_actors", "types", "CycleState"]
     },
@@ -4305,14 +4305,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 628 }],
+            "fields": [{ "docs": [], "type": 627 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 627,
-      "params": [{ "name": "T", "type": 628 }],
+      "id": 626,
+      "params": [{ "name": "T", "type": 627 }],
       "path": ["Option"]
     },
     {
@@ -4334,7 +4334,7 @@
           { "docs": [], "name": "slot", "type": 14, "typeName": "WakeupSlot" }
         ]
       },
-      "id": 628,
+      "id": 627,
       "params": [{ "name": "BlockNumber", "type": 14 }],
       "path": ["pallet_deos_actors", "types", "WakeupPointer"]
     },
@@ -4368,7 +4368,7 @@
           }
         ]
       },
-      "id": 629,
+      "id": 628,
       "params": [
         { "name": "Schedule", "type": 225 },
         { "name": "BlockNumber", "type": 14 },
@@ -4389,31 +4389,31 @@
           {
             "docs": [],
             "name": "funding_accumulated",
-            "type": 631,
+            "type": 630,
             "typeName": "FundingAccumulated"
           },
           {
             "docs": [],
             "name": "funding_tracked_assets",
-            "type": 633,
+            "type": 632,
             "typeName": "FundingTrackedAssets"
           }
         ]
       },
-      "id": 630,
+      "id": 629,
       "params": [
         { "name": "FundingPolicy", "type": 250 },
-        { "name": "FundingAccumulated", "type": 631 },
-        { "name": "FundingTrackedAssets", "type": 633 }
+        { "name": "FundingAccumulated", "type": 630 },
+        { "name": "FundingTrackedAssets", "type": 632 }
       ],
       "path": ["pallet_deos_actors", "types", "ActorFundingState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 632, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 631, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 631,
+      "id": 630,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 },
@@ -4423,7 +4423,7 @@
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 317 }] },
-      "id": 632,
+      "id": 631,
       "params": [
         { "name": "K", "type": 197 },
         { "name": "V", "type": 49 }
@@ -4433,15 +4433,15 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 634, "typeName": "BTreeSet<T>" }]
+        "value": [{ "docs": [], "type": 633, "typeName": "BTreeSet<T>" }]
       },
-      "id": 633,
+      "id": 632,
       "params": [{ "name": "T", "type": 197 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_btree_set", "BoundedBTreeSet"]
     },
     {
       "def": { "tag": "composite", "value": [{ "docs": [], "type": 233 }] },
-      "id": 634,
+      "id": 633,
       "params": [{ "name": "T", "type": 197 }],
       "path": ["BTreeSet"]
     },
@@ -4466,13 +4466,13 @@
           {
             "docs": [],
             "name": "opening_snapshot",
-            "type": 636,
+            "type": 635,
             "typeName": "BoundedBTreeMap<OpeningSurface<AssetId>, Balance, MaxSnapshotEntries>"
           },
           {
             "docs": [],
             "name": "funding_snapshot",
-            "type": 631,
+            "type": 630,
             "typeName": "BoundedBTreeMap<AssetId, Balance, MaxFundingTrackedAssets>"
           },
           {
@@ -4483,7 +4483,7 @@
           }
         ]
       },
-      "id": 635,
+      "id": 634,
       "params": [
         { "name": "AssetId", "type": 197 },
         { "name": "Balance", "type": 49 },
@@ -4496,11 +4496,11 @@
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 638, "typeName": "BTreeMap<K, V>" }]
+        "value": [{ "docs": [], "type": 637, "typeName": "BTreeMap<K, V>" }]
       },
-      "id": 636,
+      "id": 635,
       "params": [
-        { "name": "K", "type": 637 },
+        { "name": "K", "type": 636 },
         { "name": "V", "type": 49 },
         { "name": "S" }
       ],
@@ -4530,28 +4530,28 @@
           }
         ]
       },
-      "id": 637,
+      "id": 636,
       "params": [{ "name": "AssetId", "type": 197 }],
       "path": ["pallet_deos_actors", "types", "OpeningSurface"]
     },
     {
-      "def": { "tag": "composite", "value": [{ "docs": [], "type": 639 }] },
-      "id": 638,
+      "def": { "tag": "composite", "value": [{ "docs": [], "type": 638 }] },
+      "id": 637,
       "params": [
-        { "name": "K", "type": 637 },
+        { "name": "K", "type": 636 },
         { "name": "V", "type": 49 }
       ],
       "path": ["BTreeMap"]
     },
     {
-      "def": { "tag": "sequence", "value": 640 },
-      "id": 639,
+      "def": { "tag": "sequence", "value": 639 },
+      "id": 638,
       "params": [],
       "path": []
     },
     {
-      "def": { "tag": "tuple", "value": [637, 49] },
-      "id": 640,
+      "def": { "tag": "tuple", "value": [636, 49] },
+      "id": 639,
       "params": [],
       "path": []
     },
@@ -4587,7 +4587,7 @@
           }
         ]
       },
-      "id": 641,
+      "id": 640,
       "params": [
         { "name": "AccountId", "type": 1 },
         { "name": "BlockNumber", "type": 14 }
@@ -4607,17 +4607,17 @@
           }
         ]
       },
-      "id": 642,
+      "id": 641,
       "params": [],
       "path": ["pallet_deos_actors", "types", "SystemSovereignState"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 645, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 644, "typeName": "Vec<T>" }]
       },
-      "id": 643,
-      "params": [{ "name": "T", "type": 644 }, { "name": "S" }],
+      "id": 642,
+      "params": [{ "name": "T", "type": 643 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -4633,19 +4633,19 @@
           { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" }
         ]
       },
-      "id": 644,
+      "id": 643,
       "params": [],
       "path": ["pallet_deos_actors", "types", "QueueEntry"]
     },
     {
-      "def": { "tag": "sequence", "value": 644 },
-      "id": 645,
+      "def": { "tag": "sequence", "value": 643 },
+      "id": 644,
       "params": [],
       "path": []
     },
     {
       "def": { "tag": "tuple", "value": [14, 10] },
-      "id": 646,
+      "id": 645,
       "params": [],
       "path": []
     },
@@ -4653,7 +4653,7 @@
       "def": {
         "tag": "composite",
         "value": [
-          { "docs": [], "name": "entries", "type": 648, "typeName": "Entries" },
+          { "docs": [], "name": "entries", "type": 647, "typeName": "Entries" },
           { "docs": [], "name": "live_entries", "type": 14, "typeName": "u32" },
           {
             "docs": [],
@@ -4675,17 +4675,17 @@
           }
         ]
       },
-      "id": 647,
-      "params": [{ "name": "Entries", "type": 648 }],
+      "id": 646,
+      "params": [{ "name": "Entries", "type": 647 }],
       "path": ["pallet_deos_actors", "types", "WakeupPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 651, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 650, "typeName": "Vec<T>" }]
       },
-      "id": 648,
-      "params": [{ "name": "T", "type": 649 }, { "name": "S" }],
+      "id": 647,
+      "params": [{ "name": "T", "type": 648 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
@@ -4695,14 +4695,14 @@
           { "docs": [], "fields": [], "index": 0, "name": "None" },
           {
             "docs": [],
-            "fields": [{ "docs": [], "type": 650 }],
+            "fields": [{ "docs": [], "type": 649 }],
             "index": 1,
             "name": "Some"
           }
         ]
       },
-      "id": 649,
-      "params": [{ "name": "T", "type": 650 }],
+      "id": 648,
+      "params": [{ "name": "T", "type": 649 }],
       "path": ["Option"]
     },
     {
@@ -4712,13 +4712,13 @@
           { "docs": [], "name": "actor_id", "type": 10, "typeName": "ActorId" }
         ]
       },
-      "id": 650,
+      "id": 649,
       "params": [],
       "path": ["pallet_deos_actors", "types", "WakeupEntry"]
     },
     {
-      "def": { "tag": "sequence", "value": 649 },
-      "id": 651,
+      "def": { "tag": "sequence", "value": 648 },
+      "id": 650,
       "params": [],
       "path": []
     },
@@ -4753,7 +4753,7 @@
           }
         ]
       },
-      "id": 652,
+      "id": 651,
       "params": [],
       "path": ["pallet_deos_actors", "types", "WakeupBucketState"]
     },
@@ -4762,16 +4762,16 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 204, "typeName": "Vec<T>" }]
       },
-      "id": 653,
+      "id": 652,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 617, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 616, "typeName": "Vec<T>" }]
       },
-      "id": 654,
+      "id": 653,
       "params": [{ "name": "T", "type": 215 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
@@ -4780,13 +4780,13 @@
         "tag": "composite",
         "value": [{ "docs": [], "type": 204, "typeName": "Vec<T>" }]
       },
-      "id": 655,
+      "id": 654,
       "params": [{ "name": "T", "type": 14 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "tuple", "value": [215, 14] },
-      "id": 656,
+      "id": 655,
       "params": [],
       "path": []
     },
@@ -4809,27 +4809,27 @@
           {
             "docs": [],
             "name": "entries",
-            "type": 658,
+            "type": 657,
             "typeName": "BoundedVec<Option<ActorId>, MaxEntries>"
           }
         ]
       },
-      "id": 657,
+      "id": 656,
       "params": [{ "name": "MaxEntries" }],
       "path": ["pallet_deos_actors", "types", "ObservationSubscriberPage"]
     },
     {
       "def": {
         "tag": "composite",
-        "value": [{ "docs": [], "type": 659, "typeName": "Vec<T>" }]
+        "value": [{ "docs": [], "type": 658, "typeName": "Vec<T>" }]
       },
-      "id": 658,
+      "id": 657,
       "params": [{ "name": "T", "type": 189 }, { "name": "S" }],
       "path": ["bounded_collections", "bounded_vec", "BoundedVec"]
     },
     {
       "def": { "tag": "sequence", "value": 189 },
-      "id": 659,
+      "id": 658,
       "params": [],
       "path": []
     },
@@ -4842,7 +4842,7 @@
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 660,
+      "id": 659,
       "params": [],
       "path": ["pallet_deos_actors", "types", "ObservationSubscriberPageList"]
     },
@@ -4877,18 +4877,18 @@
           {
             "docs": [],
             "name": "previous_dirty_feed",
-            "type": 662,
+            "type": 661,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "next_dirty_feed",
-            "type": 662,
+            "type": 661,
             "typeName": "Option<FeedId>"
           }
         ]
       },
-      "id": 661,
+      "id": 660,
       "params": [
         { "name": "FeedId", "type": 215 },
         { "name": "BlockNumber", "type": 14 }
@@ -4908,7 +4908,7 @@
           }
         ]
       },
-      "id": 662,
+      "id": 661,
       "params": [{ "name": "T", "type": 215 }],
       "path": ["Option"]
     },
@@ -4919,25 +4919,25 @@
           {
             "docs": [],
             "name": "head",
-            "type": 662,
+            "type": 661,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "tail",
-            "type": 662,
+            "type": 661,
             "typeName": "Option<FeedId>"
           },
           {
             "docs": [],
             "name": "cursor",
-            "type": 662,
+            "type": 661,
             "typeName": "Option<FeedId>"
           },
           { "docs": [], "name": "count", "type": 14, "typeName": "u32" }
         ]
       },
-      "id": 663,
+      "id": 662,
       "params": [{ "name": "FeedId", "type": 215 }],
       "path": ["pallet_deos_actors", "types", "DirtyObservationList"]
     },
@@ -4974,7 +4974,7 @@
           }
         ]
       },
-      "id": 664,
+      "id": 663,
       "params": [],
       "path": ["pallet_deos_actors", "types", "IdleStarvationPhase"]
     },
@@ -5326,7 +5326,7 @@
           }
         ]
       },
-      "id": 665,
+      "id": 664,
       "params": [{ "name": "T" }],
       "path": ["pallet_deos_actors", "pallet", "Error"]
     }

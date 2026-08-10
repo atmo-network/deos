@@ -7,10 +7,9 @@ usage() {
     cat <<'EOF'
 Usage: audit-release-line.sh [OPTIONS]
 
-Checks release-line consistency across CHANGELOG.md, the current framework
-boundary, package metadata, and Actors package-owned documentation. The audit
-prevents release fragmentation while preserving standalone normative
-specification authority and stable package navigation.
+Checks release-line consistency across bounded CHANGELOG.md records, package
+metadata, the current framework boundary, and package-owned documentation. The audit prevents release fragmentation while preserving
+standalone normative specification authority and stable package navigation.
 
 Options:
   -h, --help  Show this help message
@@ -48,7 +47,11 @@ check_prerequisites() {
         log_error "template Cargo.lock not found"
         exit 1
     fi
-    require_commands rg awk grep sed sort uniq
+    if [[ ! -f "$PROJECT_ROOT/scripts/03-build-runtime.sh" ]]; then
+        log_error "Canonical runtime-build atom not found"
+        exit 1
+    fi
+    require_commands rg awk grep head sed sort uniq jq
     log_success "Prerequisites checked"
 }
 
@@ -58,10 +61,6 @@ latest_changelog_heading() {
 
 extract_heading_version() {
     sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+):.*/\1/'
-}
-
-extract_heading_title() {
-    sed -E 's/^## [0-9]+\.[0-9]+\.[0-9]+: //'
 }
 
 extract_cargo_field() {
@@ -79,8 +78,26 @@ extract_cargo_field() {
     ' "$file"
 }
 
+extract_workspace_package_field() {
+    local field="$1"
+    awk -v field="$field" '
+        $0 == "[workspace.package]" { in_workspace_package = 1; next }
+        /^\[/ && in_workspace_package { exit }
+        in_workspace_package && $1 == field && $2 == "=" {
+            value = $3
+            gsub(/"/, "", value)
+            print value
+            exit
+        }
+    ' "$TEMPLATE_DIR/Cargo.toml"
+}
+
 extract_cargo_version() {
     local file="$1"
+    if rg -Fqx 'version.workspace = true' "$file"; then
+        extract_workspace_package_field "version"
+        return
+    fi
     extract_cargo_field "$file" "version"
 }
 
@@ -89,24 +106,25 @@ extract_cargo_name() {
     extract_cargo_field "$file" "name"
 }
 
-extract_lock_package_version() {
+extract_lock_package_versions() {
     local package="$1"
     awk -v package="$package" '
-        $0 == "[[package]]" { in_package = 1; name = ""; version = ""; next }
+        $0 == "[[package]]" { in_package = 1; name = ""; next }
         in_package && /^name = / {
             name = $3
             gsub(/"/, "", name)
             next
         }
-        in_package && /^version = / {
+        in_package && /^version = / && name == package {
             version = $3
             gsub(/"/, "", version)
-            if (name == package) {
-                print version
-                exit
-            }
+            print version
         }
     ' "$TEMPLATE_DIR/Cargo.lock"
+}
+
+extract_lock_package_version() {
+    extract_lock_package_versions "$1" | head -n 1
 }
 
 check_template_package_version() {
@@ -124,6 +142,11 @@ check_template_package_version() {
     cargo_version="$(extract_cargo_version "$cargo_file")"
     if [[ -z "$cargo_name" ]]; then
         log_error "Template package name missing from Cargo.toml: $cargo_path"
+        exit 1
+    fi
+    if ! rg -Fqx 'version.workspace = true' "$cargo_file"; then
+        log_error "Template package version must inherit the workspace release authority"
+        echo "Package: $cargo_path"
         exit 1
     fi
     lock_version="$(extract_lock_package_version "$cargo_name")"
@@ -208,6 +231,41 @@ check_changelog_order() {
     done < <(rg '^## [0-9]+\.[0-9]+\.[0-9]+:' "$PROJECT_ROOT/CHANGELOG.md")
 }
 
+check_changelog_shape() {
+    local violations
+    violations="$(awk '
+        function finish_section() {
+            if (section != "" && records > 8) {
+                printf "%s has %d records; maximum is 8\n", section, records
+            }
+        }
+        /^## / {
+            finish_section()
+            section = $0
+            records = 0
+            next
+        }
+        section == "" { next }
+        /^- / {
+            records++
+            if (length($0) > 512) {
+                printf "%s line %d has %d characters; maximum is 512\n", section, NR, length($0)
+            }
+            next
+        }
+        /^[[:space:]]*$/ { next }
+        {
+            printf "%s line %d is not a single-line outcome record\n", section, NR
+        }
+        END { finish_section() }
+    ' "$PROJECT_ROOT/CHANGELOG.md")"
+    if [[ -n "$violations" ]]; then
+        log_error "CHANGELOG.md exceeds the bounded history shape"
+        printf '%s\n' "$violations"
+        exit 1
+    fi
+}
+
 check_markdown_release_marker() {
     local path="$1"
     local label="$2"
@@ -241,6 +299,18 @@ check_fixed_reference() {
 
 run_audit() {
     phase_banner "Step 2: Release-line consistency"
+    if [[ "$(grep -c '^\[\[relaychain\.nodes\]\]$' "$TEMPLATE_DIR/zombienet.toml")" -ne 2 || "$(grep -c '^\[\[parachains\.collators\]\]$' "$TEMPLATE_DIR/zombienet.toml")" -ne 2 ]]; then
+        log_error "Assurance topology must declare exactly two relay validators and two collators"
+        exit 1
+    fi
+    local runtime_build="$PROJECT_ROOT/scripts/03-build-runtime.sh"
+    check_exact_line "$runtime_build" 'CANONICAL_BUILD_ROOT="/tmp/deos-runtime-production-source"' "Canonical runtime physical-root drift"
+    check_exact_line "$runtime_build" '    export WASM_BUILD_TYPE=production' "Production Wasm-profile drift"
+    check_exact_line "$runtime_build" '    export CARGO_INCREMENTAL=0' "Runtime incremental-build drift"
+    check_exact_line "$runtime_build" '    trap cleanup_build_stage EXIT' "Canonical runtime cleanup-ownership drift"
+    check_exact_line "$runtime_build" '    if ! mkdir "$CANONICAL_BUILD_ROOT"; then' "Canonical runtime concurrent-build guard drift"
+    check_exact_line "$runtime_build" '    export WASM_BUILD_RUSTFLAGS="--remap-path-prefix=$BUILD_PROJECT_ROOT=/deos/source --remap-path-prefix=$cargo_home=/deos/cargo --remap-path-prefix=$rustup_home=/deos/rustup"' "Canonical runtime virtual-path drift"
+    check_exact_line "$runtime_build" '    mv "$temporary_output" "$OUTPUT_WASM_PATH"' "Canonical runtime atomic-publication drift"
     local heading
     heading="$(latest_changelog_heading)"
     if [[ -z "$heading" ]]; then
@@ -248,9 +318,7 @@ run_audit() {
         exit 1
     fi
     local latest_version
-    local latest_title
     latest_version="$(printf '%s' "$heading" | extract_heading_version)"
-    latest_title="$(printf '%s' "$heading" | extract_heading_title)"
     local duplicate_headings
     duplicate_headings="$(rg '^## [0-9]+\.[0-9]+\.[0-9]+:' "$PROJECT_ROOT/CHANGELOG.md" | sed -E 's/^## ([0-9]+\.[0-9]+\.[0-9]+):.*/\1/' | sort | uniq -d || true)"
     if [[ -n "$duplicate_headings" ]]; then
@@ -259,8 +327,37 @@ run_audit() {
         exit 1
     fi
     check_changelog_order
+    check_changelog_shape
 
-    local prepared_version="$latest_version"
+    local workspace_version
+    workspace_version="$(extract_workspace_package_field version)"
+    if [[ -z "$workspace_version" ]]; then
+        log_error "Template workspace release authority is missing"
+        exit 1
+    fi
+    local prepared_version="$workspace_version"
+    local unreleased_count
+    unreleased_count="$(grep -c '^## Unreleased$' "$PROJECT_ROOT/CHANGELOG.md" || true)"
+    if [[ "$unreleased_count" -gt 1 ]]; then
+        log_error "CHANGELOG.md contains more than one Unreleased section"
+        exit 1
+    fi
+    if [[ "$unreleased_count" == "1" ]]; then
+        local prepared_key latest_key
+        prepared_key="$(version_key "$prepared_version")"
+        latest_key="$(version_key "$latest_version")"
+        if [[ "$prepared_key" == "$latest_key" || "$prepared_key" < "$latest_key" ]]; then
+            log_error "Unreleased workspace version must be newer than the latest historical release"
+            echo "Workspace: $prepared_version"
+            echo "Historical: $latest_version"
+            exit 1
+        fi
+    elif [[ "$prepared_version" != "$latest_version" ]]; then
+        log_error "Finalized workspace release authority does not match latest changelog release"
+        echo "Workspace: $prepared_version"
+        echo "CHANGELOG: $latest_version"
+        exit 1
+    fi
     check_template_workspace_versions "$prepared_version"
     check_exact_line "$PROJECT_ROOT/web-client/package.json" "  \"version\": \"${prepared_version}\"," "Web-client package-version drift"
     check_exact_line "$PROJECT_ROOT/web-client/package-lock.json" "  \"version\": \"${prepared_version}\"," "Web-client lockfile-version drift"
@@ -286,7 +383,7 @@ run_audit() {
         log_error "Actors specification purity drift: DEOS product/runtime framing remains in the standalone contract"
         exit 1
     fi
-    check_markdown_release_marker "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" "Release line" "$latest_version"
+    check_markdown_release_marker "$TEMPLATE_DIR/pallets/actors/docs/embedding.md" "Release line" "$prepared_version"
     local package
     local integration_doc
     local integration_label

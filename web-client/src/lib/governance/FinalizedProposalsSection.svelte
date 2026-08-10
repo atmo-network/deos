@@ -156,7 +156,7 @@ Zone: Governance presentation component; consumes typed governance contracts and
               value={submissionAuthorityLabel(proposal.submissionAuthority)}
               valueClass="text-(--mono-text)"
             />
-            {#if proposal.submissionAuthority === 'Signed'}
+            {#if proposal.submissionAuthority !== 'AdminOnly'}
               <DetailRow
                 label="Opening fee"
                 value={openingFeeLabel(

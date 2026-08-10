@@ -2,9 +2,9 @@ use crate::proposal_resolution::CoreResolutionOutcome;
 use crate::{
   ActiveProposalCounts, ActiveProposals, Error, Event, ExpiringAccountTouch, ExpiryBuckets,
   FinalizedProposalOutcome, ProposalCadenceMode, ProposalExecutionAuthority, ProposalMetadata,
-  ProposalPayloadKind, ProposalPendingEnactmentAt, ProposalRejectionReason, ProposalTiming,
-  ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVoteTally, ProposalVotesByItem,
-  RecentFinalizedProposal, mock::*,
+  ProposalMetadataByItem, ProposalPayloadKind, ProposalPendingEnactmentAt, ProposalRejectionReason,
+  ProposalTiming, ProposalUrgentAuthorizedAt, ProposalVoteKind, ProposalVoteTally,
+  ProposalVotesByItem, RecentFinalizedProposal, mock::*,
 };
 use polkadot_sdk::frame_support::{BoundedVec, assert_noop, assert_ok, traits::Hooks};
 use polkadot_sdk::sp_core::H256;
@@ -1270,6 +1270,14 @@ fn submission_authority_opening_fee_and_preimage_note_cost_are_explicit_and_quer
       Some(10)
     );
     assert_eq!(Governance::payload_preimage_note_cost(0), Some(2));
+    assert_eq!(
+      Governance::proposal_submission_authority(42, ProposalPayloadKind::L1RootAction),
+      crate::ProposalSubmissionAuthority::PrimaryEligibleSigned
+    );
+    assert_eq!(
+      Governance::proposal_opening_fee(42, ProposalPayloadKind::L1RootAction),
+      Some(10)
+    );
     assert_eq!(Governance::payload_preimage_note_cost(7), Some(9));
     assert_eq!(
       Governance::proposal_submission_authority(43, ProposalPayloadKind::L2SignalToL1),
@@ -1315,6 +1323,98 @@ fn signed_submission_collects_opening_fee_and_records_proposer() {
       Balances::free_balance(ProposalFeeRecipient::get()),
       recipient_before.saturating_add(10)
     );
+  });
+}
+
+#[test]
+fn primary_eligible_signed_submission_preserves_fee_and_bounded_proposal_path() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    set_vote_weight(proposer, 1);
+    let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(proposer),
+      42,
+      106,
+      ProposalCadenceMode::Ordinary,
+      ProposalPayloadKind::L1RootAction,
+      Default::default(),
+    ));
+    assert_eq!(Governance::proposal_author(42, 106), Some(proposer));
+    assert_eq!(Governance::active_proposal_count(42), 1);
+    assert_eq!(
+      Balances::free_balance(proposer),
+      balance_before.saturating_sub(10)
+    );
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before.saturating_add(10)
+    );
+  });
+}
+
+#[test]
+fn primary_eligible_submission_rolls_back_fee_at_active_capacity() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    set_vote_weight(proposer, 1);
+    ActiveProposalCounts::<Test>::insert(42, 16);
+    let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        42,
+        107,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L1RootAction,
+        Default::default(),
+      ),
+      Error::<Test>::ActiveProposalCapReached
+    );
+    assert_eq!(Balances::free_balance(proposer), balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert!(!ActiveProposals::<Test>::contains_key(42, 107));
+    assert_eq!(Governance::proposal_author(42, 107), None);
+  });
+}
+
+#[test]
+fn veto_power_does_not_grant_strategic_submission_eligibility() {
+  new_test_ext().execute_with(|| {
+    let proposer = 10u64;
+    set_veto_vote_weight(proposer, 100);
+    set_veto_total_issuance(100);
+    let balance_before = Balances::free_balance(proposer);
+    let recipient_before = Balances::free_balance(ProposalFeeRecipient::get());
+    let events_before = System::events();
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(proposer),
+        42,
+        106,
+        ProposalCadenceMode::Ordinary,
+        ProposalPayloadKind::L1RootAction,
+        Default::default(),
+      ),
+      Error::<Test>::ProposalSubmitterNotPrimaryEligible
+    );
+    assert_eq!(Balances::free_balance(proposer), balance_before);
+    assert_eq!(
+      Balances::free_balance(ProposalFeeRecipient::get()),
+      recipient_before
+    );
+    assert_eq!(System::events(), events_before);
+    assert_eq!(Governance::active_proposal_count(42), 0);
+    assert_eq!(Governance::proposal_author(42, 106), None);
+    assert!(!ActiveProposals::<Test>::contains_key(42, 106));
+    assert!(ProposalMetadataByItem::<Test>::get(42, 106).is_none());
   });
 }
 

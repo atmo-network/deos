@@ -174,7 +174,7 @@ run_primary_checks() {
         feature_args="$(cargo_feature_args tests)"
         run_shell_step "Tests" \
             "15" \
-            "cargo test $feature_args $scope_args$test_filter"
+            "cargo test --locked $feature_args $scope_args$test_filter"
     fi
 
     if selected docs; then
@@ -182,7 +182,7 @@ run_primary_checks() {
         feature_args="$(cargo_feature_args docs)"
         run_shell_step "Documentation Build" \
             "15" \
-            "cargo doc $feature_args $scope_args --no-deps"
+            "cargo doc --locked $feature_args $scope_args --no-deps"
     fi
 }
 
@@ -210,7 +210,7 @@ run_additional_checks() {
         run_shell_step \
             "Basic workspace consistency" \
             "" \
-            "cd '$TEMPLATE_DIR' && cargo check $feature_args $scope_args --quiet"
+            "cd '$TEMPLATE_DIR' && cargo check --locked $feature_args $scope_args --quiet"
     fi
 }
 

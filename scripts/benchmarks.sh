@@ -4,6 +4,8 @@ set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 WEIGHTS_DIR="$TEMPLATE_DIR/runtime/src/weights"
+BENCHMARK_TARGET_DIR="$TEMPLATE_DIR/target/benchmarks"
+PRODUCTION_RUNTIME_WASM="$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
 STEPS=50
 REPEAT=20
 HEAP_PAGES=4096
@@ -13,9 +15,6 @@ PALLETS=(
     "pallet_deos_actors"
     "pallet_deos_router"
     "pallet_tmc"
-    "pallet_burning_manager"
-    "pallet_zap_manager"
-    "pallet_treasury_owned_liquidity"
     "pallet_asset_registry"
     "pallet_governance"
     "pallet_oracle"
@@ -140,7 +139,7 @@ check_prerequisites() {
     require_directory "$TEMPLATE_DIR" "Template directory"
     require_directory "$WEIGHTS_DIR" "Runtime weights directory"
     hydrate_local_tool_paths
-    require_commands cargo sed grep wc sort awk head
+    require_commands cargo sed grep wc sort awk head cut dirname mktemp chmod mv rm sha256sum
 
     if ! command -v frame-omni-bencher &>/dev/null; then
         log_warning "frame-omni-bencher not found. Install with:"
@@ -163,24 +162,42 @@ check_prerequisites() {
 
 build_benchmarks() {
     phase_banner "Step 2: Build benchmark runtime"
+    local production_identity=""
+    if [[ -f "$PRODUCTION_RUNTIME_WASM" ]]; then
+        production_identity="$(sha256sum "$PRODUCTION_RUNTIME_WASM" | cut -d ' ' -f 1)"
+    fi
     run_shell_step \
         "Build deos-runtime with runtime-benchmarks" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo build --release --features runtime-benchmarks -p deos-runtime"
+        "cd \"$TEMPLATE_DIR\" && CARGO_TARGET_DIR='$BENCHMARK_TARGET_DIR' cargo build --release --locked --features runtime-benchmarks -p deos-runtime"
+    if [[ -n "$production_identity" \
+        && "$(sha256sum "$PRODUCTION_RUNTIME_WASM" | cut -d ' ' -f 1)" != "$production_identity" ]]; then
+        log_error "Benchmark build mutated the canonical production runtime Wasm"
+        return 1
+    fi
 }
 
 check_only() {
     phase_banner "Step 2: Benchmark compilation check"
+    local production_identity=""
+    if [[ -f "$PRODUCTION_RUNTIME_WASM" ]]; then
+        production_identity="$(sha256sum "$PRODUCTION_RUNTIME_WASM" | cut -d ' ' -f 1)"
+    fi
     run_shell_step \
         "Verify benchmark compilation" \
         "" \
-        "cd \"$TEMPLATE_DIR\" && cargo check --features runtime-benchmarks"
+        "cd \"$TEMPLATE_DIR\" && CARGO_TARGET_DIR='$BENCHMARK_TARGET_DIR' cargo check --locked --features runtime-benchmarks"
+    if [[ -n "$production_identity" \
+        && "$(sha256sum "$PRODUCTION_RUNTIME_WASM" | cut -d ' ' -f 1)" != "$production_identity" ]]; then
+        log_error "Benchmark compilation mutated the canonical production runtime Wasm"
+        return 1
+    fi
     log_success "All benchmarks compile successfully"
 }
 
 resolve_runtime_wasm_path() {
     local candidates=(
-        "$TEMPLATE_DIR/target/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
+        "$BENCHMARK_TARGET_DIR/release/wbuild/deos-runtime/deos_runtime.compact.compressed.wasm"
     )
 
     for candidate in "${candidates[@]}"; do
@@ -335,34 +352,7 @@ run_pallet_benchmark() {
 
     log_info "Benchmarking: $pallet_name (steps=$STEPS, repeat=$REPEAT)"
 
-    if [[ "$BENCHER_MODE" == "omni" ]]; then
-        local template_file="$TEMPLATE_DIR/.maintain/frame-weight-template.hbs"
-        local runtime_wasm
-        runtime_wasm="$(resolve_runtime_wasm_path)" || return 1
-        local bencher_args=(
-            --runtime "$runtime_wasm"
-            --pallet "$pallet_name"
-            --extrinsic "$EXTRINSIC_PATTERN"
-            "${exclude_args[@]}"
-            --steps "$STEPS"
-            --repeat "$REPEAT"
-            --heap-pages "$HEAP_PAGES"
-            --output "$output_file"
-        )
-
-        if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
-            bencher_args+=(--extra)
-        fi
-
-        if [[ -f "$template_file" ]]; then
-            bencher_args+=(--template "$template_file")
-        fi
-
-        run_command_step \
-            "Generate $pallet_name weights" \
-            "" \
-            frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}"
-    else
+    if [[ "$BENCHER_MODE" != "omni" ]]; then
         log_warning "Running benchmark tests (dry run without weight generation)"
         if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
             log_warning "--extra requires frame-omni-bencher for actual extra-benchmark execution; cargo fallback remains compile-only"
@@ -370,21 +360,58 @@ run_pallet_benchmark() {
         run_shell_step \
             "Compile benchmark tests" \
             "" \
-            "cd '$TEMPLATE_DIR' && cargo test --release --features runtime-benchmarks -p deos-runtime -- benchmark --nocapture" || true
+            "cd '$TEMPLATE_DIR' && CARGO_TARGET_DIR='$BENCHMARK_TARGET_DIR' cargo test --release --locked --features runtime-benchmarks -p deos-runtime -- benchmark --nocapture" || true
         log_warning "Weight files NOT updated (frame-omni-bencher required for weight generation)"
         return 0
     fi
 
-    if [[ -f "$output_file" ]]; then
-        normalize_weight_file "$pallet_name" "$output_file"
-        if [[ "$EXTRINSIC_PATTERN" == "*" ]]; then
-            verify_weight_file_contract "$pallet_name" "$output_file"
-        fi
-        log_success "$pallet_name -> $output_file"
-    else
-        log_error "Weight file not generated for $pallet_name"
+    local template_file="$TEMPLATE_DIR/.maintain/frame-weight-template.hbs"
+    local runtime_wasm output_dir staged_output
+    runtime_wasm="$(resolve_runtime_wasm_path)" || return 1
+    output_dir="$(dirname "$output_file")"
+    require_directory "$output_dir" "Weight output directory"
+    staged_output="$(mktemp "$output_dir/.${pallet_name}.weights.XXXXXX")"
+    local bencher_args=(
+        --runtime "$runtime_wasm"
+        --pallet "$pallet_name"
+        --extrinsic "$EXTRINSIC_PATTERN"
+        "${exclude_args[@]}"
+        --steps "$STEPS"
+        --repeat "$REPEAT"
+        --heap-pages "$HEAP_PAGES"
+        --output "$staged_output"
+    )
+
+    if [[ "$INCLUDE_EXTRA_BENCHMARKS" == "1" ]]; then
+        bencher_args+=(--extra)
+    fi
+
+    if [[ -f "$template_file" ]]; then
+        bencher_args+=(--template "$template_file")
+    fi
+
+    if ! run_command_step \
+        "Generate $pallet_name weights" \
+        "" \
+        frame-omni-bencher v1 benchmark pallet "${bencher_args[@]}"; then
+        rm -f "$staged_output"
         return 1
     fi
+    if [[ ! -s "$staged_output" ]]; then
+        log_error "Weight file not generated for $pallet_name"
+        rm -f "$staged_output"
+        return 1
+    fi
+
+    normalize_weight_file "$pallet_name" "$staged_output"
+    if [[ "$EXTRINSIC_PATTERN" == "*" ]] \
+        && ! verify_weight_file_contract "$pallet_name" "$staged_output"; then
+        rm -f "$staged_output"
+        return 1
+    fi
+    chmod 0644 "$staged_output"
+    mv -f "$staged_output" "$output_file"
+    log_success "$pallet_name -> $output_file"
 }
 
 run_all_benchmarks() {
@@ -399,9 +426,9 @@ run_all_benchmarks() {
     start_time=$(date +%s)
     for pallet in "${PALLETS[@]}"; do
         if run_pallet_benchmark "$pallet"; then
-            ((succeeded++))
+            succeeded=$((succeeded + 1))
         else
-            ((failed++))
+            failed=$((failed + 1))
             log_error "Failed: $pallet"
         fi
         echo ""

@@ -51,7 +51,7 @@ Oracle owns bounded current scalar/revision truth. Producers own samples, Router
 - Router producer changes require exact aggregation/parity vectors, directional registration coverage, and failed-swap rollback evidence.
 - Reactive Actors changes require focused ingress/subscription/fanout tests and the shared Actors quick or full release route according to scheduler, liveness, capacity, or production-weight impact.
 - Client/control-plane changes require observation and reactive-authoring tests, Svelte checks, and production build when browser realization changes.
-- Metadata, runtime Wasm, generated artifacts, or release claims require their owning full validation and freshness gates; no narrower result may be promoted into release evidence.
+- Metadata, runtime Wasm, generated artifacts, or release claims require their owning full validation and freshness gates; no narrower result may be promoted into release acceptance.
 
 ## Evolution
 

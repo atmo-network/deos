@@ -1,7 +1,7 @@
 ---
 name: governance-delivery
 description: Drives bounded DEOS governance changes across specification, pallet behavior, runtime wiring, generated evidence, client composition, and release handoff.
-fmos: true
+fss: true
 ---
 
 # Governance Delivery

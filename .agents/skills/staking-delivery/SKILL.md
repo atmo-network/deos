@@ -1,7 +1,7 @@
 ---
 name: staking-delivery
 description: Coordinates guarded DEOS native-staking bootstrap readiness, call preparation, authority boundaries, and activation handoff without owning staking semantics or shared commands.
-fmos: true
+fss: true
 ---
 
 # Staking Delivery

@@ -1,7 +1,7 @@
 ---
 name: indexer-delivery
 description: Drives DEOS materialized indexer capabilities from read-model contract through ingestion, finality, schema, provider API, client provenance, and operational evidence.
-fmos: true
+fss: true
 ---
 
 # Indexer Delivery

@@ -40,7 +40,7 @@ Use this skill when a DEOS Actors change needs validation scope selection, sched
 The shared human/CI/skill implementation lives at the root public automation boundary:
 
 ```bash
-./scripts/actors-release-gate.sh --help
+./scripts/actors-assurance.sh --help
 ```
 
 This skill selects and interprets that command; it does not own a second executable copy. Successful orchestration stays compact, failures retain a complete temporary log and print a bounded tail, and `DEOS_VERBOSE=1` restores diagnostic detail.

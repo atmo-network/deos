@@ -6,12 +6,6 @@
 
 ---
 
-## 0. Specification Maintenance Meta-Layer
-
-This specification MUST stay at or below **720 lines**. New normative content SHOULD replace obsolete content instead of expanding the document indefinitely. State rules as executable positive behavior, keep implementation status out of the specification, and single-source shipped realization details in architecture documents.
-
----
-
 ## 1. Purpose
 
 DEOS staking is not a classic era/slashing NPoS design. It is an economic coordination layer that must connect four protocol functions without relying on transferable-balance event tracking:
@@ -56,14 +50,14 @@ It would not participate in native collator nomination unless a future governanc
 
 ## 3. Reward Flows
 
-The launch line is phase-aware:
+The reference activation policy is phase-aware:
 
 - Phase 1 uses trusted permissioned collators, wires LP-donation funding through Actors #14, and bridges staking-yield native-balance holdings into staking pool truth after donation execution
 - Phase 2 may add permissionless collators, explicit LP nomination, and the claimable governance-conditioned nomination reward flow
 
 Phase 2 is an explicit runtime-upgrade boundary, not a launch-time governance parameter. LP nomination and claimable nomination rewards MUST remain inactive while the runtime is in the trusted-collator Phase 1 line.
 
-Upstream collection sends 100% of transaction, Actors, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; DEOS Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the current release line divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
+Upstream collection sends 100% of transaction, Actors, governance-opening, and XCM-execution fees into Fee Sink without an immediate author split; DEOS Router trading fees remain on the Burn Actor path. Fee Sink redistribution selects the active downstream flows for the current phase: the reference permissioned phase divides available native balance 50/50 between staking ingress and liquidity provisioning, while a future permissionless-collator phase MAY use equal security/staking/liquidity thirds only after bounded security-reward settlement is specified and shipped.
 
 ### 3.1 Staking yield
 
@@ -469,7 +463,7 @@ Epoch-lag rule:
 
 ## 12. Nomination Reward Funding
 
-Reward funding is recognized by epoch balance reconciliation, not by per-block event ingress.
+Native nomination reward funding is recognized by epoch balance reconciliation, not by per-block event ingress.
 
 At epoch boundary:
 
@@ -592,9 +586,9 @@ Indexed / materialized views SHOULD cover:
 
 ## 16. Bounded Maintenance Contract
 
-The staking system SHOULD NOT be an event-stream orchestrator.
+The native staking path MUST NOT be an event-stream orchestrator.
 
-The launch contract removes the need for:
+The native launch contract removes the need for:
 
 - `stNTVE` transfer/mint/burn event ingress
 - LP token transfer event ingress
@@ -602,7 +596,9 @@ The launch contract removes the need for:
 - Cache repair based on transferable balances
 - Per-block reward touch scanning
 
-Remaining maintenance SHOULD be bounded and epoch-oriented:
+Generic non-native share-vault rewards remain a separate bounded host surface. A host MAY recognize current-block reward-account inflows, receipt transfers, and governance touches through `RewardSnapshotEventIngress` when it sets explicit scan and Weight budgets, aggregates duplicate touches/inflows, marks truncated epochs incomplete, and rejects claims from incomplete epochs. Such ingress MUST NOT claim historical replay or apply to native nomination rewards.
+
+Remaining native maintenance SHOULD be bounded and epoch-oriented:
 
 - Lazy native pool sync on explicit touchpoints
 - Epoch-close nomination reward recognition

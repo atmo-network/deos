@@ -190,8 +190,10 @@ where
   T::WinningVoteItemId: From<u32>,
 {
   let voting_period = T::ProposalVotingPeriod::get().saturated_into::<u32>();
+  let lead_in_period = T::ProposalLeadInPeriod::get().saturated_into::<u32>();
   let submitted_epoch: T::Epoch = current_epoch_u32::<T>(current_epoch)
     .saturating_sub(voting_period)
+    .saturating_sub(lead_in_period)
     .into();
   let mut bucket = BoundedVec::default();
   for index in 0..n {
@@ -334,17 +336,41 @@ mod benches {
   }
 
   #[benchmark]
-  fn cast_vote() {
-    let domain = benchmark_domain_id::<T>();
+  fn submit_signed_proposal() {
+    let proposer: T::AccountId = whitelisted_caller();
+    let domain = T::BenchmarkHelper::prepare_primary_eligible_submitter(&proposer)
+      .expect("benchmark helper must prepare a primary-eligible submitter");
     let item_id = benchmark_item_id::<T>(1);
-    let current_epoch = T::EpochProvider::current_epoch();
-    ActiveProposals::<T>::insert(
+    let occupancy = T::MaxActiveProposalsPerDomain::get().saturating_sub(1);
+    seed_active_proposals::<T>(domain, occupancy);
+    #[extrinsic_call]
+    submit_signed_proposal(
+      RawOrigin::Signed(proposer.clone()),
       domain,
       item_id,
-      ActiveProposal {
-        submitted_epoch: current_epoch,
-      },
+      ProposalCadenceMode::Ordinary,
+      ProposalPayloadKind::L1RootAction,
+      T::Hash::default(),
     );
+    assert!(ActiveProposals::<T>::contains_key(domain, item_id));
+    assert_eq!(
+      ProposalAuthorsByItem::<T>::get(domain, item_id),
+      Some(proposer)
+    );
+  }
+
+  #[benchmark]
+  fn cast_vote() {
+    let voter: T::AccountId = whitelisted_caller();
+    let domain = T::BenchmarkHelper::prepare_primary_eligible_submitter(&voter)
+      .expect("benchmark helper must prepare a primary-eligible voter");
+    let item_id = benchmark_item_id::<T>(1);
+    let submitted_epoch: T::Epoch = 1u32.into();
+    let voting_epoch_u32 =
+      1u32.saturating_add(T::ProposalLeadInPeriod::get().saturated_into::<u32>());
+    frame_system::Pallet::<T>::set_block_number(voting_epoch_u32.into());
+    let current_epoch: T::Epoch = voting_epoch_u32.into();
+    ActiveProposals::<T>::insert(domain, item_id, ActiveProposal { submitted_epoch });
     ProposalMetadataByItem::<T>::insert(
       domain,
       item_id,
@@ -366,7 +392,6 @@ mod benches {
       }
     }
     FinalizedProposalOutcomeExpiryBuckets::<T>::insert(retention_epoch, bucket);
-    let voter: T::AccountId = whitelisted_caller();
     #[extrinsic_call]
     cast_vote(
       RawOrigin::Signed(voter.clone()),
@@ -427,8 +452,9 @@ mod benches {
   fn resolve_proposal_from_votes(n: Linear<1, 256>) {
     let domain = benchmark_domain_id::<T>();
     let item_id = benchmark_item_id::<T>(1);
-    let current_epoch_u32 = T::ProposalVotingPeriod::get()
+    let current_epoch_u32 = T::ProposalLeadInPeriod::get()
       .saturated_into::<u32>()
+      .saturating_add(T::ProposalVotingPeriod::get().saturated_into::<u32>())
       .saturating_add(1);
     frame_system::Pallet::<T>::set_block_number(current_epoch_u32.into());
     let current_epoch: T::Epoch = current_epoch_u32.into();
@@ -503,13 +529,17 @@ mod benches {
   fn requeue_proposal_for_auto_finalization() {
     let domain = benchmark_domain_id::<T>();
     let item_id = benchmark_item_id::<T>(1);
-    let current_epoch_u32 = 4u32;
+    let submitted_epoch_u32 = 1u32;
+    let maturity_epoch_u32 = submitted_epoch_u32
+      .saturating_add(T::ProposalLeadInPeriod::get().saturated_into::<u32>())
+      .saturating_add(T::ProposalVotingPeriod::get().saturated_into::<u32>());
+    let current_epoch_u32 = maturity_epoch_u32.saturating_sub(1);
     frame_system::Pallet::<T>::set_block_number(current_epoch_u32.into());
     ActiveProposals::<T>::insert(
       domain,
       item_id,
       ActiveProposal {
-        submitted_epoch: 1u32.into(),
+        submitted_epoch: submitted_epoch_u32.into(),
       },
     );
     ProposalMetadataByItem::<T>::insert(
@@ -518,7 +548,7 @@ mod benches {
       benchmark_proposal_metadata::<T>(ProposalPayloadKind::L2ParameterChange),
     );
     ActiveProposalCounts::<T>::insert(domain, 1);
-    let maturity_epoch: T::Epoch = current_epoch_u32.saturating_add(1).into();
+    let maturity_epoch: T::Epoch = maturity_epoch_u32.into();
     let occupancy = T::MaxMaturingProposalsPerEpoch::get().saturating_sub(1);
     let mut bucket = BoundedVec::default();
     for index in 0..occupancy {
@@ -543,8 +573,9 @@ mod benches {
   #[benchmark]
   fn service_maturing_proposals(n: Linear<1, 4>) {
     let domain = benchmark_domain_id::<T>();
-    let current_epoch_u32 = T::ProposalVotingPeriod::get()
+    let current_epoch_u32 = T::ProposalLeadInPeriod::get()
       .saturated_into::<u32>()
+      .saturating_add(T::ProposalVotingPeriod::get().saturated_into::<u32>())
       .saturating_add(1);
     let current_epoch: T::Epoch = current_epoch_u32.into();
     seed_maturing_proposals::<T>(domain, current_epoch, n);

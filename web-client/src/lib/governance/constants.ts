@@ -10,7 +10,6 @@ import type {
 } from './types';
 
 export const DEFAULT_GOVERNANCE_WS_ENDPOINT = 'ws://127.0.0.1:9988';
-export const DEFAULT_GOVERNANCE_RPC_ENDPOINT = DEFAULT_GOVERNANCE_WS_ENDPOINT;
 
 export const GOVERNANCE_QUERY_SURFACE_AVAILABILITY: GovernanceQuerySurfaceAvailability =
   {

@@ -2,11 +2,11 @@
 
 This directory contains the custom pallets that implement the DEOS runtime kernel and its current reference economic configuration. Each pallet is designed with modern FRAME patterns and follows the project's architectural principles for production-ready blockchain applications.
 
-The current pallet set is maintained against the repository's `Polkadot SDK 2606 / node 1.24.0` line. Most of the 2606 migration fallout landed in runtime/parachain-system/asset-conversion integration surfaces rather than in pallet cores, and the pallet-local README files now record where pallet-specific cleanup was or was not needed.
+The current pallet set follows the workspace-owned Polkadot SDK dependency graph. Runtime, parachain-system, and asset-conversion integration concerns remain owned by their concrete composition surfaces rather than pallet cores.
 
 ## 🏗️ Available Pallets
 
-### [Actors](./actor/README.md)
+### [Actors](./actors/README.md)
 
 Deterministic account-abstraction actor runtime for bounded execution plans, scheduling, event-driven triggers, and lifecycle management.
 
@@ -57,7 +57,7 @@ Each pallet directory contains:
 
 Direct local entrypoints:
 
-- [Actors README](./actor/README.md)
+- [Actors README](./actors/README.md)
 - [Asset Registry README](./asset-registry/README.md)
 - [DEOS Router README](./router/README.md)
 - [Governance README](./governance/README.md)

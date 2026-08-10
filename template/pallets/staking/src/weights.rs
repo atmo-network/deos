@@ -8,8 +8,6 @@ use polkadot_sdk::frame_support::weights::{constants::RocksDbWeight, Weight};
 
 pub trait WeightInfo {
 	fn register_staking_asset() -> Weight { default_weight(1, 1) }
-	fn initialize_staked_asset() -> Weight { default_weight(1, 1) }
-	fn convert_position_to_receipt() -> Weight { default_weight(2, 3) }
 	fn sync_pool() -> Weight { default_weight(2, 1) }
 	fn stake() -> Weight { default_weight(3, 2) }
 	fn unstake() -> Weight { default_weight(3, 2) }

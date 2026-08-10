@@ -1,17 +1,19 @@
-use super::common::{ALICE, BOB, actor_fee_sink_account, new_test_ext};
+use super::common::{
+  ALICE, BOB, actor_fee_sink_account, create_test_asset, mint_tokens, new_test_ext,
+};
 use crate::configs::governance_config::{
   StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource, TacticalTreasuryInvoicePayload,
 };
 use crate::{
   Actors, Assets, Balances, DeosRouter, Governance, Preimage, Runtime, RuntimeEvent, RuntimeOrigin,
-  System,
+  Staking, System,
 };
 use codec::Encode;
-use polkadot_sdk::frame_support::assert_ok;
 use polkadot_sdk::frame_support::traits::{
   Hooks,
   fungibles::{Inspect as FungiblesInspect, Mutate as FungiblesMutate},
 };
+use polkadot_sdk::frame_support::{assert_noop, assert_ok};
 use polkadot_sdk::frame_system;
 use polkadot_sdk::sp_core::traits::{ReadRuntimeVersion, ReadRuntimeVersionExt};
 use polkadot_sdk::sp_externalities::Externalities;
@@ -154,6 +156,63 @@ fn l1_root_action_authorize_upgrade_executes_from_governance_preimage() {
           code_hash,
         })
     }));
+  });
+}
+
+#[test]
+fn strategic_signed_ingress_requires_primary_power_not_veto_power() {
+  new_test_ext().execute_with(|| {
+    let code_hash = crate::Hash::repeat_byte(29);
+    let veto_asset = primitives::ecosystem::protocol_tokens::VETO_ASSET_ID;
+    assert_ok!(<Assets as FungiblesMutate<_>>::mint_into(
+      veto_asset, &ALICE, 100,
+    ));
+    let alice_before = Balances::free_balance(ALICE);
+    let events_before = System::events();
+    assert_noop!(
+      Governance::submit_signed_proposal(
+        RuntimeOrigin::signed(ALICE),
+        PROTOCOL_GOVERNANCE_DOMAIN,
+        109,
+        pallet_governance::ProposalCadenceMode::Ordinary,
+        pallet_governance::ProposalPayloadKind::L1RootAction,
+        code_hash,
+      ),
+      pallet_governance::Error::<Runtime>::ProposalSubmitterNotPrimaryEligible
+    );
+    assert_eq!(Balances::free_balance(ALICE), alice_before);
+    assert_eq!(System::events(), events_before);
+    assert_eq!(
+      Governance::active_proposal_count(PROTOCOL_GOVERNANCE_DOMAIN),
+      0
+    );
+
+    assert_ok!(create_test_asset(0, &ALICE));
+    assert_ok!(mint_tokens(0, &ALICE, &BOB, 1_000));
+    assert_ok!(Staking::register_staking_asset(RuntimeOrigin::root(), 0));
+    assert_ok!(Staking::stake_native(RuntimeOrigin::signed(BOB), 500));
+    let bob_before = Balances::free_balance(BOB);
+    let fee_sink_before = Balances::free_balance(actor_fee_sink_account());
+    assert_ok!(Governance::submit_signed_proposal(
+      RuntimeOrigin::signed(BOB),
+      PROTOCOL_GOVERNANCE_DOMAIN,
+      109,
+      pallet_governance::ProposalCadenceMode::Ordinary,
+      pallet_governance::ProposalPayloadKind::L1RootAction,
+      code_hash,
+    ));
+    assert_eq!(
+      Governance::proposal_author(PROTOCOL_GOVERNANCE_DOMAIN, 109),
+      Some(BOB)
+    );
+    assert_eq!(
+      Balances::free_balance(BOB),
+      bob_before.saturating_sub(crate::configs::governance_config::ProposalOpeningFee::get())
+    );
+    assert_eq!(
+      Balances::free_balance(actor_fee_sink_account()),
+      fee_sink_before.saturating_add(crate::configs::governance_config::ProposalOpeningFee::get())
+    );
   });
 }
 
@@ -796,14 +855,21 @@ fn submission_authority_opening_fee_and_preimage_cost_status_are_explicit_on_cur
         PROTOCOL_GOVERNANCE_DOMAIN,
         pallet_governance::ProposalPayloadKind::L1RootAction,
       ),
-      pallet_governance::ProposalSubmissionAuthority::AdminOnly
+      pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned
     );
     assert_eq!(
       Governance::proposal_opening_fee(
         PROTOCOL_GOVERNANCE_DOMAIN,
         pallet_governance::ProposalPayloadKind::L1RootAction,
       ),
-      None
+      Some(10 * crate::EXISTENTIAL_DEPOSIT)
+    );
+    assert_eq!(
+      Governance::proposal_submission_authority(
+        TACTICAL_GOVERNANCE_DOMAIN,
+        pallet_governance::ProposalPayloadKind::L1RootAction,
+      ),
+      pallet_governance::ProposalSubmissionAuthority::AdminOnly
     );
     assert_eq!(
       Governance::proposal_submission_authority(

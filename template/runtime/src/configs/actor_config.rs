@@ -169,10 +169,10 @@ impl TmctolAssetOps {
     ) {
       return Ok(());
     }
-    let lp_farmer = crate::Actors::sovereign_account_id_system(
-      primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+    let staking_liquidity_actor = crate::Actors::sovereign_account_id_system(
+      primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     );
-    if to != &lp_farmer {
+    if to != &staking_liquidity_actor {
       return Ok(());
     }
     let (_, remainder) = <Balances as Currency<AccountId>>::slash(to, amount);
@@ -468,16 +468,24 @@ pub(crate) fn classify_remove_liquidity_failure(error: DispatchError) -> TaskFai
 }
 
 pub(crate) fn classify_router_failure(error: pallet_deos_router::Error<Runtime>) -> TaskFailure {
-  use pallet_deos_router::RouterFailureClass;
-  match error.failure_class() {
-    RouterFailureClass::NoViableRoute
-    | RouterFailureClass::ProtectionRejected
-    | RouterFailureClass::LiquidityUnavailable
-    | RouterFailureClass::PublicationRejected => TaskFailure::temporary(error),
-    RouterFailureClass::InvalidRequest
-    | RouterFailureClass::FeeRejected
-    | RouterFailureClass::IngressRejected
-    | RouterFailureClass::InvariantViolation => TaskFailure::permanent(error),
+  let retry = error.retry_class();
+  classify_router_retry(retry, error.into())
+}
+
+pub(crate) fn classify_router_execution_failure(
+  error: pallet_deos_router::ExecutionError<Runtime>,
+) -> TaskFailure {
+  let retry = error.retry_class();
+  classify_router_retry(retry, error.into_dispatch_error())
+}
+
+fn classify_router_retry(
+  retry: pallet_deos_router::RetryClass,
+  error: DispatchError,
+) -> TaskFailure {
+  match retry {
+    pallet_deos_router::RetryClass::Permanent => TaskFailure::permanent(error),
+    pallet_deos_router::RetryClass::RetryLater => TaskFailure::temporary(error),
   }
 }
 
@@ -515,7 +523,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       total_amount_in: outcome.total_amount_in,
       recipient_amount_out: outcome.recipient_amount_out,
     })
-    .map_err(TaskFailure::permanent)
+    .map_err(classify_router_execution_failure)
   }
 
   fn swap_exact_out(
@@ -576,7 +584,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       total_amount_in: outcome.total_amount_in,
       recipient_amount_out: outcome.recipient_amount_out,
     })
-    .map_err(TaskFailure::permanent)
+    .map_err(classify_router_execution_failure)
   }
 }
 
@@ -835,8 +843,8 @@ impl TmctolGenesisSystemActors {
   /// Runtime-topology accounts that retain one free native ED so arbitrarily small native ingress
   /// remains admissible under `pallet-balances` semantics.
   pub fn native_flow_anchor_accounts() -> alloc::vec::Vec<AccountId> {
-    let mut accounts = (ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID
-      ..=ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID)
+    let mut accounts = (ecosystem::actor_ids::BURN_ACTOR_ID
+      ..=ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID)
       .map(crate::Actors::sovereign_account_id_system)
       .collect::<alloc::vec::Vec<_>>();
     accounts.push(crate::Staking::pool_account_for(
@@ -883,7 +891,7 @@ impl
     use polkadot_sdk::sp_runtime::traits::AccountIdConversion;
     let governance: AccountId = ActorsPalletId::get().into_account_truncating();
 
-    // --- Burn Actor (actor_id = 0; legacy constant: BURNING_MANAGER_ACTORS_ID) ---
+    // --- Burn Actor (actor_id = 0) ---
     // Omnivorous intake: any verified inbound value signals one bounded pass that
     // swaps configured foreign balances to native and burns available native.
     let burn_schedule = Schedule {
@@ -893,7 +901,7 @@ impl
       ),
       cooldown_blocks: ecosystem::params::SYSTEM_ACTORS_COOLDOWN_BLOCKS,
     };
-    let dust = ecosystem::params::BURNING_MANAGER_DUST_THRESHOLD;
+    let dust = ecosystem::params::BURN_ACTOR_DUST_THRESHOLD;
     // Genesis execution_plan: swap known foreign assets → native, then burn.
     // Governance adds steps for new foreign assets via `update_execution_plan`.
     let burn_execution_plan: pallet_deos_actors::ExecutionPlanOf<Runtime> =
@@ -914,7 +922,7 @@ impl
 
     alloc::vec![
       (
-        ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID,
+        ecosystem::actor_ids::BURN_ACTOR_ID,
         governance.clone(),
         Mutability::Mutable,
         burn_schedule,
@@ -972,9 +980,9 @@ impl
       ecosystem::actor_ids::TREASURY_B_ACTORS_ID,
       ecosystem::actor_ids::TREASURY_C_ACTORS_ID,
       ecosystem::actor_ids::TREASURY_D_ACTORS_ID,
-      ecosystem::actor_ids::BLDR_ZM_ACTORS_ID,
+      ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
       ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
-      ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+      ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
     ]
     .into_iter()
     .map(|actor_id| (actor_id, governance.clone()))
@@ -1009,7 +1017,7 @@ impl TmctolGenesisSystemActors {
           },
           SplitLeg {
             to: crate::Actors::sovereign_account_id_system(
-              ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+              ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
             ),
             share: Perbill::from_percent(50),
           },
@@ -1243,8 +1251,8 @@ impl TmctolGenesisSystemActors {
         threshold: dust_threshold,
       }])
     };
-    let bldr_zm_account = pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
-      ecosystem::actor_ids::BLDR_ZM_ACTORS_ID,
+    let bldr_liquidity_account = pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
+      ecosystem::actor_ids::BLDR_LIQUIDITY_ACTOR_ID,
     );
     let bldr_treasury_account = pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(
       ecosystem::actor_ids::BLDR_TREASURY_ACTORS_ID,
@@ -1256,8 +1264,8 @@ impl TmctolGenesisSystemActors {
         amount: AmountResolution::AllAvailable,
         legs: alloc::vec![
           SplitLeg {
-            to: bldr_zm_account,
-            share: ecosystem::params::BLDR_SPLITTER_ZM_SHARE,
+            to: bldr_liquidity_account,
+            share: ecosystem::params::BLDR_SPLITTER_LIQUIDITY_SHARE,
           },
           SplitLeg {
             to: bldr_treasury_account,
@@ -1279,7 +1287,7 @@ impl TmctolGenesisSystemActors {
   /// ExecutionPlan steps:
   /// 1. AddLiquidity(NTVE, BLDR) — opportunistic at current pool ratio
   /// 2. SplitTransfer(LP → BLDR Bucket A, 100%)
-  pub fn build_bldr_zm_execution_plan(
+  pub fn build_bldr_liquidity_execution_plan(
     bldr_asset: AssetKind,
     lp_asset: AssetKind,
     dust_threshold: Balance,
@@ -1333,18 +1341,18 @@ impl TmctolGenesisSystemActors {
       .expect("BLDR Liquidity Actor execution_plan fits within MaxExecutionPlanSteps")
   }
 
-  /// Builds the Native Staking LP Farmer execution_plan.
+  /// Builds and activates the Native Staking Liquidity Actor execution plan.
   ///
   /// ExecutionPlan steps:
   /// 1. DonateLiquidity — stake the calculated NTVE side and donate balanced reserves
-  pub fn activate_native_staking_lp_farming(
+  pub fn activate_native_staking_liquidity_actor(
     dust_threshold: Balance,
   ) -> polkadot_sdk::sp_runtime::DispatchResult {
-    Self::ensure_native_staking_lp_farming_ready()?;
-    let execution_plan = Self::build_native_staking_lp_farming_execution_plan(dust_threshold);
+    Self::ensure_native_staking_liquidity_ready()?;
+    let execution_plan = Self::build_native_staking_liquidity_execution_plan(dust_threshold);
     crate::Actors::activate_actor(
       RuntimeOrigin::root(),
-      ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID,
+      ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID,
       pallet_deos_actors::ProgramInput::Active(pallet_deos_actors::ActiveProgramInput {
         schedule: pallet_deos_actors::Schedule {
           trigger: pallet_deos_actors::Trigger::immediate_manual_and_address_event(
@@ -1362,7 +1370,7 @@ impl TmctolGenesisSystemActors {
     )
   }
 
-  pub fn ensure_native_staking_lp_farming_ready() -> polkadot_sdk::sp_runtime::DispatchResult {
+  pub fn ensure_native_staking_liquidity_ready() -> polkadot_sdk::sp_runtime::DispatchResult {
     let native_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let staked_asset_id = crate::Staking::staked_asset_id(native_asset_id)
       .ok_or(DispatchError::Other("StakedAssetUnavailable"))?;
@@ -1373,11 +1381,13 @@ impl TmctolGenesisSystemActors {
     }
     pallet_staking::Pools::<Runtime>::get(native_asset_id)
       .ok_or(DispatchError::Other("NativeStakingPoolUnavailable"))?;
-    let actor_id = ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID;
+    let actor_id = ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID;
     if crate::Actors::active_actor_view(actor_id).is_none()
       && crate::Actors::actor_identities(actor_id).is_none()
     {
-      return Err(DispatchError::Other("NativeStakingLpFarmerUnavailable"));
+      return Err(DispatchError::Other(
+        "NativeStakingLiquidityActorUnavailable",
+      ));
     }
     let base_asset = AssetKind::Local(native_asset_id);
     let staked_asset = AssetKind::Local(staked_asset_id);
@@ -1386,14 +1396,14 @@ impl TmctolGenesisSystemActors {
     Ok(())
   }
 
-  pub fn build_native_staking_lp_farming_execution_plan(
+  pub fn build_native_staking_liquidity_execution_plan(
     dust_threshold: Balance,
   ) -> pallet_deos_actors::ExecutionPlanOf<Runtime> {
     use pallet_deos_actors::{AmountResolution, Condition, Step, StepErrorPolicy, Task};
     let native_staking_asset_id = <Runtime as pallet_staking::Config>::NativeStakingAssetId::get();
     let native_asset = AssetKind::Local(native_staking_asset_id);
     let staked_asset_id = crate::Staking::staked_asset_id(native_staking_asset_id)
-      .expect("native staking LP farming activation checks staked asset first");
+      .expect("native staking liquidity activation checks staked asset first");
     let staked_asset = AssetKind::Local(staked_asset_id);
     let native_dust = Self::all_conditions(alloc::vec![Condition::BalanceAbove {
       asset: native_asset,
@@ -1411,7 +1421,7 @@ impl TmctolGenesisSystemActors {
     }];
     steps
       .try_into()
-      .expect("native staking LP farming execution_plan fits within MaxExecutionPlanSteps")
+      .expect("native staking liquidity execution plan fits within MaxExecutionPlanSteps")
   }
 
   /// Builds the Treasury B BLDR buyback-and-burn execution_plan.
@@ -1543,8 +1553,8 @@ impl pallet_deos_actors::adapters::SovereignAccountPolicy<AccountId>
   fn is_reserved(account: &AccountId) -> bool {
     // The deterministic genesis System Actors custody accounts (including the Fee Sink) are
     // host-reserved; a hashed sovereign derivation can never alias them.
-    (primitives::ecosystem::actor_ids::BURNING_MANAGER_ACTORS_ID
-      ..=primitives::ecosystem::actor_ids::NATIVE_STAKING_LP_FARMER_ACTORS_ID)
+    (primitives::ecosystem::actor_ids::BURN_ACTOR_ID
+      ..=primitives::ecosystem::actor_ids::NATIVE_STAKING_LIQUIDITY_ACTOR_ID)
       .any(|id| account == &pallet_deos_actors::Pallet::<Runtime>::sovereign_account_id_system(id))
   }
 }
@@ -1881,7 +1891,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
   ) -> Result<(AssetKind, AssetKind, Balance), DispatchError> {
     let _ = Self::setup_remove_liquidity(owner)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
-      &BurningManagerAccount::get(),
+      &BurnActorAccount::get(),
       EXISTENTIAL_DEPOSIT,
     );
     Ok((
@@ -1896,7 +1906,7 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
   ) -> Result<(AssetKind, AssetKind, Balance, Balance), DispatchError> {
     let _ = Self::setup_remove_liquidity(owner)?;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(
-      &BurningManagerAccount::get(),
+      &BurnActorAccount::get(),
       EXISTENTIAL_DEPOSIT,
     );
     Ok((

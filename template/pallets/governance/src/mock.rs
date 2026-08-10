@@ -151,6 +151,9 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<DomainId>
     domain: DomainId,
     payload_kind: pallet_governance::ProposalPayloadKind,
   ) -> pallet_governance::ProposalSubmissionAuthority {
+    if domain == 42 && payload_kind == pallet_governance::ProposalPayloadKind::L1RootAction {
+      return pallet_governance::ProposalSubmissionAuthority::PrimaryEligibleSigned;
+    }
     if domain == 44 && payload_kind == pallet_governance::ProposalPayloadKind::Intent {
       return pallet_governance::ProposalSubmissionAuthority::Signed;
     }
@@ -158,6 +161,36 @@ impl pallet_governance::ProposalSubmissionAuthorityProvider<DomainId>
       return pallet_governance::ProposalSubmissionAuthority::Signed;
     }
     pallet_governance::ProposalSubmissionAuthority::AdminOnly
+  }
+}
+
+pub struct MockProposalSubmissionEligibilityProvider;
+impl pallet_governance::ProposalSubmissionEligibilityProvider<AccountId, DomainId>
+  for MockProposalSubmissionEligibilityProvider
+{
+  fn has_primary_governance_power(domain: DomainId, account: &AccountId) -> bool {
+    domain == 42
+      && PROPOSAL_VOTE_WEIGHTS
+        .with(|weights| weights.borrow().get(account).copied().unwrap_or_default() > 0)
+  }
+}
+
+#[cfg(feature = "runtime-benchmarks")]
+pub struct MockGovernanceBenchmarkHelper;
+
+#[cfg(feature = "runtime-benchmarks")]
+impl pallet_governance::BenchmarkHelper<AccountId, DomainId> for MockGovernanceBenchmarkHelper {
+  fn prepare_primary_eligible_submitter(
+    account: &AccountId,
+  ) -> Result<DomainId, polkadot_sdk::sp_runtime::DispatchError> {
+    PROPOSAL_VOTE_WEIGHTS.with(|weights| {
+      weights.borrow_mut().insert(*account, 1);
+    });
+    let _ =
+      <Balances as polkadot_sdk::frame_support::traits::Currency<AccountId>>::deposit_creating(
+        account, 100,
+      );
+    Ok(42)
   }
 }
 
@@ -333,6 +366,7 @@ impl pallet_governance::Config for Test {
   type ProposalPrimaryTrackFamilyProvider = MockProposalPrimaryTrackFamilyProvider;
   type ProposalUrgentPolicyProvider = MockProposalUrgentPolicyProvider;
   type ProposalSubmissionAuthorityProvider = MockProposalSubmissionAuthorityProvider;
+  type ProposalSubmissionEligibilityProvider = MockProposalSubmissionEligibilityProvider;
   type ProposalRuntimeUpgradeAuthorizationProvider =
     MockProposalRuntimeUpgradeAuthorizationProvider;
   type ProposalPayloadPreimageNoteCostProvider = MockProposalPayloadPreimageNoteCostProvider;
@@ -340,6 +374,8 @@ impl pallet_governance::Config for Test {
   type ProposalPayloadPreimageProvider = MockProposalPayloadPreimageProvider;
   type ProposalPayloadExecutor = MockProposalPayloadExecutor;
   type WinningVoteRewardTouchHandler = ();
+  #[cfg(feature = "runtime-benchmarks")]
+  type BenchmarkHelper = MockGovernanceBenchmarkHelper;
   type WeightInfo = ();
 }
 

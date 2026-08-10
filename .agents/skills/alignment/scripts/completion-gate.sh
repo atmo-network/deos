@@ -123,6 +123,12 @@ should_run_router_identity_audit() {
         has_changed_path '^\.agents/skills/alignment/scripts/audit-router-identity\.sh$'
 }
 
+should_run_strategic_governance_ingress_audit() {
+    has_changed_path '^template/pallets/governance/' || \
+        has_changed_path '^template/runtime/src/(configs/(governance|xcm)_config\.rs|chain_specs/|lib\.rs$)' || \
+        has_changed_path '^\.agents/skills/alignment/scripts/audit-strategic-governance-ingress\.sh$'
+}
+
 should_run_cargo_check() {
     if [[ "$RUN_CARGO_CHECK" == "1" ]]; then
         return 0
@@ -194,9 +200,11 @@ plan() {
     log_info "Layer 4: Markdown quality"
     log_info "Layer 5: Wiki trust"
     log_info "Layer 6: Economic claim integrity"
-    log_info "Layer 7: Release-line consistency"
-    log_info "Layer 8: Backlog open-work shape"
-    log_info "Layer 9: Knowledge sync"
+    log_info "Layer 7: Strategic governance ingress"
+    log_info "Layer 8: Security boundary ownership"
+    log_info "Layer 9: Release-line consistency"
+    log_info "Layer 10: Backlog open-work shape"
+    log_info "Layer 11: Knowledge sync"
     log_info "Audit scope: $AUDIT_SCOPE"
     log_info "Changed paths: ${#CHANGED_PATHS[@]}"
     log_info "Changed shell scripts: ${#CHANGED_SHELL_PATHS[@]}"
@@ -334,6 +342,18 @@ run_router_identity_validation() {
     fi
 }
 
+run_strategic_governance_ingress_validation() {
+    phase_banner "Step 9: Strategic governance ingress"
+    if ! should_run_strategic_governance_ingress_audit; then
+        log_warning "Skipping strategic governance ingress audit because its authority surfaces did not change"
+        return 0
+    fi
+    if ! "$SCRIPT_DIR/audit-strategic-governance-ingress.sh"; then
+        log_error "Strategic governance ingress validation failed"
+        exit 1
+    fi
+}
+
 run_release_line_validation() {
     phase_banner "Step 9: Release-line consistency"
     if ! should_run_release_line_audit; then
@@ -364,6 +384,10 @@ run_knowledge_sync() {
         log_warning "Context sync gate disabled"
         return 0
     fi
+    if (( ${#CHANGED_PATHS[@]} == 0 )); then
+        log_success "Clean candidate has no changed paths requiring context sync"
+        return 0
+    fi
     if has_changed_path '^(BACKLOG\.md|CHANGELOG\.md|AGENTS\.md|docs/|\.agents/skills/README\.md$|\.agents/skills/.*/SKILL\.md$)'; then
         log_success "Context files were updated in this pass"
         return 0
@@ -384,6 +408,7 @@ main() {
     run_wiki_trust_validation
     run_economic_claim_validation
     run_router_identity_validation
+    run_strategic_governance_ingress_validation
     run_release_line_validation
     run_backlog_validation
     run_knowledge_sync
