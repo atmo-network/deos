@@ -197,7 +197,7 @@ impl ChainSpecBuilder {
       polkadot_xcm: pallet_xcm::GenesisConfig {
         safe_xcm_version: Some(self.economic_params.safe_xcm_version)
       },
-      axial_router: pallet_axial_router::GenesisConfig {
+      deos_router: pallet_deos_router::GenesisConfig {
         _marker: Default::default(),
       },
       token_minting_curve: pallet_tmc::GenesisConfig {
@@ -357,7 +357,7 @@ mod tests {
     assert!(genesis_json.get("balances").is_some());
     assert!(genesis_json.get("sudo").is_none());
     assert!(genesis_json.get("assets").is_some());
-    assert!(genesis_json.get("axialRouter").is_some());
+    assert!(genesis_json.get("deosRouter").is_some());
     assert!(genesis_json.get("tokenMintingCurve").is_some());
     assert_eq!(
       genesis_json["collatorSelection"]["desiredCandidates"],

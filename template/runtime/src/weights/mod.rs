@@ -23,8 +23,8 @@ pub mod paritydb_weights;
 pub mod rocksdb_weights;
 
 pub mod pallet_asset_registry;
-pub mod pallet_axial_router;
 pub mod pallet_deos_actors;
+pub mod pallet_deos_router;
 pub mod pallet_governance;
 pub mod pallet_oracle;
 pub mod pallet_staking;

@@ -69,7 +69,7 @@ The complete Actors ABI manifest derives from the same exact metadata bytes and 
 
 Optional selected-actor inspection reads only exact `ActorHot(actor_id)` and `ActorIdentities(actor_id)` at that finalized hash. It reports actor existence, pending signal, actor class (System/User), queue ticket or wakeup block/page/slot, and one factual status: ActorMissing, NoPendingSignal, PendingQueueAdmission, Queued, or WakeupScheduled. Queue and wakeup pointers are mutually exclusive. PendingQueueAdmission means a signal lacks both paths at the snapshot; it does not predict when capacity returns.
 
-`AxialRouterPreExecutionReserves` identifies local pool reserves observed before Router execution. The inspection surface MUST state that this is not an external fair-price, manipulation-resistance, MEV-protection, or ordering proof. Authored slippage, System reference-deviation guards, and execution-time conditions remain separate contracts.
+`DeosRouterPreExecutionReserves` identifies local pool reserves observed before Router execution. The inspection surface MUST state that this is not an external fair-price, manipulation-resistance, MEV-protection, or ordering proof. Authored slippage, System reference-deviation guards, and execution-time conditions remain separate contracts.
 
 ## Linear Authoring
 
@@ -131,7 +131,7 @@ Each observation is classified as `Endogenous`, `Exogenous`, or `Unknown`. Exoge
 
 Every graph edge belongs to exactly one `ReactiveCausal`, `ResourceCoupling`, `Coordination`, or `DeclaredExternalCausality` family and carries `RuntimeDerived`, `ArtifactDerived`, `Declared`, or `Unknown` provenance plus every supplying identity. Observation trigger/read and declared actor effects form reactive causality; exact actor signals form coordination; asset reads/writes remain resource coupling.
 
-Artifact-derived edges identify the canonical plan; observation edges also identify known observation evidence; declared actor effects identify both declaration and plan. Runtime producer `AxialRouterPreExecutionReserves` derives endogenous provenance; explicitly external producers derive exogenous provenance; absent producer evidence stays `Unknown`. Mixed actor runtime/metadata/weight/analyzer contexts and provenance/evidence contradictions fail closed before graph construction.
+Artifact-derived edges identify the canonical plan; observation edges also identify known observation evidence; declared actor effects identify both declaration and plan. Runtime producer `DeosRouterPreExecutionReserves` derives endogenous provenance; explicitly external producers derive exogenous provenance; absent producer evidence stays `Unknown`. Mixed actor runtime/metadata/weight/analyzer contexts and provenance/evidence contradictions fail closed before graph construction.
 
 Observation lifecycle comes from the same evidence reference. Active and paused observations retain structural causal candidates; deactivated observations remain visible but cannot contribute actor/parameter effects to a reactive SCC. Router producer/lifecycle requires runtime-derived evidence, external provenance requires a declaration identity, and unknown producer/lifecycle carries no identity.
 

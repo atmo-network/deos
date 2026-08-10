@@ -33,7 +33,7 @@
       ],
       "falsification_tests": [
         "template/runtime/src/tests/tmctol_integration_tests.rs::oracle_deviation_rejects_swap_via_dexops",
-        "template/runtime/src/tests/tmctol_integration_tests.rs::axial_router_price_deviation_breakpoint_is_bound_to_pool_depth"
+        "template/runtime/src/tests/tmctol_integration_tests.rs::deos_router_price_deviation_breakpoint_is_bound_to_pool_depth"
       ]
     },
     {
@@ -79,11 +79,11 @@
       "falsification_note": "Removing prepared-leg validation or changing threshold math lets an over-threshold direct or Native-anchored leg execute instead of failing with PriceDeviationExceeded.",
       "code_anchors": [
         "template/pallets/router/src/lib.rs::Pallet::validate_prepared_legs",
-        "template/runtime/src/configs/axial_router_config.rs::PriceOracleImpl::validate_price_deviation"
+        "template/runtime/src/configs/deos_router_config.rs::PriceOracleImpl::validate_price_deviation"
       ],
       "falsification_tests": [
         "template/runtime/src/tests/tmctol_integration_tests.rs::oracle_deviation_rejects_swap_via_dexops",
-        "template/runtime/src/tests/tmctol_integration_tests.rs::axial_router_price_deviation_breakpoint_is_bound_to_pool_depth"
+        "template/runtime/src/tests/tmctol_integration_tests.rs::deos_router_price_deviation_breakpoint_is_bound_to_pool_depth"
       ]
     },
     {

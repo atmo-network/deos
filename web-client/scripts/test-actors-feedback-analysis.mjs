@@ -177,7 +177,7 @@ test('price to swap to price is a structural endogenous self-feedback path', () 
       {
         id: 'ntve-bldr-price',
         feed: priceFeed,
-        producer: 'AxialRouterPreExecutionReserves',
+        producer: 'DeosRouterPreExecutionReserves',
         lifecycle: 'Active',
         evidence: {
           provenance: 'RuntimeDerived',
@@ -286,7 +286,7 @@ test('reactive findings bind timing and policy claims to identified evidence', (
       {
         id: 'price',
         feed: priceFeed,
-        producer: 'AxialRouterPreExecutionReserves',
+        producer: 'DeosRouterPreExecutionReserves',
         lifecycle: 'Active',
         evidence: {
           provenance: 'RuntimeDerived',
@@ -418,7 +418,7 @@ test('fee funding to downstream market action to price forms a cross-actor path'
       {
         id: 'ntve-bldr-price',
         feed: priceFeed,
-        producer: 'AxialRouterPreExecutionReserves',
+        producer: 'DeosRouterPreExecutionReserves',
         lifecycle: 'Active',
         evidence: {
           provenance: 'RuntimeDerived',
@@ -689,7 +689,7 @@ test('deactivated runtime observations preserve identity without causal recurren
       {
         id: 'deactivated-price',
         feed: priceFeed,
-        producer: 'AxialRouterPreExecutionReserves',
+        producer: 'DeosRouterPreExecutionReserves',
         lifecycle: 'Deactivated',
         evidence: {
           provenance: 'RuntimeDerived',
@@ -724,7 +724,7 @@ test('timing and policy evidence rejects provenance and identity substitution', 
   const observation = {
     id: 'price',
     feed: priceFeed,
-    producer: 'AxialRouterPreExecutionReserves',
+    producer: 'DeosRouterPreExecutionReserves',
     lifecycle: 'Active',
     evidence: {
       provenance: 'RuntimeDerived',
@@ -892,7 +892,7 @@ test('feedback projection is deterministic and fails closed at graph bounds', ()
       {
         id: 'price',
         feed: priceFeed,
-        producer: 'AxialRouterPreExecutionReserves',
+        producer: 'DeosRouterPreExecutionReserves',
         lifecycle: 'Active',
         evidence: {
           provenance: 'RuntimeDerived',

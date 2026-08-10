@@ -1,6 +1,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use pallet_axial_router::{
+use pallet_deos_router::{
   AssetKind, ExactOutputExecution, FeeRoutingAdapter, PriceOracle, TmcInterface,
   types::AssetConversionApi,
 };
@@ -26,7 +26,7 @@ construct_runtime!(
     System: frame_system,
     Balances: polkadot_sdk::pallet_balances,
     Assets: polkadot_sdk::pallet_assets,
-    Router: pallet_axial_router,
+    Router: pallet_deos_router,
   }
 );
 
@@ -202,7 +202,7 @@ parameter_types! {
   pub const LiquidityAccount: AccountId = 91;
 }
 
-impl pallet_axial_router::Config for Runtime {
+impl pallet_deos_router::Config for Runtime {
   type Currency = Balances;
   type Assets = Assets;
   type TmcPallet = HostTmc;
@@ -230,7 +230,7 @@ impl pallet_axial_router::Config for Runtime {
 pub struct HostBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_axial_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
+impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
   for HostBenchmarkHelper
 {
   fn create_asset(_asset: AssetKind) -> DispatchResult {

@@ -37,7 +37,7 @@ Exclude arbitrary graph routing, external solvers, new market families, product 
 
 - Read the specification for route families, intents, comparator, protection, publication, errors, and conformance.
 - Read package architecture and `src/lib.rs` for current implementation topology.
-- Read `template/runtime/src/configs/axial_router_config.rs` for concrete adapters.
+- Read `template/runtime/src/configs/deos_router_config.rs` for concrete adapters.
 - Read Actors and Oracle integration documents only when their boundaries change.
 - Use the benchmarking capability when route classes or affected generated weights move.
 

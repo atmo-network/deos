@@ -1,7 +1,7 @@
 [package]
 name = "deos-runtime"
 description = "DEOS reference parachain runtime"
-version = "0.7.14"
+version = "0.7.15"
 license = "MIT-0"
 authors.workspace = true
 homepage.workspace = true
@@ -27,7 +27,7 @@ hex-literal = { optional = true, workspace = true, default-features = true }
 log = { workspace = true }
 pallet-deos-actors.workspace = true
 pallet-asset-registry.workspace = true
-pallet-axial-router.workspace = true
+pallet-deos-router.workspace = true
 pallet-governance.workspace = true
 pallet-oracle.workspace = true
 pallet-staking.workspace = true
@@ -80,7 +80,7 @@ std = [
   "log/std",
   "pallet-deos-actors/std",
   "pallet-asset-registry/std",
-  "pallet-axial-router/std",
+  "pallet-deos-router/std",
   "pallet-governance/std",
   "pallet-oracle/std",
   "pallet-staking/std",
@@ -98,7 +98,7 @@ runtime-benchmarks = [
   "hex-literal",
   "pallet-deos-actors/runtime-benchmarks",
   "pallet-asset-registry/runtime-benchmarks",
-  "pallet-axial-router/runtime-benchmarks",
+  "pallet-deos-router/runtime-benchmarks",
   "pallet-governance/runtime-benchmarks",
   "pallet-oracle/runtime-benchmarks",
   "pallet-staking/runtime-benchmarks",
@@ -112,7 +112,7 @@ try-runtime = [
   "cumulus-pallet-parachain-system/try-runtime",
   "pallet-deos-actors/try-runtime",
   "pallet-asset-registry/try-runtime",
-  "pallet-axial-router/try-runtime",
+  "pallet-deos-router/try-runtime",
   "pallet-governance/try-runtime",
   "pallet-oracle/try-runtime",
   "pallet-staking/try-runtime",

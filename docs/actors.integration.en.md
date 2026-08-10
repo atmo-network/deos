@@ -13,7 +13,7 @@ The portable actor contract and crate implementation remain in [`template/pallet
 | Runtime adapters, actor builders, bounds, and origins | `template/runtime/src/configs/actor_config.rs` |
 | Runtime-generated Actors weights | `template/runtime/src/weights/pallet_deos_actors.rs` |
 | DEOS Oracle publication hook | `template/runtime/src/configs/oracle_config.rs` |
-| Router fee, quote, execution, and observation composition | `template/runtime/src/configs/axial_router_config.rs` |
+| Router fee, quote, execution, and observation composition | `template/runtime/src/configs/deos_router_config.rs` |
 | Asset and transaction-extension ingress | `template/runtime/src/configs/assets_config.rs`, `template/runtime/src/lib.rs` |
 | Genesis System identities and ED anchors | `template/runtime/src/genesis_config_presets.rs` |
 | Runtime integration and load evidence | `template/runtime/src/tests/actor_integration_tests.rs`, `template/runtime/src/tests/load_testing.rs` |
@@ -240,17 +240,17 @@ Tombstone drain is `7,057,781 + 2,132,168 × n` RefTime and `2,982 + 2,492 × n`
 
 ## Generated Evidence and Artifacts
 
-Current DEOS 0.7.12 candidate artifact identities:
+Current DEOS 0.7.15 candidate artifact identities:
 
 | Artifact | SHA-256 |
 | --- | --- |
-| Actors runtime weights | `b237c442cd04bbe8ee2f66fdf7317d86d673cf42bbca3c1f9545d344dfb0bdb8` |
-| DEOS Oracle runtime weights | `ffd422bd67a6b75c8bc4e76f7ace4aad5b40a352cf2b10a70547a241e261259e` |
-| Compact compressed runtime Wasm | `503b3d2dcd00c8d4584fa10e434c603a9256896de43dc328c00cc94a3a58a3c8` |
-| SCALE-encoded V16 metadata | `bcdea5ab21683e669ab9cec2a4eabaa37d781b05995e48407f9c08da964b9400` |
-| Actors semantic manifest | `16e17ff38a7ddb1952a8d3f8c4dbc9de899127f5125fc93b847a2ef88a9fd5b7` |
-| Actors fee-envelope vectors | `1587692dcb4a05e51ff23750ca4e4d0d1f11691bc4ab5e1c56bc77d65d8f1574` |
-| Actors ABI manifest | `b2a71397cbb330387dcf71167afc0352165c335cd57db51c2286c9d6665f5203` |
+| Actors runtime weights | `dd8aa0d9030b6e6815d3d44bcc9fd0cd6fdcaaa96c02420d32f713f55cb85b4d` |
+| DEOS Oracle runtime weights | `8c73cdf77227cacda32cc7fdebc87681885339556856f02905f27d9feadb648a` |
+| Compact compressed runtime Wasm | `2b6d7adc069e9e16316831686c8a89b494973a6575f3d4a2acd62883f0222ea2` |
+| SCALE-encoded V16 metadata | `46d1ecd23107ffc32d567420a2ea55ff419b9f0efa800d329e0043eeddb167e7` |
+| Actors semantic manifest | `820dc8e282694dc357f190712eddf5f4c6450a71124a295bae1dffb9d85f4c97` |
+| Actors fee-envelope vectors | `9256b8b8eae4c44d306b8c8f6680fa54b8d6d3ec221e4014bf7ef2f5d206e056` |
+| Actors ABI manifest | `0067461f6a07a54e4aeefe1ae050a7dfeae712405705fecf7965ad11bb8ac22c` |
 
 The metadata identity hashes the exact bytes at `web-client/.papi/metadata/deos.scale`. Fee-envelope `metadataSha256` and `weightSha256` equal the metadata and Actors-weight rows above. Observation evidence binds the same metadata SHA-256 and Actors-weight identity plus the rebuilt compact-Wasm runtime-code hash. No alternate compact-Wasm claim remains active.
 

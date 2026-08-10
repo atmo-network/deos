@@ -467,8 +467,8 @@ pub(crate) fn classify_remove_liquidity_failure(error: DispatchError) -> TaskFai
   }
 }
 
-pub(crate) fn classify_router_failure(error: pallet_axial_router::Error<Runtime>) -> TaskFailure {
-  use pallet_axial_router::RouterFailureClass;
+pub(crate) fn classify_router_failure(error: pallet_deos_router::Error<Runtime>) -> TaskFailure {
+  use pallet_deos_router::RouterFailureClass;
   match error.failure_class() {
     RouterFailureClass::NoViableRoute
     | RouterFailureClass::ProtectionRejected
@@ -492,7 +492,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     let who = context.actor;
-    let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_input(
+    let quote = pallet_deos_router::Pallet::<Runtime>::quote_exact_input(
       who.clone(),
       asset_in,
       asset_out,
@@ -508,7 +508,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       quote.amount_after_fee,
       quote.amount_out,
     )?;
-    pallet_axial_router::Pallet::<Runtime>::execute_swap_for(
+    pallet_deos_router::Pallet::<Runtime>::execute_swap_for(
       who, asset_in, asset_out, amount_in, min_out, who,
     )
     .map(|outcome| DexSwapOutcome {
@@ -527,7 +527,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
     slippage_tolerance: polkadot_sdk::sp_runtime::Perbill,
   ) -> Result<DexSwapOutcome<Balance>, TaskFailure> {
     let who = context.actor;
-    let quote = pallet_axial_router::Pallet::<Runtime>::quote_exact_out(
+    let quote = pallet_deos_router::Pallet::<Runtime>::quote_exact_out(
       who.clone(),
       asset_in,
       asset_out,
@@ -564,7 +564,7 @@ impl DexOps<AccountId, AssetKind, Balance> for TmctolDexOps {
       quote.amount_after_fee,
       quote.amount_out,
     )?;
-    pallet_axial_router::Pallet::<Runtime>::execute_exact_out_for(
+    pallet_deos_router::Pallet::<Runtime>::execute_exact_out_for(
       who,
       asset_in,
       asset_out,
@@ -585,7 +585,7 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
     let AssetKind::Local(lp_id) = lp_asset else {
       return None;
     };
-    crate::AxialRouter::lp_pair_by_token_id(lp_id)
+    crate::DeosRouter::lp_pair_by_token_id(lp_id)
   }
 
   fn add_liquidity(
@@ -666,7 +666,7 @@ impl LiquidityOps<AccountId, AssetKind, Balance> for TmctolLiquidityOps {
           }
         };
         let (registry_a, registry_b) =
-          crate::AxialRouter::lp_pair_by_token_id(lp_id).ok_or_else(|| {
+          crate::DeosRouter::lp_pair_by_token_id(lp_id).ok_or_else(|| {
             TaskFailure::permanent(DispatchError::Other("Pool not found for LP token"))
           })?;
         // The expected ordered pair must match the stable registry binding; an
@@ -754,7 +754,7 @@ impl TmctolDexOps {
         "InvalidSystemMarketQuote",
       )));
     }
-    let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
     let ema_reference =
       crate::Oracle::observation_state(feed, ActorMaxSystemReferenceAgeBlocks::get())
         .ok()
@@ -1206,7 +1206,7 @@ impl TmctolGenesisSystemActors {
       AssetKind::Local(id) => id,
       _ => panic!("Treasury LP unwind requires a Local LP asset"),
     };
-    let (asset_a, asset_b) = crate::AxialRouter::lp_pair_by_token_id(lp_id)
+    let (asset_a, asset_b) = crate::DeosRouter::lp_pair_by_token_id(lp_id)
       .expect("Treasury LP unwind requires a registered LP pair");
     alloc::vec![Step {
       conditions: Self::all_conditions(alloc::vec![Condition::BalanceAbove {
@@ -1935,13 +1935,13 @@ impl pallet_deos_actors::BenchmarkHelper<AccountId, AssetKind, Balance, primitiv
   fn setup_observation_feeds(
     max: u32,
   ) -> Result<alloc::vec::Vec<primitives::OracleFeedId>, DispatchError> {
-    let producer = crate::AxialRouter::account_id();
+    let producer = crate::DeosRouter::account_id();
     let mut feeds = alloc::vec::Vec::with_capacity(max as usize);
     for index in 1..=max {
       let asset_in = AssetKind::Local(0x3000_0000u32.saturating_add(index));
       let asset_out = AssetKind::Native;
-      crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out)?;
-      let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+      crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out)?;
+      let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
       crate::Oracle::publish(RuntimeOrigin::signed(producer.clone()), feed, 1)?;
       feeds.push(feed);
     }

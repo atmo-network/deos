@@ -3,8 +3,8 @@ use crate::configs::governance_config::{
   StrategicRuntimeUpgradePayload, TacticalTreasuryFundingSource, TacticalTreasuryInvoicePayload,
 };
 use crate::{
-  Actors, Assets, AxialRouter, Balances, Governance, Preimage, Runtime, RuntimeEvent,
-  RuntimeOrigin, System,
+  Actors, Assets, Balances, DeosRouter, Governance, Preimage, Runtime, RuntimeEvent, RuntimeOrigin,
+  System,
 };
 use codec::Encode;
 use polkadot_sdk::frame_support::assert_ok;
@@ -197,14 +197,14 @@ fn l2_parameter_change_updates_router_fee_via_governance_executor() {
     let executed_epoch = ordinary_enactment_epoch(approved_epoch);
     let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(1);
     let call: crate::RuntimeCall =
-      pallet_axial_router::Call::<Runtime>::update_router_fee { new_fee }.into();
+      pallet_deos_router::Call::<Runtime>::update_router_fee { new_fee }.into();
     let encoded_call = call.encode();
     let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_call);
     assert_ok!(Preimage::note_preimage(
       RuntimeOrigin::signed(ALICE),
       encoded_call,
     ));
-    assert_ne!(AxialRouter::router_fee(), new_fee);
+    assert_ne!(DeosRouter::router_fee(), new_fee);
     assert_ok!(Governance::submit_proposal(
       RuntimeOrigin::root(),
       PROTOCOL_GOVERNANCE_DOMAIN,
@@ -215,7 +215,7 @@ fn l2_parameter_change_updates_router_fee_via_governance_executor() {
       payload_hash,
     ));
     resolve_root_action_proposal(102);
-    assert_eq!(AxialRouter::router_fee(), new_fee);
+    assert_eq!(DeosRouter::router_fee(), new_fee);
     assert_eq!(
       Governance::finalized_proposal_outcome(PROTOCOL_GOVERNANCE_DOMAIN, 102),
       Some(pallet_governance::FinalizedProposalOutcome::Enacted {
@@ -241,10 +241,10 @@ fn l2_parameter_change_updates_router_fee_via_governance_executor() {
 fn l2_parameter_change_rejects_router_fee_above_runtime_bound() {
   new_test_ext().execute_with(|| {
     let failed_epoch = ordinary_enactment_epoch(1);
-    let initial_fee = AxialRouter::router_fee();
+    let initial_fee = DeosRouter::router_fee();
     let new_fee = polkadot_sdk::sp_runtime::Perbill::from_percent(2);
     let call: crate::RuntimeCall =
-      pallet_axial_router::Call::<Runtime>::update_router_fee { new_fee }.into();
+      pallet_deos_router::Call::<Runtime>::update_router_fee { new_fee }.into();
     let encoded_call = call.encode();
     let payload_hash = <Runtime as frame_system::Config>::Hashing::hash(&encoded_call);
     assert_ok!(Preimage::note_preimage(
@@ -261,7 +261,7 @@ fn l2_parameter_change_rejects_router_fee_above_runtime_bound() {
       payload_hash,
     ));
     resolve_root_action_proposal(113);
-    assert_eq!(AxialRouter::router_fee(), initial_fee);
+    assert_eq!(DeosRouter::router_fee(), initial_fee);
     assert_eq!(
       Governance::proposal_execution_detail(PROTOCOL_GOVERNANCE_DOMAIN, 113),
       Some(

@@ -178,9 +178,9 @@ pub mod pallet_ids {
   /// DEOS Router pallet ID (multi-token routing engine)
   ///
   /// Pallet account (SS58 prefix 42):
-  ///   hex:  `0x6d6f646c617869616c7274300000000000000000000000000000000000000000`
-  ///   SS58: `5EYCAe5fjMgntj8Tch49FZ3RXMR1XiQbrSA1z2oYgQAiXukN`
-  pub const AXIAL_ROUTER_PALLET_ID: &[u8; 8] = b"axialrt0";
+  ///   hex:  `0x6d6f646c726f7574657230300000000000000000000000000000000000000000`
+  ///   SS58: `5EYCAe5j8X3dxkxG3NE9Yzf561FKmh4XYPRgrjz26bNojgZ6`
+  pub const ROUTER_PALLET_ID: &[u8; 8] = b"router00";
 
   /// TMC pallet ID (token minting curve)
   ///
@@ -259,13 +259,13 @@ pub mod params {
   ///
   /// Protocol captures 0.5% on all swaps routed through DEOS Router.
   /// XYK pool fee is 0.0% — all fee revenue flows through the Router to the Burning Manager.
-  pub const AXIAL_ROUTER_FEE: Perbill = Perbill::from_parts(5_000_000); // 50 bps
+  pub const DEOS_ROUTER_FEE: Perbill = Perbill::from_parts(5_000_000); // 50 bps
 
   /// Maximum governance-settable DEOS Router fee (1%).
   ///
   /// Bounds fee mutation so router policy cannot silently invalidate TMCTOL liveness
   /// or conservation assumptions while preserving a narrow launch-line adjustment band.
-  pub const MAX_AXIAL_ROUTER_FEE: Perbill = Perbill::from_percent(1);
+  pub const MAX_DEOS_ROUTER_FEE: Perbill = Perbill::from_percent(1);
 
   /// Maximum canonical LP reverse-index entries retained by DEOS Router.
   pub const MAX_ROUTER_LP_PAIRS: u32 = 500;
@@ -354,7 +354,7 @@ mod tests {
   #[test]
   fn pallet_ids_are_correct_length() {
     assert_eq!(pallet_ids::ACTORS_PALLET_ID.len(), 8);
-    assert_eq!(pallet_ids::AXIAL_ROUTER_PALLET_ID.len(), 8);
+    assert_eq!(pallet_ids::ROUTER_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::TMC_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::ASSET_CONVERSION_PALLET_ID.len(), 8);
     assert_eq!(pallet_ids::ASSET_REGISTRY_PALLET_ID.len(), 8);

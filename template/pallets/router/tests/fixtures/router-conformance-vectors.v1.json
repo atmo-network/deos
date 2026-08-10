@@ -1,10 +1,10 @@
 {
-  "actorWeightsSha256": "552c4564b55ff02ff7b0235dcb79f520fb0075d05e8a2fbdaf85f0ef7d8ae277",
+  "actorWeightsSha256": "dd8aa0d9030b6e6815d3d44bcc9fd0cd6fdcaaa96c02420d32f713f55cb85b4d",
   "format": "deos.router.conformance-vectors",
   "formatVersion": 1,
-  "metadataSha256": "cfabdcc97265e543fd6d774b8d9bf89cd12033fefd742d9cbb6ba9b62b6a9bfd",
-  "routerWeightsSha256": "bf81292b97f5ea34382c99e484874cc9a3b176f63537fc1a2b929c2a6d440c78",
-  "specificationSha256": "c2fccf168be12ad4b9a220e6fd6c1fe8f9825096367d95a1ad3fa0d72c0bcfc9",
+  "metadataSha256": "46d1ecd23107ffc32d567420a2ea55ff419b9f0efa800d329e0043eeddb167e7",
+  "routerWeightsSha256": "4e008ea77119a789024d9d2c59d3d67194be29811a26740777fec87edaf37b40",
+  "specificationSha256": "404e7b062ed094266ff187f166fe0de3b8bf43f2033e9d56dece8cc1c312b68b",
   "vectors": [
     {
       "crossDomainEqual": true,

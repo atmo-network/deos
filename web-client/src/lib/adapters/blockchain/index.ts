@@ -598,7 +598,7 @@ export class BlockchainAdapter implements Adapter {
     try {
       await this.submitSigned(
         (snapshot, accountId, signer) => {
-          return snapshot.typedApi.tx.AxialRouter.swap({
+          return snapshot.typedApi.tx.DeosRouter.swap({
             from,
             to,
             amount_in: amountIn,

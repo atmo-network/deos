@@ -34,7 +34,7 @@ parameter_types! {
   pub const TmcZapAllocationRatio: Perbill = ecosystem::params::TMC_ZAP_ALLOCATION;
 }
 
-use super::axial_router_config::LiquidityActorAccount;
+use super::deos_router_config::LiquidityActorAccount;
 
 pub struct TmctolDomainGlue;
 impl pallet_tmc::DomainGlueHook for TmctolDomainGlue {

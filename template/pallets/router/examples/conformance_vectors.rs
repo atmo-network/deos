@@ -1,5 +1,5 @@
 use codec::Encode;
-use pallet_axial_router::{
+use pallet_deos_router::{
   PreparedLeg, PreparedLegs, PreparedRoute, RouteFamily, RouteWeightClass, RouterOutcome,
 };
 use primitives::AssetKind;
@@ -96,7 +96,7 @@ fn main() {
     .expect("Router specification must be readable");
   let metadata = fs::read(repo.join("web-client/.papi/metadata/deos.scale"))
     .expect("runtime metadata must be generated");
-  let router_weights = fs::read(repo.join("template/runtime/src/weights/pallet_axial_router.rs"))
+  let router_weights = fs::read(repo.join("template/runtime/src/weights/pallet_deos_router.rs"))
     .expect("Router weights must be generated");
   let actor_weights = fs::read(repo.join("template/runtime/src/weights/pallet_deos_actors.rs"))
     .expect("Actors weights must be generated");

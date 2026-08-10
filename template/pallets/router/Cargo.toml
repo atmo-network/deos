@@ -1,6 +1,6 @@
 [package]
 name = "pallet-deos-router"
-version = "0.7.14"
+version = "0.7.15"
 description = "Minimalist multi-token routing system optimized for TMC ecosystems"
 authors.workspace = true
 homepage.workspace = true
@@ -10,7 +10,7 @@ publish = false
 repository.workspace = true
 
 [lib]
-name = "pallet_axial_router"
+name = "pallet_deos_router"
 
 [lints]
 workspace = true

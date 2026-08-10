@@ -171,8 +171,8 @@ pub(crate) fn register_pool_lp_pair(
   let pool = pallet_asset_conversion::Pools::<Runtime>::get(&pool_id).ok_or(
     polkadot_sdk::sp_runtime::DispatchError::Other("Pool not found"),
   )?;
-  crate::AxialRouter::register_lp_pair(pool.lp_token, pool_id)?;
-  super::oracle_config::ensure_axial_router_pool_feeds(pool_id.0, pool_id.1)
+  crate::DeosRouter::register_lp_pair(pool.lp_token, pool_id)?;
+  super::oracle_config::ensure_deos_router_pool_feeds(pool_id.0, pool_id.1)
 }
 
 impl pallet_asset_conversion::Config for Runtime {

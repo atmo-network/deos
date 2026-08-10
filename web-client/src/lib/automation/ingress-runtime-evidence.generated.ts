@@ -15,7 +15,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     transactionVersion: 1,
   },
   inventorySha256:
-    'e2782bc65dcb53f1d4d9b8404d9eb6535c33b1ec246792a7e042f5cdc261fff8',
+    'b298b0b3cf5ef02d2a5fed8cfa16cc2ee6a7e54ec1f82e75ef3bdbdf79bd0673',
   certifiedProducers: [
     {
       id: 'AddressEventIngressExtension::signed_transfer',
@@ -63,7 +63,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
       weightOwner: 'TMC distribution generated weights',
     },
     {
-      id: 'AxialRouter::route_fee',
+      id: 'DeosRouter::route_fee',
       creditedSurface: 'Burn Actor sovereign',
       sourceProvenance: 'Fee payer / InternalProtocol',
       preflightOwner: 'FeeManagerImpl::route_fee preflight',
@@ -107,7 +107,7 @@ export const DEOS_INGRESS_RUNTIME_EVIDENCE = {
     helperFiles: [
       'actor_config.rs',
       'address_event_ingress.rs',
-      'axial_router_config.rs',
+      'deos_router_config.rs',
       'tmc_config.rs',
       'xcm_config.rs',
     ],

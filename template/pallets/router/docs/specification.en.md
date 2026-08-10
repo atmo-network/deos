@@ -4,7 +4,7 @@
 
 This document defines the intended reusable contract of `pallet-deos-router`. Code and tests own executable conformance. Package architecture documents describe the shipped implementation. Concrete DEOS adapters, accounts, indices, parameters, and cross-pallet composition belong in integration documentation.
 
-The Cargo package identity is `pallet-deos-router`. The Rust crate and runtime pallet identity remain `pallet_axial_router`. This pre-launch line retains that identity explicitly and introduces no alias, duplicate pallet, migration shim, or partial rename.
+The Cargo package identity is `pallet-deos-router`. The Rust crate and runtime pallet identity remain `pallet_deos_router`. This pre-launch line retains that identity explicitly and introduces no alias, duplicate pallet, migration shim, or partial rename.
 
 ## Purpose
 
@@ -305,7 +305,7 @@ Bounded quote runtime APIs return the current projection shape and state identit
 
 ## Compatibility and Upgrade Contract
 
-The current pre-launch release retains the `pallet_axial_router` Rust crate and runtime pallet identity, pallet index, call indices, and storage prefixes. Public semantic changes land as one coherent ABI before launch; no deprecated alias or dual event/API surface is added.
+The current pre-launch release retains the `pallet_deos_router` Rust crate and runtime pallet identity, pallet index, call indices, and storage prefixes. Public semantic changes land as one coherent ABI before launch; no deprecated alias or dual event/API surface is added.
 
 A downstream launched chain owns migrations and monotonic runtime-version changes. This repository's pre-launch baseline may reset storage versions and generated metadata coherently.
 

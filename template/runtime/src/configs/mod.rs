@@ -1,7 +1,7 @@
 pub mod actor_config;
 pub mod address_event_ingress;
 pub(crate) mod assets_config;
-pub mod axial_router_config;
+pub mod deos_router_config;
 pub mod governance_config;
 pub mod oracle_config;
 pub mod pool_index;
@@ -58,7 +58,7 @@ use super::{
 pub use address_event_ingress::RuntimeAddressEventIngress;
 pub use assets_config::{AssetKind, genesis_protocol_asset_metadata, genesis_protocol_assets};
 #[allow(unused_imports)]
-pub use axial_router_config::{
+pub use deos_router_config::{
   AssetConversionAdapter, BurningManagerAccount, LiquidityActorAccount, NativeAsset,
 };
 #[allow(unused_imports)]

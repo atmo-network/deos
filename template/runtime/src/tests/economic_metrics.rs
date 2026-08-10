@@ -11,12 +11,12 @@
 // Use common module account constants and standardized asset constants
 
 use super::common::{
-  ALICE, ASSET_A, BOB, CHARLIE, SWAP_AMOUNT, axial_router_account, burning_manager_account,
-  setup_axial_router_infrastructure, setup_basic_test_environment,
+  ALICE, ASSET_A, BOB, CHARLIE, SWAP_AMOUNT, burning_manager_account, deos_router_account,
+  setup_basic_test_environment, setup_deos_router_infrastructure,
 };
-use crate::configs::axial_router_config::{BurningManagerAccount, FeeManagerImpl};
-use crate::{Assets, AxialRouter, Balances, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System};
-use pallet_axial_router::FeeRoutingAdapter;
+use crate::configs::deos_router_config::{BurningManagerAccount, FeeManagerImpl};
+use crate::{Assets, Balances, DeosRouter, EXISTENTIAL_DEPOSIT, Runtime, RuntimeOrigin, System};
+use pallet_deos_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::assert_ok;
 use polkadot_sdk::frame_support::traits::Get;
 use polkadot_sdk::sp_runtime::Perbill;
@@ -57,7 +57,7 @@ fn setup_metrics_test_environment() -> polkadot_sdk::sp_io::TestExternalities {
   let mut ext = setup_basic_test_environment();
   ext.execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(setup_axial_router_infrastructure());
+    assert_ok!(setup_deos_router_infrastructure());
   });
   ext
 }
@@ -119,7 +119,7 @@ fn test_economic_metrics_collection() {
 
     // Execute economic activity - test FeeManager directly even though router swaps already go
     // through the production AssetConversion adapter
-    let router_account = axial_router_account();
+    let router_account = deos_router_account();
     let burning_manager_account = burning_manager_account();
 
     // Ensure router account has native balance for asset deposits
@@ -214,7 +214,7 @@ fn test_capital_efficiency_tracking() {
       if block % 2 == 0 {
         // Execute swaps on even blocks
         for user in [ALICE, BOB] {
-          assert_ok!(AxialRouter::swap(
+          assert_ok!(DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             primitives::AssetKind::Native,
             primitives::AssetKind::Local(ASSET_A),
@@ -255,7 +255,7 @@ fn test_economic_coordination_metrics() {
       // Execute multiple coordinated swaps
       let users = [ALICE, BOB];
       for user in &users {
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(user.clone()),
           primitives::AssetKind::Native,
           primitives::AssetKind::Local(ASSET_A),
@@ -265,7 +265,7 @@ fn test_economic_coordination_metrics() {
           System::block_number() + 100,
         ));
         // Cross-asset swaps for coordination testing
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(user.clone()),
           primitives::AssetKind::Local(ASSET_A),
           primitives::AssetKind::Native,
@@ -274,7 +274,7 @@ fn test_economic_coordination_metrics() {
           user.clone(),
           System::block_number() + 100
         ));
-        assert_ok!(AxialRouter::swap(
+        assert_ok!(DeosRouter::swap(
           RuntimeOrigin::signed(user.clone()),
           primitives::AssetKind::Native,
           primitives::AssetKind::Local(ASSET_A),
@@ -315,7 +315,7 @@ fn test_system_health_monitoring() {
       // Regular economic activities
       if block % 3 == 0 {
         for user in [ALICE, BOB] {
-          assert_ok!(AxialRouter::swap(
+          assert_ok!(DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             primitives::AssetKind::Native,
             primitives::AssetKind::Local(ASSET_A),
@@ -358,7 +358,7 @@ fn test_burn_velocity_tracking() {
       // Execute burn-triggering activities
       for user in [ALICE, BOB] {
         for _ in 0..1 {
-          assert_ok!(AxialRouter::swap(
+          assert_ok!(DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             primitives::AssetKind::Native,
             primitives::AssetKind::Local(ASSET_A),
@@ -394,7 +394,7 @@ fn test_comprehensive_economic_dashboard() {
         0 => {
           // High-volume native swaps
           for user in [ALICE, BOB] {
-            assert_ok!(AxialRouter::swap(
+            assert_ok!(DeosRouter::swap(
               RuntimeOrigin::signed(user.clone()),
               primitives::AssetKind::Native,
               primitives::AssetKind::Local(ASSET_A),
@@ -409,7 +409,7 @@ fn test_comprehensive_economic_dashboard() {
           // Cross-asset swaps
           {
             let user = CHARLIE;
-            assert_ok!(AxialRouter::swap(
+            assert_ok!(DeosRouter::swap(
               RuntimeOrigin::signed(user.clone()),
               primitives::AssetKind::Local(ASSET_A),
               primitives::AssetKind::Native,
@@ -418,7 +418,7 @@ fn test_comprehensive_economic_dashboard() {
               user.clone(),
               System::block_number() + 100
             ));
-            assert_ok!(AxialRouter::swap(
+            assert_ok!(DeosRouter::swap(
               RuntimeOrigin::signed(user.clone()),
               primitives::AssetKind::Native,
               primitives::AssetKind::Local(ASSET_A),
@@ -432,7 +432,7 @@ fn test_comprehensive_economic_dashboard() {
         _ => {
           // Fee collection
           for user in [ALICE, BOB] {
-            assert_ok!(AxialRouter::swap(
+            assert_ok!(DeosRouter::swap(
               RuntimeOrigin::signed(user.clone()),
               primitives::AssetKind::Native,
               primitives::AssetKind::Local(ASSET_A),
@@ -484,7 +484,7 @@ fn test_economic_alert_thresholds() {
       // Intensive economic activity
       if block % 2 == 0 {
         for user in [ALICE, BOB] {
-          assert_ok!(AxialRouter::swap(
+          assert_ok!(DeosRouter::swap(
             RuntimeOrigin::signed(user.clone()),
             primitives::AssetKind::Native,
             primitives::AssetKind::Local(ASSET_A),

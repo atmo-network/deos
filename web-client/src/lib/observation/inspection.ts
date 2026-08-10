@@ -57,7 +57,7 @@ export function formatScaledObservation(value: bigint, scale: number) {
 
 type RuntimeFeedConfig = {
   producer: string;
-  provenance: 'AxialRouterPreExecutionReserves';
+  provenance: 'DeosRouterPreExecutionReserves';
   lifecycle: 'Active' | 'Paused' | 'Deactivated';
   scale: number;
   aggregation: ObservationFeedIdentity['aggregation'];

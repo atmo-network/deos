@@ -1,9 +1,9 @@
 use super::common::{
-  ALICE, BOB, add_liquidity, axial_router_account, burning_manager_account, create_pool,
-  create_test_asset, mint_tokens, new_test_ext,
+  ALICE, BOB, add_liquidity, burning_manager_account, create_pool, create_test_asset,
+  deos_router_account, mint_tokens, new_test_ext,
 };
 use crate::{
-  Actors, Assets, AxialRouter, Balances, Oracle, Runtime, RuntimeCall, RuntimeOrigin, System,
+  Actors, Assets, Balances, DeosRouter, Oracle, Runtime, RuntimeCall, RuntimeOrigin, System,
 };
 use alloc::boxed::Box;
 use codec::Encode;
@@ -24,13 +24,13 @@ use polkadot_sdk::{
 use primitives::{AssetKind, OracleAggregationId, OracleFeedId, OracleMeaning, OracleProvenance};
 
 fn directional_feed(asset_in: AssetKind, asset_out: AssetKind) -> OracleFeedId {
-  crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out)
+  crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out)
 }
 
 #[test]
 fn runtime_admits_and_publishes_typed_directional_feed() {
   new_test_ext().execute_with(|| {
-    let producer = axial_router_account();
+    let producer = deos_router_account();
     let feed = directional_feed(AssetKind::Native, AssetKind::Local(7));
     assert_ok!(Oracle::register_feed(
       RuntimeOrigin::root(),
@@ -41,7 +41,7 @@ fn runtime_admits_and_publishes_typed_directional_feed() {
         asset_out: feed.asset_out,
         method: feed.method,
       },
-      OracleProvenance::AxialRouterPreExecutionReserves,
+      OracleProvenance::DeosRouterPreExecutionReserves,
       feed.scale,
       Aggregation::Ema {
         half_life_blocks: 100,
@@ -96,7 +96,7 @@ fn pool_registration_admits_both_directional_feeds_once() {
     assert_ok!(create_test_asset(7, &ALICE));
     assert_ok!(create_pool(RuntimeOrigin::signed(ALICE), asset_a, asset_b,));
 
-    let producer = axial_router_account();
+    let producer = deos_router_account();
     let forward = directional_feed(asset_a, asset_b);
     let reverse = forward.reverse();
     let forward_config = pallet_oracle::Feeds::<Runtime>::get(forward)
@@ -172,15 +172,12 @@ fn actor_observation_publisher_inventory_is_closed_and_oracle_owned() {
 #[test]
 fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() {
   new_test_ext().execute_with(|| {
-    let producer = axial_router_account();
+    let producer = deos_router_account();
     let first = directional_feed(AssetKind::Native, AssetKind::Local(7));
     let second = directional_feed(AssetKind::Native, AssetKind::Local(8));
     for feed in [first, second] {
       assert_ok!(
-        crate::configs::oracle_config::ensure_axial_router_pool_feeds(
-          feed.asset_in,
-          feed.asset_out,
-        )
+        crate::configs::oracle_config::ensure_deos_router_pool_feeds(feed.asset_in, feed.asset_out,)
       );
       let schedule = Schedule {
         trigger: Trigger::Immediate {
@@ -261,12 +258,12 @@ fn oracle_publication_rejects_actor_unavailability_and_recovers_after_cleanup() 
 
 #[test]
 fn pool_feed_cardinality_is_explicitly_bounded() {
-  let maximum = crate::configs::oracle_config::AXIAL_ROUTER_MAX_ORACLE_POOL_PAIRS;
+  let maximum = crate::configs::oracle_config::DEOS_ROUTER_MAX_ORACLE_POOL_PAIRS;
   assert_eq!(
     10u128.pow(u32::from(
-      crate::configs::oracle_config::AXIAL_ROUTER_ORACLE_SCALE
+      crate::configs::oracle_config::DEOS_ROUTER_ORACLE_SCALE
     )),
-    crate::configs::axial_router_config::AxialRouterPrecision::get()
+    crate::configs::deos_router_config::DeosRouterPrecision::get()
   );
   assert!(
     maximum.saturating_mul(2) <= crate::configs::oracle_config::OracleMaxFeedsPerProducer::get()
@@ -295,7 +292,7 @@ fn pool_index_extension_declares_two_worst_case_feed_registrations() {
 #[test]
 fn pair_registration_rejects_before_partial_mutation_when_capacity_is_full() {
   new_test_ext().execute_with(|| {
-    let producer = axial_router_account();
+    let producer = deos_router_account();
     for index in 0..1_000 {
       let feed = directional_feed(AssetKind::Local(10_000 + index), AssetKind::Native);
       assert_ok!(Oracle::register_feed(
@@ -303,7 +300,7 @@ fn pair_registration_rejects_before_partial_mutation_when_capacity_is_full() {
         feed,
         producer.clone(),
         feed.meaning(),
-        OracleProvenance::AxialRouterPreExecutionReserves,
+        OracleProvenance::DeosRouterPreExecutionReserves,
         feed.scale,
         Aggregation::Ema {
           half_life_blocks: 100,
@@ -332,7 +329,7 @@ fn pair_registration_rejects_before_partial_mutation_when_capacity_is_full() {
     assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 1_000);
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(forward));
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(reverse));
-    assert_eq!(crate::AxialRouter::lp_pair_by_token_id(pool.lp_token), None);
+    assert_eq!(crate::DeosRouter::lp_pair_by_token_id(pool.lp_token), None);
   });
 }
 
@@ -348,7 +345,7 @@ fn pair_registration_rolls_back_first_direction_when_reverse_identity_collides()
       reverse,
       BOB,
       reverse.meaning(),
-      OracleProvenance::AxialRouterPreExecutionReserves,
+      OracleProvenance::DeosRouterPreExecutionReserves,
       reverse.scale,
       Aggregation::Ema {
         half_life_blocks: 100,
@@ -372,7 +369,7 @@ fn pair_registration_rolls_back_first_direction_when_reverse_identity_collides()
     assert_eq!(pallet_oracle::FeedCount::<Runtime>::get(), 1);
     assert!(!pallet_oracle::Feeds::<Runtime>::contains_key(forward));
     assert!(pallet_oracle::Feeds::<Runtime>::contains_key(reverse));
-    assert_eq!(crate::AxialRouter::lp_pair_by_token_id(pool.lp_token), None);
+    assert_eq!(crate::DeosRouter::lp_pair_by_token_id(pool.lp_token), None);
   });
 }
 
@@ -382,12 +379,12 @@ fn router_producer_matches_legacy_ema_vectors() {
     let asset_in = AssetKind::Native;
     let asset_out = AssetKind::Local(7);
     let feed = directional_feed(asset_in, asset_out);
-    assert_ok!(crate::configs::oracle_config::ensure_axial_router_pool_feeds(
+    assert_ok!(crate::configs::oracle_config::ensure_deos_router_pool_feeds(
       asset_in, asset_out,
     ));
     System::set_block_number(1);
     assert_ok!(
-      <crate::configs::axial_router_config::PriceOracleImpl<Runtime> as pallet_axial_router::PriceOracle<crate::Balance>>::update_ema_price(
+      <crate::configs::deos_router_config::PriceOracleImpl<Runtime> as pallet_deos_router::PriceOracle<crate::Balance>>::update_ema_price(
         asset_in,
         asset_out,
         1_000_000_000,
@@ -400,7 +397,7 @@ fn router_producer_matches_legacy_ema_vectors() {
     ] {
       System::set_block_number(block);
       assert_ok!(
-        <crate::configs::axial_router_config::PriceOracleImpl<Runtime> as pallet_axial_router::PriceOracle<crate::Balance>>::update_ema_price(
+        <crate::configs::deos_router_config::PriceOracleImpl<Runtime> as pallet_deos_router::PriceOracle<crate::Balance>>::update_ema_price(
           asset_in,
           asset_out,
           2_000_000_000,
@@ -493,8 +490,8 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
       list.head = Some(feed);
     });
     assert_eq!(
-      AxialRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,),
-      Err(pallet_axial_router::Error::<Runtime>::InvalidOracleData.into())
+      DeosRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,),
+      Err(pallet_deos_router::Error::<Runtime>::InvalidOracleData.into())
     );
     assert_eq!(Oracle::observations(feed), None);
     assert!(Actors::dirty_observation_feeds(feed).is_none());
@@ -519,7 +516,7 @@ fn failed_swap_rolls_back_oracle_fee_event_and_pool_effects() {
 
     pallet_deos_actors::DirtyObservationListState::<Runtime>::kill();
     assert!(
-      AxialRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,)
+      DeosRouter::execute_swap_for(&ALICE, asset_in, asset_out, 1_000_000_000_000, 0, &BOB,)
         .is_err()
     );
     assert_eq!(Oracle::observations(feed), None);

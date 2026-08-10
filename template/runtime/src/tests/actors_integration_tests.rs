@@ -1,6 +1,6 @@
 use super::common::{
-  ALICE, ASSET_A, BOB, CHARLIE, add_liquidity, axial_router_account, create_pool,
-  create_test_asset, mint_tokens, seeded_test_ext,
+  ALICE, ASSET_A, BOB, CHARLIE, add_liquidity, create_pool, create_test_asset, deos_router_account,
+  mint_tokens, seeded_test_ext,
 };
 use crate::{
   AccountId, Actors, Address, Assets, Balance, Balances, Executive, Oracle, Runtime, RuntimeCall,
@@ -18,7 +18,6 @@ use crate::{
 };
 use alloc::boxed::Box;
 use codec::Encode;
-use pallet_axial_router::FeeRoutingAdapter;
 use pallet_deos_actors::adapters::SovereignAccountPolicy;
 use pallet_deos_actors::{
   ActiveProgramInput, ActorId, ActorType, AmountResolution, AssetFilter, AssetFilterOf, AssetOps,
@@ -29,6 +28,7 @@ use pallet_deos_actors::{
   SourceFilter, SourceFilterOf, SplitLeg, SplitTransferLegsOf, StakingOps, StepErrorPolicy, StepOf,
   StepSkippedReason, Task, TaskOf, Trigger, TriggerSource, WeightInfo,
 };
+use pallet_deos_router::FeeRoutingAdapter;
 use polkadot_sdk::frame_support::{
   BoundedVec, assert_noop, assert_ok,
   dispatch::{DispatchClass, GetDispatchInfo},
@@ -94,15 +94,15 @@ type ExecutionPlan = ExecutionPlanOf<Runtime>;
 fn runtime_oracle_change_hook_coalesces_into_actor_dirty_feed_state() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let producer = axial_router_account();
+    let producer = deos_router_account();
     let feed =
-      crate::configs::oracle_config::axial_router_pool_feed(AssetKind::Native, AssetKind::Local(7));
+      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(7));
     assert_ok!(Oracle::register_feed(
       RuntimeOrigin::root(),
       feed,
       producer.clone(),
       feed.meaning(),
-      primitives::OracleProvenance::AxialRouterPreExecutionReserves,
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
       feed.scale,
       pallet_oracle::Aggregation::Ema {
         half_life_blocks: 100,
@@ -148,15 +148,15 @@ fn runtime_oracle_change_hook_coalesces_into_actor_dirty_feed_state() {
 fn oracle_publication_rolls_back_when_actor_change_hook_rejects() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    let producer = axial_router_account();
+    let producer = deos_router_account();
     let feed =
-      crate::configs::oracle_config::axial_router_pool_feed(AssetKind::Native, AssetKind::Local(8));
+      crate::configs::oracle_config::deos_router_pool_feed(AssetKind::Native, AssetKind::Local(8));
     assert_ok!(Oracle::register_feed(
       RuntimeOrigin::root(),
       feed,
       producer.clone(),
       feed.meaning(),
-      primitives::OracleProvenance::AxialRouterPreExecutionReserves,
+      primitives::OracleProvenance::DeosRouterPreExecutionReserves,
       feed.scale,
       pallet_oracle::Aggregation::Ema {
         half_life_blocks: 100,
@@ -861,18 +861,18 @@ fn pool_creation_owns_an_exact_lp_reverse_index() {
     let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
       .expect("created pool must exist");
     assert_eq!(
-      crate::AxialRouter::lp_pair_by_token_id(pool.lp_token),
+      crate::DeosRouter::lp_pair_by_token_id(pool.lp_token),
       Some(pair)
     );
     assert_noop!(
-      crate::AxialRouter::register_lp_pair(
+      crate::DeosRouter::register_lp_pair(
         pool.lp_token,
         (
           AssetKind::Native,
           AssetKind::Local(INDEXED_ASSET.saturating_add(1))
         ),
       ),
-      pallet_axial_router::Error::<Runtime>::LpTokenPairCollision
+      pallet_deos_router::Error::<Runtime>::LpTokenPairCollision
     );
   });
 }
@@ -920,7 +920,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
     );
     assert_eq!(Assets::balance(pool.lp_token, &ALICE), lp_before_add_bound);
     let lp_amount = Assets::balance(pool.lp_token, &ALICE) / 2;
-    pallet_axial_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
+    pallet_deos_router::LpPairByTokenId::<Runtime>::mutate(|pairs| {
       pairs.remove(&pool.lp_token);
     });
     assert_noop!(
@@ -935,7 +935,7 @@ fn remove_liquidity_requires_and_uses_the_exact_lp_reverse_index() {
       ),
       DispatchError::Other("Pool not found for LP token")
     );
-    assert_ok!(crate::AxialRouter::register_lp_pair(pool.lp_token, pair));
+    assert_ok!(crate::DeosRouter::register_lp_pair(pool.lp_token, pair));
     let lp_before_bound_failure = Assets::balance(pool.lp_token, &ALICE);
     assert_eq!(
       <TmctolLiquidityOps as LiquidityOps<AccountId, AssetKind, Balance>>::remove_liquidity(
@@ -995,7 +995,7 @@ fn executive_pool_creation_indexes_the_lp_without_event_scanning() {
     let pool = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::get(pair)
       .expect("created pool must exist");
     assert_eq!(
-      crate::AxialRouter::lp_pair_by_token_id(pool.lp_token),
+      crate::DeosRouter::lp_pair_by_token_id(pool.lp_token),
       Some(pair)
     );
   });
@@ -1643,9 +1643,9 @@ fn percentage_of_last_funding_keeps_user_actor_active_on_exhaustion() {
 fn swap_exact_in_zero_tolerance_matches_caller_aware_router_quote() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let amount_in = crate::EXISTENTIAL_DEPOSIT.saturating_mul(10);
-    let quote = crate::AxialRouter::quote_exact_input(
+    let quote = crate::DeosRouter::quote_exact_input(
       ALICE,
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
@@ -1668,9 +1668,9 @@ fn swap_exact_in_zero_tolerance_matches_caller_aware_router_quote() {
 fn exact_out_nonzero_tolerance_requires_capacity_for_adjusted_bound() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
-    let required_in = crate::AxialRouter::quote_exact_out(
+    let required_in = crate::DeosRouter::quote_exact_out(
       ALICE,
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
@@ -1700,9 +1700,9 @@ fn exact_out_nonzero_tolerance_requires_capacity_for_adjusted_bound() {
 fn exact_out_execution_is_bounded_by_the_tolerance_cap_not_the_preservable_balance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
-    let required_in = crate::AxialRouter::quote_exact_out(
+    let required_in = crate::DeosRouter::quote_exact_out(
       ALICE,
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
@@ -1730,7 +1730,7 @@ fn exact_out_execution_is_bounded_by_the_tolerance_cap_not_the_preservable_balan
 fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
     let execution_plan = BoundedVec::try_from(vec![
       make_step(Task::SwapOut {
@@ -1748,7 +1748,7 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
     .expect("execution_plan fits");
     let actor_id = create_user(ALICE, manual_schedule(), None, execution_plan);
     let sovereign = actor_account(actor_id);
-    let required_in = crate::AxialRouter::quote_exact_out(
+    let required_in = crate::DeosRouter::quote_exact_out(
       sovereign.clone(),
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
@@ -1801,7 +1801,7 @@ fn user_exact_out_zero_tolerance_preserves_floor_and_later_step_fees() {
 fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
     let execution_plan = BoundedVec::try_from(vec![make_step(Task::SwapOut {
       asset_out: AssetKind::Local(ASSET_A),
@@ -1819,16 +1819,16 @@ fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
       if gross_in == 0 {
         return None;
       }
-      let fee = if crate::AxialRouter::is_fee_exempt(&sovereign) {
+      let fee = if crate::DeosRouter::is_fee_exempt(&sovereign) {
         0
       } else {
-        crate::AxialRouter::calculate_router_fee(gross_in)
+        crate::DeosRouter::calculate_router_fee(gross_in)
       };
       let net_in = gross_in.saturating_sub(fee);
       if net_in == 0 {
         return None;
       }
-      crate::AxialRouter::quote_price(AssetKind::Native, AssetKind::Local(ASSET_A), net_in).ok()
+      crate::DeosRouter::quote_price(AssetKind::Native, AssetKind::Local(ASSET_A), net_in).ok()
     };
     let mut high = 1u128;
     let mut found = false;
@@ -1900,7 +1900,7 @@ fn swap_out_rounding_boundary_uses_minimal_input_for_target_output() {
 fn swap_exact_out_liquidity_boundary_fails_without_partial_execution() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let impossible_out = super::common::LIQUIDITY_AMOUNT;
     let execution_plan = BoundedVec::try_from(vec![make_step(Task::SwapOut {
       asset_out: AssetKind::Local(ASSET_A),
@@ -1947,7 +1947,7 @@ fn swap_exact_out_liquidity_boundary_fails_without_partial_execution() {
 fn swap_out_fails_when_required_input_exceeds_actor_balance() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let target_out = crate::EXISTENTIAL_DEPOSIT;
     let execution_plan = BoundedVec::try_from(vec![make_step(Task::SwapOut {
       asset_out: AssetKind::Local(ASSET_A),
@@ -1963,16 +1963,16 @@ fn swap_out_fails_when_required_input_exceeds_actor_balance() {
       if amount_in == 0 {
         return None;
       }
-      let fee = if crate::AxialRouter::is_fee_exempt(&sovereign) {
+      let fee = if crate::DeosRouter::is_fee_exempt(&sovereign) {
         0
       } else {
-        crate::AxialRouter::calculate_router_fee(amount_in)
+        crate::DeosRouter::calculate_router_fee(amount_in)
       };
       let net_in = amount_in.saturating_sub(fee);
       if net_in == 0 {
         return None;
       }
-      crate::AxialRouter::quote_price(AssetKind::Native, AssetKind::Local(ASSET_A), net_in).ok()
+      crate::DeosRouter::quote_price(AssetKind::Native, AssetKind::Local(ASSET_A), net_in).ok()
     };
     let mut high = 1u128;
     let mut found = false;
@@ -2037,7 +2037,7 @@ fn swap_out_fails_when_required_input_exceeds_actor_balance() {
 fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let unfunded = crate::AccountId::new([99u8; 32]);
     let result = <crate::configs::actor_config::TmctolDexOps as DexOps<
       crate::AccountId,
@@ -2054,7 +2054,7 @@ fn dex_exact_out_adapter_rejects_unfunded_input_with_explicit_error() {
     assert_eq!(
       result,
       Err(pallet_deos_actors::TaskFailure::permanent(
-        pallet_axial_router::Error::<Runtime>::InsufficientInputBalance
+        pallet_deos_router::Error::<Runtime>::InsufficientInputBalance
       ))
     );
   });
@@ -2105,7 +2105,7 @@ fn remove_liquidity_post_delta_guard_rejects_each_adversarial_mismatch() {
 #[test]
 fn remove_liquidity_passes_each_minimum_to_asset_conversion_before_mutation() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, AssetKind::Local(ASSET_A));
     let AssetKind::Local(lp_id) = lp_asset else {
@@ -2141,7 +2141,7 @@ fn remove_liquidity_passes_each_minimum_to_asset_conversion_before_mutation() {
 fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let pair = (AssetKind::Native, AssetKind::Local(ASSET_A));
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, AssetKind::Local(ASSET_A));
     let AssetKind::Local(lp_id) = lp_asset else {
@@ -2241,8 +2241,8 @@ fn remove_liquidity_minimum_failure_preserves_each_error_policy_path() {
 
 #[test]
 fn router_failure_classifier_is_exhaustive_and_typed() {
-  use pallet_axial_router::Error as RouterError;
   use pallet_deos_actors::RetryClass;
+  use pallet_deos_router::Error as RouterError;
 
   for error in [
     RouterError::<Runtime>::SlippageExceeded,
@@ -2278,11 +2278,11 @@ fn system_actor_preserves_task_local_swap_amounts_without_fifo_priority() {
 
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let actor = Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
     let amount = 200 * PRECISION;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
-    let quote = crate::AxialRouter::quote_exact_input(
+    let quote = crate::DeosRouter::quote_exact_input(
       actor.clone(),
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
@@ -2293,7 +2293,7 @@ fn system_actor_preserves_task_local_swap_amounts_without_fifo_priority() {
       .amount_out
       .saturating_mul(PRECISION)
       .saturating_div(quote.amount_after_fee);
-    publish_axial_router_observation(AssetKind::Native, AssetKind::Local(ASSET_A), reference);
+    publish_deos_router_observation(AssetKind::Native, AssetKind::Local(ASSET_A), reference);
     let before = native_balance(&actor);
     assert_ok!(crate::configs::actor_config::TmctolDexOps::swap_exact_in(
       ExecutionContext::new(&actor, ActorType::System),
@@ -2312,11 +2312,11 @@ fn typed_system_swap_uses_stricter_reference_deviation_than_user_swap() {
 
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let actor = Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
     let amount = 10 * PRECISION;
     let _ = <Balances as Currency<AccountId>>::deposit_creating(&actor, amount.saturating_mul(2));
-    publish_axial_router_observation(
+    publish_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       PRECISION.saturating_mul(110).saturating_div(100),
@@ -2352,10 +2352,10 @@ fn missing_or_uninitialized_pool_feed_does_not_block_a_valid_user_swap() {
 
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let asset_in = AssetKind::Native;
     let asset_out = AssetKind::Local(ASSET_A);
-    let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
     assert_eq!(
       Oracle::observation_state(feed, 1).expect("maximum age is valid"),
       pallet_oracle::ObservationState::Uninitialized
@@ -2383,12 +2383,12 @@ fn missing_or_uninitialized_pool_feed_does_not_block_a_valid_user_swap() {
   });
 }
 
-fn publish_axial_router_observation(asset_in: AssetKind, asset_out: AssetKind, value: Balance) {
-  crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out)
+fn publish_deos_router_observation(asset_in: AssetKind, asset_out: AssetKind, value: Balance) {
+  crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out)
     .expect("test pair feed admission succeeds");
   Oracle::publish(
-    RuntimeOrigin::signed(axial_router_account()),
-    crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out),
+    RuntimeOrigin::signed(deos_router_account()),
+    crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out),
     value,
   )
   .expect("DEOS Router producer publishes the observation");
@@ -2404,7 +2404,7 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
     let asset_out = AssetKind::Local(999_999);
     let max_age = ActorMaxSystemReferenceAgeBlocks::get();
     System::set_block_number(1);
-    publish_axial_router_observation(asset_in, asset_out, PRECISION);
+    publish_deos_router_observation(asset_in, asset_out, PRECISION);
     System::set_block_number(max_age.saturating_add(1));
     assert_ok!(TmctolDexOps::ensure_system_reference_price(
       &ExecutionContext::new(&ALICE, ActorType::System),
@@ -2430,7 +2430,7 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
 
     let uninitialized_out = AssetKind::Local(999_998);
     assert_ok!(
-      crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, uninitialized_out,)
+      crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, uninitialized_out,)
     );
     assert_eq!(
       TmctolDexOps::ensure_system_reference_price(
@@ -2445,9 +2445,9 @@ fn system_reference_guard_enforces_freshness_boundary_and_reserve_fallback() {
       ))
     );
 
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let pooled_out = AssetKind::Local(ASSET_A);
-    publish_axial_router_observation(asset_in, pooled_out, PRECISION.saturating_mul(10));
+    publish_deos_router_observation(asset_in, pooled_out, PRECISION.saturating_mul(10));
     System::set_block_number(
       System::block_number()
         .saturating_add(max_age)
@@ -2474,7 +2474,7 @@ fn checked_reference_guard_is_exact_at_the_deviation_boundary_and_rejects_above(
     let asset_out = AssetKind::Local(999_997);
     System::set_block_number(1);
     // Reference price 1.0 (scaled PRECISION).
-    publish_axial_router_observation(asset_in, asset_out, PRECISION);
+    publish_deos_router_observation(asset_in, asset_out, PRECISION);
     let max_dev = crate::configs::actor_config::ActorMaxSystemPriceDeviation::get().deconstruct();
     // Exactly at the deviation limit: |exec_out * ref_in - ref_out * exec_in| * ACCURACY
     // == max_dev * ref_out * exec_in passes; one part above fails. With ref price 1.0
@@ -2526,7 +2526,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
 
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let actor_id = actor_ids::TREASURY_B_ACTORS_ID;
     let actor = Actors::sovereign_account_id_system(actor_id);
     let amount = 10 * PRECISION;
@@ -2557,7 +2557,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
         auto_close_at_cycle_nonce: None,
       }),
     ));
-    publish_axial_router_observation(
+    publish_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(ASSET_A),
       PRECISION.saturating_mul(110).saturating_div(100),
@@ -2601,7 +2601,7 @@ fn excessive_system_reference_deviation_suspends_without_fill_and_backs_off() {
 fn temporary_market_failure_opens_the_single_retry_continuation() {
   seeded_test_ext().execute_with(|| {
     System::set_block_number(1);
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let plan = BoundedVec::try_from(vec![StepOf::<Runtime> {
       conditions: pallet_deos_actors::ConditionSet::Always,
       task: Task::SwapOut {
@@ -3624,7 +3624,7 @@ fn actor_observation_provider_maps_oracle_state_without_concrete_pallet_dependen
   seeded_test_ext().execute_with(|| {
     let asset_in = AssetKind::Native;
     let asset_out = AssetKind::Local(ASSET_A);
-    let feed = crate::configs::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    let feed = crate::configs::oracle_config::deos_router_pool_feed(asset_in, asset_out);
     assert_eq!(
       <crate::configs::actor_config::TmctolObservationProvider as pallet_deos_actors::ObservationProvider<
         primitives::OracleFeedId,
@@ -3632,7 +3632,7 @@ fn actor_observation_provider_maps_oracle_state_without_concrete_pallet_dependen
       >>::observe(&feed, 0, 10),
       pallet_deos_actors::ScalarObservationState::Unavailable
     );
-    assert_ok!(crate::configs::oracle_config::ensure_axial_router_pool_feeds(asset_in, asset_out,));
+    assert_ok!(crate::configs::oracle_config::ensure_deos_router_pool_feeds(asset_in, asset_out,));
     assert_eq!(
       <crate::configs::actor_config::TmctolObservationProvider as pallet_deos_actors::ObservationProvider<
         primitives::OracleFeedId,
@@ -3641,7 +3641,7 @@ fn actor_observation_provider_maps_oracle_state_without_concrete_pallet_dependen
       pallet_deos_actors::ScalarObservationState::Uninitialized
     );
     System::set_block_number(1);
-    publish_axial_router_observation(asset_in, asset_out, 50);
+    publish_deos_router_observation(asset_in, asset_out, 50);
     assert_eq!(
       <crate::configs::actor_config::TmctolObservationProvider as pallet_deos_actors::ObservationProvider<
         primitives::OracleFeedId,
@@ -3683,7 +3683,7 @@ fn router_fee_routing_notifies_burning_manager_via_runtime_ingress_adapter() {
     ));
     let bob_before = native_balance(&BOB);
     assert_ok!(
-      crate::configs::axial_router_config::FeeManagerImpl::<Runtime>::route_fee(
+      crate::configs::deos_router_config::FeeManagerImpl::<Runtime>::route_fee(
         &ALICE,
         AssetKind::Native,
         10_000,
@@ -3729,7 +3729,7 @@ fn router_fee_transfer_rolls_back_when_funding_pending_overflows() {
     let alice_before = native_balance(&ALICE);
     let sovereign_before = native_balance(&sovereign);
     assert_noop!(
-      crate::configs::axial_router_config::FeeManagerImpl::<Runtime>::route_fee(
+      crate::configs::deos_router_config::FeeManagerImpl::<Runtime>::route_fee(
         &ALICE,
         AssetKind::Native,
         10_000,
@@ -5636,7 +5636,7 @@ fn owner_slot_reuses_freed_slot_after_close() {
 #[test]
 fn user_dca_e2e_lifecycle_with_explicit_close() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let create_fee = <Runtime as pallet_deos_actors::Config>::ActorCreationFee::get();
     let initial_alice_balance = Balances::free_balance(&ALICE);
     let schedule = Schedule {

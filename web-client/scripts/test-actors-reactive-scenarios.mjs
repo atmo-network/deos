@@ -96,10 +96,10 @@ function priceBucket({ direction, threshold }) {
     classification: 'Expressible',
     completeStrategy: true,
     data: {
-      sampleOwner: 'AxialRouter',
+      sampleOwner: 'DeosRouter',
       truthOwner: 'pallet-oracle',
       reactionOwner: 'pallet-deos-actors',
-      provenance: 'AxialRouterPreExecutionReserves',
+      provenance: 'DeosRouterPreExecutionReserves',
       meaning: 'DirectionalLocalPoolPrice',
     },
     failure:

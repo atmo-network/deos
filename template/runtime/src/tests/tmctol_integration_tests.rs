@@ -8,8 +8,8 @@
 
 use super::common::{
   ALICE, ASSET_A, ASSET_B, add_liquidity, burning_manager_account, create_pool, get_pool_lp_asset,
-  liquidity_actor_account, new_test_ext, publish_axial_router_observation,
-  publish_bidirectional_axial_router_observation, seeded_test_ext,
+  liquidity_actor_account, new_test_ext, publish_bidirectional_deos_router_observation,
+  publish_deos_router_observation, seeded_test_ext,
 };
 use crate::{Actors, Balances, Runtime, RuntimeOrigin, System, TokenMintingCurve};
 use pallet_deos_actors::{
@@ -195,7 +195,7 @@ fn tmctol_guarantee_state_flags_broken_native_burn_plan_as_violation() {
 #[test]
 fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
     let execution_plan =
@@ -229,7 +229,7 @@ fn tmctol_guarantee_state_reports_valid_zap_postconditions() {
 #[test]
 fn tmctol_guarantee_state_flags_malformed_zap_postconditions() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = get_pool_lp_asset(AssetKind::Native, foreign);
     let malformed_plan: ExecutionPlanOf<Runtime> = alloc::vec![
@@ -440,7 +440,7 @@ fn bm_skips_burn_when_signaled_balance_is_below_dust() {
 #[test]
 fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bm_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
     let bm = Actors::sovereign_account_id_system(bm_id);
     for block in 11..=30 {
@@ -453,7 +453,7 @@ fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
     let bm_before = Balances::free_balance(&bm);
     let swap_amount = 500 * primitives::ecosystem::params::PRECISION;
     System::set_block_number(31);
-    assert_ok!(crate::AxialRouter::swap(
+    assert_ok!(crate::DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
@@ -510,7 +510,7 @@ fn router_fee_flows_to_bm_sovereign_and_burns_after_ingress_signal() {
 #[test]
 fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bm_id = actor_ids::BURNING_MANAGER_ACTORS_ID;
     let bm = Actors::sovereign_account_id_system(bm_id);
     let pre_seeded = crate::Assets::balance(super::common::ASSET_A, &bm);
@@ -527,7 +527,7 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
       );
     }
     let price = 1_000_000_000_000u128;
-    assert_ok!(publish_bidirectional_axial_router_observation(
+    assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Local(super::common::ASSET_A),
       AssetKind::Native,
       price,
@@ -610,10 +610,10 @@ fn bm_swap_foreign_to_native_then_burn_via_update_execution_plan() {
 #[test]
 fn dexops_can_swap_foreign_to_native() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
     let price = 1_000_000_000_000u128;
-    assert_ok!(publish_bidirectional_axial_router_observation(
+    assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Local(super::common::ASSET_A),
       AssetKind::Native,
       price,
@@ -652,12 +652,12 @@ fn dexops_can_swap_foreign_to_native() {
 #[test]
 fn dexops_normal_swap_succeeds() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
     let amount = primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount * 10);
     let price = 1_000_000_000_000u128;
-    assert_ok!(publish_bidirectional_axial_router_observation(
+    assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       price,
@@ -676,20 +676,20 @@ fn dexops_normal_swap_succeeds() {
 }
 
 #[test]
-fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
+fn deos_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
   let reserve = super::common::LIQUIDITY_AMOUNT;
   let fair_price = primitives::ecosystem::params::PRECISION;
   // With equal reserves, a direct XYK quote has normalized price R / (R + x).
   // The 20% guard flips at x > 0.25R. User swaps pay a 0.5% router fee first,
   // so reserve / 5 stays below the guard and reserve / 3 exceeds it.
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
-    assert_ok!(publish_axial_router_observation(
+    assert_ok!(super::common::setup_deos_router_infrastructure());
+    assert_ok!(publish_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       fair_price,
     ));
-    assert_ok!(crate::AxialRouter::swap(
+    assert_ok!(crate::DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
@@ -700,14 +700,14 @@ fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
     ));
   });
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
-    assert_ok!(publish_axial_router_observation(
+    assert_ok!(super::common::setup_deos_router_infrastructure());
+    assert_ok!(publish_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       fair_price,
     ));
     assert_noop!(
-      crate::AxialRouter::swap(
+      crate::DeosRouter::swap(
         RuntimeOrigin::signed(ALICE),
         AssetKind::Native,
         AssetKind::Local(super::common::ASSET_A),
@@ -716,7 +716,7 @@ fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
         ALICE,
         100,
       ),
-      pallet_axial_router::Error::<Runtime>::PriceDeviationExceeded
+      pallet_deos_router::Error::<Runtime>::PriceDeviationExceeded
     );
   });
 }
@@ -724,12 +724,12 @@ fn axial_router_price_deviation_breakpoint_is_bound_to_pool_depth() {
 #[test]
 fn oracle_deviation_rejects_swap_via_dexops() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
     let amount = 10 * primitives::ecosystem::params::PRECISION;
     let _ = <Balances as Currency<crate::AccountId>>::deposit_creating(&bm, amount);
     let deviated_price = 10_000_000_000_000u128;
-    assert_ok!(publish_axial_router_observation(
+    assert_ok!(publish_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       deviated_price,
@@ -751,7 +751,7 @@ fn oracle_deviation_rejects_swap_via_dexops() {
 #[test]
 fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bm = Actors::sovereign_account_id_system(actor_ids::BURNING_MANAGER_ACTORS_ID);
     let amount = primitives::ecosystem::params::PRECISION;
     assert_ok!(<crate::configs::actor_config::TmctolAssetOps as AssetOps<
@@ -760,7 +760,7 @@ fn swap_with_slippage_tolerance_succeeds_under_fair_conditions() {
       crate::Balance,
     >>::mint(&bm, AssetKind::Native, amount * 10));
     let price = 1_000_000_000_000u128;
-    assert_ok!(publish_bidirectional_axial_router_observation(
+    assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Native,
       AssetKind::Local(super::common::ASSET_A),
       price,
@@ -1005,7 +1005,7 @@ fn zap_execution_plan_uses_max_slippage_when_pool_depth_is_unavailable() {
 fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
   use primitives::ecosystem::actor_ids;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let liquidity_actor = Actors::sovereign_account_id_system(actor_ids::LIQUIDITY_ACTOR_ACTORS_ID);
     let liquidity_actor_id = actor_ids::LIQUIDITY_ACTOR_ACTORS_ID;
     let foreign = AssetKind::Local(ASSET_A);
@@ -1054,7 +1054,7 @@ fn zap_execution_plan_e2e_adds_liquidity_and_splits_lp_to_buckets() {
       crate::Balance,
     >>::mint(&liquidity_actor, foreign, fund_amount));
     let price = 1_000_000_000_000u128;
-    assert_ok!(publish_bidirectional_axial_router_observation(
+    assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Native,
       foreign,
       price,
@@ -1109,7 +1109,7 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
   use polkadot_sdk::frame_support::traits::tokens::{Fortitude, Precision, Preservation};
   use primitives::ecosystem::actor_ids;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(super::common::ASSET_A);
     let (_, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
       .next()
@@ -1160,7 +1160,7 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
       liquidity_actor_fund_amount
     ));
     let price = 1_000_000_000_000u128;
-    assert_ok!(publish_bidirectional_axial_router_observation(
+    assert_ok!(publish_bidirectional_deos_router_observation(
       AssetKind::Native,
       foreign,
       price,
@@ -1223,7 +1223,7 @@ fn burn_and_liquidity_actor_activation_for_first_foreign_asset() {
 #[test]
 fn bucket_lp_transfer_then_treasury_remove_liquidity_fits_production_budget() {
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let foreign = AssetKind::Local(ASSET_A);
     let lp_asset = super::common::get_pool_lp_asset(AssetKind::Native, foreign);
     let lp_id = match lp_asset {
@@ -1632,7 +1632,7 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
   use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
   use primitives::ecosystem::{actor_ids, protocol_tokens};
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     // BLDR TMC curve created at genesis (9.5), Splitter execution_plan active at genesis (9.6)
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
@@ -1674,7 +1674,7 @@ fn bldr_full_e2e_router_tmc_splitter_zm_bucket() {
     let alice_native_before = Balances::free_balance(&ALICE);
     let alice_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
-    assert_ok!(crate::AxialRouter::swap(
+    assert_ok!(crate::DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       bldr_asset,
@@ -1748,7 +1748,7 @@ fn treasury_b_buyback_burns_bldr() {
   use polkadot_sdk::frame_support::traits::fungibles::Inspect as FungiblesInspect;
   use primitives::ecosystem::actor_ids;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     // Use ASSET_A as buyback target (pool already exists from setup)
     let target_id = super::common::ASSET_A;
     let target_asset = AssetKind::Local(target_id);
@@ -1827,7 +1827,7 @@ fn treasury_b_buyback_burns_bldr() {
 fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
   use primitives::ecosystem::protocol_tokens;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
     let precision = primitives::ecosystem::params::PRECISION;
@@ -1838,7 +1838,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
     // Swap via Router — should select TMC (better price at low supply)
     let mint_amount = precision;
     let quote =
-      crate::AxialRouter::quote_exact_input(ALICE, AssetKind::Native, bldr_asset, mint_amount)
+      crate::DeosRouter::quote_exact_input(ALICE, AssetKind::Native, bldr_asset, mint_amount)
         .expect("direct-mint quote must exist");
     let splitter_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_SPLITTER_ACTORS_ID);
     let zm_sov = Actors::sovereign_account_id_system(actor_ids::BLDR_ZM_ACTORS_ID);
@@ -1848,7 +1848,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &splitter_sov);
     let alice_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
-    assert_ok!(crate::AxialRouter::swap(
+    assert_ok!(crate::DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       bldr_asset,
@@ -1879,7 +1879,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       .iter()
       .rev()
       .find_map(|r| {
-        if let crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+        if let crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::SwapExecuted {
           outcome,
           ..
         }) = &r.event
@@ -1892,7 +1892,7 @@ fn router_selects_tmc_over_xyk_when_tmc_price_is_better() {
       .expect("SwapExecuted event must exist");
     assert_eq!(
       used_mechanism,
-      pallet_axial_router::RouteFamily::DirectMint,
+      pallet_deos_router::RouteFamily::DirectMint,
       "Router must select TMC (DirectMint) when TMC price is better than XYK"
     );
     assert_eq!(
@@ -1921,7 +1921,7 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
   use polkadot_sdk::frame_support::traits::fungibles::Mutate as FungiblesMutate;
   use primitives::ecosystem::protocol_tokens;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
     let precision = primitives::ecosystem::params::PRECISION;
@@ -1941,7 +1941,7 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
     let mint_amount = precision;
     let alice_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
-    assert_ok!(crate::AxialRouter::swap(
+    assert_ok!(crate::DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       AssetKind::Native,
       bldr_asset,
@@ -1969,7 +1969,7 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
       .iter()
       .rev()
       .find_map(|r| {
-        if let crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+        if let crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::SwapExecuted {
           outcome,
           ..
         }) = &r.event
@@ -1982,7 +1982,7 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
       .expect("SwapExecuted event must exist");
     assert_eq!(
       used_mechanism,
-      pallet_axial_router::RouteFamily::DirectXyk,
+      pallet_deos_router::RouteFamily::DirectXyk,
       "Router must select XYK (DirectXyk) when TMC price is worse"
     );
   });
@@ -1992,20 +1992,20 @@ fn router_selects_xyk_when_tmc_price_exceeds_xyk() {
 fn router_multi_hop_foreign_to_bldr() {
   use primitives::ecosystem::protocol_tokens;
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let bldr_id = protocol_tokens::BLDR_ASSET_ID;
     let bldr_asset = AssetKind::Local(bldr_id);
     let foreign = AssetKind::Local(ASSET_A);
     let precision = primitives::ecosystem::params::PRECISION;
     // Create NTVE-BLDR XYK pool (needed for hop 2)
     super::common::setup_bldr_pool(100 * precision);
-    // NTVE-Foreign pool already exists from setup_axial_router_infrastructure (hop 1)
+    // NTVE-Foreign pool already exists from setup_deos_router_infrastructure (hop 1)
     // No direct Foreign-BLDR pool → forces multi-hop: Foreign→NTVE→BLDR
     let swap_amount = precision;
     let alice_bldr_before =
       <crate::Assets as FungiblesInspect<crate::AccountId>>::balance(bldr_id, &ALICE);
     System::reset_events();
-    assert_ok!(crate::AxialRouter::swap(
+    assert_ok!(crate::DeosRouter::swap(
       RuntimeOrigin::signed(ALICE),
       foreign,
       bldr_asset,
@@ -2023,7 +2023,7 @@ fn router_multi_hop_foreign_to_bldr() {
       .iter()
       .rev()
       .find_map(|r| {
-        if let crate::RuntimeEvent::AxialRouter(pallet_axial_router::Event::SwapExecuted {
+        if let crate::RuntimeEvent::DeosRouter(pallet_deos_router::Event::SwapExecuted {
           outcome,
           ..
         }) = &r.event
@@ -2036,7 +2036,7 @@ fn router_multi_hop_foreign_to_bldr() {
       .expect("SwapExecuted event must exist");
     assert_eq!(
       used_mechanism,
-      pallet_axial_router::RouteFamily::NativeAnchoredXyk,
+      pallet_deos_router::RouteFamily::NativeAnchoredXyk,
       "Router must use multi-hop (Foreign→NTVE→BLDR) when no direct pool exists"
     );
   });
@@ -2046,7 +2046,7 @@ fn router_multi_hop_foreign_to_bldr() {
 fn tol_bucket_drainage_pressure_respects_anchor_immutability() {
   use polkadot_sdk::frame_support::{assert_noop, traits::fungibles::Mutate};
   seeded_test_ext().execute_with(|| {
-    assert_ok!(super::common::setup_axial_router_infrastructure());
+    assert_ok!(super::common::setup_deos_router_infrastructure());
     let (pool_key, pool_info) = polkadot_sdk::pallet_asset_conversion::Pools::<Runtime>::iter()
       .next()
       .expect("pool must exist after setup");

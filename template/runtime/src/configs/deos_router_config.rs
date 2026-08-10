@@ -47,23 +47,23 @@ fn fail_after_xyk_execution() -> bool {
 
 parameter_types! {
   /// Router fee as Perbill (derived from ecosystem constant 50bps = 0.5%)
-  pub const AxialRouterFee: Perbill = ecosystem::params::AXIAL_ROUTER_FEE;
+  pub const DeosRouterFee: Perbill = ecosystem::params::DEOS_ROUTER_FEE;
   /// Maximum governance-settable router fee for the current launch line
-  pub const AxialRouterMaxFee: Perbill = ecosystem::params::MAX_AXIAL_ROUTER_FEE;
+  pub const DeosRouterMaxFee: Perbill = ecosystem::params::MAX_DEOS_ROUTER_FEE;
   /// Maximum bounded LP reverse-index entries.
-  pub const AxialRouterMaxLpPairs: u32 = ecosystem::params::MAX_ROUTER_LP_PAIRS;
+  pub const DeosRouterMaxLpPairs: u32 = ecosystem::params::MAX_ROUTER_LP_PAIRS;
   /// Native asset (AssetKind::Native)
   pub const NativeAsset: AssetKind = AssetKind::Native;
-  /// Pallet ID for the Axial router
-  pub const AxialRouterPalletId: PalletId = PalletId(*ecosystem::pallet_ids::AXIAL_ROUTER_PALLET_ID);
+  /// Pallet ID for the DEOS router
+  pub const RouterPalletId: PalletId = PalletId(*ecosystem::pallet_ids::ROUTER_PALLET_ID);
   /// Minimum foreign amount for swapping (threshold for buffer processing)
   pub const MinSwapForeign: Balance = ecosystem::params::MIN_SWAP_FOREIGN;
   /// Precision constant for all calculations
-  pub const AxialRouterPrecision: Balance = ecosystem::params::PRECISION;
+  pub const DeosRouterPrecision: Balance = ecosystem::params::PRECISION;
   /// EMA oracle half-life in blocks
-  pub const AxialRouterEmaHalfLife: u32 = ecosystem::params::EMA_HALF_LIFE_BLOCKS;
+  pub const DeosRouterEmaHalfLife: u32 = ecosystem::params::EMA_HALF_LIFE_BLOCKS;
   /// Maximum price deviation allowed
-  pub const AxialRouterMaxPriceDeviation: Perbill = ecosystem::params::MAX_PRICE_DEVIATION;
+  pub const DeosRouterMaxPriceDeviation: Perbill = ecosystem::params::MAX_PRICE_DEVIATION;
 }
 
 /// The sovereign account of the Burning Manager System Actors (actor_id=0).
@@ -89,13 +89,13 @@ impl polkadot_sdk::frame_support::traits::Get<AccountId> for LiquidityActorAccou
 }
 
 /// TMC pallet adapter for DEOS Router integration
-pub struct TmcPalletAdapter<T: pallet_axial_router::pallet::Config>(core::marker::PhantomData<T>);
+pub struct TmcPalletAdapter<T: pallet_deos_router::pallet::Config>(core::marker::PhantomData<T>);
 
 /// Price-observation implementation for local deviation checks
-pub struct PriceOracleImpl<T: pallet_axial_router::pallet::Config>(core::marker::PhantomData<T>);
+pub struct PriceOracleImpl<T: pallet_deos_router::pallet::Config>(core::marker::PhantomData<T>);
 
 /// Token-driven fee manager implementation with account-based coordination
-pub struct FeeManagerImpl<T: pallet_axial_router::pallet::Config>(core::marker::PhantomData<T>);
+pub struct FeeManagerImpl<T: pallet_deos_router::pallet::Config>(core::marker::PhantomData<T>);
 
 pub struct AssetConversionAdapter;
 
@@ -492,7 +492,7 @@ impl AssetConversionAdapter {
   }
 }
 
-impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConversionAdapter {
+impl pallet_deos_router::AssetConversionApi<AccountId, Balance> for AssetConversionAdapter {
   fn single_pool_id(asset_a: AssetKind, asset_b: AssetKind) -> Option<(AssetKind, AssetKind)> {
     if asset_a == asset_b {
       return None;
@@ -557,7 +557,10 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
       }
     };
     // Convert path from RouterAssetKind to AssetKind and box it
-    let boxed_path: Vec<Box<AssetKind>> = path.iter().cloned().map(Box::new).collect();
+    let boxed_path: Vec<Box<AssetKind>> = path.iter(/* deos-bypass: bounded-iter — Router path has at most three assets */)
+      .cloned()
+      .map(Box::new)
+      .collect();
     let origin = RuntimeOrigin::signed(who.clone());
     AssetConversion::swap_exact_tokens_for_tokens(
       origin,
@@ -591,7 +594,7 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
     max_amount_in: Balance,
     recipient: AccountId,
     keep_alive: bool,
-  ) -> Result<pallet_axial_router::ExactOutputExecution, sp_runtime::DispatchError> {
+  ) -> Result<pallet_deos_router::ExactOutputExecution, sp_runtime::DispatchError> {
     let path = [asset_in, asset_out];
     let input_asset = asset_in;
     let output_asset = asset_out;
@@ -628,16 +631,16 @@ impl pallet_axial_router::AssetConversionApi<AccountId, Balance> for AssetConver
         <pallet_assets::Pallet<Runtime> as FungiblesInspect<AccountId>>::balance(id, &recipient)
       }
     };
-    Ok(pallet_axial_router::ExactOutputExecution {
+    Ok(pallet_deos_router::ExactOutputExecution {
       amount_in: balance_before.saturating_sub(balance_after),
       recipient_amount_out: recipient_after.saturating_sub(recipient_before),
     })
   }
 }
 
-impl<T> pallet_axial_router::TmcInterface<T::AccountId, Balance> for TmcPalletAdapter<T>
+impl<T> pallet_deos_router::TmcInterface<T::AccountId, Balance> for TmcPalletAdapter<T>
 where
-  T: pallet_axial_router::pallet::Config + pallet_tmc::pallet::Config<Balance = Balance>,
+  T: pallet_deos_router::pallet::Config + pallet_tmc::pallet::Config<Balance = Balance>,
 {
   fn has_curve(asset: AssetKind) -> bool {
     pallet_tmc::Pallet::<T>::has_curve(asset)
@@ -675,22 +678,22 @@ where
   }
 }
 
-impl pallet_axial_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
+impl pallet_deos_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
   fn update_ema_price(
     asset_in: AssetKind,
     asset_out: AssetKind,
     price: Balance,
   ) -> Result<(), sp_runtime::DispatchError> {
-    let feed = super::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    let feed = super::oracle_config::deos_router_pool_feed(asset_in, asset_out);
     if !pallet_oracle::Feeds::<Runtime>::contains_key(feed) {
       return Ok(());
     }
-    let producer: AccountId = AxialRouterPalletId::get().into_account_truncating();
+    let producer: AccountId = RouterPalletId::get().into_account_truncating();
     crate::Oracle::publish_from(producer, feed, price)
   }
 
   fn get_ema_price(asset_in: AssetKind, asset_out: AssetKind) -> Option<Balance> {
-    let feed = super::oracle_config::axial_router_pool_feed(asset_in, asset_out);
+    let feed = super::oracle_config::deos_router_pool_feed(asset_in, asset_out);
     crate::Oracle::observation_state(feed, u32::MAX)
       .ok()
       .and_then(|state| match state {
@@ -712,7 +715,7 @@ impl pallet_axial_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
       } else {
         polkadot_sdk::sp_runtime::Perbill::from_rational(ema_price - current_price, ema_price)
       };
-      if deviation > AxialRouterMaxPriceDeviation::get() {
+      if deviation > DeosRouterMaxPriceDeviation::get() {
         return Err(DispatchError::Other("Price deviation exceeded"));
       }
     }
@@ -720,7 +723,7 @@ impl pallet_axial_router::PriceOracle<Balance> for PriceOracleImpl<Runtime> {
   }
 }
 
-impl pallet_axial_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImpl<Runtime> {
+impl pallet_deos_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerImpl<Runtime> {
   fn route_fee(who: &AccountId, asset: AssetKind, amount: Balance) -> sp_runtime::DispatchResult {
     let burning_manager_account = BurningManagerAccount::get();
     polkadot_sdk::frame_support::storage::with_transaction(|| {
@@ -776,26 +779,26 @@ impl pallet_axial_router::FeeRoutingAdapter<AccountId, Balance> for FeeManagerIm
   }
 }
 
-impl pallet_axial_router::pallet::Config for Runtime {
+impl pallet_deos_router::pallet::Config for Runtime {
   type AdminOrigin = frame_system::EnsureRoot<AccountId>;
   type AssetConversion = AssetConversionAdapter;
   type Assets = pallet_assets::Pallet<Runtime>;
   type BurningManagerAccount = BurningManagerAccount;
   type LiquidityActorAccount = LiquidityActorAccount;
   type Currency = Balances;
-  type DefaultRouterFee = AxialRouterFee;
-  type EmaHalfLife = AxialRouterEmaHalfLife;
+  type DefaultRouterFee = DeosRouterFee;
+  type EmaHalfLife = DeosRouterEmaHalfLife;
   type FeeAdapter = FeeManagerImpl<Runtime>;
-  type MaxPriceDeviation = AxialRouterMaxPriceDeviation;
-  type MaxLpPairs = AxialRouterMaxLpPairs;
-  type MaxRouterFee = AxialRouterMaxFee;
+  type MaxPriceDeviation = DeosRouterMaxPriceDeviation;
+  type MaxLpPairs = DeosRouterMaxLpPairs;
+  type MaxRouterFee = DeosRouterMaxFee;
   type MinSwapForeign = MinSwapForeign;
   type NativeAsset = NativeAsset;
-  type PalletId = AxialRouterPalletId;
-  type Precision = AxialRouterPrecision;
+  type PalletId = RouterPalletId;
+  type Precision = DeosRouterPrecision;
   type PriceOracle = PriceOracleImpl<Runtime>;
   type TmcPallet = TmcPalletAdapter<Runtime>;
-  type WeightInfo = crate::weights::pallet_axial_router::SubstrateWeight<Runtime>;
+  type WeightInfo = crate::weights::pallet_deos_router::SubstrateWeight<Runtime>;
   #[cfg(feature = "runtime-benchmarks")]
   type BenchmarkHelper = RuntimeBenchmarkHelper;
 }
@@ -804,7 +807,7 @@ impl pallet_axial_router::pallet::Config for Runtime {
 pub struct RuntimeBenchmarkHelper;
 
 #[cfg(feature = "runtime-benchmarks")]
-impl pallet_axial_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
+impl pallet_deos_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
   for RuntimeBenchmarkHelper
 {
   fn create_asset(asset: AssetKind) -> polkadot_sdk::sp_runtime::DispatchResult {
@@ -860,7 +863,7 @@ impl pallet_axial_router::types::BenchmarkHelper<AssetKind, AccountId, Balance>
       RuntimeOrigin::root(),
       token_asset,
       collateral_asset,
-      AxialRouterPrecision::get(),
+      DeosRouterPrecision::get(),
       0,
     )
   }

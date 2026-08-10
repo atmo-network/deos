@@ -83,12 +83,12 @@ export async function quoteBuyAtSnapshot(
     return null;
   }
   const minForeignSwapAmount =
-    await snapshot.typedApi.constants.AxialRouter.MinSwapForeign();
+    await snapshot.typedApi.constants.DeosRouter.MinSwapForeign();
   if (foreignAmount < minForeignSwapAmount) {
     return null;
   }
   const authoritativeQuote = toOptionalValue(
-    await snapshot.typedApi.view.AxialRouter.quote_exact_input(
+    await snapshot.typedApi.view.DeosRouter.quote_exact_input(
       accountId,
       foreignAsset,
       NATIVE_ASSET,
@@ -127,7 +127,7 @@ export async function quoteSellAtSnapshot(
     return null;
   }
   const authoritativeQuote = toOptionalValue(
-    await snapshot.typedApi.view.AxialRouter.quote_exact_input(
+    await snapshot.typedApi.view.DeosRouter.quote_exact_input(
       accountId,
       NATIVE_ASSET,
       foreignAsset,

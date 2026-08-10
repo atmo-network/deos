@@ -45,7 +45,7 @@ export class BlockchainSnapshotBuilder {
       (await this.resolvePrimaryForeignAsset(snapshot));
     const registeredForeignAssetCount = canonicalForeignAsset === null ? 0 : 1;
     const minForeignSwapAmount =
-      await snapshot.typedApi.constants.AxialRouter.MinSwapForeign();
+      await snapshot.typedApi.constants.DeosRouter.MinSwapForeign();
     const [
       curve,
       reserves,

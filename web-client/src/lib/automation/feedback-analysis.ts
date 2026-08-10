@@ -55,7 +55,7 @@ export type ActorFeedbackEvidenceReference = {
 export type ActorFeedbackObservation = {
   id: string;
   feed: ActorPlanProjection;
-  producer: 'AxialRouterPreExecutionReserves' | 'DeclaredExternal' | 'Unknown';
+  producer: 'DeosRouterPreExecutionReserves' | 'DeclaredExternal' | 'Unknown';
   lifecycle: 'Active' | 'Paused' | 'Deactivated' | 'Unknown';
   evidence: ActorFeedbackEvidenceReference;
   effectMatchers: Array<
@@ -329,7 +329,7 @@ function observationProvenance(
   observation: ActorFeedbackObservation,
 ): ActorObservationProvenance {
   switch (observation.producer) {
-    case 'AxialRouterPreExecutionReserves':
+    case 'DeosRouterPreExecutionReserves':
       return 'Endogenous';
     case 'DeclaredExternal':
       return 'Exogenous';
@@ -557,7 +557,7 @@ export function analyzeActorFeedback(input: {
     const derivedProvenance = observationProvenance(observation);
     requireEvidenceProvenance(
       observation.evidence,
-      observation.producer === 'AxialRouterPreExecutionReserves'
+      observation.producer === 'DeosRouterPreExecutionReserves'
         ? ['RuntimeDerived']
         : observation.producer === 'DeclaredExternal'
           ? ['Declared']

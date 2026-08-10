@@ -37,7 +37,7 @@ const paths = {
 const INGRESS_HELPER_FILES = new Set([
   'address_event_ingress.rs',
   'actor_config.rs',
-  'axial_router_config.rs',
+  'deos_router_config.rs',
   'tmc_config.rs',
   'xcm_config.rs',
 ]);

@@ -74,7 +74,7 @@ graph TD
 
 ### Launch reward phases
 
-The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-Axial action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning.
+The reward architecture is phase-aware. Phase 1 uses trusted permissioned collators, collects all non-DEOS action fees in Fee Sink, and divides available native balance 50/50 between staking ingress and liquidity provisioning.
 
 The LP-donation half flows through Fee Sink → Actors #14, with a native-balance bridge into the local native-staking asset before donation execution. After that donation hook, the staking-yield half burns native balance held by the staking pool account and mints the local native-staking asset into pool truth.
 

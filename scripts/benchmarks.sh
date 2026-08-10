@@ -11,7 +11,7 @@ CHAIN="dev"
 INCLUDE_EXTRA_BENCHMARKS=0
 PALLETS=(
     "pallet_deos_actors"
-    "pallet_axial_router"
+    "pallet_deos_router"
     "pallet_tmc"
     "pallet_burning_manager"
     "pallet_zap_manager"
@@ -50,12 +50,12 @@ Options:
   -h, --help      Show this help message
 
 Arguments:
-  PALLET_NAME     Specific pallet to benchmark (e.g., pallet_axial_router)
+  PALLET_NAME     Specific pallet to benchmark (e.g., pallet_deos_router)
                   If omitted and --all not set, the script exits with usage.
 
 Examples:
   $(basename "$0") --all                      # Benchmark all pallets
-  $(basename "$0") pallet_axial_router        # Benchmark one pallet
+  $(basename "$0") pallet_deos_router        # Benchmark one pallet
   $(basename "$0") --check                    # Verify compilation only
   $(basename "$0") --extra pallet_deos_actors         # Include Actors circular-chain diagnostics
   $(basename "$0") --extrinsic scheduler_wakeup_replace_exact --output /tmp/wakeup.rs pallet_deos_actors

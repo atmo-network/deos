@@ -25,7 +25,7 @@ const EXPECTED_PRODUCER_IDS = [
   'TmctolAssetOps::transfer',
   'TmctolAssetOps::mint',
   'TmctolMintDistributionIngress',
-  'AxialRouter::route_fee',
+  'DeosRouter::route_fee',
   'XCM asset deposit',
   'XCM deposit without origin',
   'TmctolFeeCollector',
